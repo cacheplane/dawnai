@@ -69,7 +69,7 @@ recorded for PR 2 unless it makes one of these corrections unsafe.
 - Modify: `scripts/check-docs.mjs`
 - Test: `scripts/check-docs.mjs` through `node scripts/check-docs.mjs`
 
-- [ ] **Step 1: Add file-specific accuracy contracts**
+- [x] **Step 1: Add file-specific accuracy contracts**
 
 Add these helpers after the existing `checks` loop:
 
@@ -132,7 +132,7 @@ for (const contract of accuracyContracts) {
 }
 ```
 
-- [ ] **Step 2: Point endpoint coverage at the real route table**
+- [x] **Step 2: Point endpoint coverage at the real route table**
 
 Replace the `runtime-server.ts`-only endpoint probe with a read of
 `packages/cli/src/lib/dev/runtime-fetch-core.ts`. Keep the AG-UI checks, then add:
@@ -152,7 +152,7 @@ for (const [sourceText, docsText] of runtimeEndpointContracts) {
 }
 ```
 
-- [ ] **Step 3: Build before running the dist-backed checker**
+- [x] **Step 3: Build before running the dist-backed checker**
 
 Run:
 
@@ -164,7 +164,7 @@ pnpm build
 
 Expected: PASS and fresh `dist/` output for every package.
 
-- [ ] **Step 4: Verify the guard is red on stale website content**
+- [x] **Step 4: Verify the guard is red on stale website content**
 
 Run:
 
@@ -175,7 +175,7 @@ node scripts/check-docs.mjs
 Expected: FAIL only for the newly guarded accuracy contracts and missing memory
 candidate endpoint text. Existing baseline checks remain healthy.
 
-- [ ] **Step 5: Commit the red guard**
+- [x] **Step 5: Commit the red guard**
 
 ```bash
 git add scripts/check-docs.mjs
@@ -194,7 +194,7 @@ git commit -m "test(docs): guard high-risk website contracts"
 - Modify: `apps/web/content/docs/agents.mdx`
 - Modify: `apps/web/content/docs/retry.mdx`
 
-- [ ] **Step 1: Make typed state input-driven**
+- [x] **Step 1: Make typed state input-driven**
 
 Add `tenant: z.string()` to the schema, infer `HelloState` directly from the
 schema, remove the path-injection comments, and show both invocations:
@@ -210,7 +210,7 @@ echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 State plainly that a concrete `/hello/acme` pathname is not how Dawn populates
 route state.
 
-- [ ] **Step 2: Repair the streaming client**
+- [x] **Step 2: Repair the streaming client**
 
 Change the research input to:
 
@@ -241,7 +241,7 @@ if (eventType === "chunk" && typeof payload === "string") {
 Change the event table's `chunk` shape to `string` and state that `: ping`
 comments carry no event/data payload.
 
-- [ ] **Step 3: Make dispatch semantics explicit**
+- [x] **Step 3: Make dispatch semantics explicit**
 
 Label the `task({ subagent, input })` block as the internal tool call the model
 emits, not a function authored route code imports or calls. In the HTTP example,
@@ -259,7 +259,7 @@ return {
 }
 ```
 
-- [ ] **Step 4: Reframe retry around model calls**
+- [x] **Step 4: Reframe retry around model calls**
 
 Keep the existing recipe URL, but title it “Retry transient model calls.” Remove
 the flaky `fetch-doc` tool and say route retry applies to transient provider/
@@ -277,7 +277,7 @@ In `retry.mdx`, distinguish the paths:
 
 Update related-card labels and remove “agent / tool level” language.
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 ```bash
 node scripts/check-docs.mjs
@@ -289,7 +289,7 @@ git diff --check
 Expected: web lint/typecheck and diff check PASS. The docs checker remains red
 only for accuracy contracts owned by later tasks.
 
-- [ ] **Step 6: Commit the corrected examples**
+- [x] **Step 6: Commit the corrected examples**
 
 ```bash
 git add apps/web/content/docs/recipes apps/web/content/docs/routes.mdx apps/web/content/docs/agents.mdx apps/web/content/docs/retry.mdx
@@ -306,7 +306,7 @@ git commit -m "docs: correct route and streaming examples"
 - Modify: `apps/web/content/docs/migrating-from-langgraph.mdx`
 - Modify: `apps/web/content/docs/upgrading.mdx`
 
-- [ ] **Step 1: Sync Getting Started to the generated research app**
+- [x] **Step 1: Sync Getting Started to the generated research app**
 
 Use `packages/devkit/templates/app-research` as the literal source for the tree.
 Show shared `src/tools/readDoc.ts` and `src/tools/searchCorpus.ts`, route
@@ -315,7 +315,7 @@ sandbox test. Update the coordinator/config excerpts to include `recall`,
 `remember`, and `memory.writes: "candidate"`. Replace a fixed test count with a
 behavior list so new scaffold tests do not stale the page again.
 
-- [ ] **Step 2: Correct the mental model**
+- [x] **Step 2: Correct the mental model**
 
 Name both tool discovery locations. Replace the single “AGENTS.md provides
 memory” sentence with a three-part distinction:
@@ -327,7 +327,7 @@ memory” sentence with a three-part distinction:
 State that middleware runs in dev and built Dawn HTTP runtimes, and replace the
 LangSmith-only ownership table with qualified Node, Hono, and LangSmith roles.
 
-- [ ] **Step 3: Fix testing lifecycle examples**
+- [x] **Step 3: Fix testing lifecycle examples**
 
 Change the opening to “CI tests replay fixtures; optional gated local smoke tests
 may use a live model.” Await cleanup everywhere:
@@ -345,7 +345,7 @@ and materialized-model state are process-global; use sequential suites or
 subprocess isolation. Describe the current scaffold's seven behaviors without
 promising a count.
 
-- [ ] **Step 4: Correct eval recording and programmatic execution**
+- [x] **Step 4: Correct eval recording and programmatic execution**
 
 Replace “including scorer model calls” with an explicit limitation: `--record`
 writes fixtures for the agent-run requests; a scorer such as `llmJudge` needs a
@@ -374,7 +374,7 @@ try {
 
 Include the missing `createAgentHarness` import and define `appRoot`.
 
-- [ ] **Step 5: Repair the LangGraph migration example**
+- [x] **Step 5: Repair the LangGraph migration example**
 
 Keep the user's real graph nodes/edges in the Dawn `graph` export instead of
 replacing them with identity functions. Put `.dawn/` at project root. Remove
@@ -382,13 +382,13 @@ replacing them with identity functions. Put `.dawn/` at project root. Remove
 receives `RuntimeContext`; existing graphs keep using their own imported tools.
 Put dynamic-segment values in request state.
 
-- [ ] **Step 6: Add the missing upgrade facts**
+- [x] **Step 6: Add the missing upgrade facts**
 
 Use `create-dawn-ai-app`, describe all five verify phases (app, routes, typegen,
 dependencies, runtime readiness), add Node 24+, and show Node-only imports moving
 to explicit `/node` entry points without expanding into a full release history.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 ```bash
 pnpm --filter @dawn-ai/web lint
@@ -409,7 +409,7 @@ Expected: all focused checks PASS.
 - Modify: `apps/web/content/docs/permissions.mdx`
 - Modify: `apps/web/content/docs/workspace.mdx`
 
-- [ ] **Step 1: Document actual subagent tool inheritance**
+- [x] **Step 1: Document actual subagent tool inheritance**
 
 Add this compact matrix to Tools and summarize/link it from Subagents:
 
@@ -423,7 +423,7 @@ Add this compact matrix to Tools and summarize/link it from Subagents:
 Show a child policy with `deny: ["deployProd"]` for a sensitive shared authored
 tool. Keep the internal `task` mechanism outside tool policy.
 
-- [ ] **Step 2: Remove the double-prompt access-control recipe**
+- [x] **Step 2: Remove the double-prompt access-control recipe**
 
 Remove `approve: ["runBash"]`. Use `permissions.allow.bash`/
 `permissions.deny.bash` for command-prefix decisions, and demonstrate
@@ -431,7 +431,7 @@ Remove `approve: ["runBash"]`. Use `permissions.allow.bash`/
 delegation as the fourth decision plane before a child sees sensitive input.
 Update sandbox images in the example to `node:24-slim`.
 
-- [ ] **Step 3: Correct permission matching and storage wording**
+- [x] **Step 3: Correct permission matching and storage wording**
 
 Use the precise contract everywhere:
 
@@ -444,7 +444,7 @@ Use the precise contract everywhere:
 Retain the different suggested-pattern granularity for bash, path, memory, tool,
 and subagent gates.
 
-- [ ] **Step 4: Add the `workspace/AGENTS.md` trust boundary**
+- [x] **Step 4: Add the `workspace/AGENTS.md` trust boundary**
 
 Warn that the file is re-read into prompt context for every consuming Dawn
 `agent()` route and subagent. A route with `writeFile` can persist instructions
@@ -452,7 +452,7 @@ for later requests. Recommend separate workspaces for different tenants/trust
 zones, constrained/denied writes for untrusted agents, review of seeded content,
 and never copying raw untrusted text into the file.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- tool-scope.test.ts
@@ -473,7 +473,7 @@ Expected: tests and web checks PASS.
 - Modify: `apps/web/content/docs/configuration.mdx`
 - Modify: `apps/web/content/docs/api.mdx`
 
-- [ ] **Step 1: Correct memory-kind and write contracts**
+- [x] **Step 1: Correct memory-kind and write contracts**
 
 Say semantic, episodic, and reflection are wired; procedural remains deferred.
 Document `content` as required in the model-facing `remember` schema. Split IDs:
@@ -484,7 +484,7 @@ Document `content` as required in the model-facing `remember` schema. Split IDs:
 
 Keep the existing operational sections; do not split or reorder the page.
 
-- [ ] **Step 2: Narrow retrieval guarantees**
+- [x] **Step 2: Narrow retrieval guarantees**
 
 Replace the “identical to SQLite” callout with:
 
@@ -496,7 +496,7 @@ Replace the “identical to SQLite” callout with:
 Add the `workspace/AGENTS.md` trust warning from A14 next to its current write
 instructions, without creating a second security guide.
 
-- [ ] **Step 3: Complete only the existing configuration contract**
+- [x] **Step 3: Complete only the existing configuration contract**
 
 Add concise rows for `memory.enabled` (historical/inert), `memory.vector`,
 `memory.episodes`, and `memory.distill`, with links into existing Memory anchors.
@@ -509,14 +509,14 @@ seeded into `.dawn/permissions.json`, and point runtime `always` decisions at th
 configured permissions store (whose default Node implementation uses that
 file).
 
-- [ ] **Step 4: Fix context and method references in API**
+- [x] **Step 4: Fix context and method references in API**
 
 Describe `RuntimeContext` as the route-entry context and `DawnToolContext` as the
 tool-function context. State signal behavior by transport rather than “client
 disconnect” globally. Extend the existing `MemoryStore`/pgvector method inventory
 with `browse`, `stats`, and `prune`; do not add unrelated new export tables.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 pnpm --filter @dawn-ai/core test
@@ -541,14 +541,14 @@ Expected: tests and web checks PASS.
 - Modify: `apps/web/content/docs/deployment.mdx`
 - Modify: `apps/web/content/docs/sandbox.mdx`
 
-- [ ] **Step 1: Correct middleware and transport behavior**
+- [x] **Step 1: Correct middleware and transport behavior**
 
 State that middleware runs under `dawn dev`, the Node runtime used by
 `dawn start`, and Hono builds; generated LangSmith graph entries do not include
 Dawn HTTP middleware. Correct the auth recipe's related text. State that AG-UI
 disconnect aborts its ephemeral run, while Agent Protocol disconnect does not.
 
-- [ ] **Step 2: Make the runtime endpoint description exhaustive again**
+- [x] **Step 2: Make the runtime endpoint description exhaustive again**
 
 Remove the fixed endpoint count. Add the three public memory-candidate routes:
 
@@ -564,7 +564,7 @@ parity to Dawn's Node/Hono runtimes; LangSmith uses its own `assistant_id`
 envelope. Make the one-run gate and cancel registry single-replica limitation
 explicit even with shared Postgres storage.
 
-- [ ] **Step 3: Add provider-specific sandbox truth**
+- [x] **Step 3: Add provider-specific sandbox truth**
 
 Change examples to `node:24-slim`. Add a small Docker/Kubernetes enforcement
 matrix. Docker deny uses `--network none`; Kubernetes deny permits cluster DNS,
@@ -573,7 +573,7 @@ Explain that `pidsLimit` and network enforcement differ by provider. Remove the
 unqualified HPA example or gate it behind all shared stores plus sticky routing
 or distributed per-thread serialization/cancel routing.
 
-- [ ] **Step 4: Correct the deployment target comparison**
+- [x] **Step 4: Correct the deployment target comparison**
 
 Lead the existing page with this factual split, without creating a new page:
 
@@ -587,13 +587,13 @@ Correct the Node artifact prose to one-stage `node:24-slim`, five verify phases,
 and marker-aware Dockerfile replacement. Remove “Nothing else is gated.” State
 that Postgres persistence does not distribute run/cancel coordination.
 
-- [ ] **Step 5: Correct state boundary wording**
+- [x] **Step 5: Correct state boundary wording**
 
 List `dawn run`, `dawn dev`, Node, and Hono as Dawn state boundaries using the
 Dawn request envelope. Keep LangSmith separate and avoid saying the same HTTP
 request body crosses both products.
 
-- [ ] **Step 6: Run focused runtime verification**
+- [x] **Step 6: Run focused runtime verification**
 
 ```bash
 pnpm --filter @dawn-ai/cli test -- run-cancellation.test.ts
@@ -606,7 +606,7 @@ git diff --check
 
 Expected: targeted runtime tests and web checks PASS.
 
-- [ ] **Step 7: Commit runtime/deployment corrections**
+- [x] **Step 7: Commit runtime/deployment corrections**
 
 ```bash
 git add apps/web/content/docs/state.mdx apps/web/content/docs/middleware.mdx apps/web/content/docs/recipes/auth-middleware.mdx apps/web/content/docs/ag-ui.mdx apps/web/content/docs/dev-server.mdx apps/web/content/docs/deployment.mdx apps/web/content/docs/sandbox.mdx
@@ -623,7 +623,7 @@ git commit -m "docs: correct runtime and deployment guidance"
 - Modify: `apps/web/content/blueprints/deploy/docker.md`
 - Modify: `apps/web/content/blueprints/observability/opentelemetry.md`
 
-- [ ] **Step 1: Correct the landing quickstart**
+- [x] **Step 1: Correct the landing quickstart**
 
 Use the three current steps:
 
@@ -633,7 +633,7 @@ Use the three current steps:
 
 Do not say the scaffold starts a server or creates a support route.
 
-- [ ] **Step 2: Refresh task-specific prompts**
+- [x] **Step 2: Refresh task-specific prompts**
 
 In scaffold/tool/route prompts, distinguish shared `src/tools/*` from
 route-local `<route>/tools/*`, and await harness cleanup in the testing prompt.
@@ -649,14 +649,14 @@ Rewrite the deploy prompt as a target decision:
 Update the prompt description from “Ship … to LangSmith” to target-neutral
 deployment wording.
 
-- [ ] **Step 3: Refresh compact machine reference**
+- [x] **Step 3: Refresh compact machine reference**
 
 Add shared tools and current scaffold memory files to the project shape. Add
 `dawn start` and `dawn inspect` to commands. Add thread cancel and memory
 candidate routes to the runtime API. Replace the LangSmith-only deployment
 paragraph with the same compact three-target distinction used by Deployment.
 
-- [ ] **Step 4: Mark historical content in the full reference**
+- [x] **Step 4: Mark historical content in the full reference**
 
 Change the heading and preamble before blog bodies to:
 
@@ -671,7 +671,7 @@ sections.push(
 
 Do not edit historical post bodies.
 
-- [ ] **Step 5: Replace the obsolete Docker blueprint**
+- [x] **Step 5: Replace the obsolete Docker blueprint**
 
 Bump its blueprint version and replace the LangGraph CLI flow with the current
 Dawn Node target:
@@ -692,7 +692,7 @@ Postgres/Redis platform, and license-key instructions. In the OpenTelemetry
 blueprint, replace “LangSmith (Dawn's deploy target)” with target-neutral tracing
 language.
 
-- [ ] **Step 6: Run focused website verification**
+- [x] **Step 6: Run focused website verification**
 
 ```bash
 pnpm --filter @dawn-ai/web lint
@@ -704,7 +704,7 @@ git diff --check
 Expected: all commands PASS. This is the first point at which every new accuracy
 contract is green.
 
-- [ ] **Step 7: Commit discovery updates**
+- [x] **Step 7: Commit discovery updates**
 
 ```bash
 git add apps/web/app/components/landing/Quickstart.tsx apps/web/content/prompts/index.ts apps/web/app/llms.txt/route.ts apps/web/app/llms-full.txt/route.ts apps/web/content/blueprints/deploy/docker.md apps/web/content/blueprints/observability/opentelemetry.md
@@ -717,14 +717,14 @@ git commit -m "docs: refresh website discovery guidance"
 - Modify: `docs/superpowers/plans/2026-08-09-docs-website-accuracy-sweep.md` (checkboxes only)
 - Verify: every file listed in Tasks 1–7
 
-- [ ] **Step 1: Audit every ledger row against the final diff**
+- [x] **Step 1: Audit every ledger row against the final diff**
 
 For A01–A28, confirm the false claim is gone, the replacement is supported by
 the named authority, and no page reorganization or unrelated completeness work
 entered the diff. Record any new content opportunity for PR 2 instead of adding
 it here.
 
-- [ ] **Step 2: Search for the highest-risk stale phrases**
+- [x] **Step 2: Search for the highest-risk stale phrases**
 
 ```bash
 rg -n 'injected from the pathname|payload\.content|only its own route-local|Dawn itself is not a production runtime|Dawn has no standalone server|Nothing else is gated|including scorer model calls|multi-stage `node:22-slim`' apps/web
@@ -745,7 +745,7 @@ pnpm ci:validate
 Expected: every Definition of Done lane passes. No changeset is required because
 publishable package code is unchanged.
 
-- [ ] **Step 4: Run pull-request changeset verification**
+- [x] **Step 4: Run pull-request changeset verification**
 
 ```bash
 node scripts/check-changesets.mjs
@@ -753,7 +753,7 @@ node scripts/check-changesets.mjs
 
 Expected: PASS with no required changeset.
 
-- [ ] **Step 5: Review branch hygiene**
+- [x] **Step 5: Review branch hygiene**
 
 ```bash
 git diff --check main...HEAD
@@ -765,7 +765,7 @@ Expected: no whitespace errors; a clean worktree; only the approved design,
 plan, docs checker, and website content commits are on
 `blove/docs-website-refresh`.
 
-- [ ] **Step 6: Commit completed plan tracking if needed**
+- [x] **Step 6: Commit completed plan tracking if needed**
 
 ```bash
 git add docs/superpowers/plans/2026-08-09-docs-website-accuracy-sweep.md

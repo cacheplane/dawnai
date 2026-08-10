@@ -1,6 +1,6 @@
 # Dawn Website Accuracy Sweep Design
 
-**Status:** Proposed  
+**Status:** Proposed
 **Primary audience:** Application developers building and operating Dawn apps
 
 ## Goal
