@@ -22,24 +22,25 @@ export default z.object({
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
-import type state from "./state.js"
+import state from "./state.js"
 
+type HelloInput = z.input<typeof state>
 type HelloState = z.infer<typeof state>
 
 export async function workflow(
-  state: HelloState,
+  input: HelloInput,
   ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
 ) {
-  // state.context and state.count have their Zod-defined defaults.
-  const { records } = await ctx.tools.lookup({ tenant: state.tenant, query: "*" })
-  return { ...state, count: records.length }
+  const parsed: HelloState = state.parse(input)
+  const { records } = await ctx.tools.lookup({ tenant: parsed.tenant, query: "*" })
+  return { ...parsed, count: records.length }
 }
 ```
 </CodeGroup>
 
 ## Notes
 
-- **Include route values in the schema.** `[tenant]` is part of the route id; Dawn validates `state.tenant` from the input you provide.
+- **Include route values in the schema.** `[tenant]` is part of the route id; the workflow validates `tenant` from the input by calling `state.parse(input)`.
 - **Route ids stay parameterized.** Run this route as `/hello/[tenant]` with input for `tenant`:
 
   ```bash
@@ -53,7 +54,7 @@ export async function workflow(
   ```
 
   A concrete `/hello/acme` path is not how Dawn populates route state.
-- **Defaults come from Zod.** Anything declared with `.default(...)` is filled in when the caller omits it.
+- **Parse workflow input explicitly.** Workflow routes do not automatically parse `state.ts`. Calling `state.parse(input)` validates the input and applies fields declared with `.default(...)` when the caller omits them.
 - **State is JSON-serializable.** It crosses the runtime boundary on every `runs/wait` and `runs/stream` call. Use primitives, plain objects, arrays.
 
 ## Related

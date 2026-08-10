@@ -27,8 +27,10 @@ export default async (
     const res = await fetch(`https://docs.example.com/${input.doc}`, { signal: ctx.signal })
     if (res.ok) return { text: await res.text() }
 
-    const retryable = res.status === 429 || res.status >= 500
-    if (!retryable || attempt === 2) throw new Error(`fetch failed: ${res.status}`)
+    const status = res.status
+    const retryable = status === 429 || status >= 500
+    await res.arrayBuffer() // Drain the body so the connection can be reused.
+    if (!retryable || attempt === 2) throw new Error(`fetch failed: ${status}`)
     await delay(250 * 2 ** attempt, undefined, { signal: ctx.signal })
   }
 
