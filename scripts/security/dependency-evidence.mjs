@@ -1,0 +1,291 @@
+import { fileURLToPath } from "node:url"
+
+import { readBoundedFixture } from "../release/fixture-io.mjs"
+import {
+  canonicalJsonBytes,
+  EvidenceError,
+  runBoundedProcess,
+  safeEvidenceError,
+} from "./github-evidence.mjs"
+
+const GHSA_PATTERN = /^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/u
+const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
+const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/u
+const SEVERITIES = ["critical", "high", "info", "low", "moderate"]
+
+function fail(code) {
+  throw new EvidenceError(code)
+}
+
+export async function loadAuditExpectation(file, { root = process.cwd() } = {}) {
+  let source
+  try {
+    source = await readBoundedFixture(file, { maxBytes: 1024 * 1024, root })
+  } catch {
+    fail("INVALID_EXPECTATION_FILE")
+  }
+  if (source.includes("\uFFFD")) fail("INVALID_EXPECTATION_ENCODING")
+  let parsed
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    fail("MALFORMED_EXPECTATION_JSON")
+  }
+  return validateAuditExpectation(parsed)
+}
+
+export function validateAuditExpectation(value) {
+  const fixture = safeClone(value, "INVALID_AUDIT_EXPECTATION")
+  assertExactKeys(fixture, ["full", "production", "schemaVersion"], "INVALID_AUDIT_EXPECTATION")
+  if (fixture.schemaVersion !== 1) fail("INVALID_AUDIT_EXPECTATION")
+  return {
+    full: validateMode(fixture.full),
+    production: validateMode(fixture.production),
+    schemaVersion: 1,
+  }
+}
+
+function validateMode(value) {
+  if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION")
+  assertExactKeys(value, ["muted", "records"], "INVALID_AUDIT_EXPECTATION")
+  if (!Array.isArray(value.muted) || value.muted.length !== 0 || !Array.isArray(value.records)) {
+    fail("INVALID_AUDIT_EXPECTATION")
+  }
+  const records = value.records.map(normalizeExpectedRecord).sort(compareRecord)
+  assertUniqueRecords(records, "DUPLICATE_AUDIT_EXPECTATION")
+  return { muted: [], records }
+}
+
+function normalizeExpectedRecord(value) {
+  if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION")
+  assertExactKeys(
+    value,
+    ["ghsa", "package", "severity", "version"],
+    "INVALID_AUDIT_EXPECTATION",
+  )
+  if (
+    typeof value.package !== "string" ||
+    !PACKAGE_PATTERN.test(value.package) ||
+    typeof value.version !== "string" ||
+    !VERSION_PATTERN.test(value.version) ||
+    typeof value.ghsa !== "string" ||
+    !GHSA_PATTERN.test(value.ghsa) ||
+    typeof value.severity !== "string" ||
+    !SEVERITIES.includes(value.severity)
+  ) {
+    fail("INVALID_AUDIT_EXPECTATION")
+  }
+  return {
+    ghsa: value.ghsa,
+    package: value.package,
+    severity: value.severity,
+    version: value.version,
+  }
+}
+
+export function normalizeAuditDocument(value, expectedMode, exitCode) {
+  const document = safeClone(value, "MALFORMED_AUDIT_SCHEMA")
+  const expected = validateMode(expectedMode)
+  if (!isRecord(document) || Object.hasOwn(document, "error")) fail("MALFORMED_AUDIT_SCHEMA")
+  if (!Array.isArray(document.muted) || document.muted.length !== 0) {
+    fail("AUDIT_MUTED_RECORDS")
+  }
+  if (!isRecord(document.advisories)) fail("MALFORMED_AUDIT_SCHEMA")
+  const records = []
+  const advisoryIds = new Set()
+  for (const [advisoryId, advisory] of Object.entries(document.advisories)) {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(advisoryId) || advisoryIds.has(advisoryId)) {
+      fail("INVALID_AUDIT_IDENTITY")
+    }
+    advisoryIds.add(advisoryId)
+    if (
+      !isRecord(advisory) ||
+      typeof advisory.module_name !== "string" ||
+      typeof advisory.github_advisory_id !== "string" ||
+      typeof advisory.severity !== "string" ||
+      !Array.isArray(advisory.findings) ||
+      advisory.findings.length !== 1
+    ) {
+      fail("INVALID_AUDIT_IDENTITY")
+    }
+    const finding = advisory.findings[0]
+    if (
+      !isRecord(finding) ||
+      typeof finding.version !== "string" ||
+      !Array.isArray(finding.paths) ||
+      finding.paths.length === 0 ||
+      !finding.paths.every(
+        (path) =>
+          typeof path === "string" && path.length > 0 && Buffer.byteLength(path, "utf8") <= 16_384,
+      )
+    ) {
+      fail("INVALID_AUDIT_IDENTITY")
+    }
+    records.push(
+      normalizeExpectedRecord({
+        ghsa: advisory.github_advisory_id,
+        package: advisory.module_name,
+        severity: advisory.severity,
+        version: finding.version,
+      }),
+    )
+  }
+  records.sort(compareRecord)
+  assertUniqueRecords(records, "DUPLICATE_AUDIT_IDENTITY")
+  const totals = normalizeSeverityTotals(document.metadata?.vulnerabilities)
+  const observedTotals = countSeverity(records)
+  if (JSON.stringify(totals) !== JSON.stringify(observedTotals)) fail("AUDIT_TOTAL_MISMATCH")
+  if (JSON.stringify(records) !== JSON.stringify(expected.records)) fail("AUDIT_IDENTITY_MISMATCH")
+  const findings = records.length > 0
+  if ((findings && exitCode !== 1) || (!findings && exitCode !== 0)) {
+    fail("AUDIT_EXIT_MISMATCH")
+  }
+  return {
+    exitCode,
+    muted: [],
+    records,
+    severityTotals: totals,
+    status: findings ? "findings" : "clean",
+  }
+}
+
+function normalizeSeverityTotals(value) {
+  if (!isRecord(value)) fail("MALFORMED_AUDIT_SCHEMA")
+  assertExactKeys(value, SEVERITIES, "MALFORMED_AUDIT_SCHEMA")
+  const result = {}
+  for (const severity of SEVERITIES) {
+    if (!Number.isSafeInteger(value[severity]) || value[severity] < 0) {
+      fail("MALFORMED_AUDIT_SCHEMA")
+    }
+    result[severity] = value[severity]
+  }
+  return result
+}
+
+export async function collectAuditEvidence({
+  cwd = process.cwd(),
+  expectation,
+  maxBytes = 8 * 1024 * 1024,
+  now = Date.now,
+  runProcess = runBoundedProcess,
+  timeoutMs = 120_000,
+}) {
+  const expected = validateAuditExpectation(expectation)
+  if (typeof now !== "function" || typeof runProcess !== "function") fail("INVALID_AUDIT_RUNNER")
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) {
+    fail("INVALID_AUDIT_TIMEOUT")
+  }
+  const deadline = now() + timeoutMs
+  const env = sanitizedAuditEnvironment(process.env)
+  const results = {}
+  for (const [mode, args] of [
+    ["full", ["audit", "--json"]],
+    ["production", ["audit", "--json", "--prod"]],
+  ]) {
+    const remaining = deadline - now()
+    if (remaining <= 0) fail("AUDIT_TIMEOUT")
+    let processResult
+    try {
+      processResult = await runProcess({
+        args,
+        command: "pnpm",
+        cwd,
+        env,
+        maxBytes,
+        timeoutMs: remaining,
+      })
+    } catch (error) {
+      if (error instanceof EvidenceError) throw error
+      fail("AUDIT_PROCESS_FAILED")
+    }
+    if (
+      !isRecord(processResult) ||
+      !Number.isInteger(processResult.exitCode) ||
+      typeof processResult.stdout !== "string" ||
+      typeof processResult.stderr !== "string"
+    ) {
+      fail("AUDIT_PROCESS_FAILED")
+    }
+    let document
+    try {
+      document = JSON.parse(processResult.stdout)
+    } catch {
+      fail("MALFORMED_AUDIT_JSON")
+    }
+    results[mode] = normalizeAuditDocument(document, expected[mode], processResult.exitCode)
+  }
+  return {
+    full: results.full,
+    kind: "pnpm-audit",
+    production: results.production,
+    schemaVersion: 1,
+  }
+}
+
+function sanitizedAuditEnvironment(environment) {
+  const safe = {}
+  for (const [key, value] of Object.entries(environment)) {
+    if (
+      typeof value === "string" &&
+      !/(?:^|_)(?:AUTH|KEY|PASSWORD|SECRET|TOKEN)(?:_|$)/iu.test(key) &&
+      !["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN"].includes(key)
+    ) {
+      safe[key] = value
+    }
+  }
+  return safe
+}
+
+function safeClone(value, code) {
+  try {
+    return JSON.parse(canonicalJsonBytes(value).toString("utf8"))
+  } catch (error) {
+    if (error instanceof EvidenceError) fail(code)
+    fail(code)
+  }
+}
+
+function assertExactKeys(value, expected, code) {
+  if (!isRecord(value)) fail(code)
+  const actual = Object.keys(value).sort(compareText)
+  const wanted = [...expected].sort(compareText)
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) fail(code)
+}
+
+function assertUniqueRecords(records, code) {
+  const identities = new Set()
+  for (const record of records) {
+    const identity = JSON.stringify(record)
+    if (identities.has(identity)) fail(code)
+    identities.add(identity)
+  }
+}
+
+function countSeverity(records) {
+  const result = { critical: 0, high: 0, info: 0, low: 0, moderate: 0 }
+  for (const record of records) result[record.severity] += 1
+  return result
+}
+
+function compareRecord(left, right) {
+  return compareText(JSON.stringify(left), JSON.stringify(right))
+}
+
+function compareText(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    const [operation] = process.argv.slice(2)
+    if (operation !== "audit") fail("UNSUPPORTED_OPERATION")
+    fail("CLI_NOT_READY")
+  } catch (error) {
+    console.error(safeEvidenceError(error))
+    process.exitCode = 1
+  }
+}
