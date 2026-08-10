@@ -249,6 +249,13 @@ jobs:
         # spelled-out `exec vitest`: nobody runs this lane locally, so a config
         # move or a new setupFiles in that script must not leave this one lane
         # silently running a different vitest from every other lane.
+        #
+        # Green here means the Postgres assertions RAN, not merely that nothing
+        # failed. Two different mistakes are covered by two different
+        # mechanisms: a filter that matches no file exits 1 on its own
+        # (`passWithNoTests` is false by default in vitest 4), and a suite that
+        # matches but skips is caught by the "gated Postgres lane" self-check in
+        # the test file — vitest has no fail-on-skipped flag to do it from here.
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint
 
   edge-workerd:

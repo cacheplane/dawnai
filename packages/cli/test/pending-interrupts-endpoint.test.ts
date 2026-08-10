@@ -143,13 +143,34 @@ function runStreamRequest(
   })
 }
 
-function parkRunRequest(threadId: string, message: string): Request {
+function parkRunRequest(
+  threadId: string,
+  message: string,
+  headers: Record<string, string> = {},
+): Request {
   return new Request(`http://localhost/threads/${threadId}/runs/stream`, {
     body: JSON.stringify({
       input: { messages: [{ content: message, role: "user" }] },
       route: "/park#agent",
     }),
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
+    method: "POST",
+  })
+}
+
+/** Same turn as parkRunRequest, but on the blocking (non-streaming) endpoint —
+ * the one spec §4 leaves out of the parked-STATUS work. */
+function parkWaitRequest(
+  threadId: string,
+  message: string,
+  headers: Record<string, string> = {},
+): Request {
+  return new Request(`http://localhost/threads/${threadId}/runs/wait`, {
+    body: JSON.stringify({
+      input: { messages: [{ content: message, role: "user" }] },
+      route: "/park#agent",
+    }),
+    headers: { "content-type": "application/json", ...headers },
     method: "POST",
   })
 }
@@ -316,6 +337,22 @@ const ECHO_MIDDLEWARE = [
   "",
 ].join("\n")
 
+/** Route-SCOPED policy: `/park` is admin-only, every other route is open to
+ * everyone. This is the shape that makes a last-run-route gate exploitable —
+ * the unprivileged caller is genuinely allowed to run `/echo`, so nothing stops
+ * them from moving the thread's recorded route onto it. The blanket
+ * ECHO_MIDDLEWARE above cannot express that, which is why one route per thread
+ * was enough for every other gating test here. */
+const ADMIN_PARK_MIDDLEWARE = [
+  'import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"',
+  "export default defineMiddleware((req) =>",
+  '  req.routeId !== "/park" || req.headers["x-admin"]',
+  "    ? allow()",
+  "    : reject(403, { routeId: req.routeId }),",
+  ")",
+  "",
+].join("\n")
+
 describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
   it("refuses a thread that has never run with 409 thread_route_unknown", async () => {
     const handler = await createHandler(await fixtureApp())
@@ -390,6 +427,146 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     expect(allowed.status).toBe(200)
     expect(await allowed.json()).toEqual({ interrupts: [] })
   }, 30_000)
+
+  it("refuses with 409 thread_route_unknown when the recorded route is gone, without echoing it", async () => {
+    const handler = await createHandler(await fixtureApp())
+
+    // A recorded route the registry cannot resolve. Reachable in the field
+    // whenever a route file is renamed or deleted while a thread that ran it
+    // still exists; reachable here because POST /threads takes client-supplied
+    // metadata, the same seam the persisted-route test above uses.
+    const created = await handler.fetch(
+      new Request("http://localhost/threads", {
+        body: JSON.stringify({ metadata: { route: "/retired-route#agent" } }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    )
+    expect(created.status).toBe(200)
+    const { thread_id: threadId } = (await created.json()) as { thread_id: string }
+
+    const response = await handler.fetch(pendingInterruptsRequest(threadId))
+
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as ErrorBody
+    // Same code as the never-ran arm: both mean "no usable route identity".
+    expect(body.error.details?.code).toBe("thread_route_unknown")
+    // The caller is still UNGATED here, so the server-derived key must not come
+    // back — it would tell anyone who can name a thread id which route it ran.
+    // The sibling `Unknown route: ...` sites may echo because there the key came
+    // from the caller's own request body.
+    expect(body.error.message).not.toContain("/retired-route")
+    expect(JSON.stringify(body)).not.toContain("retired-route")
+  })
+
+  it("keeps gating on the route that PARKED after a weaker route runs on the thread", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": ADMIN_PARK_MIDDLEWARE }),
+    )
+    const threadId = "t-route-swap"
+
+    // An admin parks a permission prompt on the protected route.
+    const parkedRun = await handler.fetch(
+      parkRunRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+    expect(parkedRun.status).toBe(200)
+    expect(await readSseText(parkedRun)).toContain("event: interrupt")
+
+    // The unprivileged caller is refused, as they must be.
+    const beforeSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(beforeSwap.status).toBe(403)
+    expect(await beforeSwap.json()).toEqual({ routeId: "/park" })
+
+    // Now they run a route the policy DOES allow them, on the same thread. The
+    // run itself is legitimate; `/echo` is a plain graph that never touches the
+    // checkpointer, so the parked `__interrupt__` write survives it untouched.
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    // Gating identity must still be the PARKING route. Resolving it from the
+    // last run instead hands this caller the interruptId/resumeKey pair that
+    // POST /resume needs to answer someone else's permission prompt.
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
+
+    // ...and the admin still gets the prompt back.
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("keeps gating on the parking route when the park happened on /runs/wait", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": ADMIN_PARK_MIDDLEWARE }),
+    )
+    const threadId = "t-route-swap-wait"
+
+    // /runs/wait is excluded from the parked-STATUS work by spec §4, but it can
+    // still park — and a park it does not record is a park this gate cannot see.
+    const parkedRun = await handler.fetch(
+      parkWaitRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+    expect(parkedRun.status).toBe(200)
+
+    const beforeSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(beforeSwap.status).toBe(403)
+
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("stops gating on the parking route once the parked prompt is answered", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": ADMIN_PARK_MIDDLEWARE }),
+    )
+    const threadId = "t-route-swap-cleared"
+
+    await drain(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", { "x-admin": "1" })),
+    )
+    const parked = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(parked.status).toBe(200)
+    const interruptId = ((await parked.json()) as PendingInterruptsBody).interrupts[0]?.interruptId
+    expect(interruptId).toBeTruthy()
+
+    // The resume answers the prompt and completes, so nothing is parked anymore.
+    await drain(await handler.fetch(resumeRequest(threadId, interruptId ?? "", { "x-admin": "1" })))
+
+    // The pin has to be retired, not merely stop mattering: /park is still the
+    // LAST-RUN route here, so it would answer 403 either way. Moving the thread
+    // onto /echo is what makes the two designs disagree — a pin that survives an
+    // answered prompt gates an empty list on a route nobody is parked under, and
+    // would keep doing so for every future turn on this thread.
+    await drain(await handler.fetch(runStreamRequest(threadId, "/echo#graph")))
+
+    const after = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(after.status).toBe(200)
+    expect(await after.json()).toEqual({ interrupts: [] })
+  }, 60_000)
 })
 
 function cancelRequest(threadId: string): Request {
@@ -470,13 +647,17 @@ describe("thread status after a parked or cancelled turn", () => {
   }, 30_000)
 })
 
-function resumeRequest(threadId: string, interruptId: string): Request {
+function resumeRequest(
+  threadId: string,
+  interruptId: string,
+  headers: Record<string, string> = {},
+): Request {
   return new Request(`http://localhost/threads/${threadId}/resume`, {
     body: JSON.stringify({
       resume: [{ interruptId, payload: "once", status: "resolved" }],
       route: "/park#agent",
     }),
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     method: "POST",
   })
 }
@@ -524,6 +705,10 @@ describe("thread status after a resumed turn", () => {
     await drain(await handler.fetch(parkRunRequest(threadId, "deploy to staging")))
     const parked = await readPendingInterruptsBody(handler, threadId)
     const interruptId = parked.interrupts[0]?.interruptId ?? ""
+    // Without this the whole test passes vacuously when the first turn never
+    // parks: the resume 404s, the thread is still "idle", and the empty list
+    // below is the state the thread was already in.
+    expect(interruptId).not.toBe("")
 
     await drain(await handler.fetch(resumeRequest(threadId, interruptId)))
 
@@ -573,7 +758,18 @@ describe("terminalStatus", () => {
 // packages/postgres-storage/test/*.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(process.env.DAWN_TEST_PGSTORAGE !== "1")(
+/** The one place the gate's env var is spelled, so the self-check below and the
+ * suite it watches can never drift onto different names. */
+const PGSTORAGE_LANE_REQUESTED = process.env.DAWN_TEST_PGSTORAGE === "1"
+
+/** Flipped by the gated test itself. Vitest has no flag that fails a run for
+ * SKIPPING tests — `--passWithNoTests` (already false by default in vitest 4)
+ * only covers a filter that matches no FILE, which is a different mistake — so
+ * "the CI step went green having run zero Postgres assertions" has to be caught
+ * in the file. See the self-check at the bottom. */
+let postgresLaneRan = false
+
+describe.skipIf(!PGSTORAGE_LANE_REQUESTED)(
   "pending_interrupts against a real Postgres checkpointer",
   () => {
     let container: StartedPostgreSqlContainer
@@ -646,6 +842,30 @@ describe.skipIf(process.env.DAWN_TEST_PGSTORAGE !== "1")(
 
       expect(await threadStatus(handler, threadId)).toBe("idle")
       expect((await readPendingInterruptsBody(handler, threadId)).interrupts).toEqual([])
+
+      // Last line of the test, so it records that every assertion above ran.
+      postgresLaneRan = true
     }, 120_000)
   },
 )
+
+// ---------------------------------------------------------------------------
+// Makes the gated CI step self-verifying. Without this the step is green under
+// two very different outcomes — the Postgres arc passed, or the suite above
+// quietly skipped and the run asserted nothing about Postgres at all. Vitest 4
+// offers no mechanism to tell those apart from the outside: `passWithNoTests`
+// is already false by default (a filter matching no file exits 1, verified),
+// but a file that matches while its only new suite is skipped still reports
+// success, and there is no fail-on-skipped flag to reach for. So the check
+// lives here, where it can see whether the suite actually ran.
+//
+// Declared last because vitest runs a file's suites in declaration order.
+// ---------------------------------------------------------------------------
+
+describe("gated Postgres lane", () => {
+  it("runs its assertions whenever DAWN_TEST_PGSTORAGE asks for them", () => {
+    // Also pins the gate's polarity from the ordinary no-Docker lane: a suite
+    // that ran without being asked would be starting containers everywhere.
+    expect(postgresLaneRan).toBe(PGSTORAGE_LANE_REQUESTED)
+  })
+})
