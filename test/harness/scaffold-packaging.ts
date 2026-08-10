@@ -30,6 +30,12 @@ export async function writeRegistryNpmrc(appRoot: string, registryUrl: string): 
   const host = registryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
   const npmrc = [
     `registry=${registryUrl}`,
+    // A user-level default scope selects that scope's registry even for an
+    // unscoped install. Clear it at project precedence so candidate installs
+    // cannot escape the ephemeral registry.
+    "scope=",
+    // Override a user-level registry mapping for Dawn's scoped packages.
+    `@dawn-ai:registry=${registryUrl}`,
     // Parity with a private-registry user; harmless for read-only installs.
     `//${host}/:_authToken="fake"`,
     "",

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { describe, expect, it } from "vitest"
 
@@ -10,6 +11,8 @@ import {
   runPackagedCommand,
   withPackagedNpmServer,
 } from "./packaged-app.ts"
+
+const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
 function setTestEnvironmentVariable(name: string, value: string): () => void {
   const previousValue = Reflect.get(process.env, name)
@@ -86,6 +89,45 @@ async function createNpmServerFixture(prefix: string): Promise<string> {
   )
 
   return appRoot
+}
+
+async function startPoisonRegistry(): Promise<{
+  close: () => Promise<void>
+  readonly requestCount: number
+  readonly url: string
+}> {
+  let requestCount = 0
+  const server = createServer((_request, response) => {
+    requestCount += 1
+    response.writeHead(404, { "content-type": "text/plain" })
+    response.end("poison registry")
+  })
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    server.once("error", rejectPromise)
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", rejectPromise)
+      resolvePromise()
+    })
+  })
+
+  const address = server.address()
+  if (!address || typeof address === "string") {
+    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()))
+    throw new Error("Poison registry failed to bind a TCP port")
+  }
+
+  return {
+    close: async () => {
+      await new Promise<void>((resolvePromise, rejectPromise) =>
+        server.close((error) => (error ? rejectPromise(error) : resolvePromise())),
+      )
+    },
+    get requestCount() {
+      return requestCount
+    },
+    url: `http://127.0.0.1:${address.port}/`,
+  }
 }
 
 async function readObservedServer(appRoot: string): Promise<{
@@ -181,15 +223,45 @@ describe("runPackagedCommand", () => {
 })
 
 describe("installRegistryScaffolderWithNpm", () => {
-  it("installs the latest registry scaffolder with npm and records a transcript", async () => {
+  it("ignores inherited registry overrides and installs current candidate bytes", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dawn-npm-scaffolder-"))
     const transcriptPath = join(tempRoot, "install.log")
+    const userconfigPath = join(tempRoot, "poison-user.npmrc")
+    let poisonRegistry: Awaited<ReturnType<typeof startPoisonRegistry>> | undefined
+    let restoreLowerUserconfig: (() => void) | undefined
+    let restoreUpperUserconfig: (() => void) | undefined
 
     try {
-      const { installerDir } = await installRegistryScaffolderWithNpm({
-        tempRoot,
-        transcriptPath,
-      })
+      poisonRegistry = await startPoisonRegistry()
+      await writeFile(
+        userconfigPath,
+        [
+          `scope=@poison`,
+          `@poison:registry=${poisonRegistry.url}`,
+          `@dawn-ai:registry=${poisonRegistry.url}`,
+          "",
+        ].join("\n"),
+        "utf8",
+      )
+      restoreLowerUserconfig = setTestEnvironmentVariable("npm_config_userconfig", userconfigPath)
+      restoreUpperUserconfig = setTestEnvironmentVariable("NPM_CONFIG_USERCONFIG", userconfigPath)
+
+      let installResult: Awaited<ReturnType<typeof installRegistryScaffolderWithNpm>> | undefined
+      let installError: unknown
+      try {
+        installResult = await installRegistryScaffolderWithNpm({
+          tempRoot,
+          transcriptPath,
+        })
+      } catch (error) {
+        installError = error
+      }
+
+      expect(poisonRegistry.requestCount).toBe(0)
+      expect(installError).toBeUndefined()
+      const installerDir = installResult?.installerDir
+      expect(installerDir).toBeDefined()
+      if (installerDir === undefined) throw new Error("Candidate installer was not created")
 
       await expect(readFile(join(installerDir, "package.json"), "utf8")).resolves.toContain(
         '"private": true',
@@ -200,6 +272,40 @@ describe("installRegistryScaffolderWithNpm", () => {
       await expect(
         readFile(join(installerDir, "node_modules", "create-dawn-ai-app", "package.json"), "utf8"),
       ).resolves.toContain('"name": "create-dawn-ai-app"')
+      await expect(
+        readFile(
+          join(installerDir, "node_modules", "create-dawn-ai-app", "dist", "index.js"),
+          "utf8",
+        ),
+      ).resolves.toBe(
+        await readFile(join(REPO_ROOT, "packages", "create-dawn-app", "dist", "index.js"), "utf8"),
+      )
+      await expect(
+        readFile(
+          join(
+            installerDir,
+            "node_modules",
+            "@dawn-ai",
+            "devkit",
+            "templates",
+            "app-research",
+            "package.json.template",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe(
+        await readFile(
+          join(
+            REPO_ROOT,
+            "packages",
+            "devkit",
+            "templates",
+            "app-research",
+            "package.json.template",
+          ),
+          "utf8",
+        ),
+      )
 
       const transcript = await readFile(transcriptPath, "utf8")
       expect(transcript).toContain(
@@ -207,7 +313,13 @@ describe("installRegistryScaffolderWithNpm", () => {
       )
       expect(transcript).toContain("[exit 0]")
     } finally {
-      await rm(tempRoot, { force: true, recursive: true })
+      restoreUpperUserconfig?.()
+      restoreLowerUserconfig?.()
+      try {
+        await poisonRegistry?.close()
+      } finally {
+        await rm(tempRoot, { force: true, recursive: true })
+      }
     }
   })
 })

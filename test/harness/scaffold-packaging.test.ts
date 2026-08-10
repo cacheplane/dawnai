@@ -17,6 +17,8 @@ describe("writeRegistryNpmrc", () => {
     await writeRegistryNpmrc(dir, "http://127.0.0.1:4873/")
     const npmrc = await readFile(join(dir, ".npmrc"), "utf8")
     expect(npmrc).toContain("registry=http://127.0.0.1:4873/")
+    expect(npmrc).toContain("\nscope=\n")
+    expect(npmrc).toContain("\n@dawn-ai:registry=http://127.0.0.1:4873/\n")
     expect(npmrc).toContain('//127.0.0.1:4873/:_authToken="fake"')
     await expect(readFile(join(dir, "pnpm-workspace.yaml"), "utf8")).resolves.toContain(
       "allowBuilds:",
