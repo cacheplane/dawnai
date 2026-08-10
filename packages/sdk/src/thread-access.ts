@@ -13,17 +13,38 @@
 /** LangGraph's `threads.*` split, minus `search` (Dawn serves no thread search). */
 export type ThreadAction = "create" | "read" | "update" | "delete"
 
-/** Which endpoint asked, for policies that need finer grain than `action`. */
+/**
+ * Which endpoint asked, for policies that need finer grain than `action`.
+ *
+ * Each member, its endpoint, and the `action` it arrives under:
+ *
+ * - `thread.create` — `POST /threads` — `create`, then again as the `update`
+ *   recheck that follows every create
+ * - `thread.get` — `GET /threads/:id` — `read`
+ * - `thread.state` — `GET /threads/:id/state` — `read`
+ * - `thread.delete` — `DELETE /threads/:id` — `delete`
+ * - `thread.cancel` — `POST /threads/:id/cancel` — `update`
+ * - `run.stream` — `POST /threads/:id/runs/stream` — `update`
+ * - `run.wait` — `POST /threads/:id/runs/wait` — `update`
+ * - `run.resume` — `POST /threads/:id/resume` — `update`
+ * - `run.agui` — `POST /agui/:routeId` — `update`
+ *
+ * The union ships whole, but the four `run.*` members are not gated yet: a
+ * policy may match them today and simply will not be invoked for them until the
+ * run endpoints are wired. They are here so that wiring adds no published type
+ * change, and so nobody writes an exhaustive `switch` that a later release
+ * breaks.
+ */
 export type ThreadOperation =
-  | "thread.create" // POST   /threads
-  | "thread.get" // GET    /threads/:id
-  | "thread.state" // GET    /threads/:id/state
-  | "thread.delete" // DELETE /threads/:id
-  | "thread.cancel" // POST   /threads/:id/cancel
-  | "run.stream" // POST   /threads/:id/runs/stream
-  | "run.wait" // POST   /threads/:id/runs/wait
-  | "run.resume" // POST   /threads/:id/resume
-  | "run.agui" // POST   /agui/:routeId
+  | "thread.create"
+  | "thread.get"
+  | "thread.state"
+  | "thread.delete"
+  | "thread.cancel"
+  | "run.stream"
+  | "run.wait"
+  | "run.resume"
+  | "run.agui"
 
 /**
  * The persisted thread as the policy sees it: the stored row, plus the server
@@ -36,8 +57,9 @@ export interface ThreadSubject {
   readonly status: "idle" | "busy" | "interrupted"
   /**
    * Client-supplied metadata, verbatim and UNTRUSTED — anyone who can create a
-   * thread can put anything here. Never contains the reserved key: Dawn strips
-   * it on every create path. Do not authorize against this field.
+   * thread can put anything here. Never contains the reserved key — Dawn lifts
+   * it into `access` before building this object. Do not authorize against this
+   * field.
    */
   readonly metadata: Readonly<Record<string, unknown>>
   /**
@@ -114,9 +136,11 @@ export interface ThreadAccessDeny {
 export type ThreadAccessResult = ThreadAccessAllow | ThreadAccessDeny
 
 /**
- * One action's handler. Sync-or-async on purpose: a header-only policy that
- * returns a plain object introduces NO microtask boundary in the runtime, which
- * is what lets the `/cancel` gate run after the run claim is already bound.
+ * One action's handler. Sync-or-async on purpose: a handler that returns a
+ * plain object is resolved by the runtime with no microtask boundary, so a
+ * header-only policy costs nothing on the hot path. An `async` handler is
+ * equally correct — the runtime awaits it — and every gated endpoint is
+ * ordered so that awaiting here is safe.
  */
 export type DawnThreadAccess = (
   req: ThreadAccessRequest,
