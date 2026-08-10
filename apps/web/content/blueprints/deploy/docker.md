@@ -30,7 +30,7 @@ Confirm these prerequisites before changing the app:
 
    If Docker is unavailable, install it from [docker.com/get-started](https://www.docker.com/get-started/) before building the image.
 
-3. **Project conventions** — detect the package manager from the lockfile, read `AGENTS.md` when present, and inspect `dawn.config.ts`, `package.json`, `.dockerignore`, and any existing root `Dockerfile`.
+3. **Project conventions and package metadata** — read `AGENTS.md` when present, then inspect `dawn.config.ts`, `package.json`, every lockfile, `.dockerignore`, and any existing root `Dockerfile`. Do not assume the generated image uses the repository's preferred package manager; its install step is always npm.
 
 ## Keep the CLI at runtime
 
@@ -45,6 +45,25 @@ pnpm add @dawn-ai/cli
 ```
 
 Preserve the app's existing version range or workspace specifier when moving the dependency.
+
+## Prepare a current npm lockfile
+
+The generated Dockerfile is not package-manager-aware. It copies `package.json`, an optional `package-lock.json`, and an optional `pnpm-lock.yaml`, then always runs:
+
+```dockerfile
+RUN npm ci --omit=dev || npm install --omit=dev
+```
+
+It never runs pnpm or Yarn, and a pnpm or Yarn lockfile does not constrain npm's resolver. Require a current `package-lock.json` for a reproducible production image, even when contributors use another package manager locally:
+
+```bash
+npm install --package-lock-only --ignore-scripts
+npm ci --omit=dev --dry-run
+```
+
+Review and commit the resulting lockfile. A pnpm- or Yarn-only repository otherwise gets an npm-resolved dependency graph inside the image, which can differ from local development. If repository policy forbids `package-lock.json`, stop: the current generated Dockerfile cannot provide a lockfile-reproducible install for that repository. Do not hide the mismatch by hand-authoring another Dockerfile in this blueprint.
+
+During `docker build`, confirm `npm ci --omit=dev` succeeds. The generated `|| npm install --omit=dev` fallback is recovery behavior, not a reproducibility guarantee; investigate and fix any lockfile mismatch that triggers it.
 
 ## Select the Node target
 
@@ -93,7 +112,7 @@ Do not add an older blueprint marker or manually recreate the generated contents
 
 ## Keep the build artifact in the Docker context
 
-The generated Dockerfile copies the host-built `.dawn/build/` directory into the image; it does not rerun `dawn build` inside the container. Make sure the app root is the Docker build context and that `.dockerignore` does **not** exclude `.dawn`, `.dawn/build`, or `server.mjs`.
+The generated Dockerfile copies the host-built `.dawn/build/` directory into the image; it does not rerun `dawn build` inside the container. Make sure the app root is the Docker build context and that `.dockerignore` does **not** exclude `.dawn`, `.dawn/build`, `server.mjs`, or `package-lock.json`.
 
 It is safe and recommended to exclude local dependencies, source-control data, and secrets while retaining `.dawn/build`:
 
@@ -122,7 +141,13 @@ docker build --file "$DAWN_DOCKERFILE" --tag my-dawn-app .
 
 Keep `.` as the final build-context argument even when the Dockerfile lives under `.dawn/build/`; its `COPY` instructions are rooted at the app.
 
-The generated image is a single-stage `node:24-slim` image. It installs production dependencies, copies the app and `.dawn/build`, changes ownership to UID/GID `1000:1000`, runs as that non-root user, exposes port `8000`, checks `/healthz`, and starts `.dawn/build/server.mjs`.
+The generated image is a single-stage `node:24-slim` image. It installs production dependencies with npm, copies the app and `.dawn/build`, changes ownership to UID/GID `1000:1000`, runs as that non-root user, exposes port `8000`, checks `/healthz`, and starts `.dawn/build/server.mjs`.
+
+## Protect the HTTP runtime
+
+> **Warning:** Do not expose the Dawn Node runtime directly to the public internet. Put reverse-proxy, ingress, or platform authentication in front of the entire service and apply network restrictions so only trusted callers can reach it.
+
+Application middleware gates route-execution requests, but it is not blanket server authentication. Health, thread-management and state endpoints bypass app middleware. The memory-candidate management endpoints also bypass it; they list candidates across namespaces and can approve or delete records. External authentication and network controls must cover these routes as well as Agent Protocol and AG-UI.
 
 ## Pass secrets at container run time
 
@@ -130,10 +155,12 @@ Never bake provider keys, database credentials, or other secrets into the image.
 
 ```bash
 docker run --rm \
-  --publish 8000:8000 \
+  --publish 127.0.0.1:8000:8000 \
   --env-file .env \
   my-dawn-app
 ```
+
+The loopback bind is for a local smoke test. In production, keep the container on a private network and publish it only through the authenticated proxy or platform boundary described above.
 
 The Node runtime reads its environment at run time. Document required keys in a safe `.env.example`, but do not commit populated secret files.
 
@@ -155,8 +182,9 @@ Mount durable storage or configure external stores when thread state must surviv
 
 ## Updating an existing install
 
-1. Confirm Node >=24 and keep `@dawn-ai/cli` in `dependencies`.
+1. Confirm Node >=24, keep `@dawn-ai/cli` in `dependencies`, and refresh and validate `package-lock.json` with npm.
 2. Run `dawn verify`, `dawn test`, and `dawn build --clean` again.
 3. Let the generated marker decide placement: Dawn refreshes its marked root Dockerfile and preserves an unmarked user file by emitting `.dawn/build/Dockerfile`.
-4. Confirm `.dawn/build` remains in the build context.
-5. Rebuild using the actual emitted path and repeat the `/healthz` plus route smoke tests.
+4. Confirm `.dawn/build` and `package-lock.json` remain in the build context.
+5. Rebuild using the actual emitted path; confirm the build uses `npm ci` rather than its fallback.
+6. Repeat the loopback-only `/healthz` and route smoke tests, then verify the production proxy authentication and network restrictions.

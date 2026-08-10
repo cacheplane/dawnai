@@ -36,17 +36,25 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    - Dynamic segments like \`[tenant]\` — preserved in the route id; provide values in JSON input when invoking the route. The optional \`--template basic\` scaffold uses \`/hello/[tenant]\`.
    - \`.dawn/dawn.generated.d.ts\` — auto-generated ambient types from the TypeScript compiler API.
 
-3. Run the scaffolded route end-to-end:
+3. Start with the offline, deterministic agent harness tests and replay-backed eval. These need no model-provider key:
    \`\`\`
+   npm test
+   npm run eval
+   \`\`\`
+
+4. Only then opt into a live model run. Require the user to provide a real \`OPENAI_API_KEY\`; never invent or commit one:
+   \`\`\`
+   export OPENAI_API_KEY=sk-...
    echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
    \`\`\`
 
-4. Start the dev server in one terminal:
+5. For live HTTP operation, set the key in the dev-server terminal before starting Dawn:
    \`\`\`
+   export OPENAI_API_KEY=sk-...
    pnpm exec dawn dev --port 2024
    \`\`\`
 
-5. In another terminal, show the Agent Protocol shape for the same route:
+6. In another terminal, show the Agent Protocol shape for the same route:
    \`\`\`
    THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
    curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \\
@@ -55,7 +63,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    \`\`\`
    For streaming, use the same body with \`POST /threads/$THREAD_ID/runs/stream\` and consume the SSE events.
 
-6. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
+7. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
 
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
@@ -247,18 +255,24 @@ const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can 
 
    **Dawn Node runtime — full self-hosted surface**
    \`\`\`ts
+   import { config } from "@dawn-ai/cli"
+
    export default config({ build: { targets: ["node"] } })
    \`\`\`
    This emits \`.dawn/build/server.mjs\`, a static module manifest, and a hardened Node 24 Dockerfile. Serve the Dawn runtime directly with \`dawn start\` or build the emitted Dockerfile. Ensure \`@dawn-ai/cli\` is in \`dependencies\`, not \`devDependencies\`. Supply runtime secrets in the process/container environment: \`dawn start\` does not load the file named by \`config.env\`. The Node runtime serves Agent Protocol, AG-UI, middleware, and the configured sandbox. Its default local stores and in-process run/cancel registry require one replica unless thread-keyed stickiness or distributed coordination is guaranteed.
 
    **Hono edge app — compatible subset only**
    \`\`\`ts
+   import { config } from "@dawn-ai/cli"
+
    export default config({ build: { targets: ["hono"] } })
    \`\`\`
    This emits \`app.mjs\`, \`modules.edge.mjs\`, a per-request Postgres store factory, and \`wrangler.toml\`. It serves Agent Protocol, AG-UI, and middleware, with Postgres-backed checkpoints, threads, and permissions. It cannot serve sandbox, filesystem/shell workspace capabilities, tool-output offloading, route skills, or typed long-term memory; custom store handles are rejected by the capability gate. \`memory.md\` and \`plan.md\` do not activate without a filesystem marker provider. Configure \`DATABASE_URL\` and the generated runtime dependencies, then deploy only after the capability validation passes. Run/cancel coordination remains isolate-local, so the same stickiness/distributed-coordination rule applies.
 
    **LangSmith entries — platform-owned transport**
    \`\`\`ts
+   import { config } from "@dawn-ai/cli"
+
    export default config({ build: { targets: ["langsmith"] } })
    \`\`\`
    This emits \`.dawn/build/langgraph.json\` and per-route entries keyed by \`<routeId>#<kind>\`, such as \`/research#agent\`. These are generated graphs, not the Dawn HTTP server: Dawn middleware, AG-UI, and the sandbox manager are absent. The generated config currently sets \`node_version: "22"\`, while Dawn packages require Node >=24. Treat that as an unresolved compatibility mismatch and confirm the platform can run the required Node version before deployment.
