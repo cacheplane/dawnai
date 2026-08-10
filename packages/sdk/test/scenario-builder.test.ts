@@ -766,12 +766,19 @@ describe("scenarios", () => {
     const authoredSet = new Set(["entry"])
     const authoredPattern = /dawn/gi
     const authoredTyped = new Uint8Array([1, 2, 3])
+    const authoredBlob = new Blob(["Dawn"], { type: "text/plain" })
+    const authoredFile = new File(["Dawn"], "dawn.txt", {
+      lastModified: 123,
+      type: "text/plain",
+    })
     const mock = async ({ query }: { readonly query: string }) => ({ results: [query] })
     const assertion = () => "asserted"
     const suite = scenarios("/research").scenario("cross-copy", (s) =>
       s
         .input({
+          blob: authoredBlob,
           date: authoredDate,
+          file: authoredFile,
           map: authoredMap,
           pattern: authoredPattern,
           set: authoredSet,
@@ -799,7 +806,9 @@ describe("scenarios", () => {
     const scenario = secondSdk.readScenarioSuite(suite).scenarios[0]
     if (!scenario) throw new Error("Expected a scenario descriptor")
     const snapshot = scenario.input as {
+      blob: Blob
       date: Date
+      file: File
       map: Map<string, { count: number }>
       pattern: RegExp
       set: Set<string>
@@ -807,6 +816,10 @@ describe("scenarios", () => {
     }
 
     expect(snapshot.date.toISOString()).toBe("2026-08-09T12:00:00.000Z")
+    await expect(snapshot.blob.slice(0, 2).text()).resolves.toBe("Da")
+    await expect(snapshot.file.slice(2).text()).resolves.toBe("wn")
+    expect(snapshot.file.name).toBe("dawn.txt")
+    expect(snapshot.file.lastModified).toBe(123)
     expect(snapshot.map.get("entry")).toEqual({ count: 1 })
     expect(snapshot.map.has("later")).toBe(false)
     expect([...snapshot.set]).toEqual(["entry"])

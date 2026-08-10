@@ -1,4 +1,4 @@
-import { isPromise, isWeakMap, isWeakSet } from "node:util/types"
+import * as nodeTypeChecks from "node:util/types"
 
 const SNAPSHOT_DATA = Symbol.for("dawn.scenario-readonly-snapshot-data.v1")
 const DATE_MUTATORS = new Set<PropertyKey>([
@@ -40,22 +40,9 @@ const TYPED_ARRAY_CONSTRUCTORS = {
   Uint8ClampedArray,
 } as const
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object
-const UNSUPPORTED_INTRINSIC_PROTOTYPES: readonly {
-  readonly name: string
-  readonly prototype: object
-}[] = [
-  { name: "Promise", prototype: Promise.prototype },
-  { name: "WeakMap", prototype: WeakMap.prototype },
-  { name: "WeakSet", prototype: WeakSet.prototype },
-  ...(typeof WeakRef === "function" ? [{ name: "WeakRef", prototype: WeakRef.prototype }] : []),
-  ...(typeof FinalizationRegistry === "function"
-    ? [{ name: "FinalizationRegistry", prototype: FinalizationRegistry.prototype }]
-    : []),
-  ...(typeof URL === "function" ? [{ name: "URL", prototype: URL.prototype }] : []),
-  ...(typeof URLSearchParams === "function"
-    ? [{ name: "URLSearchParams", prototype: URLSearchParams.prototype }]
-    : []),
-]
+const NODE_INTRINSIC_OBJECT_CHECKS = Object.values(nodeTypeChecks).filter(
+  (value): value is (candidate: unknown) => boolean => typeof value === "function",
+)
 
 type BinaryBuffer = ArrayBuffer | SharedArrayBuffer
 type BinaryBufferKind = "ArrayBuffer" | "SharedArrayBuffer"
@@ -84,6 +71,33 @@ interface TypedArraySnapshotData {
   readonly kind: "TypedArray"
   readonly length: number
   readonly name: TypedArrayName
+}
+
+interface BlobSnapshotData {
+  readonly blob: Blob
+  readonly kind: "Blob"
+  readonly size: number
+  readonly type: string
+}
+
+interface FileSnapshotData {
+  readonly blob: Blob
+  readonly kind: "File"
+  readonly lastModified: number
+  readonly name: string
+  readonly size: number
+  readonly type: string
+}
+
+interface BlobState {
+  readonly blob: Blob
+  readonly size: number
+  readonly type: string
+}
+
+interface FileState extends BlobState {
+  readonly lastModified: number
+  readonly name: string
 }
 
 export function createScenarioSnapshotter(): (value: unknown) => unknown {
@@ -254,45 +268,42 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
     }
 
     if (typeof File !== "undefined" && value instanceof File) {
-      const name = readBuiltInAccessor(File.prototype, "name", value)
-      const lastModified = readBuiltInAccessor(File.prototype, "lastModified", value)
-      const type = readBuiltInAccessor(Blob.prototype, "type", value)
-
-      if (
-        typeof name !== "string" ||
-        typeof lastModified !== "number" ||
-        typeof type !== "string"
-      ) {
-        throw new TypeError("File state is malformed")
-      }
-
-      const target = new File([value], name, {
-        lastModified,
-        type,
+      const state = readFileState(value)
+      const target = new File([state.blob], state.name, {
+        lastModified: state.lastModified,
+        type: state.type,
       })
-      const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
-      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
-      remember(value, target)
-      snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
-      recursivelyFreezeOwnData(target)
-      return target
+      const intrinsicKeys = new Set<PropertyKey>([
+        ...Reflect.ownKeys(target),
+        SNAPSHOT_DATA,
+        "lastModified",
+        "name",
+        "size",
+        "type",
+      ])
+      const shell = Object.create(Object.getPrototypeOf(value)) as File
+      const proxy = createReadOnlyFileSnapshot(shell, target, state)
+      remember(value, proxy)
+      snapshotOwnProperties(value, shell, snapshot, (key) => intrinsicKeys.has(key))
+      Object.freeze(shell)
+      return proxy
     }
 
     if (typeof Blob !== "undefined" && value instanceof Blob) {
-      const size = readBuiltInAccessor(Blob.prototype, "size", value)
-      const type = readBuiltInAccessor(Blob.prototype, "type", value)
-
-      if (typeof size !== "number" || typeof type !== "string") {
-        throw new TypeError("Blob state is malformed")
-      }
-
-      const target = Blob.prototype.slice.call(value, 0, size, type) as Blob
-      const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
-      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
-      remember(value, target)
-      snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
-      recursivelyFreezeOwnData(target)
-      return target
+      const state = readBlobState(value)
+      const target = state.blob
+      const intrinsicKeys = new Set<PropertyKey>([
+        ...Reflect.ownKeys(target),
+        SNAPSHOT_DATA,
+        "size",
+        "type",
+      ])
+      const shell = Object.create(Object.getPrototypeOf(value)) as Blob
+      const proxy = createReadOnlyBlobSnapshot(shell, target, state)
+      remember(value, proxy)
+      snapshotOwnProperties(value, shell, snapshot, (key) => intrinsicKeys.has(key))
+      Object.freeze(shell)
+      return proxy
     }
 
     if (typeof DOMException !== "undefined" && value instanceof DOMException) {
@@ -320,17 +331,7 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
       return Object.freeze(target)
     }
 
-    const unsupportedType = readUnsupportedIntrinsicType(value)
-
-    if (unsupportedType) {
-      throw new TypeError(`${unsupportedType} snapshot values are not supported`)
-    }
-
-    const tag = readObjectTagWithoutAccessors(value)
-
-    if (tag !== "[object Object]") {
-      throw new TypeError(`${readSnapshotTypeName(tag)} snapshot values are not supported`)
-    }
+    assertGenericCloneEligible(value)
 
     const copy = Object.create(Object.getPrototypeOf(value)) as object
     remember(value, copy)
@@ -400,6 +401,81 @@ function createReadOnlyDateSnapshot(target: Date): Date {
     set: rejectSnapshotMutation,
     setPrototypeOf: rejectSnapshotMutation,
   })
+}
+
+function createReadOnlyBlobSnapshot(shell: Blob, target: Blob, state: BlobState): Blob {
+  return new Proxy(shell, createBlobProxyHandler(target, state))
+}
+
+function createReadOnlyFileSnapshot(shell: File, target: File, state: FileState): File {
+  return new Proxy(shell, {
+    ...createBlobProxyHandler(target, state),
+    get(file, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return createFileSnapshotData(target, state)
+      }
+
+      if (property === "name") {
+        return state.name
+      }
+
+      if (property === "lastModified") {
+        return state.lastModified
+      }
+
+      return readBlobProxyProperty(file, target, state, property, receiver)
+    },
+  })
+}
+
+function createBlobProxyHandler<TBlob extends Blob>(
+  target: TBlob,
+  state: BlobState,
+): ProxyHandler<TBlob> {
+  return {
+    get(blob, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return createBlobSnapshotData(target, state)
+      }
+
+      return readBlobProxyProperty(blob, target, state, property, receiver)
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  }
+}
+
+function readBlobProxyProperty(
+  shell: Blob,
+  target: Blob,
+  state: BlobState,
+  property: PropertyKey,
+  receiver: object,
+): unknown {
+  if (property === "size") {
+    return state.size
+  }
+
+  if (property === "type") {
+    return state.type
+  }
+
+  const result = Reflect.get(shell, property, receiver)
+  const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, property)
+
+  if (
+    typeof result === "function" &&
+    property !== "constructor" &&
+    descriptor &&
+    "value" in descriptor &&
+    result === descriptor.value
+  ) {
+    return result.bind(target)
+  }
+
+  return result
 }
 
 function createReadOnlyMapSnapshot(target: Map<unknown, unknown>): Map<unknown, unknown> {
@@ -685,6 +761,70 @@ function readDateTime(source: Date): number {
 
     return data.time
   }
+}
+
+function readBlobState(source: Blob): BlobState {
+  try {
+    return readIntrinsicBlobState(source)
+  } catch {
+    return parseBlobSnapshotData(readSnapshotData(source, "Blob"))
+  }
+}
+
+function readFileState(source: File): FileState {
+  try {
+    const blob = readIntrinsicBlobState(source)
+    const name = readBuiltInAccessor(File.prototype, "name", source)
+    const lastModified = readBuiltInAccessor(File.prototype, "lastModified", source)
+
+    if (typeof name !== "string" || typeof lastModified !== "number") {
+      throw new TypeError("File state is malformed")
+    }
+
+    return { ...blob, lastModified, name }
+  } catch {
+    return parseFileSnapshotData(readSnapshotData(source, "File"))
+  }
+}
+
+function readIntrinsicBlobState(source: Blob): BlobState {
+  const size = readBuiltInAccessor(Blob.prototype, "size", source)
+  const type = readBuiltInAccessor(Blob.prototype, "type", source)
+
+  if (typeof size !== "number" || typeof type !== "string") {
+    throw new TypeError("Blob state is malformed")
+  }
+
+  const blob = Blob.prototype.slice.call(source, 0, size, type) as Blob
+  return { blob, size, type }
+}
+
+function parseBlobSnapshotData(data: Record<PropertyKey, unknown>): BlobState {
+  if (
+    !(data.blob instanceof Blob) ||
+    typeof data.size !== "number" ||
+    typeof data.type !== "string"
+  ) {
+    throw new TypeError("Blob snapshot data is malformed")
+  }
+
+  const blob = readIntrinsicBlobState(data.blob)
+
+  if (blob.size !== data.size || blob.type !== data.type) {
+    throw new TypeError("Blob snapshot data is malformed")
+  }
+
+  return blob
+}
+
+function parseFileSnapshotData(data: Record<PropertyKey, unknown>): FileState {
+  const blob = parseBlobSnapshotData(data)
+
+  if (typeof data.name !== "string" || typeof data.lastModified !== "number") {
+    throw new TypeError("File snapshot data is malformed")
+  }
+
+  return { ...blob, lastModified: data.lastModified, name: data.name }
 }
 
 function readMapEntries(source: Map<unknown, unknown>): readonly (readonly [unknown, unknown])[] {
@@ -1034,6 +1174,23 @@ function createRegExpSnapshotData(target: RegExp): Readonly<Record<string, unkno
   })
 }
 
+function createBlobSnapshotData(target: Blob, state: BlobState): Readonly<BlobSnapshotData> {
+  const blob = Blob.prototype.slice.call(target, 0, state.size, state.type) as Blob
+  return Object.freeze({ blob, kind: "Blob", size: state.size, type: state.type })
+}
+
+function createFileSnapshotData(target: File, state: FileState): Readonly<FileSnapshotData> {
+  const blob = Blob.prototype.slice.call(target, 0, state.size, state.type) as Blob
+  return Object.freeze({
+    blob,
+    kind: "File",
+    lastModified: state.lastModified,
+    name: state.name,
+    size: state.size,
+    type: state.type,
+  })
+}
+
 function isCanonicalArrayIndex(key: PropertyKey): boolean {
   if (typeof key !== "string" || key.length === 0) {
     return false
@@ -1047,10 +1204,6 @@ function isTypedArrayElementKey(key: PropertyKey): boolean {
   return isCanonicalArrayIndex(key)
 }
 
-function readSnapshotTypeName(tag: string): string {
-  return tag.startsWith("[object ") && tag.endsWith("]") ? tag.slice(8, -1) : tag
-}
-
 function readBoxedBigInt(value: object): bigint | undefined {
   try {
     return Reflect.apply(BigInt.prototype.valueOf, value, []) as bigint
@@ -1059,59 +1212,106 @@ function readBoxedBigInt(value: object): bigint | undefined {
   }
 }
 
-function readUnsupportedIntrinsicType(value: object): string | undefined {
-  if (isPromise(value)) {
-    return "Promise"
+function assertGenericCloneEligible(value: object): void {
+  if (nodeTypeChecks.isPromise(value)) {
+    throw new TypeError("Promise snapshot values are not supported")
   }
 
-  if (isWeakMap(value)) {
-    return "WeakMap"
+  if (nodeTypeChecks.isWeakMap(value)) {
+    throw new TypeError("WeakMap snapshot values are not supported")
   }
 
-  if (isWeakSet(value)) {
-    return "WeakSet"
+  if (nodeTypeChecks.isWeakSet(value)) {
+    throw new TypeError("WeakSet snapshot values are not supported")
   }
 
   const seen = new Set<object>()
   let current: object | null = value
+  let isRoot = true
 
   while (current && !seen.has(current)) {
     seen.add(current)
 
-    for (const intrinsic of UNSUPPORTED_INTRINSIC_PROTOTYPES) {
-      if (current === intrinsic.prototype) {
-        return intrinsic.name
+    if (isNodeIntrinsicObject(current)) {
+      throw new TypeError("Intrinsic snapshot values are not supported by generic cloning")
+    }
+
+    const tagDescriptor = Object.getOwnPropertyDescriptor(current, Symbol.toStringTag)
+
+    if (tagDescriptor) {
+      if (!("value" in tagDescriptor)) {
+        throw new TypeError(
+          `Snapshot accessor property ${String(Symbol.toStringTag)} is not supported`,
+        )
       }
+
+      const typeName =
+        typeof tagDescriptor.value === "string" && tagDescriptor.value.length > 0
+          ? tagDescriptor.value
+          : "Symbol.toStringTag"
+      throw new TypeError(`${typeName} snapshot values are not supported`)
+    }
+
+    if (current === Object.prototype) {
+      return
+    }
+
+    if (!isRoot && hasNativePrototypeMember(current)) {
+      throw new TypeError("Intrinsic snapshot values are not supported by generic cloning")
     }
 
     current = Object.getPrototypeOf(current) as object | null
+    isRoot = false
   }
-
-  return undefined
 }
 
-function readObjectTagWithoutAccessors(value: object): string {
-  const seen = new Set<object>()
-  let current: object | null = value
-
-  while (current && !seen.has(current)) {
-    seen.add(current)
-    const descriptor = Object.getOwnPropertyDescriptor(current, Symbol.toStringTag)
-
-    if (descriptor && !("value" in descriptor)) {
-      throw new TypeError(
-        `Snapshot accessor property ${String(Symbol.toStringTag)} is not supported`,
-      )
+function isNodeIntrinsicObject(value: object): boolean {
+  for (const check of NODE_INTRINSIC_OBJECT_CHECKS) {
+    try {
+      if (check(value)) {
+        return true
+      }
+    } catch {
+      return true
     }
-
-    if (descriptor) {
-      break
-    }
-
-    current = Object.getPrototypeOf(current) as object | null
   }
 
-  return Object.prototype.toString.call(value)
+  return false
+}
+
+function hasNativePrototypeMember(prototype: object): boolean {
+  for (const key of Reflect.ownKeys(prototype)) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+
+    if (!descriptor) {
+      return true
+    }
+
+    if ("value" in descriptor && typeof descriptor.value === "function") {
+      if (isNativeFunction(descriptor.value)) {
+        return true
+      }
+
+      continue
+    }
+
+    if (
+      (!("value" in descriptor) && descriptor.get && isNativeFunction(descriptor.get)) ||
+      (!("value" in descriptor) && descriptor.set && isNativeFunction(descriptor.set))
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function isNativeFunction(value: (...args: never[]) => unknown): boolean {
+  try {
+    return Function.prototype.toString.call(value).includes("[native code]")
+  } catch {
+    return true
+  }
 }
 
 function materializeStack(
@@ -1149,35 +1349,6 @@ function materializeStack(
     value,
     writable: false,
   })
-}
-
-function recursivelyFreezeOwnData(value: object): void {
-  const seen = new Set<object>()
-
-  function freeze(current: object): void {
-    if (seen.has(current)) {
-      return
-    }
-
-    seen.add(current)
-
-    for (const key of Reflect.ownKeys(current)) {
-      const descriptor = Object.getOwnPropertyDescriptor(current, key)
-
-      if (
-        descriptor &&
-        "value" in descriptor &&
-        (typeof descriptor.value === "object" || typeof descriptor.value === "function") &&
-        descriptor.value !== null
-      ) {
-        freeze(descriptor.value)
-      }
-    }
-
-    Object.freeze(current)
-  }
-
-  freeze(value)
 }
 
 function snapshotOwnProperties(
