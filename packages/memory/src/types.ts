@@ -53,8 +53,12 @@ export interface VectorRankingOptions {
 }
 export interface BrowseQuery {
   readonly namespacePrefix?: string
-  readonly status?: MemoryStatus
-  readonly kind?: MemoryKind
+  /** One status, or a set matching any of them. An EMPTY set matches nothing —
+   *  "any of none" is false, and reading it as "unfiltered" would show every
+   *  row to a caller that had just narrowed to zero. */
+  readonly status?: MemoryStatus | readonly MemoryStatus[]
+  /** One kind, or a set matching any of them; empty matches nothing. */
+  readonly kind?: MemoryKind | readonly MemoryKind[]
   readonly sourceType?: MemorySource["type"]
   readonly limit?: number
   readonly offset?: number
