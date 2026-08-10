@@ -46,12 +46,19 @@ if the explicit A/B failure threshold in Task 5 is met and documented.
 - Read: `package.json`
 - Read: `pnpm-lock.yaml`
 - Create: `scripts/security/dependency-evidence.mjs`
+- Create: `scripts/security/github-evidence.mjs`
+- Create: `scripts/security/publication-containment.mjs`
+- Create: `scripts/security/dependabot-reconcile.mjs`
 - Create: `test/security-dependencies/dependency-evidence.test.ts`
+- Create: `test/security-dependencies/github-evidence.test.ts`
+- Create: `test/security-dependencies/publication-containment.test.ts`
+- Create: `test/security-dependencies/dependabot-reconcile.test.ts`
 - Create: `test/security-dependencies/fixtures/audit-baseline.json`
 - Create: `test/security-dependencies/fixtures/audit-provider-utils-only.json`
 - Create: `test/security-dependencies/fixtures/dependabot-baseline.json`
 - Create: `test/security-dependencies/vitest.config.ts`
 - Create: `test/security-dependencies/tsconfig.json`
+- Create: `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
 - Modify: `vitest.workspace.ts`
 
 - [ ] **Step 1: Verify branch, base, tools, and a clean worktree**
@@ -77,59 +84,133 @@ above the pinned base. Commit this plan before beginning Task 1. If `origin/main
 moved, stop and rebase/re-review the plan onto the new exact main SHA before
 editing; do not refresh a security lock against a stale base.
 
-- [ ] **Step 2: Prove publication is still durably paused**
+- [ ] **Step 2: Prove the operational hold before adding the reviewed reader**
+
+Use exact workflow IDs and paths. The initial precondition queries every
+documented non-completed Actions status independently with `per_page=1`; a
+result is accepted only when `total_count` is numeric zero and `workflow_runs`
+is exactly empty. This avoids an unbounded pre-reader pagination path:
 
 ```bash
 set -euo pipefail
-test "$(gh api repos/cacheplane/dawnai/actions/workflows/release.yml --jq .state)" = "disabled_manually"
-test "$(gh api repos/cacheplane/dawnai/actions/workflows/publish-chart.yml --jq .state)" = "disabled_manually"
-gh api --paginate 'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
-  | jq -s -e '[.[].workflow_runs[] | select(.status != "completed")] | length == 0'
-gh api --paginate 'repos/cacheplane/dawnai/actions/workflows/309127405/runs?per_page=100' \
-  | jq -s -e '[.[].workflow_runs[] | select(.status != "completed")] | length == 0'
+release_workflow="$(gh api repos/cacheplane/dawnai/actions/workflows/260503756)"
+chart_workflow="$(gh api repos/cacheplane/dawnai/actions/workflows/309127405)"
+jq -e '.id == 260503756 and .path == ".github/workflows/release.yml" and .state == "disabled_manually"' \
+  <<<"$release_workflow" >/dev/null
+jq -e '.id == 309127405 and .path == ".github/workflows/publish-chart.yml" and .state == "disabled_manually"' \
+  <<<"$chart_workflow" >/dev/null
+for workflow_id in 260503756 309127405; do
+  for run_status in queued in_progress waiting requested pending; do
+    response="$(gh api "repos/cacheplane/dawnai/actions/workflows/$workflow_id/runs?status=$run_status&per_page=1")"
+    jq -e '.total_count == 0 and .workflow_runs == []' <<<"$response" >/dev/null
+  done
+done
 ```
 
-Expected: both workflows are `disabled_manually` and both workflow-wide,
-all-page queries return `true`. Any API, pagination, parse, or state ambiguity
-blocks the task.
+Expected: the path-resolved workflow objects match the hard-coded IDs, both are
+`disabled_manually`, and every non-completed status is empty. Any API, parse, or
+state ambiguity blocks the task. This is only the bootstrap guard; Step 4 adds
+the complete bounded workflow/public-registry containment proof.
 
 - [ ] **Step 3: Build the bounded evidence reader with TDD**
 
 First add the dedicated repository-root Vitest config described in Task 2 Step
 1 and register it in `vitest.workspace.ts`; the missing evidence module is the
-first RED. Add focused tests before implementation. The reader exposes three
-read-only operations:
+first RED. Add focused tests before implementation. Keep the CLI, GitHub
+transport, publication correlation, and alert reconciliation in the four
+focused modules listed above. The CLI exposes four read-only operations:
 
 - `audit`: executes exact argv for full and production `pnpm audit --json`, with
   one shared wall-clock deadline, stdout/stderr byte caps, no shell, explicit
   exit-code handling, process termination on timeout/overflow, and secret-safe
   errors. It accepts exit `1` only for a parsed audit result with an advisories
   object, no error envelope, record identities present, severity totals equal to
-  the record count, and the exact expected package/version/GHSA multiset from a
-  contained regular-file fixture supplied with `--expected`. The fixture has
-  separate `full` and `production` records and requires an explicit empty
-  `muted` array in each mode. Exit `0` is accepted only when both expected sets
-  are empty; every other status is an error. A missing `muted` field or any
-  non-empty `muted` record fails closed.
-- `dependabot`: executes bounded, fixed-argv `gh api` requests for
-  `repos/cacheplane/dawnai/dependabot/alerts?state=open&per_page=100&page=N`,
-  never follows more than ten pages, stops only on a short page, caps aggregate
-  bytes/records/time, and validates exact alert number, state, dependency
-  package/manifest/scope, GHSA, dismissal, and timestamps. It rejects duplicate
-  records, missing fields, error objects, partial pagination, an unsafe repo, or
-  a set different from `--expected-open`.
-- `dependabot-fixed`: reads each explicitly supplied alert number by its exact
-  REST resource, under the same aggregate bounds, and requires `state=fixed`, a
-  null dismissal, unchanged package/manifest/scope/GHSA identity from the
-  baseline fixture supplied with `--expected-identities`, and `fixed_at` no
-  earlier than `--fixed-since`.
+  the record count, and the exact expected
+  package/version/GHSA/reported-severity multiset from a contained regular-file
+  fixture supplied with `--expected`. The fixture has separate `full` and
+  `production` records and requires an explicit empty `muted` array in each
+  mode. Exit `0` is accepted only when both expected sets are empty; every other
+  status is an error. A missing `muted` field, any non-empty `muted` record, or
+  severity moved between otherwise identical records fails closed.
+- `baseline`: reads the complete live Dependabot open set and publication
+  containment state. Dependabot follows only the API's opaque cursor from a
+  validated, same-origin, repository-scoped `Link: ...; rel="next"`; the
+  unsupported `page=N` parameter is never sent. Missing, duplicate, mixed,
+  foreign, credentialed, cyclic, malformed, or more-than-ten-page next links
+  fail closed. The terminal page is proved only by absence of `rel="next"`, not
+  by a short page. Exact alert identities bind number/state/ecosystem/package/
+  manifest/scope/GHSA/reported severity/dismissal/timestamps to
+  `--expected-identities` and `--expected-open`.
+- `reconcile`: validates the exact merged PR/head/base/merge identity, derives
+  `merged_at`, and polls the expected fixed/open alert sets under one validated
+  wall-clock deadline, interval, request/byte/record budget, and attempt cap.
+  Once the target state appears, it captures complete cursor-paginated open
+  snapshot A, reads every expected-fixed record by exact number, captures open
+  snapshot B, and accepts only byte-identical canonical open snapshots with the
+  same stable default-branch head before and after. Every fixed record retains
+  the baseline package/manifest/scope/GHSA/reported-severity identity, has a
+  null dismissal, and has `fixed_at >= merged_at`. It independently validates
+  the supplied audit receipt, embeds its complete normalized full/production
+  status, tuple, severity-total, and empty-muted evidence in the canonical
+  reconciliation receipt, and also binds the original audit-receipt digest.
+- `seal-receipt`: accepts only a bounded base64 canonical reconciliation
+  receipt plus its exact SHA-256 and immutable repository correlation inputs,
+  revalidates the complete receipt schema and digest without network access,
+  then writes the exact receipt plus a separate canonical uploader manifest
+  containing the current workflow run ID/attempt to a contained output
+  directory. The pre-dispatch receipt cannot contain its future uploader run
+  identity. The operation never logs the receipt payload.
+
+Both `baseline` and `reconcile` call `publication-containment.mjs`. Its GitHub
+reads use fixed-argv `gh api --include` one page at a time so credentials remain
+inside `gh`; page and cursor next links share the same strict URL validator and
+aggregate deadline/byte/page/record budgets. It requires:
+
+- GitHub default branch and local inventory source identities equal the supplied
+  full SHAs;
+- workflow IDs `260503756` and `309127405` resolve to the exact Release and
+  Publish Chart paths, remain `disabled_manually`, and have count-consistent,
+  unique, completely paginated run histories with zero non-completed records;
+- all 21 exact inventory package-version documents and all 21 exact npm
+  attestation endpoints for `0.8.22` return exact, identity-correlated 404
+  absence, while each packument is its own package and `latest` is `0.8.21`;
+- completely paginated GitHub tag refs, Releases, and Actions artifacts contain
+  no exact `0.8.22` release/tag/candidate identity; and
+- the complete cancelled Release incident is bound to exact run/head pairs:
+  `31356780088` / `3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb`,
+  `31356940801` / `b6adaa982b25adf5fac61733a13ac65320c70bcd`, and
+  `31357014583` / `cfa55478cf8e35dc8a00ae7041c0c12479fda2d9`.
+  The first run's publish/attestation/later steps are skipped, the second has
+  zero jobs, and the third has one cancelled zero-step job. Publish Chart run
+  `31356780047` is bound to the first version-commit SHA and exactly the two
+  expected successful chart jobs. Bounded job-log reads must prove the exact
+  redacted internal no-op facts
+  (`dawn-app 0.1.0 already published, skipping` and `dawn-sandbox-infra 0.1.2
+  already published, skipping`); the chart jobs and steps themselves concluded
+  success, so their conclusions are not mislabeled as skipped. Only normalized
+  booleans and log digests enter the receipt. Historical workflow activity is
+  not misreported as nonexistent.
+
+List endpoints terminate only on a validated missing next link. Object-list
+endpoints additionally require stable `total_count`, exact retrieved count, and
+unique record IDs. npm reads use the shared bounded HTTP transport with a
+per-response cap and an exact 63-request aggregate ceiling: 21 exact-version
+documents, 21 packuments, and 21 attestation endpoints, with each endpoint
+class independently required to contain the complete 21-package inventory.
+Any network, auth, HTTP, parse, pagination, schema, identity, or count ambiguity
+is `UNPROVABLE`.
 
 The CLI writes one canonical, redacted JSON receipt to the requested path and
 prints only its path/count summary. Tests inject subprocess results and cover
 timeout, truncation, nonzero transport, valid finding exit `1`, malformed JSON,
 missing/duplicate identities, contradictory totals, page/record limits, partial
-pages, and token-like values in errors. It never prints raw stderr or auth
-headers.
+pages, cursor addition/removal/reordering/cycles, foreign or credentialed links,
+audit and Dependabot per-record severity drift, workflow ID/path mismatches,
+retrieved/total-count disagreement, one-of-21 npm or attestation presence,
+candidate tag/Release/artifact presence, historical run/head/job mismatch,
+truncated or non-no-op chart logs, default-head drift, terminal open-set drift,
+reconciliation success-at-boundary and timeout, and token-like values in errors.
+It never prints raw stderr, job logs, or auth headers.
 
 Run RED before adding the module, then GREEN:
 
@@ -137,10 +218,13 @@ Run RED before adding the module, then GREEN:
 set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts \
-  test/security-dependencies/dependency-evidence.test.ts
+  test/security-dependencies/dependency-evidence.test.ts \
+  test/security-dependencies/github-evidence.test.ts \
+  test/security-dependencies/publication-containment.test.ts \
+  test/security-dependencies/dependabot-reconcile.test.ts
 ```
 
-- [ ] **Step 4: Capture the exact live Dependabot baseline**
+- [ ] **Step 4: Capture the exact live security and containment baseline**
 
 Run the reviewed reader with this exact open-number set:
 
@@ -152,15 +236,23 @@ Run the reviewed reader with this exact open-number set:
 ```bash
 set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
-node scripts/security/dependency-evidence.mjs dependabot \
+node scripts/security/dependency-evidence.mjs baseline \
   --repo cacheplane/dawnai \
+  --inventory-ref HEAD \
+  --source-sha "$(git rev-parse HEAD)" \
+  --expected-default-sha 71dfab04e99efe303bd22e36394d68c5862cf502 \
+  --current-version 0.8.21 \
+  --target-version 0.8.22 \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
   --expected-open 122,123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
-  --output /tmp/dawn-pr1-dependabot-before.json
+  --output docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json
 ```
 
-Expected: 27 exact records. Do not infer a clean or smaller set from a failed or
-partially paginated query.
+Expected: 27 exact alert records plus the complete containment facts above. The
+canonical redacted receipt is reviewed and committed so its content and digest
+survive the implementation machine; it is not merely a temporary file. Do not
+infer a clean/smaller alert set or unpublished state from a failed or partial
+query.
 
 - [ ] **Step 5: Capture exact full and production audit baselines**
 
@@ -221,8 +313,9 @@ project, not a new workspace package, and the repo-level TypeScript test files
 must not be pulled into a publishable package's `rootDir`.
 
 Add `test/security-dependencies/tsconfig.json`, extending the repository's Node
-configuration with DOM libs, `noEmit`, and explicit path mappings to the chat
-example's React, ReactDOM, and React Core types used by the browser entry.
+configuration with DOM libs, `noEmit`, explicit `jsx: "react-jsx"`, and explicit
+path mappings to the chat example's React, ReactDOM, and React Core types used by
+the browser entry.
 Include only this test directory's `.ts`/`.tsx` sources and its Vitest and
 Playwright configs. Prove it is independent of every publishable package
 `rootDir`:
@@ -445,6 +538,7 @@ leaked test process is not.
 
 **Files:**
 - Create: `test/security-dependencies/hono-serve-static-windows.test.ts`
+- Create: `.github/workflows/dependency-security-receipt.yml`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `scripts/release/test/fixtures/workflow-entrypoints.json`
 - Modify: `scripts/release/test/fixtures/workflow-safe-executables.json`
@@ -490,15 +584,57 @@ pnpm exec playwright test --config test/security-dependencies/playwright.config.
 Do not put the browser download in every `validate` run or allow the job to skip
 when Chromium setup fails.
 
-- [ ] **Step 4: Update the parsed workflow contracts exactly**
+- [ ] **Step 4: Add the write-once post-merge receipt uploader**
+
+Create `dependency-security-receipt.yml` with only `workflow_dispatch`, an exact
+seven-input contract (`expectedMainSha`, `expectedPrNumber`,
+`expectedReviewedBaseSha`, `expectedReviewedHeadSha`, `expectedMergeSha`,
+`receiptBase64`, and `receiptSha256`), job-level `contents: read`, no secrets, no
+environment, no write or OIDC permission, and a 10-minute timeout. This workflow does **not**
+read Dependabot: the default `GITHUB_TOKEN` is not treated as sufficient for
+that endpoint before PR3 installs the dedicated read-only GitHub App.
+
+The owner-side reviewed reader produces the bounded redacted receipt. Dispatch
+inputs are safe because the receipt contains no raw descriptions, tokens,
+headers, or error bodies. Canonical receipt bytes are capped at 32 KiB so their
+single-line base64 encoding stays below GitHub's aggregate dispatch-input limit.
+Use the repository's pinned checkout, Node 24 setup, and upload actions. Keep
+`seal-receipt` and its imports Node-built-in-only so this uploader needs no
+package install. Its `run-name` includes the exact receipt SHA-256. The job must:
+
+1. validate all SHAs and the PR number before checkout;
+2. check out the exact `expectedMainSha` with persisted credentials disabled;
+3. require `github.sha` and the live default-branch ref to equal that SHA; the
+   job token is read-only, checkout does not persist it, and only this exact API
+   step receives it explicitly as `GH_TOKEN`;
+4. run `seal-receipt` to decode and revalidate the canonical receipt, its
+   digest, and repo/PR/reviewed-head/base/merge/observation-head identities,
+   then write a separate uploader manifest containing the current run
+   ID/attempt without echoing the payload; and
+5. upload the receipt and uploader manifest with the repository's pinned
+   `actions/upload-artifact` full SHA, 90-day retention, and artifact name
+   `dependency-security-receipt-<expectedMainSha>-<receiptSha256>`.
+
+The action-provided artifact ID, URL, and service digest plus the independently
+computed receipt SHA-256 form the durable index. Artifacts are write-once for a
+run; the later PR comment is only an index and is never described as the
+evidence store. Tests reject extra/missing inputs, pull-request or scheduled
+triggers, any write/id-token permission, secret access, an unpinned action,
+credential persistence, dependency installation, a dynamic command, head drift,
+wrong receipt digest, unsafe base64, oversized input, extra archive files, and
+invalid runtime run/attempt values.
+
+- [ ] **Step 5: Update the parsed workflow contracts exactly**
 
 Add the new step at index 6 to both readable allowlist fixtures and to the
 hard-coded `testing-windows` descriptor test. Add the complete browser-job
-descriptor and every executable to both fixtures. Add mutation regressions
-proving that changing a path, adding a shell operator, broadening a test command,
-removing the frozen install, or substituting a dynamic action fails closed.
+descriptor, the complete receipt-uploader workflow descriptor, and every
+executable to both fixtures. Add mutation regressions proving that changing a
+path, adding a shell operator, broadening a test command, removing the frozen
+install, expanding permissions/triggers, or substituting a dynamic action fails
+closed.
 
-- [ ] **Step 5: Observe workflow-contract RED, then make it green**
+- [ ] **Step 6: Observe workflow-contract RED, then make it green**
 
 Add the workflow step before updating fixtures/tests and run:
 
@@ -512,7 +648,7 @@ Expected RED: exact workflow descriptor/allowlist mismatch. After updating all
 three contract sources, the focused suite is green and the new adversarial
 mutation remains rejected.
 
-- [ ] **Step 6: Commit and push the intentionally failing test-only head**
+- [ ] **Step 7: Commit and push the intentionally failing test-only head**
 
 Run all unaffected controls, prove every new failure is one of the recorded
 vulnerable-version/security assertions, and commit:
@@ -708,12 +844,16 @@ Record:
 - exact focused/full/gated commands and results;
 - the post-remediation full/prod audit set;
 - live Dependabot baseline and pre-merge state;
-- publication workflow disabled/no-run evidence at the reviewed PR head.
+- the checked-in canonical baseline receipt path and SHA-256 digest;
+- publication workflows disabled, zero non-completed runs, and zero
+  exact-reviewed-head publication runs, with every historical incident run
+  preserved and explicitly classified.
 
 The checked-in document must not promise post-merge facts or contain
 self-referential SHA placeholders. Merge-SHA CI, audit, and alert reconciliation
-go in an immutable canonical PR comment after merge; PR3 may later incorporate
-that receipt into checked-in release-gate evidence.
+live in a content-addressed Actions artifact after merge; the PR comment only
+indexes that artifact. PR3 may later incorporate the receipt into checked-in
+release-gate evidence.
 
 Do not paste secrets, URLs with credentials, tokens, ambient proxy values, or
 unbounded raw logs.
@@ -726,6 +866,7 @@ Record `GHSA-866g-f22w-33x8` only, bound to:
 package: @ai-sdk/provider-utils
 snapshot: 3.0.28
 path: examples/*/web -> @copilotkit/runtime -> @ai-sdk/google-vertex
+reported severity: low
 reachability: unused Vertex response-handler branch in private examples
 disposition: UPSTREAM_BLOCKED
 owner: @blove
@@ -845,16 +986,33 @@ not an unbounded raw log in Git.
 
 - [ ] **Step 2: Re-prove publication containment and change scope**
 
-Require both publication workflows disabled, no non-completed runs, no exact
-branch-head publication run, and no diff in either publication workflow:
+Require the reviewed reader to reproduce the full Task 1 containment proof at
+the exact reviewed branch head while the default branch remains the reviewed
+base. This repeats all 21 npm version/attestation reads plus complete workflow,
+tag, Release, and Actions-artifact pagination; it is not only a workflow-state
+check:
 
 ```bash
+set -euo pipefail
+REVIEWED_HEAD_SHA="$(git rev-parse HEAD)"
+REVIEWED_BASE_SHA="$(git rev-parse origin/main)"
+node scripts/security/dependency-evidence.mjs baseline \
+  --repo cacheplane/dawnai \
+  --inventory-ref HEAD \
+  --source-sha "$REVIEWED_HEAD_SHA" \
+  --expected-default-sha "$REVIEWED_BASE_SHA" \
+  --current-version 0.8.21 \
+  --target-version 0.8.22 \
+  --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
+  --expected-open 122,123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
+  --output /tmp/dawn-pr1-reviewed-head-baseline.json
 git diff --exit-code origin/main...HEAD -- \
   .github/workflows/release.yml .github/workflows/publish-chart.yml
 ```
 
 The CI workflow may change only for the audited Windows regression and isolated
-Chromium security job.
+Chromium security job. The new receipt-uploader workflow must remain the exact
+read-only, manual, allowlisted descriptor from Task 4.
 
 - [ ] **Step 3: Commit in reviewable units**
 
@@ -888,7 +1046,8 @@ Critical/Important findings.
 
 Fetch main. If it moved, rebase and repeat frozen install, resolution receipt,
 full/prod audits, focused tests, and all affected validation. Record the exact
-reviewed head SHA and require a clean worktree.
+reviewed head SHA and reviewed base SHA, announce an operational main freeze for
+the merge window, and require a clean worktree. Auto-merge remains off.
 
 - [ ] **Step 2: Push the fix/evidence commits and finalize the draft PR**
 
@@ -921,10 +1080,33 @@ waived.
 
 - [ ] **Step 4: Merge on green and pin the merge SHA**
 
-Immediately before merge, re-read the exact head SHA, required checks, review
-threads, workflow disabled states, and absence of active publication runs. Merge
-only that reviewed head using the repository's supported strategy. Record the
-resulting full merge SHA.
+Immediately before merge, fetch and require the remote default head to equal the
+recorded reviewed base. Re-read required checks and review threads, then rerun
+the complete `baseline` operation from Task 8 to prove the 21-package public
+absence and publication hold at the exact reviewed head/base. Read the PR once
+and require it is open, ready, approved, has `auto_merge == null`, targets
+`main`, and has exact `.head.sha == REVIEWED_HEAD_SHA` and
+`.base.sha == REVIEWED_BASE_SHA`.
+
+Merge with the repository's merge-commit strategy and the CLI's atomic head
+precondition:
+
+```bash
+set -euo pipefail
+git fetch origin main
+test "$(git rev-parse origin/main)" = "$REVIEWED_BASE_SHA"
+gh pr merge "$PR_NUMBER" --repo cacheplane/dawnai --merge \
+  --match-head-commit "$REVIEWED_HEAD_SHA"
+```
+
+GitHub exposes no atomic expected-base argument, so the operational main freeze,
+immediate exact-base read, and post-merge parent proof are all mandatory. Fetch
+again and accept the merge SHA only if the exact PR object is merged with the
+same reviewed head/base and its merge commit has first parent
+`REVIEWED_BASE_SHA`, second parent `REVIEWED_HEAD_SHA`, and is the exact remote
+default head. Any head/base movement or parent mismatch invalidates the reviewed
+evidence, keeps publication paused, and requires fresh correlation; it is never
+papered over as the reviewed merge.
 
 ### Task 10: Verify exact merged-main security state
 
@@ -932,73 +1114,125 @@ resulting full merge SHA.
 - Verify: merged `main`
 - Verify: GitHub Actions and security APIs
 - Verify: npm audit/lock graph
+- Verify: `.github/workflows/dependency-security-receipt.yml`
 
-- [ ] **Step 1: Monitor post-merge CI and security runs**
+- [ ] **Step 1: Select and pin the exact observation head**
 
-Require the recorded merge SHA to be an ancestor of GitHub's current default
-branch. If main advanced, prove the intervening diff does not touch
-`package.json`, `pnpm-lock.yaml`, workspace manifests, dependency tests, or
-security/publication workflows; otherwise the live reconciliation is
-uncorrelated and must be repeated on the newer main. Monitor all runs by exact
-merge SHA and require CI, CodeQL, and Scorecard to terminal success.
-Release and Publish Chart must remain `disabled_manually` with zero exact-SHA
-runs and zero non-completed runs.
+Monitor CI, CodeQL, and Scorecard for the exact merge SHA to terminal success.
+Then read GitHub's default head into `OBSERVATION_HEAD_SHA`. Prefer exact equality
+with `MERGE_SHA`. If main advanced, require `MERGE_SHA` is an ancestor, prove the
+intervening diff does not touch `package.json`, `pnpm-lock.yaml`, any workspace
+manifest, dependency/security tests, or security/publication workflows, and
+require CI, CodeQL, and Scorecard for the newer observation head to be terminal
+success too. Otherwise stop as uncorrelated.
 
-- [ ] **Step 2: Re-run exact merged-main graph and audit verification**
+Record merge and observation heads separately. Never label a default-branch
+Dependabot observation as merge-SHA state when the heads differ. Release and
+Publish Chart must still resolve by exact ID/path to `disabled_manually` with
+zero non-completed runs. If the default head changes during any later step,
+discard the incomplete receipt and restart Tasks 10.1–10.3 at the new head.
 
-Create a clean detached verification worktree at the exact recorded merge SHA;
-do not move the implementation worktree or assume current `origin/main` still
-equals it. Under Node 24, run frozen install, security dependency tests,
-full/prod audits, and focused graph receipts. Require the same exact
-provider-utils-only GHSA set as the PR head, then remove the detached worktree
-after proving no scoped process still uses it.
+- [ ] **Step 2: Re-run exact observation-head graph and audit verification**
 
-- [ ] **Step 3: Reconcile the live Dependabot set fail closed**
+Create a clean detached verification worktree at `OBSERVATION_HEAD_SHA`; do not
+move the implementation worktree. Under Node 24, run frozen install, the full
+security dependency project, browser and focused graph receipts, then capture
+full/prod audits with
+`test/security-dependencies/fixtures/audit-provider-utils-only.json`. Require
+the exact provider-utils-only package/version/GHSA/reported-severity tuple and
+empty muted sets. Write one canonical audit receipt to
+`/tmp/dawn-pr1-postmerge-audit.json` and compute its SHA-256. Remove the detached
+worktree only after proving no scoped process uses it.
 
-On the preferred Hono-override path, poll all 26 expected-fixed alert records
-until each reports `state=fixed`, a non-null `fixed_at` at or after the merge,
-and no dismissal. On the permitted A/B fallback, poll the other 25 records and
-require #123 to remain open and undismissed with the recorded identity. Then
-query the entire paginated open set and require exact equality:
+- [ ] **Step 3: Produce one stable, bracketed reconciliation receipt**
 
-```text
-preferred: {122}
-```
+Run `reconcile` from the detached observation-head checkout. On the preferred
+path, expected fixed alerts are
+`123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201`
+and the exact open set is `{122}`. The reviewed fallback amendment substitutes
+the other 25 fixed alerts and exact open set `{122,123}`.
 
-Use the reviewed reader for every poll and the terminal receipts:
+The operation validates the exact PR number, reviewed base/head, merge commit
+and parents, observation head, and `merged_at`; verifies CI/CodeQL/Scorecard run
+IDs, attempts, heads, and success conclusions; reruns complete publication
+containment before and after alert reads; and binds the audit receipt plus every
+input fixture by SHA-256. The audit receipt is not merely referenced: after
+schema and fixture validation, its complete normalized full/production status,
+package/version/GHSA/reported-severity tuples, severity totals, and explicit
+empty muted sets are embedded in the canonical reconciliation receipt. It polls
+under one 15-minute deadline, fixed 15-second interval, at most 61 attempts, ten
+pages, and explicit aggregate byte/record caps. At terminal state it requires
+open snapshot A == open snapshot B around one fresh exact-number read of every
+fixed alert and requires the live default head to equal
+`OBSERVATION_HEAD_SHA` before A and after B.
+
+The canonical receipt schema contains repository, PR, reviewed base/head,
+merge and parent SHAs, observation head, CI/security run IDs and attempts,
+started/completed observation timestamps, complete publication facts, the
+normalized full/production audit evidence, exact open/fixed alert records, and
+all input/output digests. Raw alert descriptions, headers, job logs,
+credentials, and error bodies are excluded.
 
 ```bash
 set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
-node scripts/security/dependency-evidence.mjs dependabot-fixed \
+node scripts/security/dependency-evidence.mjs reconcile \
   --repo cacheplane/dawnai \
+  --pr "$PR_NUMBER" \
+  --reviewed-base-sha "$REVIEWED_BASE_SHA" \
+  --reviewed-head-sha "$REVIEWED_HEAD_SHA" \
+  --merge-sha "$MERGE_SHA" \
+  --observation-head-sha "$OBSERVATION_HEAD_SHA" \
+  --inventory-ref HEAD \
+  --current-version 0.8.21 \
+  --target-version 0.8.22 \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
-  --numbers 123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
-  --fixed-since "$MERGED_AT" \
-  --output /tmp/dawn-pr1-dependabot-fixed.json
-node scripts/security/dependency-evidence.mjs dependabot \
-  --repo cacheplane/dawnai \
-  --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
+  --expected-fixed 123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
   --expected-open 122 \
-  --output /tmp/dawn-pr1-dependabot-open.json
+  --audit-receipt /tmp/dawn-pr1-postmerge-audit.json \
+  --wait-timeout-ms 900000 \
+  --poll-interval-ms 15000 \
+  --max-attempts 61 \
+  --output /tmp/dawn-pr1-reconciliation.json
 ```
 
-The reviewed fallback amendment substitutes fixed numbers
-`124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201`
-and exact open numbers `122,123`.
-
-Only the Task 5 A/B failure path may permit `{122,123}`. Any timeout, query or
-parse error, new/reopened alert, dismissed alert, or compatible alert left open
+Only the Task 5 reviewed A/B failure path may use `{122,123}`. Any timeout,
+query/parse/schema error, head drift, mismatched bracketing snapshot, new or
+reopened alert, dismissal, compatible alert left open, or containment failure
 is `UNPROVABLE` and keeps publication blocked.
 
-- [ ] **Step 4: Publish the immutable post-merge receipt and release-hold verdict**
+- [ ] **Step 4: Seal the receipt in an exact-head Actions artifact**
 
-Post one canonical, redacted PR comment containing immutable PR, reviewed head,
-merge, exact-SHA CI, CodeQL, Scorecard, detached audit, and live-alert receipt
-identifiers/digests, including SHA-256 digests of the checked-in Dependabot
-identity fixture, the pre-merge baseline receipt, and both terminal post-merge
-receipts. Do not modify the already-merged audit document or create a
-self-referential evidence commit. Publication remains paused after PR1. Do not
-enable Release, generate a version candidate, or publish. PR2 fixes Dawn-owned
-scanner findings; PR3 installs the least-privilege alert/exception and release
+Compute the canonical receipt SHA-256, encode the bounded redacted bytes as one
+base64 `workflow_dispatch` input, and dispatch
+`dependency-security-receipt.yml` with `--ref main` plus exact observation-head,
+PR, reviewed-base, reviewed-head, and merge inputs. `--ref` is deliberately the branch name;
+the workflow itself rejects unless `github.sha` and live `main` both equal the
+supplied observation head. Its `run-name` includes the receipt digest.
+
+Select exactly one uploader run by full workflow path, dispatch event, exact
+run-name digest, observation head, and creation time after dispatch; ambiguity
+blocks. Require terminal success, then read its artifact list and require one
+artifact with the exact content-addressed name. Record and verify artifact ID,
+URL, retention, service digest, workflow run ID/attempt, uploader-manifest
+digest, and receipt SHA. Download it through the bounded reader, reject unsafe
+ZIP paths/types/extras, and require its receipt bytes and uploader manifest
+exactly match the local validated values. Re-read default `main` and require it
+still equals `OBSERVATION_HEAD_SHA`; otherwise restart correlation.
+
+- [ ] **Step 5: Publish the release-hold index**
+
+Post one canonical, redacted PR comment that indexes—but is not itself—the
+write-once Actions artifact. Include immutable PR/reviewed base/head/merge/
+observation identities, exact-head CI/CodeQL/Scorecard run IDs and attempts,
+artifact ID/URL/service digest, receipt/uploader/audit/baseline/fixture digests,
+and the final alert/containment verdict. The artifact's reconciliation receipt
+contains the validated audit evidence preimage as well as its digest; the
+temporary standalone audit file is not the only surviving copy. Recompute the
+checked-in baseline digest against the human audit first. Do not modify the
+merged audit document or create a self-referential evidence commit.
+
+Publication remains paused after PR1. Do not enable Release, generate a version
+candidate, or publish. PR2 fixes Dawn-owned scanner findings; PR3 installs the
+dedicated read-only alert credential plus least-privilege exception/release
 ownership gates before candidate generation resumes.
