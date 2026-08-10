@@ -1,3 +1,5 @@
+import { isPromise, isWeakMap, isWeakSet } from "node:util/types"
+
 const SNAPSHOT_DATA = Symbol.for("dawn.scenario-readonly-snapshot-data.v1")
 const DATE_MUTATORS = new Set<PropertyKey>([
   "setDate",
@@ -38,6 +40,22 @@ const TYPED_ARRAY_CONSTRUCTORS = {
   Uint8ClampedArray,
 } as const
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object
+const UNSUPPORTED_INTRINSIC_PROTOTYPES: readonly {
+  readonly name: string
+  readonly prototype: object
+}[] = [
+  { name: "Promise", prototype: Promise.prototype },
+  { name: "WeakMap", prototype: WeakMap.prototype },
+  { name: "WeakSet", prototype: WeakSet.prototype },
+  ...(typeof WeakRef === "function" ? [{ name: "WeakRef", prototype: WeakRef.prototype }] : []),
+  ...(typeof FinalizationRegistry === "function"
+    ? [{ name: "FinalizationRegistry", prototype: FinalizationRegistry.prototype }]
+    : []),
+  ...(typeof URL === "function" ? [{ name: "URL", prototype: URL.prototype }] : []),
+  ...(typeof URLSearchParams === "function"
+    ? [{ name: "URLSearchParams", prototype: URLSearchParams.prototype }]
+    : []),
+]
 
 type BinaryBuffer = ArrayBuffer | SharedArrayBuffer
 type BinaryBufferKind = "ArrayBuffer" | "SharedArrayBuffer"
@@ -229,39 +247,67 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
       )
     }
 
-    if (Object.prototype.toString.call(value) === "[object BigInt]") {
-      const primitive = Reflect.apply(BigInt.prototype.valueOf, value, []) as bigint
-      return snapshotBoxedPrimitive(value, Object(primitive), snapshot)
+    const boxedBigInt = readBoxedBigInt(value)
+
+    if (boxedBigInt !== undefined) {
+      return snapshotBoxedPrimitive(value, Object(boxedBigInt), snapshot)
     }
 
     if (typeof File !== "undefined" && value instanceof File) {
-      const target = new File([value], value.name, {
-        lastModified: value.lastModified,
-        type: value.type,
+      const name = readBuiltInAccessor(File.prototype, "name", value)
+      const lastModified = readBuiltInAccessor(File.prototype, "lastModified", value)
+      const type = readBuiltInAccessor(Blob.prototype, "type", value)
+
+      if (
+        typeof name !== "string" ||
+        typeof lastModified !== "number" ||
+        typeof type !== "string"
+      ) {
+        throw new TypeError("File state is malformed")
+      }
+
+      const target = new File([value], name, {
+        lastModified,
+        type,
       })
       const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
       Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       remember(value, target)
       snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
-      return Object.freeze(target)
+      recursivelyFreezeOwnData(target)
+      return target
     }
 
     if (typeof Blob !== "undefined" && value instanceof Blob) {
-      const target = Blob.prototype.slice.call(value, 0, value.size, value.type) as Blob
+      const size = readBuiltInAccessor(Blob.prototype, "size", value)
+      const type = readBuiltInAccessor(Blob.prototype, "type", value)
+
+      if (typeof size !== "number" || typeof type !== "string") {
+        throw new TypeError("Blob state is malformed")
+      }
+
+      const target = Blob.prototype.slice.call(value, 0, size, type) as Blob
       const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
       Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       remember(value, target)
       snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
-      return Object.freeze(target)
+      recursivelyFreezeOwnData(target)
+      return target
     }
 
     if (typeof DOMException !== "undefined" && value instanceof DOMException) {
-      const target = new DOMException(value.message, value.name)
+      const message = readBuiltInAccessor(DOMException.prototype, "message", value)
+      const name = readBuiltInAccessor(DOMException.prototype, "name", value)
+
+      if (typeof message !== "string" || typeof name !== "string") {
+        throw new TypeError("DOMException state is malformed")
+      }
+
+      const target = new DOMException(message, name)
       Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       remember(value, target)
-      snapshotOwnProperties(value, target, snapshot, (key) =>
-        hasMatchingIntrinsicAccessor(value, target, key),
-      )
+      snapshotOwnProperties(value, target, snapshot, (key) => key === "stack")
+      materializeStack(value, target, snapshot)
       return Object.freeze(target)
     }
 
@@ -269,13 +315,18 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
       const target = new Error()
       Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       remember(value, target)
-      snapshotOwnProperties(value, target, snapshot, (key) =>
-        hasMatchingIntrinsicAccessor(value, target, key),
-      )
+      snapshotOwnProperties(value, target, snapshot, (key) => key === "stack")
+      materializeStack(value, target, snapshot)
       return Object.freeze(target)
     }
 
-    const tag = Object.prototype.toString.call(value)
+    const unsupportedType = readUnsupportedIntrinsicType(value)
+
+    if (unsupportedType) {
+      throw new TypeError(`${unsupportedType} snapshot values are not supported`)
+    }
+
+    const tag = readObjectTagWithoutAccessors(value)
 
     if (tag !== "[object Object]") {
       throw new TypeError(`${readSnapshotTypeName(tag)} snapshot values are not supported`)
@@ -1000,18 +1051,133 @@ function readSnapshotTypeName(tag: string): string {
   return tag.startsWith("[object ") && tag.endsWith("]") ? tag.slice(8, -1) : tag
 }
 
-function hasMatchingIntrinsicAccessor(source: object, target: object, key: PropertyKey): boolean {
-  const sourceDescriptor = Object.getOwnPropertyDescriptor(source, key)
-  const targetDescriptor = Object.getOwnPropertyDescriptor(target, key)
+function readBoxedBigInt(value: object): bigint | undefined {
+  try {
+    return Reflect.apply(BigInt.prototype.valueOf, value, []) as bigint
+  } catch {
+    return undefined
+  }
+}
 
-  return Boolean(
-    sourceDescriptor &&
-      targetDescriptor &&
-      !("value" in sourceDescriptor) &&
-      !("value" in targetDescriptor) &&
-      sourceDescriptor.get === targetDescriptor.get &&
-      sourceDescriptor.set === targetDescriptor.set,
-  )
+function readUnsupportedIntrinsicType(value: object): string | undefined {
+  if (isPromise(value)) {
+    return "Promise"
+  }
+
+  if (isWeakMap(value)) {
+    return "WeakMap"
+  }
+
+  if (isWeakSet(value)) {
+    return "WeakSet"
+  }
+
+  const seen = new Set<object>()
+  let current: object | null = value
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+
+    for (const intrinsic of UNSUPPORTED_INTRINSIC_PROTOTYPES) {
+      if (current === intrinsic.prototype) {
+        return intrinsic.name
+      }
+    }
+
+    current = Object.getPrototypeOf(current) as object | null
+  }
+
+  return undefined
+}
+
+function readObjectTagWithoutAccessors(value: object): string {
+  const seen = new Set<object>()
+  let current: object | null = value
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const descriptor = Object.getOwnPropertyDescriptor(current, Symbol.toStringTag)
+
+    if (descriptor && !("value" in descriptor)) {
+      throw new TypeError(
+        `Snapshot accessor property ${String(Symbol.toStringTag)} is not supported`,
+      )
+    }
+
+    if (descriptor) {
+      break
+    }
+
+    current = Object.getPrototypeOf(current) as object | null
+  }
+
+  return Object.prototype.toString.call(value)
+}
+
+function materializeStack(
+  source: Error | DOMException,
+  target: Error | DOMException,
+  snapshot: (value: unknown) => unknown,
+): void {
+  const sourceDescriptor = Object.getOwnPropertyDescriptor(source, "stack")
+  const targetDescriptor = Object.getOwnPropertyDescriptor(target, "stack")
+
+  if (!sourceDescriptor) {
+    Reflect.deleteProperty(target, "stack")
+    return
+  }
+
+  let value: unknown
+
+  if ("value" in sourceDescriptor) {
+    value = snapshot(sourceDescriptor.value)
+  } else if (
+    sourceDescriptor.get &&
+    targetDescriptor &&
+    !("value" in targetDescriptor) &&
+    sourceDescriptor.get === targetDescriptor.get &&
+    sourceDescriptor.set === targetDescriptor.set
+  ) {
+    value = Reflect.apply(sourceDescriptor.get, source, [])
+  } else {
+    throw new TypeError("Snapshot accessor property stack is not supported")
+  }
+
+  Object.defineProperty(target, "stack", {
+    configurable: false,
+    enumerable: sourceDescriptor.enumerable ?? false,
+    value,
+    writable: false,
+  })
+}
+
+function recursivelyFreezeOwnData(value: object): void {
+  const seen = new Set<object>()
+
+  function freeze(current: object): void {
+    if (seen.has(current)) {
+      return
+    }
+
+    seen.add(current)
+
+    for (const key of Reflect.ownKeys(current)) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key)
+
+      if (
+        descriptor &&
+        "value" in descriptor &&
+        (typeof descriptor.value === "object" || typeof descriptor.value === "function") &&
+        descriptor.value !== null
+      ) {
+        freeze(descriptor.value)
+      }
+    }
+
+    Object.freeze(current)
+  }
+
+  freeze(value)
 }
 
 function snapshotOwnProperties(
