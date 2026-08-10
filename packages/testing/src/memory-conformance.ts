@@ -18,6 +18,12 @@ async function expectContinuationInvalid(run: () => Promise<unknown>): Promise<v
   expect.unreachable("should have rejected")
 }
 
+// A store whose keyset does not ADVANCE hands back the same full window forever.
+// Unbounded, every walk below would spin to the suite timeout with no diagnosis; the
+// bound plus the post-loop null assertion makes that a named failure instead. Third
+// parties run this suite against their own stores, so only they can hit it.
+const MAX_WALK_PAGES = 20
+
 function rec(
   over: Partial<MemoryRecord> & Pick<MemoryRecord, "id" | "namespace" | "content">,
 ): MemoryRecord {
@@ -1193,12 +1199,13 @@ export function runMemoryStoreConformance(opts: {
         expect(page.total).toBe(7)
         expect(page.continuation).not.toBeNull()
         seen.push(...page.records.map((r) => r.id))
-        while (page.continuation) {
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
           page = await s.browse({ limit: 3, cursor: page.continuation })
           // total is the WHOLE matching set on every window, never what remains.
           expect(page.total).toBe(7)
           seen.push(...page.records.map((r) => r.id))
         }
+        expect(page.continuation).toBeNull()
         expect(seen).toEqual(["r6", "r5", "r4", "r3", "r2", "r1", "r0"])
         expect(new Set(seen).size).toBe(7)
       } finally {
@@ -1232,10 +1239,11 @@ export function runMemoryStoreConformance(opts: {
         const seen: string[] = []
         let page = await s.browse({ limit: 2 })
         seen.push(...page.records.map((r) => r.id))
-        while (page.continuation) {
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
           page = await s.browse({ limit: 2, cursor: page.continuation })
           seen.push(...page.records.map((r) => r.id))
         }
+        expect(page.continuation).toBeNull()
         expect(seen).toEqual(["B", "D", "a", "c"])
       } finally {
         await close?.(s)
@@ -1257,7 +1265,7 @@ export function runMemoryStoreConformance(opts: {
         const seen: string[] = []
         let page = await s.browse({ limit: 1, orderBy: [{ field: "confidence", dir: "desc" }] })
         seen.push(...page.records.map((r) => r.id))
-        while (page.continuation) {
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
           page = await s.browse({
             limit: 1,
             orderBy: [{ field: "confidence", dir: "desc" }],
@@ -1265,6 +1273,7 @@ export function runMemoryStoreConformance(opts: {
           })
           seen.push(...page.records.map((r) => r.id))
         }
+        expect(page.continuation).toBeNull()
         expect(seen).toEqual(["c", "b", "a"])
       } finally {
         await close?.(s)
@@ -1285,6 +1294,10 @@ export function runMemoryStoreConformance(opts: {
           s.browse({ limit: 1, cursor, orderBy: [{ field: "confidence", dir: "asc" }] }),
         )
         await expectContinuationInvalid(() => s.browse({ limit: 1, cursor: "not-a-cursor" }))
+        // `now` decides which rows are expired, so it is dataset identity too. A caller
+        // that re-stamps it per request — the natural shape of an HTTP boundary — kills
+        // its own walk at page two; it must hold `now` fixed for the whole walk.
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor, now: D(9) }))
       } finally {
         await close?.(s)
       }
@@ -1312,11 +1325,12 @@ export function runMemoryStoreConformance(opts: {
         let page = await s.browse(query)
         expect(page.total).toBe(5)
         seen.push(...page.records.map((r) => r.id))
-        while (page.continuation) {
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
           page = await s.browse({ ...query, cursor: page.continuation })
           expect(page.total).toBe(5)
           seen.push(...page.records.map((r) => r.id))
         }
+        expect(page.continuation).toBeNull()
         expect(seen).toEqual(["c4", "c3", "c2", "c1", "c0"])
       } finally {
         await close?.(s)

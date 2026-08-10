@@ -157,7 +157,8 @@ export function pgKeysetWhere(
   params: unknown[],
 ): string {
   const first = order[0]
-  if (!first) throw new Error("keyset requires at least one ordered key")
+  // A plain Error 500s at the boundary that maps this module's throws to 400 by name.
+  if (!first) throw new BrowseQueryError("keyset requires at least one ordered key")
   const col = (entry: ResolvedBrowseSort) =>
     entry.collateC ? `${entry.column} COLLATE "C"` : entry.column
   const bind = (entry: ResolvedBrowseSort, index: number) =>

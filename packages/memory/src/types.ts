@@ -154,7 +154,11 @@ export interface BrowseQuery {
    *  produced it: the store recomputes the fingerprint and rejects a mismatch with a
    *  `BrowseQueryError` coded `continuation-invalid`. Applied as a keyset window, so
    *  a row inserted above the seam between pages cannot displace one out of the walk
-   *  the way an `offset` would. */
+   *  the way an `offset` would.
+   *
+   *  `now` is part of that fingerprint — it decides which rows are expired — so a
+   *  caller walking pages must hold ONE `now` for the whole walk. Re-stamping it per
+   *  request (`new Date().toISOString()`) rejects every continuation it is given. */
   readonly cursor?: string
 }
 export interface BrowsePage {
@@ -165,9 +169,9 @@ export interface BrowsePage {
    *  `records`; reading both from one transaction snapshot is Task 15. */
   readonly total: number
   /** Opaque keyset continuation, or null when this window did not fill `limit`.
-   *  Issued whenever the page FILLED — the store cannot tell whether more rows follow
-   *  without another read — so a walk over an exact multiple of `limit` legitimately
-   *  ends in one empty window rather than an error. */
+   *  Issued whenever the page FILLED rather than over-fetching `limit + 1` to learn
+   *  whether a further row exists, so a walk over an exact multiple of `limit`
+   *  legitimately ends in one empty window rather than an error. */
   readonly continuation: string | null
 }
 export interface MemoryStats {

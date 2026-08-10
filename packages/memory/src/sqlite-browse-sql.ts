@@ -166,7 +166,8 @@ export function sqliteKeysetWhere(
   params: SQLInputValue[],
 ): string {
   const first = order[0]
-  if (!first) throw new Error("keyset requires at least one ordered key")
+  // A plain Error 500s at the boundary that maps this module's throws to 400 by name.
+  if (!first) throw new BrowseQueryError("keyset requires at least one ordered key")
   const guard = `${first.column} ${first.dir === "desc" ? "<=" : ">="} ?`
   params.push(cursor.key[0] as SQLInputValue)
 
@@ -174,16 +175,21 @@ export function sqliteKeysetWhere(
   for (let i = 0; i < order.length; i += 1) {
     const parts: string[] = []
     for (let j = 0; j < i; j += 1) {
-      parts.push(`${order[j]?.column} = ?`)
+      // Narrowed rather than `order[j]?.column`: out of range this throws, where
+      // optional chaining would interpolate the literal identifier `undefined`.
+      const entry = order[j] as ResolvedBrowseSort
+      parts.push(`${entry.column} = ?`)
       params.push(cursor.key[j] as SQLInputValue)
     }
-    parts.push(`${order[i]?.column} ${order[i]?.dir === "desc" ? "<" : ">"} ?`)
+    const entry = order[i] as ResolvedBrowseSort
+    parts.push(`${entry.column} ${entry.dir === "desc" ? "<" : ">"} ?`)
     params.push(cursor.key[i] as SQLInputValue)
     terms.push(parts.length === 1 ? (parts[0] as string) : `(${parts.join(" AND ")})`)
   }
   const tail: string[] = []
   for (let j = 0; j < order.length; j += 1) {
-    tail.push(`${order[j]?.column} = ?`)
+    const entry = order[j] as ResolvedBrowseSort
+    tail.push(`${entry.column} = ?`)
     params.push(cursor.key[j] as SQLInputValue)
   }
   tail.push("id > ?")

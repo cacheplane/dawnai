@@ -138,7 +138,8 @@ export interface BrowseQueryLike {
    *  window is deterministic. Absent or empty = `updatedAt DESC`. */
   readonly orderBy?: readonly BrowseSortEntryLike[]
   /** Opaque continuation from a prior `BrowsePageLike`. It belongs to the query that
-   *  produced it: the store recomputes the fingerprint and rejects a mismatch. */
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch — `now`
+   *  included, so a caller walking pages must hold ONE `now` for the whole walk. */
   readonly cursor?: string
 }
 

@@ -182,5 +182,8 @@ describe("pgKeysetWhere", () => {
     expect(sql).toBe(
       'namespace COLLATE "C" >= $2 AND (namespace COLLATE "C" > $3 OR (namespace COLLATE "C" = $4 AND confidence < $5::real) OR (namespace COLLATE "C" = $6 AND confidence = $7::real AND id COLLATE "C" > $8))',
     )
+    // The sql assertion cannot see WHICH value each $n binds — a key pushed at the
+    // wrong index, or the id in the wrong slot, emits the identical string.
+    expect(params).toEqual(["already-bound", "ns=a", "ns=a", "ns=a", 0.5, "ns=a", 0.5, "r1"])
   })
 })

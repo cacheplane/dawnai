@@ -541,9 +541,9 @@ export function sqliteMemoryStore(opts: {
       ).n
       const records = rows.map(rowToRecord)
       const last = records.at(-1)
-      // A continuation is issued whenever the window FILLED: the store cannot know
-      // whether more rows follow without another read, and an exact-multiple walk
-      // ending in one empty window is cheaper than that read.
+      // Issued whenever the window FILLED, rather than over-fetching `limit + 1` to
+      // learn whether a further row exists: a walk over an exact multiple of `limit`
+      // therefore ends in one empty window.
       const continuation =
         last && records.length === limit
           ? encodeBrowseCursor(fingerprint, { key: browseCursorKey(last, order), id: last.id })
