@@ -565,9 +565,11 @@ describe("terminalStatus", () => {
 
 // ---------------------------------------------------------------------------
 // The endpoint reads nothing but the checkpointer's pending writes, so the
-// saver is the one dependency that can change the answer. Everything above
-// runs on sqlite; this runs the same park → list → resume → empty arc against
-// real Postgres. Gated on DAWN_TEST_PGSTORAGE=1 (needs Docker), matching
+// saver is the only dependency that can change the LISTED INTERRUPTS: the 404
+// and both 409 arms return before the checkpointer is touched, and the threads
+// store that serves them has its own real-Postgres suite. Everything above runs
+// on sqlite; this runs the same park → list → resume → empty arc against real
+// Postgres. Gated on DAWN_TEST_PGSTORAGE=1 (needs Docker), matching
 // packages/postgres-storage/test/*.
 // ---------------------------------------------------------------------------
 
@@ -578,6 +580,11 @@ describe.skipIf(process.env.DAWN_TEST_PGSTORAGE !== "1")(
     let connectionString: string
     // handler.close() does NOT close an injected checkpointer, so the pool is
     // this suite's to end — otherwise vitest hangs on an open pg pool.
+    //
+    // Module-level rather than the per-test try/finally the sibling suite uses
+    // (packages/postgres-storage/test/assume-migrated.test.ts), because here the
+    // ORDERING is what matters: afterEach's handler.close() drains runs that may
+    // still be writing checkpoints, so the pool has to outlive the test body.
     const savers: DawnPostgresSaver[] = []
 
     beforeAll(async () => {
