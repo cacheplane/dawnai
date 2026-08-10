@@ -2,13 +2,19 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
+import {
+  browseCursorKey,
+  browseQueryFingerprint,
+  decodeBrowseCursor,
+  encodeBrowseCursor,
+} from "./browse-cursor.js"
 import { normalizeSetFilter } from "./browse-filter.js"
 import { resolveBrowseOrder } from "./browse-order.js"
 import { namespacePrefixUpperBound } from "./browse-range.js"
 import { BROWSE_DEFAULT_LIMIT, validateBrowseQuery } from "./browse-validate.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
-import { appendSqliteBrowseFilter } from "./sqlite-browse-sql.js"
+import { appendSqliteBrowseFilter, sqliteKeysetWhere } from "./sqlite-browse-sql.js"
 import { tokenize } from "./tokenize.js"
 import type { MemoryQuery, MemoryRecord, MemoryStore, VectorRankingOptions } from "./types.js"
 import { cosineSimilarity, DEFAULT_VECTOR_K } from "./vector.js"
@@ -445,10 +451,6 @@ export function sqliteMemoryStore(opts: {
       // Defence in depth: whatever the caller checked, a store that accepts nonsense
       // returns an empty page that looks like an answer.
       validateBrowseQuery(q)
-      // TODO(Task 14): `q.cursor` is read NOWHERE below. Setting it is silently a
-      // no-op, not an error; the JSDoc on BrowseQuery marks it not-yet-applied.
-      // `q.filters` IS fully applied: every arm has a clause, and an unmapped
-      // field throws rather than passing through unfiltered.
       const where: string[] = []
       const params: SQLInputValue[] = []
       if (q.namespace) {
@@ -495,12 +497,11 @@ export function sqliteMemoryStore(opts: {
         params.push(q.now)
       }
       for (const filter of q.filters ?? []) appendSqliteBrowseFilter(filter, where, params)
-      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
-      // Kept as a floor because the two backends fail asymmetrically if one ever slips
-      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
-      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
-      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      // The COUNT must see the FILTERS ONLY: `total` is the size of the whole matching
+      // set, not of what is left after the cursor.
+      const filterParamCount = params.length
+      const countClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+
       const order = resolveBrowseOrder(q.orderBy)
       // Every order terminates with `id ASC` so the total order is deterministic and
       // a keyset window can never skip or repeat a row.
@@ -508,23 +509,46 @@ export function sqliteMemoryStore(opts: {
         ...order.map((entry) => `${entry.column} ${entry.dir === "desc" ? "DESC" : "ASC"}`),
         "id ASC",
       ].join(", ")
+
+      const fingerprint = browseQueryFingerprint(q)
+      const rowWhere = [...where]
+      if (q.cursor) {
+        const payload = decodeBrowseCursor(q.cursor, fingerprint, order)
+        rowWhere.push(sqliteKeysetWhere(order, payload, params))
+      }
+      const rowsClause = rowWhere.length > 0 ? `WHERE ${rowWhere.join(" AND ")}` : ""
+
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
+      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
       // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
       const rows = db
         .prepare(
           `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
                   supersedes, created_at, updated_at, effective_at, expires_at
-           FROM memories ${clause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
+           FROM memories ${rowsClause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
         )
         .all(...params, limit, offset) as Record<string, unknown>[]
       // Rows and total are two separate unwrapped statements; a concurrent write
       // between them can momentarily skew total vs records. One snapshot: Task 15.
       const total = (
-        db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
+        db
+          .prepare(`SELECT COUNT(*) AS n FROM memories ${countClause}`)
+          .get(...params.slice(0, filterParamCount)) as { n: number }
       ).n
-      // TODO(Task 14 — keyset continuation): always null until the keyset cursor lands.
-      // This is NOT the documented "no more rows" signal yet — see BrowsePage.
-      return { records: rows.map(rowToRecord), total, continuation: null }
+      const records = rows.map(rowToRecord)
+      const last = records.at(-1)
+      // A continuation is issued whenever the window FILLED: the store cannot know
+      // whether more rows follow without another read, and an exact-multiple walk
+      // ending in one empty window is cheaper than that read.
+      const continuation =
+        last && records.length === limit
+          ? encodeBrowseCursor(fingerprint, { key: browseCursorKey(last, order), id: last.id })
+          : null
+      return { records, total, continuation }
     },
     async stats(opts = {}) {
       // Byte-exact prefix match — substr(), not LIKE, so %/_/\ stay literal. This is

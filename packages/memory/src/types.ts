@@ -150,15 +150,11 @@ export interface BrowseQuery {
    *  break that tie on BYTES, so they return the same sequence for tied rows whatever
    *  the database's default collation. */
   readonly orderBy?: readonly BrowseSortEntry[]
-  // ─ The field below is DECLARED BUT NOT YET HONORED. Both in-repo stores
-  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop it on the floor today: a caller
-  //   that sets it gets an uncursored page and no error. The doc states the intended
-  //   contract and names the task delivering it — do NOT write a consumer against the
-  //   guarantee before that task lands.
-  /** Opaque continuation from a prior `BrowsePage`. It will belong to the query that
-   *  produced it: the store recomputes the fingerprint and rejects a mismatch.
-   *  NOT YET APPLIED — ignored, and no store computes or checks a fingerprint, until
-   *  Task 14 (keyset continuation). */
+  /** Opaque continuation from a prior `BrowsePage`. It belongs to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch with a
+   *  `BrowseQueryError` coded `continuation-invalid`. Applied as a keyset window, so
+   *  a row inserted above the seam between pages cannot displace one out of the walk
+   *  the way an `offset` would. */
   readonly cursor?: string
 }
 export interface BrowsePage {
@@ -169,11 +165,9 @@ export interface BrowsePage {
    *  `records`; reading both from one transaction snapshot is Task 15. */
   readonly total: number
   /** Opaque keyset continuation, or null when this window did not fill `limit`.
-   *  ALWAYS null today: no store issues one until Task 14 (keyset continuation), so
-   *  `null` currently means "this store cannot page" and NOT "no more rows" — a
-   *  consumer must not stop on it yet. Once Task 14 lands a continuation is issued
-   *  whenever the page filled, so following the last one may legitimately return
-   *  zero rows. */
+   *  Issued whenever the page FILLED — the store cannot tell whether more rows follow
+   *  without another read — so a walk over an exact multiple of `limit` legitimately
+   *  ends in one empty window rather than an error. */
   readonly continuation: string | null
 }
 export interface MemoryStats {

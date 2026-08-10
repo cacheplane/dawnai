@@ -1,4 +1,6 @@
 import type { SQLInputValue } from "node:sqlite"
+import type { BrowseCursorPayload } from "./browse-cursor.js"
+import type { ResolvedBrowseSort } from "./browse-order.js"
 import { namespacePrefixUpperBound, utcDayAfter, utcDayStart } from "./browse-range.js"
 import { BrowseQueryError } from "./browse-validate.js"
 import type { BrowseFilter } from "./types.js"
@@ -145,4 +147,48 @@ export function appendSqliteBrowseFilter(
       )
     }
   }
+}
+
+/**
+ * Everything strictly after `cursor` in `order`, as a WHERE fragment.
+ *
+ * Row-value comparisons cannot express mixed asc/desc, so this is the expanded
+ * OR-chain — plus a REDUNDANT leading range guard. The guard is logically implied by
+ * the chain and is still mandatory: it is what lets the planner seek the leading index
+ * column instead of scanning the whole index (0.54 ms vs 22.8 ms at 1M rows).
+ *
+ * Parameters are pushed in the exact textual order they appear, so the caller can
+ * concatenate this fragment after its filter clauses without renumbering.
+ */
+export function sqliteKeysetWhere(
+  order: readonly ResolvedBrowseSort[],
+  cursor: BrowseCursorPayload,
+  params: SQLInputValue[],
+): string {
+  const first = order[0]
+  if (!first) throw new Error("keyset requires at least one ordered key")
+  const guard = `${first.column} ${first.dir === "desc" ? "<=" : ">="} ?`
+  params.push(cursor.key[0] as SQLInputValue)
+
+  const terms: string[] = []
+  for (let i = 0; i < order.length; i += 1) {
+    const parts: string[] = []
+    for (let j = 0; j < i; j += 1) {
+      parts.push(`${order[j]?.column} = ?`)
+      params.push(cursor.key[j] as SQLInputValue)
+    }
+    parts.push(`${order[i]?.column} ${order[i]?.dir === "desc" ? "<" : ">"} ?`)
+    params.push(cursor.key[i] as SQLInputValue)
+    terms.push(parts.length === 1 ? (parts[0] as string) : `(${parts.join(" AND ")})`)
+  }
+  const tail: string[] = []
+  for (let j = 0; j < order.length; j += 1) {
+    tail.push(`${order[j]?.column} = ?`)
+    params.push(cursor.key[j] as SQLInputValue)
+  }
+  tail.push("id > ?")
+  params.push(cursor.id)
+  terms.push(`(${tail.join(" AND ")})`)
+
+  return `${guard} AND (${terms.join(" OR ")})`
 }

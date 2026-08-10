@@ -1,7 +1,11 @@
 import {
   BROWSE_DEFAULT_LIMIT,
+  browseCursorKey,
+  browseQueryFingerprint,
   DEFAULT_CANDIDATE_POOL,
   DEFAULT_VECTOR_K,
+  decodeBrowseCursor,
+  encodeBrowseCursor,
   fuseHybrid,
   type MemoryQuery,
   type MemoryRecord,
@@ -17,7 +21,7 @@ import {
 } from "@dawn-ai/memory"
 import { Pool, type PoolClient } from "pg"
 import pgvector from "pgvector/pg"
-import { appendPgBrowseFilter } from "./browse-sql.js"
+import { appendPgBrowseFilter, pgKeysetWhere } from "./browse-sql.js"
 import {
   pageAndTagFilter,
   RECORD_COLUMNS,
@@ -451,10 +455,6 @@ export function pgvectorMemoryStore(opts: {
       // Before ready(): a malformed query never pays for a connection.
       validateBrowseQuery(q)
       await ready()
-      // TODO(Task 14): `q.cursor` is read NOWHERE below. Setting it is silently a
-      // no-op, not an error; the JSDoc on BrowseQuery marks it not-yet-applied.
-      // `q.filters` IS fully applied: every arm has a clause, and an unmapped
-      // field throws rather than passing through unfiltered.
       const where: string[] = []
       const params: unknown[] = []
       if (q.namespace) {
@@ -513,12 +513,11 @@ export function pgvectorMemoryStore(opts: {
         where.push(`(expires_at IS NULL OR expires_at > $${params.length})`)
       }
       for (const filter of q.filters ?? []) appendPgBrowseFilter(filter, where, params)
-      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
-      // Kept as a floor because the two backends fail asymmetrically if one ever slips
-      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
-      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
-      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      // The COUNT must see the FILTERS ONLY: `total` is the size of the whole matching
+      // set, not of what is left after the cursor.
+      const filterParamCount = params.length
+      const countClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+
       const order = resolveBrowseOrder(q.orderBy)
       // COLLATE "C" only where SQLite's BINARY order would otherwise differ (namespace,
       // id). Timestamps stay uncollated so the (updated_at DESC, id COLLATE "C" ASC)
@@ -530,22 +529,42 @@ export function pgvectorMemoryStore(opts: {
         ),
         'id COLLATE "C" ASC',
       ].join(", ")
+
+      const fingerprint = browseQueryFingerprint(q)
+      const rowWhere = [...where]
+      if (q.cursor) {
+        const payload = decodeBrowseCursor(q.cursor, fingerprint, order)
+        rowWhere.push(pgKeysetWhere(order, payload, params))
+      }
+      const rowsClause = rowWhere.length > 0 ? `WHERE ${rowWhere.join(" AND ")}` : ""
+
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
+      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Rows and total are two separate round-trips; a concurrent write between
       // them can momentarily skew total vs records — acceptable for a dev
       // inspection tool (no transaction needed). One snapshot: Task 15.
       const rowsRes = await pool.query(
-        `SELECT ${RECORD_COLUMNS} FROM ${T} ${clause}
+        `SELECT ${RECORD_COLUMNS} FROM ${T} ${rowsClause}
          ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset],
       )
-      const totalRes = await pool.query(`SELECT COUNT(*)::int AS n FROM ${T} ${clause}`, params)
-      return {
-        records: (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord),
-        total: (totalRes.rows[0] as { n: number }).n,
-        // TODO(Task 14 — keyset continuation): always null until the keyset cursor
-        // lands. NOT the documented "no more rows" signal yet — see BrowsePage.
-        continuation: null,
-      }
+      const totalRes = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM ${T} ${countClause}`,
+        params.slice(0, filterParamCount),
+      )
+      const records = (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord)
+      const last = records.at(-1)
+      // A continuation is issued whenever the window FILLED: the store cannot know
+      // whether more rows follow without another read, and an exact-multiple walk
+      // ending in one empty window is cheaper than that read.
+      const continuation =
+        last && records.length === limit
+          ? encodeBrowseCursor(fingerprint, { key: browseCursorKey(last, order), id: last.id })
+          : null
+      return { records, total: (totalRes.rows[0] as { n: number }).n, continuation }
     },
 
     async stats(statsOpts = {}) {

@@ -1,7 +1,9 @@
 import {
+  type BrowseCursorPayload,
   type BrowseFilter,
   BrowseQueryError,
   namespacePrefixUpperBound,
+  type ResolvedBrowseSort,
   utcDayAfter,
   utcDayStart,
 } from "@dawn-ai/memory"
@@ -142,4 +144,50 @@ export function appendPgBrowseFilter(
       )
     }
   }
+}
+
+/**
+ * Postgres twin of `sqliteKeysetWhere` — same shape, same guard, `$n` numbering
+ * continued from `params`, COLLATE "C" where byte order matters and `::real` on the
+ * float4 column.
+ */
+export function pgKeysetWhere(
+  order: readonly ResolvedBrowseSort[],
+  cursor: BrowseCursorPayload,
+  params: unknown[],
+): string {
+  const first = order[0]
+  if (!first) throw new Error("keyset requires at least one ordered key")
+  const col = (entry: ResolvedBrowseSort) =>
+    entry.collateC ? `${entry.column} COLLATE "C"` : entry.column
+  const bind = (entry: ResolvedBrowseSort, index: number) =>
+    entry.numeric ? `$${index}::real` : `$${index}`
+
+  params.push(cursor.key[0])
+  const guard = `${col(first)} ${first.dir === "desc" ? "<=" : ">="} ${bind(first, params.length)}`
+
+  const terms: string[] = []
+  for (let i = 0; i < order.length; i += 1) {
+    const parts: string[] = []
+    for (let j = 0; j < i; j += 1) {
+      const entry = order[j] as ResolvedBrowseSort
+      params.push(cursor.key[j])
+      parts.push(`${col(entry)} = ${bind(entry, params.length)}`)
+    }
+    const entry = order[i] as ResolvedBrowseSort
+    params.push(cursor.key[i])
+    parts.push(`${col(entry)} ${entry.dir === "desc" ? "<" : ">"} ${bind(entry, params.length)}`)
+    terms.push(parts.length === 1 ? (parts[0] as string) : `(${parts.join(" AND ")})`)
+  }
+  const tail: string[] = []
+  for (let j = 0; j < order.length; j += 1) {
+    const entry = order[j] as ResolvedBrowseSort
+    params.push(cursor.key[j])
+    tail.push(`${col(entry)} = ${bind(entry, params.length)}`)
+  }
+  params.push(cursor.id)
+  tail.push(`id COLLATE "C" > $${params.length}`)
+  terms.push(`(${tail.join(" AND ")})`)
+
+  return `${guard} AND (${terms.join(" OR ")})`
 }

@@ -1,5 +1,22 @@
-import { approveWithReconcile, type MemoryRecord, type MemoryStore } from "@dawn-ai/memory"
+import {
+  approveWithReconcile,
+  BrowseQueryError,
+  type MemoryRecord,
+  type MemoryStore,
+} from "@dawn-ai/memory"
 import { expect, test } from "vitest"
+
+/** Asserted on `.code`, not on the message: the route branches on the code. */
+async function expectContinuationInvalid(run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run()
+  } catch (error) {
+    expect(error).toBeInstanceOf(BrowseQueryError)
+    expect((error as BrowseQueryError).code).toBe("continuation-invalid")
+    return
+  }
+  expect.unreachable("should have rejected")
+}
 
 function rec(
   over: Partial<MemoryRecord> & Pick<MemoryRecord, "id" | "namespace" | "content">,
@@ -362,25 +379,6 @@ export function runMemoryStoreConformance(opts: {
       const s = await makeStore()
       try {
         expect(await s.browse()).toEqual({ records: [], total: 0, continuation: null })
-      } finally {
-        await close?.(s)
-      }
-    })
-    // Deliberately temporary scaffold. It pins the CURRENT (unimplemented) continuation
-    // behavior so "always null" is executable rather than only prose — without it, a
-    // consumer reading BrowsePage's JSDoc as "null = no more rows" stops after page 1
-    // and nothing fails. Task 14 (keyset continuation) MUST delete this test: it breaks
-    // the moment a filled window starts issuing a continuation, which is the point.
-    test("browse issues no continuation yet, even when the window fills", async () => {
-      const s = await makeStore()
-      try {
-        for (const id of ["c0", "c1", "c2"]) {
-          await s.put(rec({ id, namespace: "ns", content: id }))
-        }
-        const page = await s.browse({ limit: 2 })
-        expect(page.records).toHaveLength(2)
-        expect(page.total).toBe(3)
-        expect(page.continuation).toBeNull()
       } finally {
         await close?.(s)
       }
@@ -1180,6 +1178,146 @@ export function runMemoryStoreConformance(opts: {
         await s.put(rec({ id: "new", namespace: "ns", content: "new", updatedAt: D(2) }))
         expect((await s.browse({ orderBy: [] })).records.map((r) => r.id)).toEqual(["new", "old"])
         expect((await s.browse()).records.map((r) => r.id)).toEqual(["new", "old"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse walks the whole dataset through continuations, no gaps or repeats", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 7; i += 1) {
+          await s.put(rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(i + 1) }))
+        }
+        const seen: string[] = []
+        let page = await s.browse({ limit: 3 })
+        expect(page.total).toBe(7)
+        expect(page.continuation).not.toBeNull()
+        seen.push(...page.records.map((r) => r.id))
+        while (page.continuation) {
+          page = await s.browse({ limit: 3, cursor: page.continuation })
+          // total is the WHOLE matching set on every window, never what remains.
+          expect(page.total).toBe(7)
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(seen).toEqual(["r6", "r5", "r4", "r3", "r2", "r1", "r0"])
+        expect(new Set(seen).size).toBe(7)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse returns a null continuation when the window did not fill", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "ns", content: "a" }))
+        expect((await s.browse({ limit: 10 })).continuation).toBeNull()
+        expect((await s.browse()).continuation).toBeNull()
+        // A page that fills EXACTLY still issues one; following it is a legal
+        // zero-row window, not an error.
+        const full = await s.browse({ limit: 1 })
+        expect(full.continuation).not.toBeNull()
+        const after = await s.browse({ limit: 1, cursor: full.continuation as string })
+        expect(after.records).toEqual([])
+        expect(after.total).toBe(1)
+        expect(after.continuation).toBeNull()
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations survive tied sort keys by falling through to id", async () => {
+      const s = await makeStore()
+      try {
+        for (const id of ["a", "B", "c", "D"]) {
+          await s.put(rec({ id, namespace: "ns", content: id, updatedAt: D(1) }))
+        }
+        const seen: string[] = []
+        let page = await s.browse({ limit: 2 })
+        seen.push(...page.records.map((r) => r.id))
+        while (page.continuation) {
+          page = await s.browse({ limit: 2, cursor: page.continuation })
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(seen).toEqual(["B", "D", "a", "c"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations round-trip a float confidence key exactly", async () => {
+      const s = await makeStore()
+      try {
+        // Postgres stores confidence as float4; a cursor key that is not cast back to
+        // ::real compares false against the row it came from and the walk stalls or
+        // repeats. These values are all inexact in float4.
+        for (const [id, confidence] of [
+          ["a", 0.1],
+          ["b", 0.2],
+          ["c", 0.3],
+        ] as const) {
+          await s.put(rec({ id, namespace: "ns", content: id, confidence }))
+        }
+        const seen: string[] = []
+        let page = await s.browse({ limit: 1, orderBy: [{ field: "confidence", dir: "desc" }] })
+        seen.push(...page.records.map((r) => r.id))
+        while (page.continuation) {
+          page = await s.browse({
+            limit: 1,
+            orderBy: [{ field: "confidence", dir: "desc" }],
+            cursor: page.continuation,
+          })
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(seen).toEqual(["c", "b", "a"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse rejects a continuation issued for a different query", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 3; i += 1) {
+          await s.put(rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(i + 1) }))
+        }
+        const page = await s.browse({ limit: 1 })
+        const cursor = page.continuation as string
+        // A cursor carries its query's fingerprint, so it can never be replayed
+        // against a different filter/sort and silently answer the wrong question.
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor, status: "active" }))
+        await expectContinuationInvalid(() =>
+          s.browse({ limit: 1, cursor, orderBy: [{ field: "confidence", dir: "asc" }] }),
+        )
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor: "not-a-cursor" }))
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations compose with filters, and total stays the filtered set", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await s.put(
+            rec({
+              id: `c${i}`,
+              namespace: "ns",
+              content: `c${i}`,
+              status: "candidate",
+              updatedAt: D(i + 1),
+            }),
+          )
+        }
+        await s.put(rec({ id: "keep", namespace: "ns", content: "keep", updatedAt: D(9) }))
+        const query = {
+          limit: 2,
+          filters: [{ field: "status", op: "in", values: ["candidate"] }],
+        } as const
+        const seen: string[] = []
+        let page = await s.browse(query)
+        expect(page.total).toBe(5)
+        seen.push(...page.records.map((r) => r.id))
+        while (page.continuation) {
+          page = await s.browse({ ...query, cursor: page.continuation })
+          expect(page.total).toBe(5)
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(seen).toEqual(["c4", "c3", "c2", "c1", "c0"])
       } finally {
         await close?.(s)
       }

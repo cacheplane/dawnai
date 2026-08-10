@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { appendSqliteBrowseFilter } from "../src/sqlite-browse-sql.js"
+import { resolveBrowseOrder } from "../src/browse-order.js"
+import { appendSqliteBrowseFilter, sqliteKeysetWhere } from "../src/sqlite-browse-sql.js"
 import type { BrowseFilter } from "../src/types.js"
 
 function build(filter: BrowseFilter) {
@@ -123,5 +124,47 @@ describe("appendSqliteBrowseFilter — updatedAt", () => {
       sql: "updated_at >= ? AND updated_at < ?",
       params: ["2026-08-01T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
     })
+  })
+})
+
+describe("sqliteKeysetWhere", () => {
+  it("emits the redundant leading guard plus the OR-chain, id last", () => {
+    const params: (string | number)[] = []
+    const sql = sqliteKeysetWhere(
+      resolveBrowseOrder(),
+      { key: ["2026-08-09T00:00:00.000Z"], id: "r1" },
+      params,
+    )
+    expect(sql).toBe("updated_at <= ? AND (updated_at < ? OR (updated_at = ? AND id > ?))")
+    expect(params).toEqual([
+      "2026-08-09T00:00:00.000Z",
+      "2026-08-09T00:00:00.000Z",
+      "2026-08-09T00:00:00.000Z",
+      "r1",
+    ])
+  })
+  it("flips the guard and the chain operators for an ascending leading key", () => {
+    const params: (string | number)[] = []
+    const sql = sqliteKeysetWhere(
+      resolveBrowseOrder([{ field: "createdAt", dir: "asc" }]),
+      { key: ["2026-08-09T00:00:00.000Z"], id: "r1" },
+      params,
+    )
+    expect(sql).toBe("created_at >= ? AND (created_at > ? OR (created_at = ? AND id > ?))")
+  })
+  it("nests one equality level per additional key", () => {
+    const params: (string | number)[] = []
+    const sql = sqliteKeysetWhere(
+      resolveBrowseOrder([
+        { field: "namespace", dir: "asc" },
+        { field: "confidence", dir: "desc" },
+      ]),
+      { key: ["ns=a", 0.5], id: "r1" },
+      params,
+    )
+    expect(sql).toBe(
+      "namespace >= ? AND (namespace > ? OR (namespace = ? AND confidence < ?) OR (namespace = ? AND confidence = ? AND id > ?))",
+    )
+    expect(params).toEqual(["ns=a", "ns=a", "ns=a", 0.5, "ns=a", 0.5, "r1"])
   })
 })

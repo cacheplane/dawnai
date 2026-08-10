@@ -1,6 +1,6 @@
-import type { BrowseFilter } from "@dawn-ai/memory"
+import { type BrowseFilter, resolveBrowseOrder } from "@dawn-ai/memory"
 import { describe, expect, it } from "vitest"
-import { appendPgBrowseFilter } from "../src/browse-sql.js"
+import { appendPgBrowseFilter, pgKeysetWhere } from "../src/browse-sql.js"
 
 function build(filter: BrowseFilter, startIndex = 0) {
   const where: string[] = []
@@ -147,6 +147,40 @@ describe("appendPgBrowseFilter — two-parameter arms", () => {
     )
     expect(build({ field: "updatedAt", op: "onDay", day: "2026-08-09" }, 3).sql).toBe(
       "updated_at >= $4 AND updated_at < $5",
+    )
+  })
+})
+
+describe("pgKeysetWhere", () => {
+  it("emits the guard, the OR-chain, and the C-collated id tie-break", () => {
+    const params: unknown[] = []
+    const sql = pgKeysetWhere(
+      resolveBrowseOrder(),
+      { key: ["2026-08-09T00:00:00.000Z"], id: "r1" },
+      params,
+    )
+    expect(sql).toBe(
+      'updated_at <= $1 AND (updated_at < $2 OR (updated_at = $3 AND id COLLATE "C" > $4))',
+    )
+    expect(params).toEqual([
+      "2026-08-09T00:00:00.000Z",
+      "2026-08-09T00:00:00.000Z",
+      "2026-08-09T00:00:00.000Z",
+      "r1",
+    ])
+  })
+  it("collates namespace and casts confidence, and continues the caller's numbering", () => {
+    const params: unknown[] = ["already-bound"]
+    const sql = pgKeysetWhere(
+      resolveBrowseOrder([
+        { field: "namespace", dir: "asc" },
+        { field: "confidence", dir: "desc" },
+      ]),
+      { key: ["ns=a", 0.5], id: "r1" },
+      params,
+    )
+    expect(sql).toBe(
+      'namespace COLLATE "C" >= $2 AND (namespace COLLATE "C" > $3 OR (namespace COLLATE "C" = $4 AND confidence < $5::real) OR (namespace COLLATE "C" = $6 AND confidence = $7::real AND id COLLATE "C" > $8))',
     )
   })
 })
