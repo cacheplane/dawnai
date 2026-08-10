@@ -3,6 +3,7 @@ import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
 import { normalizeSetFilter } from "./browse-filter.js"
+import { BROWSE_DEFAULT_LIMIT, validateBrowseQuery } from "./browse-validate.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
 import { tokenize } from "./tokenize.js"
@@ -429,6 +430,9 @@ export function sqliteMemoryStore(opts: {
       return rows.map(rowToRecord)
     },
     async browse(q = {}) {
+      // Defence in depth: the HTTP boundary validates too, but a store that accepts
+      // nonsense returns an empty page that looks like an answer.
+      validateBrowseQuery(q)
       // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
       // `q.cursor` are read NOWHERE below — this store still answers only the
       // pre-existing shorthand fields. Setting one of them is silently a no-op, not an
@@ -472,7 +476,7 @@ export function sqliteMemoryStore(opts: {
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
       // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
       // negatives — clamping to ≥0 integers unifies backend behavior.
-      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
       // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.

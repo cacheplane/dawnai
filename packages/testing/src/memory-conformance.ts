@@ -421,6 +421,40 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse rejects an invalid query instead of silently matching zero rows", async () => {
+      const s = await makeStore()
+      try {
+        // A store that quietly returns [] for a malformed filter teaches the caller
+        // that its query was fine and the data was empty. Both are lies.
+        await expect(s.browse({ status: "bogus" as never })).rejects.toThrow(/invalid status/)
+        await expect(
+          s.browse({ filters: [{ field: "tags", op: "in", values: ["x"] }] as never }),
+        ).rejects.toThrow(/unknown filter field/)
+        await expect(
+          s.browse({ filters: [{ field: "status", op: "in", values: [] }] }),
+        ).rejects.toThrow(/must not be empty/)
+        await expect(
+          s.browse({ orderBy: [{ field: "content" as never, dir: "asc" }] }),
+        ).rejects.toThrow(/unknown sort field/)
+        await expect(s.browse({ limit: 0 })).rejects.toThrow(/limit must be an integer >= 1/)
+        await expect(s.browse({ since: "2026-08-09" })).rejects.toThrow(/full ISO-8601/)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse does NOT impose the HTTP limit ceiling on in-process callers", async () => {
+      const s = await makeStore()
+      try {
+        // The CLI's consolidation scan browses with limit 10_000 and does offset
+        // arithmetic against `total`; a store-side clamp would silently truncate it.
+        await s.put(rec({ id: "a", namespace: "ns", content: "a" }))
+        const page = await s.browse({ limit: 10_000 })
+        expect(page.total).toBe(1)
+        expect(page.records.map((r) => r.id)).toEqual(["a"])
+      } finally {
+        await close?.(s)
+      }
+    })
     test("stats returns count maps by status/kind/namespace/sourceType plus total", async () => {
       const s = await makeStore()
       try {

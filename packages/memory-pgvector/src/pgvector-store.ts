@@ -1,4 +1,5 @@
 import {
+  BROWSE_DEFAULT_LIMIT,
   DEFAULT_CANDIDATE_POOL,
   DEFAULT_VECTOR_K,
   fuseHybrid,
@@ -10,6 +11,7 @@ import {
   rankKeywordCandidates,
   tokenize,
   type VectorRankingOptions,
+  validateBrowseQuery,
 } from "@dawn-ai/memory"
 import { Pool, type PoolClient } from "pg"
 import pgvector from "pgvector/pg"
@@ -443,6 +445,8 @@ export function pgvectorMemoryStore(opts: {
     },
 
     async browse(q = {}) {
+      // Before ready(): a malformed query never pays for a connection.
+      validateBrowseQuery(q)
       await ready()
       // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
       // `q.cursor` are read NOWHERE below — this store still answers only the
@@ -488,7 +492,7 @@ export function pgvectorMemoryStore(opts: {
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
       // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
       // negatives — clamping to ≥0 integers unifies backend behavior.
-      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Rows and total are two separate round-trips; a concurrent write between
       // them can momentarily skew total vs records — acceptable for a dev
