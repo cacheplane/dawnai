@@ -8,10 +8,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 export function correlateReleaseEvidence(candidate, observation) {
   const conflicts = new Set(findObservationSchemaConflicts(observation))
-  if (
-    conflicts.has("observation-schema-invalid") ||
-    !observationStructureIsValid(observation)
-  ) {
+  if (conflicts.has("observation-schema-invalid") || !observationStructureIsValid(observation)) {
     return invalidEvidence(conflicts)
   }
   const inventoryPackages = Array.isArray(observation.inventory?.packages)

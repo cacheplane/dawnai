@@ -855,16 +855,12 @@ for (const [name, mutate] of [
 }
 
 const malformedImmutableIdentityCases = [
-  ...["manifestAsset", "releaseRecordAsset", "manifestAttestationAsset"].flatMap(
-    (recordName) =>
-      ["name", "sha256"].flatMap((field) => [
-        [`missing artifacts.${recordName}.${field}`, (o) => delete o.artifacts[recordName][field]],
-        [`null artifacts.${recordName}.${field}`, (o) => (o.artifacts[recordName][field] = null)],
-        [
-          `wrong-type artifacts.${recordName}.${field}`,
-          (o) => (o.artifacts[recordName][field] = 1),
-        ],
-      ]),
+  ...["manifestAsset", "releaseRecordAsset", "manifestAttestationAsset"].flatMap((recordName) =>
+    ["name", "sha256"].flatMap((field) => [
+      [`missing artifacts.${recordName}.${field}`, (o) => delete o.artifacts[recordName][field]],
+      [`null artifacts.${recordName}.${field}`, (o) => (o.artifacts[recordName][field] = null)],
+      [`wrong-type artifacts.${recordName}.${field}`, (o) => (o.artifacts[recordName][field] = 1)],
+    ]),
   ),
   ...[
     "name",
