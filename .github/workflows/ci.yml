@@ -75,6 +75,12 @@ jobs:
           DAWN_REQUIRE_DOCKER: "1"
         run: pnpm test
 
+      - name: Release Inventory
+        run: pnpm check:release-inventory
+
+      - name: Release Controller Tests
+        run: pnpm test:release-controller
+
       - name: Docs Check
         run: node scripts/check-docs.mjs
 

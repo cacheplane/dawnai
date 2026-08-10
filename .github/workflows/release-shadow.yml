@@ -1,0 +1,75 @@
+name: Release Shadow
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional exact release version; must be paired with commitSha
+        required: false
+        type: string
+      commitSha:
+        description: Optional 40-character candidate SHA; must be paired with version
+        required: false
+        type: string
+  schedule:
+    - cron: "17 7 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          ref: main
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24.17.0"
+          cache: pnpm
+
+      - name: Install root release tooling
+        run: pnpm install --filter . --frozen-lockfile --ignore-scripts
+
+      - name: Validate release inventory
+        run: pnpm check:release-inventory
+
+      - name: Reconcile release state in shadow mode
+        env:
+          VERSION: ${{ inputs.version || '' }}
+          COMMIT_SHA: ${{ inputs.commitSha || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "$VERSION" && -z "$COMMIT_SHA" ]] || [[ -z "$VERSION" && -n "$COMMIT_SHA" ]]; then
+            echo "version and commitSha must be supplied together" >&2
+            exit 2
+          fi
+          args=(--repository cacheplane/dawnai --format markdown)
+          if [[ -n "$VERSION" ]]; then
+            args+=(--version "$VERSION" --commit-sha "$COMMIT_SHA")
+          fi
+          pnpm release:shadow "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect release preflight evidence
+        env:
+          VERSION: ${{ inputs.version || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          args=(--repository cacheplane/dawnai --workflow .github/workflows/release.yml --format markdown)
+          if [[ -n "$VERSION" ]]; then
+            args+=(--version "$VERSION")
+          fi
+          pnpm release:preflight "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
