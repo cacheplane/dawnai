@@ -1,4 +1,4 @@
-import type { BrowseFilter } from "@dawn-ai/memory"
+import { type BrowseFilter, BrowseQueryError } from "@dawn-ai/memory"
 
 /**
  * Append one normalized filter to a Postgres WHERE list, numbering `$n` from the
@@ -47,13 +47,25 @@ export function appendPgBrowseFilter(
           params.push(filter.value)
           where.push(`lower(content) = lower($${params.length})`)
           return
-        default:
+        case "notEquals":
           params.push(filter.value)
           where.push(`lower(content) <> lower($${params.length})`)
           return
+        default: {
+          // Every op has its own case above, so this binding is `never` today: an op
+          // added to the union stops the BUILD here rather than reaching a caller as
+          // `<>` — wrong rows, no signal, and two dialects to forget.
+          const unmapped: never = filter
+          throw new BrowseQueryError(
+            `unhandled content filter op: ${JSON.stringify((unmapped as BrowseFilter).op)}`,
+          )
+        }
       }
     }
     default:
-      throw new Error(`unhandled browse filter field: ${(filter as { field: string }).field}`)
+      // Reachable today: validateBrowseQuery accepts namespace/confidence/updatedAt,
+      // whose clauses are not built yet. BrowseQueryError rather than Error — the HTTP
+      // boundary maps a rejection by NAME, so a plain Error 500s where this must 400.
+      throw new BrowseQueryError(`unhandled browse filter field: ${filter.field}`)
   }
 }

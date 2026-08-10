@@ -534,11 +534,20 @@ export function runMemoryStoreConformance(opts: {
           ).total,
         ).toBe(3)
         // "%" and "_" are literal characters, not wildcards: this is why the stores
-        // use instr/position instead of LIKE.
-        const literal = await s.browse({
-          filters: [{ field: "content", op: "contains", value: "50% o" }],
-        })
-        expect(literal.records.map((r) => r.id)).toEqual(["pct"])
+        // use instr/position instead of LIKE. Both needles SEPARATE the two readings —
+        // under LIKE, "%" is "anything" and "_" is "any one character", so both would
+        // additionally admit "500" and "50Xoff". A needle either reading accepts (say
+        // "50% o") asserts nothing here.
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "contains", value: "50%" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["pct"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "contains", value: "50_" }] })
+          ).records.map((r) => r.id),
+        ).toEqual([])
       } finally {
         await close?.(s)
       }

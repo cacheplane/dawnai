@@ -26,6 +26,23 @@ describe("appendPgBrowseFilter — sets", () => {
   })
 })
 
+describe("appendPgBrowseFilter — unmapped field", () => {
+  it("rejects as BrowseQueryError, the name the HTTP boundary maps to 400", () => {
+    let thrown: unknown
+    try {
+      build({ field: "tags", op: "in", values: ["x"] } as never)
+    } catch (error) {
+      thrown = error
+    }
+    // Identity, not wording: a plain Error carries the same message and still 500s.
+    expect(thrown).toMatchObject({ name: "BrowseQueryError", code: "invalid-query" })
+    expect(thrown).toHaveProperty(
+      "message",
+      expect.stringContaining("unhandled browse filter field"),
+    )
+  })
+})
+
 describe("appendPgBrowseFilter — content", () => {
   it("uses position()/starts_with()/right(), never LIKE", () => {
     expect(build({ field: "content", op: "contains", value: "50%" })).toEqual({
