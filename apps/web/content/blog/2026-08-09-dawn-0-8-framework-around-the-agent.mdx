@@ -110,12 +110,14 @@ Dawn is pre-1.0. From 0.8.0 onward, the public packages share one fixed version,
 
 Breaking changes have shipped in 0.8.x patch releases. That is unusual, but a minor bump in this fixed 0.x group would move the whole package set to 1.0.0. Pin exact versions and read every intervening release note rather than only the latest one.
 
-For this release:
+For the minimal CLI and SDK case:
 
 ```bash
 pnpm add @dawn-ai/cli@0.8.21 @dawn-ai/sdk@0.8.21
 pnpm exec dawn verify
 ```
+
+If your app declares other `@dawn-ai/*` packages directly, pin every one of them to exactly 0.8.21 in the same upgrade. That includes packages such as testing, evals, sandbox, and memory; do not leave direct Dawn dependencies on mixed versions.
 
 Then run your route tests and evals, and exercise the production target you actually deploy. The [Upgrading](/docs/upgrading) guide calls out the current migrations and the checks worth keeping in that loop.
 
