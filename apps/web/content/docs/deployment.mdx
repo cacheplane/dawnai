@@ -57,7 +57,7 @@ export default config({
 
 Setting `targets` replaces the default list rather than adding to it — name `"hono"` alongside the others if you want the [edge artifacts](#edge-runtimes) too.
 
-To run the built image on Kubernetes — as a Deployment + Service with optional Ingress and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below. Keep a single replica unless shared stores are paired with sticky routing or distributed per-thread serialization and cancel routing.
+To run the built image on Kubernetes — as a Deployment + Service with optional Ingress and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 
 ## Deploying on Kubernetes
 
@@ -218,7 +218,7 @@ export default config({
 | `.dawn/build/app.mjs` | The entry point: a Hono app with one catch-all handing every request to the fetch handler, `export default`ed — the shape Workers, Vercel and Bun all accept. Import the pieces yourself to compose it into a larger Hono app. |
 | `wrangler.toml` | A scaffold at the app root: `name`, `main`, `compatibility_date`. Written **only when you have none**, and never overwritten once it exists — a `wrangler.toml` accretes bindings, vars and routes that only you know about. If you already have one, Dawn writes its copy to `.dawn/build/wrangler.toml` and says so on stderr. |
 
-The Postgres stores persist checkpoints, threads, and permission decisions, but they do not distribute the in-memory one-run-per-thread gate or cancellation registry. A multi-isolate or multi-replica deployment needs sticky routing or distributed per-thread serialization plus cancellation routing.
+The Postgres stores persist checkpoints, threads, and permission decisions, but they do not distribute the in-memory one-run-per-thread gate or cancellation registry. A multi-isolate or multi-replica deployment needs guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 
 The generated files import four packages by bare specifier, and none of them is a dependency of `@dawn-ai/cli` — the CLI does not import them, the app it generates does:
 

@@ -240,6 +240,8 @@ helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-inf
 
 `dawn build`'s `node` target (see [Deploying to production (Node/Docker)](/docs/deployment#deploying-to-production-nodedocker)) emits a `server.mjs` plus a hardened `Dockerfile` that boot the real Dawn runtime. **Build that image when your app configures `kubernetesSandbox`** — the sandbox provider only runs inside the Dawn runtime process, so an image built from the `langsmith` target's `langgraph.json` (containerized separately with `@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the Kubernetes API and will not create sandbox Pods, even with `kubernetesSandbox` configured in `dawn.config.ts`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image or bake `dawn.config.ts`; the image is the runtime contract.
 
+The default commands below install into `dawn-sandboxes` and reuse the chart's default ServiceAccount. They assume `dawn-sandbox-infra` has already created that namespace and its `dawn-orchestrator` ServiceAccount.
+
 ```bash
 # Build the image via dawn build's node target (on by default)
 dawn build
@@ -247,6 +249,7 @@ docker build -t ghcr.io/you/your-app:latest .
 
 # Install the chart against that image
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
   --set image.repository=ghcr.io/you/your-app \
   --set image.tag=latest
 ```
@@ -254,7 +257,9 @@ helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
 Or from a local checkout of the chart:
 
 ```bash
-helm install dawn-app ./charts/dawn-app --set image.repository=ghcr.io/you/your-app
+helm install dawn-app ./charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --set image.repository=ghcr.io/you/your-app
 ```
 
 `image.repository` is required — install/upgrade fails fast with a clear error if it's unset. `containerPort` (default `8000`) and `healthPath` (default `/healthz`) are also values, matching the `node` target's Dockerfile (`EXPOSE 8000`, `/healthz`) out of the box — verify both against your built image before relying on the defaults if you're deploying a differently-shaped image, since they drive the liveness/readiness/startup probes.
@@ -280,6 +285,7 @@ Supply environment variables directly (`env`) or via an existing Secret (`secret
 
 ```bash
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
   --set image.repository=ghcr.io/you/your-app \
   --set secretName=my-app-secrets
 ```
@@ -288,13 +294,14 @@ Ingress and a PodDisruptionBudget are opt-in:
 
 ```bash
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
   --set image.repository=ghcr.io/you/your-app \
   --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=app.example.com \
   --set podDisruptionBudget.enabled=true
 ```
 
-<Callout type="warn" title="Do not scale replicas without distributed run coordination">
-  The Dawn HTTP runtime's one-run-per-thread gate and cancellation registry are process-local. Shared Postgres stores make thread data durable, but do not distribute that coordination. Keep one replica unless you provide sticky routing plus distributed per-thread serialization and route cancellation to the replica that owns the run.
+<Callout type="warn" title="Do not scale replicas without thread-aware routing">
+  The Dawn HTTP runtime's one-run-per-thread gate and cancellation registry are process-local. Shared Postgres stores make thread data durable, but do not distribute that coordination. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 </Callout>
 
 <Callout type="warn" title="A user-built image, not a Dawn-hosted runtime">
@@ -321,7 +328,11 @@ export interface SandboxProvider {
   }): Promise<SandboxHandle>
   release(threadId: string): Promise<void>
   destroy(threadId: string): Promise<void>
-  preflight?(): Promise<{ readonly ok: boolean; readonly detail?: string }>
+  preflight?(): Promise<{
+    readonly ok: boolean
+    readonly detail?: string
+    readonly warnings?: readonly string[]
+  }>
 }
 ```
 

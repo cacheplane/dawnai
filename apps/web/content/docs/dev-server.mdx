@@ -199,7 +199,7 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     A cancelled SSE run terminates with `event: done` and `data: {"output":{"cancelled":true}}`, which is how clients tell cancellation apart from failure. A cancelled `runs/wait` returns `409` with `error.details.code` of `run_cancelled` — it has not sent a response body yet, so it can still use a status code, whereas a stream has already committed to `200`.
   </Tab>
   <Tab label="GET /memory/candidates">
-    List candidate memory records across all namespaces. This public management endpoint bypasses middleware.
+    List candidate memory records across all namespaces. This management endpoint bypasses middleware.
 
     ```
     GET /memory/candidates
@@ -216,7 +216,7 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     -> 409 if the record is not a candidate
     ```
 
-    This public management endpoint bypasses middleware.
+    This management endpoint bypasses middleware.
   </Tab>
   <Tab label="POST /memory/candidates/:id/reject">
     Reject a candidate by deleting its record.
@@ -226,9 +226,13 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     -> 200 { "ok": true }
     ```
 
-    This public management endpoint bypasses middleware.
+    This management endpoint bypasses middleware.
   </Tab>
 </Tabs>
+
+<Callout type="warn" title="Protect the memory-candidate endpoints">
+  All three memory-candidate endpoints bypass Dawn middleware. `GET /memory/candidates` lists candidates across every namespace; approve can activate, supersede, or deduplicate records; reject deletes records. In production, require external reverse-proxy or platform authentication and appropriate network restrictions. Do not expose these endpoints publicly by default.
+</Callout>
 
 The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`. The `{ route, input }` request body is shared by Dawn's dev, Node, and Hono HTTP runtimes. LangSmith is a separate server with its own request envelope keyed by `assistant_id`; the Dawn body is not portable there unchanged.
 
@@ -247,7 +251,7 @@ To actually stop a run, call `POST /threads/:thread_id/cancel`. Server shutdown 
 The [AG-UI endpoint](#ag-ui-endpoint) takes the opposite default and aborts on disconnect, because it is an ephemeral surface with no reattach and nothing to resume.
 
 <Callout type="warn" title="Run tracking is single-replica">
-Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. Shared Postgres thread, checkpoint, or permission stores add persistence but do not distribute this coordination. Multiple replicas require sticky routing plus a distributed per-thread serialization and cancel-routing design. The default dev and Node stores are a separate concern: they are local SQLite stores unless configured otherwise. See [deployment](/docs/deployment).
+Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. Shared Postgres thread, checkpoint, or permission stores add persistence but do not distribute this coordination. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing. The default dev and Node stores are a separate concern: they are local SQLite stores unless configured otherwise. See [deployment](/docs/deployment).
 </Callout>
 
 ## AG-UI endpoint
