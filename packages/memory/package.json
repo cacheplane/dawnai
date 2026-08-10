@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./browse": {
+      "types": "./dist/browse.d.ts",
+      "default": "./dist/browse.js"
+    },
     "./namespace": {
       "types": "./dist/namespace.d.ts",
       "default": "./dist/namespace.js"
