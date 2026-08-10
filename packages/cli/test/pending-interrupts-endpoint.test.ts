@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { RunnableConfig } from "@langchain/core/runnables"
@@ -386,5 +386,78 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-allow": "1" }))
     expect(allowed.status).toBe(200)
     expect(await allowed.json()).toEqual({ interrupts: [] })
+  }, 30_000)
+})
+
+function cancelRequest(threadId: string): Request {
+  return new Request(`http://localhost/threads/${threadId}/cancel`, { method: "POST" })
+}
+
+async function threadStatus(handler: Handler, threadId: string): Promise<string> {
+  const response = await handler.fetch(new Request(`http://localhost/threads/${threadId}`))
+  expect(response.status).toBe(200)
+  return ((await response.json()) as { status: string }).status
+}
+
+async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return await readFile(path, "utf8")
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+  throw new Error(`probe file never appeared: ${path}`)
+}
+
+// ---------------------------------------------------------------------------
+// "interrupted" is deliberately overloaded: cancelled OR parked. The
+// discriminator is pending_interrupts — non-empty means the agent is waiting
+// on a human. Both halves are asserted here so the overload cannot silently
+// lose one of its meanings.
+// ---------------------------------------------------------------------------
+
+describe("thread status after a parked or cancelled turn", () => {
+  it("marks a parked thread interrupted, with a non-empty pending_interrupts", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const handler = await createHandler(await fixtureApp())
+    const threadId = "t-parked-status"
+
+    await drain(await handler.fetch(parkRunRequest(threadId, "deploy to staging")))
+
+    expect(await threadStatus(handler, threadId)).toBe("interrupted")
+    const body = await readPendingInterruptsBody(handler, threadId)
+    expect(body.interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("marks a cancelled thread interrupted, with an empty pending_interrupts", async () => {
+    const appRoot = await fixtureApp()
+    const handler = await createHandler(appRoot)
+    const threadId = "t-cancelled-status"
+    const startedFile = join(appRoot, "cancelled-started.json")
+    const releaseFile = join(appRoot, "cancelled-release.json")
+
+    const runResponse = await handler.fetch(
+      runStreamRequest(threadId, "/blocking#graph", { releaseFile, startedFile }),
+    )
+    await waitForFile(startedFile)
+    expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
+    await drain(runResponse)
+
+    expect(await threadStatus(handler, threadId)).toBe("interrupted")
+    const body = await readPendingInterruptsBody(handler, threadId)
+    expect(body.interrupts).toEqual([])
+  }, 30_000)
+
+  it("still reports idle after a turn that completes without parking", async () => {
+    const handler = await createHandler(await fixtureApp())
+    const threadId = "t-completed-status"
+
+    await drain(await handler.fetch(runStreamRequest(threadId, "/echo#graph")))
+
+    expect(await threadStatus(handler, threadId)).toBe("idle")
   }, 30_000)
 })

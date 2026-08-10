@@ -1296,6 +1296,13 @@ async function handleApStreamRequest(options: {
   // (subprocess, non-abort-aware SDK, CPU-bound loop) keeps running after
   // that race is won. See the finally below for why this matters.
   let sourceCleanup: Promise<void> | undefined
+  // A parked turn takes the NORMAL completion path: the adapter yields the
+  // interrupt chunk and then `done`, so a drained loop does not mean the turn
+  // finished. Without this, a thread waiting on a human reads back as "idle"
+  // and a reconnecting client is told the agent is done. Deliberately the
+  // handler's own flag, so parked-status honesty depends on nothing outside
+  // this request.
+  let sawInterrupt = false
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -1327,9 +1334,10 @@ async function handleApStreamRequest(options: {
           for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
             sourceCleanup = p
           })) {
+            if (chunk.type === "interrupt") sawInterrupt = true
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
-          await threadsStore.updateStatus(threadId, "idle")
+          await threadsStore.updateStatus(threadId, sawInterrupt ? "interrupted" : "idle")
         } catch (error) {
           // A cancelled run is not a failure: clients must be able to tell the
           // two apart without inferring it from a truncated stream.
@@ -1342,8 +1350,11 @@ async function handleApStreamRequest(options: {
                 type: "done",
               }
           safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+          // A turn that parked and then failed is still parked: the pending
+          // interrupt survives in the checkpoint, so "interrupted" wins here
+          // too rather than reporting the thread as finished.
           await threadsStore
-            .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+            .updateStatus(threadId, run.cancelled || sawInterrupt ? "interrupted" : "idle")
             .catch(() => undefined)
         }
       } finally {
