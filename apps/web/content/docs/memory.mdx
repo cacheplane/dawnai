@@ -88,8 +88,8 @@ export default defineMemory({
 - **`schema`** — a Zod schema describing your fact shape.
 - **`identity?`** — the keys used for write reconciliation (in `auto` and `ask` modes). Defaults to `["subject", "predicate"]`.
 
-<Callout type="info" title="Deterministic recall">
-  By default recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock). Opting into [semantic recall](#semantic-recall-opt-in) adds one network embed at recall time; it stays deterministic under a fixed embedder (and under aimock replay).
+<Callout type="info" title="Network-free default and reproducible scoring">
+  Default SQLite keyword recall blends IDF-weighted matching with recency and confidence without FTS5, an embedding model, or a network call. Final scoring is reproducible when the candidates (or store snapshot), evaluation timestamp, and tuning are fixed; because recency uses the request's evaluation time, rankings can change as memories age. Opting into [semantic recall](#semantic-recall-opt-in) adds embedding calls, so reproducibility also requires fixed embeddings (as with a fixed embedder or aimock replay).
 </Callout>
 
 ### Generated tools
@@ -171,7 +171,7 @@ For tests, `@dawn-ai/testing` exports `fakeEmbedder()` — a deterministic, netw
 
 **Embeddings are model-tagged, so switching embedders is safe.** Each stored vector records the embedder `id` that produced it; recall only vector-compares rows whose tag matches the active embedder. Change the embedder or model and the old vectors simply stop participating — recall degrades gracefully to keyword-only for those rows until they're re-embedded, rather than comparing across incompatible vector spaces.
 
-Vector recall is a second stage on top of keyword recall; leaving `vector` unset keeps the default keyword-only path exactly as before. When enabled, the only change is one opt-in network embed of the query at recall time (and of the content at write time). With SQLite, recall stays deterministic under a fixed embedder — or aimock replay. More generally, Dawn's final scoring is deterministic for fixed candidate lists, timestamps, tuning, and embeddings.
+Vector recall is a second stage on top of keyword recall; leaving `vector` unset keeps the default keyword-only path exactly as before. When enabled, the only change is one opt-in network embed of the query at recall time (and of the content at write time). SQLite scans eligible vectors exactly; final scoring is reproducible when candidate lists, the evaluation timestamp, tuning, and embeddings are fixed, including an aimock replay that pins those inputs.
 
 Tuning lives alongside the embedder in `memory.vector` (all optional and defaulted):
 
