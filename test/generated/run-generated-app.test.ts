@@ -48,6 +48,7 @@ const tempDirs: TrackedTempDir[] = []
 interface GeneratedAppScenarioResult {
   readonly packageJson: unknown
   readonly routesJson: unknown
+  readonly scenarioTypegenOutput: string
   readonly typegenOutput: string
   readonly verifyJson: unknown
 }
@@ -355,11 +356,18 @@ async function runLifecycle(options: {
   const verifyJson = JSON.parse(verifyResult.stdout)
   const routesJson = JSON.parse(routesResult.stdout)
   const typegenOutputPath = join(options.appRoot, ".dawn", "dawn.generated.d.ts")
+  const scenarioTypegenOutputPath = join(
+    options.appRoot,
+    ".dawn",
+    "scenarios.generated.d.ts",
+  )
   await expect(stat(typegenOutputPath)).resolves.toBeDefined()
+  await expect(stat(scenarioTypegenOutputPath)).resolves.toBeDefined()
 
   return {
     packageJson,
     routesJson,
+    scenarioTypegenOutput: await readFile(scenarioTypegenOutputPath, "utf8"),
     typegenOutput: await readFile(typegenOutputPath, "utf8"),
     verifyJson,
   }

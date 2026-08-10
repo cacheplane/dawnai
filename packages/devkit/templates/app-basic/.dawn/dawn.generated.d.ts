@@ -1,3 +1,5 @@
+/// <reference path="./scenarios.generated.d.ts" />
+
 declare module "dawn:routes" {
   export type DawnRoutePath = "/hello/[tenant]";
 
@@ -7,7 +9,7 @@ declare module "dawn:routes" {
 
   export interface DawnRouteTools {
     "/hello/[tenant]": {
-      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; plan: string; }>;
+      readonly greet: (input: Parameters<typeof import("../src/app/(public)/hello/[tenant]/tools/greet.js").default>[0]) => Promise<Awaited<ReturnType<typeof import("../src/app/(public)/hello/[tenant]/tools/greet.js").default>>>;
     };
   }
 

@@ -1,12 +1,24 @@
-import { readdir, readFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import * as vitePlugin from "@dawn-ai/vite-plugin"
 import { transformWithEsbuild } from "vite"
-import { describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test } from "vitest"
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
+const tempDirs: string[] = []
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+})
+
+async function createFile(filePath: string, content: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true })
+  await writeFile(filePath, content, "utf8")
+}
 
 describe("compiler ownership", () => {
   test("does not own the TypeScript compiler dependency or import it from source", async () => {
@@ -36,6 +48,56 @@ describe("compiler ownership", () => {
 })
 
 const { transformToolSource } = vitePlugin
+
+describe("type generation", () => {
+  test("buildStart writes linked route and scenario declarations", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-vite-typegen-"))
+    tempDirs.push(appRoot)
+
+    await Promise.all([
+      createFile(join(appRoot, "package.json"), '{"type":"module"}\n'),
+      createFile(join(appRoot, "dawn.config.ts"), "export default {}\n"),
+      createFile(
+        join(appRoot, "src", "app", "hello", "index.ts"),
+        "export const agent = async () => ({})\n",
+      ),
+      createFile(
+        join(appRoot, "src", "app", "hello", "tools", "greet.ts"),
+        [
+          "interface GreetInput { readonly name: string }",
+          "interface GreetOutput { readonly message: string }",
+          "",
+          "export default async function greet(input: GreetInput): Promise<GreetOutput> {",
+          '  return { message: "Hello, " + input.name + "!" }',
+          "}",
+          "",
+        ].join("\n"),
+      ),
+    ])
+
+    const plugin = vitePlugin.dawnToolSchemaPlugin({ appRoot })
+    await plugin.buildStart?.()
+
+    const dawnTypesPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const scenarioTypesPath = join(appRoot, ".dawn", "scenarios.generated.d.ts")
+    expect(existsSync(dawnTypesPath)).toBe(true)
+    expect(existsSync(scenarioTypesPath)).toBe(true)
+
+    const dawnTypes = await readFile(dawnTypesPath, "utf8")
+    expect(dawnTypes).toContain('/// <reference path="./scenarios.generated.d.ts" />')
+
+    const scenarioTypes = await readFile(scenarioTypesPath, "utf8")
+    expect(scenarioTypes).toContain('import "@dawn-ai/sdk/testing"')
+    expect(scenarioTypes).toContain('declare module "@dawn-ai/sdk/testing"')
+    expect(scenarioTypes).toContain('readonly "greet"')
+    expect(scenarioTypes).toContain(
+      'Parameters<typeof import("../src/app/hello/tools/greet.js").default>[0]',
+    )
+    expect(scenarioTypes).toContain(
+      'Awaited<ReturnType<typeof import("../src/app/hello/tools/greet.js").default>>',
+    )
+  })
+})
 
 async function compileTransformedTool(source: string): Promise<{
   readonly source: string

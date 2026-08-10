@@ -62,11 +62,18 @@ describe("runTypegen", () => {
     expect(extractArtifacts).toHaveBeenCalledTimes(1)
 
     const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const scenarioDtsPath = join(appRoot, ".dawn", "scenarios.generated.d.ts")
     expect(existsSync(dtsPath)).toBe(true)
+    expect(existsSync(scenarioDtsPath)).toBe(true)
 
     const content = await readFile(dtsPath, "utf8")
     expect(content).toContain("DawnRoutePath")
     expect(content).toContain("greet")
+
+    const scenarioContent = await readFile(scenarioDtsPath, "utf8")
+    expect(scenarioContent).toContain('import "@dawn-ai/sdk/testing"')
+    expect(scenarioContent).toContain('"/hello/[tenant]"')
+    expect(scenarioContent).toContain('readonly "greet"')
 
     const toolsJsonPath = join(appRoot, ".dawn", "routes", "hello-tenant", "tools.json")
     const toolsJson = JSON.parse(await readFile(toolsJsonPath, "utf8"))
@@ -117,6 +124,12 @@ describe("runTypegen", () => {
     expect(content).toContain('"completed"')
     // Existing user tool still present alongside the capability-contributed one
     expect(content).toContain("greet")
+
+    const scenarioContent = await readFile(
+      join(appRoot, ".dawn", "scenarios.generated.d.ts"),
+      "utf8",
+    )
+    expect(scenarioContent).not.toContain("writeTodos")
   })
 
   test("omits writeTodos when plan.md is absent", async () => {
@@ -146,6 +159,12 @@ describe("runTypegen", () => {
     expect(content).toContain("task")
     expect(content).toContain("subagent: string")
     expect(content).toContain("greet")
+
+    const scenarioContent = await readFile(
+      join(appRoot, ".dawn", "scenarios.generated.d.ts"),
+      "utf8",
+    )
+    expect(scenarioContent).not.toContain("task")
   })
 
   test("omits task tool when subagents/ is absent or empty", async () => {
@@ -178,6 +197,12 @@ describe("runTypegen", () => {
     expect(content).toContain("listDir")
     expect(content).toContain("runBash")
     expect(content).toContain("greet")
+
+    const scenarioContent = await readFile(
+      join(appRoot, ".dawn", "scenarios.generated.d.ts"),
+      "utf8",
+    )
+    expect(scenarioContent).not.toContain("readFile")
   })
 
   test("omits workspace tools when workspace/ directory is absent", async () => {
@@ -225,6 +250,13 @@ describe("runTypegen", () => {
     expect(content).not.toContain("data: Record<string, unknown>")
     // Existing user tool still present alongside the capability-contributed ones
     expect(content).toContain("greet")
+
+    const scenarioContent = await readFile(
+      join(appRoot, ".dawn", "scenarios.generated.d.ts"),
+      "utf8",
+    )
+    expect(scenarioContent).not.toContain("remember")
+    expect(scenarioContent).not.toContain("recall")
   })
 
   test("omits remember and recall tools when memory.ts is absent", async () => {
