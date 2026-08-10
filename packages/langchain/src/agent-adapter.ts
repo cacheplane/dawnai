@@ -197,6 +197,8 @@ async function materializeAgent(
 }
 
 export async function materializeAgentGraph(options: {
+  /** Bypass the compiled-graph cache when tools close over invocation-local state. */
+  readonly bypassCache?: boolean
   readonly checkpointer?: BaseCheckpointSaver
   readonly descriptor: DawnAgent
   readonly middlewareContext?: Readonly<Record<string, unknown>>
@@ -224,7 +226,7 @@ export async function materializeAgentGraph(options: {
     ...(options.summarization ? { summarization: options.summarization } : {}),
     ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
     ...(options.subagentResolver ? { subagentResolver: options.subagentResolver } : {}),
-    ...(options.sandboxed === true ? { bypassCache: true } : {}),
+    ...(options.bypassCache === true || options.sandboxed === true ? { bypassCache: true } : {}),
   })
 }
 
@@ -690,6 +692,8 @@ function parseInterruptStringMessage(text: string): readonly RawInterruptEntry[]
 }
 
 export interface AgentOptions {
+  /** Bypass the compiled-graph cache when tools close over invocation-local state. */
+  readonly bypassCache?: boolean
   /**
    * Checkpointer used by LangGraph to park interrupted graph state and replay
    * from it on resume. Required — the CLI runtime supplies a SQLite-backed
@@ -773,7 +777,9 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.stateFields ? { stateFields: options.stateFields } : {}),
         ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
         ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
-        ...((resolver && hasTaskTool) || options.sandboxed ? { bypassCache: true } : {}),
+        ...((resolver && hasTaskTool) || options.bypassCache || options.sandboxed
+          ? { bypassCache: true }
+          : {}),
         ...(options.offload ? { offload: options.offload } : {}),
         ...(options.summarization ? { summarization: options.summarization } : {}),
         routeParamNames: options.routeParamNames,

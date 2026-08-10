@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -8,16 +8,46 @@ import { type LocalRegistry, publishWorkspace, startLocalRegistry } from "./loca
 import { runPackagedCommand } from "./packaged-app.ts"
 import { writePnpmWorkspaceBuildPolicy } from "./scaffold-packaging.ts"
 
+const NPM_CACHE_ENV_VARIANTS = ["npm_config_cache", "NPM_CONFIG_CACHE", "NpM_CoNfIg_CaChE"]
+
 describe("local-registry", () => {
   let registry: LocalRegistry
+  let inheritedPublishCache: string | undefined
+  let inheritedPublishCacheEntries: readonly string[] = []
 
   beforeAll(async () => {
     registry = await startLocalRegistry()
-    await publishWorkspace(registry.url)
+    inheritedPublishCache = await mkdtemp(join(tmpdir(), "dawn-inherited-npm-cache-"))
+    const previousCaches = new Map(
+      NPM_CACHE_ENV_VARIANTS.map((name) => [name, process.env[name]] as const),
+    )
+    for (const name of NPM_CACHE_ENV_VARIANTS) process.env[name] = inheritedPublishCache
+    try {
+      await publishWorkspace(registry.url)
+      inheritedPublishCacheEntries = await readdir(inheritedPublishCache)
+    } finally {
+      for (const [name, value] of previousCaches) {
+        if (value === undefined) {
+          delete process.env[name]
+        } else {
+          process.env[name] = value
+        }
+      }
+    }
   }, 180_000)
 
   afterAll(async () => {
-    await registry?.stop()
+    try {
+      await registry?.stop()
+    } finally {
+      if (inheritedPublishCache !== undefined) {
+        await rm(inheritedPublishCache, { force: true, recursive: true })
+      }
+    }
+  })
+
+  test("publishes with a private cache regardless of inherited npm cache casing", () => {
+    expect(inheritedPublishCacheEntries).toEqual([])
   })
 
   test("serves a published @dawn-ai package that a real install resolves", async () => {

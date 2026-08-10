@@ -24,7 +24,7 @@ This project uses **Dawn**, a TypeScript-first meta-framework for building graph
 - **`src/app/**/tools/*.ts`** — co-located tools. Each file has a default export that is an async function. Types are inferred and written to `.dawn/dawn.generated.d.ts`.
 - **`src/tools/*.ts`** — shared tools (optional). Discovered alongside route-local tools and merged into every route's tool registry. Route-local tools override shared tools with the same name.
 - **`src/middleware.ts`** — optional. Default-exports a function returned by `defineMiddleware(...)`. Runs before every local `/threads/:thread_id/runs/wait`, `/threads/:thread_id/runs/stream`, and `/threads/:thread_id/resume` request handled by `dawn dev`.
-- **`src/app/**/run.test.ts`** — colocated scenario tests. Default-export an array of scenario records (`{ name, input, expect, run?, assert? }`). Custom assertion helpers live at `@dawn-ai/sdk/testing` (`expectOutput`, `expectMeta`, `expectError`).
+- **`src/app/**/run.test.ts`** — colocated scenario tests. Default-export a route-scoped suite built with `scenarios("/route").scenario(...)` from `@dawn-ai/sdk/testing`. Each scenario uses `.input()` and an explicit `.expectPassed()` or `.expectFailed()`, followed by expectations such as `.expectOutput()`, `.expectMeta()`, or `.expectError()`. In-process scenarios can use `.mockTool()` and `.expectTool()`; server-backed scenarios use `.server(url)` and cannot use tool mocks.
 - **`.dawn/dawn.generated.d.ts`** — auto-generated. Do NOT edit by hand.
 - **`dawn:routes`** — virtual module backed by `.dawn/dawn.generated.d.ts`. If `RouteTools` does not resolve, run `dawn typegen`.
 

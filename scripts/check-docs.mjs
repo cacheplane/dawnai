@@ -102,7 +102,7 @@ const accuracyContracts = [
   },
   {
     file: "apps/web/content/prompts/index.ts",
-    required: ["dawn start", 'targets: ["node"]'],
+    required: ["dawn start", 'targets: ["node"]', "scenarios(", ".server("],
     forbidden: ["Dawn itself is not a production runtime"],
   },
   {
@@ -134,6 +134,37 @@ for (const contract of accuracyContracts) {
   for (const forbidden of contract.forbidden) {
     if (source.includes(forbidden)) {
       failures.push(`${contract.file} retains forbidden accuracy text: ${forbidden}`)
+    }
+  }
+}
+
+// Scenario examples in current docs must use the typed builder API. Historical
+// blog posts are intentionally outside this contract and remain non-normative.
+const normativeScenarioFiles = [
+  ...walkFiles(resolve(repoRoot, "apps/web/content/docs"), (file) => file.endsWith(".mdx")),
+  resolve(repoRoot, "apps/web/content/prompts/index.ts"),
+]
+const legacyScenarioPatterns = [
+  { pattern: /\brun\.url\b/, message: "uses legacy per-scenario run.url configuration" },
+  {
+    pattern: /\brun:\s*\{\s*url\b/,
+    message: "uses a legacy raw scenario run.url object",
+  },
+  {
+    pattern: /export\s+default\s+\[/,
+    message: "default-exports a raw scenario array instead of scenarios(...) builder chains",
+  },
+  {
+    pattern: /per-scenario tool mocking is not supported/i,
+    message: "claims per-scenario tool mocking is unsupported",
+  },
+]
+
+for (const filePath of normativeScenarioFiles) {
+  const source = readFileSync(filePath, "utf8")
+  for (const { pattern, message } of legacyScenarioPatterns) {
+    if (pattern.test(source)) {
+      failures.push(`${relativeToRoot(filePath)} ${message}`)
     }
   }
 }

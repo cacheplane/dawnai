@@ -57,14 +57,14 @@ export default config({
 
 Setting `targets` replaces the default list rather than adding to it — name `"hono"` alongside the others if you want the [edge artifacts](#edge-runtimes) too.
 
-To run the built image on Kubernetes — as a Deployment + Service with optional Ingress and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
+To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 
 ## Deploying on Kubernetes
 
 Running the `node` target's image on a Kubernetes cluster is a two-chart arc, published as OCI artifacts alongside the `@dawn-ai/*` npm packages:
 
 - **`dawn-sandbox-infra`** — cluster-side infrastructure a [`kubernetesSandbox`](/docs/sandbox#kubernetes-provider) deployment needs: namespace, least-privilege RBAC, a default-deny egress `NetworkPolicy` backstop, `ResourceQuota`/`LimitRange`, Pod Security Standard labels, and a PVC reaper. Install this once per cluster or environment, before pointing `kubernetesSandbox` at it. Full reference: [Deploying the sandbox infrastructure](/docs/sandbox#deploying-the-sandbox-infrastructure-helm).
-- **`dawn-app`** — your built `node`-target image, run as a Deployment + Service with optional Ingress and `PodDisruptionBudget`, wired to the sandbox infra chart's orchestrator ServiceAccount when your app configures `kubernetesSandbox`. Full reference: [Deploying a Dawn app](/docs/sandbox#deploying-a-dawn-app-helm).
+- **`dawn-app`** — your built `node`-target image, run as a Deployment + Service with optional Ingress, `HorizontalPodAutoscaler`, and `PodDisruptionBudget`, wired to the sandbox infra chart's orchestrator ServiceAccount when your app configures `kubernetesSandbox`. Full reference: [Deploying a Dawn app](/docs/sandbox#deploying-a-dawn-app-helm).
 
 <Callout type="info" title="Two audiences">
   **App authors** installing `dawn-app` need only their built image and, if they use `kubernetesSandbox`, a `dawn-sandbox-infra` release already running in the target cluster — see the chart's [ServiceAccount and namespace wiring](/docs/sandbox#serviceaccount-and-namespace-wiring) for how the two connect. **Cluster operators** installing `dawn-sandbox-infra` own the namespace, RBAC, and network-policy posture the whole cluster's sandbox Pods run under, independent of any one app.
@@ -93,11 +93,11 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
     ```
   </Step>
   <Step title="Exercise the Dawn HTTP protocol">
-    Run scenarios against a live dev server by setting `run.url` per-scenario in your `run.test.ts` files (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches Dawn request/response shape issues. It does not validate LangSmith's distinct `assistant_id` transport envelope; test that separately at the platform boundary. Process boundaries, state persistence, and tool bindings are also re-materialized by `dawn build`, so this step is necessary but not sufficient.
+    Run selected scenarios against a live dev server by adding `.server(url)` to their builder chains in `run.test.ts` (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches Dawn request/response shape issues. It does not validate LangSmith's distinct `assistant_id` transport envelope; test that separately at the platform boundary. Process boundaries, state persistence, and tool bindings are also re-materialized by `dawn build`, so this step is necessary but not sufficient.
 
     ```
     dawn dev --port 3001 &
-    # In your run.test.ts: set run: { url: "http://127.0.0.1:3001" } per scenario
+    # In run.test.ts: add .server("http://127.0.0.1:3001") to selected scenarios
     dawn test
     ```
   </Step>

@@ -4,6 +4,8 @@ import type { ExtractedToolType } from "../types.js"
 export interface ExtractToolTypesOptions {
   readonly routeDir: string
   readonly sharedToolsDir: string | undefined
+  /** Declaration location used as the base for emitted type references. */
+  readonly typeReferenceFileName?: string
 }
 
 export async function extractToolTypesForRoute(

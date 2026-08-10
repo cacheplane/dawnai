@@ -16,9 +16,9 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
 
 1. Run the scaffold:
    \`\`\`
-   pnpm create dawn-ai-app my-agent
+   npm create dawn-ai-app@latest my-agent
    cd my-agent
-   pnpm install
+   npm install
    \`\`\`
 
 2. Walk me through the generated project structure. Explain:
@@ -36,34 +36,34 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    - Dynamic segments like \`[tenant]\` — preserved in the route id; provide values in JSON input when invoking the route. The optional \`--template basic\` scaffold uses \`/hello/[tenant]\`.
    - \`.dawn/dawn.generated.d.ts\` — auto-generated ambient types from the TypeScript compiler API.
 
-3. Start with the offline, deterministic agent harness tests and replay-backed eval. These need no model-provider key:
+3. Start with type generation, validation, typechecking, the offline deterministic agent harness tests, and the replay-backed eval. These need no model-provider key:
    \`\`\`
+   npm run typegen
+   npm run check
+   npm run typecheck
    npm test
    npm run eval
    \`\`\`
 
-4. Only then opt into a live model run. Require the user to provide a real \`OPENAI_API_KEY\`; never invent or commit one:
+4. Only then opt into a live model run. Copy the environment template, require the user to add a real \`OPENAI_API_KEY\`, run the preflight, and start the tested dev script. Never invent or commit a key:
    \`\`\`
-   export OPENAI_API_KEY=sk-...
-   echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
+   cp .env.example .env
+   # Add a real OPENAI_API_KEY to .env
+   npm run verify
+   npm run dev
    \`\`\`
+   The generated dev script serves \`http://127.0.0.1:3000\`.
 
-5. For live HTTP operation, set the key in the dev-server terminal before starting Dawn:
+5. In another terminal, show the Agent Protocol shape for the same route:
    \`\`\`
-   export OPENAI_API_KEY=sk-...
-   pnpm exec dawn dev --port 2024
-   \`\`\`
-
-6. In another terminal, show the Agent Protocol shape for the same route:
-   \`\`\`
-   THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-   curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \\
+   THREAD_ID=$(curl -s -X POST http://127.0.0.1:3000/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+   curl -s -X POST http://127.0.0.1:3000/threads/$THREAD_ID/runs/wait \\
      -H 'content-type: application/json' \\
      -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}'
    \`\`\`
    For streaming, use the same body with \`POST /threads/$THREAD_ID/runs/stream\` and consume the SSE events.
 
-7. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
+6. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
 
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
@@ -206,31 +206,61 @@ const WRITE_A_TEST = `Help me write tests for a Dawn route. Pick the right style
 2. For deterministic \`workflow\`, \`graph\`, or \`chain\` routes, use a colocated \`run.test.ts\` scenario file:
 
    \`\`\`ts
-   export default [
-     {
-       name: "returns a greeting",
-       input: { tenant: "acme" },
-       expect: {
-         status: "passed",
-         output: { tenant: "acme", greeting: "Hello, acme!" },
-       },
-     },
-   ]
+   import { scenarios } from "@dawn-ai/sdk/testing"
+
+   export default scenarios("/hello/[tenant]")
+     .scenario("returns a greeting", (s) =>
+       s
+         .input({ tenant: "acme" })
+         .expectPassed()
+         .expectOutput({ tenant: "acme", greeting: "Hello, acme!" }),
+     )
    \`\`\`
 
-3. In scenario records, \`input\` is the route state and \`expect.output\` is the returned state. Keep these for deterministic route-output assertions, not LLM text exact matches.
+3. In the route-scoped builder, \`.input()\` sets the route state and \`.expectOutput()\` matches the returned state. Set \`.expectPassed()\` or \`.expectFailed()\` explicitly. Keep output expectations for deterministic route results, not LLM text exact matches.
 
-4. Run agent Vitest files with the package's test runner (for the scaffold, \`npm test\`). Run declarative scenario records with:
+4. For an in-process scenario, replace only the external or nondeterministic application tool and assert its calls. Tool names, inputs, and awaited outputs come from the generated route types:
+   \`\`\`ts
+   import { scenarios } from "@dawn-ai/sdk/testing"
+
+   export default scenarios("/research").scenario("uses a controlled corpus result", (s) =>
+     s
+       .input({ messages: [{ role: "user", content: "Research Dawn" }] })
+       .mockTool("searchCorpus", async ({ query }) => [
+         { path: "corpus/dawn.md", score: 1, snippet: query },
+       ])
+       .expectPassed()
+       .expectTool("searchCorpus", (call) =>
+         call.calledOnce().withArgs({ query: "Dawn" }),
+       ),
+   )
+   \`\`\`
+
+5. To exercise the live Dawn HTTP boundary instead, use a separate server-backed scenario. Server-backed scenarios cannot use tool mocks:
+   \`\`\`ts
+   import { scenarios } from "@dawn-ai/sdk/testing"
+
+   export default scenarios("/hello/[tenant]").scenario(
+     "returns a greeting via the dev server",
+     (s) =>
+       s
+         .input({ tenant: "acme" })
+         .server("http://127.0.0.1:3001")
+         .expectPassed()
+         .expectOutput({ tenant: "acme", greeting: "Hello, acme!" }),
+   )
+   \`\`\`
+   There is no command-level \`--url\` flag on \`dawn test\`.
+
+6. Run agent Vitest files with the package's test runner (for the scaffold, \`npm test\`). Run route scenario suites with:
    \`\`\`
    dawn test
    \`\`\`
 
-5. To run a scenario record against a live \`dawn dev\` server, set \`run: { url: "http://127.0.0.1:3001" }\` on that scenario. There is no command-level \`--url\` flag on \`dawn test\`.
-
 Constraints:
-- Agent tests should use fixtures or live mode; do not exact-match raw assistant message arrays with \`expect.output\`.
-- \`run.test.ts\` must live in the deterministic route's directory, default-export an array, and avoid \`describe()\` / \`test()\` wrappers.
-- Per-scenario tool mocking is not supported today; stub external dependencies inside the tool implementation or use the agent harness fixture tools.
+- Agent tests should use fixtures or live mode; do not exact-match raw assistant message arrays with \`.expectOutput()\`.
+- \`run.test.ts\` must live in the deterministic route's directory, default-export \`scenarios("/route").scenario(...)\`, and avoid \`describe()\` / \`test()\` wrappers.
+- In-process scenarios can replace selected application tools with \`.mockTool()\` and assert calls with \`.expectTool()\`; server-backed scenarios cannot use tool mocks.
 
 Reference: https://dawnai.org/llms.txt
 `;
@@ -244,7 +274,7 @@ const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can 
    \`\`\`
    \`dawn verify\` covers the app contract, route discovery, typegen, dependency/environment advisories, and runtime readiness. \`dawn test\` runs scenario tests. A configured \`hono\` target is capability-validated by both \`dawn check\` and \`dawn build\`.
 
-2. Optionally catch Dawn HTTP protocol-shape issues before a Node or Hono deploy. Add \`run: { url: "http://127.0.0.1:3001" }\` to selected scenarios, then run:
+2. Optionally catch Dawn HTTP protocol-shape issues before a Node or Hono deploy. Add \`.server("http://127.0.0.1:3001")\` to selected \`scenarios(...)\` builder chains, then run:
    \`\`\`
    dawn dev --port 3001 &
    dawn test

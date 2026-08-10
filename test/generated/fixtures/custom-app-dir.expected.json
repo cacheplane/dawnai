@@ -48,7 +48,7 @@
       },
       {
         "name": "typegen",
-        "renderedBytes": 279,
+        "renderedBytes": 332,
         "status": "passed"
       },
       {
@@ -101,5 +101,6 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/support/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/support/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {}\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
+  "scenarioTypegenOutput": "import \"@dawn-ai/sdk/testing\"\n\ndeclare module \"@dawn-ai/sdk/testing\" {\n  interface RouteScenarioMap {\n    \"/support/[tenant]\": {\n      readonly tools: Record<never, never>\n    }\n  }\n}\n",
+  "typegenOutput": "/// <reference path=\"./scenarios.generated.d.ts\" />\n\ndeclare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/support/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/support/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {}\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
 }

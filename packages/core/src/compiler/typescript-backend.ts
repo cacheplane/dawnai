@@ -1,4 +1,4 @@
-import { basename, extname } from "node:path"
+import { basename, dirname, extname, relative, resolve, sep } from "node:path"
 
 // TypeScript 7.0 has no stable compiler API, so Core pins the TypeScript 6 compatibility
 // wrapper and implementation behind this boundary. Revisit a native port for TS 7.1.
@@ -45,15 +45,22 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
 
 export function createAnalyzeToolFiles(
   createProgram: CreateProgram = ts.createProgram,
-): (toolFiles: ReadonlyMap<string, string>) => readonly AnalyzedTool[] {
-  return (toolFiles) => {
+): (
+  toolFiles: ReadonlyMap<string, string>,
+  typeReferenceFileName?: string,
+) => readonly AnalyzedTool[] {
+  return (toolFiles, typeReferenceFileName) => {
     if (toolFiles.size === 0) return []
 
     const program = createProgram([...toolFiles.values()], compilerOptions())
+    const typeReferenceFilePath = typeReferenceFileName ? resolve(typeReferenceFileName) : undefined
     const results: AnalyzedTool[] = []
 
     for (const [name, fileName] of toolFiles) {
-      const analyzed = analyzeProgramSource(program, fileName, name)
+      const moduleSpecifier = typeReferenceFilePath
+        ? sourceModuleSpecifier(typeReferenceFilePath, fileName)
+        : undefined
+      const analyzed = analyzeProgramSource(program, fileName, name, moduleSpecifier)
       if (analyzed) results.push(analyzed)
     }
 
@@ -63,14 +70,18 @@ export function createAnalyzeToolFiles(
 
 const analyzeToolFilesWithProgram = createAnalyzeToolFiles()
 
-export function analyzeToolFiles(toolFiles: ReadonlyMap<string, string>): readonly AnalyzedTool[] {
-  return analyzeToolFilesWithProgram(toolFiles)
+export function analyzeToolFiles(
+  toolFiles: ReadonlyMap<string, string>,
+  typeReferenceFileName?: string,
+): readonly AnalyzedTool[] {
+  return analyzeToolFilesWithProgram(toolFiles, typeReferenceFileName)
 }
 
 function analyzeProgramSource(
   program: ts.Program,
   fileName: string,
   name: string,
+  sourceModuleSpecifier?: string,
 ): AnalyzedTool | null {
   const checker = program.getTypeChecker()
   const sourceFile = program.getSourceFile(fileName)
@@ -90,7 +101,8 @@ function analyzeProgramSource(
   const callableDeclaration =
     callableTarget.valueDeclaration ?? callableTarget.declarations?.[0] ?? sourceFile
   const exportType = checker.getTypeOfSymbolAtLocation(callableTarget, callableDeclaration)
-  const signature = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)[0]
+  const signatures = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)
+  const signature = signatures[0]
   if (!signature) return null
 
   const isSourceFileDefaultLibrary = (candidate: ts.SourceFile) =>
@@ -114,6 +126,13 @@ function analyzeProgramSource(
   )
   const targetDescription = ts.displayPartsToString(callableTarget.getDocumentationComment(checker))
   const description = exportedDescription || targetDescription || leadingJsDoc.description
+  const sourceModuleTypes = sourceModuleSpecifier
+    ? renderSourceModuleToolTypes(
+        sourceModuleSpecifier,
+        signatures.length,
+        firstParameter !== undefined,
+      )
+    : null
 
   return {
     name,
@@ -122,14 +141,57 @@ function analyzeProgramSource(
       description: hasRuntimeModuleExport(moduleExports, "description", checker, sourceFile),
       schema: hasRuntimeModuleExport(moduleExports, "schema", checker, sourceFile),
     },
-    inputType: parameterType
-      ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
-      : "void",
-    outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
+    inputType:
+      sourceModuleTypes?.inputType ??
+      (parameterType
+        ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
+        : "void"),
+    outputType:
+      sourceModuleTypes?.outputType ??
+      checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
     parameter: parameterType
       ? resolveParameterType(parameterType, checker, sourceFile, isSourceFileDefaultLibrary)
       : null,
     parameterDescriptions: leadingJsDoc.parameterDescriptions,
+  }
+}
+
+function sourceModuleSpecifier(typeReferenceFileName: string, toolFileName: string): string {
+  let specifier = relative(dirname(typeReferenceFileName), resolve(toolFileName))
+    .split(sep)
+    .join("/")
+  if (specifier.endsWith(".mts")) {
+    specifier = `${specifier.slice(0, -".mts".length)}.mjs`
+  } else if (specifier.endsWith(".cts")) {
+    specifier = `${specifier.slice(0, -".cts".length)}.cjs`
+  } else {
+    specifier = specifier.replace(/\.tsx?$/, ".js")
+  }
+  return specifier.startsWith(".") ? specifier : `./${specifier}`
+}
+
+function renderSourceModuleToolTypes(
+  moduleSpecifier: string,
+  signatureCount: number,
+  hasInput: boolean,
+): { readonly inputType: string; readonly outputType: string } {
+  const moduleType = `typeof import(${JSON.stringify(moduleSpecifier)}).default`
+  if (signatureCount === 1) {
+    return {
+      inputType: hasInput ? `Parameters<${moduleType}>[0]` : "void",
+      outputType: `Awaited<ReturnType<${moduleType}>>`,
+    }
+  }
+
+  // Parameters and ReturnType select the last overload; Core has always selected the first.
+  const overloadShape = `{ ${Array.from(
+    { length: signatureCount },
+    (_, index) => `(...args: infer Args${index}): infer Return${index}`,
+  ).join("; ")} }`
+  const firstOverload = `${moduleType} extends ${overloadShape}`
+  return {
+    inputType: hasInput ? `(${firstOverload} ? Args0[0] : never)` : "void",
+    outputType: `Awaited<(${firstOverload} ? Return0 : never)>`,
   }
 }
 

@@ -10,6 +10,7 @@ import {
   prepareGeneratedRuntimeApp,
   readGeneratedExpectedFixture,
   runGeneratedRuntimeScenario,
+  typecheckGeneratedRuntimeApp,
   type TrackedTempDir,
 } from "./harness.ts"
 
@@ -28,8 +29,17 @@ describe("generated app runtime contract", () => {
       registry: tempDirs,
       tempRoot,
     })
+    const runTestSource = await readFile(
+      resolve(prepared.appRoot, "src/app/(public)/hello/[tenant]/run.test.ts"),
+      "utf8",
+    )
 
     await expectBasicAuthoringLane(prepared.appRoot)
+    expect(runTestSource).toContain(
+      'import { expectMeta, expectOutput, scenarios } from "@dawn-ai/sdk/testing"',
+    )
+    expect(runTestSource).toContain('export default scenarios("/hello/[tenant]")')
+    expect(runTestSource).not.toContain("export default [")
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("basic")
 
@@ -62,6 +72,7 @@ describe("generated app runtime contract", () => {
       tempRoot,
     })
 
+    await typecheckGeneratedRuntimeApp(prepared)
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("handwritten")
 

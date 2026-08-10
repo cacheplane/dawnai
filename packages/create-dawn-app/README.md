@@ -9,22 +9,22 @@ Scaffold a new Dawn app — the fastest way to start building LangGraph agents l
 ## Usage
 
 ```sh
-pnpm create dawn-ai-app my-app
-# or
 npm create dawn-ai-app@latest my-app
-# or
-yarn create dawn-ai-app my-app
-```
-
-Then:
-
-```sh
 cd my-app
-pnpm install
-pnpm dawn check
+npm install
+cp .env.example .env
+# Add a real OPENAI_API_KEY to .env
+npm run verify
+npm run dev
 ```
 
-Requires Node.js 22.12+.
+Requires Node.js 24 or later and npm 11. The generated research app's live path
+uses a real model; its tests and evals use deterministic fixtures for offline
+confidence.
+
+You can also scaffold with `pnpm create dawn-ai-app my-app` or
+`yarn create dawn-ai-app my-app`, but Node 24 with npm 11 is the supported
+generated-app path.
 
 ### Options
 
@@ -49,11 +49,19 @@ my-app/
         plan.md                       # seeds the thread's todos
         memory.ts
         memory.md
-        tools/
-          searchCorpus.ts
-          readDoc.ts
+        subagents/
+          researcher/
+            index.ts
+        skills/
+          cite-sources/
+            SKILL.md
+          synthesize-findings/
+            SKILL.md
         evals/
           research-quality.eval.ts
+    tools/
+      searchCorpus.ts                 # shared corpus search
+      readDoc.ts                      # shared full-document reader
   test/
     research.test.ts
   workspace/
@@ -68,9 +76,32 @@ my-app/
       fetch-source.mjs
 ```
 
-Run it offline with `pnpm dawn check`, `pnpm test`, and `pnpm dawn eval`. To invoke the route live, start `pnpm dawn dev` and run `/research#agent` through the Agent Protocol thread endpoints.
+### Live activation
 
-The generated `package.json` wires `@dawn-ai/sdk`, `@dawn-ai/cli`, `@dawn-ai/core`, and `@dawn-ai/langchain`, with scripts for `dawn check`, evals, tests, and TypeScript typecheck. Run any other `dawn` command via `pnpm dawn <command>`.
+Copy `.env.example` to `.env`, add a real `OPENAI_API_KEY`, run
+`npm run verify`, then run `npm run dev`. The generated dev script serves Dawn
+on `http://127.0.0.1:3000`; invoke `/research#agent` through its Agent Protocol
+or AG-UI endpoints.
+
+### Offline confidence
+
+Run `npm run typegen` to write `.dawn/dawn.generated.d.ts`. Run
+`npm run check` to validate routes, tools, and configuration without writing
+generated files. `npm run typecheck`, `npm test`, and `npm run eval` complete
+the offline authoring checks; tests and evals replay deterministic fixtures and
+are not a keyless product demo.
+
+### Build and start
+
+Run `npm run build` followed by `npm start`. The first command writes the
+configured artifacts under `.dawn/build`; the second loads `.env` when present
+and serves `.dawn/build/server.mjs`. `npm start` requires a successful build
+first.
+
+The generated `package.json` wires `@dawn-ai/sdk`, `@dawn-ai/cli`,
+`@dawn-ai/langchain`, `@dawn-ai/sandbox`, and `zod`. Its main scripts are
+`dev`, `verify`, `typegen`, `check`, `typecheck`, `test`, `eval`, `build`, and
+`start`. Run other CLI commands with `npx dawn <command>`.
 
 ### Basic template
 

@@ -1,22 +1,20 @@
 # Testing
 
-Scenario tests are colocated with routes as `run.test.ts` files. Each scenario declares an input state and the expected output, and `dawn test` runs them against the real route runtime.
+Scenario tests are colocated with routes as `run.test.ts` files. Each file default-exports a route-scoped suite built with `scenarios("/route")`, and `dawn test` runs every scenario through the route runtime. Plain default-exported scenario arrays are not supported.
 
 ## A minimal test
 
-A scenario file is a default-exported array of plain scenario records — there is no `describe()` or `test()` wrapper, and the route is inferred from the file's directory:
+A scenario file has no `describe()` or `test()` wrapper. Pass the route ID to `scenarios()`, add cases with `.scenario()`, then set the input and expected status explicitly:
 
 ```ts title="src/app/(public)/support/[tenant]/run.test.ts"
-export default [
-  {
-    name: "greets a tenant",
-    input: { tenant: "acme" },
-    expect: {
-      status: "passed",
-      output: { tenant: "acme", greeting: "Hello, acme!" },
-    },
-  },
-]
+import { scenarios } from "@dawn-ai/sdk/testing"
+
+export default scenarios("/support/[tenant]").scenario("greets a tenant", (s) =>
+  s
+    .input({ tenant: "acme" })
+    .expectPassed()
+    .expectOutput({ tenant: "acme", greeting: "Hello, acme!" }),
+)
 ```
 
 Run all scenarios:
@@ -25,59 +23,94 @@ Run all scenarios:
 dawn test
 ```
 
-Dawn discovers every `run.test.ts` under `src/app/`, invokes the route for each scenario, and evaluates the declarative expectation.
+Dawn discovers every `run.test.ts` under `src/app/`, verifies that the declared route matches the file's directory, invokes the route, and evaluates the expectations. `dawn typegen` writes the route and application-tool types used by the builder, so route names, `.mockTool()`, and `.expectTool()` are discoverable in IntelliSense.
 
-## Scenario shape
+## Builder API
 
-Each entry in the default-exported array is `{ name, input, expect, run?, assert? }`:
+Every `.scenario(name, configure)` callback must return a builder that has called `.input()` exactly once and selected either `.expectPassed()` or `.expectFailed()`. The remaining methods add expectations or choose where the scenario runs:
 
-- `name` — human-readable scenario name.
-- `input` — the JSON state passed to the route.
-- `expect` — declarative expectation (see below).
-- `run?` — optional run config: `{ url?: string }` to target a live dev server.
-- `assert?` — optional `(result) => void` callback for custom assertions, evaluated alongside `expect`.
+- `.input(value)` sets the route input.
+- `.expectPassed()` and `.expectFailed()` select the required result status.
+- `.expectOutput(value)` matches a passed route's returned state.
+- `.expectError(value)` matches a failed route's modeled error.
+- `.expectMeta(value)` matches `{ mode, routeId, routePath, executionSource }`.
+- `.assert(callback)` runs a synchronous or asynchronous custom assertion after declarative expectations.
+- `.server(url)` sends the scenario through a running Dawn-compatible server instead of invoking in-process.
+- `.mockTool(name, implementation)` replaces one application tool for this in-process invocation.
+- `.expectTool(name, configure)` asserts calls made to a tool mocked earlier in the same scenario.
 
-The `expect` object accepts:
+Passing scenarios can use `.expectOutput()`; failing scenarios can use `.expectError()`. The builder's type states hide combinations that cannot succeed and the loader validates the same rules at runtime.
 
-- `status` (required) — `"passed" | "failed"`.
-- `output?` — deep-equal match against the route's returned state.
-- `meta?` — match against `{ mode, routeId, routePath, executionSource }`.
-- `error?` — for `status: "failed"`, match `{ kind, message: string | { includes: string } }`.
-
-For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/sdk/testing`:
+For programmatic assertions, import the existing helpers from `@dawn-ai/sdk/testing`:
 
 ```ts title="src/app/(public)/support/[tenant]/run.test.ts"
-import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
+import { expectMeta, expectOutput, scenarios } from "@dawn-ai/sdk/testing"
 
-export default [
-  {
-    name: "custom assert",
-    input: { tenant: "acme" },
-    expect: { status: "passed" },
-    assert: (result) => {
+export default scenarios("/support/[tenant]").scenario("custom assert", (s) =>
+  s
+    .input({ tenant: "acme" })
+    .expectPassed()
+    .assert((result) => {
       expectOutput(result, { greeting: "Hello, acme!" })
       expectMeta(result, { mode: "agent", routeId: "/support/[tenant]" })
-    },
-  },
-]
+    }),
+)
 ```
+
+`expectOutput`, `expectMeta`, and `expectError` use the same result model as declarative expectations and produce focused mismatch messages.
+
+## Mocking application tools
+
+Use `.mockTool()` when an in-process scenario should replace an external or nondeterministic application tool while keeping the rest of the route real. Tool names, parameters, and awaited return values come from the generated route types:
+
+```ts title="src/app/research/run.test.ts"
+import { scenarios } from "@dawn-ai/sdk/testing"
+
+export default scenarios("/research").scenario("uses a controlled search result", (s) =>
+  s
+    .input({ messages: [{ role: "user", content: "Research Dawn" }] })
+    .mockTool("searchWeb", async ({ query }) => ({
+      results: [{ title: "Dawn", url: "https://example.test/dawn", query }],
+    }))
+    .expectPassed()
+    .expectTool("searchWeb", (call) =>
+      call.calledOnce().withArgs({ query: "Dawn" }),
+    ),
+)
+```
+
+Mocks are partial: application tools not named by `.mockTool()` keep their real implementations. Dawn resolves shared and route-local tool precedence first, then replaces only the selected definition's implementation while preserving its schema, description, scope, and source metadata.
+
+`.expectTool()` is available only for tools mocked earlier in the same scenario. Its call builder supports:
+
+- `.called()` for one or more calls.
+- `.calledOnce()` for exactly one call.
+- `.calledTimes(n)` for exactly `n` calls.
+- `.notCalled()` for zero calls.
+- `.withArgs(partial)` for at least one call containing the supplied deep-partial object. Primitive values and arrays match exactly.
+
+Count and argument assertions are independent when combined. Multiple `.withArgs()` assertions each need a matching invocation, and one compatible invocation may satisfy more than one matcher. Call ordering and return-value assertions are not part of this API.
+
+Mocks apply only to the root route's generated application-tool set: route-local tools and shared tools. They cannot shadow built-in planning, workspace, memory, skill, or subagent capability tools, and a parent route's mocks never propagate into a child subagent route.
+
+Each scenario invocation receives a fresh override set and call journal. Dawn never mutates cached route modules, so mocks cannot leak into another scenario, a later `dawn run`, a server request, or a concurrently executing invocation.
 
 ## Against a live dev server
 
-To exercise protocol parity against a running `dawn dev`, set `run.url` per-scenario. There is no command-level `--url` flag on `dawn test`.
+Use `.server(url)` to exercise a scenario through a running `dawn dev`, built Dawn server, or staging deployment. There is no command-level `--url` flag on `dawn test`.
 
 ```ts title="src/app/(public)/support/[tenant]/run.test.ts"
-export default [
-  {
-    name: "greets a tenant via dev server",
-    input: { tenant: "acme" },
-    run: { url: "http://127.0.0.1:3001" },
-    expect: {
-      status: "passed",
-      output: { tenant: "acme", greeting: "Hello, acme!" },
-    },
-  },
-]
+import { scenarios } from "@dawn-ai/sdk/testing"
+
+export default scenarios("/support/[tenant]").scenario(
+  "greets a tenant via dev server",
+  (s) =>
+    s
+      .input({ tenant: "acme" })
+      .server("http://127.0.0.1:3001")
+      .expectPassed()
+      .expectOutput({ tenant: "acme", greeting: "Hello, acme!" }),
+)
 ```
 
 Start the dev server first, then run `dawn test`:
@@ -87,22 +120,30 @@ dawn dev --port 3001 &
 dawn test
 ```
 
-<Callout type="tip" title="Run both to confirm parity">
-  If the in-process scenario passes but the live-server scenario fails, something in your route doesn't survive the LangSmith protocol. The live-server mode is how you catch this before deploy.
+<Callout type="tip" title="Use both execution modes">
+  Keep fast, isolated behavior checks in-process. Add selected server-backed scenarios for behavior that only exists across the transport or runtime boundary.
 </Callout>
+
+### When to use a server-backed scenario
+
+A server-backed scenario is useful when the claim depends on:
+
+- JSON request and response serialization;
+- request middleware and request-scoped context;
+- runtime boot and route lookup wiring;
+- packaged static modules in a built runtime; or
+- real staging infrastructure and deployment configuration.
+
+Server-backed scenarios execute in another process and exchange JSON. JavaScript mock functions cannot cross that boundary, so `.server()` and `.mockTool()` are mutually exclusive in the builder and in runtime validation. Dawn does not install a test backdoor or a serializable mock interpreter in the server.
+
+Control server dependencies at their real boundary instead. Start a local fake HTTP service, point the server at a model proxy, or use a dedicated staging dependency before running `dawn test`.
 
 ## Agents, retries, and middleware
 
 Two cross-cutting features shape what scenarios assert:
 
-- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`). See [Retry](/docs/retry).
-- **Middleware** — `src/middleware.ts` runs before every `/threads/:id/runs/wait` and `/threads/:id/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`. See [Middleware](/docs/middleware).
-
-## Mocking tools
-
-<Callout type="warn" title="Not supported today">
-  Per-scenario tool mocking (a `tools` field in the scenario record) is **not** part of the scenario surface today — extra keys are silently ignored. Use the `assert` callback for custom matchers, or stub external dependencies inside the tool itself (e.g. behind an env flag) until tool mocking lands. Tracked as a follow-up.
-</Callout>
+- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, call `.expectFailed().expectError(...)` or use `.assert()` with `expectError`. See [Retry](/docs/retry).
+- **Middleware** — `src/middleware.ts` runs before local Agent Protocol run and stream requests. **Server-backed scenarios targeting a Dawn runtime exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should use `.expectFailed().expectError(...)`. See [Middleware](/docs/middleware).
 
 ## Rules
 
@@ -110,11 +151,14 @@ Two cross-cutting features shape what scenarios assert:
   <Step title="File location">
     `run.test.ts` must live in the route's directory, not a sibling or nested folder. Dawn matches tests to routes by directory.
   </Step>
-  <Step title="Default-exported array">
-    The file's default export is the array of scenario records. There is no `describe()` or `test()` wrapper.
+  <Step title="Route-scoped suite">
+    Default-export `scenarios("/route").scenario(...)`. The declared route must match the file location, and plain scenario arrays are rejected.
   </Step>
-  <Step title="Use the helpers from @dawn-ai/sdk/testing for custom assertions">
-    `expectOutput`, `expectMeta`, and `expectError` cover deep-equal match (with helpful diffs). For partial or fuzzy matching today, use the declarative `expect` shape (`output`/`meta`/`error`) or write a custom predicate in `assert(result)`.
+  <Step title="Complete every scenario">
+    Call `.input()` once and select `.expectPassed()` or `.expectFailed()`. Add declarative expectations or `.assert()` for the behavior the scenario owns.
+  </Step>
+  <Step title="Use typed application-tool mocks narrowly">
+    Mock only the external or nondeterministic application tools needed for the claim. Leave deterministic tools real, and use a server-backed scenario when the transport boundary itself is under test.
   </Step>
   <Step title="Keep scenarios focused">
     One scenario = one claim about the route's behavior. If you're adding branches, add more scenarios — don't inflate a single one.
@@ -130,7 +174,7 @@ Use `dawn verify` as the integrity gate (it covers app, routes, typegen, and dep
 - run: pnpm exec dawn test
 ```
 
-`dawn verify` runs typegen and check internally, plus the deps check (missing packages, missing env vars) that bare `dawn check && dawn typegen` does not. `dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario.
+`dawn verify` runs typegen and check internally, plus the deps check (missing packages, missing env vars) that bare `dawn check && dawn typegen` does not. Typegen also refreshes `.dawn/scenarios.generated.d.ts`, which powers route and application-tool completion in `run.test.ts`. `dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario.
 
 ## Unit-testing tools and middleware
 
@@ -222,5 +266,5 @@ test("uppercaseReads forwards every other backend method", async () => {
   { href: "/docs/routes", title: "Routes", subtitle: "the four route kinds whose behavior scenarios assert" },
   { href: "/docs/state", title: "State", subtitle: "state schema that input and output are validated against" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "why live-server scenarios exercise middleware but in-process scenarios bypass it" },
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "starting the server scenarios target via run.url" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "starting the runtime targeted by .server(url) scenarios" },
 ]} />
