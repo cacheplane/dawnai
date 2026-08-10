@@ -2,6 +2,10 @@ import { agent } from "@dawn-ai/sdk"
 
 export default agent({
   model: "gpt-5-mini",
+  // Deep research fans out: plan → dispatch a researcher per sub-question → many
+  // corpus tool calls → synthesize. That legitimately exceeds LangGraph's default
+  // 25 super-steps, so raise the ceiling for this coordinator.
+  recursionLimit: 100,
   description:
     "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
   systemPrompt: `You are a deep-research coordinator. Given a question:

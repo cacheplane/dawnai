@@ -20,6 +20,10 @@ export function registryLatestSpecifiers() {
   }
 }
 
+export function candidateRegistryNpmArgs(registryUrl: string): readonly string[] {
+  return [`--registry=${registryUrl}`, "--scope=", `--@dawn-ai:registry=${registryUrl}`]
+}
+
 /**
  * Point a scaffolded app at the ephemeral test registry. Real users install from
  * a registry; the generated app does exactly that — no overrides, no tarball pins.
@@ -30,6 +34,12 @@ export async function writeRegistryNpmrc(appRoot: string, registryUrl: string): 
   const host = registryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
   const npmrc = [
     `registry=${registryUrl}`,
+    // A user-level default scope selects that scope's registry even for an
+    // unscoped install. Clear it at project precedence so candidate installs
+    // cannot escape the ephemeral registry.
+    "scope=",
+    // Override a user-level registry mapping for Dawn's scoped packages.
+    `@dawn-ai:registry=${registryUrl}`,
     // Parity with a private-registry user; harmless for read-only installs.
     `//${host}/:_authToken="fake"`,
     "",

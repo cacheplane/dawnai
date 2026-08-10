@@ -84,46 +84,48 @@ export async function publishWorkspace(url: string): Promise<void> {
   const packages = await readPublicPackages()
 
   const host = url.replace(/^https?:\/\//, "").replace(/\/$/, "")
+  const publishRoot = await mkdtemp(join(tmpdir(), "dawn-publish-"))
 
-  // npm config passed as env, the highest-precedence config layer after the command
-  // line. Setting these in the publish env makes them authoritative: they override
-  // any `registry`/auth inherited from ~/.npmrc, the project .npmrc, or an
-  // env-injected npm_config_registry, regardless of what the host machine carries.
-  //
-  //   - registry: the local Verdaccio (the publish target for unscoped packages once
-  //     the inherited default scope is cleared — see `--scope=` below).
-  //   - //<host>/:_authToken: Verdaccio accepts $anonymous publish but npm still
-  //     wants an auth token in the env for the target host, else ENEEDAUTH.
-  //   - replace-registry-host=never: npm 10 otherwise rewrites the PUT target host
-  //     back to the public registry; pin it so the tarball PUT stays local.
-  //
-  // ROOT CAUSE this guards against: `npm publish` resolves the *publish* registry by
-  // scope, not from the top-level `registry`. Two failure modes, both silently
-  // routing to registry.npmjs.org → ENEEDAUTH/E404 on a developer or CI machine:
-  //   1. A SCOPED package (@dawn-ai/*) uses `@<scope>:registry` and falls back to
-  //      the public registry — NOT the top-level `registry` — when that scope has no
-  //      registry. We set `npm_config_@<scope>:registry` per package below.
-  //   2. An inherited default `scope=@foo` in ~/.npmrc routes EVERY publish (even
-  //      unscoped create-dawn-ai-app) through `@foo:registry`, ignoring both
-  //      `--registry` and `npm_config_registry`. We pass `--scope=` to clear it so
-  //      unscoped publishes fall back to the top-level `registry`.
-  const baseEnv: NodeJS.ProcessEnv = {
-    npm_config_registry: url,
-    [`npm_config_//${host}/:_authToken`]: "fake",
-    npm_config_replace_registry_host: "never",
-    // The release workflow exports NPM_CONFIG_PROVENANCE=true (uppercase) at the
-    // job level for trusted publishing to npmjs. Inherited by this `npm publish`
-    // it fails with EUSAGE "provenance generation not supported" — Sigstore
-    // provenance can't be produced for a throwaway local registry. Override the
-    // exact (uppercase) key so it always wins over the job env; harmless on a dev
-    // machine where it is unset.
-    NPM_CONFIG_PROVENANCE: "false",
-  }
-
-  // Pack each public package into a temp dir, then publish the tarball directly
-  // to the local Verdaccio.
-  const packsDir = await mkdtemp(join(tmpdir(), "dawn-packs-"))
   try {
+    const packsDir = await mkdtemp(join(publishRoot, "packs-"))
+    const npmCacheDir = await mkdtemp(join(publishRoot, "npm-cache-"))
+
+    // npm config passed as env, the highest-precedence config layer after the command
+    // line. Setting these in the publish env makes them authoritative: they override
+    // any `registry`/auth inherited from ~/.npmrc, the project .npmrc, or an
+    // env-injected npm_config_* value, regardless of what the host machine carries.
+    //
+    //   - registry: the local Verdaccio (the publish target for unscoped packages once
+    //     the inherited default scope is cleared — see `--scope=` below).
+    //   - //<host>/:_authToken: Verdaccio accepts $anonymous publish but npm still
+    //     wants an auth token in the env for the target host, else ENEEDAUTH.
+    //   - replace-registry-host=never: npm 10 otherwise rewrites the PUT target host
+    //     back to the public registry; pin it so the tarball PUT stays local.
+    //
+    // ROOT CAUSE this guards against: `npm publish` resolves the *publish* registry by
+    // scope, not from the top-level `registry`. Two failure modes, both silently
+    // routing to registry.npmjs.org → ENEEDAUTH/E404 on a developer or CI machine:
+    //   1. A SCOPED package (@dawn-ai/*) uses `@<scope>:registry` and falls back to
+    //      the public registry — NOT the top-level `registry` — when that scope has no
+    //      registry. We set `npm_config_@<scope>:registry` per package below.
+    //   2. An inherited default `scope=@foo` in ~/.npmrc routes EVERY publish (even
+    //      unscoped create-dawn-ai-app) through `@foo:registry`, ignoring both
+    //      `--registry` and `npm_config_registry`. We pass `--scope=` to clear it so
+    //      unscoped publishes fall back to the top-level `registry`.
+    const baseEnv: NodeJS.ProcessEnv = {
+      npm_config_registry: url,
+      [`npm_config_//${host}/:_authToken`]: "fake",
+      npm_config_replace_registry_host: "never",
+      // The release workflow exports NPM_CONFIG_PROVENANCE=true (uppercase) at the
+      // job level for trusted publishing to npmjs. Inherited by this `npm publish`
+      // it fails with EUSAGE "provenance generation not supported" — Sigstore
+      // provenance can't be produced for a throwaway local registry. Override the
+      // exact (uppercase) key so it always wins over the job env; harmless on a dev
+      // machine where it is unset.
+      NPM_CONFIG_PROVENANCE: "false",
+    }
+
+    // Pack each public package, then publish the tarball directly to local Verdaccio.
     for (const { dir, name } of packages) {
       const packResult = await runPackagedCommand({
         args: ["pack", "--pack-destination", packsDir],
@@ -145,14 +147,26 @@ export async function publishWorkspace(url: string): Promise<void> {
       await runPackagedCommand({
         // `--scope=` clears any inherited default scope so the publish target comes
         // from `registry` (for unscoped) or the package's own scope (set in env).
-        args: ["publish", tarballPath, "--tag", "latest", "--access", "public", "--scope="],
+        // `--cache` has stronger precedence than every npm_config_cache casing and
+        // keeps concurrent same-name/version publications from sharing cacache state.
+        args: [
+          "publish",
+          tarballPath,
+          "--tag",
+          "latest",
+          "--access",
+          "public",
+          "--scope=",
+          "--cache",
+          npmCacheDir,
+        ],
         command: "npm",
         cwd: dir,
         env: scope ? { ...baseEnv, [`npm_config_${scope}:registry`]: url } : baseEnv,
       })
     }
   } finally {
-    await rm(packsDir, { force: true, recursive: true })
+    await rm(publishRoot, { force: true, recursive: true })
   }
 }
 
