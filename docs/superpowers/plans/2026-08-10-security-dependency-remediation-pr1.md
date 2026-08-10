@@ -28,7 +28,7 @@ gate.
 `@hono/node-server` 2.1, CopilotKit 1.66, MCP SDK, Kubernetes client, GitHub
 Actions, Dependabot, and `pnpm audit`.
 
-**Pinned baseline:** `d42774ecbc4295e9135ba74e8aab7520c3edd7d2`
+**Pinned baseline:** `3887079d400bdf019d3ff90bc89599c1899fa422`
 
 **Preferred terminal security set:** Full and production audits contain only
 `GHSA-866g-f22w-33x8`; the live Dependabot open set is exactly alert `#122`.
@@ -76,8 +76,8 @@ test "$(node --version)" = "v24.19.0"
 test "$(pnpm --version)" = "10.33.0"
 git fetch origin main
 test "$(git branch --show-current)" = "blove/security-dependency-remediation"
-test "$(git rev-parse origin/main)" = "d42774ecbc4295e9135ba74e8aab7520c3edd7d2"
-test "$(git merge-base origin/main HEAD)" = "d42774ecbc4295e9135ba74e8aab7520c3edd7d2"
+test "$(git rev-parse origin/main)" = "3887079d400bdf019d3ff90bc89599c1899fa422"
+test "$(git merge-base origin/main HEAD)" = "3887079d400bdf019d3ff90bc89599c1899fa422"
 test "$(git diff --name-only origin/main...HEAD)" = \
   "docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md"
 test -z "$(git status --short)"
@@ -266,7 +266,7 @@ node scripts/security/dependency-evidence.mjs baseline \
   --repo cacheplane/dawnai \
   --inventory-ref HEAD \
   --source-sha "$(git rev-parse HEAD)" \
-  --expected-default-sha d42774ecbc4295e9135ba74e8aab7520c3edd7d2 \
+  --expected-default-sha 3887079d400bdf019d3ff90bc89599c1899fa422 \
   --current-version 0.8.21 \
   --target-version 0.8.22 \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \

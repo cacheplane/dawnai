@@ -714,7 +714,7 @@ describe("dependency evidence CLI", () => {
 			const output = resolve(temporary, "reconciliation.json");
 			await writeFile(baselineReceipt, '{"baseline":true}\n');
 			await writeFile(auditReceipt, '{"audit":true}\n');
-			const reviewedBaseSha = "d42774ecbc4295e9135ba74e8aab7520c3edd7d2";
+			const reviewedBaseSha = "3887079d400bdf019d3ff90bc89599c1899fa422";
 			const reviewedHeadSha = "b".repeat(40);
 			const mergeSha = "c".repeat(40);
 			const observationHeadSha = "d".repeat(40);
