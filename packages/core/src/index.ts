@@ -99,6 +99,10 @@ export {
   renderDawnTypes,
   renderRouteTypes,
 } from "./typegen/render-route-types.js"
+export {
+  renderScenarioTypes,
+  SCENARIO_TYPES_FILE,
+} from "./typegen/render-scenario-types.js"
 export type { RouteStateFields } from "./typegen/render-state-types.js"
 export { renderStateTypes } from "./typegen/render-state-types.js"
 export { renderToolTypes } from "./typegen/render-tool-types.js"

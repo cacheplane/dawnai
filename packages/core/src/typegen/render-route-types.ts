@@ -25,6 +25,8 @@ export function renderDawnTypes(
   const toolBlock = renderToolTypes(toolTypes).trimEnd()
 
   const parts: string[] = [
+    '/// <reference path="./scenarios.generated.d.ts" />',
+    "",
     'declare module "dawn:routes" {',
     `  export type DawnRoutePath = ${pathUnion};`,
     "",
