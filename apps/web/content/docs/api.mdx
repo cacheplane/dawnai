@@ -570,7 +570,7 @@ export function validateModelId(opts: {
 }): ModelIdValidation
 ```
 
-Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#curated_model_ids)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
+Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#model-id-constants)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
 
 ### `ModelIdValidation`
 

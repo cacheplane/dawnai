@@ -17,23 +17,36 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     Tab,
     RelatedCards,
     CopyPromptButton,
-    h1: ({ children }) => (
+    // `id` comes from rehype-slug and is the in-page anchor target — every
+    // heading override has to pass it through, at every level.
+    h1: ({ children, id }) => (
       <h1
+        id={id}
         className="font-display text-4xl md:text-5xl font-semibold text-ink mb-6 tracking-tight"
         style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
       >
         {children}
       </h1>
     ),
-    h2: ({ children }) => (
+    h2: ({ children, id }) => (
       <h2
+        id={id}
         className="font-display text-2xl md:text-3xl font-semibold text-ink mt-10 mb-4 tracking-tight"
         style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
       >
         {children}
       </h2>
     ),
-    h3: ({ children }) => <h3 className="text-lg font-semibold text-ink mt-8 mb-3">{children}</h3>,
+    h3: ({ children, id }) => (
+      <h3 id={id} className="text-lg font-semibold text-ink mt-8 mb-3">
+        {children}
+      </h3>
+    ),
+    h4: ({ children, id }) => (
+      <h4 id={id} className="text-base font-semibold text-ink mt-6 mb-2">
+        {children}
+      </h4>
+    ),
     p: ({ children }) => <p className="text-ink-muted leading-7 mb-4">{children}</p>,
     code: InlineCode,
     pre: Pre,
