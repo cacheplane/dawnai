@@ -76,7 +76,7 @@ function buildLlmsTxt(): string {
       "```",
       "",
       "## Commands",
-      "- `dawn add [name]` — fetch and print an integration blueprint for an agent to apply",
+      "- `dawn add` — list the blueprint catalog; `dawn add <name-or-url>` — fetch and print an integration blueprint for an agent to apply",
       "- `dawn build` — emit configured deployment targets (`node` + `langsmith` by default; `hono` opt-in)",
       "- `dawn check` — validate app structure/config",
       "- `dawn dev` — local Agent Protocol runtime server",

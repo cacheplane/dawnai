@@ -90,7 +90,7 @@ const ADD_A_TOOL = `Help me add a new tool to an existing Dawn app. Dawn discove
 
 4. Run \`dawn typegen\` to regenerate types after adding the tool (or leave \`dawn dev\` running — it does this on every file save).
 
-5. For a \`workflow\`, or a callable \`graph\` function that explicitly receives Dawn \`RuntimeContext\`, update \`index.ts\` to call the tool via \`ctx.tools.<tool-name>({ ... })\`. A precompiled raw LangGraph object's \`.invoke()\` treats its second argument as LangGraph \`RunnableConfig\`, not Dawn's typed \`RuntimeContext\`; it should keep or import its own tools rather than expect workflow-style \`ctx.tools\`. For an \`agent\` route, leave \`index.ts\` as the default \`agent(...)\` descriptor; Dawn materializes the agent with its eligible tools.
+5. For a \`workflow\`, or a callable \`graph\` function that explicitly receives Dawn \`RuntimeContext\`, update \`index.ts\` to call the tool via \`ctx.tools.<tool-name>({ ... })\`. A precompiled raw LangGraph object's \`.invoke()\` treats its second argument as LangGraph \`RunnableConfig\`, not Dawn's typed \`RuntimeContext\`; it keeps the tools its implementation already owns or imports rather than expecting workflow-style \`ctx.tools\`. For an \`agent\` route, leave \`index.ts\` as the default \`agent(...)\` descriptor; Dawn materializes the agent with its eligible tools.
 
 6. Re-run the route with \`dawn run\` and confirm the new tool is invoked end-to-end.
 
@@ -114,7 +114,7 @@ const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes a
    import { z } from "zod"
 
    export default z.object({
-     topic: z.string(),
+     topic: z.string().default(""),
      question: z.string().default(""),
    })
    \`\`\`
@@ -123,21 +123,11 @@ const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes a
 
    **Workflow** (async function, most common):
    \`\`\`ts
-   import type { RuntimeContext } from "@dawn-ai/sdk"
-   import type { RouteTools } from "dawn:routes"
-   import type { z } from "zod"
    import state from "./state.js"
 
-   type <RouteName>State = z.infer<typeof state>
-
-   export async function workflow(
-     input: unknown,
-     ctx: RuntimeContext<RouteTools<"/<route-path>">>
-   ) {
+   export async function workflow(input: unknown) {
      const parsed = state.parse(input)
-     // use ctx.tools.<toolName>() — fully typed
-     const result = await ctx.tools.<toolName>({ topic: parsed.topic })
-     return { ...parsed, result }
+     return { ...parsed, result: parsed.topic }
    }
    \`\`\`
 
@@ -161,7 +151,7 @@ const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes a
    })
    \`\`\`
 
-4. Add tools at the appropriate scope: use \`src/tools/*.ts\` for tools shared across routes, or \`src/app/<new-route>/[topic]/tools/*.ts\` for route-local tools. A route-local tool shadows a same-named shared tool for that route. The default research scaffold uses shared tools.
+4. If the route needs tools, add them at the appropriate scope: use \`src/tools/*.ts\` for tools shared across routes, or \`src/app/<new-route>/[topic]/tools/*.ts\` for route-local tools. A route-local tool shadows a same-named shared tool for that route. Then add a typed \`RuntimeContext\` parameter and call the tool through \`ctx.tools\`; otherwise keep the workflow tool-free.
 
 5. Run \`dawn routes\` to confirm Dawn discovered the new route and what pathname it computed. Then \`dawn run '<pathname>'\` with the required state via stdin.
 

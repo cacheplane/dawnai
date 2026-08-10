@@ -24,11 +24,10 @@ import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
 import state from "./state.js"
 
-type HelloInput = z.input<typeof state>
 type HelloState = z.infer<typeof state>
 
 export async function workflow(
-  input: HelloInput,
+  input: unknown,
   ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
 ) {
   const parsed: HelloState = state.parse(input)
@@ -55,6 +54,7 @@ export async function workflow(
 
   A concrete `/hello/acme` path is not how Dawn populates route state.
 - **Parse workflow input explicitly.** Workflow routes do not automatically parse `state.ts`. Calling `state.parse(input)` validates the input and applies fields declared with `.default(...)` when the caller omits them.
+- **This workflow imports and parses the schema directly.** It can keep `tenant` required. For agent-state discovery, Dawn instead validates `{}` to extract defaults; if you reuse this schema for an agent route, make every top-level field accept missing input so discovery does not skip it.
 - **State is JSON-serializable.** It crosses the runtime boundary on every `runs/wait` and `runs/stream` call. Use primitives, plain objects, arrays.
 
 ## Related

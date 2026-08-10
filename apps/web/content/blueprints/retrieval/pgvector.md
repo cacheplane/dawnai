@@ -132,7 +132,7 @@ Run typegen to refresh the generated declarations:
 dawn typegen
 ```
 
-After running typegen, `ctx.tools.search_documents` is available inside a `workflow` with full IntelliSense on its input and return shapes. A callable `graph` function may explicitly accept Dawn `RuntimeContext` and use the same typed tool. A precompiled raw LangGraph object's `.invoke()` instead treats its second argument as LangGraph `RunnableConfig`, not Dawn's typed `RuntimeContext`, so it keeps or imports its own tools rather than expecting workflow-style `ctx.tools`.
+After running typegen, `ctx.tools.search_documents` is available inside a `workflow` with full IntelliSense on its input and return shapes. A callable `graph` function may explicitly accept Dawn `RuntimeContext` and use the same typed tool. A precompiled raw LangGraph object's `.invoke()` instead treats its second argument as LangGraph `RunnableConfig`, not Dawn's typed `RuntimeContext`, so it keeps the tools its implementation already owns or imports rather than expecting workflow-style `ctx.tools`.
 
 If this is a shared tool placed in `src/tools/`, Dawn discovers it for every route under the same name; the invocation boundary above still applies.
 

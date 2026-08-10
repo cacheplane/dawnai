@@ -25,7 +25,7 @@ Use live-server scenario tests to catch protocol-shape issues before deploying a
 ```
 dawn build
 docker build -t my-app .
-docker run -p 8000:8000 --env-file .env my-app
+docker run -p 127.0.0.1:8000:8000 --env-file .env my-app
 ```
 
 For local production-like serving without Docker, use `dawn start`, which boots the same runtime directly:

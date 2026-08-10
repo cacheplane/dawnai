@@ -82,8 +82,13 @@ for (const check of checks) {
 const accuracyContracts = [
   {
     file: "apps/web/content/docs/recipes/typed-state.mdx",
-    required: ["tenant: z.string()"],
-    forbidden: ["[tenant] is injected from the pathname"],
+    required: [
+      "tenant: z.string()",
+      "input: unknown",
+      "workflow imports and parses",
+      "agent-state discovery",
+    ],
+    forbidden: ["input: HelloInput", "[tenant] is injected from the pathname"],
   },
   {
     file: "apps/web/content/docs/recipes/stream-output.mdx",
@@ -93,13 +98,19 @@ const accuracyContracts = [
   {
     file: "apps/web/content/docs/state.mdx",
     required: [
-      "tenant: z.string()",
+      'tenant: z.string().default("")',
       'import state from "./state.js"',
       "input: unknown",
       "state.parse(input)",
       "Plain workflows must parse",
+      "validating `{}`",
+      "rejects `{}`",
+      "is skipped",
     ],
-    forbidden: ["Zod-parsed default `\"\"` is applied when caller omits it"],
+    forbidden: [
+      "tenant: z.string(),",
+      "Zod-parsed default `\"\"` is applied when caller omits it",
+    ],
   },
   {
     file: "apps/web/content/docs/testing-agents.mdx",
@@ -114,7 +125,7 @@ const accuracyContracts = [
       "callable `graph` function",
       "precompiled raw LangGraph object",
       "RunnableConfig",
-      "imports its own tools",
+      "owns or imports",
       'import state from "./state.js"',
       "export async function workflow(\n  input: unknown,",
       "const parsed = state.parse(input)",
@@ -125,6 +136,7 @@ const accuracyContracts = [
       "only its own route-local `tools/*.ts`",
       "inside `workflow`/`graph` route entries",
       "Inside a `workflow` or `graph` route",
+      "imports its own tools instead",
       'import type state from "./state.js"',
       "state: HelloState",
     ],
@@ -139,6 +151,7 @@ const accuracyContracts = [
       "/memory/candidates",
       "spans namespaces",
       "entire service",
+      "docker run -p 127.0.0.1:8000:8000",
     ],
     forbidden: ["Nothing else is gated"],
   },
@@ -150,8 +163,15 @@ const accuracyContracts = [
       "/memory/candidates",
       "spans namespaces",
       "entire service",
+      "parent watcher/session keeps the same URL",
+      "child owns the HTTP listener",
+      "default SQLite",
     ],
-    forbidden: [],
+    forbidden: [
+      "parent owns the HTTP server",
+      "parent HTTP server is unaffected",
+      "parent process keeps the HTTP server alive",
+    ],
   },
   {
     file: "apps/web/content/prompts/index.ts",
@@ -160,17 +180,21 @@ const accuracyContracts = [
       'targets: ["node"]',
       "scenarios(",
       ".server(",
-      "topic: z.string()",
+      'topic: z.string().default("")',
       'import state from "./state.js"',
       "input: unknown",
       "state.parse(input)",
       "callable \\`graph\\` function",
       "precompiled raw LangGraph object",
       "RunnableConfig",
+      "owns or imports",
+      "return { ...parsed, result: parsed.topic }",
     ],
     forbidden: [
       "Dawn itself is not a production runtime",
       "For a \\`workflow\\` or \\`graph\\` route",
+      "ctx.tools.<toolName>",
+      "topic: z.string(),",
     ],
   },
   {
@@ -180,6 +204,7 @@ const accuracyContracts = [
       "dawn inspect",
       "/threads/:thread_id/cancel",
       "fetch and print an integration blueprint",
+      "`dawn add` — list the blueprint catalog",
       "five phases",
       "runtime readiness",
       "middleware-bypassing management routes",
@@ -189,12 +214,22 @@ const accuracyContracts = [
   },
   {
     file: "apps/web/content/blueprints/retrieval/pgvector.md",
-    required: ["callable `graph` function", "precompiled raw LangGraph object", "RunnableConfig"],
+    required: [
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+    ],
     forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
   },
   {
     file: "apps/web/content/blueprints/retrieval/pinecone.md",
-    required: ["callable `graph` function", "precompiled raw LangGraph object", "RunnableConfig"],
+    required: [
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+    ],
     forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
   },
   {
@@ -223,8 +258,15 @@ const accuracyContracts = [
   },
   {
     file: "apps/web/app/components/landing/WhyDawn.tsx",
-    required: ["Node and Hono HTTP runtimes", "raw graph and chain exports stay portable"],
-    forbidden: ["Dawn is not a runtime"],
+    required: [
+      "Node and Hono HTTP runtimes",
+      "raw graph and chain exports stay portable",
+      "durable stores",
+    ],
+    forbidden: [
+      "Dawn is not a runtime",
+      "persisted state available across child-runtime restarts.",
+    ],
   },
   {
     file: "apps/web/app/components/landing/FeatureRouting.tsx",
@@ -233,8 +275,36 @@ const accuracyContracts = [
   },
   {
     file: "apps/web/app/components/landing/FeatureDevLoop.tsx",
-    required: ["restarts the child runtime", "parent listener", "persisted thread/checkpoint state"],
-    forbidden: ["only schema-incompatible", "First compile in ~400ms", "incremental in tens of ms"],
+    required: [
+      "restarts the child runtime",
+      "parent watcher/session",
+      "child-owned HTTP listener restarts",
+      "default SQLite",
+    ],
+    forbidden: [
+      "parent listener stays up",
+      "Stable parent listener",
+      "persisted thread/checkpoint state remains available",
+      "only schema-incompatible",
+      "First compile in ~400ms",
+      "incremental in tens of ms",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/DevLoopAnimation.tsx",
+    required: [
+      "Parent watcher/session keeps the same URL",
+      "Restarting child HTTP runtime",
+      "Child HTTP listener ready",
+      "Default SQLite thread/checkpoint state",
+    ],
+    forbidden: [
+      "Compiled in 412ms",
+      "Graph state preserved across reload",
+      "Updated route /support in 87ms",
+      "updated in 31ms",
+      "compiled in 22ms",
+    ],
   },
   {
     file: "apps/web/content/blueprints/deploy/docker.md",

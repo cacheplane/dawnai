@@ -25,8 +25,9 @@ export function WhyDawn() {
           <p>
             Dawn is a meta-framework for LangGraph in the same shape Next.js is for React.
             File-system routes for agents, shared and route-local tools with inferred argument
-            types, end-to-end generated types from your state schema, and a dev server that keeps
-            persisted state available across child-runtime restarts.
+            types, end-to-end generated types from your state schema, and a dev session that keeps
+            the same URL while its child HTTP runtime restarts. With durable stores, persisted state
+            remains available across those restarts.
           </p>
           <p>
             <strong className="text-ink font-medium">

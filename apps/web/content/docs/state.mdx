@@ -4,14 +4,14 @@ Routes may declare a state contract in a colocated `state.ts` file. State is the
 
 ## The shape
 
-When present, `state.ts` default-exports a Zod schema or Standard Schema value. Agent routes use it to parse defaults at runtime, and you can derive the TypeScript type via `z.infer<typeof state>`:
+When present, `state.ts` default-exports a Zod schema or Standard Schema value. Agent routes discover and apply state defaults from it, and you can derive the TypeScript type via `z.infer<typeof state>`:
 
 <CodeGroup>
 ```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
 export default z.object({
-  tenant: z.string(),
+  tenant: z.string().default(""),
   /** Accumulated context from tool call results */
   context: z.string().default(""),
 })
@@ -33,10 +33,10 @@ export async function workflow(input: unknown, ctx: RuntimeContext): Promise<Hel
 ```
 </CodeGroup>
 
-Agent routes apply a discovered `state.ts` schema automatically. Plain workflows must parse their unknown input explicitly, as above; schema defaults appear only after `state.parse(input)` succeeds.
+Agent-state discovery extracts defaults by validating `{}`. A schema that rejects `{}` is skipped, so its agent state defaults and generated types are not produced. Make every top-level field accept missing input, usually with `.default(...)`. Agent routes apply defaults from a successfully discovered schema automatically. Plain workflows must parse their unknown input explicitly, as above; their schema defaults appear only after `state.parse(input)` succeeds.
 
 <Callout type="info" title="Zod or any Standard Schema">
-  State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.
+  State discovery accepts a Zod-compatible schema or any value that implements [Standard Schema](https://standardschema.dev/). It calls `~standard.validate({})` when that slot is present, otherwise `.parse({})`, and requires a successful object value. The scaffold uses Zod.
 </Callout>
 
 ## Dynamic segments are route params

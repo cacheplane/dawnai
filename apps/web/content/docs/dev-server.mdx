@@ -303,7 +303,7 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
-## Hot reload
+## Restart cycle
 
 When you save a file under `src/app/`, the dev server:
 
@@ -312,20 +312,23 @@ When you save a file under `src/app/`, the dev server:
     Ignorable paths (`.dawn/`, `workspace/`, lockfiles) are skipped. Every other change — route files, tools, `state.ts`, reducers, config, middleware — restarts the child, and the restart log line names the reason (for example `Restarting Dawn dev server (tool change: src/tools/search.ts)`).
   </Step>
   <Step title="Restarts the child runtime">
-    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. Typegen runs before every spawn, so the fresh child always sees current generated types. The old child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
+    Dawn uses a parent-child process architecture. The parent watcher/session keeps the same URL and orchestrates restarts; the child owns the HTTP listener and route graph. Each restart stops the old child and its listener, then starts a fresh child on the same port. Typegen runs before every spawn, so the fresh child sees current generated types. The old child is `stop()`ed with a forced-kill timeout: in-flight requests get a brief grace window, then are force-killed.
   </Step>
   <Step title="Preserves route ids">
     Routes keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding a `route` key continues to work without reconnection.
   </Step>
+  <Step title="Reloads durable state">
+    With the default SQLite checkpointer and threads store, persisted thread/checkpoint state survives child restarts. Custom-store durability follows the store you configure; an in-memory store does not survive a process restart.
+  </Step>
 </Steps>
 
 <Callout type="info" title="Why this architecture">
-  Running the route runtime in a child process means the parent HTTP server is unaffected by a route's crash. The dev server stays up even when your code throws — you just see the error in the logs and save to retry.
+  Keeping the watcher/session in the parent lets it report a nonfatal restart failure and watch for the next save. The child process owns route execution and the HTTP listener, so a restart replaces both together at the same URL.
 </Callout>
 
 ## Logging
 
-The parent process keeps the HTTP server alive while child route runtimes restart. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window.
+The parent process keeps the watcher/session and URL identity while the child HTTP listener restarts. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window.
 
 ## Related
 
