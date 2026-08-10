@@ -1076,6 +1076,23 @@ function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
+    // GET /threads/:thread_id/pending_interrupts — durable HITL prompts
+    // ------------------------------------------------------------------
+    // Not a collision with GET /threads/:thread_id: that pattern's
+    // [^/?#]+ capture cannot span a slash. Dispatch filters on method first,
+    // so sharing a path prefix with the POST endpoints is safe too.
+    {
+      handle: async (request, params) =>
+        handleApPendingInterruptsRequest({
+          checkpointer: getCheckpointer(request),
+          threadId: params.thread_id ?? "",
+          threadsStore: getThreadsStore(request),
+        }),
+      method: "GET",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/pending_interrupts(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
     // POST /threads/:thread_id/resume — resolve a parked interrupt
     // ------------------------------------------------------------------
     {
@@ -1591,6 +1608,51 @@ async function handleApWaitRequest(options: {
       run.release()
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// AP pending-interrupts handler — durable HITL prompts for a reconnected client
+// ---------------------------------------------------------------------------
+
+async function handleApPendingInterruptsRequest(options: {
+  readonly checkpointer: BaseCheckpointSaver
+  readonly threadId: string
+  readonly threadsStore: ThreadsStore
+}): Promise<Response> {
+  const { checkpointer, threadId, threadsStore } = options
+
+  // Thread first, with the same code POST /cancel and POST /resume use for an
+  // unknown thread, so a client branches on one code across the AP surface.
+  // Thread existence is therefore observable BEFORE any middleware runs — the
+  // same as POST /resume, which answers 404 long before it calls
+  // runMiddleware. Deliberate, and fixed by §1 of the spec; the interrupt
+  // payloads themselves stay behind the gate added in the next task.
+  const thread = await threadsStore.getThread(threadId)
+  if (!thread) {
+    return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
+      status: 404,
+    })
+  }
+
+  // A known thread with no checkpoint has nothing parked. That is a 200 with an
+  // empty list, not a 404: "no such thread" and "nothing pending" are different
+  // answers and a reconnecting client acts on them differently.
+  //
+  // A malformed pending-write set is still listed — this endpoint reports what
+  // is parked, and POST /resume is the surface that refuses to act on writes it
+  // cannot address safely (malformed_checkpoint).
+  const snapshot = await readPendingInterrupts(checkpointer, threadId)
+  const interrupts = (snapshot?.interrupts ?? []).map(({ interruptId, resumeKey, value }) => ({
+    interruptId,
+    resumeKey,
+    value,
+  }))
+  return Response.json(
+    { interrupts },
+    // Checkpoint state changes under the client; a cached answer would show a
+    // prompt that has already been resolved.
+    { headers: { "cache-control": "no-store" }, status: 200 },
+  )
 }
 
 // ---------------------------------------------------------------------------
