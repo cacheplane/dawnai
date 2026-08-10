@@ -38,9 +38,12 @@ describe("selectConsolidationBatches", () => {
     // route=/a week A (3), route=/a week B (2), route=/b week A (1 → dropped by minBatchSize)
     expect(batches.length).toBe(2)
     const first = batches.find((b) => b.namespace === "route=/a" && b.records.length === 3)
-    expect(first?.records.map((r) => r.id)).toEqual(["a1", "a2", "a3"])
-    expect(first?.period.since <= wA(7)).toBe(true)
-    expect(first?.period.until > wA(9)).toBe(true)
+    // Thrown rather than asserted: the period comparisons below read as `false` on an
+    // absent batch, which fails with no hint that the batch itself was missing.
+    if (first === undefined) throw new Error("no route=/a batch of 3 records")
+    expect(first.records.map((r) => r.id)).toEqual(["a1", "a2", "a3"])
+    expect(first.period.since <= wA(7)).toBe(true)
+    expect(first.period.until > wA(9)).toBe(true)
     expect(batches.every((b) => b.namespace !== "route=/b")).toBe(true)
   })
   it("falls back to createdAt when effectiveAt is absent", () => {

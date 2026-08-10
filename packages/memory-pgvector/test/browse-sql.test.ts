@@ -130,7 +130,12 @@ describe("appendPgBrowseFilter — updatedAt", () => {
       params: ["2026-08-10T00:00:00.000Z"],
     })
     expect(
-      build({ field: "updatedAt", op: "betweenDays", fromDay: "2026-08-01", untilDay: "2026-08-09" }),
+      build({
+        field: "updatedAt",
+        op: "betweenDays",
+        fromDay: "2026-08-01",
+        untilDay: "2026-08-09",
+      }),
     ).toEqual({
       sql: "updated_at >= $1 AND updated_at < $2",
       params: ["2026-08-01T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
