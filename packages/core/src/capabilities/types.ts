@@ -99,24 +99,37 @@ export type BrowseFilterLike =
 /**
  * Structural mirror of @dawn-ai/memory's `BrowseQuery`. Named (not inlined on
  * `MemoryStoreLike.browse`) so drift is a one-line diff instead of an invisible
- * parameter tweak: method parameters are checked BIVARIANTLY, so a narrower inline
- * shape stays assignable and silently rots. `memory-contract-parity.test.ts`
- * compares this type directly, which is invariant. Keep in lockstep with
- * packages/memory/src/types.ts.
+ * parameter tweak, and so the parity tripwire can compare it directly — see
+ * packages/testing/test/memory-contract-parity.contract.ts for why comparing the
+ * STORE types is not enough. Keep in lockstep with packages/memory/src/types.ts.
  */
 export interface BrowseQueryLike {
   readonly namespacePrefix?: string
+  /** One status, or a set matching any of them. An EMPTY set matches NOTHING —
+   *  "any of none" is false; reading it as "unfiltered" would show every row to a
+   *  caller that had just narrowed to zero. */
   readonly status?: MemoryStatusLike | readonly MemoryStatusLike[]
+  /** One kind, or a set matching any of them; an empty set matches nothing. */
   readonly kind?: MemoryKindLike | readonly MemoryKindLike[]
   readonly sourceType?: MemorySourceTypeLike
   readonly limit?: number
   readonly offset?: number
+  /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
   readonly since?: string
+  /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
   readonly until?: string
+  /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
+   *  no prefix semantics. ANDed with everything else. */
   readonly namespace?: string
+  /** AND-combined normalized predicates; at most one per field, at most 8 total. */
   readonly filters?: readonly BrowseFilterLike[]
+  /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. */
   readonly orderBy?: readonly BrowseSortEntryLike[]
+  /** Opaque continuation from a prior `BrowsePageLike`. Belongs to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch. */
   readonly cursor?: string
 }
 
