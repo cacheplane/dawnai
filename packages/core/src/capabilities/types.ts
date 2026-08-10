@@ -41,6 +41,32 @@ export interface Embedder {
   embed(texts: readonly string[]): Promise<Float32Array[]>
 }
 
+/**
+ * Structural mirror of @dawn-ai/memory's `BrowseQuery`. Named (not inlined on
+ * `MemoryStoreLike.browse`) so drift is a one-line diff instead of an invisible
+ * parameter tweak: method parameters are checked BIVARIANTLY, so a narrower inline
+ * shape stays assignable and silently rots. `memory-contract-parity.test.ts`
+ * compares this type directly, which is invariant. Keep in lockstep with
+ * packages/memory/src/types.ts.
+ */
+export interface BrowseQueryLike {
+  readonly namespacePrefix?: string
+  readonly status?: MemoryStatusLike | readonly MemoryStatusLike[]
+  readonly kind?: MemoryKindLike | readonly MemoryKindLike[]
+  readonly sourceType?: MemorySourceTypeLike
+  readonly limit?: number
+  readonly offset?: number
+  readonly since?: string
+  readonly until?: string
+  readonly now?: string
+}
+
+/** Structural mirror of @dawn-ai/memory's `BrowsePage`. See `BrowseQueryLike`. */
+export interface BrowsePageLike {
+  readonly records: readonly MemoryRecordLike[]
+  readonly total: number
+}
+
 export interface MemoryStoreLike {
   put(
     rec: MemoryRecordLike,
@@ -73,23 +99,7 @@ export interface MemoryStoreLike {
   delete(id: string): Promise<void>
   listCandidates(namespacePrefix: string): Promise<readonly MemoryRecordLike[]>
   /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
-  browse(q?: {
-    readonly namespacePrefix?: string
-    readonly status?: MemoryStatusLike
-    readonly kind?: MemoryKindLike
-    readonly sourceType?: MemorySourceTypeLike
-    readonly limit?: number
-    readonly offset?: number
-    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
-    readonly since?: string
-    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
-    readonly until?: string
-    /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
-    readonly now?: string
-  }): Promise<{
-    readonly records: readonly MemoryRecordLike[]
-    readonly total: number
-  }>
+  browse(q?: BrowseQueryLike): Promise<BrowsePageLike>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<{
     readonly total: number
