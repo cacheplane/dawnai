@@ -269,7 +269,7 @@ function globToRegExp(pattern) {
       source += "(?:[^/]+/)*"
       return
     }
-    source += segment.replace(/[.+^${}|]/gu, "\\$&").replaceAll("*", "[^/]*")
+    source += segment.replace(/[\\.+^${}|]/gu, "\\$&").replaceAll("*", "[^/]*")
     if (index < segments.length - 1) {
       source += "/"
     }

@@ -206,8 +206,14 @@ test("readReleaseInventory follows positive and negative workspace patterns at t
   assert.ok(calls.every((call) => call.ref === "release-ref"))
 })
 
-test("readReleaseInventory rejects unsupported brace, character-class, and question-mark globs", async () => {
-  for (const pattern of ["packages/{a,b}", "packages/[ab]", "packages/pkg-?", " "]) {
+test("readReleaseInventory rejects unsupported brace, character-class, question-mark, and backslash globs", async () => {
+  for (const pattern of [
+    "packages/{a,b}",
+    "packages/[ab]",
+    "packages/pkg-?",
+    "packages\\pkg-a",
+    " ",
+  ]) {
     await assert.rejects(
       readFixtureInventory({
         workspaceSource: `packages:\n  - '${pattern}'\n`,
