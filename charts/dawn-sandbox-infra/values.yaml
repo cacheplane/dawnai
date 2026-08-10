@@ -12,10 +12,13 @@ namespace:
   create: true
   # name: the namespace the provider's `opts.namespace` must match.
   name: dawn-sandboxes
+  # extraLabels: additional namespace labels. Pod Security and fixed chart
+  # ownership labels are reserved and rejected by the namespace template.
+  extraLabels: {}
 
 podSecurityStandard:
   # enforce: baseline | restricted | privileged
-  enforce: baseline
+  enforce: restricted
   warn: restricted
   audit: restricted
   # version: the PSS policy version to pin the enforce/warn/audit labels to.

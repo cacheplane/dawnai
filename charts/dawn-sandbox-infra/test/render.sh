@@ -5,13 +5,43 @@ CHART="$(dirname "$0")/.."
 tmpl() { helm template test "$CHART" "$@"; }
 assert() { if ! grep -qE "$2"; then echo "FAIL: $1"; exit 1; fi; echo "ok: $1"; }
 refute() { if grep -qE "$2"; then echo "FAIL (expected absent): $1"; exit 1; fi; echo "ok: $1"; }
+assert_extra_label_rejected() {
+  label="$1"
+  set_value="$2"
+  if tmpl --show-only templates/namespace.yaml --set-string "$set_value" >/dev/null 2>&1; then
+    echo "FAIL: namespace.extraLabels must not override $label"
+    exit 1
+  fi
+  echo "ok: namespace.extraLabels rejects $label"
+}
 
-# Namespace + PSS (default baseline enforce, restricted warn/audit)
-tmpl --show-only templates/namespace.yaml | assert "ns name" 'name: dawn-sandboxes'
-tmpl --show-only templates/namespace.yaml | assert "pss enforce baseline" 'pod-security.kubernetes.io/enforce: baseline'
-tmpl --show-only templates/namespace.yaml | assert "pss warn restricted" 'pod-security.kubernetes.io/warn: restricted'
-# Override: enforce restricted
-tmpl --show-only templates/namespace.yaml --set podSecurityStandard.enforce=restricted | assert "pss enforce override" 'pod-security.kubernetes.io/enforce: restricted'
+# Namespace + PSS (restricted by default)
+NAMESPACE="$(tmpl --show-only templates/namespace.yaml)"
+printf '%s\n' "$NAMESPACE" | assert "ns name" 'name: dawn-sandboxes'
+printf '%s\n' "$NAMESPACE" | assert "pss enforce restricted" 'pod-security.kubernetes.io/enforce: restricted'
+printf '%s\n' "$NAMESPACE" | assert "pss warn restricted" 'pod-security.kubernetes.io/warn: restricted'
+printf '%s\n' "$NAMESPACE" | assert "pss audit restricted" 'pod-security.kubernetes.io/audit: restricted'
+
+COMPAT_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.dawn\.sh/compat-run=run-123')"
+printf '%s\n' "$COMPAT_NAMESPACE" | assert "compat run label" 'dawn\.sh/compat-run: run-123'
+
+EXTRA_LABEL_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.example\.com/team=platform')"
+printf '%s\n' "$EXTRA_LABEL_NAMESPACE" | assert "unrelated extra label" 'example\.com/team: platform'
+
+assert_extra_label_rejected "Pod Security labels" \
+  'namespace.extraLabels.pod-security\.kubernetes\.io/enforce=privileged'
+assert_extra_label_rejected "helm.sh/chart" \
+  'namespace.extraLabels.helm\.sh/chart=override'
+assert_extra_label_rejected "app.kubernetes.io/name" \
+  'namespace.extraLabels.app\.kubernetes\.io/name=override'
+assert_extra_label_rejected "app.kubernetes.io/instance" \
+  'namespace.extraLabels.app\.kubernetes\.io/instance=override'
+assert_extra_label_rejected "app.kubernetes.io/version" \
+  'namespace.extraLabels.app\.kubernetes\.io/version=override'
+assert_extra_label_rejected "app.kubernetes.io/managed-by" \
+  'namespace.extraLabels.app\.kubernetes\.io/managed-by=override'
 
 # Orchestrator RBAC: ServiceAccount, Role (exact rule surface), RoleBinding
 RBAC="$(tmpl --show-only templates/rbac-orchestrator.yaml)"

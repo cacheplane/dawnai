@@ -1,3 +1,15 @@
+{{- $reservedLabels := dict
+  "helm.sh/chart" true
+  "app.kubernetes.io/name" true
+  "app.kubernetes.io/instance" true
+  "app.kubernetes.io/version" true
+  "app.kubernetes.io/managed-by" true
+-}}
+{{- range $key, $_ := .Values.namespace.extraLabels }}
+  {{- if or (hasPrefix "pod-security.kubernetes.io/" $key) (hasKey $reservedLabels $key) }}
+    {{- fail (printf "namespace.extraLabels key %q is reserved" $key) }}
+  {{- end }}
+{{- end }}
 {{- if .Values.namespace.create }}
 apiVersion: v1
 kind: Namespace
@@ -11,4 +23,7 @@ metadata:
     pod-security.kubernetes.io/warn-version: {{ .Values.podSecurityStandard.version | quote }}
     pod-security.kubernetes.io/audit: {{ .Values.podSecurityStandard.audit }}
     pod-security.kubernetes.io/audit-version: {{ .Values.podSecurityStandard.version | quote }}
+    {{- with .Values.namespace.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
