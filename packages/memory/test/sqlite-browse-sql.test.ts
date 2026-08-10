@@ -63,3 +63,24 @@ describe("appendSqliteBrowseFilter — content", () => {
     )
   })
 })
+
+describe("appendSqliteBrowseFilter — namespace", () => {
+  it("compares exactly for equals", () => {
+    expect(build({ field: "namespace", op: "equals", value: "route=/x" })).toEqual({
+      sql: "namespace = ?",
+      params: ["route=/x"],
+    })
+  })
+  it("turns startsWith into a half-open byte range (sargable, still metachar-literal)", () => {
+    expect(build({ field: "namespace", op: "startsWith", value: "route=/a" })).toEqual({
+      sql: "namespace >= ? AND namespace < ?",
+      params: ["route=/a", "route=/b"],
+    })
+  })
+  it("drops the upper bound when the prefix has none", () => {
+    expect(build({ field: "namespace", op: "startsWith", value: "\u{10FFFF}" })).toEqual({
+      sql: "namespace >= ?",
+      params: ["\u{10FFFF}"],
+    })
+  })
+})

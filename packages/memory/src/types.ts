@@ -122,6 +122,9 @@ export type BrowseFilter =
     }
 export interface BrowseQuery {
   readonly namespacePrefix?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
+   *  no prefix semantics. ANDed with everything else, `namespacePrefix` included. */
+  readonly namespace?: string
   /** One status, or a set matching any of them. An EMPTY set matches nothing —
    *  "any of none" is false, and reading it as "unfiltered" would show every
    *  row to a caller that had just narrowed to zero. */
@@ -137,15 +140,11 @@ export interface BrowseQuery {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
-  // ─ The four fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
+  // ─ The fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
   //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
   //   caller that sets one gets an unfiltered, default-ordered, uncursored page and no
   //   error. Each doc states the intended contract and names the task delivering it —
   //   do NOT write a consumer against the guarantee before that task lands.
-  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
-   *  no prefix semantics. ANDed with everything else.
-   *  NOT YET APPLIED — ignored until Task 11 (exact namespace + sargable prefix). */
-  readonly namespace?: string
   /** AND-combined normalized predicates. The intended contract is at most one filter
    *  per `field` and at most 8 in total — but nothing validates either cap yet, and no
    *  store evaluates a predicate. Caps arrive with the shared validator (Task 4), the

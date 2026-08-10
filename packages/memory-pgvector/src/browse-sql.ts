@@ -1,4 +1,4 @@
-import { type BrowseFilter, BrowseQueryError } from "@dawn-ai/memory"
+import { type BrowseFilter, BrowseQueryError, namespacePrefixUpperBound } from "@dawn-ai/memory"
 
 /**
  * Append one normalized filter to a Postgres WHERE list, numbering `$n` from the
@@ -62,9 +62,26 @@ export function appendPgBrowseFilter(
         }
       }
     }
+    case "namespace": {
+      if (filter.op === "equals") {
+        params.push(filter.value)
+        where.push(`namespace COLLATE "C" = $${params.length}`)
+        return
+      }
+      const upper = namespacePrefixUpperBound(filter.value)
+      params.push(filter.value)
+      const lower = params.length
+      if (upper === undefined) {
+        where.push(`namespace COLLATE "C" >= $${lower}`)
+        return
+      }
+      params.push(upper)
+      where.push(`namespace COLLATE "C" >= $${lower} AND namespace COLLATE "C" < $${params.length}`)
+      return
+    }
     default:
-      // Reachable today: validateBrowseQuery accepts namespace/confidence/updatedAt,
-      // whose clauses are not built yet. BrowseQueryError rather than Error — the HTTP
+      // Reachable today: validateBrowseQuery accepts confidence/updatedAt, whose
+      // clauses are not built yet. BrowseQueryError rather than Error — the HTTP
       // boundary maps a rejection by NAME, so a plain Error 500s where this must 400.
       throw new BrowseQueryError(`unhandled browse filter field: ${filter.field}`)
   }

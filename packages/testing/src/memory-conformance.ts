@@ -552,6 +552,56 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse namespace is EXACT while namespacePrefix stays a prefix", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "exact", namespace: "route=/a", content: "exact" }))
+        await s.put(rec({ id: "child", namespace: "route=/ab", content: "child" }))
+        const byPrefix = await s.browse({ namespacePrefix: "route=/a" })
+        expect(byPrefix.records.map((r) => r.id).sort()).toEqual(["child", "exact"])
+        expect(byPrefix.total).toBe(2)
+        // The exact field is what kills the Inspector's client-side narrowing, where
+        // the server counted the prefix and the client displayed the equality.
+        const byExact = await s.browse({ namespace: "route=/a" })
+        expect(byExact.records.map((r) => r.id)).toEqual(["exact"])
+        expect(byExact.total).toBe(1)
+        const byFilter = await s.browse({
+          filters: [{ field: "namespace", op: "equals", value: "route=/ab" }],
+        })
+        expect(byFilter.records.map((r) => r.id)).toEqual(["child"])
+        expect(byFilter.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse namespace startsWith keeps byte-exact, case-sensitive, metachar-literal semantics", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "u", namespace: "route=/foo_bar", content: "u" }))
+        await s.put(rec({ id: "x", namespace: "route=/fooXbar", content: "x" }))
+        await s.put(rec({ id: "unicode", namespace: "route=/日本語", content: "unicode" }))
+        const underscore = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "route=/foo_" }],
+        })
+        expect(underscore.records.map((r) => r.id)).toEqual(["u"])
+        expect(underscore.total).toBe(1)
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "namespace", op: "startsWith", value: "ROUTE=/foo" }],
+            })
+          ).total,
+        ).toBe(0)
+        // Multi-byte prefixes must not fall outside the computed range.
+        const unicode = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "route=/日" }],
+        })
+        expect(unicode.records.map((r) => r.id)).toEqual(["unicode"])
+        expect(unicode.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
     test("stats returns count maps by status/kind/namespace/sourceType plus total", async () => {
       const s = await makeStore()
       try {

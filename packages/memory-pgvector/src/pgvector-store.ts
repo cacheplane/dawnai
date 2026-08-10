@@ -6,6 +6,7 @@ import {
   type MemoryQuery,
   type MemoryRecord,
   type MemoryStore,
+  namespacePrefixUpperBound,
   normalizeSetFilter,
   type RecallRankingOptions,
   rankKeywordCandidates,
@@ -449,17 +450,31 @@ export function pgvectorMemoryStore(opts: {
       // Before ready(): a malformed query never pays for a connection.
       validateBrowseQuery(q)
       await ready()
-      // TODO(Tasks 11/13/14): `q.namespace`, `q.orderBy` and `q.cursor` are read
-      // NOWHERE below. Setting one of them is silently a no-op, not an error; the
-      // JSDoc on BrowseQuery marks each as not-yet-applied. `q.filters` IS applied,
-      // but only its status/kind/content arms — the rest throw (Tasks 11/12).
+      // TODO(Tasks 13/14): `q.orderBy` and `q.cursor` are read NOWHERE below.
+      // Setting one of them is silently a no-op, not an error; the JSDoc on
+      // BrowseQuery marks each as not-yet-applied. `q.filters` IS applied, but only
+      // its status/kind/content/namespace arms — the rest throw (Task 12).
       const where: string[] = []
       const params: unknown[] = []
+      if (q.namespace) {
+        params.push(q.namespace)
+        where.push(`namespace COLLATE "C" = $${params.length}`)
+      }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
-        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
-        params.push(q.namespacePrefix, q.namespacePrefix)
-        where.push(`left(namespace, length($${params.length - 1})) = $${params.length}`)
+        // Byte-exact, case-sensitive prefix as a sargable half-open range —
+        // deliberately NOT LIKE (so %/_/\ stay literal). COLLATE "C" on both sides:
+        // the database's own collation would order the bounds differently to SQLite.
+        const upper = namespacePrefixUpperBound(q.namespacePrefix)
+        params.push(q.namespacePrefix)
+        const lower = params.length
+        if (upper === undefined) {
+          where.push(`namespace COLLATE "C" >= $${lower}`)
+        } else {
+          params.push(upper)
+          where.push(
+            `namespace COLLATE "C" >= $${lower} AND namespace COLLATE "C" < $${params.length}`,
+          )
+        }
       }
       // `= ANY($n)` over a text[] rather than expanded placeholders: it keeps
       // one bind per filter, and an EMPTY array is already false, which is the

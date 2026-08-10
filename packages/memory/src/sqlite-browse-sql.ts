@@ -1,4 +1,5 @@
 import type { SQLInputValue } from "node:sqlite"
+import { namespacePrefixUpperBound } from "./browse-range.js"
 import { BrowseQueryError } from "./browse-validate.js"
 import type { BrowseFilter } from "./types.js"
 
@@ -72,9 +73,24 @@ export function appendSqliteBrowseFilter(
         }
       }
     }
+    case "namespace": {
+      if (filter.op === "equals") {
+        where.push("namespace = ?")
+        params.push(filter.value)
+        return
+      }
+      // Byte-exact prefix as a half-open RANGE rather than substr(): identical
+      // semantics (metacharacters stay literal, comparison stays case-sensitive),
+      // but the planner can seek the namespace-leading index instead of scanning.
+      const upper = namespacePrefixUpperBound(filter.value)
+      where.push(upper === undefined ? "namespace >= ?" : "namespace >= ? AND namespace < ?")
+      params.push(filter.value)
+      if (upper !== undefined) params.push(upper)
+      return
+    }
     default:
-      // Reachable today: validateBrowseQuery accepts namespace/confidence/updatedAt,
-      // whose clauses are not built yet. BrowseQueryError rather than Error — the HTTP
+      // Reachable today: validateBrowseQuery accepts confidence/updatedAt, whose
+      // clauses are not built yet. BrowseQueryError rather than Error — the HTTP
       // boundary maps a rejection by NAME, so a plain Error 500s where this must 400.
       throw new BrowseQueryError(`unhandled browse filter field: ${filter.field}`)
   }

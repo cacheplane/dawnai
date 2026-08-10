@@ -67,3 +67,16 @@ describe("appendPgBrowseFilter — content", () => {
     )
   })
 })
+
+describe("appendPgBrowseFilter — namespace", () => {
+  it('compares with COLLATE "C" so byte order matches SQLite', () => {
+    expect(build({ field: "namespace", op: "equals", value: "route=/x" })).toEqual({
+      sql: 'namespace COLLATE "C" = $1',
+      params: ["route=/x"],
+    })
+    expect(build({ field: "namespace", op: "startsWith", value: "route=/a" })).toEqual({
+      sql: 'namespace COLLATE "C" >= $1 AND namespace COLLATE "C" < $2',
+      params: ["route=/a", "route=/b"],
+    })
+  })
+})

@@ -3,6 +3,7 @@ import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
 import { normalizeSetFilter } from "./browse-filter.js"
+import { namespacePrefixUpperBound } from "./browse-range.js"
 import { BROWSE_DEFAULT_LIMIT, validateBrowseQuery } from "./browse-validate.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
@@ -443,17 +444,24 @@ export function sqliteMemoryStore(opts: {
       // Defence in depth: whatever the caller checked, a store that accepts nonsense
       // returns an empty page that looks like an answer.
       validateBrowseQuery(q)
-      // TODO(Tasks 11/13/14): `q.namespace`, `q.orderBy` and `q.cursor` are read
-      // NOWHERE below. Setting one of them is silently a no-op, not an error; the
-      // JSDoc on BrowseQuery marks each as not-yet-applied. `q.filters` IS applied,
-      // but only its status/kind/content arms — the rest throw (Tasks 11/12).
+      // TODO(Tasks 13/14): `q.orderBy` and `q.cursor` are read NOWHERE below.
+      // Setting one of them is silently a no-op, not an error; the JSDoc on
+      // BrowseQuery marks each as not-yet-applied. `q.filters` IS applied, but only
+      // its status/kind/content/namespace arms — the rest throw (Task 12).
       const where: string[] = []
       const params: SQLInputValue[] = []
+      if (q.namespace) {
+        where.push("namespace = ?")
+        params.push(q.namespace)
+      }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
-        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
-        where.push("substr(namespace, 1, length(?)) = ?")
-        params.push(q.namespacePrefix, q.namespacePrefix)
+        // Byte-exact, case-sensitive prefix as a sargable half-open range —
+        // deliberately NOT LIKE (so %/_/\ stay literal) and no longer substr()
+        // (which was not sargable: 8.0 ms scan vs 0.63 ms seek at 100k).
+        const upper = namespacePrefixUpperBound(q.namespacePrefix)
+        where.push(upper === undefined ? "namespace >= ?" : "namespace >= ? AND namespace < ?")
+        params.push(q.namespacePrefix)
+        if (upper !== undefined) params.push(upper)
       }
       // A set becomes IN (?,?,…); an EMPTY set becomes a clause that matches
       // nothing, which is the contract — not an absent filter.
