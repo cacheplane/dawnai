@@ -1,6 +1,18 @@
-import { randomBytes } from "node:crypto"
-import { rename, rm, writeFile } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join } from "node:path"
+import { createHash, randomBytes } from "node:crypto"
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises"
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
+
+import { RECOMMENDED_VERCEL_CONFIG } from "../../src/lib/build/targets/vercel-config.js"
 
 export const REQUIRED_VERCEL_ENV = [
   "DAWN_VERCEL_TOKEN",
@@ -8,6 +20,1244 @@ export const REQUIRED_VERCEL_ENV = [
   "DAWN_VERCEL_PROJECT_ID",
   "DAWN_VERCEL_DATABASE_URL",
 ] as const
+
+export const NATIVE_DIRECT_DAWN_DEPENDENCIES = [
+  "@dawn-ai/cli",
+  "@dawn-ai/postgres-storage",
+  "@dawn-ai/sdk",
+] as const
+
+export interface NativePackageManifest {
+  readonly dependencies?: Readonly<Record<string, string>>
+  readonly name: string
+  readonly optionalDependencies?: Readonly<Record<string, string>>
+  readonly peerDependencies?: Readonly<Record<string, string>>
+  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>
+  readonly version: string
+}
+
+export interface NativeWorkspacePackage {
+  readonly dir: string
+  readonly manifest: NativePackageManifest
+  readonly name: string
+}
+
+export interface NativePackedArtifact {
+  readonly packageJson: NativePackageManifest
+  readonly packageName: string
+  readonly packageVersion: string
+  readonly tarballName: string
+  readonly tarballPath: string
+}
+
+export interface NativeLocalCommandRequest {
+  readonly args: readonly string[]
+  readonly cwd: string
+  readonly executable: string
+}
+
+export interface NativeLocalCommandResult {
+  readonly exitCode: number
+  readonly stderr: string
+  readonly stdout: string
+}
+
+export type NativeLocalCommandRunner = (
+  request: NativeLocalCommandRequest,
+) => Promise<NativeLocalCommandResult>
+
+export interface AssembledNativeFixture {
+  readonly kind: "source" | "prebuilt"
+  readonly lockfilePath: string
+  readonly root: string
+}
+
+export interface NativeFixtureAssembly {
+  readonly artifacts: readonly NativePackedArtifact[]
+  readonly closure: readonly NativeWorkspacePackage[]
+  readonly prebuilt: AssembledNativeFixture
+  readonly runRoot: string
+  readonly source: AssembledNativeFixture
+}
+
+export interface AssembleNativeFixturesOptions {
+  readonly generatedFiles: Readonly<Record<string, string>>
+  readonly orgId: string
+  readonly packPackage?: (
+    entry: NativeWorkspacePackage,
+    packDir: string,
+  ) => Promise<NativePackedArtifact>
+  readonly projectId: string
+  readonly repoRoot: string
+  readonly runCommand: NativeLocalCommandRunner
+  readonly runRoot: string
+}
+
+export interface NativeReleaseAuthorization {
+  readonly apply: (headers: Headers) => void
+  readonly assertSafe: (label: string, value: unknown) => void
+  readonly digestSha256: string
+}
+
+export function createNativeReleaseAuthorization(): NativeReleaseAuthorization {
+  const credential = randomBytes(32).toString("base64url")
+  const digestSha256 = createHash("sha256").update(credential, "utf8").digest("hex")
+  const redactor = createSecretRedactor([credential])
+  return {
+    apply: (headers) => headers.set("x-dawn-vercel-release", credential),
+    assertSafe: (label, value) => redactor.assertSafe(label, value),
+    digestSha256,
+  }
+}
+
+export function nativeAgentRunBody(
+  route: "/state#agent" | "/stream#agent",
+  content: string,
+): {
+  readonly input: {
+    readonly messages: readonly [{ readonly content: string; readonly role: "user" }]
+  }
+  readonly route: "/state#agent" | "/stream#agent"
+} {
+  if (route === "/state#agent") assertLogMarker(content)
+  else assertBarrierId(content)
+  return { input: { messages: [{ content, role: "user" }] }, route }
+}
+
+export function renderNativeRouteFiles(
+  releaseDigestSha256: string,
+): Readonly<Record<string, string>> {
+  if (!/^[a-f0-9]{64}$/.test(releaseDigestSha256)) {
+    throw new Error("native release digest must be a lowercase SHA-256 hex value")
+  }
+
+  const database = [
+    'import { Pool } from "pg"',
+    "",
+    "export const pool = new Pool({",
+    "  connectionString: process.env.DATABASE_URL,",
+    "  max: 2,",
+    "  connectionTimeoutMillis: 10_000,",
+    "  idleTimeoutMillis: 30_000,",
+    "  query_timeout: 5_000,",
+    "  statement_timeout: 5_000,",
+    "})",
+    "",
+    "function safePoolErrorField(value: unknown, fallback: string): string {",
+    '  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value)',
+    "    ? value",
+    "    : fallback",
+    "}",
+    "",
+    'pool.on("error", (error: Error & { readonly code?: unknown }) => {',
+    '  console.error("dawn-vercel-fixture-pool-error", {',
+    '    code: safePoolErrorField(error.code, "UNKNOWN"),',
+    '    name: safePoolErrorField(error.name, "Error"),',
+    "  })",
+    "})",
+    "",
+  ].join("\n")
+
+  const streamDeadline = [
+    "export async function raceStreamDeadline(operation, timeoutMs, signal) {",
+    "  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {",
+    '    throw new Error("stream deadline must be a positive safe integer")',
+    "  }",
+    "  let timeout",
+    "  let onAbort",
+    "  try {",
+    "    const deadline = new Promise((_, reject) => {",
+    "      timeout = setTimeout(",
+    '        () => reject(new Error("stream operation deadline exceeded")),',
+    "        timeoutMs,",
+    "      )",
+    "      if (signal) {",
+    '        onAbort = () => reject(new Error("stream barrier wait aborted"))',
+    "        if (signal.aborted) onAbort()",
+    '        else signal.addEventListener("abort", onAbort, { once: true })',
+    "      }",
+    "    })",
+    "    return await Promise.race([operation, deadline])",
+    "  } finally {",
+    "    if (timeout !== undefined) clearTimeout(timeout)",
+    '    if (signal && onAbort) signal.removeEventListener("abort", onAbort)',
+    "  }",
+    "}",
+    "",
+  ].join("\n")
+
+  const state = [
+    'import { HumanMessage, type BaseMessage } from "@langchain/core/messages"',
+    'import { Annotation, END, START, StateGraph } from "@langchain/langgraph"',
+    'import { DawnPostgresSaver } from "@dawn-ai/postgres-storage"',
+    'import { pool } from "../../lib/database.js"',
+    "",
+    "const State = Annotation.Root({",
+    "  messages: Annotation<BaseMessage[]>({",
+    "    reducer: (current, update) => [...current, ...update],",
+    "    default: () => [],",
+    "  }),",
+    "  visits: Annotation<number>({",
+    "    reducer: (current, update) => current + update,",
+    "    default: () => 0,",
+    "  }),",
+    "  markers: Annotation<string[]>({",
+    "    reducer: (current, update) => [...current, ...update],",
+    "    default: () => [],",
+    "  }),",
+    "})",
+    "",
+    "const checkpointer = new DawnPostgresSaver({ pool })",
+    "",
+    "function record(state: typeof State.State): { readonly markers: string[]; readonly visits: 1 } {",
+    "  const latest = state.messages.at(-1)",
+    '  if (!(latest instanceof HumanMessage) || typeof latest.content !== "string") {',
+    '    throw new Error("state route requires one latest HumanMessage with string content")',
+    "  }",
+    "  const marker = latest.content",
+    '  if (/^log-vcl-[a-f0-9]{32}$/.test(marker)) console.info("dawn-vercel-fixture-log", marker)',
+    "  return { markers: [marker], visits: 1 }",
+    "}",
+    "",
+    "export const agent = new StateGraph(State)",
+    '  .addNode("record", record)',
+    '  .addEdge(START, "record")',
+    '  .addEdge("record", END)',
+    "  .compile({ checkpointer })",
+    "",
+  ].join("\n")
+
+  const stream = [
+    'import { HumanMessage } from "@langchain/core/messages"',
+    'import { pool } from "../../lib/database.js"',
+    'import { raceStreamDeadline } from "../../lib/stream-deadline.mjs"',
+    "",
+    "const BARRIER_GRAMMAR = /^b-vcl-[a-f0-9]{32}$/",
+    "const POLL_INTERVAL_MS = 250",
+    "const POLL_DEADLINE_MS = 60_000",
+    "const QUERY_DEADLINE_MS = 5_000",
+    "",
+    "interface RunnableConfig {",
+    "  readonly signal?: AbortSignal",
+    "}",
+    "",
+    "function readBarrierId(input: unknown): string {",
+    '  if (typeof input !== "object" || input === null || !("messages" in input)) {',
+    '    throw new Error("stream route requires normalized messages")',
+    "  }",
+    "  const messages = (input as { readonly messages?: unknown }).messages",
+    "  if (!Array.isArray(messages) || messages.length === 0) {",
+    '    throw new Error("stream route requires one latest HumanMessage")',
+    "  }",
+    "  const latest = messages.at(-1)",
+    "  if (",
+    "    !(latest instanceof HumanMessage) ||",
+    '    typeof latest.content !== "string" ||',
+    "    !BARRIER_GRAMMAR.test(latest.content)",
+    "  ) {",
+    '    throw new Error("stream route requires a canonical barrier identifier")',
+    "  }",
+    "  return latest.content",
+    "}",
+    "",
+    "async function waitForRelease(barrierId: string, signal?: AbortSignal): Promise<void> {",
+    "  const deadline = Date.now() + POLL_DEADLINE_MS",
+    "  while (Date.now() < deadline) {",
+    '    if (signal?.aborted) throw new Error("stream barrier wait aborted")',
+    "    const remainingMs = deadline - Date.now()",
+    "    if (remainingMs <= 0) break",
+    "    const result = await raceStreamDeadline(",
+    "      pool.query<{ readonly released: boolean }>(",
+    '        "SELECT released FROM public.dawn_vercel_test_barriers WHERE barrier_id = $1",',
+    "        [barrierId],",
+    "      ),",
+    "      Math.min(QUERY_DEADLINE_MS, remainingMs),",
+    "      signal,",
+    "    )",
+    "    if (result.rows.length > 1) {",
+    '      throw new Error("stream barrier query returned multiple rows")',
+    "    }",
+    "    if (result.rows.length === 1 && result.rows[0]?.released === true) return",
+    "    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))",
+    "    if (sleepMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, sleepMs))",
+    "  }",
+    '  throw new Error("stream barrier wait deadline exceeded")',
+    "}",
+    "",
+    "export const agent = {",
+    "  async invoke(input: unknown, config: RunnableConfig = {}) {",
+    "    const barrierId = readBarrierId(input)",
+    "    await waitForRelease(barrierId, config.signal)",
+    "    return { barrierId, released: true as const }",
+    "  },",
+    "  async *streamEvents(input: unknown, config: RunnableConfig = {}) {",
+    "    const barrierId = readBarrierId(input)",
+    "    yield {",
+    '      event: "on_chat_model_stream",',
+    '      name: "dawn-vercel-fixture-stream",',
+    '      run_id: "dawn-vercel-fixture-stream",',
+    '      data: { chunk: { content: "before-release" } },',
+    "    }",
+    "    await waitForRelease(barrierId, config.signal)",
+    "    yield {",
+    '      event: "on_chat_model_stream",',
+    '      name: "dawn-vercel-fixture-stream",',
+    '      run_id: "dawn-vercel-fixture-stream",',
+    '      data: { chunk: { content: "after-release" } },',
+    "    }",
+    "    yield {",
+    '      event: "on_chain_end",',
+    '      name: "LangGraph",',
+    '      run_id: "dawn-vercel-fixture-stream",',
+    "      data: { output: { barrierId, released: true as const } },",
+    "    }",
+    "  },",
+    "}",
+    "",
+  ].join("\n")
+
+  const release = [
+    'import { pool } from "../../lib/database.js"',
+    "",
+    "const BARRIER_GRAMMAR = /^b-vcl-[a-f0-9]{32}$/",
+    "",
+    "export async function graph(input: unknown) {",
+    "  if (",
+    '    typeof input !== "object" ||',
+    "    input === null ||",
+    '    !("barrierId" in input) ||',
+    '    typeof input.barrierId !== "string" ||',
+    "    !BARRIER_GRAMMAR.test(input.barrierId)",
+    "  ) {",
+    '    throw new Error("release route requires a canonical barrier identifier")',
+    "  }",
+    "  const barrierId = input.barrierId",
+    "  const result = await pool.query<{ readonly barrier_id: string }>(",
+    '    "UPDATE public.dawn_vercel_test_barriers SET released = true WHERE barrier_id = $1 AND released = false RETURNING barrier_id",',
+    "    [barrierId],",
+    "  )",
+    "  if (result.rows.length !== 1 || result.rows[0]?.barrier_id !== barrierId) {",
+    '    throw new Error("release route did not update exactly one requested barrier")',
+    "  }",
+    "  return { barrierId, released: true as const }",
+    "}",
+    "",
+  ].join("\n")
+
+  const middleware = [
+    'import { Buffer } from "node:buffer"',
+    'import { createHash, timingSafeEqual } from "node:crypto"',
+    'import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"',
+    "",
+    `const RELEASE_DIGEST = Buffer.from("${releaseDigestSha256}", "hex")`,
+    "const RELEASE_HEADER_GRAMMAR = /^[A-Za-z0-9_-]{43}$/",
+    "",
+    "export default defineMiddleware((request) => {",
+    '  if (request.routeId !== "/release") return allow()',
+    '  const credential = request.headers["x-dawn-vercel-release"]',
+    "  if (!credential || !RELEASE_HEADER_GRAMMAR.test(credential)) {",
+    '    return reject(401, { error: "unauthorized" })',
+    "  }",
+    '  const presentedDigest = createHash("sha256").update(credential, "utf8").digest()',
+    "  if (",
+    "    presentedDigest.length !== RELEASE_DIGEST.length ||",
+    "    !timingSafeEqual(presentedDigest, RELEASE_DIGEST)",
+    "  ) {",
+    '    return reject(401, { error: "unauthorized" })',
+    "  }",
+    "  return allow()",
+    "})",
+    "",
+  ].join("\n")
+
+  return {
+    "src/app/release/index.ts": release,
+    "src/app/state/index.ts": state,
+    "src/app/stream/index.ts": stream,
+    "src/lib/database.ts": database,
+    "src/lib/stream-deadline.mjs": streamDeadline,
+    "src/middleware.ts": middleware,
+  }
+}
+
+function mutableYamlObject(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>
+}
+
+function splitYamlFlow(value: string): readonly string[] {
+  const parts: string[] = []
+  let quote: '"' | "'" | undefined
+  let escaped = false
+  let start = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    if (quote === '"' && escaped) {
+      escaped = false
+      continue
+    }
+    if (quote === '"' && character === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === ",") {
+      parts.push(value.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  if (quote) throw new Error("native fixture lockfile contains an unterminated flow quote")
+  parts.push(value.slice(start).trim())
+  return parts.filter((part) => part.length > 0)
+}
+
+function yamlEntrySeparator(value: string): number {
+  let quote: '"' | "'" | undefined
+  let escaped = false
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    if (quote === '"' && escaped) {
+      escaped = false
+      continue
+    }
+    if (quote === '"' && character === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === '"' || character === "'") quote = character
+    else if (character === ":") return index
+  }
+  return -1
+}
+
+function parseYamlScalar(source: string): unknown {
+  const value = source.trim()
+  if (value.startsWith('"')) {
+    try {
+      return JSON.parse(value)
+    } catch (error) {
+      throw new Error("native fixture lockfile contains invalid double-quoted YAML", {
+        cause: error,
+      })
+    }
+  }
+  if (value.startsWith("'")) {
+    if (!value.endsWith("'") || value.length < 2) {
+      throw new Error("native fixture lockfile contains invalid single-quoted YAML")
+    }
+    return value.slice(1, -1).replaceAll("''", "'")
+  }
+  if (value === "{}") return mutableYamlObject()
+  if (value === "[]") return []
+  if (value.startsWith("{") && value.endsWith("}")) {
+    const result = mutableYamlObject()
+    for (const entry of splitYamlFlow(value.slice(1, -1))) {
+      const separator = yamlEntrySeparator(entry)
+      if (separator <= 0) throw new Error("native fixture lockfile contains invalid flow YAML")
+      const key = String(parseYamlScalar(entry.slice(0, separator)))
+      if (Object.hasOwn(result, key)) {
+        throw new Error("native fixture lockfile contains a duplicate flow key")
+      }
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: parseYamlScalar(entry.slice(separator + 1)),
+        writable: true,
+      })
+    }
+    return result
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return splitYamlFlow(value.slice(1, -1)).map((entry) => parseYamlScalar(entry))
+  }
+  if (value === "true") return true
+  if (value === "false") return false
+  if (value === "null" || value === "~") return null
+  return value
+}
+
+export function parseNativeFixtureLockfile(source: string): unknown {
+  if (source.length === 0 || source.includes("\t")) {
+    throw new Error("native fixture lockfile must be nonempty space-indented YAML")
+  }
+  const lines = source
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .map((line, index) => ({
+      indent: line.length - line.trimStart().length,
+      line: index + 1,
+      text: line.trim(),
+    }))
+    .filter(({ text }) => text.length > 0 && !text.startsWith("#"))
+  const root = mutableYamlObject()
+  const stack: Array<{
+    readonly indent: number
+    readonly value: Record<string, unknown> | unknown[]
+  }> = [{ indent: -1, value: root }]
+
+  for (const [index, line] of lines.entries()) {
+    if (line.indent % 2 !== 0) {
+      throw new Error(`native fixture lockfile line ${line.line} has invalid indentation`)
+    }
+    while ((stack.at(-1)?.indent ?? -1) >= line.indent) stack.pop()
+    const parent = stack.at(-1)?.value
+    if (!parent) throw new Error(`native fixture lockfile line ${line.line} has no parent`)
+    const next = lines[index + 1]
+
+    if (line.text.startsWith("- ")) {
+      if (!Array.isArray(parent)) {
+        throw new Error(`native fixture lockfile line ${line.line} has an unexpected sequence`)
+      }
+      parent.push(parseYamlScalar(line.text.slice(2)))
+      continue
+    }
+    if (Array.isArray(parent)) {
+      throw new Error(`native fixture lockfile line ${line.line} must be a sequence item`)
+    }
+
+    const separator = yamlEntrySeparator(line.text)
+    if (separator <= 0) throw new Error(`native fixture lockfile line ${line.line} is malformed`)
+    const key = String(parseYamlScalar(line.text.slice(0, separator)))
+    if (Object.hasOwn(parent, key)) {
+      throw new Error(`native fixture lockfile line ${line.line} repeats a key`)
+    }
+    const remainder = line.text.slice(separator + 1).trim()
+    const parsed =
+      remainder.length > 0
+        ? parseYamlScalar(remainder)
+        : next && next.indent > line.indent && next.text.startsWith("- ")
+          ? []
+          : mutableYamlObject()
+    Object.defineProperty(parent, key, {
+      configurable: true,
+      enumerable: true,
+      value: parsed,
+      writable: true,
+    })
+    if (remainder.length === 0) {
+      if (!next || next.indent <= line.indent) {
+        throw new Error(`native fixture lockfile line ${line.line} has an empty mapping value`)
+      }
+      stack.push({ indent: line.indent, value: parsed as Record<string, unknown> | unknown[] })
+    }
+  }
+  return root
+}
+
+function artifactsByName(
+  artifacts: readonly NativePackedArtifact[],
+): ReadonlyMap<string, NativePackedArtifact> {
+  const indexed = new Map<string, NativePackedArtifact>()
+  for (const artifact of artifacts) {
+    if (indexed.has(artifact.packageName)) {
+      throw new Error(`duplicate native packed artifact ${artifact.packageName}`)
+    }
+    indexed.set(artifact.packageName, artifact)
+  }
+  return indexed
+}
+
+export function renderNativeFixtureManifest(
+  kind: "source" | "prebuilt",
+  artifacts: readonly NativePackedArtifact[],
+): Record<string, unknown> {
+  const indexed = artifactsByName(artifacts)
+  const localDependencies = Object.fromEntries(
+    NATIVE_DIRECT_DAWN_DEPENDENCIES.map((name) => {
+      const artifact = indexed.get(name)
+      if (!artifact) throw new Error(`native fixture manifest is missing packed dependency ${name}`)
+      return [name, `file:vendor/${artifact.tarballName}`]
+    }),
+  )
+  return {
+    name: `dawn-vercel-native-${kind}`,
+    version: "0.0.0",
+    private: true,
+    type: "module",
+    packageManager: "pnpm@10.33.0",
+    scripts: { build: "dawn build" },
+    dependencies: {
+      ...localDependencies,
+      "@langchain/core": "1.2.5",
+      "@langchain/langgraph": "1.4.9",
+      "@langchain/langgraph-checkpoint": "1.1.3",
+      "@neondatabase/serverless": "1.1.0",
+      hono: "4.12.28",
+      pg: "8.22.0",
+      zod: "4.4.3",
+    },
+  }
+}
+
+export function renderNativeWorkspaceYaml(artifacts: readonly NativePackedArtifact[]): string {
+  artifactsByName(artifacts)
+  return [
+    "packages:",
+    '  - "."',
+    "",
+    "onlyBuiltDependencies:",
+    "  - esbuild",
+    "",
+    "allowBuilds:",
+    "  esbuild: true",
+    "",
+    "overrides:",
+    ...[...artifacts]
+      .sort((left, right) => left.packageName.localeCompare(right.packageName))
+      .map(
+        (artifact) =>
+          `  ${JSON.stringify(artifact.packageName)}: ${JSON.stringify(`file:vendor/${artifact.tarballName}`)}`,
+      ),
+    "",
+  ].join("\n")
+}
+
+function packageManifestFromJson(value: unknown, path: string): NativePackageManifest {
+  const manifest = lockfileRecord(value, path)
+  if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
+    throw new Error(`${path} must contain string name and version fields`)
+  }
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
+    if (manifest[field] === undefined) continue
+    const dependencies = lockfileRecord(manifest[field], `${path}.${field}`)
+    if (Object.values(dependencies).some((entry) => typeof entry !== "string")) {
+      throw new Error(`${path}.${field} must contain only string dependency ranges`)
+    }
+  }
+  if (manifest.peerDependenciesMeta !== undefined) {
+    const metadata = lockfileRecord(manifest.peerDependenciesMeta, `${path}.peerDependenciesMeta`)
+    for (const entry of Object.values(metadata)) {
+      const record = lockfileRecord(entry, `${path}.peerDependenciesMeta entry`)
+      if (record.optional !== undefined && typeof record.optional !== "boolean") {
+        throw new Error(`${path}.peerDependenciesMeta optional must be boolean`)
+      }
+    }
+  }
+  return manifest as unknown as NativePackageManifest
+}
+
+async function readNativeWorkspacePackages(
+  repoRoot: string,
+): Promise<ReadonlyMap<string, NativeWorkspacePackage>> {
+  const packagesRoot = join(repoRoot, "packages")
+  const entries = await readdir(packagesRoot, { withFileTypes: true })
+  const packages = new Map<string, NativeWorkspacePackage>()
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+    const dir = join("packages", entry.name)
+    const manifestPath = join(repoRoot, dir, "package.json")
+    let source: string
+    try {
+      source = await readFile(manifestPath, "utf8")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
+      throw error
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(source)
+    } catch (error) {
+      throw new Error(`native workspace package manifest is invalid at ${manifestPath}`, {
+        cause: error,
+      })
+    }
+    const manifest = packageManifestFromJson(parsed, `native workspace package ${entry.name}`)
+    if (!manifest.name.startsWith("@dawn-ai/")) continue
+    if (packages.has(manifest.name)) {
+      throw new Error(`duplicate native workspace package ${manifest.name}`)
+    }
+    packages.set(manifest.name, { dir, manifest, name: manifest.name })
+  }
+  return packages
+}
+
+async function runSuccessfulLocalCommand(
+  runCommand: NativeLocalCommandRunner,
+  request: NativeLocalCommandRequest,
+): Promise<NativeLocalCommandResult> {
+  const result = await runCommand(request)
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `native fixture local command ${basename(request.executable)} failed with exit ${result.exitCode}: ${result.stderr || result.stdout}`,
+    )
+  }
+  return result
+}
+
+async function packNativeWorkspacePackage(
+  entry: NativeWorkspacePackage,
+  packDir: string,
+  repoRoot: string,
+  runCommand: NativeLocalCommandRunner,
+): Promise<NativePackedArtifact> {
+  const existing = new Set(await readdir(packDir))
+  await runSuccessfulLocalCommand(runCommand, {
+    executable: "corepack",
+    args: ["pnpm", "pack", "--pack-destination", packDir],
+    cwd: join(repoRoot, entry.dir),
+  })
+  const tarballs = (await readdir(packDir)).filter(
+    (name) => name.endsWith(".tgz") && !existing.has(name),
+  )
+  if (tarballs.length !== 1) {
+    throw new Error(`${entry.name} pack must produce exactly one new tarball`)
+  }
+  const tarballName = tarballs[0] as string
+  const tarballPath = join(packDir, tarballName)
+  const extractRoot = join(packDir, `.extract-${entry.name.slice("@dawn-ai/".length)}`)
+  await mkdir(extractRoot)
+  await runSuccessfulLocalCommand(runCommand, {
+    executable: "tar",
+    args: ["-xzf", tarballPath, "-C", extractRoot],
+    cwd: repoRoot,
+  })
+  const extractedPath = join(extractRoot, "package", "package.json")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(extractedPath, "utf8"))
+  } catch (error) {
+    throw new Error(`${entry.name} packed artifact must contain valid package.json`, {
+      cause: error,
+    })
+  }
+  const packageJson = packageManifestFromJson(parsed, `${entry.name} packed package.json`)
+  if (packageJson.name !== entry.name || packageJson.version !== entry.manifest.version) {
+    throw new Error(`${entry.name} packed metadata does not match its workspace manifest`)
+  }
+  return {
+    packageJson,
+    packageName: entry.name,
+    packageVersion: entry.manifest.version,
+    tarballName,
+    tarballPath,
+  }
+}
+
+function assertSafeGeneratedFilePath(path: string): void {
+  const segments = path.split(/[\\/]/)
+  const reserved = new Set([
+    ".dawn",
+    ".vercel",
+    "node_modules",
+    "vendor",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "vercel.json",
+    "dawn.config.ts",
+  ])
+  if (
+    path.length === 0 ||
+    isAbsolute(path) ||
+    segments.some((segment) => segment.length === 0 || segment === "." || segment === "..") ||
+    reserved.has(segments[0] as string)
+  ) {
+    throw new Error(`unsafe generated native fixture path ${path}`)
+  }
+}
+
+async function writeNativeFixture(
+  root: string,
+  kind: "source" | "prebuilt",
+  artifacts: readonly NativePackedArtifact[],
+  generatedFiles: Readonly<Record<string, string>>,
+  orgId: string,
+  projectId: string,
+): Promise<AssembledNativeFixture> {
+  await mkdir(join(root, "vendor"), { recursive: true })
+  await mkdir(join(root, ".vercel"), { recursive: true })
+  for (const artifact of artifacts) {
+    await copyFile(artifact.tarballPath, join(root, "vendor", artifact.tarballName))
+  }
+  await Promise.all([
+    writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify(renderNativeFixtureManifest(kind, artifacts), null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(join(root, "pnpm-workspace.yaml"), renderNativeWorkspaceYaml(artifacts), "utf8"),
+    writeFile(
+      join(root, "vercel.json"),
+      `${JSON.stringify(RECOMMENDED_VERCEL_CONFIG, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      join(root, ".vercel", "project.json"),
+      `${JSON.stringify({ orgId, projectId }, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      join(root, "dawn.config.ts"),
+      'export default { build: { targets: ["vercel"] } }\n',
+      "utf8",
+    ),
+  ])
+  for (const [path, contents] of Object.entries(generatedFiles)) {
+    assertSafeGeneratedFilePath(path)
+    const destination = join(root, path)
+    await mkdir(dirname(destination), { recursive: true })
+    await writeFile(destination, contents, { encoding: "utf8", flag: "wx" })
+  }
+  return { kind, lockfilePath: join(root, "pnpm-lock.yaml"), root }
+}
+
+export async function assembleNativeFixtures(
+  options: AssembleNativeFixturesOptions,
+): Promise<NativeFixtureAssembly> {
+  if (!isAbsolute(options.repoRoot) || !isAbsolute(options.runRoot)) {
+    throw new Error("native fixture repoRoot and runRoot must be absolute")
+  }
+  await assertRegularDirectory(options.repoRoot, "native fixture repository root")
+  const canonicalRepoRoot = await realpath(options.repoRoot)
+  const canonicalRunParent = await realpath(dirname(options.runRoot))
+  const canonicalRunRoot = join(canonicalRunParent, basename(options.runRoot))
+  const relativeRunRoot = relative(canonicalRepoRoot, canonicalRunRoot)
+  const runRootIsOutside =
+    relativeRunRoot === ".." ||
+    relativeRunRoot.startsWith(`..${sep}`) ||
+    isAbsolute(relativeRunRoot)
+  if (!runRootIsOutside) {
+    throw new Error("native fixture runRoot must be outside the repository")
+  }
+  await mkdir(canonicalRunRoot)
+  const packDir = join(canonicalRunRoot, "packs")
+  const fixtureRoot = join(canonicalRunRoot, "fixtures")
+  await mkdir(packDir)
+  await mkdir(fixtureRoot)
+
+  const packages = await readNativeWorkspacePackages(canonicalRepoRoot)
+  const closure = deriveDawnPackageClosure(NATIVE_DIRECT_DAWN_DEPENDENCIES, packages)
+  await runSuccessfulLocalCommand(options.runCommand, {
+    executable: "corepack",
+    args: ["pnpm", "build"],
+    cwd: canonicalRepoRoot,
+  })
+
+  const artifacts: NativePackedArtifact[] = []
+  for (const entry of closure) {
+    const artifact = options.packPackage
+      ? await options.packPackage(entry, packDir)
+      : await packNativeWorkspacePackage(entry, packDir, canonicalRepoRoot, options.runCommand)
+    if (
+      artifact.packageName !== entry.name ||
+      artifact.packageVersion !== entry.manifest.version ||
+      artifact.packageJson.name !== entry.name ||
+      artifact.packageJson.version !== entry.manifest.version ||
+      dirname(artifact.tarballPath) !== packDir ||
+      basename(artifact.tarballPath) !== artifact.tarballName
+    ) {
+      throw new Error(`packed artifact identity mismatch for ${entry.name}`)
+    }
+    const stats = await lstat(artifact.tarballPath)
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      throw new Error(`packed artifact for ${entry.name} must be a regular non-symlink file`)
+    }
+    artifacts.push(artifact)
+  }
+  const source = await writeNativeFixture(
+    join(fixtureRoot, "source"),
+    "source",
+    artifacts,
+    options.generatedFiles,
+    options.orgId,
+    options.projectId,
+  )
+  const prebuilt = await writeNativeFixture(
+    join(fixtureRoot, "prebuilt"),
+    "prebuilt",
+    artifacts,
+    options.generatedFiles,
+    options.orgId,
+    options.projectId,
+  )
+
+  for (const fixture of [source, prebuilt]) {
+    await runSuccessfulLocalCommand(options.runCommand, {
+      executable: "corepack",
+      args: ["pnpm", "install", "--lockfile-only", "--ignore-scripts"],
+      cwd: fixture.root,
+    })
+    validateNativeFixtureLockfile(
+      parseNativeFixtureLockfile(await readFile(fixture.lockfilePath, "utf8")),
+      artifacts,
+    )
+  }
+  await rm(join(source.root, "node_modules"), { force: true, recursive: true })
+  await runSuccessfulLocalCommand(options.runCommand, {
+    executable: "corepack",
+    args: ["pnpm", "install", "--frozen-lockfile"],
+    cwd: prebuilt.root,
+  })
+  await runSuccessfulLocalCommand(options.runCommand, {
+    executable: join(prebuilt.root, "node_modules", ".bin", "dawn"),
+    args: ["build"],
+    cwd: prebuilt.root,
+  })
+
+  const expectedTarballs = artifacts.map(({ tarballName }) => tarballName)
+  await assertNativeFixtureUploadIsolation({
+    expectedTarballs,
+    kind: "source",
+    orgId: options.orgId,
+    projectId: options.projectId,
+    root: source.root,
+  })
+  await assertNativeFixtureUploadIsolation({
+    expectedTarballs,
+    kind: "prebuilt",
+    orgId: options.orgId,
+    projectId: options.projectId,
+    root: prebuilt.root,
+  })
+  return { artifacts, closure, prebuilt, runRoot: canonicalRunRoot, source }
+}
+
+export function deriveDawnPackageClosure(
+  roots: readonly string[],
+  packages: ReadonlyMap<string, NativeWorkspacePackage>,
+): readonly NativeWorkspacePackage[] {
+  const visited = new Set<string>()
+  const pending = [...roots]
+  while (pending.length > 0) {
+    const name = pending.pop() as string
+    if (visited.has(name)) continue
+    if (!name.startsWith("@dawn-ai/")) {
+      throw new Error(`native fixture root ${name} must be a Dawn package`)
+    }
+    const entry = packages.get(name)
+    if (!entry) throw new Error(`native fixture package closure is missing ${name}`)
+    if (entry.name !== name || entry.manifest.name !== name) {
+      throw new Error(`native fixture package map entry for ${name} has inconsistent names`)
+    }
+    visited.add(name)
+
+    const dependencies = new Set([
+      ...Object.keys(entry.manifest.dependencies ?? {}),
+      ...Object.keys(entry.manifest.optionalDependencies ?? {}),
+      ...Object.keys(entry.manifest.peerDependencies ?? {}).filter(
+        (dependency) => entry.manifest.peerDependenciesMeta?.[dependency]?.optional !== true,
+      ),
+    ])
+    for (const dependency of dependencies) {
+      if (dependency.startsWith("@dawn-ai/") && !visited.has(dependency)) pending.push(dependency)
+    }
+  }
+
+  return [...visited]
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => packages.get(name) as NativeWorkspacePackage)
+}
+
+function lockfileRecord(value: unknown, path: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be a lockfile object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function collectLockfileStrings(
+  value: unknown,
+  output: string[] = [],
+  active = new WeakSet<object>(),
+): readonly string[] {
+  if (typeof value === "string") {
+    output.push(value)
+    return output
+  }
+  if (!value || typeof value !== "object") return output
+  if (active.has(value)) throw new Error("native fixture lockfile contains a reference cycle")
+  active.add(value)
+  try {
+    if (Array.isArray(value)) {
+      for (const entry of value) collectLockfileStrings(entry, output, active)
+      return output
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      output.push(key)
+      collectLockfileStrings(entry, output, active)
+    }
+    return output
+  } finally {
+    active.delete(value)
+  }
+}
+
+function dawnNameFromLockfileKey(value: string): string | undefined {
+  const match = /^(@dawn-ai\/[A-Za-z0-9._-]+)(?:@|$)/.exec(value)
+  return match?.[1]
+}
+
+function parsePnpmPeerContext(value: string, start: number): number | undefined {
+  if (value[start] !== "(") return undefined
+  let index = start + 1
+  const peer = /^(?:@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|[A-Za-z0-9._-]+)@/.exec(value.slice(index))
+  if (!peer) return undefined
+  index += peer[0].length
+
+  const versionStart = index
+  while (index < value.length && value[index] !== "(" && value[index] !== ")") {
+    if (/\s/.test(value[index] as string)) return undefined
+    index += 1
+  }
+  if (index === versionStart) return undefined
+
+  while (value[index] === "(") {
+    const nestedEnd = parsePnpmPeerContext(value, index)
+    if (nestedEnd === undefined) return undefined
+    index = nestedEnd
+  }
+  return value[index] === ")" ? index + 1 : undefined
+}
+
+function hasCompletePnpmPeerSuffix(value: string): boolean {
+  if (value.length === 0) return false
+  let index = 0
+  while (index < value.length) {
+    const contextEnd = parsePnpmPeerContext(value, index)
+    if (contextEnd === undefined) return false
+    index = contextEnd
+  }
+  return true
+}
+
+function matchesVendoredIdentity(value: string, packageName: string, ref: string): boolean {
+  const identity = `${packageName}@${ref}`
+  return (
+    value === identity ||
+    (value.startsWith(identity) && hasCompletePnpmPeerSuffix(value.slice(identity.length)))
+  )
+}
+
+export function validateNativeFixtureLockfile(
+  value: unknown,
+  artifacts: readonly NativePackedArtifact[],
+): void {
+  const lockfile = lockfileRecord(value, "native fixture lockfile")
+  if (lockfile.lockfileVersion !== "9.0") {
+    throw new Error('native fixture lockfileVersion must be exactly "9.0"')
+  }
+  const expected = new Map<
+    string,
+    { readonly artifact: NativePackedArtifact; readonly ref: string }
+  >()
+  const expectedTarballs = new Set<string>()
+  for (const artifact of artifacts) {
+    if (!/^@dawn-ai\/[A-Za-z0-9._-]+$/.test(artifact.packageName)) {
+      throw new Error(`invalid Dawn packed artifact name ${artifact.packageName}`)
+    }
+    if (
+      basename(artifact.tarballName) !== artifact.tarballName ||
+      !/^[A-Za-z0-9._-]+\.tgz$/.test(artifact.tarballName)
+    ) {
+      throw new Error(`invalid vendored tarball name for ${artifact.packageName}`)
+    }
+    if (basename(artifact.tarballPath) !== artifact.tarballName) {
+      throw new Error(`packed tarball path does not match ${artifact.packageName}`)
+    }
+    if (expected.has(artifact.packageName) || expectedTarballs.has(artifact.tarballName)) {
+      throw new Error(`duplicate native packed artifact for ${artifact.packageName}`)
+    }
+    expectedTarballs.add(artifact.tarballName)
+    expected.set(artifact.packageName, {
+      artifact,
+      ref: `file:vendor/${artifact.tarballName}`,
+    })
+  }
+  if (expected.size === 0)
+    throw new Error("native fixture lockfile expects a nonempty Dawn closure")
+
+  const strings = collectLockfileStrings(lockfile)
+  for (const item of strings) {
+    const dawnName = dawnNameFromLockfileKey(item)
+    if (dawnName) {
+      const expectedEntry = expected.get(dawnName)
+      if (!expectedEntry) {
+        throw new Error(`native fixture lockfile contains unexpected Dawn package ${dawnName}`)
+      }
+      if (item !== dawnName && !matchesVendoredIdentity(item, dawnName, expectedEntry.ref)) {
+        throw new Error(`native fixture lockfile contains a non-vendored copy of ${dawnName}`)
+      }
+    }
+    if (/^(?:workspace:|link:)/.test(item)) {
+      throw new Error("native fixture lockfile contains a workspace or link reference")
+    }
+    if (
+      item.includes("../") ||
+      item.includes("..\\") ||
+      /(?:^|[\\/])(?:packages|assets)[\\/]/.test(item) ||
+      /file:(?:\/|[A-Za-z]:[\\/])/.test(item)
+    ) {
+      throw new Error("native fixture lockfile contains a repository or absolute path")
+    }
+    if (item.includes("file:")) {
+      const recognized = [...expected].some(([name, { ref }]) => {
+        return item === ref || matchesVendoredIdentity(item, name, ref)
+      })
+      if (!recognized) {
+        throw new Error("native fixture lockfile contains an unexpected file reference")
+      }
+    }
+  }
+
+  const overrides = lockfileRecord(lockfile.overrides, "native fixture lockfile overrides")
+  for (const [name, { ref }] of expected) {
+    if (overrides[name] !== ref) {
+      throw new Error(`native fixture lockfile override for ${name} must be ${ref}`)
+    }
+  }
+
+  const importers = lockfileRecord(lockfile.importers, "native fixture lockfile importers")
+  for (const [importerName, importerValue] of Object.entries(importers)) {
+    const importer = lockfileRecord(importerValue, `native fixture importer ${importerName}`)
+    for (const field of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+      if (importer[field] === undefined) continue
+      const dependencies = lockfileRecord(importer[field], `native fixture importer ${field}`)
+      for (const [name, dependencyValue] of Object.entries(dependencies)) {
+        if (!name.startsWith("@dawn-ai/")) continue
+        const expectedEntry = expected.get(name)
+        if (!expectedEntry) {
+          throw new Error(`native fixture importer contains unexpected Dawn package ${name}`)
+        }
+        const dependency = lockfileRecord(dependencyValue, `native fixture importer ${name}`)
+        if (
+          dependency.specifier !== expectedEntry.ref ||
+          dependency.version !== expectedEntry.ref
+        ) {
+          throw new Error(`native fixture importer does not use the matching tarball for ${name}`)
+        }
+      }
+    }
+  }
+
+  const packages = lockfileRecord(lockfile.packages, "native fixture lockfile packages")
+  const snapshots = lockfileRecord(lockfile.snapshots, "native fixture lockfile snapshots")
+  for (const [name, { artifact, ref }] of expected) {
+    const packageKeys = Object.keys(packages).filter((key) =>
+      matchesVendoredIdentity(key, name, ref),
+    )
+    const snapshotKeys = Object.keys(snapshots).filter((key) =>
+      matchesVendoredIdentity(key, name, ref),
+    )
+    if (packageKeys.length !== 1 || snapshotKeys.length !== 1) {
+      throw new Error(
+        `native fixture lockfile must contain ${name} exactly once in packages and snapshots`,
+      )
+    }
+    const packageEntry = lockfileRecord(packages[packageKeys[0] as string], `package ${name}`)
+    const resolution = lockfileRecord(packageEntry.resolution, `package ${name} resolution`)
+    if (resolution.tarball !== ref || packageEntry.version !== artifact.packageVersion) {
+      throw new Error(`native fixture lockfile package ${name} does not match its packed artifact`)
+    }
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+    throw error
+  }
+}
+
+async function assertRegularDirectory(path: string, label: string): Promise<void> {
+  const stats = await lstat(path)
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`${label} must be a regular non-symlink directory`)
+  }
+}
+
+async function assertNoSymlinks(path: string, label: string): Promise<void> {
+  const stats = await lstat(path)
+  if (stats.isSymbolicLink()) throw new Error(`${label} contains a symlink at ${path}`)
+  if (!stats.isDirectory()) return
+  for (const entry of await readdir(path)) {
+    await assertNoSymlinks(join(path, entry), label)
+  }
+}
+
+export async function assertNativeFixtureUploadIsolation(options: {
+  readonly expectedTarballs: readonly string[]
+  readonly kind: "source" | "prebuilt"
+  readonly orgId: string
+  readonly projectId: string
+  readonly root: string
+}): Promise<void> {
+  if (!isAbsolute(options.root)) throw new Error("native fixture root must be absolute")
+  await assertRegularDirectory(options.root, "native fixture root")
+
+  const expectedTarballs = [...options.expectedTarballs].sort()
+  if (
+    expectedTarballs.length === 0 ||
+    new Set(expectedTarballs).size !== expectedTarballs.length ||
+    expectedTarballs.some((name) => basename(name) !== name || !/^[A-Za-z0-9._-]+\.tgz$/.test(name))
+  ) {
+    throw new Error("expected vendored tarball names must be unique safe basenames")
+  }
+
+  const projectPath = join(options.root, ".vercel", "project.json")
+  const projectStats = await lstat(projectPath)
+  if (projectStats.isSymbolicLink() || !projectStats.isFile()) {
+    throw new Error("native fixture project link must be a regular non-symlink file")
+  }
+  let project: unknown
+  try {
+    project = JSON.parse(await readFile(projectPath, "utf8"))
+  } catch (error) {
+    throw new Error("native fixture project link must contain valid JSON", { cause: error })
+  }
+  const projectRecord = lockfileRecord(project, "native fixture project link")
+  if (
+    Object.keys(projectRecord).sort().join("\0") !== "orgId\0projectId" ||
+    projectRecord.orgId !== options.orgId ||
+    projectRecord.projectId !== options.projectId
+  ) {
+    throw new Error("native fixture project link must exactly match the expected project binding")
+  }
+
+  const vendorPath = join(options.root, "vendor")
+  await assertRegularDirectory(vendorPath, "native fixture vendor directory")
+  await assertNoSymlinks(vendorPath, "native fixture vendor directory")
+  const actualTarballs = (await readdir(vendorPath)).sort()
+  if (actualTarballs.join("\0") !== expectedTarballs.join("\0")) {
+    throw new Error("native fixture vendor directory must contain the exact expected tarballs")
+  }
+  for (const name of expectedTarballs) {
+    const stats = await lstat(join(vendorPath, name))
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      throw new Error(`native fixture tarball ${name} must be a regular non-symlink file`)
+    }
+  }
+
+  if (options.kind === "source") {
+    if (await pathExists(join(options.root, "node_modules"))) {
+      throw new Error("source native fixture must not contain node_modules")
+    }
+    if (await pathExists(join(options.root, ".vercel", "output"))) {
+      throw new Error("source native fixture must not contain .vercel/output")
+    }
+    if (await pathExists(join(options.root, ".dawn"))) {
+      throw new Error("source native fixture must not contain .dawn")
+    }
+    await assertNoSymlinks(options.root, "source native fixture upload tree")
+    return
+  }
+
+  const outputPath = join(options.root, ".vercel", "output")
+  await assertRegularDirectory(outputPath, "prebuilt native fixture output")
+  await assertNoSymlinks(outputPath, "prebuilt native fixture output")
+}
 
 export interface NativeLaneEnvironment {
   readonly artifactDir: string
