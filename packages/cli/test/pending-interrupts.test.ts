@@ -324,6 +324,36 @@ describe("readPendingInterrupts", () => {
       malformed: false,
     })
   })
+
+  // A non-record payload marks the snapshot malformed but the interrupt is still
+  // listed, carrying that payload verbatim. GET /threads/:id/pending_interrupts
+  // lists a malformed set and never surfaces `malformed`, so this junk reaches
+  // the client — pinned here so dropping it becomes a deliberate wire change.
+  test.each([
+    { name: "null", payload: null },
+    { name: "a string", payload: "oops" },
+    { name: "an array", payload: [] },
+  ])(
+    "lists $name as a non-record payload verbatim and marks the snapshot malformed",
+    async ({ payload }) => {
+      const snapshot = await readPendingInterrupts(
+        fakeCheckpointer([[TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1, value: payload }]]),
+        "thread-malformed-payload",
+      )
+
+      expect(snapshot).toStrictEqual({
+        interrupts: [
+          {
+            aliases: [RESUME_KEY_1],
+            interruptId: RESUME_KEY_1,
+            resumeKey: RESUME_KEY_1,
+            value: payload,
+          },
+        ],
+        malformed: true,
+      })
+    },
+  )
 })
 
 describe("parsePendingInterrupts", () => {

@@ -20,6 +20,12 @@ export interface PendingInterrupt {
    * is what made a parked prompt undisplayable after a reconnect. `undefined`
    * when the write carries no `value` key at all.
    *
+   * Not narrowed to a record: a payload that is not one (`null`, a string, an
+   * array) is still listed here verbatim, and only sets the snapshot's
+   * `malformed` flag. Since a malformed set is still listed and `malformed` is
+   * not on the wire, such a payload does reach the client — dropping it would
+   * be a wire change, so it is pinned by test rather than left incidental.
+   *
    * Optional because this interface is public API (`@dawn-ai/cli/runtime`): a
    * required field would stop external code from constructing the literal. The
    * parse always sets the key, so `Object.hasOwn(i, "value")` is always true.
@@ -77,7 +83,7 @@ export function parsePendingInterrupts(tuple: CheckpointTuple): PendingInterrupt
     const hasInnerValue = Object.hasOwn(value, "value")
     // Kept verbatim for GET /threads/:id/pending_interrupts: this is the
     // permission prompt a reconnecting client re-renders.
-    const payload = hasInnerValue ? value.value : undefined
+    const payload = value.value
     const innerValue = isRecord(payload) ? payload : undefined
     if (hasInnerValue && !innerValue) malformed = true
 
