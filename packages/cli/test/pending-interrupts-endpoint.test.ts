@@ -451,6 +451,11 @@ describe("thread status after a parked or cancelled turn", () => {
     expect(await threadStatus(handler, threadId)).toBe("interrupted")
     const body = await readPendingInterruptsBody(handler, threadId)
     expect(body.interrupts).toEqual([])
+
+    // The cancel stopped us CONSUMING the route, not the route itself: without
+    // this the abandoned loop keeps polling for 15s past teardown, against a
+    // tmpdir afterEach has already removed.
+    await writeFile(releaseFile, "release")
   }, 30_000)
 
   it("still reports idle after a turn that completes without parking", async () => {
@@ -461,33 +466,6 @@ describe("thread status after a parked or cancelled turn", () => {
 
     expect(await threadStatus(handler, threadId)).toBe("idle")
   }, 30_000)
-})
-
-// ---------------------------------------------------------------------------
-// Direct cover for the decision rule the handlers share. The parked-turn half
-// of it is unreachable on the FAILURE path over HTTP: nothing throws once the
-// adapter has yielded the interrupt chunk, and a route cannot emit raw chunks
-// of its own (a non-agent route is awaited and yields a single `done`). These
-// cases are therefore the only coverage that combination gets — they pin the
-// rule, not the wiring that feeds it.
-// ---------------------------------------------------------------------------
-
-describe("terminalStatus", () => {
-  it("reports idle for a turn that neither parked nor was cancelled", () => {
-    expect(terminalStatus({ cancelled: false, sawInterrupt: false })).toBe("idle")
-  })
-
-  it("reports interrupted for a parked turn", () => {
-    expect(terminalStatus({ cancelled: false, sawInterrupt: true })).toBe("interrupted")
-  })
-
-  it("reports interrupted for a cancelled turn", () => {
-    expect(terminalStatus({ cancelled: true, sawInterrupt: false })).toBe("interrupted")
-  })
-
-  it("reports interrupted for a turn that parked and was then cancelled", () => {
-    expect(terminalStatus({ cancelled: true, sawInterrupt: true })).toBe("interrupted")
-  })
 })
 
 function resumeRequest(threadId: string, interruptId: string): Request {
@@ -553,4 +531,32 @@ describe("thread status after a resumed turn", () => {
     const after = await readPendingInterruptsBody(handler, threadId)
     expect(after.interrupts).toEqual([])
   }, 60_000)
+})
+
+// ---------------------------------------------------------------------------
+// Direct cover for the decision rule the handlers share. The parked-and-failed
+// combination genuinely happens — the success-path status write sits inside the
+// same try, so a write that rejects lands in the catch with the interrupt
+// already seen — but it cannot be DRIVEN from here: reaching it needs a
+// ThreadsStore that fails on demand, and createRuntimeFetchHandler exposes no
+// seam to inject one. These cases are therefore the only coverage that
+// combination gets — they pin the rule, not the wiring that feeds it.
+// ---------------------------------------------------------------------------
+
+describe("terminalStatus", () => {
+  it("reports idle for a turn that neither parked nor was cancelled", () => {
+    expect(terminalStatus({ cancelled: false, sawInterrupt: false })).toBe("idle")
+  })
+
+  it("reports interrupted for a parked turn", () => {
+    expect(terminalStatus({ cancelled: false, sawInterrupt: true })).toBe("interrupted")
+  })
+
+  it("reports interrupted for a cancelled turn", () => {
+    expect(terminalStatus({ cancelled: true, sawInterrupt: false })).toBe("interrupted")
+  })
+
+  it("reports interrupted for a turn that parked and was then cancelled", () => {
+    expect(terminalStatus({ cancelled: true, sawInterrupt: true })).toBe("interrupted")
+  })
 })

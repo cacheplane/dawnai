@@ -1337,6 +1337,10 @@ async function handleApStreamRequest(options: {
             if (chunk.type === "interrupt") sawInterrupt = true
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
+          // Deliberately not run.cancelled: the loop drained, so the turn
+          // finished. A cancel that lost the race against the last chunk does
+          // not retroactively interrupt it — the same abort-vs-settle race the
+          // /runs/wait re-check documents at length.
           await threadsStore.updateStatus(
             threadId,
             terminalStatus({ cancelled: false, sawInterrupt }),
@@ -1608,6 +1612,10 @@ async function handleApWaitRequest(options: {
       )
     }
 
+    // Deliberately unconditional, unlike the streaming handlers' terminalStatus:
+    // the spec scopes parked-status honesty to the streaming endpoints, so a
+    // /runs/wait turn that parks still reads "idle" here. Clients detect that
+    // case via GET /threads/:id/pending_interrupts.
     await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
     return Response.json(result.output, { status: 200 })
   } finally {
@@ -1933,6 +1941,10 @@ async function handleResumeRequest(options: {
               if (chunk.type === "interrupt") sawInterrupt = true
               safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
             }
+            // Deliberately not run.cancelled: the loop drained, so the turn
+            // finished. A cancel that lost the race against the last chunk does
+            // not retroactively interrupt it — the same abort-vs-settle race the
+            // /runs/wait re-check documents at length.
             await threadsStore.updateStatus(
               threadId,
               terminalStatus({ cancelled: false, sawInterrupt }),
@@ -2027,8 +2039,13 @@ function validateApRunBody(
  * checkpoint. Module scope rather than inline because more than one AP handler
  * has to end turns by this rule, and the two must not drift apart.
  *
- * Exported for the tests: the parked-and-failed combination is unreachable over
- * HTTP, since nothing throws after the adapter has yielded the interrupt.
+ * Exported for the tests because the parked-and-failed combination, while it
+ * genuinely happens, cannot be DRIVEN over HTTP: the only way into a handler's
+ * catch with `sawInterrupt` set and the run not cancelled is the success-path
+ * status write itself failing — it sits inside the same try — and
+ * createRuntimeFetchHandler exposes no seam for a fault-injecting ThreadsStore.
+ * That is also what the catch's `sawInterrupt` wiring is for: it retries the
+ * same status rather than downgrading a parked thread to "idle".
  */
 export function terminalStatus(options: {
   readonly cancelled: boolean
