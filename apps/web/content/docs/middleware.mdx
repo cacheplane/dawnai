@@ -1,6 +1,6 @@
 # Middleware
 
-Dawn supports a single global request middleware for authentication, request shaping, and per-request context. The middleware runs once per request, before any route executes, and its decision (allow or reject) gates execution.
+Dawn supports a single global request middleware for authentication, request shaping, and per-request context. The middleware runs once per route-execution request, before the route executes, and its decision (allow or reject) gates execution.
 
 ## File location
 
@@ -104,9 +104,9 @@ This keeps the request lifecycle predictable and avoids ordering questions about
 
 ## Where middleware runs
 
-Middleware runs in the local dev server (`dawn dev`). Both local `/threads/:id/runs/wait` and `/threads/:id/runs/stream` requests invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware because it is a liveness probe.
+Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served by `dawn start` or the generated `server.mjs`, and Hono builds. Agent Protocol `/threads/:id/runs/wait`, `/threads/:id/runs/stream`, and `/threads/:id/resume` requests invoke it before route execution, as does the AG-UI route. Health, thread-management, state, and memory-candidate endpoints bypass it.
 
-`dawn build` does not currently materialize this middleware into the generated LangSmith entry files. Treat middleware as a local Dawn runtime feature unless your deployment target wires it in separately.
+The `langsmith` build target is different: its generated graph entries do not include Dawn HTTP middleware. Put equivalent authentication at the LangSmith/platform boundary when you deploy those entries.
 
 ## Errors thrown from middleware
 

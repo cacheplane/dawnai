@@ -79,7 +79,7 @@ export default function OG() {
             display: "flex",
           }}
         >
-          File-system routing, route-local tools, generated types, HMR.
+          File-system routing, shared and route-local tools, generated types.
         </span>
       </div>
 
@@ -120,7 +120,7 @@ export default function OG() {
           }}
         >
           <span style={{ color: ACCENT }}>$</span>
-          <span>pnpm create dawn-ai-app</span>
+          <span>npm create dawn-ai-app@latest my-agent</span>
         </div>
       </div>
     </div>,

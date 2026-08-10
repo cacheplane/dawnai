@@ -285,7 +285,7 @@ export function defineMemory<S extends z.ZodTypeAny>(def: {
 }): DefinedMemory<S>
 ```
 
-Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence activates the memory capability, contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`. `kind` selects the memory category. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for write reconciliation; it defaults to `["subject", "predicate"]`.
+Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence activates the memory capability, contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`. Semantic, episodic, and reflection kinds are wired; procedural remains deferred. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for semantic write reconciliation; it defaults to `["subject", "predicate"]`. The model-facing `remember` call requires both schema-valid `data` and a human-readable `content` string. Semantic IDs hash namespace plus serialized data; append-only episodic and reflection IDs hash that basis plus the write timestamp sampled when `remember` executes. Repeated appends normally receive distinct IDs, but identical namespace/data writes in the same millisecond can share an ID and collide through the store's ID-keyed upsert.
 
 ```ts
 import { defineMemory } from "@dawn-ai/sdk"
@@ -414,7 +414,9 @@ export interface RuntimeContext<TTools extends ToolRegistry = ToolRegistry> {
 }
 ```
 
-Injected into every tool invocation. `signal` is aborted when the client disconnects. `tools` is the registry of all tools bound to the current route, typed as `TTools`. `fs` is the workspace filesystem handle, available when the workspace capability is active.
+The context passed to an authored route entry: a `workflow` function, or a callable/custom `graph` entry that accepts Dawn's second argument. It is not the context for a tool function. `tools` is the registry of tools bound to the current route, typed as `TTools`; `fs` is the workspace filesystem handle.
+
+`signal` follows the run transport. An Agent Protocol viewer disconnect leaves the durable run executing. An AG-UI disconnect, explicit Agent Protocol `POST /threads/:id/cancel`, or server shutdown aborts it. Providers, tools, and other awaited work must cooperate with the signal for cancellation to stop their work promptly.
 
 See [Tools](/docs/tools).
 
@@ -450,7 +452,9 @@ export interface DawnToolContext {
 }
 ```
 
-The context argument Dawn passes to a route tool's function. `signal` is aborted when the client disconnects. `middleware` carries any context injected by `allow(...)` for the current request. `fs` is a sandboxed [`WorkspaceFs`](#workspacefs) handle scoped to the route's `workspace/` directory.
+The context Dawn passes to a route tool function, distinct from the route-entry [`RuntimeContext`](#runtimecontexttools). `middleware` carries any context injected by `allow(...)` for the current request. `fs` is a sandboxed [`WorkspaceFs`](#workspacefs) handle scoped to the route's `workspace/` directory.
+
+The tool's `signal` follows its run transport. An Agent Protocol viewer disconnect leaves the durable run executing. An AG-UI disconnect, explicit Agent Protocol `POST /threads/:id/cancel`, or server shutdown aborts it. The tool and any provider or subprocess it calls must cooperate with the signal for cancellation to stop work promptly.
 
 See [Tools](/docs/tools) and [Workspace Filesystem](/docs/workspace).
 
@@ -925,9 +929,9 @@ export interface PgvectorMemoryStore extends MemoryStore {
 }
 ```
 
-Implements `put`, `get`, `search`, `update`, `supersede`, `delete`, and `listCandidates` from `@dawn-ai/memory`. `close()` ends the owned `pg.Pool`; it is a no-op when the store was constructed with an injected pool.
+Implements the full `MemoryStore` method inventory from `@dawn-ai/memory`: `put`, `get`, `search`, `update`, `supersede`, `delete`, `listCandidates`, `browse`, `stats`, and `prune`. `browse` provides filtered cross-namespace pagination, `stats` returns aggregate facet counts, and `prune` deletes expired rows plus episodic rows beyond an optional per-namespace cap. `close()` ends the owned `pg.Pool`; it is a no-op when the store was constructed with an injected pool.
 
-Hybrid search runs when the query includes both `queryEmbedding` and `embedderId`. The store retrieves a keyword list and a pgvector nearest-neighbor list, then fuses them with the same shared hybrid ranking core used by SQLite.
+Hybrid search runs when the query includes both `queryEmbedding` and `embedderId`. The store retrieves a keyword list and an approximate pgvector HNSW nearest-neighbor list, then applies the same Dawn fusion and final-scoring semantics used by SQLite. SQLite scans eligible vectors exactly; pgvector may therefore supply different candidates, rows, or ordering. Scoring is deterministic for fixed candidates, timestamps, tuning, and embeddings.
 
 ### `vectorColumnDef(dimensions)`
 

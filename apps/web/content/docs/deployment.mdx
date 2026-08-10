@@ -2,11 +2,17 @@
 
 Dawn is not a managed hosting platform — there's no Dawn-operated cloud you push to. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). `dawn build` emits up to three targets, selected via `build.targets` (default: `["node", "langsmith"]`):
 
-- **`node`** — a `server.mjs` entry that boots the real Dawn runtime, plus a hardened `Dockerfile`. This is the only target that engages the [execution sandbox](/docs/sandbox) and the workspace tools in production. See [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) below.
-- **`langsmith`** — `langgraph.json` plus per-route entry files, for **LangSmith** or another runtime that consumes the generated LangGraph entry files directly. This target does not run the Dawn runtime and does not engage the sandbox. See [The LangSmith / LangGraph Platform path](#the-langsmith--langgraph-platform-path) below.
+- **`node`** — a `server.mjs` entry that boots the Dawn HTTP runtime, plus a hardened `Dockerfile`. This is the deployment target that can engage the [execution sandbox](/docs/sandbox). See [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) below.
+- **`langsmith`** — `langgraph.json` plus per-route entry files, for **LangSmith** or another runtime that consumes the generated LangGraph entries directly. Agent-route entries use Dawn's policy-aware materialization path. It is not a Dawn HTTP server. See [The LangSmith / LangGraph Platform path](#the-langsmith--langgraph-platform-path) below.
 - **`hono`** — an edge entry point (`app.mjs`) plus a `wrangler.toml`, for Cloudflare Workers and other web-standard runtimes. Runs the real Dawn runtime — Agent Protocol and AG-UI — over an honest **subset** of Dawn: no sandbox, no filesystem, no shell. **Opt-in**, not a default. See [Edge runtimes](#edge-runtimes) below.
 
-Use live-server scenario tests to catch protocol-shape issues before deploying either target.
+| Target | Runtime surface | Policy and capability surface | Important limits |
+|---|---|---|---|
+| Node | Dawn HTTP `server.mjs`: Agent Protocol, AG-UI, and middleware | Tool scope, permissions, capabilities, and sandbox when configured | Requires Node >=24; one-run and cancel coordination are process-local |
+| Hono | Dawn fetch runtime: Agent Protocol, AG-UI, and middleware | Supported tool scope, permissions, and capabilities | No sandbox or filesystem capabilities; filesystem markers such as route `memory.md` and `plan.md` do not activate without a `MarkerFs`; run/cancel coordination is isolate-local |
+| LangSmith | Generated LangGraph entries using LangSmith's `assistant_id` request envelope | Agent-route materialization includes tool scope, capabilities, and permission gates | No Dawn HTTP middleware, AG-UI server, or sandbox manager; generated `langgraph.json` currently requests Node 22 even though Dawn packages require Node >=24 |
+
+Use live-server scenario tests to catch protocol-shape issues before deploying a Dawn HTTP target. LangSmith has its own transport envelope and should also be tested at that platform boundary.
 
 ## Deploying to production (Node/Docker)
 
@@ -14,12 +20,12 @@ Use live-server scenario tests to catch protocol-shape issues before deploying e
 
 - **`.dawn/build/server.mjs`** — imports `serveRuntime` from `@dawn-ai/cli` and boots the full Dawn runtime on one HTTP listener: Agent Protocol (`/threads`), AG-UI (`/agui/:routeId`), and `/healthz`.
 - **`.dawn/build/modules.mjs`** — a generated static module manifest: every route, tool, state definition, and route memory module imported statically, with their schemas inlined. `server.mjs` boots from it, so production startup performs no route-tree scanning or per-file discovery — the app is wired at build time. Regenerated on every `dawn build`; `dawn check` fails when the manifest's route set no longer matches the routes on disk (a route added, renamed, or removed since the last build). Route, tool, and reducer *code* changes flow through automatically — the manifest imports the live source files — but build-time inputs like a newly added tool file or regenerated schemas are picked up on the next `dawn build`.
-- **`Dockerfile`** — a hardened multi-stage `node:22-slim` image: runs as non-root `1000:1000`, `EXPOSE 8000`, a `HEALTHCHECK` against `/healthz`, `CMD ["node", ".dawn/build/server.mjs"]`. Written to the app root unless a `Dockerfile` already exists there, in which case it's written to `.dawn/build/Dockerfile` instead so an existing Dockerfile is never overwritten.
+- **`Dockerfile`** — a hardened single-stage `node:24-slim` image: runs as non-root `1000:1000`, `EXPOSE 8000`, a `HEALTHCHECK` against `/healthz`, and `CMD ["node", ".dawn/build/server.mjs"]`. On the first build Dawn writes it at the app root. A later build replaces that root file only while it retains Dawn's generated-file marker; a user-authored or marker-removed root `Dockerfile` is preserved and the generated copy goes to `.dawn/build/Dockerfile`.
 
 ```
 dawn build
 docker build -t my-app .
-docker run -p 8000:8000 --env-file .env my-app
+docker run -p 127.0.0.1:8000:8000 --env-file .env my-app
 ```
 
 For local production-like serving without Docker, use `dawn start`, which boots the same runtime directly:
@@ -35,9 +41,13 @@ dawn start --host 127.0.0.1 --port 3000
   `server.mjs` imports `@dawn-ai/cli` at runtime. If it's listed under `devDependencies`, `npm ci --omit=dev` — which the generated Dockerfile runs — strips it from the production image, and the container fails to boot. Move `@dawn-ai/cli` to `dependencies` before building a deployable image.
 </Callout>
 
-Because it runs the actual Dawn runtime, this is the only deployment path that engages the [execution sandbox](/docs/sandbox), [tool scoping](/docs/tools), and [permissions](/docs/permissions) exactly as configured in `dawn.config.ts`. The `langsmith` target does not run the Dawn runtime and does not engage any of the three. The `hono` target does run the Dawn runtime — so tool scoping and permissions apply — but the sandbox is unavailable there and `dawn build` [rejects it by name](#what-the-edge-cannot-serve).
+Because it runs the full Dawn HTTP runtime, this is the deployment path that can engage the [execution sandbox](/docs/sandbox) alongside [tool scoping](/docs/tools), capabilities, and [permissions](/docs/permissions) as configured in `dawn.config.ts`. The `hono` target also runs the Dawn HTTP runtime, so its supported tool scoping, capabilities, permissions, and middleware apply, but the sandbox and filesystem-backed capabilities are unavailable there. Generated LangSmith agent entries use the policy-aware materialization path for tool scope, capabilities, and permission gates, but do not include Dawn's sandbox manager or HTTP middleware.
 
-The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution, but not thread create, read, delete, or state endpoints. Allowed middleware context reaches tools as `ctx.middleware`.
+The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution. Allowed middleware context reaches tools as `ctx.middleware`.
+
+<Callout type="warn" title="Authenticate the whole service">
+  App middleware gates execution routes; it is not blanket server authentication. Thread create, read, delete, state, and `/threads/:thread_id/cancel` bypass it, as do `/memory/candidates` and its approve/reject routes. Candidate listing spans namespaces, while approve and reject mutate records. `/healthz` also bypasses middleware so an intended platform probe can reach it. Any non-local exposure requires reverse-proxy or platform authentication plus network restrictions covering the entire service, with only the intended health probe exempted at that external layer.
+</Callout>
 
 Select targets explicitly in `dawn.config.ts` if you only want one:
 
@@ -51,7 +61,7 @@ export default config({
 
 Setting `targets` replaces the default list rather than adding to it — name `"hono"` alongside the others if you want the [edge artifacts](#edge-runtimes) too.
 
-To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below.
+To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below. Multiple replicas require guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 
 ## Deploying on Kubernetes
 
@@ -78,7 +88,7 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
     dawn verify
     ```
 
-    `dawn verify` runs four checks in one call: app contract, route discovery, typegen, and deps (missing packages and missing env vars). Pass `--json` for machine-readable output. The deps check is uniquely useful before a deploy — neither `dawn check` nor `dawn typegen` covers it.
+    `dawn verify` runs five phases in one call: app contract, route discovery, typegen, dependency/environment readiness, and runtime readiness (the Node version floor plus sandbox-provider preflight when configured). Pass `--json` for machine-readable output. Missing dependencies and environment variables are advisory; app, route, typegen, and runtime failures fail verification.
 
     Optionally follow with scenario coverage:
 
@@ -86,8 +96,8 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
     dawn test
     ```
   </Step>
-  <Step title="Confirm protocol parity">
-    Run selected scenarios against a live dev server by adding `.server(url)` to their builder chains in `run.test.ts` (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches request/response shape issues before deploy. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
+  <Step title="Exercise the Dawn HTTP protocol">
+    Run selected scenarios against a live dev server by adding `.server(url)` to their builder chains in `run.test.ts` (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches Dawn request/response shape issues. It does not validate LangSmith's distinct `assistant_id` transport envelope; test that separately at the platform boundary. Process boundaries, state persistence, and tool bindings are also re-materialized by `dawn build`, so this step is necessary but not sufficient.
 
     ```
     dawn dev --port 3001 &
@@ -117,12 +127,12 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
 
     Notes:
     - Each graph key is `<routeId>#<kind>` — e.g. `/research#agent`. Use this exact string as the `assistant_id` in any client request.
-    - `dependencies: ["."]` and `node_version: "22"` are required by LangSmith.
+    - The generator currently writes `dependencies: ["."]` and `node_version: "22"` for LangSmith. Dawn packages themselves require Node >=24, so this is an unresolved compatibility mismatch, not verified runtime parity. Confirm the platform's supported Node version before deploying this artifact.
     - `env` resolves to `.env.example` when that file exists, else `.env`.
     - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
   </Step>
-  <Step title="Local middleware (optional)">
-    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before local `/threads/:id/runs/wait` and `/threads/:id/runs/stream` requests handled by `dawn dev`. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers during local development and live-server tests. `dawn build` does not currently materialize this middleware into the generated LangSmith entry files. See [Middleware](/docs/middleware) for the API.
+  <Step title="Add platform authentication">
+    `src/middleware.ts` runs in Dawn HTTP runtimes (`dawn dev`, Node, and Hono), but `dawn build` does not materialize it into generated LangSmith entries. Configure equivalent authentication at the LangSmith/platform boundary. Generated agent-route graphs still use Dawn's policy-aware materialization for tool scope, capabilities, and permission gates. See [Middleware](/docs/middleware) for the Dawn HTTP API.
   </Step>
   <Step title="Push to your LangSmith-connected remote">
     LangSmith builds from the generated `langgraph.json` and route entry files, then provisions assistants keyed by the `<routeId>#<kind>` ids. From there, your agents and harnesses can hit the deployed endpoints using those assistant ids.
@@ -161,7 +171,7 @@ export default { fetch: (request: Request) => handler.fetch(request) }
 
 `modules.edge.mjs` and not `modules.mjs`: the `node` target's manifest reaches `node:path`, `node:url` and `@dawn-ai/cli/runtime` (which pulls in tsx and esbuild), and bundling it for Workers fails on fourteen unresolved builtins — several of them bare, so `nodejs_compat` does not rescue it either. Run `dawn build` with `hono` among your `build.targets` to get the edge flavor. A test bundles this very snippet, read out of this page, to keep the two from drifting.
 
-Anything you do not supply has no filesystem to fall back to, so the handler fails loudly naming the missing piece rather than silently degrading. A few inputs are optional by contract and simply switch their feature off when absent: middleware, the sandbox provider, and the capability markers that read `workspace/AGENTS.md`, `memory.md`, `plan.md`, and `skills/`.
+Anything you do not supply has no filesystem to fall back to, so the handler fails loudly naming a required store rather than silently substituting one. Some inputs are optional by contract: middleware is absent when not supplied, and filesystem-marker capabilities do not activate without a `MarkerFs`. In particular, route `memory.md` and `plan.md` deactivate on the generated Hono runtime. The Hono build gate rejects configured sandbox and the filesystem-dependent workspace and skills surfaces rather than silently dropping them.
 
 "Switches off when absent" means absent *from the config too*. Because this entry point is hand-composed it never meets the `hono` target's build gate, so the handler applies the same gate itself: if the `config` you pass here asks for something this runtime cannot serve — a `sandbox` block with no `sandboxManager`, a `toolOutput` block, or a manifest route carrying skills — every request fails with `DAWN_E1005` instead of quietly doing nothing. See [What the edge cannot serve](#what-the-edge-cannot-serve).
 
@@ -211,6 +221,8 @@ export default config({
 | `.dawn/build/stores.mjs` | A **per-request** store factory: a `@neondatabase/serverless` WebSocket pool plus the three `@dawn-ai/postgres-storage` stores, torn down when the request settles. See [Why the stores are per-request](#why-the-stores-are-per-request). |
 | `.dawn/build/app.mjs` | The entry point: a Hono app with one catch-all handing every request to the fetch handler, `export default`ed — the shape Workers, Vercel and Bun all accept. Import the pieces yourself to compose it into a larger Hono app. |
 | `wrangler.toml` | A scaffold at the app root: `name`, `main`, `compatibility_date`. Written **only when you have none**, and never overwritten once it exists — a `wrangler.toml` accretes bindings, vars and routes that only you know about. If you already have one, Dawn writes its copy to `.dawn/build/wrangler.toml` and says so on stderr. |
+
+The Postgres stores persist checkpoints, threads, and permission decisions, but they do not distribute the in-memory one-run-per-thread gate or cancellation registry. A multi-isolate or multi-replica deployment needs guaranteed thread-keyed sticky routing to one process **or** distributed per-thread serialization and cancel routing.
 
 The generated files import four packages by bare specifier, and none of them is a dependency of `@dawn-ai/cli` — the CLI does not import them, the app it generates does:
 
@@ -282,7 +294,7 @@ The *Why* entries for workspace tooling, tool-output offloading, skills and long
 
 `toolOutput` is the newest entry in this table, and adding it can turn a build that passed into one that fails — see [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target).
 
-Nothing else is gated: the rest of the runtime is on this path — Agent Protocol and AG-UI, route tools, [subagents](/docs/subagents), [tool scoping](/docs/tools), [permissions](/docs/permissions) against the Postgres store, [middleware](/docs/middleware), and durable thread state. What the workerd lane actually exercises is narrower than that list, though: one agent route, an AG-UI conversation, no tools. Treat the rest as ungated rather than as proven under workerd.
+The supported edge surface includes Agent Protocol and AG-UI, route tools, [subagents](/docs/subagents), [tool scoping](/docs/tools), [permissions](/docs/permissions) against the Postgres store, [middleware](/docs/middleware), and durable thread state. Filesystem-marker capabilities still need special care: without a `MarkerFs`, route `memory.md` and `plan.md` do not activate. The workerd lane exercises a narrower slice — one agent route and an AG-UI conversation with no tools — so support should not be read as proof of every combination under workerd.
 
 Two more build-time failures, both about the provider import map. A bundler cannot follow a variable import specifier, so `app.mjs` emits a static `switch` over exactly the model packages your app can reach — and whatever is missing from that map is missing from the bundle. The build therefore fails rather than narrowing it when a route cannot be imported, or when an agent's model id maps to no known provider (set `provider` explicitly). `summarization.model` is included, so an app with OpenAI routes and an Anthropic summarization model no longer builds green and fails at request time on a package that was never bundled.
 
@@ -317,12 +329,12 @@ If you can't or won't use LangSmith, use the `node` target: [Deploying to produc
 
 If your app fits [the edge subset](#what-the-edge-cannot-serve) and you would rather not run a container at all, the [`hono` target](#the-hono-build-target) deploys the same runtime to Cloudflare Workers with Postgres for durable state.
 
-The `langsmith` target's `langgraph.json` and per-route entry files can also be containerized independently with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command, if you specifically want a LangGraph-Platform-compatible container rather than the Dawn runtime — but that image does not run Dawn's runtime and will not engage the sandbox, tool scoping, or permissions even if `dawn.config.ts` configures them.
+The `langsmith` target's `langgraph.json` and per-route entry files can also be containerized independently with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command, if you specifically want a LangGraph-Platform-compatible container rather than the Dawn HTTP runtime. Agent-route entries materialize Dawn tool scope, capabilities, and permission gates, but the image has no Dawn HTTP middleware, AG-UI server, or sandbox manager. The generated Node 22 setting also conflicts with Dawn packages' Node >=24 requirement; treat compatibility as unresolved until the platform can run the required version.
 
 ## Troubleshooting
 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
-- **Assistant id not found** — the `route` in the request body doesn't match a `<routeId>#<kind>` key in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
+- **Assistant id not found** — for Dawn's Node/Hono HTTP runtime, `route` in `{ route, input }` must match a `<routeId>#<kind>` key. On LangSmith, supply that same key through the platform's `assistant_id` envelope instead. Inspect `.dawn/build/langgraph.json` directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
 - **Type inference drifted** — run `dawn typegen` locally and inspect `.dawn/dawn.generated.d.ts`. The generated file is ignored by the starter template, so regenerate it in CI/build steps unless your project chooses to commit `.dawn/`.
 - **`dawn build` fails with `DAWN_E1005`** — the app uses something [the edge cannot serve](#what-the-edge-cannot-serve). The message names every offending config key and file at once. Fix them, or drop `"hono"` from `build.targets`. If the build used to pass and the only offender is `toolOutput`, that key is a recent addition to the gate — see [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target).
 - **A deployed worker 500s *every* request with `DAWN_E1005`, `/healthz` included** — the same gate, raised at request time: this runtime has no filesystem, and the app is configured for `sandbox`, `toolOutput`, or a route with skills. The full report is on stderr (once) and in the response body, naming each feature and its config key. Most often this is a [hand-composed entry](#the-dawn-aiclifetch-entry-point) that never ran the `hono` target and so never met the build gate. Remove the dead config, or supply the missing piece yourself — a `sandboxManager` passed to `createRuntimeFetchHandler` counts as serving `sandbox`. This never happens on Node.
@@ -335,7 +347,7 @@ The `langsmith` target's `langgraph.json` and per-route entry files can also be 
 <RelatedCards items={[
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol endpoints and live-server scenarios" },
   { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "opt-in isolation the node target engages in production" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating in the local Dawn runtime" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating across Dawn HTTP deployment targets" },
   { href: "/docs/testing", title: "Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn start, dawn verify, and all other commands" },
 ]} />

@@ -116,11 +116,16 @@ while a UI drives later turns through AG-UI.
 
 <Callout type="warn" title="No reconnect or replay support">
   Each POST owns one SSE response. Dawn does not buffer emitted AG-UI events or
-  support last-event-id replay. If the connection drops, the route can finish
-  and checkpoint its state, but the client cannot reattach to that in-flight
-  event stream. A later request against the same thread starts a new run from
-  the latest checkpoint.
+  support last-event-id replay. If the connection drops, Dawn aborts that
+  ephemeral AG-UI run; the client cannot reattach to its event stream. A later
+  request against the same thread starts a new run from the latest completed
+  checkpoint.
 </Callout>
+
+Agent Protocol has the opposite disconnect policy: closing a `runs/stream`,
+`runs/wait`, or `resume` connection only disconnects the viewer, and the run
+continues. Stop it explicitly with `POST /threads/:thread_id/cancel`; server
+shutdown also aborts in-flight work.
 
 ## Related
 

@@ -60,7 +60,12 @@ async function buildLlmsFull(): Promise<string> {
     sections.push(`### ${title}`, "", await readContent(p), "", "---", "")
   }
 
-  sections.push("\n\n# Blog\n")
+  sections.push(
+    "## Historical Blog Archive",
+    "",
+    "The posts below are historical, non-normative snapshots. Current contracts are the Documentation, Task-Specific Prompts, and Agent Config Templates above.",
+    "",
+  )
   for (const post of getAllPosts()) {
     const raw = readFileSync(join(process.cwd(), "content", "blog", post.sourceFile), "utf8")
     sections.push(`\n## ${post.title}\n\n${raw}\n`)

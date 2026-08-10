@@ -1,16 +1,17 @@
 # Access Control
 
-Dawn has three independent layers that each answer a different question about a tool call. They compose — none of them substitutes for another, and most production apps that touch anything sensitive (shell, network, prod data) end up using all three together.
+Dawn has four independent decision planes. They compose — none substitutes for another, and an app may use the planes relevant to each route.
 
 | Layer | Question it answers | Docs |
 |---|---|---|
 | Tool scoping | *Which* tools can the model call? | [Tools](/docs/tools#scoping-a-routes-tools) |
 | Permissions / HITL | *Whether* a given call runs | [Permissions](/docs/permissions) |
 | Execution sandbox | *What* an allowed, approved call can actually touch | [Sandbox](/docs/sandbox) |
+| Guarded delegation | *Whether* a child receives the delegated input before any of its tools execute | [Subagents](/docs/subagents#delegation-policy) |
 
 ## Tool scoping — which tools
 
-`agent({ tools: { allow, deny, approve, constrain } })` controls the surface offered to the model. `deny` revokes a tool so it's never wired into the generated entry; `allow` grants back a withheld capability tool (subagents start least-privilege, so this is how you hand one `readFile` or `runBash`); `deny` wins when a name appears in both. This is enforced at composition time — a denied tool is never wired in, so the model has no way to call it, valid or not.
+`agent({ tools: { allow, deny, approve, constrain } })` controls the surface offered to the model. `deny` revokes a tool so it's never wired into the generated entry; `allow` grants back a capability tool withheld from a subagent, such as `readFile` or `runBash`; `deny` wins when a name appears in both. This is enforced at composition time — a denied tool is never wired in, so the model has no way to call it, valid or not.
 
 ```ts title="src/app/ops/index.ts"
 export default agent({ model: "gpt-5", systemPrompt: "…", tools: { deny: ["runBash"] } })
@@ -22,35 +23,52 @@ Scoping controls the *surface*, not what a granted tool does once invoked — a 
 
 Two gates are on by default for the built-in workspace tools: `runBash` commands are matched against allow/deny patterns, and filesystem paths outside `workspace/` are permission-gated. An unmatched ("unknown") call pauses the run and asks a human, unless `permissions.mode` is set to `non-interactive` (fail-closed) or `bypass` (dev/test only).
 
-Two more gates ride the same interrupt machinery: `tools: { approve: [...] }` requires human approval before *any* named tool call, and `memory: { writes: "ask" }` gates belief-contradiction memory writes. See [Permissions](/docs/permissions) for the interrupt payloads and resume flow.
+Two more gates ride the same interrupt machinery: `tools: { approve: [...] }` requires human approval before a named tool call, and `memory: { writes: "ask" }` gates belief-contradiction memory writes. Use `tools.approve` for a separately authored tool such as `deployProd`; workspace command and path tools already use their pattern-aware gates. See [Permissions](/docs/permissions) for the interrupt payloads and resume flow.
 
 ## Execution sandbox — what a call can touch
 
 Even a tool that's allowed and approved still runs somewhere. By default that's the local `workspace/` directory on the host. Adding a `sandbox` key to `dawn.config.ts` routes every `readFile`, `writeFile`, `listDir`, and `runBash` call for a thread into an isolated environment instead — filesystem, shell, and (optionally) network. Dawn ships a Docker reference provider and a Kubernetes provider behind the same `SandboxProvider` contract. See [Sandbox](/docs/sandbox).
 
+## Guarded delegation — whether a child receives input
+
+A parent's `delegation` policy runs at the final dispatch boundary, before the child starts. Its allow, deny, approve, or constraint decision determines whether the child receives the delegated input at all; only after that decision allows dispatch can the child's own tool policies and permission gates run. See [Subagents](/docs/subagents#delegation-policy).
+
 ## How they compose
 
-A route that lets the model run shell commands, gated by approval, inside an isolated environment stacks all three — `sandbox` in `dawn.config.ts` decides what `runBash` can touch, and the route's `tools` block decides which tools are offered and which need approval:
+A route that uses pattern-gated shell commands in an isolated environment, separately approves an authored deployment tool, and reviews delegated input stacks all four planes:
 
 ```ts title="dawn.config.ts"
 import { config } from "@dawn-ai/cli"
 import { dockerSandbox } from "@dawn-ai/sandbox"
 
 export default config({
-  sandbox: { provider: dockerSandbox({ image: "node:22-slim" }) }, // what runBash can touch
+  permissions: {
+    allow: { bash: ["ls", "cat"] },
+    deny: { bash: ["rm -rf", "sudo"] },
+  },
+  sandbox: { provider: dockerSandbox({ image: "node:24-slim" }) }, // what runBash can touch
 })
 ```
 
 ```ts title="src/app/ops/index.ts"
+import { agent } from "@dawn-ai/sdk"
+import researcher from "./subagents/researcher/index.js"
+
 export default agent({
   model: "gpt-5",
   systemPrompt: "…",
-  tools: { allow: ["runBash"], approve: ["runBash"] }, // which tools + whether each call runs
+  tools: { deny: ["writeFile"], approve: ["deployProd"] },
+  subagents: { researcher },
+  delegation: {
+    rules: {
+      researcher: { action: "approve", reason: "Review delegated customer context." },
+    },
+  },
 })
 ```
 
-<Callout type="info" title="None of the three is optional coverage for another">
-  Tool scoping without a sandbox still lets an allowed `runBash` touch the whole host filesystem. A sandbox without scoping still exposes every tool to the model, just from inside an isolated box. Permissions without a sandbox still pause for approval, but an approved call runs on the host. Layer the ones your app needs — most agents that call `runBash` or write outside `workspace/` want all three.
+<Callout type="info" title="Each plane answers a separate question">
+  Tool scoping without a sandbox still lets an allowed `runBash` touch the whole host filesystem. A sandbox redirects only Dawn's built-in workspace tools — `readFile`, `writeFile`, `listDir`, and `runBash` — into the isolated environment. Authored tools such as `deployProd` still execute in the app process and need their own least-privilege and isolation design. Permissions without a sandbox still pause for approval, but an approved workspace call runs on the host. Guarded delegation controls whether a child receives input, not what that child can call or access after it starts.
 </Callout>
 
 ## Related
@@ -59,5 +77,6 @@ export default agent({
   { href: "/docs/tools", title: "Tools", subtitle: "tool scoping — allow, deny, approve, constrain" },
   { href: "/docs/permissions", title: "Permissions", subtitle: "human-in-the-loop approval for paths, commands, tools, and memory writes" },
   { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "per-thread filesystem, shell, and network isolation" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "guarded delegation before a child receives input" },
   { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including permissions and sandbox" },
 ]} />

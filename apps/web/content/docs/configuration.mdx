@@ -72,7 +72,8 @@ export default {
   // checkpointer: myCheckpointer,
   // threadsStore: myThreadsStore,
 
-  // Path to the env file used by `dawn dev` and `dawn verify`.
+  // Path to the env file loaded by `dawn dev` and `dawn inspect`.
+  // `dawn verify` resolves the same path for readiness checks without loading it.
   // env: "./.env",  // default
 }
 ```
@@ -138,7 +139,9 @@ permissions?: {
 
 #### `permissions.allow` and `permissions.deny`
 
-Pattern maps keyed by tool name (e.g. `bash`, `readFile`). Values are glob-style pattern strings matched against the candidate command or path. `allow` entries are seeded into `.dawn/permissions.json` at startup; `deny` entries are checked first and cannot be overridden by a human approval. Both lists are merged with any patterns the user approves interactively during a session.
+Pattern maps are keyed by operation (for example `bash`, `readFile`, or `memory`). Values use prefix matching against the candidate command, path, or memory namespace; deny wins over allow. The reserved `tool` and `subagent` keys are different: their entries match exact tool names or serialized subagent identities, never prefixes.
+
+Static `allow` and `deny` entries remain in `dawn.config.ts`; Dawn does not seed them into the runtime permissions file. Only an interactive **Always** decision adds a runtime allow entry to the configured store. The default Node store persists those decisions in `.dawn/permissions.json`; a custom store, including the Postgres store, may persist them elsewhere.
 
 #### `permissions.allow.tool`
 
@@ -190,9 +193,11 @@ Stores Agent Protocol thread metadata (create time, status, latest checkpoint re
 
 | Type | Default | Scope |
 |---|---|---|
-| `string` | `"./.env"` | `dawn dev`, `dawn verify` only |
+| `string` | `"./.env"` | loaded by `dawn dev` and `dawn inspect`; checked by `dawn verify` |
 
-Path to the `.env` file loaded for local development commands, relative to the app root. This setting does **not** affect the deploy artifact — environment variables for production are configured separately in `langgraph.json` (see [Deployment](/docs/deployment)).
+Path to the `.env` file that `dawn dev` and `dawn inspect` load into the process, relative to the app root. `dawn verify` resolves the same path and reads it to check for required provider keys, but does not load it. `dawn start` does not load `config.env`; pass runtime variables through the shell, host, or deployment platform.
+
+The generated LangSmith target records an env-file path in `.dawn/build/langgraph.json`: `.env.example` when that file exists, otherwise `.env`. LangSmith uses the referenced file to identify variables. This is specific to the LangSmith artifact, not the environment contract for every build target. See [Deployment](/docs/deployment).
 
 ---
 
@@ -234,6 +239,7 @@ Configures long-term memory governance. A route opts into memory by adding a `me
 
 ```ts
 memory?: {
+  enabled?: boolean
   store?: MemoryStore
   writes?: "off" | "candidate" | "auto" | "ask"
   indexMaxEntries?: number
@@ -242,16 +248,52 @@ memory?: {
     recencyHalfLifeMs?: number
     candidatePool?: number
   }
+  vector?: {
+    embedder: Embedder
+    weights?: { keyword?: number; vector?: number }
+    rrfK?: number
+    vectorK?: number
+    recencyWeight?: number
+    confidenceWeight?: number
+  }
+  episodes?: {
+    enabled?: boolean
+    ttlMs?: number
+    cap?: number
+    includeFailedRuns?: boolean
+    embed?: boolean
+  }
+  distill?: {
+    model?: string
+    provider?: ModelProviderId
+    maxBatches?: number
+    consolidate?: {
+      olderThanMs?: number
+      minBatchSize?: number
+      maxBatchSize?: number
+      ttlMs?: number
+      sourceTtlMs?: number
+    }
+    reflect?: {
+      minNewRecords?: number
+      maxRecords?: number
+      writes?: "candidate" | "auto"
+    }
+  }
   resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
 }
 ```
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `enabled` | `boolean` | — | Historical, inert compatibility field. It does not enable or disable memory; a route's `memory.ts` and `writes` govern capability exposure. |
 | `store` | `MemoryStore` | SQLite at `.dawn/memory.sqlite` | The memory store backend. Defaults to an SQLite-backed store at `<appRoot>/.dawn/memory.sqlite`. Override to plug in a custom backend. |
 | `writes` | `"off" \| "candidate" \| "auto" \| "ask"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). `ask` — same as `auto`, except a supersede (belief contradiction) interrupts for human Once/Always/Deny approval when running interactively; headless behaves exactly like `auto`. |
 | `indexMaxEntries` | `number` | `20` | Cap on how many in-scope memories are injected into the prompt memory index. |
 | `recall` | `{ weights?, recencyHalfLifeMs?, candidatePool? }` | relevance/recency/confidence `0.6`/`0.3`/`0.1`, 14-day half-life, pool `256` | Ranked-recall tuning for `recall({ query })`. `weights` blends IDF relevance, recency decay, and stored confidence; `recencyHalfLifeMs` sets the recency half-life; `candidatePool` caps how many newest token-matches a ranked search scores. Query-less recall (the injected index) is unaffected. |
+| `vector` | `{ embedder; weights?; rrfK?; vectorK?; recencyWeight?; confidenceWeight? }` | absent (keyword-only) | Enables [hybrid semantic recall](/docs/memory#semantic-recall-opt-in). `embedder` is required when the block is present. Defaults: keyword/vector weights `1`/`1`, `rrfK: 60`, `vectorK: 64`, recency/confidence weights `0.3`/`0.1`. A custom store owns its retrieval tuning. |
+| `episodes` | `{ enabled?; ttlMs?; cap?; includeFailedRuns?; embed? }` | disabled; 30-day TTL; cap `500`; include failures; no embeddings | Configures the [runtime episode recorder](/docs/memory#episodic-memory). `embed: true` is currently unsupported: Dawn warns once and resolves it to `false`, so recorded episodes use keyword and time-window recall. |
+| `distill` | `{ model?; provider?; maxBatches?; consolidate?; reflect? }` | see description | Tunes explicitly invoked [distillation commands](/docs/memory#distillation); nothing runs automatically. Defaults: `gpt-5-mini`, provider inferred then `openai`, `maxBatches: 5`; consolidate after 7 days in batches of 5–50, summaries without expiry, source TTL 7 days; reflect after 10 new records over at most 100, writing `candidate` records (`reflect.writes` accepts only `"candidate"` or `"auto"`). |
 | `resolveScope` | `(ctx: { routePath; appRoot }) => Record<string, string>` | — | Supplies runtime namespace dimensions (e.g. `tenant`, `user`, `agent`) for the memory namespace. Only the dimensions a route declares in its `memory.ts` scope are applied. |
 
 See [Memory](/docs/memory) for the full long-term-memory model and [Permissions](/docs/permissions#memory-write-approval-writes-ask) for the `ask`-mode HITL flow, plus the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
@@ -404,7 +446,7 @@ await pool.end()
 
 - **Checkpoint payloads are opaque.** The serialized checkpoint, its metadata, and pending-write values are stored as `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not used: it rejects a NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which reach checkpoints in normal operation through tool output.
 - **Unchanged channel values repeat per checkpoint.** Each checkpoint stores its channel values as one payload rather than deduplicating across checkpoints. SQLite has the same property and Dawn has lived with it; on Postgres the same shape costs more, because every repeat crosses the network and lands in TOAST storage. This has not been benchmarked — size your database accordingly for long threads carrying large state.
-- **The per-thread run gate is in-process.** The runtime's "one run at a time per thread" check lives in instance memory, so two instances can each start a run on the same thread. A shared store makes that visible; it does not cause it. Serialize at the routing layer if you need a hard guarantee.
+- **The per-thread run gate and cancellation registry are in-process.** Postgres shares durable rows, not these coordinators: two replicas can each start a run on the same thread, and an explicit cancellation request can stop only the run registered in the instance that receives it. Use sticky routing or a distributed coordination layer when you need cross-replica serialization and cancellation guarantees.
 - **Thread timestamps are `text`, not `timestamptz`.** `created_at` / `updated_at` are app-generated ISO-8601 strings, so the exact string handed to an API client comes back unchanged. Ordering uses `COLLATE "C"` so it does not depend on the database's locale.
 - **Rows are plaintext.** Treat the database as sensitive application data.
 

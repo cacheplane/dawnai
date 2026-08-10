@@ -1,260 +1,239 @@
 ---
 description: Add OpenTelemetry tracing to a Dawn app.
 website: https://opentelemetry.io
-version: 1
+version: 2
 tags: [observability, tracing, otel]
 source: official
 ---
 
 # Add OpenTelemetry to your Dawn app
 
-You are an AI coding agent adding OpenTelemetry tracing to a Dawn app. It initializes the OTel Node SDK and exports spans to an OTLP endpoint so you can trace runs in your own observability backend. It does NOT replace LangSmith tracing (Dawn's deploy target has its own), stand up a collector, or auto-instrument your tools beyond what the Node SDK's auto-instrumentations provide.
+You are an AI coding agent adding OpenTelemetry tracing to a Dawn app running in a Node process you control. This blueprint creates a self-starting ECMAScript preload that initializes the OTel Node SDK before Dawn loads, then exports spans to an OTLP endpoint. It does not replace tracing supplied by a hosting platform, stand up a collector, or instrument tools beyond the Node auto-instrumentations you enable.
 
 ## Prerequisites
 
-Before proceeding, confirm the following is true:
+Confirm all of the following before changing the app:
 
-**OTLP-compatible backend reachable from this environment** — you need a collector or observability backend that accepts OTLP/HTTP traces (e.g. an OTel Collector, Jaeger, Honeycomb, Grafana Tempo). You must know its OTLP endpoint URL.
+1. **Node.js 24 or newer** — this matches Dawn's runtime requirement and supports the `--import` preload used below.
+2. **An OTLP/HTTP trace endpoint** — an OpenTelemetry Collector or compatible backend such as Jaeger, Honeycomb, or Grafana Tempo must be reachable from the runtime.
+3. **A controllable Node startup path** — use this blueprint with `dawn start` or the generated Node target's `.dawn/build/server.mjs`. For the `hono` edge target, use instrumentation supported by that platform. For generated `langsmith` entries, evaluate platform tracing first.
 
-> **Note:** OpenTelemetry instrumentation is most valuable for self-hosted Dawn runtimes where you control the server process. If you only deploy to LangSmith, LangSmith already provides first-class LangChain/LangGraph tracing — you may not need OTel. Confirm this is a self-hosted deployment before proceeding.
-
-If no OTLP backend is available or configured, stop and tell the user what needs to be set up before continuing.
+If no OTLP backend or controllable Node process is available, stop and explain what must be supplied.
 
 ## Inspect the project
 
-Run these checks before writing any code:
+Before writing files:
 
-1. **Package manager** — detect from lockfile: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm.
-2. **App directory** — read `dawn.config.ts` and find the `appDir` field (defaults to `src/app`). Note the overall project structure.
-3. **AGENTS.md** — read it if present for project-specific conventions (naming, style, preferred imports).
-4. **Existing install check** — look for `src/lib/otel.ts`. If the file exists and its first line is `// dawn-blueprint: opentelemetry@1`, skip to [Updating an existing install](#updating-an-existing-install).
-5. **Server entry point** — identify where the self-hosted server bootstraps. Look for a `src/server.ts`, `src/index.ts`, or similar file that starts the HTTP server. This is where `startTelemetry()` must be called first. If no custom entry exists and the app only uses `dawn dev`, note that OTel must be loaded via Node's `--import` preload flag.
-6. **Env conventions** — check for `.env` and `.env.example` to learn how the project names and documents secrets.
+1. Read `AGENTS.md` when present and inspect `package.json`, `dawn.config.ts`, `.dockerignore`, and the selected deployment path.
+2. Check for a root `instrumentation.mjs` whose first line is `// dawn-blueprint: opentelemetry@2`. If present, follow [Updating an existing install](#updating-an-existing-install).
+3. Check for the legacy `src/lib/otel.ts` marker `// dawn-blueprint: opentelemetry@1`. That module exported `startTelemetry()` but did not call it when preloaded; migrate it using the legacy steps below.
+4. Confirm how runtime environment variables are injected. `dawn start` does not load the file named by `dawn.config.ts`'s `env` setting, so a process manager, shell, container, or platform must provide the OTel variables.
 
-## Install dependencies
+## Install runtime dependencies
 
-You need five packages:
+The preload runs in production, so install these as regular `dependencies`, not `devDependencies`:
 
-- **`@opentelemetry/sdk-node`** — the Node.js SDK that wires up the tracer, exporter, and auto-instrumentations.
-- **`@opentelemetry/auto-instrumentations-node`** — a meta-package that enables built-in auto-instrumentations (HTTP, gRPC, DNS, etc.) with a single call.
-- **`@opentelemetry/exporter-trace-otlp-http`** — exports spans to an OTLP/HTTP endpoint.
-- **`@opentelemetry/resources`** — provides `resourceFromAttributes` for describing this service (2.x API).
-- **`@opentelemetry/semantic-conventions`** — provides the `ATTR_SERVICE_NAME` constant (and other semantic attribute keys).
+- `@opentelemetry/sdk-node`
+- `@opentelemetry/auto-instrumentations-node`
+- `@opentelemetry/instrumentation`
+- `@opentelemetry/exporter-trace-otlp-http`
+- `@opentelemetry/resources`
+- `@opentelemetry/semantic-conventions`
 
-Check `package.json` before installing to avoid duplicates. Install only what is missing.
+Check `package.json` first and install only what is missing:
 
 ```bash
-# pnpm (detected from pnpm-lock.yaml)
 pnpm add @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node \
+  @opentelemetry/instrumentation \
   @opentelemetry/exporter-trace-otlp-http @opentelemetry/resources \
   @opentelemetry/semantic-conventions
 
-# npm equivalent
+# npm equivalent:
 # npm install @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node \
+#   @opentelemetry/instrumentation \
 #   @opentelemetry/exporter-trace-otlp-http @opentelemetry/resources \
 #   @opentelemetry/semantic-conventions
 
-# yarn equivalent
+# yarn equivalent:
 # yarn add @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node \
+#   @opentelemetry/instrumentation \
 #   @opentelemetry/exporter-trace-otlp-http @opentelemetry/resources \
 #   @opentelemetry/semantic-conventions
 ```
 
-Install the latest majors of each package — do not pin specific minor versions. As of the OTel JS 2.x release, `@opentelemetry/resources` 2.x removed the `Resource` class constructor; the code in this blueprint uses the `resourceFromAttributes` factory (2.x API). Run `npm info <pkg> version` (or the equivalent for your package manager) to confirm the latest before installing.
+Use compatible current majors. The template uses the OpenTelemetry resources 2.x `resourceFromAttributes` API rather than the removed `new Resource(...)` constructor.
 
-## Create the instrumentation module
+## Create the self-starting preload
 
-Place the file at:
+Create this JavaScript module at the app root:
 
+```text
+instrumentation.mjs
 ```
-src/lib/otel.ts
-```
 
-Write the following file in full. Read the inline comments — adapt the service name default and any exporter options to match the project before saving.
+Use `.mjs`, not a TypeScript source file. Current Dawn scaffolds set `noEmit: true`, so there is no compiled `dist/lib/otel.js` to preload. Node evaluates this module before the application entry and the top-level `sdk.start()` performs the initialization; merely exporting a start function is not enough.
 
-```ts
-// dawn-blueprint: opentelemetry@1
+```js
+// dawn-blueprint: opentelemetry@2
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions"
-import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node"
 
-// Read the OTLP endpoint from the environment. No default — if unset, the
-// exporter will fall back to the OTel SDK default (http://localhost:4318/v1/traces).
-// Always set OTEL_EXPORTER_OTLP_ENDPOINT in your environment.
-const exporter = new OTLPTraceExporter({
-  url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-  // Adapt: if your backend requires auth headers, pass them here or via
-  // OTEL_EXPORTER_OTLP_HEADERS (see Configure environment below).
-})
+const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+if (!endpoint) {
+  throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required")
+}
 
 const sdk = new NodeSDK({
   resource: resourceFromAttributes({
-    // Adapt: replace "dawn-app" with your service name, or rely on the
-    // OTEL_SERVICE_NAME environment variable (takes precedence at SDK init time).
     [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? "dawn-app",
   }),
-  traceExporter: exporter,
-  // getNodeAutoInstrumentations() enables HTTP, gRPC, DNS, and other built-in
-  // instrumentations. Pass options to disable individual instrumentations:
-  // getNodeAutoInstrumentations({ "@opentelemetry/instrumentation-fs": { enabled: false } })
-  instrumentations: [getNodeAutoInstrumentations()],
+  traceExporter: new OTLPTraceExporter({ url: endpoint }),
+  instrumentations: [
+    getNodeAutoInstrumentations({
+      // Adapt this map when an instrumentation is too noisy.
+      // "@opentelemetry/instrumentation-fs": { enabled: false },
+    }),
+  ],
 })
 
-let started = false
+// This file is a preload: initialize at module evaluation time, before Dawn's
+// CLI or generated server imports the runtime and HTTP modules.
+sdk.start()
 
-/**
- * Initialize the OpenTelemetry Node SDK and register a SIGTERM shutdown hook.
- * Call this function at the very top of your app's entry point — before any
- * other imports run — so auto-instrumentations patch modules at load time.
- *
- * Safe to call multiple times: only the first call starts the SDK.
- */
-export function startTelemetry(): void {
-  if (started) return
-  started = true
-
-  sdk.start()
-
-  // Flush and shut down the SDK cleanly when the process exits.
-  // The Node SDK's shutdown() is async; give it 5 s before forcing exit.
-  process.on("SIGTERM", () => {
-    sdk
-      .shutdown()
-      .then(() => process.exit(0))
-      .catch((err) => {
-        console.error("OTel SDK shutdown error:", err)
-        process.exit(1)
-      })
+// Best-effort flush on a natural event-loop exit. Do not install a signal or
+// process.exit handler here that could compete with the host's lifecycle.
+process.once("beforeExit", () => {
+  void sdk.shutdown().catch((error) => {
+    console.error("OpenTelemetry shutdown failed:", error)
   })
-}
+})
 ```
 
-> **Before saving:**
-> - `OTEL_SERVICE_NAME` default (`"dawn-app"`) — replace with a meaningful name for this app
-> - Exporter URL — will come from `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment (see Configure environment)
-> - Auth headers (if required by your backend) — set via `OTEL_EXPORTER_OTLP_HEADERS` or in the `OTLPTraceExporter` constructor
+Before saving, choose an appropriate fallback service name. Authentication headers can be supplied through `OTEL_EXPORTER_OTLP_HEADERS`; do not hard-code them in this file.
 
-## Wire it into your app
+The `beforeExit` hook is natural-exit cleanup only. It does not guarantee a flush for `SIGTERM`, `SIGINT`, `process.exit()`, or forced container termination. This template deliberately avoids claiming ownership of process signals; if termination-time delivery is required, coordinate shutdown with the process supervisor and the exact server lifecycle rather than adding an independent exit handler here.
 
-OTel must initialize **before** any other module loads. Auto-instrumentations work by patching modules at require/import time; if the SDK starts after `http` or `fetch` have already been imported, those patches are missed and spans will not be generated.
+## Validate the preload
 
-### Option A — Custom server entry (recommended)
+Check JavaScript syntax without starting the application:
 
-If the project has a custom server entry (e.g. `src/server.ts` or `src/index.ts`), import `startTelemetry` from `./lib/otel` and call it as the **very first statement**. This works with the project's existing TypeScript toolchain and requires no extra loader.
-
-```ts
-// src/server.ts  (or src/index.ts — wherever the server bootstraps)
-import { startTelemetry } from "./lib/otel"
-startTelemetry()
-
-// All other imports come after — OTel is now active before they load.
-import { createServer } from "http"
-// ... rest of server bootstrap
+```bash
+node --check instrumentation.mjs
 ```
 
-In ESM projects, `import` statements are hoisted by the runtime regardless of source order. Use a dynamic `await import()` to guarantee ordering:
+Once the required environment is set and the dependencies are installed, verify that Node can resolve and execute the preload itself. Dawn's entry is ESM, so include OpenTelemetry's supported ESM instrumentation hook as well as the preload:
 
-```ts
-// src/server.ts — ESM-safe ordering via dynamic import
-const { startTelemetry } = await import("./lib/otel")
-startTelemetry()
-
-const { createServer } = await import("http")
-// ... rest of server bootstrap
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+OTEL_SERVICE_NAME=dawn-app \
+NODE_OPTIONS="--experimental-loader=@opentelemetry/instrumentation/hook.mjs --import=./instrumentation.mjs" \
+node -e 'console.log("OpenTelemetry preload initialized")'
 ```
 
-### Option B — Node preload flag (works without a custom entry)
+An import, loader, or configuration error must fail here before Dawn starts. A successful message proves the self-starting module evaluated; end-to-end span delivery is verified below. Node currently labels the loader flag experimental because OpenTelemetry's ESM hook still uses that API.
 
-If there is no custom entry, or to guarantee OTel loads first regardless of ESM hoisting, preload the module via Node's `--import` flag.
+## Start Dawn with the preload
 
-**Important:** Node cannot preload a bare `.ts` file without a TypeScript loader. You have two sub-options:
+`NODE_OPTIONS` lets the same file run before either supported Node entry without editing Dawn-generated artifacts.
 
-- **(B1) Compiled JS** — build the project first, then point `--import` at the compiled output file (e.g. `dist/lib/otel.js`):
+For `dawn start`, invoke the app-local binary so only the Dawn process receives the preload:
 
-  ```json
-  {
-    "scripts": {
-      "start": "node --import ./dist/lib/otel.js dist/server.js"
-    }
-  }
-  ```
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+OTEL_SERVICE_NAME=dawn-app \
+NODE_OPTIONS="--experimental-loader=@opentelemetry/instrumentation/hook.mjs --import=./instrumentation.mjs" \
+./node_modules/.bin/dawn start --host 127.0.0.1 --port 8000
+```
 
-- **(B2) tsx loader** — if your project uses `tsx` as a TypeScript runner, chain it with `--import`:
+For the generated Node target, run the emitted entry directly:
 
-  ```bash
-  node --import tsx --import ./src/lib/otel.ts dist/server.js
-  # or via NODE_OPTIONS:
-  NODE_OPTIONS="--import tsx --import ./src/lib/otel.ts" node dist/server.js
-  ```
+```bash
+pnpm exec dawn build --clean
 
-  Do not use `--import ./src/lib/otel.js` while pointing at a `.ts` source file — Node will not resolve it without a loader and the preload will silently fail or error.
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+OTEL_SERVICE_NAME=dawn-app \
+NODE_OPTIONS="--experimental-loader=@opentelemetry/instrumentation/hook.mjs --import=./instrumentation.mjs" \
+node .dawn/build/server.mjs
+```
 
-> **`dawn dev` note:** `dawn dev` runs a child route runtime inside a managed process. To instrument that child process with OTel, set `NODE_OPTIONS` in your `.env` before starting `dawn dev`. The child runtime inherits `NODE_OPTIONS` from its environment. Use one of the B1/B2 forms above (e.g. `NODE_OPTIONS="--import tsx --import ./src/lib/otel.ts"`) or prefer Option A if a custom entry exists.
+The preload runs before `.dawn/build/server.mjs` imports `@dawn-ai/cli`. Keep `instrumentation.mjs` in the app root and in the build context.
+
+### Generated Docker image
+
+Do not edit the marker-managed Dockerfile. Its existing `CMD ["node", ".dawn/build/server.mjs"]` automatically honors `NODE_OPTIONS`, and its `COPY . .` places the root preload at `/app/instrumentation.mjs`.
+
+After building the Dawn-generated image, inject the preload and secrets at container run time:
+
+```bash
+docker run --rm \
+  --publish 127.0.0.1:8000:8000 \
+  --env-file .env \
+  --env 'NODE_OPTIONS=--experimental-loader=@opentelemetry/instrumentation/hook.mjs --import=./instrumentation.mjs' \
+  my-dawn-app
+```
+
+Ensure `.dockerignore` does not exclude `instrumentation.mjs`, keep the OTel packages in regular `dependencies`, and refresh `package-lock.json` because the generated image installs with npm. The OTLP endpoint from `--env-file` must be reachable from inside the container; `127.0.0.1` refers to the container itself, not a collector running on the host. In a container platform, use the collector's service address and set the same complete `NODE_OPTIONS` value in the workload environment rather than changing the generated command.
 
 ## Configure environment
 
-Add the following variables to `.env` (never commit this file):
+Provide these values through the runtime's secret and environment mechanism:
 
-```
-# OTLP collector/backend endpoint — required
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+```dotenv
+# Full OTLP/HTTP traces endpoint expected by OTLPTraceExporter
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
 
 # Human-readable service name shown in traces
 OTEL_SERVICE_NAME=dawn-app
 
-# Auth headers for backends that require them (e.g. Honeycomb, Grafana Cloud)
-# Format: comma-separated key=value pairs
-# OTEL_EXPORTER_OTLP_HEADERS=x-honeycomb-team=your-api-key,x-honeycomb-dataset=your-dataset
+# Optional backend authentication, as comma-separated key=value pairs
+# OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20your-token
 ```
 
-Document them in `.env.example` so other contributors know what to set:
+Document variable names without values in `.env.example`. Never commit populated credentials. `dawn start` does not automatically load `.env` or `config.env`; the shell examples above set non-secret local values explicitly, while production should inject all values through its process, container, or platform configuration.
 
-```
-OTEL_EXPORTER_OTLP_ENDPOINT=
-OTEL_SERVICE_NAME=
-# OTEL_EXPORTER_OTLP_HEADERS=
-```
+OpenTelemetry and other tracing integrations are independent. `dawn dev` enables LangSmith tracing when `LANGSMITH_API_KEY` is present; an OTel-instrumented Node deployment exports separately to the configured OTLP backend.
 
-If the project uses a different env-loading convention (e.g. a vault, a platform-injected secret, or an `env.ts` file), follow that convention instead of `.env`.
+## Verify end to end
 
-> **LangSmith tracing is separate.** `dawn dev` automatically enables LangSmith tracing when `LANGSMITH_API_KEY` is present (setting `LANGCHAIN_TRACING_V2=true`). OpenTelemetry tracing is independent — both can be active at the same time. They export to different backends via different mechanisms.
-
-## Verify
-
-1. **Start the server with env set** — ensure `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` are in the environment, then start the app:
+1. Start the Node runtime with `NODE_OPTIONS` using one of the commands above.
+2. Confirm process health:
 
    ```bash
-   dawn dev
-   # or, for a self-hosted server with compiled output:
-   node --import ./dist/lib/otel.js dist/server.js
+   curl --fail http://127.0.0.1:8000/healthz
    ```
 
-   The OTel SDK logs nothing on successful start by default. If you see an error like `Error: connect ECONNREFUSED`, the collector endpoint is not reachable — check that the backend is running and the URL is correct.
-
-2. **Exercise a route** — send a request to trigger a run:
+3. Exercise a real route so HTTP and model/tool activity can produce spans:
 
    ```bash
    echo '{"messages":[{"role":"user","content":"Hello"}]}' \
-     | dawn run '/your-route' --url http://127.0.0.1:3001
+     | pnpm exec dawn run /research --url http://127.0.0.1:8000
    ```
 
-3. **Confirm spans in your backend** — open your observability backend UI and look for traces with the service name matching `OTEL_SERVICE_NAME`. You should see at least one HTTP span for the inbound request.
-
-4. **Collector reachability check** — if no spans arrive, run:
-
-   ```bash
-   curl -v $OTEL_EXPORTER_OTLP_ENDPOINT
-   ```
-
-   A connection error means the backend is not reachable from this host. A 4xx response usually means a missing or incorrect auth header (`OTEL_EXPORTER_OTLP_HEADERS`).
+4. In the observability backend, find a trace whose service name matches `OTEL_SERVICE_NAME`. The preload check alone does not prove export; the backend trace does.
+5. If no trace arrives, verify collector reachability and authentication from the same runtime environment. A connection error indicates an unreachable endpoint; a 4xx response usually indicates missing or invalid `OTEL_EXPORTER_OTLP_HEADERS`.
 
 ## Updating an existing install
 
-If `src/lib/otel.ts` already exists with the `// dawn-blueprint: opentelemetry@1` marker on its first line:
+### Version 2
 
-1. Compare the existing file against the module template in [Create the instrumentation module](#create-the-instrumentation-module).
-2. Apply relevant changes from this guide (e.g. updated `ATTR_SERVICE_NAME` import from `@opentelemetry/semantic-conventions`, the double-start guard, the `SIGTERM` hook) while **preserving the user's customisations** — service name default, exporter URL overrides, extra instrumentations, or any additional `ResourceAttributes`.
-3. Do not change the marker line; it must remain `// dawn-blueprint: opentelemetry@1` as the first line of the file.
-4. Confirm that `startTelemetry()` is still called at the top of the server entry (or via `NODE_OPTIONS`) after updating.
+If root `instrumentation.mjs` starts with `// dawn-blueprint: opentelemetry@2`:
+
+1. Compare it with the current template while preserving the service name, exporter options, headers, and intentional instrumentation overrides.
+2. Keep `sdk.start()` at top level; do not turn it back into an uncalled exported function.
+3. Run `node --check instrumentation.mjs`, the standalone preload command, and the end-to-end trace check.
+4. Confirm every Node deployment path supplies both the ESM loader hook and `--import=./instrumentation.mjs` in `NODE_OPTIONS`, including the generated Docker image.
+
+### Migrating version 1
+
+If `src/lib/otel.ts` starts with `// dawn-blueprint: opentelemetry@1`:
+
+1. Create root `instrumentation.mjs` from the version 2 template and carry forward only intentional exporter, resource, and instrumentation customizations.
+2. Confirm the new file calls `sdk.start()` at top level.
+3. Replace every `dist/lib/otel.js`, TypeScript-loader, and old preload reference with the ESM loader hook plus `--import=./instrumentation.mjs` through `NODE_OPTIONS`.
+4. Validate the direct Dawn, generated-server, and container startup path the app actually deploys.
+5. After trace export is confirmed and no import references remain, remove the legacy `src/lib/otel.ts` file.
+
+Reference: https://opentelemetry.io/docs/languages/js/getting-started/nodejs/

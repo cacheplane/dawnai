@@ -47,8 +47,8 @@ task({
 
 The parent receives the child's final text as the tool result.
 
-<Callout type="info" title="Subagents are least-privilege by default">
-  A child route does not inherit the parent's capability tools. By default it sees only its own `tools/*.ts`; ambient tools like `writeFile` and `runBash` are withheld unless granted via `tools: { allow: [...] }`. A child with a dispatchable child of its own receives the internal `task` mechanism independently; `task` cannot be granted or controlled through tool policy. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
+<Callout type="info" title="Subagent tool inheritance">
+  A child gets shared authored `src/tools/*` and its own route-local `tools/*` by default, but does not inherit the parent route's local tools. Active capability tools such as `writeFile` and `runBash` are withheld unless granted with `tools.allow`. Explicitly deny a sensitive shared authored tool, for example `tools: { deny: ["deployProd"] }`, when a child must not receive it. A child with a dispatchable child of its own receives the internal `task` mechanism independently; keep `task` outside tool policy. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
 </Callout>
 
 A subagent can also declare its own `tools: { approve: [...] }` to require human approval per call on any of its tools. The resulting `kind: "tool"` interrupt surfaces on the **parent's** stream, alongside the other `subagent.*` events, not on a separate child stream. See [Per-tool approval](/docs/permissions#per-tool-approval).
