@@ -185,6 +185,37 @@ fails with targeted guidance instead of retaining an unresolved runtime import.
 Every condition target is a packed `dist` artifact; the published import map
 never points at unshipped source.
 
+Some bundled CommonJS dependencies access Node builtins with literal
+`require(...)` calls. The first esbuild pass uses an internal compatibility
+plugin that intercepts only esbuild `require-call` resolutions whose literal
+specifier is a recognized Node builtin. It canonicalizes bare builtin names to
+`node:*` and routes each through a CommonJS wrapper that statically
+default-imports the canonical `node:*` module and assigns that imported value to
+`module.exports`. This preserves the callable or object value returned by
+CommonJS `require`, rather than substituting an ESM namespace object. `module`
+and `node:module` are never bridged. Nonliteral requires and unresolved or
+external nonbuiltins remain fail-closed.
+
+The plugin has one narrow optional-peer rule for `pg`. It applies only when the
+importer resolves inside the real `pg` package boundary, the owning
+`package.json` declares `name: "pg"`, and the importer-relative path is exactly
+`lib/native/client.js`. The same manifest must declare a string
+`peerDependencies["pg-native"]` range and
+`peerDependenciesMeta["pg-native"].optional === true`. Only then does that
+file's literal `require("pg-native")` resolve to a lazy CommonJS stub whose
+evaluation throws an error with code `MODULE_NOT_FOUND`, accurately modeling an
+absent optional native binding. No other importer or import kind receives that
+stub: direct `pg-native` use remains unsupported and fails the build.
+Credential-free bundle execution proves the ordinary JavaScript `pg.Pool` path
+works, `pg.native` resolves to `null`, and `NODE_PG_FORCE_NATIVE` fails with the
+expected missing-module error.
+
+This compatibility pass does not weaken or replace
+`validateVercelOutput`. The independent post-bundle validation pass remains
+unchanged: it still rejects `module`/`node:module`, nonliteral runtime
+dependencies, unbundled nonbuiltins, virtual inputs, and dependencies that
+escape the function-directory boundary.
+
 `.vercel/output/config.json` uses Build Output API version 3 and routes every
 request path and method to the single `index` function. Agent Protocol paths
 must remain unchanged; there is no `/api` prefix or application rewrite visible

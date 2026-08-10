@@ -35,7 +35,8 @@
 - `packages/cli/src/lib/build/targets/web-runtime.ts` — owns the shared edge-capability preflight, provider discovery, static module/store/app source generation, and dependency notice used by Hono and Vercel.
 - `packages/cli/src/lib/build/targets/vercel-config.ts` — owns the recommended `vercel.json`, parsing/preservation rules, `fluid` validation, reference-file emission, and warnings.
 - `packages/cli/src/lib/build/targets/vercel-output.ts` — owns Build Output API metadata validation and the backup/rename/rollback publisher for `.vercel/output`.
-- `packages/cli/src/lib/build/targets/vercel.ts` — coordinates staging, shared runtime generation, esbuild bundling, metadata creation, validation, root-config reconciliation, transactional publication, and artifact reporting.
+- `packages/cli/src/lib/build/targets/vercel-node-compat.ts` — owns the internal first-pass esbuild plugin that converts literal CommonJS Node-builtin requires into static `node:*` imports and models only `pg`'s verified optional native peer as absent.
+- `packages/cli/src/lib/build/targets/vercel.ts` — coordinates staging, shared runtime generation, esbuild bundling through the Node-compatibility plugin, metadata creation, validation, root-config reconciliation, transactional publication, and artifact reporting.
 - `packages/langchain/src/default-model-importer.ts` and `packages/langchain/src/static-model-importer.ts` — separate the ordinary Node dynamic fallback from the loader-free static-deployment fallback selected by the Vercel bundle.
 
 ### New test and CI files
@@ -66,7 +67,8 @@
 - `web-runtime.ts` does not know about Wrangler, Vercel JSON, filesystem transactions, or esbuild.
 - `vercel-config.ts` does not create or remove `.vercel/output`.
 - `vercel-output.ts` does not build code or inspect application configuration.
-- `vercel.ts` is orchestration only; move pure behavior into the two focused helpers rather than growing another `hono.ts`-sized file.
+- `vercel-node-compat.ts` is internal to the Vercel target. It does not publish output, weaken post-bundle validation, or provide a general CommonJS loader.
+- `vercel.ts` is orchestration only; move pure behavior into focused helpers rather than growing another `hono.ts`-sized file.
 - The native helper owns all external mutations and cleanup. The ordinary target tests remain credential-free.
 
 ### Task 1: Register the opt-in target and mirror validation
@@ -823,6 +825,9 @@
 ### Task 8: Build the native two-preview fixture and black-box client
 
 **Files:**
+- Create: `packages/cli/src/lib/build/targets/vercel-node-compat.ts`
+- Modify: `packages/cli/src/lib/build/targets/vercel.ts`
+- Modify: `packages/cli/test/vercel-target.test.ts`
 - Create: `packages/cli/test/helpers/vercel-native-fixture.ts`
 - Create: `packages/cli/test/helpers/vercel-native-cleanup.mjs`
 - Create: `packages/cli/test/vercel-native-lane.test.ts`
@@ -916,6 +921,10 @@
 
   Write a fixture-local `pnpm-workspace.yaml` override for every vendored Dawn package to its matching relative tarball. Generate separate frozen lockfiles, parse and validate them as in Step 5, and install only the prebuilt fixture. Both fixtures get the recommendation-shaped `vercel.json`, `build.targets: ["vercel"]`, and an exact local project link. Keep `.vercel/project.json` out of diagnostic uploads.
 
+  Do not add `pg-native` to either manifest. Both fixtures intentionally
+  exercise the ordinary JavaScript `pg.Pool` path with that optional native
+  binding absent.
+
   Re-run the Step 5 command. Expected: PASS.
 
 - [ ] **Step 7: Write RED tests for the exact model-free routes and release secret**
@@ -937,7 +946,87 @@
 
   Expected: FAIL because the fixture source generator is incomplete.
 
+**Prerequisite compatibility checkpoint (complete and commit before Step 8):**
+
+- [ ] **Add focused credential-free RED cases.** In `vercel-target.test.ts`, build
+  through the real Vercel target and prove:
+
+  - a CommonJS dependency's literal Node-builtin require receives the same
+    callable/object value as native CommonJS, not an ESM namespace;
+  - an ordinary `pg@8.22.0` `Pool` can be constructed without opening a
+    connection, `pg.native === null` when `pg-native` is absent, and evaluating
+    a fresh bundle with `NODE_PG_FORCE_NATIVE=1` fails with code
+    `MODULE_NOT_FOUND`;
+  - direct application import or require of `pg-native`, a lookalike
+    `lib/native/client.js` outside the verified `pg` package boundary, missing
+    or non-optional `pg-native` peer metadata, a nonliteral require, and an
+    unresolved/external nonbuiltin all fail closed; and
+  - literal `require("module")` and `require("node:module")` remain rejected.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-target.test.ts \
+    -t "Vercel CommonJS Node compatibility"
+  ```
+
+  Expected: FAIL because the first bundle still leaves CommonJS Node-builtin
+  access and `pg`'s absent optional native binding as runtime require edges.
+
+- [ ] **Implement the narrow first-pass compatibility plugin.** Create
+  `vercel-node-compat.ts` with an internal esbuild plugin. Intercept only
+  `onResolve` calls whose `kind` is `require-call` and whose path is a literal
+  recognized Node builtin, excluding both `module` and `node:module`.
+  Canonicalize bare names to `node:*`; load a virtual CommonJS wrapper that uses
+  a static default import of that canonical module and assigns the imported
+  value to `module.exports`. Do not rewrite nonliteral sites, nonbuiltins, or
+  unresolved imports.
+
+  Add one separate exact `pg-native` rule only for a `require-call` from an
+  importer whose real path is exactly `lib/native/client.js` beneath its owning
+  package root and whose parsed package manifest has `name: "pg"`, a string
+  `peerDependencies["pg-native"]` range, and
+  `peerDependenciesMeta["pg-native"].optional === true`. Load a lazy CommonJS
+  stub that throws only when required and assigns `code: "MODULE_NOT_FOUND"` to
+  the error. Every direct `pg-native` import, every other importer, and every
+  other import kind must continue through normal esbuild resolution and reject
+  when unavailable. Wire this plugin into the first build in `vercel.ts`; do
+  not modify `validateVercelOutput` or its second-pass dependency rules.
+
+- [ ] **Verify the production correction.** Re-run the focused RED command, the
+  complete Vercel target suite, typecheck,
+  scoped formatting, and the diff check:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-target.test.ts \
+    -t "Vercel CommonJS Node compatibility"
+  corepack pnpm --filter @dawn-ai/cli test vercel-target.test.ts build-targets.test.ts
+  corepack pnpm --filter @dawn-ai/cli typecheck
+  corepack pnpm biome check --config-path packages/config-biome/biome.json \
+    packages/cli/src/lib/build/targets/vercel-node-compat.ts \
+    packages/cli/src/lib/build/targets/vercel.ts \
+    packages/cli/test/vercel-target.test.ts
+  git diff --check
+  ```
+
+  Expected: PASS, while the existing post-bundle negative controls remain
+  unchanged and green.
+
+- [ ] **Commit the prerequisite separately before the fixture-assembly commit.**
+
+  ```bash
+  git add packages/cli/src/lib/build/targets/vercel-node-compat.ts \
+    packages/cli/src/lib/build/targets/vercel.ts \
+    packages/cli/test/vercel-target.test.ts
+  git commit -m "fix(cli): bridge cjs node builtins for vercel"
+  ```
+
 - [ ] **Step 8: Generate the raw graph, stream, release, and middleware**
+
+  Begin this step only after the prerequisite compatibility checkpoint above is
+  green and committed. This fixture is the cross-reference that exercises the
+  production bridge; it must not patch `pg`, vendor `pg-native`, or weaken Build
+  Output validation locally.
 
   Generate one module-lifetime `pg.Pool` with `connectionString: process.env.DATABASE_URL`, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. Pool construction must tolerate an absent build-time value and must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
 
