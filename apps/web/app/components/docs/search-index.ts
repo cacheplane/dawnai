@@ -7,6 +7,7 @@
 
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import GithubSlugger from "github-slugger"
 import { DOCS_NAV, type DocsNavItem } from "./nav"
 
 export interface DocsSearchHeading {
@@ -22,15 +23,12 @@ export interface DocsSearchEntry {
   readonly headings: readonly DocsSearchHeading[]
 }
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-}
-
 function extractHeadings(mdx: string): readonly DocsSearchHeading[] {
   const out: DocsSearchHeading[] = []
+  // The same slugger `rehype-slug` runs, one instance per document, fed every
+  // heading level in document order — that shared state (its duplicate-suffix
+  // counter) is what keeps these anchors identical to the ids in the built page.
+  const slugger = new GithubSlugger()
   let inFence = false
   for (const line of mdx.split("\n")) {
     const trimmed = line.trim()
@@ -39,11 +37,12 @@ function extractHeadings(mdx: string): readonly DocsSearchHeading[] {
       continue
     }
     if (inFence) continue
-    const match = /^(#{1,3})\s+(.+)$/.exec(trimmed)
+    const match = /^(#{1,6})\s+(.+)$/.exec(trimmed)
     if (!match?.[1] || !match[2]) continue
-    const level = match[1].length as 1 | 2 | 3
+    const level = match[1].length
     const text = match[2].trim().replace(/`([^`]+)`/g, "$1")
-    out.push({ text, level, anchor: slugify(text) })
+    const anchor = slugger.slug(text)
+    if (level <= 3) out.push({ text, level: level as 1 | 2 | 3, anchor })
   }
   return out
 }

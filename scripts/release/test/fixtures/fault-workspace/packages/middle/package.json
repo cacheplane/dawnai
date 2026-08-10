@@ -1,0 +1,12 @@
+{
+  "name": "@fault/middle",
+  "version": "1.2.3",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "@fault/base": "workspace:*"
+  }
+}

@@ -2,6 +2,7 @@ import { MemorySaver } from "@langchain/langgraph"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-core.js"
+import { createRuntimeFetchHandler as createNodeRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import {
   chatFixtureApp,
   fakePermissionsStore,
@@ -112,5 +113,158 @@ describe("edge runtime diagnostics", () => {
     const second = await handler.fetch(new Request("http://localhost/threads", { method: "POST" }))
     expect(second.status).toBe(500)
     expect(errors.filter((line) => line.includes("DATABASE_URL"))).toHaveLength(1)
+  }, 120_000)
+})
+
+// ---------------------------------------------------------------------------
+// GATED FEATURES THAT USED TO NO-OP IN SILENCE.
+//
+// The build gate (DAWN_E1005, edge-capabilities.ts) rejects all of these — but
+// it only runs when the `hono` target does, and hand-composing an entry over
+// `@dawn-ai/cli/fetch` is a documented way to deploy. Such an app never runs the
+// target, so before these guards a `sandbox` block reached a worker, was read,
+// and did nothing at all. Same code, same words, raised at request time.
+// ---------------------------------------------------------------------------
+
+/** The edge shape: no bootFallbacks, every store injected per request. */
+async function edgeHandler(
+  appRoot: string,
+  modules: Awaited<ReturnType<typeof buildStaticModulesForFixture>>,
+  config: NonNullable<Parameters<typeof createRuntimeFetchHandler>[0]["config"]>,
+) {
+  const handler = await createRuntimeFetchHandler({
+    appRoot,
+    config,
+    modules,
+    requestStores: async () => ({
+      checkpointer: new MemorySaver(),
+      permissionsStore: fakePermissionsStore(),
+      threadsStore: memoryThreadsStore().store,
+    }),
+  })
+  cleanup.push(() => handler.close())
+  return handler
+}
+
+describe("edge runtime capability guards", () => {
+  it("raises DAWN_E1005 for a configured `sandbox` no edge runtime can start", async () => {
+    const appRoot = await chatFixtureApp()
+    const modules = await buildStaticModulesForFixture(appRoot)
+    const errors = captureConsoleError()
+
+    const handler = await edgeHandler(appRoot, modules, {
+      // A provider handle is never contacted here — the gap is that this
+      // runtime has no container daemon to hand it to.
+      sandbox: { provider: {} as never },
+    })
+
+    const response = await handler.fetch(new Request("http://localhost/healthz"))
+    // Health checks fail too, deliberately: a rollout that goes green while
+    // silently ignoring the sandbox block is the failure this exists to stop.
+    expect(response.status).toBe(500)
+    const body = (await response.json()) as {
+      error: { message: string; code?: string; docsUrl?: string }
+    }
+    expect(body.error.code).toBe("DAWN_E1005")
+    expect(body.error.message).toContain("sandbox")
+    expect(body.error.message).toContain("`sandbox` in dawn.config.ts")
+    expect(body.error.docsUrl).toBeTruthy()
+    expect(errors.join("\n")).toContain("sandbox")
+
+    // Deduped like every other deployment misconfiguration.
+    await handler.fetch(new Request("http://localhost/healthz"))
+    expect(
+      errors.filter((line) => line.includes("DAWN_E1005") || line.includes("sandbox")),
+    ).toHaveLength(1)
+  }, 120_000)
+
+  it("raises DAWN_E1005 for `toolOutput`, which has nowhere to spill", async () => {
+    const appRoot = await chatFixtureApp()
+    const modules = await buildStaticModulesForFixture(appRoot)
+    captureConsoleError()
+
+    const handler = await edgeHandler(appRoot, modules, {
+      toolOutput: { offloadThresholdChars: 1_000 },
+    })
+
+    const response = await handler.fetch(new Request("http://localhost/healthz"))
+    expect(response.status).toBe(500)
+    const body = (await response.json()) as { error: { message: string; code?: string } }
+    expect(body.error.code).toBe("DAWN_E1005")
+    expect(body.error.message).toContain("tool-output offloading")
+    expect(body.error.message).toContain("`toolOutput` in dawn.config.ts")
+  }, 120_000)
+
+  it("raises DAWN_E1005 for a route whose skills would vanish from the prompt", async () => {
+    const appRoot = await chatFixtureApp()
+    const built = await buildStaticModulesForFixture(appRoot)
+    captureConsoleError()
+
+    // What `dawn build` records into the manifest for a route with a
+    // `skills/<name>/SKILL.md` — the only trace of them that survives to
+    // request time, since the capability's `detect` needs a MarkerFs.
+    const modules = {
+      ...built,
+      routes: built.routes.map((route) => ({ ...route, skills: ["cite-sources"] })),
+    }
+    const handler = await edgeHandler(appRoot, modules, {})
+
+    const response = await handler.fetch(new Request("http://localhost/healthz"))
+    expect(response.status).toBe(500)
+    const body = (await response.json()) as { error: { message: string; code?: string } }
+    expect(body.error.code).toBe("DAWN_E1005")
+    expect(body.error.message).toContain("skills")
+    expect(body.error.message).toContain("cite-sources")
+  }, 120_000)
+
+  it("serves an ordinary edge app that configured none of them", async () => {
+    // The guard must cost nothing for the apps the hono target actually
+    // produces — a 500 here would break every deployed worker.
+    const appRoot = await chatFixtureApp()
+    const modules = await buildStaticModulesForFixture(appRoot)
+
+    const handler = await edgeHandler(appRoot, modules, {})
+
+    const response = await handler.fetch(new Request("http://localhost/healthz"))
+    expect(response.status).toBe(200)
+  }, 120_000)
+})
+
+// ---------------------------------------------------------------------------
+// …AND NEVER ON NODE.
+//
+// Every feature above absent is a documented DEGRADE on node, not a fault (see
+// `requireFallbacks` in execute-route-core.ts). A node app configuring all three
+// is completely normal — they all work there. This is the half of the guard
+// that protects existing users, so it is asserted through the real node entry
+// point rather than a stub: `runtime-fetch-handler.ts` is what applies
+// `nodeBootFallbacks`, which is the single condition the guard turns on.
+// ---------------------------------------------------------------------------
+
+describe("node runtime — the same config raises nothing", () => {
+  it("serves normally with sandbox, toolOutput AND route skills all configured", async () => {
+    const appRoot = await chatFixtureApp()
+    const built = await buildStaticModulesForFixture(appRoot)
+    const modules = {
+      ...built,
+      routes: built.routes.map((route) => ({ ...route, skills: ["cite-sources"] })),
+    }
+    const errors = captureConsoleError()
+
+    // Same three inputs that produced three DAWN_E1005s above. The ONLY
+    // difference is the entry point, which supplies the node fallback bag.
+    const handler = await createNodeRuntimeFetchHandler({
+      appRoot,
+      config: {
+        sandbox: { provider: {} as never },
+        toolOutput: { offloadThresholdChars: 1_000 },
+      },
+      modules,
+    })
+    cleanup.push(() => handler.close())
+
+    const response = await handler.fetch(new Request("http://localhost/healthz"))
+    expect(response.status).toBe(200)
+    expect(errors.join("\n")).not.toContain("DAWN_E1005")
   }, 120_000)
 })

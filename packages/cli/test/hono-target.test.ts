@@ -519,6 +519,27 @@ export default defineMemory({ schema: z.object({ fact: z.string() }) })
     expect(message).toContain(join("src", "app", "chat", "skills"))
   })
 
+  test("dawn check gates `toolOutput`, whose keys survive the build boundary intact", async () => {
+    // The one gated feature whose config is plain JSON, so it inlines into the
+    // bundle cleanly and then does nothing — the edge has no filesystem to
+    // spill oversized tool output to. Gated at BUILD time as well as at request
+    // time deliberately: without this the build went green and the deployed
+    // worker was the thing that rejected the app.
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  toolOutput: { offloadThresholdChars: 20000 },
+}
+`,
+    })
+
+    const error = await runCheck(appRoot).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(String(error)).toContain("`toolOutput`")
+    expect(String(error)).toContain("tool-output offloading")
+  })
+
   test("dawn check mirrors the store-handle gating, not just the loud features", async () => {
     // The silent-divergence class — and the one `dawn check` was NOT asserted
     // for. With only sandbox/workspace/skills covered here, narrowing the config

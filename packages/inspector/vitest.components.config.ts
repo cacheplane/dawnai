@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     name: "inspector-components",
     environment: "jsdom",
-    include: ["test/components/**/*.test.tsx"],
+    // `.ts` too: not every component-side unit is JSX — the filter mapping is
+    // pure logic that would otherwise have to pretend to be a component file.
+    include: ["test/components/**/*.test.{ts,tsx}"],
   },
 })

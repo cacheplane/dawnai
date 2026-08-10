@@ -3,7 +3,13 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "!.next/cache/**",
+        ".dawn/build/**",
+        ".dawn/dawn.generated.d.ts"
+      ]
     },
     "@dawn-ai/cli#build": {
       "dependsOn": ["^build"],
@@ -22,10 +28,74 @@
       "persistent": true
     },
     "lint": {
-      "dependsOn": ["^lint"]
+      "dependsOn": ["^lint"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/config-biome/biome.json"]
     },
     "test": {
-      "dependsOn": ["^test"]
+      "dependsOn": ["build", "^test"]
+    },
+    "@dawn-ai/cli#test": {
+      "dependsOn": ["build", "^test", "@dawn-ai/testing#build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/web/content/docs/**",
+        "$TURBO_ROOT$/packages/ag-ui/README.md",
+        "$TURBO_ROOT$/examples/chat/**",
+        "$TURBO_ROOT$/examples/research/**",
+        "!$TURBO_ROOT$/examples/*/**/node_modules/**",
+        "!$TURBO_ROOT$/examples/*/**/.dawn/**",
+        "!$TURBO_ROOT$/examples/*/**/.next/**",
+        "!$TURBO_ROOT$/examples/*/**/.turbo/**",
+        "!$TURBO_ROOT$/examples/*/**/dist/**",
+        "!$TURBO_ROOT$/examples/*/**/*.tsbuildinfo"
+      ]
+    },
+    "@dawn-ai/core#test": {
+      "dependsOn": ["build", "^test"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/packages/vite-plugin/package.json",
+        "$TURBO_ROOT$/test/fixtures/contracts/manifest.snap.json"
+      ]
+    },
+    "@dawn-ai/inspector#test": {
+      "dependsOn": ["build", "^test"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/web/next.config.ts",
+        "$TURBO_ROOT$/apps/web/next-env.d.ts",
+        "$TURBO_ROOT$/apps/web/package.json",
+        "$TURBO_ROOT$/examples/chat/web/next.config.mjs",
+        "$TURBO_ROOT$/examples/chat/web/package.json",
+        "$TURBO_ROOT$/examples/research/web/next.config.mjs",
+        "$TURBO_ROOT$/examples/research/web/package.json"
+      ]
+    },
+    "@dawn-ai/sandbox#test": {
+      "dependsOn": ["build", "^test"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.github/workflows/ci.yml",
+        "$TURBO_ROOT$/charts/dawn-sandbox-infra/values.yaml"
+      ]
+    },
+    "@dawn-ai/testing#test": {
+      "dependsOn": ["build", "^test"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/examples/memory/server/dawn.config.ts",
+        "$TURBO_ROOT$/examples/memory/server/package.json",
+        "$TURBO_ROOT$/examples/memory/server/tsconfig.json",
+        "$TURBO_ROOT$/examples/memory/server/src/**",
+        "$TURBO_ROOT$/test/runtime/fixtures/sandbox-app/dawn.config.ts",
+        "$TURBO_ROOT$/test/runtime/fixtures/sandbox-app/package.json",
+        "$TURBO_ROOT$/test/runtime/fixtures/sandbox-app/src/**"
+      ]
+    },
+    "create-dawn-ai-app#test": {
+      "dependsOn": ["build", "^test"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/test/harness/**"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]

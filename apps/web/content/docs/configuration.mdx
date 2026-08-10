@@ -209,6 +209,8 @@ Configures tool-output offloading. When a tool returns a result whose serialized
 | `gcThrottleMs` | `number` | `10000` | Minimum milliseconds between GC scans. Default is 10 seconds. |
 | `noOffloadTools` | `string[]` | `[]` | Additional tool names whose output is never offloaded. Merged with the built-in exempt set (`readFile`, `listDir`), which are always exempt so the agent can read back offloaded content without triggering re-offload. |
 
+Offloading needs a filesystem, so this key is [gated off the `hono` target](/docs/deployment#what-the-edge-cannot-serve): setting it while `"hono"` is in `build.targets` fails the build with `DAWN_E1005`, and a runtime with no filesystem raises the same code per request. An empty `toolOutput: {}` configures nothing and is not gated. See [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target) if this turned a passing build red.
+
 ---
 
 ### `summarization`
@@ -228,7 +230,7 @@ Configures conversation summarization. When enabled, Dawn compresses older messa
 
 ### `memory`
 
-Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememory) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
+Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememorydef) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
 
 ```ts
 memory?: {
@@ -273,7 +275,7 @@ build?: {
 `targets` selects which deployment artifacts `dawn build` emits. Known targets:
 - `"node"` — a runnable Node server entry (`.dawn/build/server.mjs`, which boots `serveRuntime`) plus a hardened `Dockerfile`. This is the only target that engages the sandbox in production. Run it with `dawn start` or `docker build`/`docker run`.
 - `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json` and the per-route materialized graph entry files).
-- `"hono"` — an edge entry point (`.dawn/build/app.mjs`), its module manifest and per-request Postgres store factory, and a `wrangler.toml` scaffold, for Cloudflare Workers and other web-standard runtimes. **Not emitted by default**, and it serves a [subset of Dawn](/docs/deployment#what-the-edge-cannot-serve) — the build fails with `DAWN_E1005` when the app uses something the edge cannot run.
+- `"hono"` — an edge entry point (`.dawn/build/app.mjs`), its module manifest and per-request Postgres store factory, and a `wrangler.toml` scaffold, for Cloudflare Workers and other web-standard runtimes. **Not emitted by default**, and it serves a [subset of Dawn](/docs/deployment#what-the-edge-cannot-serve) — the build fails with `DAWN_E1005` when the app uses something the edge cannot run, and a runtime with no filesystem fallbacks raises the same code on every request for anything that got past the build gate. Neither can fire on the `node` target.
 
 `node` and `langsmith` are emitted by default. Naming `targets` **replaces** that list rather than adding to it: restrict to one — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way, and name every target you want otherwise (`{ build: { targets: ["node", "hono"] } }`). See [Deployment](/docs/deployment) for the full bridge.
 
@@ -375,7 +377,7 @@ import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
 const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
 ```
 
-Reach for `/node` on Node, Bun, or Vercel functions when you want the convenience. Use the main entry with your own pool everywhere else.
+Reach for `/node` on Node, Bun, or a Vercel function running the Node.js runtime when you want the convenience. Use the main entry with your own pool everywhere else.
 
 Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
 
@@ -383,8 +385,8 @@ Note that `permissions.store` receives `mode` explicitly. A custom store owns it
 
 | Host | Works | Notes |
 |---|---|---|
-| Node, Bun | Yes | Direct TCP to Postgres. |
-| Vercel functions | Yes | Direct TCP to Postgres. |
+| Node, Bun | Yes | Direct TCP to Postgres. Exercised in CI. |
+| Vercel functions (Node.js runtime) | Should, untested | Direct TCP to Postgres — the runtime is Node, so `pg` behaves as it does above. Nothing here has been run on Vercel, so this is inference from the driver rather than a measurement. Vercel's **Edge** runtime has no raw TCP socket and needs the Cloudflare Workers row's treatment instead. |
 | Cloudflare Workers | **Not with `pg`** | `pg` opens a TCP socket, which workerd does not provide — so the `/node` entry is unusable there. Inject a [`@neondatabase/serverless`](https://github.com/neondatabase/serverless) WebSocket `Pool` into the main entry instead; it satisfies `SqlPool`, and a throwaway spike confirmed inside real workerd that the checkpointer's `BEGIN`/`COMMIT`/`ROLLBACK` are genuine session transactions on that path. That wiring is what `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates, and a gated CI lane exercises it inside real workerd end to end — at the AG-UI level, [with limits worth reading](/docs/deployment#what-is-proven-and-what-is-not). Build the pool and the stores **per request** — see [why](/docs/deployment#why-the-stores-are-per-request). [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) should also work but is untested; it needs a Cloudflare account. |
 
 ### Your app owns store teardown

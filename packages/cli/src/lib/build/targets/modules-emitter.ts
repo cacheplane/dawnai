@@ -7,6 +7,7 @@ import type { RouteDefinition, RouteKind } from "@dawn-ai/core"
 import { createRouteAssistantId } from "../../runtime/route-identity.js"
 import { discoverStateDefinition } from "../../runtime/state-discovery.js"
 import { discoverToolDefinitions, type ToolScope } from "../../runtime/tool-discovery.js"
+import { discoverSkillDirs } from "./edge-capabilities.js"
 
 /**
  * Build-time discovery results for one route — everything the emitter needs
@@ -25,6 +26,21 @@ export interface RouteStaticDiscovery {
   /** Reducer-override files, keyed by state field (agent routes only). */
   readonly reducers: readonly { readonly field: string; readonly filePath: string }[] | undefined
   readonly routeId: string
+  /**
+   * Skill directory names under `<routeDir>/skills`; `undefined` when the route
+   * has none.
+   *
+   * The ONE build fact recorded here that the runtime cannot re-derive. Skill
+   * bodies are read from disk when a route loads, so on a runtime with no
+   * filesystem the skills capability's `detect` returns false and the skills
+   * vanish from the prompt with nothing to report — "this route had skills" and
+   * "this route had none" are indistinguishable at request time. Carrying the
+   * names lets `collectRuntimeCapabilityGaps` raise DAWN_E1005 instead.
+   *
+   * Optional, unlike its siblings: "no skills" is the overwhelmingly common
+   * case and every existing constructor of this type predates the field.
+   */
+  readonly skills?: readonly string[]
   /**
    * `state.ts` defaults as entries; `undefined` when the route has no state
    * definition, `[]` when it has a defined-but-empty one (mirrors the
@@ -95,12 +111,19 @@ export async function collectRouteStaticDiscovery(options: {
   const memoryFile =
     route.kind === "agent" && existsSync(memoryFilePath) ? memoryFilePath : undefined
 
+  // Same walker the edge build gate uses, so the two can never disagree about
+  // what counts as a skill. `undefined` rather than `[]` when there are none:
+  // the emitter then omits the field entirely and a skill-less app's manifest
+  // is byte-for-byte what it was before this fact existed.
+  const skillDirs = discoverSkillDirs(join(route.routeDir, "skills"))
+
   return {
     entryFile: route.entryFile,
     kind: route.kind,
     memoryFile,
     reducers,
     routeId: route.id,
+    ...(skillDirs.length > 0 ? { skills: skillDirs } : {}),
     stateDefaults,
     toolSchemas,
     tools,
@@ -265,6 +288,12 @@ export function emitModulesFileWithFlavor(
     lines.push(`      routeId: ${JSON.stringify(discovery.routeId)},`)
     lines.push(`      routeModule: ${routeVar},`)
     lines.push(`      routePath: ${JSON.stringify(appRootRelative(appRoot, discovery.entryFile))},`)
+    // Emitted ONLY when the route actually has skills, so a skill-less app's
+    // manifest is unchanged by this field's existence. Plain names, not paths:
+    // the runtime guard reports them, it never opens them.
+    if (discovery.skills && discovery.skills.length > 0) {
+      lines.push(`      skills: ${JSON.stringify(discovery.skills)},`)
+    }
     if (discovery.stateDefaults) {
       // Defaults come from arbitrary user schema code; the dynamic path hands
       // the live values to resolveStateFields while this path inlines them.

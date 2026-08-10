@@ -50,7 +50,7 @@ export const DAWN_ERRORS = {
   },
   DAWN_E1005: {
     code: "DAWN_E1005",
-    title: "Feature unsupported by the build target",
+    title: "Feature unsupported by the build target or runtime",
     docsPath: "/docs/deployment",
   },
   DAWN_E2001: {
