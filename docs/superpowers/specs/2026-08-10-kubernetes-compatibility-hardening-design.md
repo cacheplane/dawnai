@@ -168,7 +168,8 @@ immutable test inputs. It records:
 - digest-pinned Kind node images;
 - the Calico manifest URL, expected SHA-256, and exact image rewrites;
 - the digest-pinned sandbox workload image; and
-- every digest-pinned probe and placeholder image used by the focused suite.
+- every digest-pinned probe, placeholder, and smoke-build base image used by
+  the focused and canonical suites.
 
 The initial Kind images come from the official Kind v0.32.0 release:
 
@@ -226,19 +227,24 @@ Other external focused-suite fixtures are likewise pinned:
 | placeholder application | `nginxinc/nginx-unprivileged:stable-alpine@sha256:44e36330f74d4f3a1d4e222acca9e23b401fb87811a7597024502bb759c4dd49` |
 | reachability probe | `curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b` |
 | inert admission probe | `registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a` |
+| packaged-app build base | `docker.io/library/node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03` |
 
 The reaper image remains digest-pinned in the chart and is audited against the
-policy. Locally built packaged-application and AI-mock images are content built
-from the checked-out commit and loaded directly into Kind; they are not remote
-mutable inputs.
+policy. The smoke-only Dockerfile augmentation replaces the generated
+`FROM node:24-slim` exactly once with the policy's packaged-app base, without
+changing Dawn's production Dockerfile generator. The AI-mock Dockerfile uses
+the policy's digest-pinned Node 22 base directly. Locally built
+packaged-application and AI-mock images are then loaded directly into Kind;
+their source and base-image inputs are no longer mutable remote tags.
 
 Static tests require the exact set of canonical and endpoint roles, valid
 minor/version relationships, digest-qualified image references, a valid
 manifest checksum, exact Calico rewrite cardinality, explicit tool versions,
 and one-minor skew between both kubectl clients and every supported API server.
 Tag-only remote fixture references are rejected. The canonical jobs in
-`ci.yml`, chart defaults, and documentation are checked against the policy so
-the JSON does not become an unused declaration.
+`ci.yml`, smoke Dockerfiles/build helpers, chart defaults, and documentation
+are checked against the policy so the JSON does not become an unused
+declaration.
 
 Sources:
 
