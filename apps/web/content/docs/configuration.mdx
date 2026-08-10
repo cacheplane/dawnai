@@ -230,7 +230,7 @@ Configures conversation summarization. When enabled, Dawn compresses older messa
 
 ### `memory`
 
-Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememory) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
+Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememorydef) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
 
 ```ts
 memory?: {

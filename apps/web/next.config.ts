@@ -1,5 +1,6 @@
 import createMDX from "@next/mdx"
 import type { NextConfig } from "next"
+import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "./lib/mdx-plugins"
 
 const nextConfig: NextConfig = {
   experimental: { useTypeScriptCli: true },
@@ -9,22 +10,9 @@ const nextConfig: NextConfig = {
 
 const withMDX = createMDX({
   options: {
-    // Turbopack requires serializable plugin references — pass as module-path strings
-    remarkPlugins: [
-      ["remark-gfm", {}],
-      ["remark-frontmatter", { type: "yaml", marker: "-" }],
-      ["remark-mdx-frontmatter", { name: "frontmatter" }],
-    ],
-    rehypePlugins: [
-      [
-        "rehype-pretty-code",
-        {
-          theme: "github-light",
-          keepBackground: false,
-          defaultLang: "plaintext",
-        },
-      ],
-    ],
+    // Turbopack requires serializable plugin references — see lib/mdx-plugins.ts
+    remarkPlugins: MDX_REMARK_PLUGINS,
+    rehypePlugins: MDX_REHYPE_PLUGINS,
   },
 })
 
