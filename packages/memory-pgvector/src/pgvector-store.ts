@@ -15,6 +15,7 @@ import {
 } from "@dawn-ai/memory"
 import { Pool, type PoolClient } from "pg"
 import pgvector from "pgvector/pg"
+import { appendPgBrowseFilter } from "./browse-sql.js"
 import {
   pageAndTagFilter,
   RECORD_COLUMNS,
@@ -448,10 +449,10 @@ export function pgvectorMemoryStore(opts: {
       // Before ready(): a malformed query never pays for a connection.
       validateBrowseQuery(q)
       await ready()
-      // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
-      // `q.cursor` are read NOWHERE below — this store still answers only the
-      // pre-existing shorthand fields. Setting one of them is silently a no-op, not an
-      // error; the JSDoc on BrowseQuery marks each as not-yet-applied.
+      // TODO(Tasks 11/13/14): `q.namespace`, `q.orderBy` and `q.cursor` are read
+      // NOWHERE below. Setting one of them is silently a no-op, not an error; the
+      // JSDoc on BrowseQuery marks each as not-yet-applied. `q.filters` IS applied,
+      // but only its status/kind/content arms — the rest throw (Tasks 11/12).
       const where: string[] = []
       const params: unknown[] = []
       if (q.namespacePrefix) {
@@ -489,6 +490,7 @@ export function pgvectorMemoryStore(opts: {
         params.push(q.now)
         where.push(`(expires_at IS NULL OR expires_at > $${params.length})`)
       }
+      for (const filter of q.filters ?? []) appendPgBrowseFilter(filter, where, params)
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
       // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
       // Kept as a floor because the two backends fail asymmetrically if one ever slips

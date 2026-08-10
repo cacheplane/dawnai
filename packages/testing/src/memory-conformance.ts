@@ -464,6 +464,85 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse filters[] narrows by status/kind set, ANDed with everything else", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
+        await s.put(rec({ id: "b", namespace: "route=/x", content: "b", status: "candidate" }))
+        await s.put(rec({ id: "e", namespace: "route=/y", content: "e", kind: "episodic" }))
+        const inSet = await s.browse({
+          filters: [{ field: "status", op: "in", values: ["candidate", "superseded"] }],
+        })
+        expect(inSet.records.map((r) => r.id)).toEqual(["b"])
+        expect(inSet.total).toBe(1)
+        const notIn = await s.browse({
+          filters: [{ field: "kind", op: "notIn", values: ["episodic"] }],
+        })
+        expect(notIn.records.map((r) => r.id).sort()).toEqual(["a", "b"])
+        expect(notIn.total).toBe(2)
+        const anded = await s.browse({
+          namespacePrefix: "route=/x",
+          filters: [{ field: "status", op: "in", values: ["candidate"] }],
+        })
+        expect(anded.records.map((r) => r.id)).toEqual(["b"])
+        expect(anded.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse content filters are case-insensitive substring matches, not LIKE patterns", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "ns", content: "Acme threshold is 500" }))
+        await s.put(rec({ id: "b", namespace: "ns", content: "zed color is blue" }))
+        await s.put(rec({ id: "pct", namespace: "ns", content: "50% off today" }))
+        await s.put(rec({ id: "und", namespace: "ns", content: "50Xoff today" }))
+        const contains = await s.browse({
+          filters: [{ field: "content", op: "contains", value: "ACME" }],
+        })
+        expect(contains.records.map((r) => r.id)).toEqual(["a"])
+        expect(contains.total).toBe(1)
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "notContains", value: "acme" }] })
+          ).records
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(["b", "pct", "und"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "startsWith", value: "acme " }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["a"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "endsWith", value: "IS BLUE" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["b"])
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "content", op: "equals", value: "zed color is blue" }],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["b"])
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "content", op: "notEquals", value: "zed color is blue" }],
+            })
+          ).total,
+        ).toBe(3)
+        // "%" and "_" are literal characters, not wildcards: this is why the stores
+        // use instr/position instead of LIKE.
+        const literal = await s.browse({
+          filters: [{ field: "content", op: "contains", value: "50% o" }],
+        })
+        expect(literal.records.map((r) => r.id)).toEqual(["pct"])
+      } finally {
+        await close?.(s)
+      }
+    })
     test("stats returns count maps by status/kind/namespace/sourceType plus total", async () => {
       const s = await makeStore()
       try {
