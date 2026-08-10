@@ -11,6 +11,26 @@ import type {
 const SCENARIO_SUITE = Symbol.for("dawn.scenario-suite")
 const SCENARIO_DRAFT = Symbol("dawn.scenario-draft")
 const TOOL_CALL_EXPECTATION_DRAFT = Symbol("dawn.tool-call-expectation-draft")
+const SNAPSHOT_PROXY_TARGETS = new WeakMap<object, object>()
+
+const DATE_MUTATORS = new Set<PropertyKey>([
+  "setDate",
+  "setFullYear",
+  "setHours",
+  "setMilliseconds",
+  "setMinutes",
+  "setMonth",
+  "setSeconds",
+  "setTime",
+  "setUTCDate",
+  "setUTCFullYear",
+  "setUTCHours",
+  "setUTCMilliseconds",
+  "setUTCMinutes",
+  "setUTCMonth",
+  "setUTCSeconds",
+  "setYear",
+])
 
 type ScenarioStatus = ScenarioDescriptor["expectedStatus"]
 type ToolCallCount = NonNullable<ScenarioToolCallExpectationDescriptor["count"]>
@@ -494,11 +514,10 @@ function parseBrandedSuite(value: unknown): ScenarioSuiteDescriptor {
 function parseSuiteDescriptor(value: unknown): ScenarioSuiteDescriptor {
   const suite = assertRecord(value, "suite descriptor")
   const route = assertNonEmptyString(readRequired(suite, "route", "Suite route"), "Suite route")
-  const scenariosValue = readRequired(suite, "scenarios", "Suite scenarios")
-
-  if (!Array.isArray(scenariosValue)) {
-    throw new Error("Suite scenarios must be an array")
-  }
+  const scenariosValue = assertDenseArray(
+    readRequired(suite, "scenarios", "Suite scenarios"),
+    "Suite scenarios",
+  )
 
   const snapshot = createUnknownSnapshotter()
   const names = new Set<string>()
@@ -618,12 +637,10 @@ function parseToolMocks(
   value: unknown,
   scenarioName: string,
 ): readonly ScenarioToolMockDescriptor[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Scenario ${scenarioName} tool mocks must be an array`)
-  }
+  const mockValues = assertDenseArray(value, `Scenario ${scenarioName} tool mocks`)
 
   const names = new Set<string>()
-  const mocks = value.map((mockValue, index) => {
+  const mocks = mockValues.map((mockValue, index) => {
     const mock = assertRecord(mockValue, `Scenario ${scenarioName} tool mock at index ${index}`)
     const name = assertNonEmptyString(
       readRequired(mock, "name", `Scenario ${scenarioName} tool mock name`),
@@ -661,11 +678,12 @@ function parseToolCallExpectations(
   mockedNames: ReadonlySet<string>,
   snapshot: (value: unknown) => unknown,
 ): readonly ScenarioToolCallExpectationDescriptor[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Scenario ${scenarioName} tool call expectations must be an array`)
-  }
+  const expectationValues = assertDenseArray(
+    value,
+    `Scenario ${scenarioName} tool call expectations`,
+  )
 
-  const expectations = value.map((expectationValue, index) => {
+  const expectations = expectationValues.map((expectationValue, index) => {
     const label = `Scenario ${scenarioName} tool expectation at index ${index}`
     const expectation = assertRecord(expectationValue, label)
     const name = assertNonEmptyString(
@@ -677,15 +695,10 @@ function parseToolCallExpectations(
       throw new Error(`Scenario ${scenarioName} must mock tool ${name} before expecting it`)
     }
 
-    const argumentMatchersValue = readRequired(
-      expectation,
-      "argumentMatchers",
+    const argumentMatchersValue = assertDenseArray(
+      readRequired(expectation, "argumentMatchers", `${label} argument matchers`),
       `${label} argument matchers`,
     )
-
-    if (!Array.isArray(argumentMatchersValue)) {
-      throw new Error(`${label} argument matchers must be an array`)
-    }
 
     const count = Object.hasOwn(expectation, "count")
       ? parseToolCallCount(expectation.count, label)
@@ -832,44 +845,166 @@ function createUnknownSnapshotter(): (value: unknown) => unknown {
   const seen = new WeakMap<object, unknown>()
 
   function snapshot(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      const existing = seen.get(value)
+    if (typeof value !== "object" || value === null) {
+      return value
+    }
 
-      if (existing) {
-        return existing
-      }
+    if (seen.has(value)) {
+      return seen.get(value)
+    }
 
+    const source = SNAPSHOT_PROXY_TARGETS.get(value) ?? value
+
+    if (Array.isArray(source)) {
       const copy: unknown[] = []
-      seen.set(value, copy)
+      copy.length = source.length
+      remember(value, source, copy)
 
-      for (const item of value) {
-        copy.push(snapshot(item))
+      for (let index = 0; index < source.length; index += 1) {
+        if (Object.hasOwn(source, index)) {
+          copy[index] = snapshot(source[index])
+        }
       }
 
       return Object.freeze(copy)
     }
 
-    if (!isPlainObject(value)) {
-      return value
+    if (source instanceof Date) {
+      const target = new Date(Date.prototype.getTime.call(source))
+      Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+      const proxy = createReadOnlyDateSnapshot(target)
+      remember(value, source, proxy)
+      snapshotOwnProperties(source, target, snapshot)
+      Object.freeze(target)
+      return proxy
     }
 
-    const existing = seen.get(value)
+    if (source instanceof Map) {
+      const target = new Map<unknown, unknown>()
+      Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+      const proxy = createReadOnlyMapSnapshot(target)
+      remember(value, source, proxy)
 
-    if (existing) {
-      return existing
+      for (const [key, item] of Map.prototype.entries.call(source)) {
+        Map.prototype.set.call(target, snapshot(key), snapshot(item))
+      }
+
+      snapshotOwnProperties(source, target, snapshot)
+      Object.freeze(target)
+      return proxy
     }
 
-    const copy: Record<string, unknown> = {}
-    seen.set(value, copy)
-
-    for (const [key, item] of Object.entries(value)) {
-      copy[key] = snapshot(item)
-    }
-
+    const copy = Object.create(Object.getPrototypeOf(source)) as object
+    remember(value, source, copy)
+    snapshotOwnProperties(source, copy, snapshot)
     return Object.freeze(copy)
   }
 
+  function remember(original: object, source: object, copy: object): void {
+    seen.set(original, copy)
+
+    if (source !== original) {
+      seen.set(source, copy)
+    }
+  }
+
   return snapshot
+}
+
+function createReadOnlyDateSnapshot(target: Date): Date {
+  const proxy = new Proxy(target, {
+    get(date, property, receiver) {
+      if (DATE_MUTATORS.has(property)) {
+        return rejectSnapshotMutation
+      }
+
+      const result = Reflect.get(date, property, receiver)
+
+      if (
+        typeof result === "function" &&
+        property !== "constructor" &&
+        Object.hasOwn(Date.prototype, property)
+      ) {
+        return result.bind(date)
+      }
+
+      return result
+    },
+  })
+  SNAPSHOT_PROXY_TARGETS.set(proxy, target)
+  return proxy
+}
+
+function createReadOnlyMapSnapshot(target: Map<unknown, unknown>): Map<unknown, unknown> {
+  let proxy: Map<unknown, unknown>
+  proxy = new Proxy(target, {
+    get(map, property, receiver) {
+      if (property === "set" || property === "delete" || property === "clear") {
+        return rejectSnapshotMutation
+      }
+
+      if (property === "size") {
+        return Reflect.get(map, property, map)
+      }
+
+      if (property === "forEach") {
+        return (
+          callback: (value: unknown, key: unknown, map: Map<unknown, unknown>) => void,
+          thisArg?: unknown,
+        ): void => {
+          Map.prototype.forEach.call(map, (value, key) => {
+            callback.call(thisArg, value, key, proxy)
+          })
+        }
+      }
+
+      const result = Reflect.get(map, property, receiver)
+
+      if (
+        typeof result === "function" &&
+        property !== "constructor" &&
+        Object.hasOwn(Map.prototype, property)
+      ) {
+        return result.bind(map)
+      }
+
+      return result
+    },
+  })
+  SNAPSHOT_PROXY_TARGETS.set(proxy, target)
+  return proxy
+}
+
+function snapshotOwnProperties(
+  source: object,
+  target: object,
+  snapshot: (value: unknown) => unknown,
+): void {
+  for (const key of Reflect.ownKeys(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key)
+
+    if (!descriptor) {
+      continue
+    }
+
+    if ("value" in descriptor) {
+      Object.defineProperty(target, key, {
+        ...descriptor,
+        value: snapshot(descriptor.value),
+      })
+      continue
+    }
+
+    Object.defineProperty(target, key, {
+      ...(descriptor.configurable !== undefined ? { configurable: descriptor.configurable } : {}),
+      ...(descriptor.enumerable !== undefined ? { enumerable: descriptor.enumerable } : {}),
+      ...(descriptor.get !== undefined ? { get: descriptor.get } : {}),
+    })
+  }
+}
+
+function rejectSnapshotMutation(): never {
+  throw new TypeError("Cannot mutate a read-only snapshot")
 }
 
 function readRequired(
@@ -892,6 +1027,20 @@ function assertRecord(value: unknown, label: string): Record<PropertyKey, unknow
   return value
 }
 
+function assertDenseArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`)
+  }
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new Error(`${label} must not contain a hole at index ${index}`)
+    }
+  }
+
+  return value
+}
+
 function assertNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${label} must be a non-empty string`)
@@ -902,13 +1051,4 @@ function assertNonEmptyString(value: unknown, label: string): string {
 
 function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return typeof value === "object" && value !== null
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false
-  }
-
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
 }
