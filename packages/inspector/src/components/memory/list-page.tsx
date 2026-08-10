@@ -191,6 +191,12 @@ export function ListPage() {
   const pageRecords = namespace
     ? (page?.records ?? []).filter((rec) => rec.namespace === namespace)
     : (page?.records ?? [])
+  // Group headers count the rows the grid HOLDS, and the list is capped at a
+  // page. On a truncated page that count is an artifact of where the cap fell —
+  // it read "route=/notes (197)" next to a facet rail saying 250 — so group
+  // only when the page is the whole answer. The rail stays the honest
+  // navigator for anything larger.
+  const pageIsComplete = page !== undefined && page.records.length >= page.total
   const searching = query.length > 0
   // Keyed by source, not message — two fetchers failing with the same message
   // must not produce duplicate React keys (or stacked repeats).
@@ -295,6 +301,9 @@ export function ListPage() {
               records={pageRecords}
               onSelect={setSelectedId}
               onTickedChange={setTicked}
+              // Only while looking at everything: scoped to one namespace by the
+              // rail, every row would sit under a single group header.
+              groupByNamespace={namespace === undefined && pageIsComplete}
               // Filtering is server-side: the funnels only decide the query.
               filters={filters}
               onFiltersChange={handleFiltersChange}

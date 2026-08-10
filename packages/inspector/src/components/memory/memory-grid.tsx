@@ -112,6 +112,12 @@ function statusClass(status: MemoryStatus): string {
   return ""
 }
 
+/** Module-level so their identities are stable — the grid reapplies controlled
+ *  state on every render, and fresh objects each time would churn it. Both
+ *  modes stay controlled so switching to a namespace facet clears grouping. */
+const GROUP_BY_NAMESPACE = ["namespace"]
+const FLAT_ROWS: string[] = []
+
 /** Module-level so its identity is stable — `usePretable` keys the grid on it. */
 function rowIdOf(row: GridRow): string {
   return row.id
@@ -133,6 +139,7 @@ export function MemoryGrid({
   records,
   onSelect,
   onTickedChange,
+  groupByNamespace = false,
   filters,
   onFiltersChange,
 }: {
@@ -142,12 +149,24 @@ export function MemoryGrid({
    *  rendered order, for bulk actions. Omitted where bulk actions make no
    *  sense (the grouped search results). */
   onTickedChange?: (ids: string[]) => void
+  /** Nest rows under one expandable header per namespace. Worth it only when
+   *  looking at every namespace at once — scoped to one, every row would sit
+   *  under a single group. */
+  groupByNamespace?: boolean
   /** Funnel state to display, and where changes go. Omit both to render without
    *  column filtering — the grouped search results filter nothing. */
   filters?: Record<string, ColumnFilter>
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
+
+  const surfaceState = useMemo(
+    () => ({
+      rowGroups: groupByNamespace ? GROUP_BY_NAMESPACE : FLAT_ROWS,
+      ...(filters ? { filters } : {}),
+    }),
+    [groupByNamespace, filters],
+  )
 
   // The engine reports the exact height of all rows; until the first layout
   // effect lands, estimate from the theme's density so the initial paint is
@@ -169,13 +188,15 @@ export function MemoryGrid({
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}
+      // One controlled `state`: a second `state` prop would clobber the first,
+      // silently ungrouping the moment a filter was applied.
+      state={surfaceState}
       {...(onTickedChange
         ? {
             rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
             onRowSelectionChange: onTickedChange,
           }
         : {})}
-      {...(filters ? { state: { filters } } : {})}
       {...(onFiltersChange ? { onFiltersChange } : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
