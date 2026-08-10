@@ -1,10 +1,13 @@
+import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import {
+  cp,
   lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -13,6 +16,7 @@ import {
 import { tmpdir } from "node:os"
 import { basename, dirname, join, win32 } from "node:path"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 import { build as buildBundle } from "esbuild"
 import { afterEach, describe, expect, test } from "vitest"
 
@@ -32,6 +36,13 @@ import {
   writeVercelMetadata,
 } from "../src/lib/build/targets/vercel-output.js"
 import { CliError, type CommandIo } from "../src/lib/output.js"
+import {
+  edgeBindings,
+  ensureLinkedDistsFresh,
+  probeDocker,
+  requireDockerFailure,
+  startEdgeContainers,
+} from "./helpers/hono-edge-fixture.js"
 
 const tempDirs: string[] = []
 const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -48,6 +59,9 @@ const EXPECTED_RECOMMENDED_VERCEL_CONFIG_JSON = `{
   "buildCommand": "node node_modules/@dawn-ai/cli/dist/index.js build",
   "fluid": true
 }\n`
+const docker = await probeDocker()
+const requireDocker = process.env.DAWN_REQUIRE_DOCKER === "1"
+const isolatedRoundTrip = docker.available || requireDocker ? test : test.skip
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
@@ -228,7 +242,252 @@ async function validOutput(outputDir: string): Promise<void> {
   await writeFile(entryPath(outputDir), 'import "node:fs"\nexport default {}\n', "utf8")
 }
 
+const ISOLATED_IMPORT_PROBE = `import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+
+if (process.versions.node.split(".")[0] !== "24") {
+  throw new Error(\`expected Node 24, received \${process.versions.node}\`)
+}
+
+const entry = resolve(process.cwd(), "index.mjs")
+const outsideSentinel = resolve(process.cwd(), "..", "outside-sentinel.txt")
+let parentReadBlocked = false
+try {
+  await readFile(outsideSentinel, "utf8")
+} catch (error) {
+  if (error?.code !== "ERR_ACCESS_DENIED") throw error
+  parentReadBlocked = true
+}
+if (!parentReadBlocked) throw new Error("expected reads above index.func to be denied")
+
+const module = await import(pathToFileURL(entry).href)
+if (typeof module.default?.fetch !== "function") {
+  throw new Error("expected a default Web Fetch API handler")
+}
+
+console.log(JSON.stringify({
+  cwd: process.cwd(),
+  node: process.versions.node,
+  parentReadBlocked,
+}))
+`
+
+const ISOLATED_STREAM_PROBE = `import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+
+if (process.versions.node.split(".")[0] !== "24") {
+  throw new Error(\`expected Node 24, received \${process.versions.node}\`)
+}
+
+const outsideSentinel = resolve(process.cwd(), "..", "outside-sentinel.txt")
+let parentReadBlocked = false
+try {
+  await readFile(outsideSentinel, "utf8")
+} catch (error) {
+  if (error?.code !== "ERR_ACCESS_DENIED") throw error
+  parentReadBlocked = true
+}
+if (!parentReadBlocked) throw new Error("expected reads above index.func to be denied")
+
+const entry = resolve(process.cwd(), "index.mjs")
+const module = await import(pathToFileURL(entry).href)
+const handler = module.default
+if (typeof handler?.fetch !== "function") {
+  throw new Error("expected a default Web Fetch API handler")
+}
+
+const post = (path, body, headers = {}) => handler.fetch(new Request(\`http://localhost\${path}\`, {
+  body: JSON.stringify(body),
+  headers: { "content-type": "application/json", ...headers },
+  method: "POST",
+}))
+
+const createResponse = await post("/threads", {})
+if (createResponse.status !== 200) {
+  throw new Error(\`POST /threads failed with \${createResponse.status}: \${await createResponse.text()}\`)
+}
+const createdThread = await createResponse.json()
+if (typeof createdThread.thread_id !== "string") {
+  throw new Error("expected POST /threads to return thread_id")
+}
+
+const threadId = createdThread.thread_id
+const streamResponse = await post(
+  \`/threads/\${encodeURIComponent(threadId)}/runs/stream\`,
+  { input: {}, route: "/probe#workflow" },
+  { accept: "text/event-stream" },
+)
+if (streamResponse.status !== 200) {
+  throw new Error(\`POST /runs/stream failed with \${streamResponse.status}: \${await streamResponse.text()}\`)
+}
+if (!streamResponse.headers.get("content-type")?.startsWith("text/event-stream")) {
+  throw new Error(\`expected an SSE response, received \${streamResponse.headers.get("content-type")}\`)
+}
+const reader = streamResponse.body?.getReader()
+if (!reader) throw new Error("expected /runs/stream to expose a ReadableStream")
+
+const decoder = new TextDecoder()
+let chunks = 0
+let sawEof = false
+let sse = ""
+const streamDeadline = Date.now() + 60_000
+const readWithTimeout = async () => {
+  const remaining = streamDeadline - Date.now()
+  if (remaining <= 0) throw new Error("timed out waiting for /runs/stream EOF")
+  let timer
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("timed out reading /runs/stream")),
+          Math.min(30_000, remaining),
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+for (;;) {
+  const result = await readWithTimeout()
+  if (result.done) {
+    sawEof = true
+    sse += decoder.decode()
+    break
+  }
+  chunks += 1
+  sse += decoder.decode(result.value, { stream: true })
+}
+if (chunks === 0) throw new Error("expected at least one streamed body chunk")
+if (!sawEof) throw new Error("expected terminal EOF from the stream reader")
+
+const meaningfulSse = sse.replaceAll(": ping\\n\\n", "")
+const expectedSse = 'event: done\\ndata: {"output":{"message":"deterministic"}}\\n\\n'
+if (meaningfulSse !== expectedSse) {
+  throw new Error(\`expected deterministic terminal SSE, received: \${sse}\`)
+}
+
+const subsequentResponse = await handler.fetch(
+  new Request(\`http://localhost/threads/\${encodeURIComponent(threadId)}\`),
+)
+if (subsequentResponse.status !== 200) {
+  throw new Error(
+    \`subsequent GET /threads/:id failed with \${subsequentResponse.status}: \${await subsequentResponse.text()}\`,
+  )
+}
+const persistedThread = await subsequentResponse.json()
+if (
+  persistedThread.thread_id !== threadId ||
+  persistedThread.status !== "idle" ||
+  persistedThread.metadata?.route !== "/probe#workflow"
+) {
+  throw new Error(\`expected the streamed thread to remain idle and readable: \${JSON.stringify(persistedThread)}\`)
+}
+
+console.log(JSON.stringify({
+  chunks,
+  createStatus: createResponse.status,
+  eof: sawEof,
+  parentReadBlocked,
+  streamStatus: streamResponse.status,
+  subsequentStatus: subsequentResponse.status,
+}))
+`
+
+async function copyFunctionOutsideApp(appRoot: string): Promise<string> {
+  const isolatedRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-vercel-isolated-")))
+  tempDirs.push(isolatedRoot)
+  const copiedFunctionDir = join(isolatedRoot, "index.func")
+  await cp(functionDir(join(appRoot, ".vercel", "output")), copiedFunctionDir, {
+    recursive: true,
+  })
+  await writeFile(join(isolatedRoot, "outside-sentinel.txt"), "must stay unreadable\n", "utf8")
+  await rm(appRoot, { force: true, recursive: true })
+  return copiedFunctionDir
+}
+
+async function runIsolatedNode(
+  copiedFunctionDir: string,
+  source: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<{ stderr: string; stdout: string }> {
+  return await promisify(execFile)(
+    process.execPath,
+    [
+      "--permission",
+      `--allow-fs-read=${copiedFunctionDir}`,
+      "--input-type=module",
+      "--eval",
+      source,
+    ],
+    {
+      cwd: copiedFunctionDir,
+      env: { ...env },
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 120_000,
+    },
+  )
+}
+
 describe("complete Vercel target", () => {
+  test("executes as a self-contained function after only index.func is copied", async () => {
+    await ensureLinkedDistsFresh()
+    const appRoot = await createTargetFixture()
+    await runTargetBuild(appRoot)
+
+    const copiedFunctionDir = await copyFunctionOutsideApp(appRoot)
+    expect(existsSync(appRoot)).toBe(false)
+    expect(await listTree(copiedFunctionDir)).toEqual([".vc-config.json", "index.mjs"])
+
+    const { stderr, stdout } = await runIsolatedNode(copiedFunctionDir, ISOLATED_IMPORT_PROBE)
+
+    expect(stderr).toBe("")
+    expect(JSON.parse(stdout.trim())).toMatchObject({
+      cwd: copiedFunctionDir,
+      node: expect.stringMatching(/^24\./),
+      parentReadBlocked: true,
+    })
+  }, 180_000)
+
+  isolatedRoundTrip(
+    "streams Agent Protocol requests through the isolated copied function",
+    async () => {
+      if (!docker.available) throw requireDockerFailure(docker)
+      const containers = await startEdgeContainers()
+      try {
+        await ensureLinkedDistsFresh()
+        const appRoot = await createTargetFixture()
+        await runTargetBuild(appRoot)
+        const copiedFunctionDir = await copyFunctionOutsideApp(appRoot)
+
+        const { stderr, stdout } = await runIsolatedNode(
+          copiedFunctionDir,
+          ISOLATED_STREAM_PROBE,
+          edgeBindings(containers, {}),
+        )
+        const receipt = JSON.parse(stdout.trim().split("\n").at(-1) ?? "") as {
+          chunks?: number
+        }
+
+        expect(stderr).toBe("")
+        expect(receipt).toMatchObject({
+          createStatus: 200,
+          eof: true,
+          parentReadBlocked: true,
+          streamStatus: 200,
+          subsequentStatus: 200,
+        })
+        expect(receipt.chunks).toBeGreaterThan(0)
+      } finally {
+        await containers.stop()
+      }
+    },
+    300_000,
+  )
+
   test("publishes the exact final tree and reports only final artifacts", async () => {
     const appRoot = await createTargetFixture()
     const priorDatabaseUrl = process.env.DATABASE_URL
