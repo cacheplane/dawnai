@@ -5,10 +5,11 @@
 Add `GET /threads/{thread_id}/pending_interrupts`, which returns the human-in-the-loop
 interrupts parked on a thread together with each interrupt's payload, so a client that
 reloaded can re-render a permission prompt from durable checkpoint state alone. Standard
-Agent Protocol middleware gates the endpoint using the route last run on the thread; a
-thread that has never run is refused with `thread_route_unknown`. Because the endpoint is
-a `GET`, middleware can now observe a `req.method` of `"GET"` — middleware that assumed
-`"POST"` needs updating.
+Agent Protocol middleware gates the endpoint using the route that parked the interrupts,
+falling back to the route last run on the thread when nothing is parked; a thread with no
+resolvable route is refused with `thread_route_unknown`. Because the endpoint is a `GET`,
+middleware can now observe a `req.method` of `"GET"`, and `req.params` is empty there —
+middleware that assumed `"POST"` or read route params needs updating.
 
 Parked turns now report thread status `"interrupted"` instead of `"idle"` on
 `GET /threads/{thread_id}`, from the run stream and the resume endpoint. `/runs/wait` is
