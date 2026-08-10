@@ -123,6 +123,76 @@ describe.skipIf(!gated)("memory JSON API", () => {
     expect(page.records.every((r) => r.namespace === "route=/notes")).toBe(true)
   })
 
+  it("browse accepts JSON filters and orderBy, and reports a continuation", async () => {
+    const filters = encodeURIComponent(
+      JSON.stringify([{ field: "content", op: "contains", value: "acme" }]),
+    )
+    const res = await fetch(`${server.base}/api/memory/list?filters=${filters}`)
+    expect(res.status).toBe(200)
+    const page = (await res.json()) as {
+      records: MemoryRecord[]
+      total: number
+      continuation: string | null
+    }
+    expect(page.records.map((r) => r.id).sort()).toEqual(["active1", "cand1"])
+    expect(page.total).toBe(2)
+    expect(page.continuation).toBeNull()
+
+    const orderBy = encodeURIComponent(JSON.stringify([{ field: "namespace", dir: "asc" }]))
+    // ONE `now` for the whole walk: it is part of the cursor fingerprint, so letting the
+    // route stamp a fresh one per request would reject the continuation it just issued.
+    const walk = `orderBy=${orderBy}&limit=2&now=2026-08-09T00%3A00%3A00.000Z`
+    const ordered = await fetch(`${server.base}/api/memory/list?${walk}`)
+    const orderedPage = (await ordered.json()) as {
+      records: MemoryRecord[]
+      continuation: string | null
+    }
+    expect(orderedPage.records).toHaveLength(2)
+    expect(orderedPage.continuation).not.toBeNull()
+
+    const next = await fetch(
+      `${server.base}/api/memory/list?${walk}&cursor=${encodeURIComponent(orderedPage.continuation as string)}`,
+    )
+    expect(next.status).toBe(200)
+    const nextPage = (await next.json()) as { records: MemoryRecord[] }
+    const firstIds = orderedPage.records.map((r) => r.id)
+    expect(nextPage.records.every((r) => !firstIds.includes(r.id))).toBe(true)
+  })
+
+  it("browse narrows to an exact namespace", async () => {
+    const res = await fetch(
+      `${server.base}/api/memory/list?namespace=${encodeURIComponent("route=/other")}`,
+    )
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id)).toEqual(["other1"])
+    expect(page.total).toBe(1)
+  })
+
+  it("browse rejects malformed filters, bad sorts, oversized limits and forged cursors", async () => {
+    const badJson = await fetch(`${server.base}/api/memory/list?filters=%7Bnope`)
+    expect(badJson.status).toBe(400)
+    expect(((await badJson.json()) as { error: string }).error).toContain(
+      "filters must be valid JSON",
+    )
+
+    const badSort = encodeURIComponent(JSON.stringify([{ field: "content", dir: "asc" }]))
+    const sortRes = await fetch(`${server.base}/api/memory/list?orderBy=${badSort}`)
+    expect(sortRes.status).toBe(400)
+    expect(((await sortRes.json()) as { error: string }).error).toContain("unknown sort field")
+
+    const overLimit = await fetch(`${server.base}/api/memory/list?limit=5000`)
+    expect(overLimit.status).toBe(400)
+    expect(((await overLimit.json()) as { error: string }).error).toContain("at most 1000")
+
+    const forged = await fetch(`${server.base}/api/memory/list?cursor=not-a-real-cursor`)
+    expect(forged.status).toBe(400)
+    // Pinned on the CODE, not the prose: a continuation can be wrong several ways
+    // (undecodable, wrong version, wrong query) and they share one stable name.
+    expect((await forged.json()) as { error: string; code: string }).toMatchObject({
+      code: "continuation-invalid",
+    })
+  })
+
   it("stats aggregates byStatus and byNamespace", async () => {
     const res = await fetch(`${server.base}/api/memory/stats`)
     expect(res.status).toBe(200)
