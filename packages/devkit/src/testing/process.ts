@@ -117,13 +117,18 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
   child.stdin.end()
 
   let closed = false
+  let settled = false
   const closedPromise = new Promise<{
     readonly exitCode: number | null
     readonly signal: NodeJS.Signals | null
   }>((resolve, reject) => {
-    child.once("error", reject)
+    child.once("error", (error) => {
+      settled = true
+      reject(error)
+    })
     child.once("close", (exitCode, signal) => {
       closed = true
+      settled = true
       resolve({ exitCode, signal })
     })
   })
@@ -209,7 +214,13 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
   }
 
   try {
-    await terminateTimedOutProcessTree(child, groupPid, closedPromise, () => closed)
+    await terminateTimedOutProcessTree(
+      child,
+      groupPid,
+      closedPromise,
+      () => closed,
+      () => settled,
+    )
   } catch (error) {
     throw createSpawnProcessError(
       options,
@@ -317,27 +328,28 @@ async function terminateTimedOutProcessTree(
   groupPid: number,
   closed: Promise<unknown>,
   isClosed: () => boolean,
+  isSettled: () => boolean,
 ): Promise<void> {
   if (process.platform === "win32") {
     try {
       await taskkillProcessTree(groupPid, PROCESS_TIMEOUT_GRACE_MS + PROCESS_TIMEOUT_FORCE_MS)
     } catch (error) {
       try {
-        await waitForClosed(closed, isClosed, PROCESS_TIMEOUT_FORCE_MS, groupPid)
+        await waitForClosed(closed, isClosed, isSettled, PROCESS_TIMEOUT_FORCE_MS, groupPid)
       } catch {
         throw error
       }
       return
     }
-    await waitForClosed(closed, isClosed, PROCESS_TIMEOUT_FORCE_MS, groupPid)
+    await waitForClosed(closed, isClosed, isSettled, PROCESS_TIMEOUT_FORCE_MS, groupPid)
     return
   }
 
   signalProcessGroup(child, groupPid, "SIGTERM")
-  if (await waitForProcessGroupExit(groupPid, closed, isClosed, PROCESS_TIMEOUT_GRACE_MS)) return
+  if (await waitForProcessGroupExit(groupPid, closed, isSettled, PROCESS_TIMEOUT_GRACE_MS)) return
 
   signalProcessGroup(child, groupPid, "SIGKILL")
-  if (await waitForProcessGroupExit(groupPid, closed, isClosed, PROCESS_TIMEOUT_FORCE_MS)) return
+  if (await waitForProcessGroupExit(groupPid, closed, isSettled, PROCESS_TIMEOUT_FORCE_MS)) return
 
   throw new Error(
     `Timed-out subprocess group ${groupPid} did not stop within ${PROCESS_TIMEOUT_GRACE_MS + PROCESS_TIMEOUT_FORCE_MS}ms`,
@@ -364,19 +376,19 @@ function signalProcessGroup(
 async function waitForProcessGroupExit(
   groupPid: number,
   closed: Promise<unknown>,
-  isClosed: () => boolean,
+  isSettled: () => boolean,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (isClosed()) {
-      if (!processGroupIsRunning(groupPid)) return true
+    if (!processGroupIsRunning(groupPid)) return true
+    if (isSettled()) {
       await delay(PROCESS_TIMEOUT_POLL_MS)
     } else {
       await Promise.race([closed.catch(() => undefined), delay(PROCESS_TIMEOUT_POLL_MS)])
     }
   }
-  return isClosed() && !processGroupIsRunning(groupPid)
+  return !processGroupIsRunning(groupPid)
 }
 
 function processGroupIsRunning(groupPid: number): boolean {
@@ -404,25 +416,21 @@ function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
 async function waitForClosed(
   closed: Promise<unknown>,
   isClosed: () => boolean,
+  isSettled: () => boolean,
   timeoutMs: number,
   groupPid: number,
 ): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (isClosed()) return
+    if (isSettled()) {
+      await delay(PROCESS_TIMEOUT_POLL_MS)
+    } else {
+      await Promise.race([closed.catch(() => undefined), delay(PROCESS_TIMEOUT_POLL_MS)])
+    }
+  }
   if (isClosed()) return
-  let timeoutHandle: NodeJS.Timeout | undefined
-  let outcome: "closed" | "timeout"
-  try {
-    outcome = await Promise.race([
-      closed.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => {
-        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
-  }
-  if (outcome !== "closed") {
-    throw new Error(`Timed-out subprocess tree ${groupPid} did not close within ${timeoutMs}ms`)
-  }
+  throw new Error(`Timed-out subprocess tree ${groupPid} did not close within ${timeoutMs}ms`)
 }
 
 function delay(ms: number): Promise<void> {
