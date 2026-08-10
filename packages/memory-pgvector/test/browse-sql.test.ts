@@ -79,4 +79,20 @@ describe("appendPgBrowseFilter — namespace", () => {
       params: ["route=/a", "route=/b"],
     })
   })
+  it("drops the upper bound when the prefix has none", () => {
+    expect(build({ field: "namespace", op: "startsWith", value: "\u{10FFFF}" })).toEqual({
+      sql: 'namespace COLLATE "C" >= $1',
+      params: ["\u{10FFFF}"],
+    })
+  })
+  it("numbers both bounds from the caller's current parameter count", () => {
+    // The bounds are pushed one at a time, so $n is read off params.length twice —
+    // an off-by-one here binds the upper bound to someone else's parameter.
+    expect(build({ field: "namespace", op: "startsWith", value: "route=/a" }, 3).sql).toBe(
+      'namespace COLLATE "C" >= $4 AND namespace COLLATE "C" < $5',
+    )
+    expect(build({ field: "namespace", op: "startsWith", value: "\u{10FFFF}" }, 3).sql).toBe(
+      'namespace COLLATE "C" >= $4',
+    )
+  })
 })

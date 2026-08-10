@@ -112,6 +112,9 @@ export type BrowseFilterLike =
  */
 export interface BrowseQueryLike {
   readonly namespacePrefix?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive, no
+   *  prefix semantics. ANDed with everything else, `namespacePrefix` included. */
+  readonly namespace?: string
   /** One status, or a set matching any of them. An EMPTY set matches NOTHING —
    *  "any of none" is false; reading it as "unfiltered" would show every row to a
    *  caller that had just narrowed to zero. */
@@ -127,15 +130,13 @@ export interface BrowseQueryLike {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
-  // ─ The four fields below are DECLARED BUT NOT YET HONORED by any in-repo store:
+  /** AND-combined normalized predicates: at most one per `field`, at most 8 in total,
+   *  both enforced. The `status`/`kind`/`content`/`namespace` arms are evaluated;
+   *  `confidence` and `updatedAt` are rejected rather than ignored. */
+  readonly filters?: readonly BrowseFilterLike[]
+  // ─ The two fields below are DECLARED BUT NOT YET HONORED by any in-repo store:
   //   they are ignored, silently, with no error. See packages/memory/src/types.ts for
   //   the per-field intended contract and the task that delivers it.
-  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
-   *  no prefix semantics. ANDed with everything else. NOT YET APPLIED. */
-  readonly namespace?: string
-  /** AND-combined normalized predicates. Intended: at most one per `field`, at most 8
-   *  in total — neither cap is validated yet, and no store evaluates a predicate. */
-  readonly filters?: readonly BrowseFilterLike[]
   /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
    *  window is deterministic. Absent or empty = `updatedAt DESC`. NOT YET APPLIED —
    *  every store still orders `updatedAt DESC, id ASC` unconditionally. */

@@ -61,10 +61,10 @@ export async function initSchema(
   await client.query(
     `CREATE INDEX IF NOT EXISTS ${prefix}_updated_id ON ${t} (updated_at DESC, id COLLATE "C" ASC)`,
   )
-  // TODO(Task 11 — namespace): no reader yet. browse() still emits the non-sargable
-  // `left(namespace, n) = $1`, which plans as a seq scan; this index starts paying for
-  // its write cost when the prefix arm emits `namespace COLLATE "C" >= $1 AND < $2`,
-  // a range the default-collation composite above cannot serve.
+  // browse()'s namespace clauses are C-collated on both sides — `= $1` and the
+  // half-open `>= $1 AND < $2` — and the default-collation composite above cannot
+  // serve either. stats() and prune() still match with `left(namespace, n) = $1` and
+  // get nothing from this index.
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_ns_c ON ${t} (namespace COLLATE "C")`)
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok ON ${tk} (token)`)
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok_mem ON ${tk} (memory_id)`)

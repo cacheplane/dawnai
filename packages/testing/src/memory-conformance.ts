@@ -602,6 +602,43 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse ANDs namespace with namespacePrefix instead of letting one win", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "exact", namespace: "route=/a", content: "exact" }))
+        await s.put(rec({ id: "child", namespace: "route=/ab", content: "child" }))
+        // The only query that binds both clauses at once, so it is the only one where
+        // a parameter pushed out of step with its clause shows up as a wrong answer
+        // rather than a bind error.
+        const both = await s.browse({ namespace: "route=/ab", namespacePrefix: "route=/a" })
+        expect(both.records.map((r) => r.id)).toEqual(["child"])
+        expect(both.total).toBe(1)
+        const disjoint = await s.browse({ namespace: "route=/a", namespacePrefix: "route=/ab" })
+        expect(disjoint.records).toEqual([])
+        expect(disjoint.total).toBe(0)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse namespacePrefix above the last code point keeps only a lower bound", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "below", namespace: "route=/a", content: "below" }))
+        await s.put(rec({ id: "top", namespace: "\u{10FFFF}top", content: "top" }))
+        // Nothing sorts above U+10FFFF, so the prefix has no successor and the upper
+        // bound must be OMITTED — binding an absent one matches nothing at all.
+        const top = await s.browse({ namespacePrefix: "\u{10FFFF}" })
+        expect(top.records.map((r) => r.id)).toEqual(["top"])
+        expect(top.total).toBe(1)
+        const viaFilter = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "\u{10FFFF}" }],
+        })
+        expect(viaFilter.records.map((r) => r.id)).toEqual(["top"])
+        expect(viaFilter.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
     test("stats returns count maps by status/kind/namespace/sourceType plus total", async () => {
       const s = await makeStore()
       try {

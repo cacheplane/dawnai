@@ -457,13 +457,19 @@ export function pgvectorMemoryStore(opts: {
       const where: string[] = []
       const params: unknown[] = []
       if (q.namespace) {
+        // COLLATE "C" even for equality, because the documented contract is BYTE-exact
+        // and a column under a nondeterministic collation equates strings that differ
+        // byte-wise. The cost is the default-collation _ns_status_updated composite;
+        // what it buys is _ns_c, the index the prefix range below already needs.
         params.push(q.namespace)
         where.push(`namespace COLLATE "C" = $${params.length}`)
       }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix as a sargable half-open range —
-        // deliberately NOT LIKE (so %/_/\ stay literal). COLLATE "C" on both sides:
-        // the database's own collation would order the bounds differently to SQLite.
+        // Byte-exact, case-sensitive prefix as a half-open range — deliberately NOT
+        // LIKE, so %/_/\ stay literal. COLLATE "C" on both bounds or the database's
+        // own collation orders them differently to SQLite. Sargable on _ns_c, but the
+        // same trade SQLite measures: the ORDER BY picks the plan, so a broad prefix
+        // gives up _updated_id's ordered scan for a sort and only a selective one wins.
         const upper = namespacePrefixUpperBound(q.namespacePrefix)
         params.push(q.namespacePrefix)
         const lower = params.length
@@ -534,7 +540,8 @@ export function pgvectorMemoryStore(opts: {
 
     async stats(statsOpts = {}) {
       await ready()
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — left(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek _ns_c, and no task owns moving it.
       const clause = statsOpts.namespacePrefix ? "WHERE left(namespace, length($1)) = $2" : ""
       const params: unknown[] = statsOpts.namespacePrefix
         ? [statsOpts.namespacePrefix, statsOpts.namespacePrefix]
@@ -564,7 +571,8 @@ export function pgvectorMemoryStore(opts: {
 
     async prune(pruneOpts) {
       await ready()
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — left(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek _ns_c, and no task owns moving it.
       // Two explicit SQL strings per pass (with/without prefix) — no clause
       // splicing, each statement readable on its own.
       // Two passes are separate autocommit statements (possibly different pool

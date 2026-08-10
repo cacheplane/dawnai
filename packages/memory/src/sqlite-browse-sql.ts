@@ -79,9 +79,9 @@ export function appendSqliteBrowseFilter(
         params.push(filter.value)
         return
       }
-      // Byte-exact prefix as a half-open RANGE rather than substr(): identical
-      // semantics (metacharacters stay literal, comparison stays case-sensitive),
-      // but the planner can seek the namespace-leading index instead of scanning.
+      // Byte-exact prefix as a half-open RANGE: metacharacters stay literal and the
+      // comparison stays case-sensitive. Sargable, with the same ORDER BY trade the
+      // store's own `namespacePrefix` documents.
       const upper = namespacePrefixUpperBound(filter.value)
       where.push(upper === undefined ? "namespace >= ?" : "namespace >= ? AND namespace < ?")
       params.push(filter.value)

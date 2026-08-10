@@ -140,16 +140,17 @@ export interface BrowseQuery {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
-  // ─ The fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
-  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
-  //   caller that sets one gets an unfiltered, default-ordered, uncursored page and no
-  //   error. Each doc states the intended contract and names the task delivering it —
-  //   do NOT write a consumer against the guarantee before that task lands.
-  /** AND-combined normalized predicates. The intended contract is at most one filter
-   *  per `field` and at most 8 in total — but nothing validates either cap yet, and no
-   *  store evaluates a predicate. Caps arrive with the shared validator (Task 4), the
-   *  predicates with Task 9 (status/kind/content) and Task 12 (confidence/updatedAt). */
+  /** AND-combined normalized predicates: at most one per `field` and at most 8 in
+   *  total, both enforced by `validateBrowseQuery`. Both in-repo stores evaluate the
+   *  `status`/`kind`/`content`/`namespace` arms; `confidence` and `updatedAt` are
+   *  REJECTED as a `BrowseQueryError` rather than ignored, until Task 12 builds their
+   *  clauses. */
   readonly filters?: readonly BrowseFilter[]
+  // ─ The two fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
+  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
+  //   caller that sets one gets a default-ordered, uncursored page and no error. Each
+  //   doc states the intended contract and names the task delivering it — do NOT write
+  //   a consumer against the guarantee before that task lands.
   /** Applied in order, always terminated server-side by an `id ASC` tie-break so
    *  every window is deterministic. Absent or empty = `updatedAt DESC`.
    *  NOT YET APPLIED — every store still orders `updatedAt DESC, id ASC`

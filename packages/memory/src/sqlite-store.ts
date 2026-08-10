@@ -455,9 +455,11 @@ export function sqliteMemoryStore(opts: {
         params.push(q.namespace)
       }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix as a sargable half-open range —
-        // deliberately NOT LIKE (so %/_/\ stay literal) and no longer substr()
-        // (which was not sargable: 8.0 ms scan vs 0.63 ms seek at 100k).
+        // Byte-exact, case-sensitive prefix as a half-open range — deliberately NOT
+        // LIKE, so %/_/\ stay literal. Sargable, but the ORDER BY picks the plan, so
+        // it is a trade: at 100k a selective prefix seeks (6.5 -> 0.13 ms) while a
+        // BROAD one gives up idx_mem_updated_id's ordered early exit for a temp
+        // B-tree sort (0.05 -> 41 ms). The COUNT(*) below seeks either way.
         const upper = namespacePrefixUpperBound(q.namespacePrefix)
         where.push(upper === undefined ? "namespace >= ?" : "namespace >= ? AND namespace < ?")
         params.push(q.namespacePrefix)
@@ -517,7 +519,8 @@ export function sqliteMemoryStore(opts: {
       return { records: rows.map(rowToRecord), total, continuation: null }
     },
     async stats(opts = {}) {
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — substr(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek, and no task owns moving it.
       const clause = opts.namespacePrefix ? "WHERE substr(namespace, 1, length(?)) = ?" : ""
       const params: SQLInputValue[] = opts.namespacePrefix
         ? [opts.namespacePrefix, opts.namespacePrefix]
@@ -542,7 +545,8 @@ export function sqliteMemoryStore(opts: {
       }
     },
     async prune(opts) {
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — substr(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek, and no task owns moving it.
       const prefixParams: SQLInputValue[] = opts.namespacePrefix
         ? [opts.namespacePrefix, opts.namespacePrefix]
         : []
