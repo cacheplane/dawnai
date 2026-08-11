@@ -200,20 +200,20 @@ describe("browseSearchParams", () => {
         status: ["active", "candidate"],
         kind: ["semantic"],
       }),
-      { limit: 200, offset: 400 },
+      { limit: 200, cursor: "cur-400" },
     )
     expect(params.get("namespace")).toBe("route=/notes")
     expect(params.get("namespacePrefix")).toBeNull()
     expect(params.getAll("status")).toEqual(["active", "candidate"])
     expect(params.getAll("kind")).toEqual(["semantic"])
     expect(params.get("limit")).toBe("200")
-    expect(params.get("offset")).toBe("400")
+    expect(params.get("cursor")).toBe("cur-400")
   })
 
   it("omits absent narrowings entirely", () => {
     const params = browseSearchParams(canonicalBrowseQuery({ view: "list" }), {
       limit: 200,
-      offset: 0,
+      cursor: null,
     })
     expect(params.get("namespace")).toBeNull()
     expect(params.getAll("status")).toEqual([])
@@ -223,7 +223,7 @@ describe("browseSearchParams", () => {
   it("takes the expiry cutoff out of the answer, so one key means one set", () => {
     const params = browseSearchParams(canonicalBrowseQuery({ view: "timeline" }), {
       limit: 200,
-      offset: 400,
+      cursor: "cur-400",
     })
     expect(params.get("includeExpired")).toBe("1")
     expect(params.get("now")).toBeNull()
@@ -231,7 +231,9 @@ describe("browseSearchParams", () => {
 
   it("refuses a matches-nothing query instead of asking for everything", () => {
     const nothing = canonicalBrowseQuery({ view: "list", status: [] })
-    expect(() => browseSearchParams(nothing, { limit: 200, offset: 0 })).toThrow(/matches nothing/)
+    expect(() => browseSearchParams(nothing, { limit: 200, cursor: null })).toThrow(
+      /matches nothing/,
+    )
   })
 
   it("sends predicates and order as the JSON params the route already parses", () => {
@@ -241,7 +243,7 @@ describe("browseSearchParams", () => {
         filters: [STATUS_IN_ACTIVE],
         orderBy: [CONFIDENCE_DESC],
       }),
-      { limit: 200, offset: 0 },
+      { limit: 200, cursor: null },
     )
     expect(JSON.parse(params.get("filters") ?? "null")).toEqual([
       { field: "status", op: "in", values: ["active"] },
@@ -257,7 +259,7 @@ describe("browseSearchParams", () => {
   it("omits both when the grid asked for neither", () => {
     const params = browseSearchParams(canonicalBrowseQuery({ view: "list" }), {
       limit: 200,
-      offset: 0,
+      cursor: null,
     })
     expect(params.get("filters")).toBeNull()
     expect(params.get("orderBy")).toBeNull()
@@ -275,7 +277,7 @@ describe("browseSearchParams", () => {
         orderBy: [CONFIDENCE_DESC],
         since: "2026-08-01T00:00:00.000Z",
       }),
-      { limit: 200, offset: 400 },
+      { limit: 200, cursor: "cur-400" },
     )
     expect(parseBrowseQuery(params, {})).toEqual({
       namespace: "route=/notes",
@@ -286,16 +288,45 @@ describe("browseSearchParams", () => {
       filters: [{ field: "confidence", op: "between", min: 0.1, max: 0.9 }, STATUS_IN_ACTIVE],
       orderBy: [CONFIDENCE_DESC],
       limit: 200,
-      offset: 400,
+      // A cursor and NO offset: the validator rejects the pair, and the parser leaves
+      // the default off entirely when a cursor arrives without one.
+      cursor: "cur-400",
     })
   })
 
   it("threads the pinned timeline window bound", () => {
     const params = browseSearchParams(
       canonicalBrowseQuery({ view: "timeline", since: "2026-08-01T00:00:00.000Z" }),
-      { limit: 200, offset: 0 },
+      { limit: 200, cursor: null },
     )
     expect(params.get("since")).toBe("2026-08-01T00:00:00.000Z")
     expect(params.getAll("kind")).toEqual(["episodic"])
+  })
+})
+
+describe("browseSearchParams — keyset paging", () => {
+  it("sends the continuation as `cursor`, with no offset beside it", () => {
+    const params = browseSearchParams(canonicalBrowseQuery({ view: "list" }), {
+      limit: 200,
+      cursor: "cur-200",
+    })
+    expect(params.get("cursor")).toBe("cur-200")
+    // The validator REJECTS a cursor sent with a non-zero offset, and a zero one beside
+    // a cursor is two answers to "where does this window start". Neither is sent.
+    expect(params.get("offset")).toBeNull()
+    const parsed = parseBrowseQuery(params, {})
+    expect(parsed.cursor).toBe("cur-200")
+    expect(parsed.offset).toBeUndefined()
+  })
+
+  it("sends no cursor for a head window, and still never an offset", () => {
+    const params = browseSearchParams(canonicalBrowseQuery({ view: "list" }), {
+      limit: 200,
+      cursor: null,
+    })
+    expect(params.get("cursor")).toBeNull()
+    expect(params.get("offset")).toBeNull()
+    // Absent IS the head: the route defaults offset to 0.
+    expect(parseBrowseQuery(params, {}).offset).toBe(0)
   })
 })

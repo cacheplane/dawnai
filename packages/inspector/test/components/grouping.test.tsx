@@ -156,7 +156,7 @@ describe("grouping over a partial page is marked, not withheld", () => {
         const body = u.includes("/api/memory/stats")
           ? stats
           : u.includes("/api/memory/list")
-            ? { records, total }
+            ? { records, total, continuation: null }
             : { groups: [] }
         return new Response(JSON.stringify(body), {
           status: 200,

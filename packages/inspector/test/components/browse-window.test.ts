@@ -76,7 +76,13 @@ describe("loadMoreState against the machine that answers the click", () => {
   const KEY_A = '["list",null,null,null,null,null,null]'
   const KEY_B = '["list","route=/notes",null,null,null,null,null]'
 
-  function fulfilledWith(count: number, total: number): BrowseState {
+  /** `continuation` decides `browseHasMore`, so it is what puts a state on one side or
+   *  the other of the footer's "exhausted" branch — the counts no longer do. */
+  function fulfilledWith(
+    count: number,
+    total: number,
+    continuation: string | null = "cur-1",
+  ): BrowseState {
     return apply(
       INITIAL_BROWSE_STATE,
       { type: "query-changed", datasetKey: KEY_A },
@@ -84,7 +90,7 @@ describe("loadMoreState against the machine that answers the click", () => {
         type: "response",
         revision: 1,
         kind: "initial",
-        page: { records: rows(count), total },
+        page: { records: rows(count), total, continuation },
         at: 1,
       },
     )
@@ -93,7 +99,7 @@ describe("loadMoreState against the machine that answers the click", () => {
   const partial = fulfilledWith(200, 5432)
   const states: Readonly<Record<string, BrowseState>> = {
     partial,
-    complete: fulfilledWith(137, 137),
+    complete: fulfilledWith(137, 137, null),
     atCap: fulfilledWith(BROWSE_RESIDENT_CAP, 5432),
     refreshing: apply(partial, { type: "poll-tick" }),
     queued: apply(partial, { type: "poll-tick" }, { type: "load-more-requested" }),

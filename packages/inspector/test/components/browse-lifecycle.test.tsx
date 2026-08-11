@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe("browse lifecycle", () => {
   it("flow 1: shows a loading block, then rows and the honest total", async () => {
-    stubServer(() => jsonResponse({ records: [record("a")], total: TOTAL }))
+    stubServer(() => jsonResponse({ records: [record("a")], total: TOTAL, continuation: null }))
     render(<ListPage />)
     expect(screen.queryByTestId("browse-loading")).not.toBeNull()
     await screen.findByText("content a")
@@ -69,7 +69,7 @@ describe("browse lifecycle", () => {
   })
 
   it("an empty result gets the empty block, with copy that knows about filters", async () => {
-    stubServer(() => jsonResponse({ records: [], total: 0 }))
+    stubServer(() => jsonResponse({ records: [], total: 0, continuation: null }))
     render(<ListPage />)
     await waitFor(() =>
       expect(screen.getByTestId("browse-empty").textContent).toContain("No memories yet"),
@@ -88,7 +88,7 @@ describe("browse lifecycle", () => {
     stubServer(() =>
       fail
         ? jsonResponse({ error: "no memory store configured" }, 500)
-        : jsonResponse({ records: [record("a")], total: 1 }),
+        : jsonResponse({ records: [record("a")], total: 1, continuation: null }),
     )
     render(<ListPage />)
     const block = await screen.findByTestId("browse-error")
@@ -102,7 +102,9 @@ describe("browse lifecycle", () => {
 
   it("flow 2/4: a facet change marks the visible rows stale and asks for the exact namespace", async () => {
     let release: (() => void) | undefined
-    const mock = stubServer(() => jsonResponse({ records: [record("a")], total: 1 }))
+    const mock = stubServer(() =>
+      jsonResponse({ records: [record("a")], total: 1, continuation: null }),
+    )
     render(<ListPage />)
     await screen.findByText("content a")
 
@@ -115,7 +117,7 @@ describe("browse lifecycle", () => {
         await new Promise<void>((resolve) => {
           release = resolve
         })
-        return jsonResponse({ records: [record("z")], total: 1 })
+        return jsonResponse({ records: [record("z")], total: 1, continuation: null })
       }
       return jsonResponse({ error: "not found" }, 404)
     })
@@ -146,7 +148,7 @@ describe("browse lifecycle", () => {
       stubServer(() =>
         fail
           ? jsonResponse({ error: "network down" }, 503)
-          : jsonResponse({ records: [record("a")], total: 1 }),
+          : jsonResponse({ records: [record("a")], total: 1, continuation: null }),
       )
       render(<ListPage />)
       await vi.waitFor(() => screen.getByText("content a"))
@@ -172,7 +174,7 @@ describe("browse lifecycle", () => {
   })
 
   it("shows an as-of instant once polling is paused", async () => {
-    stubServer(() => jsonResponse({ records: [record("a")], total: 1 }))
+    stubServer(() => jsonResponse({ records: [record("a")], total: 1, continuation: null }))
     render(<ListPage />)
     await screen.findByText("content a")
     expect(screen.getByTestId("browse-status").textContent).not.toContain("Updated ")

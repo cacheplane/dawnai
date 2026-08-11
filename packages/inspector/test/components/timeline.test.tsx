@@ -52,7 +52,7 @@ function stubApi(records: readonly MemoryRecord[] = [epDay1, epDay2]) {
     const u = String(url)
     if (u.includes("/api/memory/stats")) return jsonResponse(stats)
     if (u.includes("/api/memory/list")) {
-      return jsonResponse({ records, total: records.length })
+      return jsonResponse({ records, total: records.length, continuation: null })
     }
     if (u.includes("/api/memory/search")) return jsonResponse({ groups: [], hybrid: false })
     const byId = records.find((r) => u.endsWith(`/api/memory/${r.id}`))

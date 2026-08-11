@@ -36,14 +36,15 @@ const STATS = {
   bySourceType: { tool: 2 },
 }
 
-/** `total` is the MATCHING population, not the window size — one larger than the
- *  records handed back is what leaves the load-more control in its ACTIVE state,
- *  which is the only state that can prove the control is live in a given view. */
-function stubApi(total = 3) {
+/** `total` is the MATCHING population, not the window size. The CONTINUATION is what
+ *  leaves the load-more control in its ACTIVE state — the only state that can prove the
+ *  control is live in a given view — because a walk ends when the server withholds a
+ *  token, not when the counts happen to meet. */
+function stubApi(total = 3, continuation: string | null = "cur-1") {
   const mock = vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url)
     if (u.includes("/api/memory/stats")) return jsonResponse(STATS)
-    if (u.includes("/api/memory/list")) return jsonResponse({ records, total, continuation: null })
+    if (u.includes("/api/memory/list")) return jsonResponse({ records, total, continuation })
     return jsonResponse({ groups: [{ namespace: "route=/notes", records: [record({ id: "a" })] }] })
   })
   vi.stubGlobal("fetch", mock)

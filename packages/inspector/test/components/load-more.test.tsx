@@ -65,6 +65,29 @@ describe("LoadMoreFooter", () => {
     expect(button.tabIndex).toBe(0)
   })
 
+  it("does not claim ALL are loaded when its own total says otherwise", () => {
+    // `"exhausted"` is a statement about the walk: the server issued no continuation.
+    // Rows added ABOVE the walk — approve hoists to the head of the default order — are
+    // counted by `total` and cannot be reached by walking further, so the two numbers
+    // legitimately disagree. Saying "All 137 loaded" beside a status bar reading 152
+    // would be the footer asserting a completeness its own props contradict.
+    render(
+      <LoadMoreFooter
+        state="exhausted"
+        loaded={137}
+        total={152}
+        onLoadMore={vi.fn()}
+        browseOnlyReason={undefined}
+      />,
+    )
+    const button = screen.getByRole("button")
+    expect(button.textContent).toBe("137 of 152 loaded")
+    expect(button.getAttribute("aria-disabled")).toBe("true")
+    // Inactive AND unexplained is the one combination this control never ships.
+    const described = document.getElementById(button.getAttribute("aria-describedby") ?? "")
+    expect(described?.textContent).toBe("Nothing further follows the records loaded here.")
+  })
+
   it("explains the resident cap instead of silently refusing", () => {
     render(
       <LoadMoreFooter
@@ -174,17 +197,18 @@ describe("load-more in the page", () => {
           bySourceType: { tool: 3 },
         })
       if (u.includes("/api/memory/list")) {
-        // Which window is being asked for is read off `offset`, because that is what
-        // the shipped client sends. The route ALSO accepts a keyset `cursor` and every
-        // page carries a `continuation` (see api.e2e.test.ts), but `browseSearchParams`
-        // never sends one and `BrowsePageResponse` does not carry one — so a
-        // cursor-keyed stub would answer a question the client never asks and hand back
-        // the first page forever.
-        const offset = new URL(u, "http://localhost").searchParams.get("offset")
+        // Which window is being asked for is read off `cursor`, because that is what
+        // the client sends: a head window carries none, and every later one carries the
+        // token the response before it issued. Keying on `offset` instead would answer
+        // a question this client never asks and hand back the first page forever.
+        const cursor = new URL(u, "http://localhost").searchParams.get("cursor")
         return jsonResponse(
-          offset !== null && offset !== "0"
+          cursor === "cur-1"
             ? { records: second, total, continuation: null }
-            : { records: first, total, continuation: "cur-1" },
+            : // A token exactly when this window does not already hold the whole
+              // matching set — the store's own rule, expressed against a page size of
+              // `first.length` rather than the 200 the client asks for.
+              { records: first, total, continuation: first.length < total ? "cur-1" : null },
         )
       }
       return jsonResponse({ groups: [] })
@@ -250,21 +274,27 @@ describe("load-more in the page", () => {
     expect(screen.getAllByText("content b")).toHaveLength(1)
   })
 
-  it("asks for the window that starts after the rows already resident", async () => {
-    // The plan wrote this as "sends the newest continuation as the cursor". The
-    // shipped client does not walk keyset cursors: `loadMoreWindow` builds
-    // `{limit, offset: residentCount}` and `browseSearchParams` sends exactly those
-    // two. The subject of the test is unchanged — the second request must not re-ask
-    // for the rows already on screen — but it is asserted in the protocol that ships.
+  it("sends the newest continuation as the cursor, and never a row offset", async () => {
+    // Approve stamps `updatedAt = now` and hoists the row to the head of the default
+    // order. Under an offset walk that pushes an unseen row across the seam and it is
+    // never fetched — a SILENT omission, indistinguishable client-side from a row that
+    // does not exist. The keyset walk's failure mode is a duplicate instead, which
+    // arrives with a known id and is dropped on append.
     const { mock } = stubPages([record({ id: "a" })], [record({ id: "c" })])
     render(<ListPage />)
     await screen.findByText("content a")
     fireEvent.click(within(screen.getByTestId("load-more-footer")).getByRole("button"))
     await screen.findByText("content c")
-    const offsets = mock.mock.calls
+    const windows = mock.mock.calls
       .map((call) => new URL(String(call[0]), "http://localhost"))
       .filter((u) => u.pathname.includes("/api/memory/list"))
-      .map((u) => u.searchParams.get("offset"))
-    expect(offsets).toEqual(["0", "1"])
+      .map((u) => ({
+        cursor: u.searchParams.get("cursor"),
+        offset: u.searchParams.get("offset"),
+      }))
+    expect(windows).toEqual([
+      { cursor: null, offset: null },
+      { cursor: "cur-1", offset: null },
+    ])
   })
 })

@@ -11,7 +11,7 @@ import type {
  *  It is part of the dataset identity anyway. A timeline query and a list query
  *  narrowed to episodic serialize to the SAME params, so keying on `view` costs a
  *  refetch on that one toggle — paid deliberately, because the resident window and
- *  the offset it implies belong to the surface that paged them, and a switch that
+ *  the continuation it holds belong to the surface that paged them, and a switch that
  *  inherited them would resume another surface's walk. */
 export type BrowseView = "list" | "timeline"
 
@@ -171,10 +171,14 @@ export function browseMatchesNothing(query: CanonicalBrowseQuery): boolean {
  * caller that skips it has to fail loudly: the params for an empty set are the params
  * for no set at all, so the request would come back unfiltered — every record, in
  * answer to "none of them".
+ *
+ * The window is KEYSET: a `cursor`, or nothing at all for the head. No `offset` is
+ * ever sent — `validateBrowseQuery` rejects a cursor paired with a non-zero one, and
+ * a zero one beside a cursor is two answers to "where does this window start".
  */
 export function browseSearchParams(
   query: CanonicalBrowseQuery,
-  window: { readonly limit: number; readonly offset: number },
+  window: { readonly limit: number; readonly cursor: string | null },
 ): URLSearchParams {
   if (browseMatchesNothing(query))
     throw new Error("browseSearchParams: this query matches nothing; resolve it locally")
@@ -190,13 +194,20 @@ export function browseSearchParams(
   if (query.filters !== null) params.set("filters", JSON.stringify(query.filters))
   if (query.orderBy !== null) params.set("orderBy", JSON.stringify(query.orderBy))
   // The expiry cutoff is switched OFF rather than pinned, which is what makes the
-  // dataset key total. Left to default, the route stamps `now` per request, so an
-  // episode expiring mid-walk shifts every later offset up by one and that row is
-  // skipped for good — and two requests sharing a key answer different sets. Pinning
-  // a `now` here would instead freeze the cutoff for a view that re-polls every two
-  // seconds, and advancing it would pivot the whole dataset just to move a clock.
+  // dataset key total. Left to default, the route stamps `now` per request, so two
+  // requests sharing a key answer different sets — the key would name a question
+  // whose answer moves with the clock. Pinning a `now` here would instead freeze the
+  // cutoff for a view that re-polls every two seconds, and advancing it would pivot
+  // the whole dataset just to move a clock.
+  //
+  // It is also what makes a continuation walkable at all: `now` participates in the
+  // cursor fingerprint, so a route-stamped `now` rejects every token it had just
+  // issued — pinned-`now` walks are the only other way through, and this view has
+  // nowhere honest to pin one. Switched off, there is no `now` to disagree about.
+  // api.e2e.test.ts walks these very params against the route, and the test beside it
+  // shows the unpinned walk failing.
   params.set("includeExpired", "1")
   params.set("limit", String(window.limit))
-  params.set("offset", String(window.offset))
+  if (window.cursor !== null) params.set("cursor", window.cursor)
   return params
 }

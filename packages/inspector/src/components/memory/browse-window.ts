@@ -27,9 +27,11 @@ export type LoadMoreState = "available" | "loading" | "exhausted" | "at-cap" | "
 export function loadMoreState(input: {
   readonly phase: PretableDataState["phase"]
   readonly loaded: number
-  /** The POPULATION fact (`browseHasMore`), never `browseCanLoadMore`: that one already
-   *  folds the cap in, so a capped window would read `"exhausted"` and the control would
-   *  call a set complete thousands of rows early. */
+  /** The WALK fact (`browseHasMore`) — the server issued a continuation — and never
+   *  `browseCanLoadMore`: that one already folds the cap in, so a capped window would
+   *  read `"exhausted"` and the control would call a set complete thousands of rows
+   *  early. At the cap the window filled, so the token is there and this stays true;
+   *  `"at-cap"` below is what names the refusal. */
   readonly hasMore: boolean
 }): LoadMoreState {
   // Switched over the whole phase union with no `default`, so a phase added upstream

@@ -47,7 +47,8 @@ function stubApi() {
   const mock = vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url)
     if (u.includes("/api/memory/stats")) return jsonResponse(stats)
-    if (u.includes("/api/memory/list")) return jsonResponse({ records, total: records.length })
+    if (u.includes("/api/memory/list"))
+      return jsonResponse({ records, total: records.length, continuation: null })
     return jsonResponse({ groups: [] })
   })
   vi.stubGlobal("fetch", mock)

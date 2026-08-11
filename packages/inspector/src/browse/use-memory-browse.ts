@@ -25,7 +25,9 @@ import {
 export const BROWSE_POLL_INTERVAL_MS = 2000
 
 const NO_RECORDS: readonly MemoryRecord[] = []
-const EMPTY_PAGE: BrowsePageResponse = { records: NO_RECORDS, total: 0 }
+/** `continuation: null` because there is nothing to walk: this page is the ANSWER to a
+ *  matches-nothing query, not a window that stopped short of one. */
+const EMPTY_PAGE: BrowsePageResponse = { records: NO_RECORDS, total: 0, continuation: null }
 const UNKNOWN_TOTAL_META: PretableResultMeta = { total: { kind: "unknown" } }
 
 export type BrowseFetcher = (
@@ -39,8 +41,15 @@ export type BrowseFetcher = (
  *  the boundary, the same body becomes an ordinary request failure with a banner. */
 function isBrowsePage(body: unknown): body is BrowsePageResponse {
   if (body === null || typeof body !== "object") return false
-  const page = body as { records?: unknown; total?: unknown }
-  return Array.isArray(page.records) && typeof page.total === "number"
+  const page = body as { records?: unknown; total?: unknown; continuation?: unknown }
+  return (
+    Array.isArray(page.records) &&
+    typeof page.total === "number" &&
+    // Required, never defaulted. `undefined` folded to `null` would report the walk
+    // complete on a response that never said so, and the rest of the set would be
+    // unreachable with nothing on screen to say why.
+    (page.continuation === null || typeof page.continuation === "string")
+  )
 }
 
 /** GET one browse window, surfacing the API's `{error}` body as the thrown message. */
@@ -88,10 +97,12 @@ export interface UseMemoryBrowseResult {
   readonly updatedAt: number | null
   /** Polling is suspended: live off, tab hidden, or a held error. */
   readonly paused: boolean
-  /** The server holds matching records that are not resident. NOT a promise that
-   *  `loadMore` will fetch them: past the resident cap this stays true while the
-   *  machine refuses the request, so a consumer that offers a control must gate it on
-   *  the loaded count as well — and say which of the two it is refusing on. */
+  /** The forward walk can be continued — the newest response issued a continuation.
+   *  NOT a promise that `loadMore` will fetch anything: past the resident cap this
+   *  stays true while the machine refuses the request, so a consumer that offers a
+   *  control must gate it on the loaded count as well — and say which of the two it is
+   *  refusing on. Nor is it `loaded < total`; see `browseHasMore` for why those two
+   *  legitimately disagree by up to one poll period. */
   readonly hasMore: boolean
   loadMore(): void
   refresh(): void
@@ -112,7 +123,14 @@ export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseRes
   // while tagging them with the revision the state still holds — and `browseReduce`
   // ACCEPTS that response, merging one question's rows and total under the other's
   // dataset key. Lagging a render behind within one key is harmless: the key is the
-  // JSON of exactly the fields `browseSearchParams` reads.
+  // JSON of exactly the narrowings `browseSearchParams` reads off the query.
+  //
+  // The window's `cursor` comes from the machine, not from here, and cannot be paired
+  // with the wrong query: the reducer only builds a load-more while the FULFILLED
+  // revision is the desired one, and a query change bumps that revision and issues an
+  // `initial` (cursor-less) request instead. The route would reject a mismatch anyway
+  // — the token carries its own query's fingerprint — but that is the backstop, not
+  // the mechanism.
   const queryRef = useRef(query)
   const fetchRef = useRef<BrowseFetcher>(input.fetchPage ?? fetchBrowsePage)
   const nowRef = useRef<() => number>(input.now ?? Date.now)
