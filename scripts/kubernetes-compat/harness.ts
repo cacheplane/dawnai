@@ -215,6 +215,12 @@ interface CleanupExecution {
   readonly error?: Error
 }
 
+interface CleanupPass {
+  readonly execution: CleanupExecution
+  readonly retained: boolean
+  readonly revision: number
+}
+
 interface DiagnosticRequest {
   readonly id: string
   readonly command: ReturnType<typeof kubectl.command> | ReturnType<typeof helm.command>
@@ -1149,8 +1155,10 @@ export async function runKubernetesCompatibility(
   let signalRegistration: SignalCleanupRegistration | undefined
   let reportRecorder: CompatibilityReportRecorder | undefined
   let observedServer = "unavailable"
-  let cleanupOperation: Promise<CleanupExecution> | undefined
-  let shutdownRecoveryOperation: Promise<void> | undefined
+  let cleanupQueue: Promise<void> = Promise.resolve()
+  let latestCleanupPass: CleanupPass | undefined
+  let signalCleanupOperation: Promise<void> | undefined
+  let cleanupStateRevision = 0
   let unconfirmedProcessTreeError: CommandExecutionError | undefined
   let shutdownRequested = false
   let preflight: ClusterPreflightResult | undefined
@@ -1214,121 +1222,176 @@ export async function runKubernetesCompatibility(
 
   const registerReleaseCleanupCandidate = (role: InstalledReleaseRole): void => {
     assertLifecycleActive(`registering ${role} Helm install`)
-    releaseCleanupCandidates.add(role)
+    if (!releaseCleanupCandidates.has(role)) {
+      releaseCleanupCandidates.add(role)
+      cleanupStateRevision += 1
+    }
   }
 
-  const cleanupCurrentState = (retainClusterResources: boolean): Promise<CleanupExecution> => {
-    if (cleanupOperation !== undefined) return cleanupOperation
-    cleanupOperation = (async () => {
-      const errors: Error[] = []
-      if (shutdownRecoveryOperation !== undefined) {
-        try {
-          await shutdownRecoveryOperation
-        } catch (error) {
-          errors.push(normalizeError(error, "Signal ownership recovery failed"))
-        }
-      }
-      const hadWork =
-        ownership.length > 0 ||
-        releaseCleanupCandidates.size > 0 ||
-        networkLease !== undefined ||
-        tokenDestroyers.size > 0
-      if (!hadWork && errors.length === 0) {
-        return { result: Object.freeze({ status: "skipped" }) }
-      }
-      const remoteCleanupBlocked = unconfirmedProcessTreeError !== undefined
-      if (unconfirmedProcessTreeError !== undefined) errors.push(unconfirmedProcessTreeError)
-      let ownershipVerified = ownership.length === 0
-      if (!remoteCleanupBlocked && ownership.length > 0) {
-        try {
-          await resolved.cleanupCluster({
-            context: options.context,
-            runId,
-            ownership: [...ownership],
-            installedReleases: [],
-            removeTokenFiles: async () => undefined,
-            keepOnFailure: true,
-          })
-          ownershipVerified = true
-        } catch (error) {
-          errors.push(normalizeError(error, "Namespace ownership verification failed"))
-        }
-      }
+  const serializeCleanupState = <T>(operation: () => Promise<T>): Promise<T> => {
+    const queued = cleanupQueue.then(operation, operation)
+    cleanupQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    )
+    return queued
+  }
 
-      const localActions: (() => Promise<void>)[] = [
-        ...(!remoteCleanupBlocked &&
-        ownershipVerified &&
-        ownership.some(({ name }) => name === derivedNames.sandboxNamespace) &&
-        networkLease !== undefined
-          ? [() => networkLease?.cleanup() ?? Promise.resolve()]
-          : []),
-        ...tokenDestroyers,
-      ]
-      const localResults = await Promise.allSettled(
-        localActions.map((action) => Promise.resolve().then(action)),
-      )
-      for (const outcome of localResults) {
-        if (outcome.status === "rejected") {
-          errors.push(normalizeError(outcome.reason, "Local compatibility cleanup failed"))
-        }
+  const executeCleanupPass = async (retainClusterResources: boolean): Promise<CleanupPass> => {
+    const errors: Error[] = []
+    const hadWork =
+      ownership.length > 0 ||
+      releaseCleanupCandidates.size > 0 ||
+      networkLease !== undefined ||
+      tokenDestroyers.size > 0
+    if (!hadWork) {
+      const skipped: CleanupPass = {
+        execution: { result: Object.freeze({ status: "skipped" }) },
+        retained: false,
+        revision: cleanupStateRevision,
       }
-
-      const retained =
-        !remoteCleanupBlocked && retainClusterResources && ownershipVerified && ownership.length > 0
-      if (!remoteCleanupBlocked && ownershipVerified && !retained && ownership.length > 0) {
-        const hasBothNamespaceOwnership = [
-          derivedNames.managementNamespace,
-          derivedNames.sandboxNamespace,
-        ].every((namespace) => ownership.some(({ name }) => name === namespace))
-        try {
-          await resolved.cleanupCluster({
-            context: options.context,
-            runId,
-            ownership: [...ownership],
-            installedReleases: hasBothNamespaceOwnership ? [...releaseCleanupCandidates] : [],
-            removeTokenFiles: async () => undefined,
-          })
-        } catch (error) {
-          errors.push(normalizeError(error, "Owned cluster cleanup failed"))
-        }
+      latestCleanupPass = skipped
+      return skipped
+    }
+    const remoteCleanupBlocked = unconfirmedProcessTreeError !== undefined
+    if (unconfirmedProcessTreeError !== undefined) errors.push(unconfirmedProcessTreeError)
+    let ownershipVerified = ownership.length === 0
+    if (!remoteCleanupBlocked && ownership.length > 0) {
+      try {
+        await resolved.cleanupCluster({
+          context: options.context,
+          runId,
+          ownership: [...ownership],
+          installedReleases: [],
+          removeTokenFiles: async () => undefined,
+          keepOnFailure: true,
+        })
+        ownershipVerified = true
+      } catch (error) {
+        errors.push(normalizeError(error, "Namespace ownership verification failed"))
       }
+    }
 
-      const cleanupError = aggregateErrors(errors, "Kubernetes compatibility cleanup failed")
-      const result: CleanupResult = Object.freeze({
-        status: cleanupError === undefined ? "passed" : "failed",
-        diagnostics: redactSensitive({
-          retained,
-          ...(remoteCleanupBlocked ? { blocked: true } : {}),
-          ...(cleanupError !== undefined ? { errors: errorDiagnostics(cleanupError) } : {}),
-        }),
-      })
-      return {
+    const activeNetworkLease =
+      !remoteCleanupBlocked &&
+      ownershipVerified &&
+      ownership.some(({ name }) => name === derivedNames.sandboxNamespace)
+        ? networkLease
+        : undefined
+    const localActions: (() => Promise<void>)[] = [
+      ...(activeNetworkLease !== undefined
+        ? [
+            async () => {
+              await activeNetworkLease.cleanup()
+              if (networkLease === activeNetworkLease) {
+                networkLease = undefined
+                cleanupStateRevision += 1
+              }
+            },
+          ]
+        : []),
+      ...tokenDestroyers,
+    ]
+    const localResults = await Promise.allSettled(
+      localActions.map((action) => Promise.resolve().then(action)),
+    )
+    for (const outcome of localResults) {
+      if (outcome.status === "rejected") {
+        errors.push(normalizeError(outcome.reason, "Local compatibility cleanup failed"))
+      }
+    }
+
+    const retained =
+      !remoteCleanupBlocked && retainClusterResources && ownershipVerified && ownership.length > 0
+    if (!remoteCleanupBlocked && ownershipVerified && !retained && ownership.length > 0) {
+      const hasBothNamespaceOwnership = [
+        derivedNames.managementNamespace,
+        derivedNames.sandboxNamespace,
+      ].every((namespace) => ownership.some(({ name }) => name === namespace))
+      try {
+        await resolved.cleanupCluster({
+          context: options.context,
+          runId,
+          ownership: [...ownership],
+          installedReleases: hasBothNamespaceOwnership ? [...releaseCleanupCandidates] : [],
+          removeTokenFiles: async () => undefined,
+        })
+      } catch (error) {
+        errors.push(normalizeError(error, "Owned cluster cleanup failed"))
+      }
+    }
+
+    const cleanupError = aggregateErrors(errors, "Kubernetes compatibility cleanup failed")
+    const result: CleanupResult = Object.freeze({
+      status: cleanupError === undefined ? "passed" : "failed",
+      diagnostics: redactSensitive({
+        retained,
+        ...(remoteCleanupBlocked ? { blocked: true } : {}),
+        ...(cleanupError !== undefined ? { errors: errorDiagnostics(cleanupError) } : {}),
+      }),
+    })
+    const pass: CleanupPass = {
+      execution: {
         result,
         ...(cleanupError !== undefined ? { error: cleanupError } : {}),
-      }
-    })()
-    return cleanupOperation
+      },
+      retained,
+      revision: cleanupStateRevision,
+    }
+    latestCleanupPass = pass
+    return pass
   }
 
-  const signalCleanup = async (): Promise<void> => {
-    if (shutdownRecoveryOperation === undefined) {
-      shutdownRequested = true
-      lifecycleAbort.abort()
-      shutdownRecoveryOperation = (async () => {
-        await waitForTrackedLifecyclePhases()
-        const recoveries = await Promise.allSettled([
-          recoverNamespaceOwnership(derivedNames.managementNamespace),
-          recoverNamespaceOwnership(derivedNames.sandboxNamespace),
-        ])
-        const recoveryError = aggregateErrors(
-          recoveries.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
-          "Signal ownership recovery failed",
-        )
-        if (recoveryError !== undefined) throw recoveryError
-      })()
-    }
-    const cleanup = await cleanupCurrentState(false)
-    if (cleanup.error !== undefined) throw cleanup.error
+  const cleanupCurrentState = (retainClusterResources: boolean): Promise<CleanupExecution> =>
+    serializeCleanupState(async () => {
+      const current = latestCleanupPass
+      if (
+        current !== undefined &&
+        current.revision === cleanupStateRevision &&
+        (!current.retained || retainClusterResources)
+      ) {
+        return current.execution
+      }
+      return (await executeCleanupPass(retainClusterResources)).execution
+    })
+
+  const signalCleanup = (): Promise<void> => {
+    if (signalCleanupOperation !== undefined) return signalCleanupOperation
+    shutdownRequested = true
+    lifecycleAbort.abort()
+    signalCleanupOperation = serializeCleanupState(async () => {
+      const errors: Error[] = []
+      const previousCleanupError = latestCleanupPass?.execution.error
+      if (previousCleanupError !== undefined) errors.push(previousCleanupError)
+
+      await waitForTrackedLifecyclePhases()
+      const recoveries = await Promise.allSettled([
+        recoverNamespaceOwnership(derivedNames.managementNamespace),
+        recoverNamespaceOwnership(derivedNames.sandboxNamespace),
+      ])
+      for (const outcome of recoveries) {
+        if (outcome.status === "rejected") {
+          errors.push(normalizeError(outcome.reason, "Signal ownership recovery failed"))
+        }
+      }
+
+      const current = latestCleanupPass
+      const needsFreshCleanup =
+        current === undefined ||
+        current.revision !== cleanupStateRevision ||
+        current.execution.result.status !== "passed" ||
+        current.retained
+      const cleanup = needsFreshCleanup
+        ? (await executeCleanupPass(false)).execution
+        : current.execution
+      if (cleanup.error !== undefined && cleanup.error !== previousCleanupError) {
+        errors.push(cleanup.error)
+      }
+
+      const error = aggregateErrors(errors, "Kubernetes compatibility signal cleanup failed")
+      if (error !== undefined) throw error
+    })
+    return signalCleanupOperation
   }
 
   const ensureSignalRegistration = (): void => {
@@ -1353,6 +1416,7 @@ export async function runKubernetesCompatibility(
       return
     }
     ownership.push(candidate)
+    cleanupStateRevision += 1
   }
 
   const recoverNamespaceOwnership = async (name: string): Promise<void> => {
@@ -1458,13 +1522,14 @@ export async function runKubernetesCompatibility(
         destroyInFlight ??= Promise.resolve()
           .then(() => secure.destroy())
           .then(() => {
-            tokenDestroyers.delete(destroy)
+            if (tokenDestroyers.delete(destroy)) cleanupStateRevision += 1
           })
         return destroyInFlight.finally(() => {
           destroyInFlight = undefined
         })
       }
       tokenDestroyers.add(destroy)
+      cleanupStateRevision += 1
 
       const operationOutcome = await Promise.resolve()
         .then(() => {
@@ -1586,6 +1651,7 @@ export async function runKubernetesCompatibility(
       }),
     )
     networkLease = networkControlLease
+    cleanupStateRevision += 1
 
     const runProviderPhase = async (
       phase: "provider-before-upgrade" | "provider-after-upgrade",

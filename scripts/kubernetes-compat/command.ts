@@ -491,9 +491,12 @@ function killDirectChild(child: CommandChild, signal: NodeJS.Signals): boolean {
 interface ProcessTreeTracker {
   readonly rootPid: number
   readonly identities: Map<number, ProcessIdentity>
+  readonly knownIdentities: Map<number, ProcessIdentity>
+  readonly untrustedPids: Set<number>
   rootIdentity: ProcessIdentity | undefined
   originalProcessGroup: number | undefined
   rootExited: boolean
+  identityProofFailed: boolean
   scanFailed: boolean
   lastActivityScanStartedAt: number
   scanRequested: boolean
@@ -505,7 +508,48 @@ interface ProcessTreeTracker {
 
 interface ProcessIdentity {
   readonly startedAt: string
+  readonly ppid: number
   readonly pgid: number
+}
+
+function matchesProcessIdentity(
+  processEntry: ProcessTableEntry,
+  identity: ProcessIdentity,
+): boolean {
+  return (
+    processEntry.startedAt === identity.startedAt &&
+    processEntry.ppid === identity.ppid &&
+    processEntry.pgid === identity.pgid
+  )
+}
+
+function isProvenOrphanReparenting(
+  tracker: ProcessTreeTracker,
+  processEntry: ProcessTableEntry,
+  identity: ProcessIdentity,
+  byPid: ReadonlyMap<number, ProcessTableEntry>,
+): boolean {
+  if (
+    !tracker.rootExited ||
+    processEntry.startedAt !== identity.startedAt ||
+    processEntry.pgid !== identity.pgid ||
+    processEntry.ppid !== 1 ||
+    identity.ppid === 1
+  ) {
+    return false
+  }
+
+  const parentIdentity = tracker.knownIdentities.get(identity.ppid)
+  const currentParent = byPid.get(identity.ppid)
+  return (
+    parentIdentity !== undefined &&
+    (currentParent === undefined || !matchesProcessIdentity(currentParent, parentIdentity))
+  )
+}
+
+function rejectProcessIdentity(tracker: ProcessTreeTracker, pid: number): void {
+  tracker.untrustedPids.add(pid)
+  tracker.identityProofFailed = true
 }
 
 function updateTrackedProcesses(
@@ -516,21 +560,29 @@ function updateTrackedProcesses(
   const retained = new Map<number, ProcessIdentity>()
   for (const [pid, identity] of tracker.identities) {
     const current = byPid.get(pid)
-    if (current?.startedAt === identity.startedAt) {
-      retained.set(pid, { startedAt: current.startedAt, pgid: current.pgid })
+    if (pid === tracker.rootPid && tracker.rootExited) {
+      if (current !== undefined && !matchesProcessIdentity(current, identity)) {
+        rejectProcessIdentity(tracker, pid)
+      }
+      continue
+    }
+    if (
+      current !== undefined &&
+      (matchesProcessIdentity(current, identity) ||
+        isProvenOrphanReparenting(tracker, current, identity, byPid))
+    ) {
+      retained.set(pid, identity)
+    } else if (current !== undefined) {
+      rejectProcessIdentity(tracker, pid)
     }
   }
 
   const root = byPid.get(tracker.rootPid)
   if (tracker.rootIdentity === undefined && !tracker.rootExited && root?.pgid === tracker.rootPid) {
-    tracker.rootIdentity = { startedAt: root.startedAt, pgid: root.pgid }
+    tracker.rootIdentity = { startedAt: root.startedAt, ppid: root.ppid, pgid: root.pgid }
     tracker.originalProcessGroup = root.pgid
+    tracker.knownIdentities.set(root.pid, tracker.rootIdentity)
     retained.set(root.pid, tracker.rootIdentity)
-  } else if (
-    tracker.rootIdentity !== undefined &&
-    root?.startedAt === tracker.rootIdentity.startedAt
-  ) {
-    retained.set(root.pid, { startedAt: root.startedAt, pgid: root.pgid })
   }
 
   const discovered = new Set<number>(retained.keys())
@@ -540,12 +592,28 @@ function updateTrackedProcesses(
     for (const candidate of processes) {
       if (
         candidate.pid !== tracker.rootPid &&
+        !tracker.untrustedPids.has(candidate.pid) &&
         !discovered.has(candidate.pid) &&
         discovered.has(candidate.ppid) &&
         isSafeProcessId(candidate.pid)
       ) {
+        const knownIdentity = tracker.knownIdentities.get(candidate.pid)
+        if (
+          knownIdentity !== undefined &&
+          !matchesProcessIdentity(candidate, knownIdentity) &&
+          !isProvenOrphanReparenting(tracker, candidate, knownIdentity, byPid)
+        ) {
+          rejectProcessIdentity(tracker, candidate.pid)
+          continue
+        }
+        const identity = knownIdentity ?? {
+          startedAt: candidate.startedAt,
+          ppid: candidate.ppid,
+          pgid: candidate.pgid,
+        }
+        tracker.knownIdentities.set(candidate.pid, identity)
         discovered.add(candidate.pid)
-        retained.set(candidate.pid, { startedAt: candidate.startedAt, pgid: candidate.pgid })
+        retained.set(candidate.pid, identity)
         changed = true
       }
     }
@@ -597,9 +665,12 @@ function createProcessTreeTracker(
   const tracker: ProcessTreeTracker = {
     rootPid,
     identities: new Map(),
+    knownIdentities: new Map(),
+    untrustedPids: new Set(),
     rootIdentity: undefined,
     originalProcessGroup: undefined,
     rootExited: false,
+    identityProofFailed: false,
     scanFailed: false,
     lastActivityScanStartedAt: 0,
     scanRequested: false,
@@ -668,6 +739,7 @@ async function terminatePosixProcessTree(
   await stopProcessTreeTracker(tracker, dependencies)
   const dispatchFailures: unknown[] = []
   const provenProcessGroup = (): number | undefined => {
+    if (tracker?.untrustedPids.has(pid) === true) return undefined
     if (!rootHasExited()) return tracker?.originalProcessGroup ?? pid
     const originalProcessGroup = tracker?.originalProcessGroup
     if (originalProcessGroup === undefined) return undefined
@@ -713,6 +785,7 @@ async function terminatePosixProcessTree(
       return (
         dispatchFailures.length === 0 &&
         tracker?.scanFailed !== true &&
+        tracker?.identityProofFailed !== true &&
         (tracker === undefined || tracker.rootIdentity !== undefined || !rootHasExited())
       )
     }
@@ -879,6 +952,7 @@ export function createCommandExecutor(
       let spawned = false
       let settled = false
       let terminalStarted = false
+      let childExited = false
       let childClosed = false
       let pendingFailure: PendingFailure | undefined
       let closedAfterFailure = false
@@ -894,6 +968,7 @@ export function createCommandExecutor(
         options.signal?.removeEventListener("abort", onAbort)
         child.off("spawn", onSpawn)
         child.off("error", onError)
+        child.off("exit", onExit)
         child.off("close", onClose)
         child.stdout.off("data", onStdout)
         child.stderr.off("data", onStderr)
@@ -941,7 +1016,11 @@ export function createCommandExecutor(
                 child,
                 terminationDependencies,
                 processTreeTracker,
-                () => childClosed || child.exitCode !== null || child.signalCode !== null,
+                () =>
+                  childExited ||
+                  childClosed ||
+                  child.exitCode !== null ||
+                  child.signalCode !== null,
               )
             : killDirectChild(child, "SIGKILL"),
         )
@@ -981,6 +1060,11 @@ export function createCommandExecutor(
         ) {
           processTreeTracker = createProcessTreeTracker(pid, terminationDependencies)
         }
+      }
+
+      function onExit(): void {
+        childExited = true
+        if (processTreeTracker !== undefined) processTreeTracker.rootExited = true
       }
 
       function onStdout(value: Buffer | string): void {
@@ -1045,6 +1129,7 @@ export function createCommandExecutor(
       }
 
       function onClose(code: number | null, signal: NodeJS.Signals | null): void {
+        childExited = true
         childClosed = true
         if (processTreeTracker !== undefined) processTreeTracker.rootExited = true
         if (pendingFailure !== undefined) {
@@ -1096,7 +1181,8 @@ export function createCommandExecutor(
             child,
             terminationDependencies,
             processTreeTracker,
-            () => childClosed || child.exitCode !== null || child.signalCode !== null,
+            () =>
+              childExited || childClosed || child.exitCode !== null || child.signalCode !== null,
           ),
         )
         void terminationDispatch.then((terminated) => {
@@ -1125,6 +1211,7 @@ export function createCommandExecutor(
 
       child.once("spawn", onSpawn)
       child.on("error", onError)
+      child.once("exit", onExit)
       child.once("close", onClose)
       child.stdout.on("data", onStdout)
       child.stderr.on("data", onStderr)

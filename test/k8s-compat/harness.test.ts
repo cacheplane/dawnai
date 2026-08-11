@@ -1446,6 +1446,116 @@ describe("signal cleanup", () => {
     },
   )
 
+  test("waits for late ownership recovery and a fresh cleanup pass before termination", async () => {
+    const fixture = createHarnessFixture()
+    const emitter = new EventEmitter()
+    const finalPersistenceStarted = deferred()
+    const releaseFinalPersistence = deferred()
+    const signalRecoveryStarted = deferred()
+    const releaseSignalRecovery = deferred()
+    const terminated = deferred()
+    let managementRecoveryCount = 0
+    let persistenceCount = 0
+    const baseExecute = fixture.dependencies.execute as Runner
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (
+        command.file === "kubectl" &&
+        command.args.includes("create") &&
+        typeof options?.stdin === "string" &&
+        options.stdin.includes('"kind":"Namespace"')
+      ) {
+        fixture.commandCalls.push({ command, options })
+        fixture.events.push("management.create.accepted")
+        throw new Error("management Namespace response was lost")
+      }
+      if (
+        command.file === "kubectl" &&
+        command.args.includes("get") &&
+        command.args.includes(NAMES.managementNamespace)
+      ) {
+        fixture.commandCalls.push({ command, options })
+        managementRecoveryCount += 1
+        if (managementRecoveryCount === 1) {
+          fixture.events.push("management.recover.initial.failed")
+          throw new Error("initial management ownership recovery failed")
+        }
+        fixture.events.push("management.recover.signal.started")
+        signalRecoveryStarted.resolve()
+        await releaseSignalRecovery.promise
+        fixture.events.push("management.recover.signal.settled")
+        return result(command, namespace(NAMES.managementNamespace, "management-uid"))
+      }
+      if (
+        command.file === "kubectl" &&
+        command.args.includes("get") &&
+        command.args.includes(NAMES.sandboxNamespace)
+      ) {
+        fixture.commandCalls.push({ command, options })
+        return result(command, "")
+      }
+      return baseExecute(command, options)
+    })
+    const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+      fixture.dependencies
+    const run = runKubernetesCompatibility(OPTIONS, {
+      ...dependenciesWithoutFakeRegistration,
+      execute,
+      persistReport: async (_root, _filename, report) => {
+        persistenceCount += 1
+        fixture.events.push(`report.persist.${persistenceCount}`)
+        fixture.reports.push(report)
+        if (persistenceCount === 2) {
+          finalPersistenceStarted.resolve()
+          await releaseFinalPersistence.promise
+        }
+        return join(REPOSITORY_ROOT, ARTIFACT_DIRECTORY, "compat-report.json")
+      },
+      registerSignalCleanup: registerOwnedResourceSignalCleanup,
+      signalCleanupOptions: {
+        emitter,
+        terminate: (observedSignal) => {
+          fixture.events.push(`terminate.${observedSignal}`)
+          terminated.resolve()
+        },
+        timeoutMs: 5_000,
+      },
+    }).catch((error: unknown) => error)
+
+    await finalPersistenceStarted.promise
+    emitter.emit("SIGTERM")
+    await signalRecoveryStarted.promise
+    await nextEventLoopTurn()
+
+    expect(fixture.events).not.toContain("terminate.SIGTERM")
+    expect(fixture.events).not.toContain("cleanup.destroy")
+
+    releaseSignalRecovery.resolve()
+    await terminated.promise
+    releaseFinalPersistence.resolve()
+    const error = await run
+
+    expect(error).toBeInstanceOf(Error)
+    expect(fixture.events.indexOf("management.recover.signal.settled")).toBeLessThan(
+      fixture.events.indexOf("cleanup.verify"),
+    )
+    expect(fixture.events.indexOf("cleanup.verify")).toBeLessThan(
+      fixture.events.indexOf("cleanup.destroy"),
+    )
+    expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
+      fixture.events.indexOf("terminate.SIGTERM"),
+    )
+    expect(fixture.cleanupInputs.at(-1)).toMatchObject({
+      ownership: [
+        {
+          name: NAMES.managementNamespace,
+          uid: "management-uid",
+          runId: RUN_ID,
+        },
+      ],
+      installedReleases: [],
+    })
+  })
+
   test.skipIf(process.platform === "win32")(
     "waits for confirmed detached provider descendants before token and cluster cleanup",
     async () => {

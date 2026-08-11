@@ -602,7 +602,6 @@ describe("shell-free command executor", () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
 
     controller.abort()
-    child.emit("close", null, "SIGKILL")
 
     await expect(execution).rejects.toMatchObject({ outcome: { kind: "aborted" } })
     expect(spawnOptions).toMatchObject({ shell: false, detached: true })
@@ -745,7 +744,7 @@ describe("shell-free command executor", () => {
     child.exitCode = 0
     child.emit("close", 0, null)
 
-    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
     expect(killProcessGroup).not.toHaveBeenCalled()
     expect(killProcess).not.toHaveBeenCalled()
     expect(processGroupExists).not.toHaveBeenCalled()
@@ -804,10 +803,194 @@ describe("shell-free command executor", () => {
     child.exitCode = 0
     child.emit("close", 0, null)
 
-    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
     expect(killProcessGroup).not.toHaveBeenCalled()
     expect(killProcess).not.toHaveBeenCalledWith(descendantPid, expect.anything())
     expect(processGroupExists).not.toHaveBeenCalled()
+  })
+
+  test("does not signal a same-second root PID reuse after exit while close is delayed", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_031
+    const startedAt = "Tue Aug 11 03:20:00 2026"
+    let rootReused = false
+    const listProcesses = vi.fn(async () => [
+      {
+        pid: child.pid as number,
+        ppid: rootReused ? 1 : process.pid,
+        pgid: child.pid as number,
+        startedAt,
+      },
+    ])
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists: () => true,
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    child.exitCode = 0
+    child.emit("exit", 0, null)
+    rootReused = true
+    child.stdout.write("descendant-held output")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalledTimes(2))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    child.emit("close", 0, null)
+
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(killProcess).not.toHaveBeenCalledWith(child.pid, expect.anything())
+  })
+
+  test("does not signal a same-second reused descendant with changed ancestry and group", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_041
+    const descendantPid = 6_042
+    const rootStartedAt = "Tue Aug 11 03:30:00 2026"
+    const descendantStartedAt = "Tue Aug 11 03:30:01 2026"
+    let descendantReused = false
+    const listProcesses = vi.fn(async () =>
+      descendantReused
+        ? [
+            {
+              pid: descendantPid,
+              ppid: 1,
+              pgid: descendantPid,
+              startedAt: descendantStartedAt,
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: rootStartedAt,
+            },
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: child.pid as number,
+              startedAt: descendantStartedAt,
+            },
+          ],
+    )
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists: () => false,
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    child.exitCode = 0
+    child.emit("exit", 0, null)
+    descendantReused = true
+    child.stdout.write("descendant-held output")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalledTimes(2))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    child.emit("close", 0, null)
+
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(killProcess).not.toHaveBeenCalledWith(descendantPid, expect.anything())
+  })
+
+  test("terminates proven original-group and setsid orphans after root exit", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_051
+    const groupedPid = 6_052
+    const setsidPid = 6_053
+    let rootExited = false
+    const liveDescendants = new Set([groupedPid, setsidPid])
+    const identities = [
+      {
+        pid: groupedPid,
+        ppid: child.pid as number,
+        pgid: child.pid as number,
+        startedAt: "Tue Aug 11 03:40:01 2026",
+      },
+      {
+        pid: setsidPid,
+        ppid: child.pid as number,
+        pgid: setsidPid,
+        startedAt: "Tue Aug 11 03:40:02 2026",
+      },
+    ]
+    const listProcesses = vi.fn(async () => [
+      ...(!rootExited
+        ? [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 03:40:00 2026",
+            },
+          ]
+        : []),
+      ...identities
+        .filter(({ pid }) => liveDescendants.has(pid))
+        .map((identity) => ({ ...identity, ppid: rootExited ? 1 : identity.ppid })),
+    ])
+    const killProcessGroup = vi.fn((pgid: number) => {
+      for (const identity of identities) {
+        if (identity.pgid === pgid) liveDescendants.delete(identity.pid)
+      }
+    })
+    const killProcess = vi.fn((pid: number) => {
+      liveDescendants.delete(pid)
+    })
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists: (pgid) =>
+        identities.some(
+          ({ pid, pgid: identityGroup }) => liveDescendants.has(pid) && identityGroup === pgid,
+        ),
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    child.exitCode = 0
+    child.emit("exit", 0, null)
+    rootExited = true
+    child.stdout.write("descendant-held output")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalledTimes(2))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    child.emit("close", 0, null)
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    expect(killProcessGroup).toHaveBeenCalledWith(child.pid, "SIGKILL")
+    expect(killProcess).toHaveBeenCalledWith(setsidPid, "SIGKILL")
+    expect(liveDescendants).toEqual(new Set())
   })
 
   test("fails boundedly when descendant termination cannot be confirmed", async () => {
@@ -850,7 +1033,8 @@ describe("shell-free command executor", () => {
       },
     )
     child.emit("spawn")
-    await Promise.resolve()
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
 
     controller.abort()
     child.emit("close", null, "SIGKILL")
@@ -865,7 +1049,7 @@ describe("shell-free command executor", () => {
       outcome: { kind: "aborted" },
       processTreeTermination: "unconfirmed",
     })
-    expect(killProcessGroup).toHaveBeenCalled()
+    expect(killProcessGroup).not.toHaveBeenCalled()
     expect(killProcess).toHaveBeenCalledWith(descendantPid, "SIGKILL")
     expect(delay.mock.calls.length).toBeGreaterThan(0)
     expect(delay.mock.calls.length).toBeLessThanOrEqual(25)
@@ -1122,6 +1306,7 @@ describe("shell-free command executor", () => {
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialAbortListeners)
     expect(child.listenerCount("spawn")).toBe(0)
     expect(child.listenerCount("error")).toBe(0)
+    expect(child.listenerCount("exit")).toBe(0)
     expect(child.listenerCount("close")).toBe(0)
     expect(child.stdout.listenerCount("data")).toBe(0)
     expect(child.stderr.listenerCount("data")).toBe(0)
@@ -1159,6 +1344,7 @@ describe("shell-free command executor", () => {
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialAbortListeners)
     expect(child.listenerCount("spawn")).toBe(0)
     expect(child.listenerCount("error")).toBe(0)
+    expect(child.listenerCount("exit")).toBe(0)
     expect(child.listenerCount("close")).toBe(0)
     expect(child.stdout.listenerCount("data")).toBe(0)
     expect(child.stderr.listenerCount("data")).toBe(0)
