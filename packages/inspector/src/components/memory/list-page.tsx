@@ -1,7 +1,7 @@
 "use client"
 import type { MemoryKind, MemoryRecord, MemoryStats, MemoryStatus } from "@dawn-ai/memory"
 import type { ColumnFilter } from "@pretable/react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { canonicalBrowseQuery } from "../../browse/canonical-query"
 import { useMemoryBrowse } from "../../browse/use-memory-browse"
 import { Badge } from "../ui/badge"
@@ -24,9 +24,10 @@ interface SearchResponse {
 }
 
 /** Each source owns its own error slot — a stats success must not clear a search
- *  failure's banner, and neither may clear a mutation's. The browse REQUEST kinds
- *  (refresh, load-more) keep their own slots inside `useMemoryBrowse`. */
-type ErrorSource = "stats" | "search" | "mutation"
+ *  failure's banner. The browse REQUEST kinds (refresh, load-more) keep their own
+ *  slots inside `useMemoryBrowse`, and a bulk mutation's failures stay with the bar
+ *  that lists which ids failed and why. */
+type ErrorSource = "stats" | "search"
 
 /** Timeline window presets → milliseconds back from now ("all" = unbounded). */
 const WINDOWS = {
@@ -131,6 +132,22 @@ export function ListPage() {
   // Search replaces the browse view entirely, so browse stops polling behind it.
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
+  const browsePhase = browse.dataState.phase
+
+  // `refreshBrowse` is the same poll tick the interval sends, so single flight DROPS it
+  // whenever a request is already running — and with `live` off there is no next tick
+  // to cover the skip, which leaves the row a mutation just changed on screen for good.
+  // Hold the intent instead and spend it once the browse can take it.
+  const [refreshRequested, setRefreshRequested] = useState(0)
+  const refreshServed = useRef(0)
+  const requestRefresh = useCallback(() => setRefreshRequested((n) => n + 1), [])
+  useEffect(() => {
+    // `idle` is exactly the state a poll tick starts a request from: the desired
+    // revision is fulfilled and nothing is in flight.
+    if (refreshServed.current === refreshRequested || browsePhase !== "idle") return
+    refreshServed.current = refreshRequested
+    refreshBrowse()
+  }, [refreshRequested, browsePhase, refreshBrowse])
 
   const stats = usePolling(statsFn, 2000, live)
 
@@ -167,8 +184,8 @@ export function ListPage() {
   const closeSheet = useCallback(() => setSelectedId(undefined), [])
   const handleMutated = useCallback(() => {
     setSelectedId(undefined)
-    refreshBrowse()
-  }, [refreshBrowse])
+    requestRefresh()
+  }, [requestRefresh])
   // The grid keeps its own checkbox state, so clearing here would leave the
   // boxes ticked. Remounting it (see `key` below) is what actually resets both.
   const [gridEpoch, setGridEpoch] = useState(0)
@@ -178,23 +195,18 @@ export function ListPage() {
   }, [])
   const handleBulkDone = useCallback(
     ({ failed }: { failed: number }) => {
-      if (failed === 0) {
-        // Keep the selection when anything failed: clearing it unmounts the bar, and
-        // the report of what went wrong goes with it.
-        clearTicked()
-        setError("mutation", undefined)
-      } else {
-        setError("mutation", `${failed} bulk action(s) failed — see the bar for details.`)
-      }
-      refreshBrowse()
+      // Keep the selection when anything failed: clearing it unmounts the bar, and the
+      // bar is the only channel carrying WHICH ids failed and why.
+      if (failed === 0) clearTicked()
+      requestRefresh()
     },
-    [clearTicked, refreshBrowse, setError],
+    [clearTicked, requestRefresh],
   )
 
   const byStatus = stats?.byStatus ?? {}
-  // No client-side narrowing any more: the request carries the EXACT namespace, so
-  // the rows on screen and `total` describe the same set. Filtering here would make
-  // "N loaded of M matching" a lie the moment a facet was clicked.
+  // Filtering here would make "N loaded of M matching" a lie the moment a facet was
+  // clicked: the request carries the EXACT namespace, so the rows and `total` already
+  // describe the same set.
   const pageRecords = browse.records
   // Group headers count the rows the grid HOLDS. On a truncated window that count is
   // an artifact of where the cap fell, so group only when the window is the whole
@@ -208,12 +220,21 @@ export function ListPage() {
     ? "No memories match these filters."
     : "No memories yet — run your agent and watch them appear."
   const searching = query.length > 0
+  const dataState = browse.dataState
+  // The grid's body-state block owns the error PHASE, and the timeline has no such
+  // block — this entry is the only channel a timeline failure has. Exactly one of the
+  // two surfaces is mounted, so one failure still gets one retry control.
+  const timelineFailure =
+    !searching && view === "timeline" && dataState.phase === "error"
+      ? (dataState.message ?? "Could not load memories.")
+      : undefined
   const browseRequestFailed =
     browse.errors.refresh !== undefined || browse.errors["load-more"] !== undefined
   const errorEntries: BrowseErrorEntry[] = [
     ...Object.entries(errors).flatMap(([source, message]) =>
       message ? [{ source, message }] : [],
     ),
+    ...(timelineFailure === undefined ? [] : [{ source: "browse", message: timelineFailure }]),
     ...(browse.errors.refresh === undefined
       ? []
       : [{ source: "refresh", message: `Refresh failed: ${browse.errors.refresh}` }]),
@@ -287,8 +308,18 @@ export function ListPage() {
         <main className="min-w-0 flex-1 overflow-y-auto p-4">
           <BrowseErrorBanners
             errors={errorEntries}
-            {...(browseRequestFailed ? { onRetry: retryBrowse } : {})}
+            {...(browseRequestFailed || timelineFailure !== undefined
+              ? { onRetry: retryBrowse }
+              : {})}
           />
+          {searching ? null : (
+            <BrowseStatusBar
+              loaded={pageRecords.length}
+              total={browse.total}
+              phase={browsePhase}
+              asOf={browse.paused ? browse.updatedAt : null}
+            />
+          )}
           {searching ? (
             search && search.groups.length > 0 ? (
               <div className="space-y-4">
@@ -305,33 +336,33 @@ export function ListPage() {
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
           ) : view === "timeline" ? (
-            // TimelineView owns its empty state ("No episodes in this window.").
-            <TimelineView records={pageRecords} onSelect={setSelectedId} />
+            // TimelineView owns its empty state ("No episodes in this window.") — but
+            // that copy is an ANSWER, so it must not stand in for one that has not
+            // arrived, or for one that failed.
+            browsePhase === "loading" ? (
+              <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+                Loading memories…
+              </p>
+            ) : timelineFailure !== undefined && pageRecords.length === 0 ? null : (
+              <TimelineView records={pageRecords} onSelect={setSelectedId} />
+            )
           ) : (
-            <>
-              <BrowseStatusBar
-                loaded={pageRecords.length}
-                total={browse.total}
-                phase={browse.dataState.phase}
-                asOf={browse.paused ? browse.updatedAt : null}
-              />
-              <MemoryGrid
-                key={gridEpoch}
-                records={pageRecords}
-                onSelect={setSelectedId}
-                onTickedChange={setTicked}
-                // Only while looking at everything: scoped to one namespace by the
-                // rail, every row would sit under a single group header.
-                groupByNamespace={namespace === undefined && pageIsComplete}
-                // Filtering is server-side: the funnels only decide the query.
-                filters={filters}
-                onFiltersChange={handleFiltersChange}
-                dataState={browse.dataState}
-                resultMeta={browse.resultMeta}
-                emptyMessage={emptyMessage}
-                onRetry={retryBrowse}
-              />
-            </>
+            <MemoryGrid
+              key={gridEpoch}
+              records={pageRecords}
+              onSelect={setSelectedId}
+              onTickedChange={setTicked}
+              // Only while looking at everything: scoped to one namespace by the
+              // rail, every row would sit under a single group header.
+              groupByNamespace={namespace === undefined && pageIsComplete}
+              // Filtering is server-side: the funnels only decide the query.
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              dataState={dataState}
+              resultMeta={browse.resultMeta}
+              emptyMessage={emptyMessage}
+              onRetry={retryBrowse}
+            />
           )}
         </main>
       </div>
