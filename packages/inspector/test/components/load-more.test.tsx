@@ -82,6 +82,50 @@ describe("LoadMoreFooter", () => {
     expect(described?.textContent).toMatch(/narrow the filters/i)
   })
 
+  it("does not look active while there is no answer for it to extend", () => {
+    const onLoadMore = vi.fn()
+    render(
+      <LoadMoreFooter
+        state="unavailable"
+        loaded={200}
+        total={5432}
+        onLoadMore={onLoadMore}
+        browseOnlyReason={undefined}
+      />,
+    )
+    const button = screen.getByRole("button")
+    expect(button.getAttribute("aria-disabled")).toBe("true")
+    // `Button`'s base class styles `disabled:` only, and this control is never
+    // natively `disabled` — without an `aria-disabled`-keyed rule the inactive
+    // states render identically to the active one and still answer hover.
+    expect(button.className).toContain("aria-disabled:opacity-50")
+    const described = document.getElementById(button.getAttribute("aria-describedby") ?? "")
+    expect(described?.textContent).toMatch(/answer to extend/i)
+    fireEvent.click(button)
+    expect(onLoadMore).not.toHaveBeenCalled()
+  })
+
+  it("treats an empty browse-only reason as no reason at all", () => {
+    // One normalization feeds every branch. Read through two different guards, `""`
+    // strips the counts off the label AND leaves the control active with nothing
+    // rendered to explain the missing numbers.
+    const onLoadMore = vi.fn()
+    render(
+      <LoadMoreFooter
+        state="available"
+        loaded={200}
+        total={5432}
+        onLoadMore={onLoadMore}
+        browseOnlyReason=""
+      />,
+    )
+    const button = screen.getByRole("button")
+    expect(button.textContent).toBe("Load more — 200 of 5,432 loaded")
+    expect(button.getAttribute("aria-disabled")).toBe(null)
+    fireEvent.click(button)
+    expect(onLoadMore).toHaveBeenCalledTimes(1)
+  })
+
   it("does not call onLoadMore when it is not available", () => {
     const onLoadMore = vi.fn()
     render(
@@ -115,8 +159,10 @@ describe("LoadMoreFooter", () => {
 })
 
 describe("load-more in the page", () => {
-  function stubPages(first: MemoryRecord[], second: MemoryRecord[]) {
-    let listCalls = 0
+  /** `total` is the MATCHING population the list route reports, independent of how
+   *  many records either window carries — passing one equal to `first.length` is what
+   *  puts the footer in a state other than `"available"` on the very first response. */
+  function stubPages(first: MemoryRecord[], second: MemoryRecord[], total = 3) {
     const mock = vi.fn(async (url: RequestInfo | URL) => {
       const u = String(url)
       if (u.includes("/api/memory/stats"))
@@ -135,17 +181,16 @@ describe("load-more in the page", () => {
         // cursor-keyed stub would answer a question the client never asks and hand back
         // the first page forever.
         const offset = new URL(u, "http://localhost").searchParams.get("offset")
-        listCalls += 1
         return jsonResponse(
           offset !== null && offset !== "0"
-            ? { records: second, total: 3, continuation: null }
-            : { records: first, total: 3, continuation: "cur-1" },
+            ? { records: second, total, continuation: null }
+            : { records: first, total, continuation: "cur-1" },
         )
       }
       return jsonResponse({ groups: [] })
     })
     vi.stubGlobal("fetch", mock)
-    return { mock, listCalls: () => listCalls }
+    return { mock }
   }
 
   it("lives OUTSIDE the grid element and after it in the document", async () => {
@@ -162,6 +207,30 @@ describe("load-more in the page", () => {
     expect(grid.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it("quotes the page's own loaded count against the page's own matching total", async () => {
+    // The seam between `loadMoreState` and the footer. Both sides are unit-covered;
+    // only the rendered label proves the page hands each prop the value it names —
+    // `state`, `loaded` and `total` can each be replaced by a constant without this.
+    stubPages([record({ id: "a" })], [])
+    render(<ListPage />)
+    await screen.findByText("content a")
+    expect(within(screen.getByTestId("load-more-footer")).getByRole("button").textContent).toBe(
+      "Load more — 1 of 3 loaded",
+    )
+  })
+
+  it("stops offering more once the window already holds the whole answer", async () => {
+    // The other direction of `state`: pinned to a constant `"available"` the mount
+    // site still passes every test above, because in those fixtures `"available"` is
+    // the true value. Here it is not.
+    stubPages([record({ id: "a" })], [], 1)
+    render(<ListPage />)
+    await screen.findByText("content a")
+    expect(within(screen.getByTestId("load-more-footer")).getByRole("button").textContent).toBe(
+      "All 1 loaded",
+    )
+  })
+
   it("appends the next window and keeps the rows already loaded", async () => {
     stubPages(
       [record({ id: "a" }), record({ id: "b" })],
@@ -170,8 +239,9 @@ describe("load-more in the page", () => {
     render(<ListPage />)
     await screen.findByText("content a")
     fireEvent.click(within(screen.getByTestId("load-more-footer")).getByRole("button"))
-    expect(await screen.findByText("content c")).toBeDefined()
-    expect(screen.getByText("content a")).toBeDefined()
+    // `findByText`/`getByText` throw on a miss, so the query IS the assertion here.
+    await screen.findByText("content c")
+    screen.getByText("content a")
     // "b" arrived in both windows — an expiry between the two requests shifts every
     // later offset up by one and re-emits the row on the seam. It must appear once.
     expect(screen.getAllByText("content b")).toHaveLength(1)

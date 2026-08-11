@@ -172,8 +172,11 @@ export function ListPage() {
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
-  const loadedTotal =
-    browse.resultMeta.total?.kind === "exact" ? browse.resultMeta.total.count : undefined
+  // The hook's own `total`, not a second derivation out of `resultMeta` — both gate
+  // on the same fulfillment, and this component already reads `browse.total` for the
+  // status bar and the grouping gate. Two derivations of one number is how two
+  // surfaces end up quoting different populations for the same answer.
+  const loadedTotal = browse.total ?? undefined
   const footerState = loadMoreState({
     phase: browse.dataState.phase,
     loaded: browse.rows.length,
