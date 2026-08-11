@@ -523,6 +523,7 @@ describe("malformed and throwing policies", () => {
       const { handler } = await setup({ threadAccess: malformed })
       expect((await handler.fetch(del("/threads/t-x"))).status).toBe(403)
       expect((await handler.fetch(post("/threads/t-x/cancel"))).status).toBe(403)
+      expect((await handler.fetch(post("/threads"))).status).toBe(403)
       expect((await handler.fetch(get("/threads/t-x"))).status).toBe(404)
       expect((await handler.fetch(get("/threads/t-x/state"))).status).toBe(404)
     } finally {
@@ -565,6 +566,45 @@ describe("malformed and throwing policies", () => {
     }
   })
 
+  it("turns a throwing policy into a 500 and never reaches createThread", async () => {
+    // The endpoint's real work must not run. A throw is not caught by the gate:
+    // it propagates to fetch's catch-all, which is fail-closed and honest,
+    // where a 403 would hide a broken policy behind a working-looking one.
+    let creates = 0
+    const store: ThreadsStore = {
+      async createThread() {
+        creates += 1
+        return {
+          created_at: "2026-01-01T00:00:00.000Z",
+          metadata: {},
+          status: "idle",
+          thread_id: "t-should-not-happen",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }
+      },
+      async deleteThread() {},
+      async getThread() {
+        return undefined
+      },
+      async listThreads() {
+        return []
+      },
+      async updateMetadata() {},
+      async updateStatus() {},
+    }
+    const { handler } = await setup({
+      threadAccess: {
+        fallback: () => {
+          throw new Error("policy exploded")
+        },
+      },
+      threadsStore: store,
+    })
+    const response = await handler.fetch(post("/threads", { metadata: { tenant: "acme" } }))
+    expect(response.status).toBe(500)
+    expect(creates).toBe(0)
+  })
+
   it("turns a throwing policy into a 500 and never deletes the row", async () => {
     // The endpoint's real work must not run. A throw is not caught by the gate:
     // it propagates to fetch's catch-all, which is fail-closed and honest,
@@ -588,5 +628,231 @@ describe("malformed and throwing policies", () => {
     const response = await handler.fetch(del("/threads/t-x"))
     expect(response.status).toBe(500)
     expect(deletes).toBe(0)
+  })
+})
+
+/**
+ * A store whose `createThread` always hands back a row it did not just write —
+ * the Postgres upsert shape. Untestable through real sqlite, which throws on a
+ * duplicate instead.
+ */
+function collidingStore(foreign: {
+  readonly thread_id: string
+  readonly metadata: Record<string, unknown>
+}): { readonly store: ThreadsStore; readonly attempts: () => number } {
+  let attempts = 0
+  const store: ThreadsStore = {
+    async createThread() {
+      attempts += 1
+      return {
+        created_at: "2026-01-01T00:00:00.000Z",
+        metadata: foreign.metadata,
+        status: "idle",
+        thread_id: foreign.thread_id,
+        updated_at: "2026-01-02T00:00:00.000Z",
+      }
+    },
+    async deleteThread() {},
+    async getThread() {
+      return undefined
+    },
+    async listThreads() {
+      return []
+    },
+    async updateMetadata() {},
+    async updateStatus() {},
+  }
+  return { attempts: () => attempts, store }
+}
+
+/**
+ * The adversarial sibling of `collidingStore`: the row it returns is a
+ * stranger's, but it is INDISTINGUISHABLE from one we just wrote — same
+ * timestamps, the metadata we asked for. Only the id differs. Nothing the
+ * collision predicate can see separates it, which is the whole point: the
+ * recheck, not the predicate, is the boundary.
+ */
+function indistinguishableStore(threadId: string): {
+  readonly store: ThreadsStore
+  readonly attempts: () => number
+} {
+  let attempts = 0
+  const store: ThreadsStore = {
+    async createThread(input) {
+      attempts += 1
+      return {
+        created_at: "2026-01-01T00:00:00.000Z",
+        metadata: input.metadata ?? {},
+        status: "idle",
+        thread_id: threadId,
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }
+    },
+    async deleteThread() {},
+    async getThread() {
+      return undefined
+    },
+    async listThreads() {
+      return []
+    },
+    async updateMetadata() {},
+    async updateStatus() {},
+  }
+  return { attempts: () => attempts, store }
+}
+
+describe("POST /threads with a policy installed", () => {
+  it("denies before the row is written", async () => {
+    const { handler } = await setup({ threadAccess: denyAll })
+    const response = await handler.fetch(post("/threads"))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({
+      error: {
+        details: { code: "thread_access_denied" },
+        kind: "request_error",
+        message: "Forbidden",
+      },
+    })
+  })
+
+  it("never calls createThread on a denied create", async () => {
+    // "Before the row is written" is a claim about ORDER, and a status code
+    // cannot see order. The store can.
+    const { attempts, store } = collidingStore({ metadata: {}, thread_id: "t-foreign" })
+    const { handler } = await setup({ threadAccess: denyAll, threadsStore: store })
+    expect((await handler.fetch(post("/threads", { metadata: { tenant: "acme" } }))).status).toBe(
+      403,
+    )
+    expect(attempts()).toBe(0)
+  })
+
+  it("passes the stripped client metadata as requestedMetadata on the create call", async () => {
+    const { policy, seen } = recording()
+    const { handler } = await setup({ threadAccess: policy })
+    await handler.fetch(
+      post("/threads", { metadata: { "dawn:access": { ownerId: "attacker" }, tenant: "acme" } }),
+    )
+    expect(seen[0]).toMatchObject({
+      action: "create",
+      operation: "thread.create",
+      requestedMetadata: { tenant: "acme" },
+    })
+    expect(seen[0]?.threadId).toBeUndefined()
+    expect(seen[0]?.thread).toBeUndefined()
+  })
+
+  it("stores the stamp under the reserved key and surfaces it as thread.access later", async () => {
+    const seen: ThreadAccessRequest[] = []
+    const policy: ThreadAccessPolicy = {
+      create: () => ({ decision: "allow", stamp: { ownerId: "u-1" } }),
+      fallback: (req) => {
+        seen.push(req)
+        return { decision: "allow" }
+      },
+    }
+    const { handler } = await setup({ threadAccess: policy })
+    const created = await handler.fetch(post("/threads", { metadata: { tenant: "acme" } }))
+    expect(created.status).toBe(200)
+    const body = (await created.json()) as { metadata: Record<string, unknown>; thread_id: string }
+    // The raw row still carries the key: hiding it would break round-tripping
+    // and make the stamp undebuggable.
+    expect(body.metadata).toEqual({ "dawn:access": { ownerId: "u-1" }, tenant: "acme" })
+
+    seen.length = 0
+    await handler.fetch(get(`/threads/${body.thread_id}`))
+    expect(seen.at(-1)?.thread?.access).toEqual({ ownerId: "u-1" })
+    expect(seen.at(-1)?.thread?.metadata).toEqual({ tenant: "acme" })
+  })
+
+  it("re-authorizes the returned row as an update, on the same operation", async () => {
+    const { policy, seen } = recording()
+    const { handler } = await setup({ threadAccess: policy })
+    const created = await handler.fetch(post("/threads"))
+    const { thread_id } = (await created.json()) as { thread_id: string }
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toMatchObject({
+      action: "update",
+      operation: "thread.create",
+      threadId: thread_id,
+    })
+    expect(seen[1]?.thread?.thread_id).toBe(thread_id)
+    // The create's metadata was already adjudicated by the create call;
+    // repeating it would invite authorizing the same input twice.
+    expect(seen[1]?.requestedMetadata).toBeUndefined()
+  })
+
+  it("lets a stricter update handler deny its own successful create, at the 403 update default", async () => {
+    const { handler } = await setup({
+      threadAccess: {
+        create: () => ({ decision: "allow" }),
+        fallback: () => ({ decision: "deny" }),
+      },
+    })
+    const response = await handler.fetch(post("/threads"))
+    expect(response.status).toBe(403)
+  })
+
+  it("runs neither the retry nor the recheck for a hook-less app", async () => {
+    const { attempts, store } = collidingStore({
+      metadata: { owner: "stranger" },
+      thread_id: "t-foreign",
+    })
+    const { handler } = await setup({ threadsStore: store })
+    const response = await handler.fetch(post("/threads"))
+    expect(response.status).toBe(200)
+    expect(attempts()).toBe(1)
+  })
+
+  it("retries with a fresh id when the store hands back a row it did not write", async () => {
+    const { attempts, store } = collidingStore({
+      metadata: { owner: "stranger" },
+      thread_id: "t-foreign",
+    })
+    const { handler } = await setup({ threadAccess: allowAll, threadsStore: store })
+    await handler.fetch(post("/threads"))
+    expect(attempts()).toBe(3)
+  })
+
+  it("denies rather than returning the foreign row when every attempt collides", async () => {
+    const { store } = collidingStore({ metadata: { owner: "stranger" }, thread_id: "t-foreign" })
+    const { handler } = await setup({
+      threadAccess: {
+        create: () => ({ decision: "allow", stamp: { ownerId: "u-1" } }),
+        // An ownership policy: the foreign row carries no matching stamp.
+        fallback: (req) =>
+          req.thread?.access?.ownerId === "u-1" ? { decision: "allow" } : { decision: "deny" },
+      },
+      threadsStore: store,
+    })
+    const response = await handler.fetch(post("/threads"))
+    expect(response.status).toBe(403)
+    expect(await response.text()).not.toContain("t-foreign")
+  })
+
+  it("re-authorizes the returned row even when the collision predicate cannot tell", async () => {
+    // The case a stamp COMPARISON gets wrong: `permit()` issues no stamp, so
+    // both sides are undefined and any "did the stamp survive" test passes on a
+    // row we never wrote. Here the predicate is satisfied too — one attempt,
+    // no retry — and the recheck is the only thing left holding the line.
+    const seen: ThreadAccessRequest[] = []
+    const { attempts, store } = indistinguishableStore("t-foreign")
+    const { handler } = await setup({
+      threadAccess: {
+        create: () => ({ decision: "allow" }),
+        fallback: (req) => {
+          seen.push(req)
+          return { decision: "deny" }
+        },
+      },
+      threadsStore: store,
+    })
+    const response = await handler.fetch(post("/threads"))
+    expect(attempts()).toBe(1)
+    expect(response.status).toBe(403)
+    expect(seen.at(-1)).toMatchObject({
+      action: "update",
+      operation: "thread.create",
+      threadId: "t-foreign",
+    })
   })
 })

@@ -971,6 +971,34 @@ function toThreadSubject(thread: Thread): ThreadSubject {
   }
 }
 
+/** Structural equality over JSON-shaped values (no Dates, no Maps, no cycles). */
+function jsonDeepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => jsonDeepEqual(item, b[index]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const leftKeys = Object.keys(left)
+  if (leftKeys.length !== Object.keys(right).length) return false
+  return leftKeys.every((key) => Object.hasOwn(right, key) && jsonDeepEqual(left[key], right[key]))
+}
+
+/**
+ * Did `createThread` actually insert, or did it hand back a row that was
+ * already there? Best-effort collision detection, NOT the security boundary —
+ * the unconditional `update` recheck beside it is. It is decisive exactly when
+ * the policy stamped (an adopted row carries a different stamp, or none) and
+ * indecisive in the one case where it does not matter: a `permit()` with no
+ * stamp on a create with no metadata has nothing to distinguish and also
+ * nothing to authorize against later.
+ */
+function isRowWeJustWrote(thread: Thread, stored: Record<string, unknown> | undefined): boolean {
+  return thread.created_at === thread.updated_at && jsonDeepEqual(thread.metadata, stored ?? {})
+}
+
 /**
  * Every deny becomes bytes here.
  *
@@ -1165,9 +1193,49 @@ function buildRouteTable(ctx: {
         // stripping it always means an app that adopts a policy later can never
         // inherit a stamp a client forged before it did.
         const clientMetadata = stripReservedThreadMetadata(metadata)
-        const thread = await getThreadsStore(request).createThread(
-          clientMetadata !== undefined ? { metadata: clientMetadata } : {},
-        )
+        const gate = makeThreadGate(threadAccess, request)
+        const created = gate({
+          action: "create",
+          operation: "thread.create",
+          ...(clientMetadata !== undefined ? { requestedMetadata: clientMetadata } : {}),
+        })
+        const settled = isThenable(created) ? await created : created
+        if (!settled.ok) return settled.response
+
+        const stored = settled.stamp
+          ? { ...(clientMetadata ?? {}), [THREAD_ACCESS_METADATA_KEY]: settled.stamp }
+          : clientMetadata
+        const input = stored !== undefined ? { metadata: stored } : {}
+
+        let thread = await getThreadsStore(request).createThread(input)
+
+        // Both of the following are inside the hook branch. A hook-less app
+        // makes the one createThread call above and returns, exactly as today.
+        if (threadAccess) {
+          // The id is server-generated and only 32 bits wide, so the row that
+          // came back is not necessarily the row we wrote: Postgres upserts on a
+          // collision and returns the existing row with its existing metadata,
+          // discarding the caller's. Retry rather than hand back a stranger's
+          // thread — a bare re-authorization would be safe but would 403 a
+          // create the caller was fully entitled to make.
+          for (let attempt = 1; attempt < 3 && !isRowWeJustWrote(thread, stored); attempt++) {
+            thread = await getThreadsStore(request).createThread(input)
+          }
+
+          // Unconditional: authorize the ROW, not the intent. Never a stamp
+          // comparison — when the policy returns permit() with no stamp both
+          // sides are undefined, the comparison passes, and the loser proceeds
+          // on the winner's row with no re-authorization at all.
+          const recheck = gate({
+            action: "update",
+            operation: "thread.create",
+            thread,
+            threadId: thread.thread_id,
+          })
+          const rechecked = isThenable(recheck) ? await recheck : recheck
+          if (!rechecked.ok) return rechecked.response
+        }
+
         return Response.json(thread, { status: 200 })
       },
       method: "POST",
