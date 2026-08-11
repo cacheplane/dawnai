@@ -9,8 +9,9 @@
 secret-safe evidence for all six dedicated chart, Kubernetes, and Docker lanes
 without adding a public runner or mutating hosted state.
 
-**Architecture:** Task 1 makes the checked-in Docker assertion fail closed and
-tests its process/resource lifecycle. Task 2 creates one ignored, run-local
+**Architecture:** Task 1A makes the checked-in Docker assertion fail closed and
+tests its process/resource lifecycle. Task 1B gives the existing smoke image
+builder a tested run-unique output tag. Task 2 creates one ignored, run-local
 TypeScript orchestrator under `artifacts/testing/dedicated-infrastructure/`.
 That orchestrator owns all temporary state, bounded subprocesses, result
 records, exact cleanup, and lane commands. Tasks 3-8 invoke one complete lane
@@ -103,7 +104,7 @@ type FailureClass =
   | "dawn-behavior"
   | "cleanup"
 type CleanupStatus = "passed" | "failed" | "not-run"
-type AttemptId = "attempt0" | "retry1"
+type AttemptId = "attempt0" | "retry1" | `fix${number}`
 
 interface CommandRecord {
   readonly stage: string
@@ -119,6 +120,8 @@ interface AttemptRecord {
   readonly id: AttemptId
   readonly resource: string
   readonly context: string | null
+  readonly kind: "first-pass" | "transient-retry" | "post-fix"
+  readonly gitCommit: string
   readonly startedAt: string
   readonly finishedAt: string
   readonly exitCode: number
@@ -145,19 +148,29 @@ interface LaneResult {
   readonly nativeArtifact: string | null
   readonly cleanup: CleanupStatus
   readonly retry: "none" | "retry1"
+  readonly postFixRuns: number
+  readonly verifiedCommit: string
   readonly blockedBy?: string
   readonly hostedEquivalent?: string
   readonly attempts: readonly AttemptRecord[]
 }
 
 interface RetainedRecord {
-  readonly lane: "focused-1.35" | "focused-1.34" | "focused-1.36"
+  readonly lane: Exclude<LaneId, "docker-e2e">
   readonly resource: string
   readonly startedAt: string
   readonly finishedAt: string | null
   readonly status: "running" | "failed" | "cleaned"
   readonly diagnostics: string | null
   readonly cleanup: CleanupStatus
+}
+
+interface FixRecord {
+  readonly commit: string
+  readonly parentCommit: string
+  readonly changedFiles: readonly string[]
+  readonly affectedLanes: readonly LaneId[]
+  readonly registeredAt: string
 }
 
 interface RunState {
@@ -177,23 +190,32 @@ interface RunState {
     readonly path: string
     readonly sha256: string | null
   }>>
+  readonly sharedBootstrap: {
+    readonly status: "pending" | "ready" | "failed"
+    readonly reason: string | null
+  }
+  readonly dockerBootstrap: {
+    readonly status: "pending" | "ready" | "failed"
+    readonly reason: string | null
+  }
   readonly kubernetesBootstrap: {
     readonly status: "pending" | "ready" | "failed"
     readonly reason: string | null
   }
   readonly baseline: {
-    readonly kindClusters: readonly string[]
-    readonly fixedContainers: Readonly<Record<string, string>>
-    readonly fixedNetworks: Readonly<Record<string, string>>
-    readonly sandboxContainers: Readonly<Record<string, string>>
-    readonly sandboxVolumes: readonly string[]
-    readonly fixedImages: Readonly<Record<string, string>>
+    readonly kindClusters: readonly string[] | null
+    readonly fixedContainers: Readonly<Record<string, string>> | null
+    readonly fixedNetworks: Readonly<Record<string, string>> | null
+    readonly sandboxContainers: Readonly<Record<string, string>> | null
+    readonly sandboxVolumes: Readonly<Record<string, string>> | null
+    readonly fixedImages: Readonly<Record<string, string>> | null
   }
   readonly ownedClusters: readonly string[]
   readonly ownedImages: Readonly<Record<string, string>>
   readonly activeRegistryPid: number | null
   readonly results: readonly LaneResult[]
   readonly retained: readonly RetainedRecord[]
+  readonly fixes: readonly FixRecord[]
 }
 ```
 
@@ -209,10 +231,17 @@ Consistency rules:
 - `failed`: nonzero exit or failed cleanup, non-`none` class, no blocked fields.
 - `blocked`: null exit, `bootstrap/environment`, cleanup `not-run`, no
   attempts, and nonempty `blockedBy` plus `hostedEquivalent`.
-- `retry1`: exactly two attempts named `attempt0` and `retry1`; the first
-  attempt records `retryEligible=true` and a nonempty reason. Kubernetes's
-  second resource uses the exact `-retry1` suffix. Docker remains
-  `docker-daemon` because it has no disposable resource name.
+- `retry1`: the first two attempts are exactly `attempt0` and `retry1`; the
+  first records `retryEligible=true` and a nonempty reason. Kubernetes's second
+  resource uses the exact `-retry1` suffix. Docker remains `docker-daemon`
+  because it has no disposable resource name. Later `fixN` attempts may follow.
+- `post-fix`: after a committed evidence-driven fix, append `fix1`, `fix2`, and
+  so on. Each records `kind=post-fix`, the exact current Git SHA, and a clean
+  Kubernetes resource with the matching `-fixN` suffix (Docker remains
+  `docker-daemon`). Preserve all earlier failing attempts. `verifiedCommit`
+  always equals the latest attempt's Git SHA; final validation requires every
+  non-blocked lane affected by a later fix to have a post-fix attempt at the
+  final reviewed HEAD.
 - All timestamps are UTC ISO strings and `finishedAt >= startedAt`.
 - Kubernetes resource names match the run token and lane; Docker uses
   `docker-daemon`.
@@ -226,7 +255,7 @@ lane\tstatus\tstarted_at\tfinished_at\texit_code\tclassification\tresource\ttool
 
 ---
 
-### Task 1: Harden Docker Smoke Ownership Under Deterministic TDD
+### Task 1A: Harden Docker Smoke Ownership Under Deterministic TDD
 
 **Files:**
 - Create: `test/k8s-compat/assert-docker-smoke.test.ts`
@@ -267,7 +296,10 @@ Cover these scenarios:
    revalidation detects the changed object ID and never deletes the replacement;
 8. post-adoption sandbox ID/label change: invalidate both sandbox claims and
    delete neither the container nor its unlabelled volume; and
-9. a hanging diagnostic command and a hanging cleanup command: the watchdog
+9. same-name sandbox volume replacement: its canonical inspect fingerprint
+   changes, so cleanup deletes neither the replacement nor an associated
+   untrusted container; and
+10. a hanging diagnostic command and a hanging cleanup command: the watchdog
    terminates each bounded command, the script itself exits within ten seconds,
    diagnostic timeout still precedes cleanup, and cleanup timeout is reported
    as failure rather than hanging.
@@ -319,10 +351,13 @@ In `assert-docker.sh`:
   `dawn.sandbox=$SANITIZED_TID` plus a 64-lowercase-hex
   `dawn.sandbox.identity`;
 - claim the unlabelled volume only when it was absent at preflight and observed
-  after this run request began;
+  after this run request began. Record a canonical fingerprint from
+  `docker volume inspect` normalized with `jq -cS` over `CreatedAt`, `Driver`,
+  `Labels`, `Mountpoint`, `Name`, `Options`, and `Scope`;
 - before diagnostics/cleanup, re-read every owned object ID. A changed fixed
   object is a cleanup failure and is skipped. A changed sandbox ID or either
-  changed label invalidates both sandbox claims;
+  changed label invalidates both sandbox claims. A changed volume fingerprint
+  invalidates the volume claim;
 - capture bounded app/mock logs, exact sandbox inspect data, and at most 50
   read-only prefix namespace entries on every nonzero exit;
 - route every Docker inspect/log/removal used by ownership validation,
@@ -363,6 +398,78 @@ git commit -m "fix(testing): isolate Docker smoke cleanup"
 
 Do not change the hosted workflow cleanup in this task. The local lane never
 executes that broad hosted teardown block.
+
+### Task 1B: Support Run-Unique Smoke Image Tags Under TDD
+
+**Files:**
+- Create: `test/k8s-compat/build-image-smoke.test.ts`
+- Modify: `test/k8s-smoke/build-image.sh`
+
+- [ ] **Step 1: Add a behavior-level fixture test**
+
+Create a temporary miniature repository containing a copy of
+`build-image.sh`, the policy's `packagedAppBase`, a smoke app directory, and a
+fake `node_modules/.bin/dawn`. The fake Dawn build writes the required marked
+Dockerfile and server output. Put fake `pnpm`, `docker`, `curl`, and `tar`
+executables first in `PATH`; record Docker argv and the Dockerfile content used
+for each build.
+
+Prove all of these without a real registry or daemon:
+
+1. the existing two-argument `k8s` invocation still tags
+   `dawn-smoke-app:k8s`;
+2. a third argument `dawn-smoke-app:k8s-run123` is the `-t` target of the K8s
+   build;
+3. a third argument `dawn-smoke-app:docker-run123` is used by both Docker
+   variant builds, and the static-CLI layer's generated Dockerfile says
+   `FROM dawn-smoke-app:docker-run123`; and
+4. an empty or whitespace-containing explicit tag exits `2` before pnpm or
+   Docker runs.
+
+The fake `curl`/`tar` path for the Docker variant creates an executable
+`docker/docker` fixture; no network or host image is touched.
+
+- [ ] **Step 2: Preserve RED evidence**
+
+```bash
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts \
+  build-image-smoke
+```
+
+Expected RED: the current script accepts only two positional arguments and
+hard-codes `dawn-smoke-app:$VARIANT`.
+
+- [ ] **Step 3: Add the narrow internal argument**
+
+Change the usage to:
+
+```text
+sh build-image.sh <k8s|docker> <verdaccio-registry-url> [output-image-tag]
+```
+
+Resolve `TAG` from argument 3 when present, otherwise retain the existing
+`dawn-smoke-app:$VARIANT` default used by hosted CI. Reject an explicitly empty
+or whitespace-containing tag before side effects. Keep `TAG` quoted everywhere
+and use it consistently for the initial build and Docker static-CLI layer. Do
+not change registry, package, Dockerfile, base-image, or static-CLI behavior.
+
+- [ ] **Step 4: Verify and commit**
+
+```bash
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts \
+  build-image-smoke
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  pnpm exec tsc -p test/k8s-compat/tsconfig.json --noEmit
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  pnpm exec biome check --config-path packages/config-biome/biome.json \
+  test/k8s-compat/build-image-smoke.test.ts
+sh -n test/k8s-smoke/build-image.sh
+git diff --check
+git add test/k8s-compat/build-image-smoke.test.ts test/k8s-smoke/build-image.sh
+git commit -m "fix(testing): isolate smoke image tags"
+```
 
 ### Task 2: Bootstrap A Safe Run-Local Orchestrator
 
@@ -419,8 +526,10 @@ pnpm exec tsx infra-runner.ts run <LaneId>
 pnpm exec tsx infra-runner.ts status [LaneId]
 pnpm exec tsx infra-runner.ts validate
 pnpm exec tsx infra-runner.ts cleanup
-pnpm exec tsx infra-runner.ts rerun-retained <focused LaneId>
-pnpm exec tsx infra-runner.ts cleanup-retained <focused LaneId>
+pnpm exec tsx infra-runner.ts rerun-retained <Kubernetes LaneId>
+pnpm exec tsx infra-runner.ts cleanup-retained <Kubernetes LaneId>
+pnpm exec tsx infra-runner.ts register-fix <commit> <LaneId...>
+pnpm exec tsx infra-runner.ts rerun-after-fix <LaneId>
 ```
 
 Implement with Node stdlib plus repository-installed packages only. Do not
@@ -432,7 +541,8 @@ contents or credentials.
 Required primitives:
 
 - `runCommand`: process-group spawn, explicit timeout, graceful TERM then KILL,
-  exit/signal capture, and optional stdout capture;
+  exit/signal capture, optional stdout/stdin, and a required per-stage TERM
+  grace period;
 - `withLock`: exclusive `orchestrator.lock`, stale-lock refusal rather than
   deletion;
 - `readState` / `writeState`: runtime validation and atomic temp-file rename;
@@ -458,14 +568,29 @@ Required primitives:
   expected temporary basename prefix, parent equal to `realpath(tmpdir())`,
   and an exact owner-marker match before `fs.rm({recursive:true})`.
 
-`rerun-retained` is legal only after that focused lane has a first-pass failed
-result. It creates one new exact `*-retain1` cluster, stores a `RetainedRecord`,
-and passes `--keep-on-failure` to the focused harness. It never changes the six
-first-pass result rows. `cleanup-retained` diagnoses and deletes that exact
-cluster, proves absence with a successful Kind listing, and changes the record
-to `cleaned`. Final validation rejects `running` or uncleaned retained records.
+`rerun-retained` is legal only after the selected Kubernetes lane has a
+first-pass failed result and bounded diagnostics. It creates one new exact
+`*-retain1` cluster and stores a `RetainedRecord`. Focused lanes pass
+`--keep-on-failure`; chart-apply and Kubernetes E2E use the same body but skip
+automatic cluster deletion only after a failed retained attempt. It never
+changes the six first-pass result rows. `cleanup-retained` diagnoses and deletes
+that exact cluster, proves absence with a successful Kind listing, and changes
+the record to `cleaned`. Final validation rejects `running` or uncleaned
+retained records. Docker is rejected by both commands.
 
-SIGINT/SIGTERM handlers abort the active child process group and enter the same
+`register-fix` requires a clean worktree, current HEAD equal to the supplied
+commit, that commit to be a direct descendant of the previous reviewed head,
+and `git diff-tree` to match the stored changed-file list. It records the
+minimal affected/downstream lane set justified by the TDD fix; the controller
+must include every already-run lane exercising a changed file. `rerun-after-fix`
+requires that fix record, a prior `dawn-behavior` attempt, a clean worktree,
+and current HEAD different from that attempt's `gitCommit`. It appends the next
+`fixN` attempt, runs from a clean resource, updates the lane result, and records
+the new SHA. It is not a transient retry and has no one-retry limit. The
+controller invokes it for the directly affected lane and every already-run
+downstream lane that exercises the changed behavior.
+
+SIGINT/SIGTERM handlers terminate the active child process group and enter the same
 diagnostics/cleanup/result path. Every registry wait is capped at 180 seconds;
 registry shutdown is capped at ten seconds. Downloads are capped at two minutes,
 Kind create at six minutes, image build/pull/load at twenty minutes,
@@ -490,13 +615,22 @@ condition, never merely because the row says `yes`.
 | image pull | `docker pull <digest-image>` | 20m | `bootstrap/environment` | registry transport only |
 | Kind image load | `kind load docker-image <image> --name <cluster>` | 20m | `cluster-setup` | transient load only |
 | registry | `pnpm exec tsx test/k8s-smoke/serve-registry.ts <owned-url-file>` | ready 3m; stop 10s | `bootstrap/environment` | startup transport only |
-| app image build | `sh test/k8s-smoke/build-image.sh <k8s-or-docker> <registry-url>` | 25m | `bootstrap/environment` | external pull/download only |
-| aimock build | `docker build --tag dawn-smoke-aimock:latest --file test/k8s-smoke/aimock/Dockerfile test/k8s-smoke` | 20m | `bootstrap/environment` | external pull only |
+| app image build | `sh test/k8s-smoke/build-image.sh <k8s-or-docker> <registry-url> <run-unique-tag>` | 25m | evidence-refined below | external pull/download only |
+| aimock build | `docker build --tag <run-unique-aimock-tag> --file test/k8s-smoke/aimock/Dockerfile test/k8s-smoke` | 20m | evidence-refined below | external pull only |
 | Helm install/uninstall | exact argv in Tasks 3 and 7 | 6m install; 3m uninstall | install=`dawn-behavior`; uninstall=`cleanup` | no |
 | Kubernetes assertion | `sh test/k8s-smoke/assert-k8s.sh` | 10m | `dawn-behavior` | no |
 | Docker assertion | `sh test/k8s-smoke/assert-docker.sh` | 10m | `dawn-behavior` | no |
 | diagnostic command | exact read-only command | 30s each | preserve primary class | no |
 | Kind delete | `kind delete cluster --name <owned-cluster>` | 3m | `cleanup` | no |
+
+The default TERM grace is ten seconds. The two assertion stages use an
+eight-minute TERM grace because their shell traps may execute multiple
+30-second bounded diagnostic and cleanup commands. On assertion timeout or a
+forwarded user signal, send TERM to the assertion process group and wait the
+full grace before KILL. The outer runner then performs only its own
+registry/image/cluster lifecycle; it never assumes ownership of Docker smoke
+containers. The 10-minute assertion budget plus 8-minute grace remains inside
+the hosted lane's 30-minute envelope.
 
 Every child gets `cwd=repoRoot`, the explicit Node/tool `PATH`, and the isolated
 `KUBECONFIG`. Lane-specific environment is an allowlisted overlay:
@@ -512,6 +646,30 @@ policy file's SHA-256 against `RunState.policySha256` before each lane. It does
 not accept caller overrides for pins, timeouts, cluster names, contexts, or
 cleanup targets.
 
+The table's class is a default, not permission to misclassify source defects.
+Apply this deterministic refinement before writing an attempt:
+
+- frozen-install lockfile/manifest/workspace resolution errors are
+  `dawn-behavior`; DNS, TLS, registry availability, missing host executable,
+  disk, and permission failures are `bootstrap/environment`;
+- `pnpm build` compiler/bundler/source errors are `dawn-behavior`; host OOM,
+  disk, missing executable, and daemon failures are `bootstrap/environment`;
+- `build-image.sh` failures in Dawn build output, emitted Dockerfile checks, or
+  workspace packaging are `dawn-behavior`; external registry/download and
+  daemon transport failures are `bootstrap/environment`;
+- a Docker assertion message that refuses occupied/pre-existing/concurrent
+  resources is `bootstrap/environment`; a reported exact-resource cleanup
+  failure is `cleanup`; all Agent Protocol, tool-result, sandbox-hardening, and
+  teardown assertions are `dawn-behavior`; and
+- any workload/cluster/image cleanup failure makes the final attempt and lane
+  classification `cleanup` while retaining the primary command's class in the
+  command ledger and diagnostics.
+
+When evidence does not prove an environment or cleanup branch, fail closed as
+`dawn-behavior`, set `retryEligible=false`, preserve diagnostics, and stop for
+systematic debugging. This conservative default cannot bypass TDD or create a
+blind retry; reclassify only when the debugging evidence proves another class.
+
 The ignored tests use fake executables and temporary state to prove:
 
 - an existing global active-run lease prevents creation of a second run;
@@ -523,12 +681,18 @@ The ignored tests use fake executables and temporary state to prove:
 - attempt variables survive because state, not a subshell, owns them;
 - one eligible retry creates exactly two attempts with `-retry1`;
 - ineligible classes never retry;
+- a registered fix preserves the failed attempt and appends a Git-bound
+  `fix1` attempt; stale pre-fix evidence fails validation;
+- retained chart, focused, and Kubernetes-E2E reruns use exact `-retain1`
+  clusters and cannot pass final validation until exact cleanup is recorded;
 - diagnostics precede cleanup after nonzero exit and TERM;
+- assertion timeout sends TERM and honors the full assertion-specific grace
+  before KILL, allowing the fake shell to finish diagnostics and cleanup;
 - a Kubernetes bootstrap block still allows `docker-e2e`;
 - foreign Docker prefix resources classify as
   `bootstrap/environment`, not `cleanup`; and
-- a failed fixed-tag build is inspected in `finally`, adopted by exact image ID,
-  and removed only if that ID still owns the tag; and
+- a failed run-unique-tag build is inspected in `finally`, adopted by exact
+  image ID, and removed only if that ID still owns the tag; and
 - tool-root cleanup rejects a forged path or owner marker.
 
 Run:
@@ -544,10 +708,23 @@ pnpm exec tsx --test "$RUN_ROOT/infra-runner.test.ts"
 
 - [ ] **Step 3: Bootstrap shared and Kubernetes-specific prerequisites**
 
-`bootstrap` first records Node, pnpm, OS/architecture, Docker client/server,
-`curl`, `jq`, and Git. It requires Node `v24.19.0`, pnpm `10.33.0`, a
-reachable Docker daemon, `Darwin arm64` for Kubernetes lanes, and a frozen
-workspace install.
+`bootstrap` is three independently persisted phases:
+
+1. **shared:** record Git SHA, policy hash, Node, pnpm, OS/architecture, `curl`,
+   `jq`, and Git; require Node `v24.19.0`, pnpm `10.33.0`, and a frozen
+   workspace install; write `sharedBootstrap` success/failure;
+2. **Docker:** require the daemon, record client/server versions, and capture
+   the exact fixed container/network/sandbox/image baselines before any
+   Kubernetes download; write `dockerBootstrap` success/failure; and
+3. **Kubernetes:** require `Darwin arm64`, download/verify the temporary tools,
+   then capture Kind clusters with a successful temporary-Kind listing; write
+   `kubernetesBootstrap` success/failure.
+
+Each phase catches and persists its own reason. A failed shared phase blocks all
+lanes. A failed Docker phase blocks all six local lanes because Kind uses that
+daemon. A failed Kubernetes phase blocks only the five Kubernetes lanes;
+`docker-e2e` remains runnable and its evidence remains valid. Missing fields are
+never used to infer status.
 
 Then download into `TOOL_ROOT`, with HTTPS-only redirects and upstream
 checksums:
@@ -566,7 +743,7 @@ checksums:
 Require exact executable paths and versions after extraction. Use guarded
 `fs.rm` only for the extracted Helm child directory.
 
-Record baseline Kind clusters, exact fixed smoke containers/network, all
+The Docker phase records exact fixed smoke containers/network, all
 sandbox-prefix names, sandbox volumes, and these image tags:
 `dawn-smoke-app:k8s`, `dawn-smoke-app:docker`,
 `dawn-smoke-aimock:latest`. Bootstrap records but does not alter or globally
@@ -574,6 +751,10 @@ reject Docker smoke resources: chart/focused Kubernetes lanes do not own that
 namespace. Each packaged E2E lane performs its own fail-closed image preflight;
 the Docker E2E lane additionally requires the fixed app/mock/network and both
 sandbox namespaces to be empty. Never overwrite a pre-existing fixed tag.
+Container, network, and image values are Docker object IDs. Volume values are
+SHA-256 hashes of canonicalized inspect objects containing `CreatedAt`,
+`Driver`, `Labels`, `Mountpoint`, `Name`, `Options`, and `Scope`; names alone
+are not identity evidence.
 
 If Kubernetes bootstrap fails, persist the reason as a shared Kubernetes
 prerequisite. The five Kubernetes `run` commands must still produce blocked
@@ -594,6 +775,20 @@ Use this exact configuration table:
 
 First attempt cluster names are
 `dawn-local-$RUN_TOKEN-<suffix>`; retry names append `-retry1`.
+
+Local packaged lanes use only these run-unique tags:
+
+```text
+dawn-smoke-app:k8s-$RUN_TOKEN
+dawn-smoke-app:docker-$RUN_TOKEN
+dawn-smoke-aimock:k8s-$RUN_TOKEN
+dawn-smoke-aimock:docker-$RUN_TOKEN
+```
+
+Require each exact tag absent immediately before its build. Record its image ID
+after any started build outcome, revalidate that ID before tag removal, and
+prove exact absence afterward. Never create, overwrite, or remove the hosted
+fixed tags.
 
 Canonical lane commands are fixed in Tasks 3-8 below. The runner may
 parameterize only exact cluster/context names, temporary paths, and environment.
@@ -740,16 +935,15 @@ pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run kubernetes-e2e-1.35
 
 The encoded body must:
 
-1. refuse existing `dawn-smoke-app:k8s` or
-   `dawn-smoke-aimock:latest` tags;
+1. derive/refuse the two exact run-unique K8s tags from Task 2;
 2. run `pnpm build` and the exact chart-RBAC test;
 3. create the unique policy 1.35 no-CNI cluster and install verified Calico;
 4. pull the policy `sandboxWorkload` digest and load it into the exact cluster;
 5. start `test/k8s-smoke/serve-registry.ts` with a tool-root URL file, wait at
    most 180 seconds, and guarantee bounded process shutdown;
-6. run `sh test/k8s-smoke/build-image.sh k8s <registry-url>`, stop the
-   registry, and load `dawn-smoke-app:k8s`;
-7. build/load `dawn-smoke-aimock:latest`;
+6. run `sh test/k8s-smoke/build-image.sh k8s <registry-url>
+   <run-unique-app-tag>`, stop the registry, and load that exact tag;
+7. build/load the run-unique K8s aimock tag;
 8. create `dawn-app`, install `dawn-sandbox-infra` with
    `values-sandbox-infra.yaml`, deploy/wait for aimock, and install
    `dawn-app` with `values-dawn-app.yaml`;
@@ -765,12 +959,16 @@ kubectl --context "<context>" create namespace dawn-app
 helm --kube-context "<context>" install dawn-sandbox-infra \
   charts/dawn-sandbox-infra -n dawn-sandboxes --create-namespace \
   -f test/k8s-smoke/values-sandbox-infra.yaml --wait
-kubectl --context "<context>" apply \
-  -f test/k8s-smoke/aimock.k8s.yaml
+kubectl --context "<context>" set image \
+  -f test/k8s-smoke/aimock.k8s.yaml \
+  aimock="<run-unique-aimock-tag>" --local -o yaml
+# Pass the captured stdout from the previous argv as stdin to:
+kubectl --context "<context>" apply -f -
 kubectl --context "<context>" -n dawn-app rollout status \
   deploy/aimock --timeout=120s
 helm --kube-context "<context>" install dawn-app charts/dawn-app \
-  -n dawn-app -f test/k8s-smoke/values-dawn-app.yaml --wait
+  -n dawn-app -f test/k8s-smoke/values-dawn-app.yaml \
+  --set-string "image.tag=<k8s-$RUN_TOKEN>" --wait
 sh test/k8s-smoke/assert-k8s.sh
 ```
 
@@ -784,14 +982,15 @@ kubectl --context "<context>" delete namespace dawn-app dawn-sandboxes \
 kind delete cluster --name "<owned-cluster>"
 ```
 
-Track the two image IDs immediately after build. At cleanup, require each fixed
-tag still resolve to the recorded ID before removing that tag. A changed tag is
-a cleanup failure and is not removed. Verify both tags are absent afterward.
-Wrap each build in `try/finally`: once a fixed-tag build command has started,
-inspect the tag in `finally` even when the command failed. Because preflight
-proved absence, any observed tag becomes run-owned with its exact image ID and
-must enter identity-checked cleanup. This captures the intermediate
-`dawn-smoke-app:k8s` tag left by a partially failed build.
+Track the two image IDs immediately after build. At cleanup, require each
+run-unique tag still resolve to the recorded ID before removing that tag. A
+changed tag is a cleanup failure and is not removed. Verify both tags are absent
+afterward.
+Wrap each build in `try/finally`: once a run-unique-tag build command has started,
+inspect the run-unique tag in `finally` even when the command failed. Because
+the globally leased run is the sole producer of that nonce-bearing tag, any
+observed tag becomes run-owned with its exact image ID and must enter
+identity-checked cleanup.
 No commit.
 
 ### Task 8: Run Packaged Docker E2E Independently
@@ -811,13 +1010,14 @@ The encoded body must:
 
 1. independently verify Node, pnpm, Docker, `curl`, and `jq`;
 2. refuse existing fixed app/mock/network names, any sandbox-prefix container
-   or volume, and existing `dawn-smoke-app:docker` /
-   `dawn-smoke-aimock:latest` image tags;
+   or volume, and either exact run-unique Docker image tag;
 3. run `pnpm build` and pull the policy sandbox workload image;
 4. start the bounded registry, run
-   `sh test/k8s-smoke/build-image.sh docker <registry-url>`, build aimock, and
-   stop the registry;
-5. run only the hardened `sh test/k8s-smoke/assert-docker.sh`; and
+   `sh test/k8s-smoke/build-image.sh docker <registry-url>
+   <run-unique-app-tag>`, build the run-unique aimock tag, and stop the registry;
+5. run only the hardened `sh test/k8s-smoke/assert-docker.sh` with
+   `APP_IMAGE=<run-unique-app-tag>` and
+   `AIMOCK_IMAGE=<run-unique-aimock-tag>`; and
 6. perform read-only absence audits for exact fixed resources and both sandbox
    namespaces.
 
@@ -828,9 +1028,9 @@ is `bootstrap/environment`, never `cleanup`, and is never removed.
 Track/revalidate image IDs exactly as in Task 7. Do not execute or copy the
 hosted workflow's broad `Diagnostics + cleanup` loops. No commit.
 The `build-image.sh docker` call also uses `try/finally` adoption: it can create
-the base `dawn-smoke-app:docker` tag and then fail while adding the static Docker
-CLI. Inspect and claim that exact tag after every started build outcome, then
-remove it only when its current image ID still matches the recorded ID.
+the run-unique base tag and then fail while adding the static Docker CLI.
+Inspect and claim that exact tag after every started build outcome, then remove
+it only when its current image ID still matches the recorded ID.
 
 ### Task 9: Validate Evidence, Verify The Repository, And Clean Tools
 
@@ -839,13 +1039,14 @@ remove it only when its current image ID still matches the recorded ID.
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts \
-  assert-docker-smoke
+  assert-docker-smoke build-image-smoke
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   pnpm exec tsc -p test/k8s-compat/tsconfig.json --noEmit
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   pnpm exec biome check --config-path packages/config-biome/biome.json \
   test/k8s-compat/assert-docker-smoke.test.ts
 sh -n test/k8s-smoke/assert-docker.sh
+sh -n test/k8s-smoke/build-image.sh
 ```
 
 Also rerun every RED/GREEN command added for an evidence-proven live defect and
@@ -870,6 +1071,11 @@ pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
   Evidence Contract;
 - parseable ordered timestamps and nonempty tool versions/resources;
 - attempt count, IDs, retry eligibility, and retry resource naming;
+- every attempt's `gitCommit` exists, its command timestamps are contained by
+  the attempt, and `verifiedCommit` equals its latest attempt;
+- every `FixRecord` matches Git parent/changed-file evidence and every listed
+  affected lane that had already run has a later `post-fix` attempt at that
+  commit or a descendant. No result may silently replace its pre-fix attempt;
 - a nonempty diagnostics path for every failed attempt; the file must exist,
   be owned by this run root, have a SHA-256 recorded in state, and have a
   modification time between that attempt's start and finish;
@@ -881,19 +1087,27 @@ pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
   cluster resource and the argv ledger used to invoke the harness;
 - a named prerequisite and exact hosted equivalent for every blocked row;
 - exact absence of every run-owned cluster, fixed smoke object, registry
-  process, and fixed image tag;
+  process, and run-unique image tag;
 - sandbox container/volume namespace sets equal to the captured baseline (and
   empty for any successfully attempted Docker lane);
 - unchanged baseline Kind clusters; and
 - no unrecorded retained cluster.
 
 Also re-hash `.github/kubernetes-compatibility.json` and require it to equal
-`RunState.policySha256`. Require the recorded Kind, kubectl, and Helm paths to
-be children of the owned tool root; require versions `v0.32.0`, `v1.35.6`, and
-`v4.2.3`; and require the recorded Kind/kubectl download hashes to equal the
-fixed expected hashes in Task 2. Compare every pre-existing fixed container,
-network, sandbox container, volume, and image tag to its baseline object/image
-ID. A pre-existing object may remain unchanged; it may never disappear or be
+`RunState.policySha256`. Always validate `sharedBootstrap`, `dockerBootstrap`,
+their exact Node/pnpm/Docker evidence, and the Docker baseline when Docker
+bootstrap reached `ready`. If shared or Docker bootstrap failed, require every
+dependent row to be blocked by that exact persisted reason and do not require
+the corresponding absent baseline fields. If `kubernetesBootstrap=ready`, require the recorded
+Kind, kubectl, and Helm paths to be children of the owned tool root; require
+versions `v0.32.0`, `v1.35.6`, and `v4.2.3`; require the recorded Kind/kubectl
+download hashes to equal the fixed expected hashes in Task 2; and compare the
+current Kind list to the captured baseline. If Kubernetes bootstrap failed,
+require all five Kubernetes rows to be valid blocked rows carrying that exact
+reason and hosted equivalents, and do not require absent tool/baseline fields.
+Compare every pre-existing fixed container, network, sandbox container, and
+image tag to its baseline object/image ID, and every volume to its canonical
+inspect fingerprint. A pre-existing object may remain unchanged; it may never disappear or be
 replaced. When an E2E lane passed its preflight, the relevant baseline entries
 must have been absent and the run-created fixed tags/resources must now be
 absent.
