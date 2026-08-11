@@ -2198,7 +2198,7 @@ describe("probe command routing, evidence, and cleanup", () => {
         ? `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`
         : path.endsWith("/roles")
           ? `roles.rbac.authorization.k8s.io is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "roles" in API group "rbac.authorization.k8s.io" in the namespace "${names.sandboxNamespace}"`
-          : `configmaps is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "configmaps" in API group "" in the namespace "${names.managementNamespace}"`
+          : `networkpolicies.networking.k8s.io is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "networkpolicies" in API group "networking.k8s.io" in the namespace "${names.managementNamespace}"`
       return { exitCode: 1, body: forbidden(message) }
     })
 
@@ -2215,16 +2215,97 @@ describe("probe command routing, evidence, and cleanup", () => {
     }
     expect(requests[1]?.[1]?.stdin).toEqual(expect.any(String))
     expect(requests[2]?.[1]?.stdin).toEqual(expect.any(String))
+    expect(requests[2]?.[0]).toEqual({
+      file: "kubectl",
+      args: [
+        "--kubeconfig",
+        kubeconfig,
+        "--context",
+        context,
+        "--v=8",
+        "create",
+        "--raw",
+        `/apis/networking.k8s.io/v1/namespaces/${names.managementNamespace}/networkpolicies`,
+        "--filename",
+        "-",
+      ],
+    })
     const role = stdinObject(requests[1]?.[1] ?? {})
     const outside = stdinObject(requests[2]?.[1] ?? {})
     expect(metadata(role)).toMatchObject({
       namespace: names.sandboxNamespace,
       labels: { "dawn.sh/compat-run": runId },
     })
-    expect(metadata(outside)).toMatchObject({
-      namespace: names.managementNamespace,
-      labels: { "dawn.sh/compat-run": runId },
+    expect(outside).toEqual({
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: {
+        name: expect.stringMatching(/^dawn-compat-outside-namespace-rbac-probe-[0-9a-f]{8}$/),
+        namespace: names.managementNamespace,
+        labels: {
+          "dawn.sh/compat-run": runId,
+          "dawn.sh/compat-component": "outside-namespace-rbac-probe",
+        },
+      },
+      spec: {
+        podSelector: {
+          matchLabels: {
+            "dawn.sh/compat-run": runId,
+            "dawn.sh/compat-component": "outside-namespace-rbac-probe",
+          },
+        },
+        policyTypes: ["Ingress", "Egress"],
+      },
     })
+    expect(execute.mock.calls.at(-1)?.[0]).toEqual({
+      file: "kubectl",
+      args: [
+        "--context",
+        context,
+        "delete",
+        "networkpolicy",
+        "--namespace",
+        names.managementNamespace,
+        "--selector",
+        `dawn.sh/compat-run=${runId},dawn.sh/compat-component=outside-namespace-rbac-probe`,
+        "--ignore-not-found=true",
+        "--wait=true",
+        "--output",
+        "json",
+      ],
+    })
+  })
+
+  test("detects provider-granted NetworkPolicy creation that escapes into management", async () => {
+    const networkPolicyPath = `/apis/networking.k8s.io/v1/namespaces/${names.managementNamespace}/networkpolicies`
+    const rawPaths: string[] = []
+    const execute = fakeRunner((command) => {
+      if (command.args.includes("delete")) return {}
+      const pathIndex = command.args.indexOf("--raw") + 1
+      const path = command.args[pathIndex] ?? ""
+      rawPaths.push(path)
+      if (path.endsWith("/configmaps")) {
+        return {
+          exitCode: 1,
+          body: forbidden(
+            `configmaps is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "configmaps" in API group "" in the namespace "${names.managementNamespace}"`,
+          ),
+        }
+      }
+      if (path === networkPolicyPath) {
+        return {
+          apiVersion: "networking.k8s.io/v1",
+          kind: "NetworkPolicy",
+          metadata: { name: "escaped", namespace: names.managementNamespace },
+        }
+      }
+      throw new Error(`Unexpected raw probe path: ${path}`)
+    })
+
+    await expect(
+      runOutsideNamespaceDeniedProbe({ context, kubeconfig, runId, execute }),
+    ).rejects.toThrow(/expected kubectl rejection code/i)
+    expect(rawPaths).toEqual([networkPolicyPath])
   })
 
   test("classifies command failures separately from structured Kubernetes rejection evidence", async () => {

@@ -982,6 +982,7 @@ async function runRbacDeniedProbe(input: {
   readonly cleanup?: {
     readonly namespace: string
     readonly resourceTypes: string
+    readonly component?: string
   }
 }): Promise<void> {
   const state = probeState(input.probe)
@@ -1012,6 +1013,7 @@ async function runRbacDeniedProbe(input: {
       namespace: cleanup.namespace,
       runId: state.runId,
       resourceTypes: cleanup.resourceTypes,
+      ...(cleanup.component !== undefined ? { component: cleanup.component } : {}),
     }),
   )
 }
@@ -1057,28 +1059,38 @@ export async function runOutsideNamespaceDeniedProbe(
   input: TokenKubeconfigProbeInput,
 ): Promise<void> {
   const state = probeState(input)
-  const name = resourceName(state.runId, "outside-configmap")
+  const component = "outside-namespace-rbac-probe"
+  const name = resourceName(state.runId, component)
   await runRbacDeniedProbe({
     probe: input,
-    path: `/api/v1/namespaces/${encodeURIComponent(state.managementNamespace)}/configmaps`,
+    path: `/apis/networking.k8s.io/v1/namespaces/${encodeURIComponent(state.managementNamespace)}/networkpolicies`,
     name: "outside-namespace RBAC probe",
     expectation: {
       verb: "create",
-      resource: "configmaps",
-      apiGroup: "",
+      resource: "networkpolicies",
+      apiGroup: "networking.k8s.io",
       namespace: state.managementNamespace,
     },
     body: {
-      apiVersion: "v1",
-      kind: "ConfigMap",
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
       metadata: {
         name,
         namespace: state.managementNamespace,
-        labels: { [RUN_LABEL]: state.runId },
+        labels: { [RUN_LABEL]: state.runId, [COMPONENT_LABEL]: component },
       },
-      data: { probe: "denied" },
+      spec: {
+        podSelector: {
+          matchLabels: { [RUN_LABEL]: state.runId, [COMPONENT_LABEL]: component },
+        },
+        policyTypes: ["Ingress", "Egress"],
+      },
     },
-    cleanup: { namespace: state.managementNamespace, resourceTypes: "configmap" },
+    cleanup: {
+      namespace: state.managementNamespace,
+      resourceTypes: "networkpolicy",
+      component,
+    },
   })
 }
 
