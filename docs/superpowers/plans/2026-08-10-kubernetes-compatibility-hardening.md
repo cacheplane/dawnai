@@ -754,8 +754,11 @@ function succeeds.
 10. capture and later require exact Namespace UID plus
     `dawn.sh/compat-run=<runId>` before Helm uninstall or Namespace deletion.
 
-Do not put a custom audience in the TokenRequest. Register signal cleanup only
-after the first owned resource exists.
+Do not put a custom audience in the TokenRequest. Install signal cleanup after
+the non-mutating preflight, permission, and accounting gates but before the
+first mutation. Run the first Namespace creation as a tracked, abortable
+lifecycle phase. On a signal, wait for that phase to settle, re-read exact
+run-labelled Namespace ownership, and only then perform guarded cleanup.
 
 - [ ] **Step 6: Verify and commit**
 

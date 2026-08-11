@@ -607,7 +607,9 @@ single representative `can-i`. It covers:
 | both namespaces | Services | create, get, list, update, patch, delete |
 | both namespaces | Pods | create, get, list, watch, delete |
 | management namespace | Deployments | create, get, list, watch, update, patch, delete |
+| management namespace | ReplicaSets | get, list |
 | sandbox namespace | CronJobs, Jobs, and NetworkPolicies | create, get, list, watch, update, patch, delete |
+| management namespace | NetworkPolicies | get, list, watch, delete |
 | sandbox namespace | `pods/exec` | create, get |
 | both namespaces | `pods/log` | get |
 | both namespaces | Events | get, list, watch |
@@ -635,9 +637,11 @@ their standard Helm release labels; Helm release records are additionally
 bounded by exact generated release names. After each namespace is created, the
 harness captures its Kubernetes UID. Before either Helm uninstall, cleanup gets
 both namespaces and requires their original UID and run label. It then removes
-the exact releases before explicitly deleting any surviving namespace. A
-mismatch stops destructive cleanup and is reported rather than allowing Helm
-or kubectl to delete a reused name.
+the exact releases, re-reads each surviving Namespace, and issues a raw
+Kubernetes DELETE with a v1 `DeleteOptions.preconditions.uid` equal to the
+captured ownership UID. A mismatch or UID-precondition conflict stops
+destructive cleanup and is reported rather than allowing Helm or kubectl to
+delete a reused name.
 
 Cleanup is registered for normal exit, test failure, `SIGINT`, `SIGTERM`, and
 `SIGHUP`. It targets only internally generated namespace and release names and
