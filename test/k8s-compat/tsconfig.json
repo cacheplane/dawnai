@@ -10,6 +10,7 @@
   "include": [
     "../../scripts/kubernetes-compat.ts",
     "../../scripts/kubernetes-compat/**/*.ts",
+    "../../packages/sandbox/src/kubernetes/kube-client.ts",
     "./**/*.ts"
   ]
 }

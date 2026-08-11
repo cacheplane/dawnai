@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["DAWN_REQUIRE_HELM"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
