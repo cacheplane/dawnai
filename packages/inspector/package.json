@@ -33,7 +33,7 @@
     "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test e2e playwright.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "test:e2e": "playwright test --config playwright.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json"
   },
   "dependencies": {
     "@dawn-ai/core": "workspace:*",

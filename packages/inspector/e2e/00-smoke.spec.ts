@@ -6,7 +6,7 @@ import {
   seedIdsInDefaultOrder,
 } from "../test/seed"
 import { expect, test } from "./fixtures"
-import { grid, openBrowse, rowIds } from "./helpers"
+import { grid, openBrowse, rowIds, status } from "./helpers"
 
 /** Pretable's group row id, mirrored: `__group__:<columnId>=s:<value>` with `%`, `/`
  *  and `=` percent-escaped (grid-core `makeGroupId`/`escapeGroupKey`). */
@@ -15,10 +15,21 @@ function groupRowId(namespace: string): string {
   return `__group__:namespace=s:${escaped}`
 }
 
-/** Pretable orders group siblings with an `Intl.Collator`, not by byte — the three
- *  seeded namespaces are lowercase ASCII, where the two agree, but mirroring the real
- *  comparator keeps that a fact about the fixture rather than an assumption. */
-const collator = new Intl.Collator()
+/** Pretable orders group siblings with these exact options (grid-core `sortSiblings`),
+ *  ascending unless the active sort targets the grouped column — which the browse
+ *  default, `updatedAt DESC`, does not. Constructed the same way here so this really is
+ *  the shipped comparator, and not a lookalike that happens to agree on three
+ *  lowercase-ASCII namespaces. */
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+
+/** A floor on how much of the window the virtualizer has to actually draw. The grid caps
+ *  its viewport height, so only a fraction of the 200 loaded rows is ever in the
+ *  document — but without a floor, `slice(0, ids.length)` lets the value under test
+ *  choose its own coverage, and a regression that collapsed the grid to a single row
+ *  would still satisfy both `toBeVisible` and the order assertion. Well under the ~19
+ *  the capped viewport currently fits, because that count is a rendering detail and this
+ *  is a floor, not a pin. */
+const MIN_RENDERED_ROWS = 15
 
 /**
  * What the browse grid actually renders for the first server window.
@@ -50,17 +61,32 @@ function groupedFirstWindow(): string[] {
 }
 
 test("the standalone server serves the seeded browse dataset", async ({ page, consoleErrors }) => {
+  // Naming the fixture is what subscribes to it; the console-error gate runs in its
+  // teardown, so the unused-looking parameter IS the subscription.
   void consoleErrors
   await openBrowse(page)
   await expect(grid(page)).toBeVisible()
-  const ids = await rowIds(page)
-  expect(ids.length).toBeGreaterThan(0)
-  expect(ids.length).toBeLessThanOrEqual(BROWSE_PAGE_SIZE)
-  // The head of the documented default order as the grid draws it, not an arbitrary
-  // slice: this one assertion is what makes every later "beyond the window" claim mean
-  // something. The slice is by rendered count because the grid virtualizes — only the
-  // rows that fit the viewport are in the document, so this covers the head of the
-  // window and not all BROWSE_PAGE_SIZE of it.
-  expect(ids).toEqual(groupedFirstWindow().slice(0, ids.length))
-  expect(BROWSE_SEED_COUNT).toBe(1250)
+
+  // The window and the population, both read off the page: `loaded` is the page size the
+  // server actually returned and `total` the count it matched over the whole store. The
+  // only claim here that does not depend on how much of the window the grid draws — the
+  // row assertion below sees 18 records of the 200.
+  await expect(status(page)).toHaveText(
+    `${BROWSE_PAGE_SIZE.toLocaleString("en-US")} loaded of ${BROWSE_SEED_COUNT.toLocaleString("en-US")} matching`,
+  )
+
+  // Re-read inside the retry rather than once before it: the rendered set can still
+  // change a frame after the phase reads `idle` (see `rowIds`), and a floor over a single
+  // snapshot would convert that into a flake.
+  await expect(async () => {
+    const ids = await rowIds(page)
+    expect(ids.length).toBeGreaterThanOrEqual(MIN_RENDERED_ROWS)
+    expect(ids.length).toBeLessThanOrEqual(BROWSE_PAGE_SIZE)
+    // The head of the documented default order as the grid DRAWS it, not an arbitrary
+    // slice: this one assertion is what makes every later "beyond the window" claim mean
+    // something. Sliced by rendered count because the grid virtualizes.
+    expect(ids).toEqual(groupedFirstWindow().slice(0, ids.length))
+    // Bounded well under the test timeout: a genuinely wrong window would otherwise
+    // retry for the full 60 s and report as a timeout rather than as a diff.
+  }).toPass({ timeout: 15_000 })
 })

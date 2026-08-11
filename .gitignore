@@ -15,6 +15,8 @@ artifacts/
 .superpowers/
 .vercel
 .knot/
+test-results/
+playwright-report/
 packages/testing/test/fixtures/**/.dawn/
 test/runtime/dawn-testing/**/.dawn/
 test/runtime/dawn-testing/**/workspace/tool-outputs/
