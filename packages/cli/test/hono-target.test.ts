@@ -923,7 +923,7 @@ export const postgresCheckpointer = () => store
 `
 
   /**
-   * `@neondatabase/serverless`, stubbed at the three seams the emitted stores.mjs
+   * `@neondatabase/serverless`, stubbed at the four seams the emitted stores.mjs
    * actually uses.
    *
    * `Client` carries the driver's REAL per-instance defaults (TLS on), and
@@ -946,6 +946,13 @@ export const postgresCheckpointer = () => store
 }
 /** Every pool built, in order. */
 export const pools = []
+export const defaultTypeParserCalls = []
+export const types = {
+  getTypeParser(id, format = "text") {
+    defaultTypeParserCalls.push([id, format])
+    return (value) => "default:" + id + ":" + format + ":" + value
+  },
+}
 export class Pool {
   constructor(options) {
     this.options = options
@@ -974,6 +981,29 @@ export const poolConnections = () =>
       wsProxy: client.neonConfig.wsProxy?.("dawn-pg", 5432) ?? null,
     }
   })
+export const poolTypeParserReport = () => {
+  const customTypes = pools[0]?.options.types
+  const byteaParser = customTypes?.getTypeParser(17, "text")
+  const bytea = byteaParser("\\\\x0001ff")
+  const invalidBytea = ["\\\\x0", "\\\\xgg", "legacy-bytea"].map((value) => {
+    try {
+      byteaParser(value)
+      return "accepted"
+    } catch {
+      return "rejected"
+    }
+  })
+  return {
+    binaryBytea: customTypes?.getTypeParser(17, "binary")("raw"),
+    bytea: Array.from(bytea),
+    byteaConstructor: bytea.constructor.name,
+    defaultTypeParserCalls,
+    distinctPoolTypeObjects:
+      new Set(pools.map((pool) => pool.options.types)).size === pools.length,
+    integer: customTypes?.getTypeParser(23, "text")("42"),
+    invalidBytea,
+  }
+}
 `
 
   /** A `@dawn-ai/cli/fetch` stub whose runtime env knows nothing. */
@@ -1111,6 +1141,29 @@ console.log(JSON.stringify(${options.report ?? "poolConnections()"}))
     // One pool per request, each carrying its own listener — not one pool that
     // happened to be listened to once.
     expect(observed).toEqual([["error"], ["error"]])
+  })
+
+  test("parses BYTEA without the deprecated Buffer constructor and delegates every other type", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    const observed = await driveEmittedStores(appRoot, [{}, {}], {
+      report: "poolTypeParserReport()",
+      reportImports: 'import { poolTypeParserReport } from "@neondatabase/serverless"',
+    })
+
+    expect(observed).toEqual({
+      binaryBytea: "default:17:binary:raw",
+      bytea: [0, 1, 255],
+      byteaConstructor: "Uint8Array",
+      defaultTypeParserCalls: [
+        [17, "binary"],
+        [23, "text"],
+      ],
+      distinctPoolTypeObjects: true,
+      integer: "default:23:text:42",
+      invalidBytea: ["rejected", "rejected", "rejected"],
+    })
   })
 
   test("a request without the proxy binding still connects with TLS", async () => {

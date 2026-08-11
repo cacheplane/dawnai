@@ -135,7 +135,7 @@ import {
   createPostgresThreadsStore,
   postgresCheckpointer,
 } from "@dawn-ai/postgres-storage"
-import { Client, Pool } from "@neondatabase/serverless"
+import { Client, Pool, types } from "@neondatabase/serverless"
 
 /**
  * One binding, read the way Dawn reads every other knob.
@@ -152,6 +152,32 @@ import { Client, Pool } from "@neondatabase/serverless"
  * seeded. On workerd \`env\` supplies the value and neither fallback is consulted.
  */
 const binding = (env, name) => env?.[name] ?? readRuntimeEnv(name)
+
+/**
+ * Decode PostgreSQL's canonical hex BYTEA text without the driver's deprecated
+ * Buffer constructor. Dawn's checkpoint serializer consumes Uint8Array, so the
+ * result retains the driver's byte semantics without a process-global parser
+ * override that could affect another request.
+ */
+const parseDawnByteaText = (value) => {
+  if (
+    typeof value !== "string" ||
+    value.length < 2 ||
+    value.charCodeAt(0) !== 92 ||
+    value[1] !== "x"
+  ) {
+    throw new Error("postgres BYTEA text must use canonical hex format")
+  }
+  const hex = value.slice(2)
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error("postgres BYTEA text contains malformed hex")
+  }
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let index = 0; index < hex.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16)
+  }
+  return bytes
+}
 
 /**
  * The pool's client class, carrying the local-wsproxy driver switches on the
@@ -242,6 +268,12 @@ export async function createRequestStores(env) {
   const pool = new Pool({
     connectionString: databaseUrl,
     dawnWsProxy: binding(env, "DAWN_PG_WS_PROXY"),
+    types: {
+      getTypeParser(id, format = "text") {
+        if (id === 17 && format === "text") return parseDawnByteaText
+        return types.getTypeParser(id, format)
+      },
+    },
   })
   // AFTER construction, not as a \`Client\` option: this driver's Pool overwrites
   // \`this.Client\` with its own class in its constructor. This assignment is what

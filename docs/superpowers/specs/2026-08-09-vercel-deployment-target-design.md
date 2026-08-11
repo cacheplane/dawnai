@@ -142,6 +142,14 @@ same logic for:
 - runtime-environment seeding; and
 - the Hono catch-all around `createRuntimeFetchHandler`.
 
+The shared store emitter supplies every per-request Neon pool with a local
+type-parser object. PostgreSQL OID 17 in text format is accepted only in
+canonical `\x` hex form and decoded into `Uint8Array` without calling the
+driver's deprecated `Buffer()` constructor. Malformed or legacy BYTEA text
+fails closed; binary BYTEA and every other OID delegate to the pinned driver's
+default parser. The override is attached to the pool rather than the global
+`types` registry, so one request cannot change parser behavior for another.
+
 The `hono` target continues to publish those files under `.dawn/build` and to
 own `wrangler.toml`. The `vercel` target stages equivalent runtime files only
 as inputs to its bundle and owns Vercel output and configuration. Shared code
@@ -394,7 +402,12 @@ The fixture exports three deterministic, model-free routes:
   timeouts, and an explicit pool error listener) and passes it to the saver.
   Construction performs no query or migration at module evaluation, so
   Vercel's source-build discovery does not require `DATABASE_URL`; connections
-  and migrations remain lazy at runtime.
+  and migrations remain lazy at runtime. When the runtime value is present,
+  the fixture parses it as a URL and replaces only `sslmode` with
+  `verify-full`, preserving the pinned `pg` driver's secure interpretation
+  without its alias warning. A malformed present value fails with a fixed
+  message that retains no raw input. The raw and normalized values are never
+  logged.
 - `/stream#agent` is a raw legacy Runnable that emits one meaningful token,
   waits on a run-specific Postgres barrier with a finite overall deadline and a
   per-query deadline race, emits a second token, then supplies a root
@@ -656,8 +669,14 @@ Both preview URLs receive the same bounded client sequence:
    `responseStatusCode`, top-level `level`, top-level `message`, and every
    nested `logs[]` entry's `level` and `message`. Reject `error` or `fatal`
    levels even if their messages lack a keyword, and reject a truthy or
-   malformed top-level or nested `messageTruncated` field. Canonically
-   fingerprint every normalized field and complete nested log entry; if a
+   malformed top-level or nested `messageTruncated` field.
+   Pinned CLI `58.9.0` emits the exact integer `0` when the upstream log row
+   omits a response status; accept only that sentinel or an integer from 100
+   through 599. The sentinel is log-shape compatibility, not HTTP-success
+   evidence: the black-box client separately proves every relevant response
+   status and body. Missing, string, fractional, negative, 1–99, and 600+
+   values remain malformed. Canonically fingerprint every normalized field
+   and complete nested log entry; if a
    request identifier reappears with changed content, treat it as a new row
    version, rescan it, and reset the quiet timer.
 
@@ -667,10 +686,10 @@ Both preview URLs receive the same bounded client sequence:
    rows exist. After the marker first appears, require 30 consecutive seconds
    with no new row version, resetting the quiet timer whenever one appears,
    and perform one final query at the boundary. Scan every row version through
-   that final query for 5xx responses and uncaught, unhandled, handler, pool,
-   connection, leak, or lifecycle errors. Empty logs, differently scoped logs,
-   malformed rows, truncation, or failure to complete the quiet interval before
-   the deadline cannot pass.
+   that final query for explicit 5xx responses and uncaught, unhandled, handler,
+   pool, connection, leak, or lifecycle errors. Empty logs, differently scoped
+   logs, malformed rows, truncation, or failure to complete the quiet interval
+   before the deadline cannot pass.
 
 Before each deploy the lane parses the exact fixture `vercel.json`, requires
 `fluid: true`, and records its SHA-256. Each deploy subprocess uses the fixture

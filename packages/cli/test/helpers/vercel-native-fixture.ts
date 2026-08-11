@@ -142,8 +142,21 @@ export function renderNativeRouteFiles(
   const database = [
     'import { Pool } from "pg"',
     "",
+    "function nativeDatabaseUrl(): string | undefined {",
+    "  const value = process.env.DATABASE_URL",
+    "  if (value === undefined) return undefined",
+    "  let databaseUrl: URL",
+    "  try {",
+    "    databaseUrl = new URL(value)",
+    "  } catch {",
+    '    throw new Error("native fixture DATABASE_URL is malformed")',
+    "  }",
+    '  databaseUrl.searchParams.set("sslmode", "verify-full")',
+    "  return databaseUrl.toString()",
+    "}",
+    "",
     "export const pool = new Pool({",
-    "  connectionString: process.env.DATABASE_URL,",
+    "  connectionString: nativeDatabaseUrl(),",
     "  max: 2,",
     "  connectionTimeoutMillis: 10_000,",
     "  idleTimeoutMillis: 30_000,",
@@ -4347,15 +4360,16 @@ export function scanNativeVercelLogJsonl(_options: {
     if (row.deploymentId !== options.deploymentId || row.projectId !== options.projectId) {
       throw new Error("native Vercel log row does not match deployment and project scope")
     }
+    const responseStatusCode = row.responseStatusCode
     if (
       !own(row, "responseStatusCode") ||
-      !Number.isSafeInteger(row.responseStatusCode) ||
-      (row.responseStatusCode as number) < 100 ||
-      (row.responseStatusCode as number) > 599
+      !Number.isSafeInteger(responseStatusCode) ||
+      (responseStatusCode !== 0 &&
+        ((responseStatusCode as number) < 100 || (responseStatusCode as number) > 599))
     ) {
       throw new Error("native Vercel log response status code is missing or malformed")
     }
-    if ((row.responseStatusCode as number) >= 500) {
+    if ((responseStatusCode as number) >= 500) {
       throw new Error("native Vercel log row reports a 5xx response status")
     }
     if (typeof row.level !== "string" || typeof row.message !== "string") {

@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { discoverRoutes } from "@dawn-ai/core/node"
+import { transform } from "esbuild"
 
 import { afterEach, describe, expect, test, vi } from "vitest"
 
@@ -5078,6 +5079,14 @@ describe("runtime log scan", () => {
         }),
       ]),
     ).toMatchObject({ markerOccurrences: 2, versions: [{ markerOccurrences: 2 }] })
+
+    expect(
+      scan([
+        validLogRow({
+          responseStatusCode: 0,
+        }),
+      ]),
+    ).toMatchObject({ markerOccurrences: 1, versions: [{ id: "request-1" }] })
   })
 
   test.each([
@@ -5093,7 +5102,10 @@ describe("runtime log scan", () => {
     ["missing status", { responseStatusCode: undefined }],
     ["string status", { responseStatusCode: "200" }],
     ["fractional status", { responseStatusCode: 200.5 }],
+    ["negative status", { responseStatusCode: -1 }],
+    ["invalid low status sentinel", { responseStatusCode: 1 }],
     ["invalid status range", { responseStatusCode: 99 }],
+    ["invalid high status range", { responseStatusCode: 600 }],
     ["top truncation", { messageTruncated: true }],
     ["malformed truncation", { messageTruncated: "false" }],
     ["top error level", { level: "ERROR" }],
@@ -5175,6 +5187,27 @@ describe("runtime log scan", () => {
     ).not.toThrow()
   })
 
+  test.each([
+    [
+      "pg connection security warning",
+      "The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'",
+    ],
+    [
+      "deprecated Buffer constructor warning",
+      "[DEP0005] DeprecationWarning: Buffer() is deprecated",
+    ],
+  ])("rejects the exact %s even when its response status is otherwise valid", (_label, message) => {
+    expect(() =>
+      scan([
+        validLogRow({
+          level: "error",
+          logs: [{ level: "error", message }],
+          message,
+        }),
+      ]),
+    ).toThrow(/runtime error|error level|level reports/)
+  })
+
   test("polls the exact command until one marker and a resettable final quiet boundary", async () => {
     const startMs = 1_800_000_000_000
     let current = startMs
@@ -5191,7 +5224,7 @@ describe("runtime log scan", () => {
         current += milliseconds
       },
     }
-    const markerRow = validLogRow({ id: "request-marker" })
+    const markerRow = validLogRow({ id: "request-marker", responseStatusCode: 0 })
     const otherRow = (sequence: number) =>
       validLogRow({
         id: "request-other",
@@ -5296,6 +5329,34 @@ describe("runtime log scan", () => {
       }),
     ).rejects.toThrow(/180|deadline/)
     expect(calls).toBe(1)
+  })
+
+  test("rejects an explicit 5xx version after the same row first reports unavailable status", async () => {
+    const startMs = 1_800_000_000_000
+    let current = startMs
+    let calls = 0
+    await expect(
+      pollNativeVercelRuntimeLogs({
+        clock: {
+          now: () => current,
+          sleep: async (milliseconds) => {
+            current += milliseconds
+          },
+        },
+        deploymentId,
+        logBoundary: {
+          logs: async () => {
+            calls += 1
+            return `${JSON.stringify(validLogRow({ responseStatusCode: calls === 1 ? 0 : 500 }))}\n`
+          },
+        },
+        logMarker,
+        orgId: "team_Test123",
+        projectId,
+        queryStartMs: startMs,
+      }),
+    ).rejects.toThrow(/5xx|status/)
+    expect(calls).toBe(2)
   })
 
   test("counts a changed version of the same marker row and rejects the second occurrence", async () => {
@@ -9274,6 +9335,68 @@ describe("model-free native fixture", () => {
     expect(generatedSource).not.toMatch(/gpt-|openai|model\s*:/i)
     expect(generatedSource).toContain(authorization.digestSha256)
     expect(() => authorization.assertSafe("generated route source", files)).not.toThrow()
+    expect(files["src/lib/database.ts"]).toContain(
+      'databaseUrl.searchParams.set("sslmode", "verify-full")',
+    )
+    expect(files["src/lib/database.ts"]).toContain("connectionString: nativeDatabaseUrl()")
+    expect(files["src/lib/database.ts"]).not.toContain("connectionString: process.env.DATABASE_URL")
+
+    const databaseModuleRoot = await makeTempDir()
+    const pgStubRoot = join(databaseModuleRoot, "node_modules", "pg")
+    await mkdir(pgStubRoot, { recursive: true })
+    await writeFile(
+      join(pgStubRoot, "package.json"),
+      JSON.stringify({ exports: "./index.mjs", name: "pg", type: "module" }),
+      "utf8",
+    )
+    await writeFile(
+      join(pgStubRoot, "index.mjs"),
+      `export class Pool {
+  constructor(options) { this.options = options }
+  on() { return this }
+}
+`,
+      "utf8",
+    )
+    const transformedDatabase = await transform(files["src/lib/database.ts"] as string, {
+      format: "esm",
+      loader: "ts",
+      target: "node24",
+    })
+    const databaseModulePath = join(databaseModuleRoot, "database.mjs")
+    await writeFile(databaseModulePath, transformedDatabase.code, "utf8")
+    const priorDatabaseUrl = process.env.DATABASE_URL
+    try {
+      process.env.DATABASE_URL =
+        "postgres://fixture:password@localhost:5432/dawn?application_name=native&sslmode=require"
+      const configured = (await import(`${pathToFileURL(databaseModulePath).href}?configured`)) as {
+        readonly pool: { readonly options: { readonly connectionString?: string } }
+      }
+      expect(configured.pool.options.connectionString).toBe(
+        "postgres://fixture:password@localhost:5432/dawn?application_name=native&sslmode=verify-full",
+      )
+
+      delete process.env.DATABASE_URL
+      const absent = (await import(`${pathToFileURL(databaseModulePath).href}?absent`)) as {
+        readonly pool: { readonly options: { readonly connectionString?: string } }
+      }
+      expect(absent.pool.options.connectionString).toBeUndefined()
+
+      const malformedDatabaseUrl = "postgres-secret-not-a-url"
+      process.env.DATABASE_URL = malformedDatabaseUrl
+      let malformedError: unknown
+      try {
+        await import(`${pathToFileURL(databaseModulePath).href}?malformed`)
+      } catch (error) {
+        malformedError = error
+      }
+      expect(malformedError).toBeInstanceOf(Error)
+      expect((malformedError as Error).message).toBe("native fixture DATABASE_URL is malformed")
+      expect(JSON.stringify(malformedError)).not.toContain(malformedDatabaseUrl)
+    } finally {
+      if (priorDatabaseUrl === undefined) delete process.env.DATABASE_URL
+      else process.env.DATABASE_URL = priorDatabaseUrl
+    }
 
     const deadlineModulePath = join(await makeTempDir(), "stream-deadline.mjs")
     await writeFile(deadlineModulePath, files["src/lib/stream-deadline.mjs"] as string, "utf8")

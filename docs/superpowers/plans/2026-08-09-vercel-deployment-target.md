@@ -577,6 +577,15 @@
 
   Do not externalize Dawn, Hono, Postgres, Neon, application, or discovered provider packages. Catch esbuild resolution failures and throw a `CliError` naming the missing specifier and explaining the function-directory boundary.
 
+  In the shared generated `stores.mjs`, pass each Neon pool its own `types`
+  object. Override only text OID 17: require canonical `\x` plus complete hex
+  byte pairs and decode directly to `Uint8Array`. Reject malformed and legacy
+  BYTEA text without invoking `Buffer`; delegate binary OID 17 and every other
+  OID/format to the pinned driver's default `types.getTypeParser`. Do not mutate
+  the driver's process-global type registry. Execute the emitted stores in a
+  test that proves valid bytes, malformed rejection, delegation, and per-pool
+  installation.
+
 - [ ] **Step 4: Write metadata, validate, reconcile config, and publish**
 
   The orchestration order must be:
@@ -1030,7 +1039,7 @@
   production bridge; it must not patch `pg`, vendor `pg-native`, or weaken Build
   Output validation locally.
 
-  Generate one module-lifetime `pg.Pool` with `connectionString: process.env.DATABASE_URL`, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, `query_timeout: 5_000`, `statement_timeout: 5_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. Pool construction must tolerate an absent build-time value and must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
+  Generate one module-lifetime `pg.Pool` with a runtime-only connection-string normalizer, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, `query_timeout: 5_000`, `statement_timeout: 5_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. If `DATABASE_URL` is absent, pass `undefined` so source discovery remains credential-free. If present, parse it with `URL`, replace only `sslmode` with `verify-full`, and pass the normalized string without logging either form. Catch invalid URL parsing and throw a fixed error with no raw input or cause. Pool construction must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
 
   `/state#agent` must export the named `agent` as a raw compiled `StateGraph`. Define inline `messages`, `visits`, and `markers` annotations: messages and markers append, visits sum, and defaults are empty/zero. Compile with `new DawnPostgresSaver({ pool })`, its default `public.dawn_checkpoints`/`public.dawn_writes` names, empty checkpoint namespace, and default serializer. The record node reads only the latest `HumanMessage` string content, returns one visit plus that marker, and recognizes `^log-vcl-[a-f0-9]{32}$` by emitting exactly one `console.info("dawn-vercel-fixture-log", marker)` line.
 
@@ -1130,7 +1139,7 @@
 
   Split CRLF delimiters and UTF-8 bytes across arbitrary chunks. Require the parser to preserve incomplete tails, parse only completed SSE frames, ignore heartbeat comments, join every `data:` line with `\n`, and JSON-parse public frames. Test that one pending `nextMeaningfulFrame()` may consume heartbeats/partial bytes, survives a one-second timeout without cancellation, and is the same promise later yielding the post-release frame. Reject early `after-release`, `done`, or EOF, and reject raw internal `on_chain_end` as a public event.
 
-  Feed log JSONL with repeated request IDs and changed nested content. Require nonempty row `id`, exact `deploymentId`, exact synthetic `projectId` scope echo, no malformed/truthy top-level or nested `messageTruncated`, no 5xx, no top-level/nested `error` or `fatal`, and no uncaught/unhandled/handler/pool/connection/leak/lifecycle error. Canonically fingerprint every normalized top-level field and complete nested `logs[]` entry; a changed version rescans and resets quiet. Exactly 1,000 rows fails.
+  Feed log JSONL with repeated request IDs and changed nested content. Require nonempty row `id`, exact `deploymentId`, exact synthetic `projectId` scope echo, no malformed/truthy top-level or nested `messageTruncated`, no explicit 5xx, no top-level/nested `error` or `fatal`, and no uncaught/unhandled/handler/pool/connection/leak/lifecycle error. Accept `responseStatusCode` only as exact integer `0`—the pinned CLI's upstream-status-missing sentinel—or an integer 100–599; the sentinel is never HTTP-success evidence, which the black-box response checks establish independently. Reject missing, string, fractional, negative, 1–99, and 600+ values. Canonically fingerprint every normalized top-level field and complete nested `logs[]` entry; a changed version rescans and resets quiet. Exactly 1,000 rows fails. Keep exact pg SSL-alias and Node `Buffer()` deprecation warning rows as error-level rejection regressions; remove their causes in the generated fixture/runtime rather than allowlisting them.
 
   Run:
 
@@ -1379,7 +1388,7 @@
   - visits `[1, 2]`, markers in order, the generated state read matching the second run, and a physical checkpoint for each deployment;
   - missing/wrong release-header `401`, exact target-only release, and the sentinel still unreleased at assertion time;
   - `200` non-redirected `text/event-stream`, first chunk before the preserved one-second quiet read, authorized release only afterward, exact second chunk then exact `done`, and EOF after done with ordered finite indexes;
-  - a later request whose unique canonical marker is present in complete exact-deployment logs, followed by the 30-second quiet/final-query scan with no truncation, 5xx, fatal/error level, or lifecycle error;
+  - a later request whose unique canonical marker is present in complete exact-deployment logs, followed by the 30-second quiet/final-query scan with no truncation, explicit 5xx, fatal/error level, or lifecycle error;
   - source provenance proves no local prebuilt output and an observed remote build; prebuilt provenance proves validated local output, `--prebuilt`, and no remote source build;
   - reconciliation cardinality/binding evidence and cleanup postconditions showing every authenticated deployment absent by exact `/v13` GET `404` and every persisted database row absent.
 
@@ -1532,7 +1541,7 @@
   - the prebuilt preview performed no remote source build;
   - each preview persisted state, kept the sentinel unreleased, exposed the first SSE frame and a preserved quiet read before the authorized target release, completed in exact public-frame order, and served the canonical later log-marker request;
   - marker reconciliation found the expected cardinality, every authenticated exact-ID workset member reached `/v13` `404`, and `to_regclass`-aware cleanup proved every persisted thread/barrier row absent;
-  - the complete exact-deployment log scan reached its final quiet-boundary query with no truncation, 5xx, fatal/error level, or lifecycle error.
+  - the complete exact-deployment log scan reached its final quiet-boundary query with no truncation, explicit 5xx, fatal/error level, or lifecycle error.
 
   If native evidence fails, use `@superpowers:systematic-debugging`; fix the root cause and repeat the focused and native lanes. Do not revise documentation to claim native support before this passes.
 
