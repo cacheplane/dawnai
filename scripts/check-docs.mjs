@@ -4,12 +4,22 @@ import { pathToFileURL } from "node:url"
 import { NodeFlags, SyntaxKind } from "typescript/unstable/ast"
 import {
   isAssertionExpression,
+  isExpressionWithTypeArguments,
   isIdentifier,
+  isIndexedAccessTypeNode,
+  isInterfaceDeclaration,
+  isIntersectionTypeNode,
+  isLiteralTypeNode,
   isObjectLiteralExpression,
   isParenthesizedExpression,
+  isParenthesizedTypeNode,
   isPropertyAssignment,
+  isPropertySignatureDeclaration,
   isSatisfiesExpression,
   isStringLiteral,
+  isTypeLiteralNode,
+  isTypeReferenceNode,
+  isUnionTypeNode,
   isVariableStatement,
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
@@ -526,7 +536,7 @@ const accuracyContracts = [
       "not completed until",
       "does not embed",
       '`memory.writes: "off"` makes the recorder a no-op',
-      'failed episode records currently use `toolsUsed: []`',
+      "failed episode records currently use `toolsUsed: []`",
       "## Episodic memory",
     ],
     forbidden: [
@@ -971,6 +981,37 @@ const accuracyContracts = [
     ],
   },
   {
+    file: "apps/web/content/docs/configuration.mdx",
+    required: [
+      "# Configuration Reference",
+      "/docs/persistence",
+      "/docs/production-topology",
+      "/docs/memory/long-term",
+      "/docs/deployment",
+      "/docs/sandbox",
+      "reserved `tool` and `subagent` keys use exact matching",
+      "resource paths, bash commands, and memory scopes use prefix matching",
+      "stay in memory and do not seed the runtime permissions store",
+      "three explicit entries",
+      "application owns the pool",
+      "records an env-file path, not variable names",
+      "does not distribute active-run or cancel coordination",
+      "injected `sandboxManager` takes precedence over `config.sandbox`",
+      "injected `memoryStore` takes precedence over `config.memory.store`",
+      'dockerSandbox({ image: "node:24-slim" })',
+      "pnpm add @dawn-ai/postgres-storage pg",
+    ],
+    forbidden: [
+      "dawn start loads",
+      "before every CLI command and at runtime startup",
+      "every commonly-used key",
+      "#### Two entry points",
+      "### What this does and does not run on",
+      "### Storage shape and known limits",
+      "dawn-sandbox:latest",
+    ],
+  },
+  {
     file: "apps/web/content/docs/deployment/langsmith.mdx",
     required: [
       'node_version: "22"',
@@ -1299,6 +1340,309 @@ for (const contract of accuracyContracts) {
     if (retainsForbiddenText) {
       failures.push(`${contract.file} retains forbidden accuracy text: ${forbiddenRegex}`)
     }
+  }
+}
+
+// Configuration is the public DawnConfig schema reference. Parse property
+// signatures through TypeScript's AST rather than indentation/brace regexes:
+// the source interface contains nested literals, unions, callback signatures,
+// comments, and an imported SandboxConfig. The explicit path inventory makes
+// every public config addition or removal an intentional documentation change.
+// Callback arguments and instance interfaces are leaves: they describe values
+// assigned at one config path, not additional paths an app author configures.
+function collectConfigSchemaPaths({ sources, rootInterface, expandInterfaces = [rootInterface] }) {
+  const sourcePaths = sources.map((_, index) => `/configuration-schema-${index}.ts`)
+  const virtualFiles = Object.fromEntries(
+    sourcePaths.map((sourcePath, index) => [sourcePath, sources[index]]),
+  )
+  virtualFiles["/tsconfig.json"] = JSON.stringify({
+    compilerOptions: { noLib: true },
+    files: sourcePaths,
+  })
+
+  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
+  let snapshot
+  try {
+    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
+    const interfaces = new Map()
+    const expandableInterfaces = new Set(expandInterfaces)
+    for (const sourcePath of sourcePaths) {
+      const project = snapshot.getDefaultProjectForFile(sourcePath)
+      const sourceFile = project?.program.getSourceFile(sourcePath)
+      for (const statement of sourceFile?.statements ?? []) {
+        if (!isInterfaceDeclaration(statement)) continue
+        const declarations = interfaces.get(statement.name.text) ?? []
+        declarations.push(statement)
+        interfaces.set(statement.name.text, declarations)
+      }
+    }
+
+    const paths = new Set()
+    const propertyName = (property) => {
+      const name = property.name
+      return isIdentifier(name) || isStringLiteral(name) ? name.text : null
+    }
+
+    const collectMembers = (members, prefix, stack) => {
+      for (const member of members) {
+        if (!isPropertySignatureDeclaration(member)) continue
+        const name = propertyName(member)
+        if (!name) continue
+        const path = prefix ? `${prefix}.${name}` : name
+        paths.add(path)
+        if (member.type) collectType(member.type, path, stack)
+      }
+    }
+
+    const collectInterface = (name, prefix, stack) => {
+      if (stack.has(name)) return
+      const declarations = interfaces.get(name)
+      if (!declarations) return
+      const nextStack = new Set([...stack, name])
+      for (const declaration of declarations) {
+        for (const clause of declaration.heritageClauses ?? []) {
+          for (const heritageType of clause.types) {
+            if (
+              isExpressionWithTypeArguments(heritageType) &&
+              isIdentifier(heritageType.expression)
+            ) {
+              collectInterface(heritageType.expression.text, prefix, nextStack)
+            }
+          }
+        }
+        collectMembers(declaration.members, prefix, nextStack)
+      }
+    }
+
+    const collectType = (type, prefix, stack) => {
+      if (isTypeLiteralNode(type)) {
+        collectMembers(type.members, prefix, stack)
+        return
+      }
+      if (isUnionTypeNode(type) || isIntersectionTypeNode(type)) {
+        for (const memberType of type.types) collectType(memberType, prefix, stack)
+        return
+      }
+      if (isParenthesizedTypeNode(type)) {
+        collectType(type.type, prefix, stack)
+        return
+      }
+      if (
+        isTypeReferenceNode(type) &&
+        isIdentifier(type.typeName) &&
+        expandableInterfaces.has(type.typeName.text)
+      ) {
+        collectInterface(type.typeName.text, prefix, stack)
+        return
+      }
+      if (!isIndexedAccessTypeNode(type)) return
+      if (!isTypeReferenceNode(type.objectType) || !isIdentifier(type.objectType.typeName)) return
+      if (!isLiteralTypeNode(type.indexType) || !isStringLiteral(type.indexType.literal)) return
+
+      const declarations = interfaces.get(type.objectType.typeName.text)
+      const selected = declarations
+        ?.flatMap((declaration) => [...declaration.members])
+        .find(
+          (member) =>
+            isPropertySignatureDeclaration(member) &&
+            propertyName(member) === type.indexType.literal.text,
+        )
+      if (selected?.type) collectType(selected.type, prefix, stack)
+    }
+
+    collectInterface(rootInterface, "", new Set())
+    return [...paths].sort()
+  } finally {
+    snapshot?.dispose()
+    api.close()
+  }
+}
+
+const schemaTraversalProbePaths = collectConfigSchemaPaths({
+  expandInterfaces: ["BaseConfig", "MergedConfig"],
+  rootInterface: "MergedConfig",
+  sources: [
+    `
+      interface BaseConfig {
+        inherited?: { nested?: boolean }
+      }
+      interface MergedConfig extends BaseConfig {
+        direct?: string
+      }
+      interface MergedConfig {
+        merged?: number
+      }
+    `,
+  ],
+})
+const expectedSchemaTraversalProbePaths = ["direct", "inherited", "inherited.nested", "merged"]
+if (
+  JSON.stringify(schemaTraversalProbePaths) !== JSON.stringify(expectedSchemaTraversalProbePaths)
+) {
+  failures.push(
+    `configuration schema AST traversal lost merged or inherited properties: expected ${expectedSchemaTraversalProbePaths.join(", ")}; received ${schemaTraversalProbePaths.join(", ")}`,
+  )
+}
+
+const expectedDawnConfigSchemaPaths = [
+  "appDir",
+  "backends",
+  "backends.exec",
+  "backends.filesystem",
+  "build",
+  "build.targets",
+  "checkpointer",
+  "env",
+  "memory",
+  "memory.distill",
+  "memory.distill.consolidate",
+  "memory.distill.consolidate.maxBatchSize",
+  "memory.distill.consolidate.minBatchSize",
+  "memory.distill.consolidate.olderThanMs",
+  "memory.distill.consolidate.sourceTtlMs",
+  "memory.distill.consolidate.ttlMs",
+  "memory.distill.maxBatches",
+  "memory.distill.model",
+  "memory.distill.provider",
+  "memory.distill.reflect",
+  "memory.distill.reflect.maxRecords",
+  "memory.distill.reflect.minNewRecords",
+  "memory.distill.reflect.writes",
+  "memory.enabled",
+  "memory.episodes",
+  "memory.episodes.cap",
+  "memory.episodes.embed",
+  "memory.episodes.enabled",
+  "memory.episodes.includeFailedRuns",
+  "memory.episodes.ttlMs",
+  "memory.indexMaxEntries",
+  "memory.recall",
+  "memory.recall.candidatePool",
+  "memory.recall.recencyHalfLifeMs",
+  "memory.recall.weights",
+  "memory.recall.weights.confidence",
+  "memory.recall.weights.recency",
+  "memory.recall.weights.relevance",
+  "memory.resolveScope",
+  "memory.store",
+  "memory.vector",
+  "memory.vector.confidenceWeight",
+  "memory.vector.embedder",
+  "memory.vector.recencyWeight",
+  "memory.vector.rrfK",
+  "memory.vector.vectorK",
+  "memory.vector.weights",
+  "memory.vector.weights.keyword",
+  "memory.vector.weights.vector",
+  "memory.writes",
+  "permissions",
+  "permissions.allow",
+  "permissions.deny",
+  "permissions.mode",
+  "permissions.store",
+  "sandbox",
+  "sandbox.env",
+  "sandbox.idleTimeoutMs",
+  "sandbox.network",
+  "sandbox.network.allowlist",
+  "sandbox.network.denylist",
+  "sandbox.network.mode",
+  "sandbox.provider",
+  "sandbox.resources",
+  "sandbox.resources.cpus",
+  "sandbox.resources.diskGb",
+  "sandbox.resources.memoryMb",
+  "sandbox.resources.timeoutMs",
+  "sandbox.security",
+  "sandbox.security.dropAllCapabilities",
+  "sandbox.security.noNewPrivileges",
+  "sandbox.security.pidsLimit",
+  "sandbox.security.readOnlyRootFilesystem",
+  "sandbox.security.runAsNonRoot",
+  "sandbox.security.runAsNonRoot.gid",
+  "sandbox.security.runAsNonRoot.uid",
+  "summarization",
+  "summarization.enabled",
+  "summarization.keepRecentTurns",
+  "summarization.maxTokens",
+  "summarization.model",
+  "summarization.summarize",
+  "summarization.tokenCounter",
+  "threadsStore",
+  "toolOutput",
+  "toolOutput.gcThrottleMs",
+  "toolOutput.maxBytes",
+  "toolOutput.noOffloadTools",
+  "toolOutput.offloadThresholdChars",
+  "toolOutput.previewLines",
+  "toolOutput.ttlMs",
+].sort()
+
+const dawnConfigSchemaPaths = collectConfigSchemaPaths({
+  expandInterfaces: ["DawnConfig", "SandboxConfig", "SandboxSecurityPolicy"],
+  rootInterface: "DawnConfig",
+  sources: [
+    readFileSync(resolve(repoRoot, "packages/core/src/types.ts"), "utf8"),
+    readFileSync(resolve(repoRoot, "packages/workspace/src/sandbox-types.ts"), "utf8"),
+  ],
+})
+
+if (JSON.stringify(dawnConfigSchemaPaths) !== JSON.stringify(expectedDawnConfigSchemaPaths)) {
+  failures.push(
+    `DawnConfig nested schema path inventory changed: expected ${expectedDawnConfigSchemaPaths.join(", ")}; received ${dawnConfigSchemaPaths.join(", ")}`,
+  )
+}
+
+const configurationMdxSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/configuration.mdx"),
+  "utf8",
+)
+const completeConfigurationExample =
+  /## Complete annotated example[\s\S]*?```ts[^\n]*\n([\s\S]*?)```/.exec(
+    configurationMdxSource,
+  )?.[1] ?? ""
+
+const keyReferenceSource = configurationMdxSource.slice(
+  configurationMdxSource.indexOf("## Key reference"),
+  configurationMdxSource.indexOf("## Postgres backend"),
+)
+const documentedConfigSchemaSource = [
+  "export interface DocumentedConfig {",
+  ...[...keyReferenceSource.matchAll(/```ts[^\n]*\n([\s\S]*?)```/g)].map((match) => match[1]),
+  "}",
+].join("\n")
+const documentedConfigSchemaPaths = collectConfigSchemaPaths({
+  rootInterface: "DocumentedConfig",
+  sources: [documentedConfigSchemaSource],
+})
+
+if (JSON.stringify(documentedConfigSchemaPaths) !== JSON.stringify(expectedDawnConfigSchemaPaths)) {
+  failures.push(
+    `apps/web/content/docs/configuration.mdx nested schema paths differ from DawnConfig: expected ${expectedDawnConfigSchemaPaths.join(", ")}; received ${documentedConfigSchemaPaths.join(", ")}`,
+  )
+}
+
+for (const field of expectedDawnConfigSchemaPaths.filter((path) => !path.includes("."))) {
+  if (!configurationMdxSource.includes(`### \`${field}\``)) {
+    failures.push(
+      `apps/web/content/docs/configuration.mdx is missing DawnConfig field heading: ${field}`,
+    )
+  }
+  if (!new RegExp(`(?:^|\\W)${field}\\s*:`).test(completeConfigurationExample)) {
+    failures.push(
+      `apps/web/content/docs/configuration.mdx complete example is missing DawnConfig field: ${field}`,
+    )
+  }
+}
+
+for (const requiredExampleText of [
+  '//   // network: { mode: "deny", allowlist: ["api.openai.com"] },',
+  "//     // runAsNonRoot: { uid: 1000, gid: 1000 },",
+]) {
+  if (!completeConfigurationExample.includes(requiredExampleText)) {
+    failures.push(
+      `apps/web/content/docs/configuration.mdx complete example is missing schema alternative: ${requiredExampleText}`,
+    )
   }
 }
 

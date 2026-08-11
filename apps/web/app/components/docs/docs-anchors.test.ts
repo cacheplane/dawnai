@@ -312,6 +312,19 @@ describe("docs links and in-page anchors", () => {
       expect(memory?.ids).toContain(anchor)
       expect(longTerm?.ids).toContain(anchor)
     }
+
+    const configuration = pages.get("configuration.mdx")
+    for (const anchor of [
+      "backends",
+      "permissions",
+      "permissionsstore",
+      "memory",
+      "build",
+      "sandbox",
+      "postgres-backend",
+    ]) {
+      expect(configuration?.ids).toContain(anchor)
+    }
   })
 
   it("resolves every repository-owned docs link and supplied fragment", () => {
