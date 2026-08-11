@@ -1,7 +1,7 @@
 import { seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
+import type { DawnMiddleware, MiddlewareRequest, ThreadAccessPolicy } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
@@ -48,6 +48,7 @@ import {
   dawnErrorCodeOf,
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { threadAccessBootLine } from "./thread-access.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
@@ -274,6 +275,24 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // Authorization, unlike middleware, must never resolve to "allow all" by
+  // accident: `loadThreadAccess` throws DAWN_E3003 rather than degrading when a
+  // policy file exists but cannot be bound. An absent file resolves to
+  // undefined — an app that never had a policy keeps today's behavior exactly.
+  const threadAccess: ThreadAccessPolicy | undefined =
+    options.threadAccess ??
+    options.modules?.threadAccess ??
+    (await fallbacks?.loadThreadAccess?.(options.appRoot))
+  // One line per boot, and the only signal an operator has that a policy
+  // vanished. Emitted AFTER resolution, so a DAWN_E3003 throw pre-empts it: a
+  // boot that failed never claims to have bound anything.
+  console.log(
+    threadAccessBootLine({
+      fromManifest: options.modules?.threadAccess !== undefined,
+      fromOptions: options.threadAccess !== undefined,
+      resolved: threadAccess !== undefined,
+    }),
+  )
   // `requestStores` makes the boot resolution below OPTIONAL, but only on a
   // runtime that has no filesystem to fall back to. Every node caller keeps
   // resolving exactly as before (it has `fallbacks`); an edge caller that

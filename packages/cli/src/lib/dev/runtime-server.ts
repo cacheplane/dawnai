@@ -5,7 +5,7 @@ import type { DawnConfig } from "@dawn-ai/core"
 // runtime - this module's VALUE graph stays node-http-only.
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { DawnMiddleware, ThreadAccessPolicy } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { RuntimeBootFallbacks } from "../runtime/execute-route-core.js"
@@ -85,6 +85,11 @@ export interface StartRuntimeServerOptions {
   readonly memoryStore?: () => Promise<MemoryStore>
   /** Pre-loaded middleware. Absent: the dynamic src/middleware.ts probe. */
   readonly middleware?: DawnMiddleware
+  /**
+   * Pre-loaded thread access policy. Absent: the build manifest's entry, then
+   * the dynamic src/thread-access.ts probe.
+   */
+  readonly threadAccess?: ThreadAccessPolicy
   /** Boot-resolved sandbox manager. Absent: built from `config.sandbox`. */
   readonly sandboxManager?: SandboxManager
   /**

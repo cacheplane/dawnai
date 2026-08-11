@@ -4,6 +4,7 @@
  * Re-exports the pure half so this stays the one import site callers know.
  */
 
+import { validateThreadAccessPolicy } from "../dev/thread-access.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { DawnStaticModules, StaticRouteModule } from "./static-modules-core.js"
 
@@ -38,6 +39,19 @@ export async function loadStaticModules(manifestUrl: URL | string): Promise<Dawn
     throw new Error(
       `Static module manifest at ${href} has a non-function middleware entry — re-run \`dawn build\`.`,
     )
+  }
+  // Thread access is optional, and `undefined` is legitimate (an app with no
+  // policy file emits no entry) — but anything present must be a well-formed
+  // policy. Validated with the same function the dynamic loader uses, because
+  // types are erased across the manifest import.
+  const threadAccess = (manifest as { readonly threadAccess?: unknown }).threadAccess
+  if (threadAccess !== undefined) {
+    const reason = validateThreadAccessPolicy(threadAccess)
+    if (reason) {
+      throw new Error(
+        `Static module manifest at ${href} has an invalid threadAccess entry (${reason}) — re-run \`dawn build\`.`,
+      )
+    }
   }
   const routes = (manifest as { readonly routes: readonly unknown[] }).routes
   for (const entry of routes) {
