@@ -2,13 +2,19 @@
 import type { MemoryKind, MemoryRecord, MemoryStatus } from "@dawn-ai/memory"
 import {
   type ColumnFilter,
+  type PretableBodyStateKind,
   type PretableColumn,
+  type PretableDataState,
+  type PretableProcessingOptions,
+  type PretableResultMeta,
   PretableSurface,
+  type PretableSurfaceMessages,
   type PretableTelemetry,
 } from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
 import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
+import { Button } from "../ui/button"
 
 /** Row projection handed to pretable — a plain bag so it satisfies `PretableRow`
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
@@ -106,6 +112,50 @@ const CELL_CLASS: Partial<Record<string, string>> = {
   confidence: "tabular-nums",
 }
 
+/**
+ * Browse sends status/kind to the server, so the engine must DISPLAY the funnel
+ * state without re-applying it — and `resultMeta.total` is silently ignored (with a
+ * dev warning) under engine filter authority, so external authority is what makes
+ * the honest total reachable at all.
+ *
+ * Sort is external AND the browse columns are non-sortable: leaving sort on
+ * "engine" would sort a server-selected window locally, which presents the wrong
+ * SAMPLE under a truthful-looking `aria-sort`, while external sort without an
+ * `orderBy` in the request would paint a header arrow that does nothing. Sorting
+ * comes back with server ordering.
+ */
+const SERVER_PROCESSING: PretableProcessingOptions = { filter: "external", sort: "external" }
+
+const BROWSE_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
+  ...column,
+  sortable: false,
+}))
+
+/** Enough room for a loading/empty/error block to be legible when the body holds
+ *  no rows to give the viewport its height. */
+const MIN_BODY_STATE_PX = 160
+
+/** Lifecycle copy. `emptyStateMessage` is NOT here — filtered-empty and
+ *  unfiltered-empty are different answers, and only the caller knows which. */
+const BROWSE_MESSAGES: PretableSurfaceMessages = {
+  loadingStateMessage: () => "Loading memories…",
+  dataErrorAnnouncement: ({ message }) =>
+    message === undefined ? "Could not load memories." : `Could not load memories: ${message}`,
+  staleAnnouncement: () => "Updating results…",
+  focusedRowRemovedAnnouncement: () => "The focused memory was removed.",
+  resultsAnnouncement: ({ loaded, total, added, scope }) => {
+    const head =
+      scope === "all" || total.kind !== "exact"
+        ? `${loaded.toLocaleString()} loaded`
+        : `${loaded.toLocaleString()} loaded of ${total.count.toLocaleString()} matching`
+    return added === undefined ? head : `Loaded ${added.toLocaleString()} more. ${head}.`
+  },
+  moreRowsBoundaryAnnouncement: ({ loadedCount, total }) =>
+    total === undefined
+      ? `End of the ${loadedCount.toLocaleString()} loaded memories.`
+      : `End of the ${loadedCount.toLocaleString()} loaded memories, of ${total.toLocaleString()} matching.`,
+}
+
 function statusClass(status: MemoryStatus): string {
   if (status === "candidate") return "bg-amber-50"
   if (status === "superseded") return "text-zinc-400 line-through"
@@ -142,6 +192,10 @@ export function MemoryGrid({
   groupByNamespace = false,
   filters,
   onFiltersChange,
+  dataState,
+  resultMeta,
+  emptyMessage,
+  onRetry,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
@@ -157,6 +211,20 @@ export function MemoryGrid({
    *  column filtering — the grouped search results filter nothing. */
   filters?: Record<string, ColumnFilter>
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
+  /** Supply to turn lifecycle presentation ON: body blocks, the phase attribute,
+   *  phase announcements, and external processing authority. Omit it — as the
+   *  search results do — and the grid behaves exactly as it did before. */
+  dataState?: PretableDataState
+  /** The matching population and the dataset identity, always for the FULFILLED
+   *  revision. */
+  resultMeta?: PretableResultMeta
+  /** Body copy for the empty block. "Nothing stored" and "nothing matches what you
+   *  asked for" are different answers; only the caller knows which applies. */
+  emptyMessage?: string
+  /** Retry affordance for the error block. The design routes it through the
+   *  body-state slot rather than a second banner, so exactly one retry control is
+   *  ever on screen. */
+  onRetry?: () => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -176,21 +244,69 @@ export function MemoryGrid({
     setContentHeight(telemetry.totalHeight)
   }, [])
   const density = getDensityHeights()
-  const viewportHeight = Math.min(
-    (contentHeight ?? rows.length * density.rowHeight) + density.headerHeight,
-    MAX_VIEWPORT_PX,
+  const viewportHeight = Math.max(
+    Math.min(
+      (contentHeight ?? rows.length * density.rowHeight) + density.headerHeight,
+      MAX_VIEWPORT_PX,
+    ),
+    dataState !== undefined && rows.length === 0 ? MIN_BODY_STATE_PX : 0,
+  )
+
+  const messages = useMemo<PretableSurfaceMessages>(
+    () => ({
+      ...BROWSE_MESSAGES,
+      emptyStateMessage: () => emptyMessage ?? "No memories.",
+    }),
+    [emptyMessage],
   )
 
   return (
     <PretableSurface<GridRow>
       ariaLabel="Memories"
-      columns={COLUMNS}
+      columns={dataState === undefined ? COLUMNS : BROWSE_COLUMNS}
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}
       // One controlled `state`: a second `state` prop would clobber the first,
       // silently ungrouping the moment a filter was applied.
       state={surfaceState}
+      // Spread-or-omit rather than `prop={undefined}`: `exactOptionalPropertyTypes`
+      // rejects an explicit undefined, and `dataState` has NO default — omitting it
+      // turns lifecycle presentation entirely off.
+      {...(dataState === undefined ? {} : { dataState, processing: SERVER_PROCESSING, messages })}
+      {...(resultMeta === undefined ? {} : { resultMeta })}
+      {...(dataState === undefined
+        ? {}
+        : {
+            renderBodyState: ({
+              kind,
+              errorMessage,
+            }: {
+              kind: PretableBodyStateKind
+              errorMessage?: string
+            }) =>
+              kind === "loading" ? (
+                <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+                  Loading memories…
+                </p>
+              ) : kind === "empty" ? (
+                <p data-testid="browse-empty" className="p-4 text-sm text-zinc-400">
+                  {emptyMessage ?? "No memories."}
+                </p>
+              ) : (
+                <div
+                  data-testid="browse-error"
+                  className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                >
+                  <span>{errorMessage ?? "Could not load memories."}</span>
+                  {onRetry ? (
+                    <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
+                      Retry
+                    </Button>
+                  ) : null}
+                </div>
+              ),
+          })}
       {...(onTickedChange
         ? {
             rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
