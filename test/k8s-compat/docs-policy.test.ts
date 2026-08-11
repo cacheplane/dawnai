@@ -27,6 +27,7 @@ const policyDocumentation = ["chart", "package", "website", "bundled"] as const
 const commandDocumentation = [...policyDocumentation, "contributors"] as const
 const compatibilityDisclaimer =
   "Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers."
+const sentenceSegmenter = new Intl.Segmenter("en", { granularity: "sentence" })
 
 async function loadDocumentation(): Promise<Documentation> {
   const entries = await Promise.all(
@@ -48,6 +49,30 @@ function proseText(source: string): string {
     .replaceAll(/\s+/g, " ")
 }
 
+function normalizedProseStatements(source: string): readonly string[] {
+  const statements: string[] = []
+  const paragraphs = markdownText(source)
+    .replaceAll(/\r\n?/g, "\n")
+    .split(/\n\s*\n/)
+
+  for (const paragraph of paragraphs) {
+    const blocks = paragraph.split(/\n(?=\s*(?:(?:[-*+]|\d+\.)\s+|\|))/)
+    for (const block of blocks) {
+      const normalized = block
+        .replaceAll(/^\s*(?:#{1,6}|>)\s?/gm, "")
+        .replace(/^\s*(?:[-*+]|\d+\.)\s+/, "")
+        .replaceAll(/\s+/g, " ")
+        .trim()
+      for (const { segment } of sentenceSegmenter.segment(normalized)) {
+        const statement = segment.trim()
+        if (statement) statements.push(statement)
+      }
+    }
+  }
+
+  return statements
+}
+
 function calicoVersion(policy: CompatibilityPolicy): string {
   const versions = new Set(
     policy.calico.images.map(({ source }) => /:(v\d+\.\d+\.\d+)$/.exec(source)?.[1]),
@@ -64,17 +89,14 @@ function portableCommand(policy: CompatibilityPolicy): string {
 }
 
 function makesUnsupportedCompatibilityClaim(source: string): boolean {
-  const text = markdownText(source).trim()
+  const text = markdownText(source).replaceAll(/\s+/g, " ").trim()
   if (text === compatibilityDisclaimer) return false
-  const namesKindEvidence = /\bKind(?:\/Calico)?(?:\s+(?:coverage|evidence|suite|tests?))?\b/i.test(
-    text,
-  )
   const makesClaim = /\b(?:certif(?:y|ies|ied|ication)|proves?|supports?|guarantees?)\b/i.test(text)
   const namesUnsupportedScope =
     /\b(?:managed (?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)|(?:arbitrary|other|every|all)\s+(?:CNIs?|storage drivers?|managed clusters?)|storage drivers?)\b/i.test(
       text,
     )
-  return namesKindEvidence && makesClaim && namesUnsupportedScope
+  return makesClaim && namesUnsupportedScope
 }
 
 describe("Kubernetes compatibility documentation policy", () => {
@@ -163,30 +185,40 @@ describe("Kubernetes compatibility documentation policy", () => {
     }
 
     for (const [name, source] of Object.entries(documentation)) {
-      for (const line of markdownText(source).split("\n")) {
+      for (const statement of normalizedProseStatements(source)) {
         expect(
-          makesUnsupportedCompatibilityClaim(line),
-          `${name} contains an unsupported managed-Kubernetes, CNI, or storage claim: ${line.trim()}`,
+          makesUnsupportedCompatibilityClaim(statement),
+          `${name} contains an unsupported managed-Kubernetes, CNI, or storage claim: ${statement}`,
         ).toBe(false)
       }
     }
   })
 
   test.each([
+    "Dawn certifies managed Kubernetes services.",
+    `Kind coverage proves compatibility across all
+managed Kubernetes services.`,
     "Kind proves every managed cluster, CNI, and storage driver",
     "Kind supports managed Kubernetes services",
     "Kind guarantees compatibility for other CNIs",
     "Kind coverage proves storage driver compatibility",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
-    expect(makesUnsupportedCompatibilityClaim(claim)).toBe(true)
+    expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
 
   test.each([
     compatibilityDisclaimer,
+    `Dawn's Kind/Calico coverage does not certify managed Kubernetes services,
+other CNI implementations, or storage drivers.`,
     "A policy-enforcing CNI is required for NetworkPolicy egress controls.",
     "Dynamic ReadWriteOnce storage provisioning is required.",
+    "The compatibility suite tests Kind with Calico.",
+    "Kind coverage proves compatibility for the policy-pinned versions. Managed Kubernetes services require separate validation.",
+    `Kind coverage proves compatibility for the policy-pinned versions.
+
+Managed Kubernetes services require separate validation.`,
   ])("allows factual compatibility boundary: %s", (claim) => {
-    expect(makesUnsupportedCompatibilityClaim(claim)).toBe(false)
+    expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(false)
   })
 
   test("keeps chart values and NOTES aligned with operational prerequisites", async () => {
