@@ -11,7 +11,7 @@ const stats: MemoryStats = {
   bySourceType: { tool: 2 },
 }
 
-function record(id: string, over: Partial<MemoryRecord> = {}): MemoryRecord {
+function record(id: string): MemoryRecord {
   return {
     id,
     kind: "semantic",
@@ -24,7 +24,6 @@ function record(id: string, over: Partial<MemoryRecord> = {}): MemoryRecord {
     status: "active",
     createdAt: "2026-07-13T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
-    ...over,
   }
 }
 
@@ -34,6 +33,11 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   })
 }
+
+/** Counts go through the same Intl call the component does; a literal "5,432"
+ *  would pin the RUNNER's locale, and `test.env` cannot fix that because ICU
+ *  resolves the default locale before a test can set LC_ALL. */
+const TOTAL = 5432
 
 /** A fake server whose /list answer is swappable mid-test. */
 function stubServer(list: () => Response) {
@@ -55,11 +59,13 @@ afterEach(() => {
 
 describe("browse lifecycle", () => {
   it("flow 1: shows a loading block, then rows and the honest total", async () => {
-    stubServer(() => jsonResponse({ records: [record("a")], total: 5432 }))
+    stubServer(() => jsonResponse({ records: [record("a")], total: TOTAL }))
     render(<ListPage />)
-    expect(screen.getByTestId("browse-loading")).toBeDefined()
-    expect(await screen.findByText("content a")).toBeDefined()
-    expect(screen.getByTestId("browse-status").textContent).toContain("1 loaded of 5,432 matching")
+    expect(screen.queryByTestId("browse-loading")).not.toBeNull()
+    await screen.findByText("content a")
+    expect(screen.getByTestId("browse-status").textContent).toContain(
+      `1 loaded of ${TOTAL.toLocaleString()} matching`,
+    )
   })
 
   it("an empty result gets the empty block, with copy that knows about filters", async () => {
@@ -90,7 +96,7 @@ describe("browse lifecycle", () => {
 
     fail = false
     fireEvent.click(within(block).getByRole("button", { name: "Retry" }))
-    expect(await screen.findByText("content a")).toBeDefined()
+    await screen.findByText("content a")
     expect(screen.queryByTestId("browse-error")).toBeNull()
   })
 
@@ -98,17 +104,20 @@ describe("browse lifecycle", () => {
     let release: (() => void) | undefined
     const mock = stubServer(() => jsonResponse({ records: [record("a")], total: 1 }))
     render(<ListPage />)
-    expect(await screen.findByText("content a")).toBeDefined()
+    await screen.findByText("content a")
 
     // Hold the next answer so the stale window is observable.
     mock.mockImplementation(async (url: RequestInfo | URL) => {
       const u = String(url)
       if (u.includes("/api/memory/stats")) return jsonResponse(stats)
       if (u.includes("/api/memory/search")) return jsonResponse({ groups: [] })
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
-      return jsonResponse({ records: [record("z")], total: 1 })
+      if (u.includes("/api/memory/list")) {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return jsonResponse({ records: [record("z")], total: 1 })
+      }
+      return jsonResponse({ error: "not found" }, 404)
     })
 
     const rail = screen.getByRole("navigation")
@@ -117,14 +126,17 @@ describe("browse lifecycle", () => {
       expect(screen.getByTestId("browse-status").getAttribute("data-phase")).toBe("stale"),
     )
     // The OLD rows are still on screen, and marked as answering the old question.
-    expect(screen.getByText("content a")).toBeDefined()
+    expect(screen.queryByText("content a")).not.toBeNull()
 
     release?.()
-    expect(await screen.findByText("content z")).toBeDefined()
-    const listCalls = mock.mock.calls
-      .map((call) => String(call[0]))
-      .filter((u) => u.includes("/api/memory/list"))
-    expect(listCalls.some((u) => u.includes("namespace=route%3D%2Fnotes"))).toBe(true)
+    await screen.findByText("content z")
+    // Parsed, not substring-matched: a request for the sibling `route=/notes2`
+    // also contains the substring `namespace=route%3D%2Fnotes`.
+    const scoped = mock.mock.calls
+      .map((call) => new URL(String(call[0]), "http://localhost"))
+      .filter((u) => u.pathname.endsWith("/api/memory/list"))
+      .filter((u) => u.searchParams.get("namespace") === "route=/notes")
+    expect(scoped.length).toBeGreaterThan(0)
   })
 
   it("flow 8/9: a failing poll tick banners itself without disturbing the rows", async () => {
@@ -137,15 +149,18 @@ describe("browse lifecycle", () => {
           : jsonResponse({ records: [record("a")], total: 1 }),
       )
       render(<ListPage />)
-      await vi.waitFor(() => expect(screen.getByText("content a")).toBeDefined())
+      await vi.waitFor(() => screen.getByText("content a"))
 
       fail = true
       await vi.advanceTimersByTimeAsync(2100)
+      // Sibling banners render their message bare, so this prefix is the only thing
+      // naming a background refresh as the source of the failure.
       await vi.waitFor(() =>
-        expect(screen.getByTestId("error-refresh").textContent).toContain("network down"),
+        expect(screen.getByTestId("error-refresh").textContent).toContain(
+          "Refresh failed: network down",
+        ),
       )
-      // Rows survive a failed refresh, and the failure did NOT become the error block.
-      expect(screen.getByText("content a")).toBeDefined()
+      expect(screen.queryByText("content a")).not.toBeNull()
       expect(screen.queryByTestId("browse-error")).toBeNull()
 
       fail = false
@@ -159,7 +174,7 @@ describe("browse lifecycle", () => {
   it("shows an as-of instant once polling is paused", async () => {
     stubServer(() => jsonResponse({ records: [record("a")], total: 1 }))
     render(<ListPage />)
-    expect(await screen.findByText("content a")).toBeDefined()
+    await screen.findByText("content a")
     expect(screen.getByTestId("browse-status").textContent).not.toContain("Updated ")
 
     fireEvent.click(screen.getByLabelText("live"))
