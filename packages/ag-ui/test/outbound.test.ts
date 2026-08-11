@@ -1,11 +1,18 @@
-import { EventType, ToolCallResultEventSchema } from "@ag-ui/core"
+import { ActivitySnapshotEventSchema, EventType, ToolCallResultEventSchema } from "@ag-ui/core"
 import { describe, expect, test } from "vitest"
+import { DAWN_PLAN_ACTIVITY_TYPE, DAWN_SUBAGENT_ACTIVITY_TYPE } from "../src/activities.ts"
 import { createCounterIdFactory } from "../src/ids.js"
 import { toAguiEvents } from "../src/outbound.js"
 import { encodeAgUiSse } from "../src/sse.js"
 import type { DawnAgentStreamChunk } from "../src/types.js"
 
 const CTX = { threadId: "th-1", runId: "rn-1" }
+const CHILD = {
+  call_id: "call-1",
+  subagent: "researcher",
+  route_id: "/research#researcher",
+  depth: 1,
+} as const
 
 async function collect(chunks: DawnAgentStreamChunk[]) {
   const out = []
@@ -118,7 +125,9 @@ describe("toAguiEvents", () => {
       { type: "tool_call", data: { id: "run-function", name: "echo", input: () => undefined } },
       { type: "done", data: {} },
     ])
-    const args = events.filter((e) => e.type === EventType.TOOL_CALL_ARGS) as Array<{ delta: string }>
+    const args = events.filter((e) => e.type === EventType.TOOL_CALL_ARGS) as Array<{
+      delta: string
+    }>
     expect(args.map((e) => e.delta)).toEqual(["{}", "{}"])
   })
 
@@ -144,7 +153,7 @@ describe("toAguiEvents", () => {
   test("unknown non-token chunks flush an open text message before being ignored", async () => {
     const events = await collect([
       { type: "token", data: "hi" },
-      { type: "plan_update", data: {} },
+      { type: "capability.unknown", data: { arbitrary: true } },
       { type: "token", data: "again" },
       { type: "done", data: {} },
     ])
@@ -158,6 +167,178 @@ describe("toAguiEvents", () => {
       EventType.TEXT_MESSAGE_END,
       EventType.RUN_FINISHED,
     ])
+  })
+
+  test("plan activity does not flush an open text message", async () => {
+    const todos = [{ content: "Search the corpus", status: "in_progress" }] as const
+    const events = await collect([
+      { type: "token", data: "before" },
+      { type: "plan_update", data: { todos } },
+      { type: "token", data: "after" },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ])
+    const activity = events.find((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
+    expect(ActivitySnapshotEventSchema.parse(activity)).toEqual({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "dawn:plan:rn-1",
+      activityType: DAWN_PLAN_ACTIVITY_TYPE,
+      replace: true,
+      content: { todos },
+    })
+    expect(events.filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)).toMatchObject([
+      { messageId: "msg-1", delta: "before" },
+      { messageId: "msg-1", delta: "after" },
+    ])
+  })
+
+  test("malformed recognized plan emits no activity, text flush, or run error", async () => {
+    const events = await collect([
+      { type: "token", data: "before" },
+      { type: "plan_update", data: { todos: [{ content: "invalid", status: "unknown" }] } },
+      { type: "token", data: "after" },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ])
+    expect(events.filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)).toEqual([])
+    expect(events.filter((event) => event.type === EventType.RUN_ERROR)).toEqual([])
+  })
+
+  test("subagent activity exposes only allowlisted progress and never child content", async () => {
+    const childTodos = [{ content: "Read the source", status: "in_progress" }] as const
+    const events = await collect([
+      { type: "token", data: "root-before" },
+      { type: "subagent.start", data: CHILD },
+      { type: "subagent.plan_update", data: { ...CHILD, todos: childTodos } },
+      {
+        type: "subagent.tool_call",
+        data: {
+          ...CHILD,
+          id: "child-tool-1",
+          tool: "readDoc",
+          input: "secret-input",
+        },
+      },
+      {
+        type: "subagent.tool_result",
+        data: { ...CHILD, id: "child-tool-1", output: "secret-output" },
+      },
+      { type: "subagent.message", data: { ...CHILD, content: "secret-child-prose" } },
+      { type: "subagent.end", data: { ...CHILD, final_message: "secret-final" } },
+      { type: "token", data: "root-after" },
+      { type: "done" },
+    ])
+
+    const activities = events
+      .filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
+      .map((event) => ActivitySnapshotEventSchema.parse(event))
+    expect(activities).toEqual([
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "dawn:subagent:call-1",
+        activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+        replace: true,
+        content: {
+          name: "researcher",
+          depth: 1,
+          status: "running",
+          tools: [],
+          totalToolCount: 0,
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "dawn:subagent:call-1",
+        activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+        replace: true,
+        content: {
+          name: "researcher",
+          depth: 1,
+          status: "running",
+          todos: childTodos,
+          tools: [],
+          totalToolCount: 0,
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "dawn:subagent:call-1",
+        activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+        replace: true,
+        content: {
+          name: "researcher",
+          depth: 1,
+          status: "running",
+          todos: childTodos,
+          tools: [{ name: "readDoc", status: "running" }],
+          totalToolCount: 1,
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "dawn:subagent:call-1",
+        activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+        replace: true,
+        content: {
+          name: "researcher",
+          depth: 1,
+          status: "running",
+          todos: childTodos,
+          tools: [{ name: "readDoc", status: "completed" }],
+          totalToolCount: 1,
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "dawn:subagent:call-1",
+        activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+        replace: true,
+        content: {
+          name: "researcher",
+          depth: 1,
+          status: "completed",
+          todos: childTodos,
+          tools: [{ name: "readDoc", status: "completed" }],
+          totalToolCount: 1,
+        },
+      },
+    ])
+
+    const serializedContent = JSON.stringify(activities.map((activity) => activity.content))
+    for (const secret of [
+      "secret-input",
+      "secret-output",
+      "secret-child-prose",
+      "secret-final",
+      CHILD.call_id,
+      CHILD.route_id,
+      "child-tool-1",
+    ]) {
+      expect(serializedContent).not.toContain(secret)
+    }
+    const rootText = events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => event.delta)
+      .join("")
+    expect(rootText).toBe("root-beforeroot-after")
+    expect(rootText).not.toMatch(/secret-input|secret-output|secret-child-prose|secret-final/)
   })
 
   test("repeated calls to the same tool get distinct toolCallIds from their upstream ids", async () => {
@@ -178,7 +359,9 @@ describe("toAguiEvents", () => {
       { type: "tool_result", data: { name: "greet", output: "again" } },
       { type: "done", data: {} },
     ])
-    const starts = events.filter((e) => e.type === EventType.TOOL_CALL_START) as Array<{ toolCallId: string }>
+    const starts = events.filter((e) => e.type === EventType.TOOL_CALL_START) as Array<{
+      toolCallId: string
+    }>
     const results = events.filter((e) => e.type === EventType.TOOL_CALL_RESULT) as Array<{
       toolCallId: string
       messageId: string
@@ -198,10 +381,149 @@ describe("toAguiEvents", () => {
       type: EventType.RUN_FINISHED,
       threadId: "th-1",
       runId: "rn-1",
-      outcome: { type: "interrupt", interrupts: [{ id: "perm-1", reason: "command", metadata: { interruptId: "perm-1", kind: "command" } }] },
+      outcome: {
+        type: "interrupt",
+        interrupts: [
+          { id: "perm-1", reason: "command", metadata: { interruptId: "perm-1", kind: "command" } },
+        ],
+      },
     })
     // exactly one RUN_FINISHED (done after interrupt was ignored)
     expect(events.filter((e) => e.type === EventType.RUN_FINISHED)).toHaveLength(1)
+  })
+
+  test("delegation approval interrupt before subagent start emits no activity", async () => {
+    const events = await collect([
+      { type: "interrupt", data: { interruptId: "delegate-1", kind: "tool" } },
+      { type: "subagent.start", data: CHILD },
+      { type: "done" },
+    ])
+
+    expect(events).toEqual([
+      { type: EventType.RUN_STARTED, threadId: "th-1", runId: "rn-1" },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        outcome: {
+          type: "interrupt",
+          interrupts: [
+            {
+              id: "delegate-1",
+              reason: "tool",
+              metadata: { interruptId: "delegate-1", kind: "tool" },
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  test("child-owned interrupt preserves one running activity and suppresses later child events", async () => {
+    const events = await collect([
+      { type: "subagent.start", data: CHILD },
+      { type: "interrupt", data: { interruptId: "child-approval", kind: "command" } },
+      {
+        type: "subagent.plan_update",
+        data: { ...CHILD, todos: [{ content: "private-late-plan", status: "pending" }] },
+      },
+      {
+        type: "subagent.tool_call",
+        data: { ...CHILD, id: "late-tool", tool: "lateTool", input: "private-late-input" },
+      },
+      { type: "subagent.end", data: { ...CHILD, final_message: "private-late-final" } },
+      { type: "done" },
+    ])
+
+    const activities = events.filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
+    expect(activities).toHaveLength(1)
+    expect(ActivitySnapshotEventSchema.parse(activities[0])).toEqual({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "dawn:subagent:call-1",
+      activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [],
+        totalToolCount: 0,
+      },
+    })
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_FINISHED,
+      threadId: "th-1",
+      runId: "rn-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: "child-approval",
+            reason: "command",
+            metadata: { interruptId: "child-approval", kind: "command" },
+          },
+        ],
+      },
+    })
+    expect(JSON.stringify(events)).not.toMatch(
+      /private-late-plan|private-late-input|private-late-final/,
+    )
+  })
+
+  test("resume replaces a subagent activity with fresh request-local state", async () => {
+    const firstRequest = await collect([
+      { type: "subagent.start", data: CHILD },
+      {
+        type: "subagent.plan_update",
+        data: { ...CHILD, todos: [{ content: "Old plan", status: "in_progress" }] },
+      },
+      {
+        type: "subagent.tool_call",
+        data: { ...CHILD, id: "old-tool", tool: "oldTool", input: "old-input" },
+      },
+      { type: "interrupt", data: { interruptId: "parked-child", kind: "command" } },
+      { type: "done" },
+    ])
+    const secondRequest = await collect([
+      { type: "subagent.start", data: CHILD },
+      { type: "subagent.end", data: { ...CHILD, final_message: "private-final" } },
+      { type: "done" },
+    ])
+
+    const firstActivities = firstRequest
+      .filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
+      .map((event) => ActivitySnapshotEventSchema.parse(event))
+    const secondActivities = secondRequest
+      .filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
+      .map((event) => ActivitySnapshotEventSchema.parse(event))
+    expect(firstActivities).toHaveLength(3)
+    expect(secondActivities).toHaveLength(2)
+    expect([...firstActivities, ...secondActivities].map((event) => event.messageId)).toEqual([
+      "dawn:subagent:call-1",
+      "dawn:subagent:call-1",
+      "dawn:subagent:call-1",
+      "dawn:subagent:call-1",
+      "dawn:subagent:call-1",
+    ])
+    expect(secondActivities.map((event) => event.content)).toEqual([
+      {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [],
+        totalToolCount: 0,
+      },
+      {
+        name: "researcher",
+        depth: 1,
+        status: "completed",
+        tools: [],
+        totalToolCount: 0,
+      },
+    ])
+    expect(JSON.stringify(secondActivities.map((event) => event.content))).not.toMatch(
+      /Old plan|oldTool|old-input|private-final/,
+    )
   })
 
   test("consecutive interrupts are accumulated in order before done", async () => {
@@ -335,7 +657,12 @@ describe("toAguiEvents", () => {
     const events = await collect([{ type: "done" }])
     expect(events).toEqual([
       { type: EventType.RUN_STARTED, threadId: "th-1", runId: "rn-1" },
-      { type: EventType.RUN_FINISHED, threadId: "th-1", runId: "rn-1", outcome: { type: "success" } },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        outcome: { type: "success" },
+      },
     ])
   })
 
