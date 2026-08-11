@@ -8,11 +8,13 @@ import { expect, test } from "./fixtures"
 import {
   asDrawn,
   expectDrawnRows,
+  expectDrawnRunAround,
   expectPhase,
   grid,
   liveRegionText,
   loadMore,
   openBrowse,
+  scrollGridTo,
   scrollTop,
   status,
 } from "./helpers"
@@ -31,17 +33,9 @@ function statusText(loaded: number, matching: number): string {
   return `${n(loaded)} loaded of ${n(matching)} matching`
 }
 
-async function scrollGridTo(page: Parameters<typeof grid>[0], offset: number): Promise<void> {
-  await grid(page).evaluate((node, top) => {
-    node.scrollTop = top
-  }, offset)
-}
-
 // D1-GRID-06, D1-DATA-07, D1-COUNT-01. The UI distinguishes LOADED records from
 // MATCHING records and can retrieve another window without losing what it holds.
 test.describe("scenario 5 — honest partial result", () => {
-  test.setTimeout(90_000)
-
   test("loaded count and matching total are separately stated, and load-more appends", async ({
     page,
     consoleErrors,
@@ -79,6 +73,11 @@ test.describe("scenario 5 — honest partial result", () => {
     await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE * 2, BROWSE_SEED_COUNT))
     await expectPhase(page, "idle")
     // Design §11: an append moves nothing, because the rows arrive BELOW the viewport.
+    //
+    // A single unretried snapshot, which the settling note on `rowIds` says is normally
+    // a race. Safe HERE for a reason that does not generalise: an append only grows
+    // `scrollHeight`, and the browser re-clamps `scrollTop` only when it shrinks. A
+    // scenario that asserts this shape after a REPLACE has to poll instead.
     expect(await scrollTop(page)).toBe(offsetBefore)
     // The announcement carries the DELTA and the SCOPE, not a bare number — asserted as
     // the whole sentence, since "400" alone appears in any count-shaped message.
@@ -90,16 +89,51 @@ test.describe("scenario 5 — honest partial result", () => {
         `Loaded ${n(BROWSE_PAGE_SIZE)} more. ${statusText(BROWSE_PAGE_SIZE * 2, BROWSE_SEED_COUNT)}.`,
       )
 
-    // What it HOLDS, not just what it counted: the extended window is the same order
-    // continued, so the head is unchanged and the second page follows the first. Read
-    // back at the top because the grid virtualizes — the rows this compares are only in
-    // the document while the viewport is over them.
+    // What it HOLDS, not just what it counted. Three reads, because the count channels
+    // above are all one channel: a page that incremented its own counter and dropped the
+    // records satisfies every assertion so far.
+    const both = asDrawn(order.slice(0, BROWSE_PAGE_SIZE * 2))
+
+    // The rows reached the GRID's model rather than only the page's chrome. Under
+    // grouping `aria-rowcount` IS the loaded model's size (the downgrade pinned above),
+    // so this is an independent witness to the same append and the only one that is not
+    // a number the status bar computed.
+    await expect(grid(page)).toHaveAttribute("aria-rowcount", String(both.length + 1))
+
+    // The head is UNCHANGED — an append, not a replace. This is all a read at the top
+    // can settle: the viewport draws ~19 rows and the one-window and two-window
+    // projections share a 54-row prefix, so it passes against either.
     await scrollGridTo(page, 0)
-    await expectDrawnRows(page, asDrawn(order.slice(0, BROWSE_PAGE_SIZE * 2)))
+    await expectDrawnRows(page, both)
+
+    // …and the second window CONTINUES the first, which is only testable AT THE SEAM.
+    // The seam is not at row 200: grouping files each arriving record under its own
+    // namespace, so window 2's rows land at the END OF THEIR GROUP and the first of them
+    // sits inside the first group. Taking it as "the first drawn row the append
+    // contributed" finds that position from the projection instead of naming a row.
+    //
+    // What this settles, exactly: the second window's RECORDS are resident, in the
+    // server's order. Residency is attributable to the click — the background refresh
+    // asks for a limit of the RESIDENT COUNT (`refreshWindow`), so a poll can re-anchor
+    // rows it already has but can never fetch a window the client did not page into.
+    // ORDER is attributable only for ~2 s: a refresh places its response wholesale at
+    // the front, so an append that put the right records in the wrong place is corrected
+    // by the next tick and is out of this scenario's reach. Pinning that needs the poll
+    // suppressed, which is scenario 7's apparatus, not this one's.
+    const appended = new Set(order.slice(BROWSE_PAGE_SIZE, BROWSE_PAGE_SIZE * 2))
+    const seam = both.find((id) => appended.has(id))
+    if (seam === undefined) throw new Error("the seed's second window contributes no drawn row")
+    await expectDrawnRunAround(page, both, seam)
   })
 
   test("load-more stops at the resident cap and says why", async ({ page, consoleErrors }) => {
     void consoleErrors
+    // Four sequential round-trips to the store, each gated on its own `expect` — so the
+    // worst case this test can legitimately reach is four times the 10 s expect budget
+    // plus the page load, which is over the file's 60 s default. Raised on THIS test
+    // only: the append test above makes one round-trip and gains nothing from a longer
+    // budget except a slower report when it genuinely hangs.
+    test.setTimeout(90_000)
     await openBrowse(page)
 
     // Progress is measured off the STATUS BAR, never off the DOM: the grid virtualizes,

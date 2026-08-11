@@ -76,6 +76,15 @@ export async function scrollTop(page: Page): Promise<number> {
   return grid(page).evaluate((node) => node.scrollTop)
 }
 
+/** The setter beside that getter. Kept together deliberately: the grid virtualizes, so
+ *  every claim about a row below the fold has to move the box first, and a private copy
+ *  of this in one spec is a copy the next scenario writes again. */
+export async function scrollGridTo(page: Page, offset: number): Promise<void> {
+  await grid(page).evaluate((node, top) => {
+    node.scrollTop = top
+  }, offset)
+}
+
 /** The single permanent polite region, portalled to document.body. */
 export async function liveRegionText(page: Page): Promise<string> {
   return page.locator("[data-pretable-live-region]").innerText()
@@ -195,6 +204,68 @@ export async function expectDrawnRows(page: Page, expected: readonly string[]): 
     expect(ids).toEqual(expected.slice(0, ids.length))
     // Bounded well under the test timeout: a genuinely wrong window would otherwise
     // retry for the full 60 s and report as a timeout rather than as a diff.
+  }).toPass({ timeout: 15_000 })
+}
+
+/** The vertical distance from one drawn row to the next, MEASURED rather than assumed.
+ *  Pretable takes its row height from the theme's density and applies the same one to
+ *  group headers, so a single pitch describes the whole model — but the number itself is
+ *  a rendering detail, and a literal here would silently aim at the wrong row the first
+ *  time that density changed. */
+async function rowPitchPx(page: Page): Promise<number> {
+  const tops = await grid(page)
+    .locator("[data-pretable-row-id]")
+    .evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).getBoundingClientRect().top))
+  const [first, second] = tops
+  if (first === undefined || second === undefined) {
+    throw new Error(`cannot measure a row pitch from ${tops.length} drawn row(s)`)
+  }
+  const pitch = second - first
+  if (pitch <= 0) throw new Error(`measured a non-positive row pitch (${pitch}px)`)
+  return pitch
+}
+
+/**
+ * The browse grid draws a contiguous run of `expected` with `anchorId` INSIDE it.
+ *
+ * The complement of `expectDrawnRows`, which compares against the HEAD of `expected` and
+ * so can only ever settle claims about the top of the model. Anything about a JOIN —
+ * that a second server window continues the first rather than replacing it — is
+ * invisible there: the viewport draws ~19 rows, and two projections that differ deep in
+ * the model still share a long prefix, so the head read passes against either one.
+ *
+ * Three separable claims, and the scenario needs all three: the drawn ids are a run of
+ * `expected` (so the ORDER is the expected one), the run reaches `anchorId` (so the rows
+ * under test are genuinely in the model — an anchor the model lacks cannot be drawn),
+ * and the run extends on BOTH sides of it (so a seam is bracketed rather than merely
+ * touched, which is what "around" is claiming). `anchorId` must therefore be an interior
+ * row; the head and the tail are `expectDrawnRows`' and a scroll-to-bottom's business.
+ *
+ * The scroll sits INSIDE the retry so a read taken before the virtualizer settled is
+ * re-driven rather than re-read at a position it has already left.
+ */
+export async function expectDrawnRunAround(
+  page: Page,
+  expected: readonly string[],
+  anchorId: string,
+): Promise<void> {
+  const index = expected.indexOf(anchorId)
+  expect(index, `"${anchorId}" is not in the expected projection`).toBeGreaterThan(0)
+  expect(index, `"${anchorId}" is the last expected row, so nothing follows it`).toBeLessThan(
+    expected.length - 1,
+  )
+  await expect(async () => {
+    await scrollGridTo(page, index * (await rowPitchPx(page)))
+    const ids = await rowIds(page)
+    expect(ids.length).toBeGreaterThanOrEqual(MIN_RENDERED_ROWS)
+    const head = ids[0]
+    const offset = head === undefined ? -1 : expected.indexOf(head)
+    expect(offset, `drawn row "${head}" is not in the expected projection`).toBeGreaterThanOrEqual(
+      0,
+    )
+    expect(ids).toEqual(expected.slice(offset, offset + ids.length))
+    expect(offset).toBeLessThan(index)
+    expect(offset + ids.length).toBeGreaterThan(index + 1)
   }).toPass({ timeout: 15_000 })
 }
 
