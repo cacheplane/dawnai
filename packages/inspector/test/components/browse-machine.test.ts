@@ -474,6 +474,23 @@ describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () 
     expect(settled.state.fulfilled?.total).toBe(5431)
   })
 
+  it("refuses a refresh response with nothing in flight instead of guessing its span", () => {
+    // The request's limit is the only record of how far this response reached, and
+    // either guess decides rule 3: too high drops a live tail, too low pins a stale one.
+    expect(() =>
+      browseReduce(
+        { ...loaded, inFlight: null },
+        {
+          type: "response",
+          revision: 1,
+          kind: "refresh",
+          page: { records: [record("a")], total: 5432 },
+          at: 2000,
+        },
+      ),
+    ).toThrow(/in flight/)
+  })
+
   it("a load-more response is appended with ids deduped", () => {
     const loading = browseReduce(loaded, { type: "load-more-requested" }).state
     const settled = browseReduce(loading, {

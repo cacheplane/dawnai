@@ -190,6 +190,20 @@ function withinCap(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
   return records.length <= BROWSE_RESIDENT_CAP ? records : records.slice(0, BROWSE_RESIDENT_CAP)
 }
 
+/** The store issues a continuation exactly when a window fills its limit, and this
+ *  event carries no continuation, so the span is re-derived against the request that
+ *  produced it — `inFlight` is the only place that limit is held. Single flight keeps
+ *  it populated until the response is applied, so a null here is a broken caller, not a
+ *  case with a defensible default: either guess decides rule 3, one by dropping a live
+ *  tail and the other by pinning a stale one. */
+function refreshFilledItsWindow(state: BrowseState, records: readonly MemoryRecord[]): boolean {
+  const issued = state.inFlight
+  if (issued === null) {
+    throw new Error("browse: a refresh response arrived with no request in flight")
+  }
+  return records.length >= issued.window.limit
+}
+
 /** Success clears only ITS OWN slot. */
 function clearedError(
   state: BrowseState,
@@ -338,12 +352,7 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
       const records = withinCap(
         event.kind === "refresh"
           ? reconcileRefreshedWindow(base, event.page.records, {
-              // The store issues a continuation exactly when a window fills its limit,
-              // and this event carries no continuation, so the span is re-derived
-              // against the request that produced it — still `inFlight` here, which is
-              // the only place that limit is held.
-              filled:
-                event.page.records.length >= (state.inFlight?.window.limit ?? BROWSE_PAGE_SIZE),
+              filled: refreshFilledItsWindow(state, event.page.records),
             })
           : event.kind === "load-more"
             ? dedupeById(base, event.page.records)
