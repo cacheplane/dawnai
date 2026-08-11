@@ -44,6 +44,11 @@ Also in this release:
   response lands, the total reads `—` rather than `0`.
 - The grid is no longer remounted to clear a selection; a `datasetKey` pivot clears
   selection, focus and group expansion in the same emit that lands the new rows.
+- The bulk action bar is withheld whenever the rows on screen answer a previous
+  query — while the new one loads, and equally while it is failing and those rows
+  are all that survived. Approving or forgetting a selection formed under a
+  question the grid has stopped answering is the ambiguity this release exists to
+  remove; the bar returns once the rows are the answer to what was asked.
 - While a search is running, browse-only controls are marked `aria-disabled` and stay
   focusable with an `aria-describedby` explanation, rather than staying active and
   being silently ignored.

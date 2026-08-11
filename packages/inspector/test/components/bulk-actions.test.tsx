@@ -292,6 +292,68 @@ describe("bulk actions", () => {
       expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false"),
     )
     expect(screen.queryByTestId("bulk-bar")).toBeNull()
+
+    // …and the gate REOPENS once the rows on screen answer the desired query: a
+    // withholding rule that never lifts is indistinguishable from a broken bar, so
+    // the success path has to end with the bar back.
+    fireEvent.click(checkboxFor(container, "c1"))
+    expect(await screen.findByTestId("bulk-bar")).toBeDefined()
+  })
+
+  it("withholds the bar when the new query's fetch FAILS under the previous rows", async () => {
+    // The failure path of the same window. The rows a failed query change leaves on
+    // screen are the PREVIOUS query's — the grid says so itself with the error strip
+    // — and the selection survives with them, because the engine pivots on the
+    // fulfilled revision and nothing new was fulfilled. Gating on the phase NAME
+    // misses this: the phase left `stale` for `error` while the rows did not move.
+    let failList = false
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url)
+        if (init?.method === "POST") return jsonResponse({ ok: true })
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          return failList
+            ? jsonResponse({ error: "network down" }, 503)
+            : jsonResponse({ records, total: records.length, continuation: null })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    const { container } = render(<ListPage />)
+    await screen.findByText("first candidate")
+    fireEvent.click(checkboxFor(container, "c1"))
+    expect(await screen.findByTestId("bulk-bar")).toBeDefined()
+
+    failList = true
+    fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
+    const dialog = await screen.findByRole("dialog", { name: "Filter status" })
+    const box = within(dialog)
+      .getAllByRole("checkbox")
+      .find((cb) => cb.closest("label")?.textContent?.includes("candidate"))
+    if (!box) throw new Error("no candidate option")
+    fireEvent.click(box)
+
+    // The strip — not the block — is what pins the case: it is the grid's own claim
+    // that rows survived the failure and still answer the previous question.
+    const strip = await screen.findByTestId("browse-error-strip")
+    expect(screen.getByText("first candidate")).toBeDefined()
+    expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("true")
+    expect(screen.queryByTestId("bulk-bar")).toBeNull()
+
+    // Recovery re-opens it: the retry answers the DESIRED query, so the rows on
+    // screen are its rows and a selection formed over them is unambiguous again.
+    failList = false
+    fireEvent.click(within(strip).getByRole("button", { name: "Retry" }))
+    // The strip going is NOT the answer landing — it goes the moment the retry is in
+    // flight, which is still `stale` over the same rows. The tick dropping is: the
+    // engine only pivots `datasetKey` on the FULFILLED revision.
+    await vi.waitFor(() =>
+      expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false"),
+    )
+    fireEvent.click(checkboxFor(container, "c1"))
+    expect(await screen.findByTestId("bulk-bar")).toBeDefined()
   })
 
   it("clears whole rows even when a cell was clicked first", async () => {

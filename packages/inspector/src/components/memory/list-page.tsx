@@ -638,8 +638,12 @@ export function ListPage() {
       </div>
       {/* Acting on rows a newly-desired query is about to replace is exactly the
           ambiguity this design bans, so the bar is withheld while the visible
-          rows answer the previous query. */}
-      {ticked.length > 0 && browsePhase !== "stale" ? (
+          rows answer the previous query. Gated on the ROWS, never on the phase
+          name: a query change whose fetch FAILS leaves `stale` for `error` with
+          those same rows still on screen (the grid bands them with the error
+          strip), and a phase test would hand the bar back at exactly the moment
+          the user has least reason to trust what they are looking at. */}
+      {ticked.length > 0 && !browse.rowsAreStale ? (
         <BulkBar
           ticked={ticked}
           records={browse.rows}

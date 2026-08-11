@@ -126,6 +126,26 @@ export function browseCanLoadMore(state: BrowseState): boolean {
   return browseHasMore(state) && browseResidentCount(state) < BROWSE_RESIDENT_CAP
 }
 
+/** Whether the records ON SCREEN answer a revision other than the desired one.
+ *
+ *  TWO phases satisfy this — `stale` and `error` with rows — because the phase splits
+ *  them by whether an attempt is still running, which is a fact about the REQUEST. The
+ *  rows are identical either way: a query change keeps the previous revision's records
+ *  (see `query-changed`), and a failed initial fetch for the new revision fulfils
+ *  nothing, so they stay. A rule about what the user is looking at — a destructive
+ *  action over a selection formed under the previous query — must ask this and never a
+ *  phase name, or it lifts the moment the refetch fails.
+ *
+ *  Empty records are excluded so the name stays literally true: with nothing rendered
+ *  there is nothing on screen to be answering the wrong question — those states are
+ *  `loading`, or the `error` that has no rows to keep. What is left is exactly `stale`
+ *  plus `error`-with-rows, and browse-machine.test pins one of each alongside the two
+ *  `false` cases so the flag can never quietly become a synonym for "failed". */
+export function browseRowsAreStale(state: BrowseState): boolean {
+  const fulfilled = state.fulfilled
+  return fulfilled !== null && fulfilled.revision !== state.revision && fulfilled.records.length > 0
+}
+
 /**
  * Phase derivation, mechanical.
  *

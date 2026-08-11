@@ -10,6 +10,7 @@ import {
   browseHasMore,
   browsePhase,
   browseReduce,
+  browseRowsAreStale,
   INITIAL_BROWSE_STATE,
 } from "../../src/browse/browse-machine"
 
@@ -253,6 +254,38 @@ describe("browse machine — the phase table", () => {
     )
     expect(browsePhase(failedWarm)).toBe("error")
     expect(failedWarm.fulfilled?.records).toHaveLength(1)
+  })
+
+  it("reports rows as stale across BOTH phases the previous revision survives into", () => {
+    const pending = apply(loaded, { type: "query-changed", datasetKey: KEY_B })
+    expect(browsePhase(pending)).toBe("stale")
+    expect(browseRowsAreStale(pending)).toBe(true)
+
+    // The same rows, one failure later. The phase moved and the picture did not,
+    // which is the whole reason a consumer gating on what is DISPLAYED cannot read
+    // the phase name.
+    const failedWarm = apply(pending, {
+      type: "failure",
+      revision: 2,
+      kind: "initial",
+      message: "boom",
+    })
+    expect(browsePhase(failedWarm)).toBe("error")
+    expect(failedWarm.fulfilled?.records).toBe(pending.fulfilled?.records)
+    expect(browseRowsAreStale(failedWarm)).toBe(true)
+
+    // False everywhere the rows do answer the desired revision — including the
+    // `error` that has no rows at all, so the flag never stands in for "failed".
+    expect(browseRowsAreStale(loaded)).toBe(false)
+    expect(
+      browseRowsAreStale(
+        apply(
+          INITIAL_BROWSE_STATE,
+          { type: "query-changed", datasetKey: KEY_A },
+          { type: "failure", revision: 1, kind: "initial", message: "boom" },
+        ),
+      ),
+    ).toBe(false)
   })
 
   it("a retry in flight is a fresh attempt, not the held failure", () => {

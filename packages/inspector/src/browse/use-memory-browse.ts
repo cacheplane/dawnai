@@ -12,6 +12,7 @@ import {
   browseHasMore,
   browsePhase,
   browseReduce,
+  browseRowsAreStale,
   INITIAL_BROWSE_STATE,
 } from "./browse-machine"
 import {
@@ -73,6 +74,10 @@ export interface UseMemoryBrowseInput {
 
 export interface UseMemoryBrowseResult {
   readonly rows: readonly MemoryRecord[]
+  /** `rows` answer a revision other than the desired one. Gate anything that ACTS on
+   *  what is displayed on this, not on `dataState.phase`: `stale` and `error`-with-rows
+   *  are the same picture, and only this one covers both. */
+  readonly rowsAreStale: boolean
   readonly dataState: PretableDataState
   readonly resultMeta: PretableResultMeta
   /** Matching population for the FULFILLED revision, or null when nothing is
@@ -280,6 +285,7 @@ export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseRes
 
   return {
     rows: fulfilled?.records ?? NO_RECORDS,
+    rowsAreStale: browseRowsAreStale(state),
     dataState,
     resultMeta,
     total: fulfilled?.total ?? null,
