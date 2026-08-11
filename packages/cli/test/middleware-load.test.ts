@@ -3,8 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
-
 import { loadMiddleware } from "../src/lib/dev/middleware-node.js"
+import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 
 const roots: string[] = []
 
@@ -158,5 +158,45 @@ describe("loadMiddleware — a middleware file that binds nothing", () => {
     await expect(loadMiddleware(root)).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(String(warn.mock.calls[0]?.[0])).toContain(file)
+  })
+})
+
+/**
+ * The load-bearing claim of the design: this is a BOOT failure, not a loader
+ * detail. Asserting it at `createRuntimeFetchHandler` is what proves the
+ * rejection actually reaches the caller that would otherwise have started
+ * serving — `dawn dev`'s child, `dawn start`, and a built `server.mjs` all
+ * await this one function.
+ */
+describe("the runtime boot", () => {
+  async function bootableApp(files: Readonly<Record<string, string>> = {}): Promise<string> {
+    const root = await makeAppRoot()
+    const all: Record<string, string> = {
+      "dawn.config.ts": "export default {}\n",
+      "package.json": '{ "name": "middleware-boot-fixture", "type": "module" }\n',
+      "src/app/probe/index.ts":
+        "export const workflow = async (_input: unknown) => ({ ok: true })\n",
+      ...files,
+    }
+    for (const [rel, body] of Object.entries(all)) {
+      const filePath = join(root, rel)
+      await mkdir(join(filePath, ".."), { recursive: true })
+      await writeFile(filePath, body, "utf8")
+    }
+    return root
+  }
+
+  it("refuses to start when the middleware file cannot be imported", async () => {
+    const root = await bootableApp({ "src/middleware.ts": 'throw new Error("MIDDLEWARE_BOOM")\n' })
+
+    await expect(createRuntimeFetchHandler({ appRoot: root })).rejects.toThrow(/MIDDLEWARE_BOOM/)
+  })
+
+  it("starts normally when the app has no middleware file at all", async () => {
+    const root = await bootableApp()
+
+    const handler = await createRuntimeFetchHandler({ appRoot: root })
+    expect(handler.fetch).toBeTypeOf("function")
+    await handler.close()
   })
 })
