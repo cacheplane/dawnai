@@ -73,8 +73,7 @@ task may assume an exported variable or function survived a previous command:
 cd /Users/blove/.codex/worktrees/b5f4/dawn
 export NODE24_BIN=/Users/blove/.nvm/versions/node/v24.19.0/bin
 export PATH="$NODE24_BIN:$PATH"
-RUN_ID="$(node -e 'const {readFileSync}=require("node:fs"); process.stdout.write(readFileSync("artifacts/testing/dedicated-infrastructure/active-run-id", "utf8").trim())')"
-export RUN_ROOT="$PWD/artifacts/testing/dedicated-infrastructure/$RUN_ID"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json", "utf8")); process.stdout.write(active.runRoot)')"
 test -f "$RUN_ROOT/state.json"
 test -f "$RUN_ROOT/infra-runner.ts"
 ```
@@ -106,15 +105,32 @@ type FailureClass =
 type CleanupStatus = "passed" | "failed" | "not-run"
 type AttemptId = "attempt0" | "retry1"
 
+interface CommandRecord {
+  readonly stage: string
+  readonly executable: string
+  readonly args: readonly string[]
+  readonly startedAt: string
+  readonly finishedAt: string
+  readonly exitCode: number
+  readonly timedOut: boolean
+}
+
 interface AttemptRecord {
   readonly id: AttemptId
   readonly resource: string
+  readonly context: string | null
   readonly startedAt: string
   readonly finishedAt: string
   readonly exitCode: number
   readonly classification: FailureClass
   readonly cleanup: Exclude<CleanupStatus, "not-run">
   readonly diagnostics: string | null
+  readonly diagnosticsSha256: string | null
+  readonly nativeArtifact: string | null
+  readonly nativeArtifactSha256: string | null
+  readonly retryEligible: boolean
+  readonly retryReason: string | null
+  readonly commands: readonly CommandRecord[]
 }
 
 interface LaneResult {
@@ -133,6 +149,52 @@ interface LaneResult {
   readonly hostedEquivalent?: string
   readonly attempts: readonly AttemptRecord[]
 }
+
+interface RetainedRecord {
+  readonly lane: "focused-1.35" | "focused-1.34" | "focused-1.36"
+  readonly resource: string
+  readonly startedAt: string
+  readonly finishedAt: string | null
+  readonly status: "running" | "failed" | "cleaned"
+  readonly diagnostics: string | null
+  readonly cleanup: CleanupStatus
+}
+
+interface RunState {
+  readonly schemaVersion: 1
+  readonly runId: string
+  readonly runToken: string
+  readonly ownerNonce: string
+  readonly repoRoot: string
+  readonly runRoot: string
+  readonly toolRoot: string
+  readonly kubeconfig: string
+  readonly createdAt: string
+  readonly finalizedAt: string | null
+  readonly policySha256: string
+  readonly tools: Readonly<Record<string, {
+    readonly version: string
+    readonly path: string
+    readonly sha256: string | null
+  }>>
+  readonly kubernetesBootstrap: {
+    readonly status: "pending" | "ready" | "failed"
+    readonly reason: string | null
+  }
+  readonly baseline: {
+    readonly kindClusters: readonly string[]
+    readonly fixedContainers: Readonly<Record<string, string>>
+    readonly fixedNetworks: Readonly<Record<string, string>>
+    readonly sandboxContainers: Readonly<Record<string, string>>
+    readonly sandboxVolumes: readonly string[]
+    readonly fixedImages: Readonly<Record<string, string>>
+  }
+  readonly ownedClusters: readonly string[]
+  readonly ownedImages: Readonly<Record<string, string>>
+  readonly activeRegistryPid: number | null
+  readonly results: readonly LaneResult[]
+  readonly retained: readonly RetainedRecord[]
+}
 ```
 
 The orchestrator atomically rewrites `state.json`, `results.json`, and
@@ -148,11 +210,19 @@ Consistency rules:
 - `blocked`: null exit, `bootstrap/environment`, cleanup `not-run`, no
   attempts, and nonempty `blockedBy` plus `hostedEquivalent`.
 - `retry1`: exactly two attempts named `attempt0` and `retry1`; the first
-  classification is retry-eligible; the second resource uses the exact
-  `-retry1` suffix.
+  attempt records `retryEligible=true` and a nonempty reason. Kubernetes's
+  second resource uses the exact `-retry1` suffix. Docker remains
+  `docker-daemon` because it has no disposable resource name.
 - All timestamps are UTC ISO strings and `finishedAt >= startedAt`.
 - Kubernetes resource names match the run token and lane; Docker uses
   `docker-daemon`.
+
+`results.tsv` has this exact header and one escaped, single-line field per
+column (tabs/newlines in free text become spaces):
+
+```text
+lane\tstatus\tstarted_at\tfinished_at\texit_code\tclassification\tresource\ttool_versions\tnative_artifact\tcleanup\tretry\tblocked_by\thosted_equivalent
+```
 
 ---
 
@@ -196,7 +266,11 @@ Cover these scenarios:
 7. same-name replacement for app, mock, network, and sandbox container:
    revalidation detects the changed object ID and never deletes the replacement;
 8. post-adoption sandbox ID/label change: invalidate both sandbox claims and
-   delete neither the container nor its unlabelled volume.
+   delete neither the container nor its unlabelled volume; and
+9. a hanging diagnostic command and a hanging cleanup command: the watchdog
+   terminates each bounded command, the script itself exits within ten seconds,
+   diagnostic timeout still precedes cleanup, and cleanup timeout is reported
+   as failure rather than hanging.
 
 The fake must support these identity reads exactly:
 
@@ -224,6 +298,12 @@ handling and object-ID ownership.
 In `assert-docker.sh`:
 
 - require `docker`, `curl`, `jq`, `awk`, `grep`, `sed`, and `tr`;
+- add `run_bounded`, implemented with POSIX background processes: start the
+  requested command, start a watchdog that sleeps
+  `SMOKE_COMMAND_TIMEOUT_SECONDS` (default `30`), sends TERM, waits
+  `SMOKE_COMMAND_KILL_GRACE_SECONDS` (default `2`), then sends KILL; wait for
+  the command while capturing its status; stop/reap the watchdog; and return
+  the command status. Do not depend on GNU `timeout`;
 - install separate `HUP`, `INT`, `TERM`, and `EXIT` traps;
 - make signal traps set `SIGNAL_NAME` and exit `129`, `130`, or `143`;
 - make the EXIT trap preserve the original status unless validation/cleanup
@@ -245,6 +325,10 @@ In `assert-docker.sh`:
   changed label invalidates both sandbox claims;
 - capture bounded app/mock logs, exact sandbox inspect data, and at most 50
   read-only prefix namespace entries on every nonzero exit;
+- route every Docker inspect/log/removal used by ownership validation,
+  diagnostics, or cleanup through `run_bounded`. A timeout skips that target,
+  marks cleanup failed when applicable, and cannot suppress the original
+  diagnostic output;
 - after diagnostics, delete containers and the network by their recorded
   object IDs, not by names. Delete the exact sandbox volume name only while its
   sandbox ownership claim remains valid;
@@ -297,20 +381,33 @@ executes that broad hosted teardown block.
 
 Use Node 24 and a Node stdlib bootstrap (not `rm -rf` or a shell heredoc) to:
 
-1. verify the branch and repository root;
-2. generate `RUN_ID=<UTC basic timestamp>-<8 hex>` and `RUN_TOKEN=<8 hex>`;
-3. create `RUN_ROOT` mode `0700`;
-4. create `TOOL_ROOT` with
+1. verify the branch and canonical repository root;
+2. acquire the repository-global ignored
+   `artifacts/testing/dedicated-infrastructure/active-run.json` lease with
+   `open(path, "wx", 0o600)`. If it already exists, refuse to overwrite it.
+   A new run is allowed only after the referenced prior state says
+   `finalizedAt != null`, its tool root is absent, its baseline/resource audit
+   passes, and the prior lease has been explicitly removed by that run's
+   `cleanup` command;
+3. generate `RUN_ID=<UTC basic timestamp>-<8 hex>` and `RUN_TOKEN=<8 hex>`;
+4. create `RUN_ROOT` mode `0700`;
+5. create `TOOL_ROOT` with
    `mkdtemp(join(tmpdir(), "dawn-infra-tools-"))`;
-5. write a random ownership nonce and
+6. reserve `KUBECONFIG=$TOOL_ROOT/kubeconfig`, create it mode `0600`, and put
+   this exact path in the environment of every Kind, kubectl, Helm, and focused
+   harness child. Never inherit or merge the user's kubeconfig;
+7. write a random ownership nonce and
    `$TOOL_ROOT/.dawn-infra-owner.json` containing the run ID, nonce, repo root,
-   and canonical tool-root path;
-6. atomically write the initial state; and
-7. atomically write
-   `artifacts/testing/dedicated-infrastructure/active-run-id`.
+   canonical tool-root path, and kubeconfig path;
+8. atomically write the initial `RunState`; and
+9. finish the active lease document with run ID, nonce, run root, tool root,
+   state path, and creation time. A failure between lease creation and state
+   initialization leaves a fail-closed lease for manual inspection; it is never
+   silently replaced.
 
 This minimal state creation must succeed before any Kubernetes download. Verify
-both artifact paths are ignored with `git check-ignore`.
+the lease, run root, state, and runner paths are ignored with
+`git check-ignore`.
 
 - [ ] **Step 2: Implement the ignored orchestrator and its local tests**
 
@@ -323,6 +420,7 @@ pnpm exec tsx infra-runner.ts status [LaneId]
 pnpm exec tsx infra-runner.ts validate
 pnpm exec tsx infra-runner.ts cleanup
 pnpm exec tsx infra-runner.ts rerun-retained <focused LaneId>
+pnpm exec tsx infra-runner.ts cleanup-retained <focused LaneId>
 ```
 
 Implement with Node stdlib plus repository-installed packages only. Do not
@@ -360,14 +458,64 @@ Required primitives:
   expected temporary basename prefix, parent equal to `realpath(tmpdir())`,
   and an exact owner-marker match before `fs.rm({recursive:true})`.
 
+`rerun-retained` is legal only after that focused lane has a first-pass failed
+result. It creates one new exact `*-retain1` cluster, stores a `RetainedRecord`,
+and passes `--keep-on-failure` to the focused harness. It never changes the six
+first-pass result rows. `cleanup-retained` diagnoses and deletes that exact
+cluster, proves absence with a successful Kind listing, and changes the record
+to `cleaned`. Final validation rejects `running` or uncleaned retained records.
+
 SIGINT/SIGTERM handlers abort the active child process group and enter the same
 diagnostics/cleanup/result path. Every registry wait is capped at 180 seconds;
 registry shutdown is capped at ten seconds. Downloads are capped at two minutes,
 Kind create at six minutes, image build/pull/load at twenty minutes,
 kubectl/Helm at five minutes, and cluster cleanup at three minutes.
 
+Use this command policy exactly. `args` are argv elements, not a shell string;
+`<...>` values come only from validated policy/state fields. `eligible` means a
+retry is allowed only when the captured stderr/exit proves the named transient
+condition, never merely because the row says `yes`.
+
+| Stage | executable and args | outer timeout | failure class | retry eligible |
+|---|---|---:|---|---|
+| frozen install | `pnpm install --frozen-lockfile` | 20m | `bootstrap/environment` | no |
+| tool download | `curl --fail --show-error --silent --location --max-redirs 5 --proto =https --proto-redir =https <url> --output <owned-path>` | 2m | `bootstrap/environment` | transport/5xx only |
+| chart RBAC | `pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac` | 5m | `dawn-behavior` | no |
+| Kind create | `kind create cluster --name <cluster> --image <digest-image> [--config .github/kind/kind-calico.yaml] --wait 180s` | 6m | `cluster-setup` | transient create/pull only |
+| Calico prepare | `pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output <owned-manifest>` | 2m | checksum=`bootstrap/environment`; transport=`cluster-setup` | transport only |
+| Calico apply | `kubectl --context <context> apply --filename <owned-manifest>` | 5m | `cluster-setup` | transient API only |
+| Calico ready | `kubectl --context <context> -n kube-system rollout status daemonset/calico-node --timeout=180s`, then `kubectl --context <context> wait --for=condition=Ready nodes --all --timeout=180s` | 5m each | `cluster-setup` | transient readiness only |
+| focused harness | `pnpm verify:k8s:compat -- --target <minor> --context <context>` | 35m | `dawn-behavior` | no |
+| workspace build | `pnpm build` | 20m | `bootstrap/environment` | no |
+| image pull | `docker pull <digest-image>` | 20m | `bootstrap/environment` | registry transport only |
+| Kind image load | `kind load docker-image <image> --name <cluster>` | 20m | `cluster-setup` | transient load only |
+| registry | `pnpm exec tsx test/k8s-smoke/serve-registry.ts <owned-url-file>` | ready 3m; stop 10s | `bootstrap/environment` | startup transport only |
+| app image build | `sh test/k8s-smoke/build-image.sh <k8s-or-docker> <registry-url>` | 25m | `bootstrap/environment` | external pull/download only |
+| aimock build | `docker build --tag dawn-smoke-aimock:latest --file test/k8s-smoke/aimock/Dockerfile test/k8s-smoke` | 20m | `bootstrap/environment` | external pull only |
+| Helm install/uninstall | exact argv in Tasks 3 and 7 | 6m install; 3m uninstall | install=`dawn-behavior`; uninstall=`cleanup` | no |
+| Kubernetes assertion | `sh test/k8s-smoke/assert-k8s.sh` | 10m | `dawn-behavior` | no |
+| Docker assertion | `sh test/k8s-smoke/assert-docker.sh` | 10m | `dawn-behavior` | no |
+| diagnostic command | exact read-only command | 30s each | preserve primary class | no |
+| Kind delete | `kind delete cluster --name <owned-cluster>` | 3m | `cleanup` | no |
+
+Every child gets `cwd=repoRoot`, the explicit Node/tool `PATH`, and the isolated
+`KUBECONFIG`. Lane-specific environment is an allowlisted overlay:
+
+- focused: `DAWN_REQUIRE_HELM=1` only for chart-RBAC, then
+  `DAWN_TEST_K8S_CONTEXT=<context>` and `DAWN_K8S_TARGET=<minor>`;
+- Kubernetes E2E: `DAWN_TEST_SMOKE_E2E=1`, `KIND_CLUSTER=<cluster>`, and
+  `DAWN_TEST_K8S_CONTEXT=<context>`; and
+- Docker E2E: `DAWN_TEST_SMOKE_E2E=1`.
+
+The runner reads every image/version from the parsed policy and checks the
+policy file's SHA-256 against `RunState.policySha256` before each lane. It does
+not accept caller overrides for pins, timeouts, cluster names, contexts, or
+cleanup targets.
+
 The ignored tests use fake executables and temporary state to prove:
 
+- an existing global active-run lease prevents creation of a second run;
+- every Kubernetes child receives only the run-owned `KUBECONFIG`;
 - a failed Kind listing cannot establish absence or ownership;
 - a partial create is cleaned only when exact post-create observation proves
   ownership;
@@ -379,13 +527,19 @@ The ignored tests use fake executables and temporary state to prove:
 - a Kubernetes bootstrap block still allows `docker-e2e`;
 - foreign Docker prefix resources classify as
   `bootstrap/environment`, not `cleanup`; and
+- a failed fixed-tag build is inspected in `finally`, adopted by exact image ID,
+  and removed only if that ID still owns the tag; and
 - tool-root cleanup rejects a forged path or owner marker.
 
 Run:
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx --test "$RUN_ROOT/infra-runner.test.ts"
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx --test "$RUN_ROOT/infra-runner.test.ts"
 ```
 
 - [ ] **Step 3: Bootstrap shared and Kubernetes-specific prerequisites**
@@ -449,10 +603,13 @@ behavior.
 - [ ] **Step 5: Verify bootstrap without starting a lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" bootstrap
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" status
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" bootstrap
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" status
 git status --short
 ```
 
@@ -465,8 +622,12 @@ the repository has no new tracked change. No commit.
 - [ ] **Step 1: Invoke the complete lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run chart-apply-1.35
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run chart-apply-1.35
 ```
 
 The encoded body must:
@@ -481,6 +642,22 @@ The encoded body must:
 5. run the pinned reachability image and curl
    `http://dawn-app.default.svc.cluster.local/`.
 
+The chart/reachability argv are exactly equivalent to:
+
+```bash
+helm --kube-context "<context>" install dawn-app charts/dawn-app \
+  --set-string "image.repository=<placeholder-repository>" \
+  --set-string "image.digest=<placeholder-digest>" \
+  --set containerPort=8080 --set healthPath=/ \
+  --set serviceAccount.create=true \
+  --set serviceAccount.name=dawn-app-smoke \
+  --wait --timeout 3m
+kubectl --context "<context>" rollout status deploy/dawn-app --timeout=120s
+kubectl --context "<context>" run curl \
+  --image="<policy-reachability-image>" --restart=Never --rm -i --quiet -- \
+  curl -sf http://dawn-app.default.svc.cluster.local/
+```
+
 Diagnostics include the default namespace. Cleanup uninstalls the exact release
 then deletes the exact cluster. Verify the result row and exact cluster absence.
 No commit.
@@ -490,8 +667,12 @@ No commit.
 - [ ] **Step 1: Invoke the complete lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.35
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.35
 ```
 
 The encoded body must run, in order:
@@ -514,8 +695,12 @@ commit.
 - [ ] **Step 1: Invoke the complete lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.34
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.34
 ```
 
 Use the policy 1.34 image and target `1.34`; otherwise execute the same
@@ -528,8 +713,12 @@ confirmed shared prerequisite blocks both. No commit.
 - [ ] **Step 1: Invoke the complete lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.36
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run focused-1.36
 ```
 
 Use the policy 1.36 image and target `1.36`; otherwise execute the same
@@ -541,8 +730,12 @@ failures. No commit.
 - [ ] **Step 1: Invoke the complete lane**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run kubernetes-e2e-1.35
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run kubernetes-e2e-1.35
 ```
 
 The encoded body must:
@@ -565,9 +758,40 @@ The encoded body must:
 10. diagnose before uninstalling exact releases/namespaces and deleting the
     exact cluster.
 
+The workload argv are exactly equivalent to:
+
+```bash
+kubectl --context "<context>" create namespace dawn-app
+helm --kube-context "<context>" install dawn-sandbox-infra \
+  charts/dawn-sandbox-infra -n dawn-sandboxes --create-namespace \
+  -f test/k8s-smoke/values-sandbox-infra.yaml --wait
+kubectl --context "<context>" apply \
+  -f test/k8s-smoke/aimock.k8s.yaml
+kubectl --context "<context>" -n dawn-app rollout status \
+  deploy/aimock --timeout=120s
+helm --kube-context "<context>" install dawn-app charts/dawn-app \
+  -n dawn-app -f test/k8s-smoke/values-dawn-app.yaml --wait
+sh test/k8s-smoke/assert-k8s.sh
+```
+
+Cleanup uses only this disposable cluster/context and these exact names:
+
+```bash
+helm --kube-context "<context>" uninstall dawn-app -n dawn-app
+helm --kube-context "<context>" uninstall dawn-sandbox-infra -n dawn-sandboxes
+kubectl --context "<context>" delete namespace dawn-app dawn-sandboxes \
+  --ignore-not-found=true --wait=false
+kind delete cluster --name "<owned-cluster>"
+```
+
 Track the two image IDs immediately after build. At cleanup, require each fixed
 tag still resolve to the recorded ID before removing that tag. A changed tag is
 a cleanup failure and is not removed. Verify both tags are absent afterward.
+Wrap each build in `try/finally`: once a fixed-tag build command has started,
+inspect the tag in `finally` even when the command failed. Because preflight
+proved absence, any observed tag becomes run-owned with its exact image ID and
+must enter identity-checked cleanup. This captures the intermediate
+`dawn-smoke-app:k8s` tag left by a partially failed build.
 No commit.
 
 ### Task 8: Run Packaged Docker E2E Independently
@@ -575,8 +799,12 @@ No commit.
 - [ ] **Step 1: Invoke the complete lane even after Kubernetes-only failures**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run docker-e2e
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" run docker-e2e
 ```
 
 The encoded body must:
@@ -599,6 +827,10 @@ is `bootstrap/environment`, never `cleanup`, and is never removed.
 
 Track/revalidate image IDs exactly as in Task 7. Do not execute or copy the
 hosted workflow's broad `Diagnostics + cleanup` loops. No commit.
+The `build-image.sh docker` call also uses `try/finally` adoption: it can create
+the base `dawn-smoke-app:docker` tag and then fail while adding the static Docker
+CLI. Inspect and claim that exact tag after every started build outcome, then
+remove it only when its current image ID still matches the recorded ID.
 
 ### Task 9: Validate Evidence, Verify The Repository, And Clean Tools
 
@@ -622,8 +854,12 @@ its affected live lane.
 - [ ] **Step 2: Validate the complete evidence schema**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
 ```
 
 `validate` must require:
@@ -634,7 +870,15 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   Evidence Contract;
 - parseable ordered timestamps and nonempty tool versions/resources;
 - attempt count, IDs, retry eligibility, and retry resource naming;
-- an existing native artifact for each attempted focused lane;
+- a nonempty diagnostics path for every failed attempt; the file must exist,
+  be owned by this run root, have a SHA-256 recorded in state, and have a
+  modification time between that attempt's start and finish;
+- an existing native artifact for each attempted focused lane. Parse the JSON
+  and require its target, observed server minor, harness run ID, and timestamps
+  to match the recorded lane/attempt; require its SHA-256 and path to be
+  recorded on that `AttemptRecord`. The report schema has no context field, so
+  validate the attempt's separately recorded `context` against the exact
+  cluster resource and the argv ledger used to invoke the harness;
 - a named prerequisite and exact hosted equivalent for every blocked row;
 - exact absence of every run-owned cluster, fixed smoke object, registry
   process, and fixed image tag;
@@ -642,6 +886,17 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   empty for any successfully attempted Docker lane);
 - unchanged baseline Kind clusters; and
 - no unrecorded retained cluster.
+
+Also re-hash `.github/kubernetes-compatibility.json` and require it to equal
+`RunState.policySha256`. Require the recorded Kind, kubectl, and Helm paths to
+be children of the owned tool root; require versions `v0.32.0`, `v1.35.6`, and
+`v4.2.3`; and require the recorded Kind/kubectl download hashes to equal the
+fixed expected hashes in Task 2. Compare every pre-existing fixed container,
+network, sandbox container, volume, and image tag to its baseline object/image
+ID. A pre-existing object may remain unchanged; it may never disappear or be
+replaced. When an E2E lane passed its preflight, the relevant baseline entries
+must have been absent and the run-created fixed tags/resources must now be
+absent.
 
 Local ARM64 failures must explicitly state the hosted Ubuntu AMD64 equivalent
 still required. Local success never substitutes for hosted evidence.
@@ -657,14 +912,21 @@ git status --short
 - [ ] **Step 4: Perform guarded final cleanup**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec tsx "$RUN_ROOT/infra-runner.ts" cleanup
+cd /Users/blove/.codex/worktrees/b5f4/dawn
+export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+export RUN_ROOT="$(node -e 'const {readFileSync}=require("node:fs"); const active=JSON.parse(readFileSync("artifacts/testing/dedicated-infrastructure/active-run.json","utf8")); process.stdout.write(active.runRoot)')"
+test -f "$RUN_ROOT/state.json"
+test -f "$RUN_ROOT/infra-runner.ts"
+pnpm exec tsx "$RUN_ROOT/infra-runner.ts" cleanup
 ```
 
 `cleanup` re-runs the exact absence/baseline audit, validates canonical
 `TOOL_ROOT` plus its owner marker, and removes only that tool root through
 `fs.rm`. It leaves ignored evidence under `RUN_ROOT`. It refuses to finish
-while an owned or retained cluster/resource remains.
+while an owned or retained cluster/resource remains. Only after tool-root
+absence is proved does it atomically set `finalizedAt`, verify that the global
+`active-run.json` lease still has this run ID and nonce, and remove that exact
+lease. A mismatch leaves the lease untouched and fails cleanup.
 
 - [ ] **Step 5: Final review**
 
