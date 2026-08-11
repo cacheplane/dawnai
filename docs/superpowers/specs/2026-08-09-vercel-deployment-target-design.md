@@ -634,10 +634,14 @@ Both preview URLs receive the same bounded client sequence:
    start and preserve one pending read-for-next-meaningful-frame operation. It
    may consume heartbeats and partial bytes, but for one full second it must
    produce no completed meaningful frame and no EOF; the timeout must win the
-   race without cancelling that pending operation. Only then may the authorized
-   release request run. It must return exactly one affected identifier matching
-   the target; a database read must show target `released = true` and sentinel
-   `released = false`. A platform that buffers the whole response deadlocks
+   race without cancelling that pending operation. Measure the full interval
+   with the injected clock: if the host timer wakes early, sleep only the
+   remaining positive delta while preserving the same pending read, and fail if
+   the clock does not advance after a bounded number of wakeups. Only then may
+   the authorized release request run. It must return exactly one affected
+   identifier matching the target; a database read must show target
+   `released = true` and sentinel `released = false`. A platform that buffers
+   the whole response deadlocks
    until the bounded pre-release timeout and fails, while a route that failed to
    block resolves the preserved read before authorization and also fails.
 6. After release, require public `event: chunk` with JSON data exactly

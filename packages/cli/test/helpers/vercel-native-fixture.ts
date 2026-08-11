@@ -4617,6 +4617,7 @@ export interface NativeBlackBoxEvidence {
 type NativeFunctionalStage = "logs" | "routes" | "state" | "stream"
 
 const NATIVE_BLACK_BOX_OPERATION_TIMEOUT_MS = 30_000
+const NATIVE_BLACK_BOX_QUIET_STALL_WAKEUP_LIMIT = 8
 
 const NATIVE_CHECKPOINT_COUNT_SQL = [
   "SELECT COUNT(*)::integer AS checkpoint_count",
@@ -5118,15 +5119,33 @@ export async function runNativeVercelBlackBox(options: {
     }
     const pendingAfter = frames.nextMeaningfulFrame()
     const quietStartMs = nativeClockNow(options.clock, "native Vercel black-box quiet clock")
+    const quietDeadlineMs = quietStartMs + 1_000
+    if (!Number.isSafeInteger(quietDeadlineMs)) {
+      throw new Error("native Vercel black-box quiet deadline is outside the safe timestamp range")
+    }
     const quietWinner = await Promise.race([
       pendingAfter.then(() => "frame" as const),
       (async () => {
-        await options.clock.sleep(1_000)
-        const quietEndMs = nativeClockNow(options.clock, "native Vercel black-box quiet clock")
-        if (quietEndMs - quietStartMs < 1_000) {
-          throw new Error(
-            "native Vercel black-box pre-release quiet timer was shorter than one second",
+        let observedMs = quietStartMs
+        let stalledWakeups = 0
+        while (observedMs < quietDeadlineMs) {
+          await options.clock.sleep(quietDeadlineMs - observedMs)
+          const nextObservedMs = nativeClockNow(
+            options.clock,
+            "native Vercel black-box quiet clock",
           )
+          if (nextObservedMs < observedMs) {
+            throw new Error("native Vercel black-box quiet clock did not advance")
+          }
+          if (nextObservedMs === observedMs) {
+            stalledWakeups += 1
+            if (stalledWakeups > NATIVE_BLACK_BOX_QUIET_STALL_WAKEUP_LIMIT) {
+              throw new Error("native Vercel black-box quiet clock did not advance")
+            }
+            continue
+          }
+          stalledWakeups = 0
+          observedMs = nextObservedMs
         }
         return "timer" as const
       })(),

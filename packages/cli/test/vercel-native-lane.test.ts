@@ -4083,6 +4083,8 @@ describe("causal SSE", () => {
     const runtimeSnapshots: string[] = []
     const sseEvidence: unknown[] = []
     let nowMs = 1_800_000_000_000
+    let truncatedQuietSleep = false
+    let truncatedQuietRemainder = false
     let stateTurn = 0
     let targetReleased = false
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
@@ -4119,7 +4121,14 @@ describe("causal SSE", () => {
         now: () => nowMs,
         sleep: async (milliseconds) => {
           events.push(`sleep:${milliseconds}`)
-          nowMs += milliseconds
+          if (milliseconds === 1_000 && !truncatedQuietSleep) {
+            truncatedQuietSleep = true
+            nowMs += 999
+          } else if (milliseconds === 1 && !truncatedQuietRemainder) {
+            truncatedQuietRemainder = true
+          } else {
+            nowMs += milliseconds
+          }
         },
       },
       database: {
@@ -4380,6 +4389,7 @@ describe("causal SSE", () => {
       events.indexOf(`http:POST:/threads/${ids.laterThreadId}/runs/wait`),
     )
     expect(events.filter((entry) => entry === "sleep:1000")).toHaveLength(1)
+    expect(events.filter((entry) => entry === "sleep:1")).toHaveLength(2)
     expect(events.indexOf(`http:POST:/threads/${ids.releaseThreadId}/runs/wait`)).toBeLessThan(
       events.indexOf("sleep:1000"),
     )
@@ -4461,6 +4471,7 @@ describe("causal SSE", () => {
     "stream origin",
     "stream MIME",
     "stream body",
+    "quiet clock",
     "early post-release frame",
     "early done frame",
     "early EOF",
@@ -4495,6 +4506,7 @@ describe("causal SSE", () => {
     let nowMs = 1_800_000_000_000
     let requestCount = 0
     let databaseCount = 0
+    let quietSleepCalls = 0
     const databaseSql: string[] = []
     let dispatchCount = 0
     let stateTurn = 0
@@ -4556,7 +4568,8 @@ describe("causal SSE", () => {
       clock: {
         now: () => nowMs,
         sleep: async (milliseconds) => {
-          nowMs += milliseconds
+          quietSleepCalls += 1
+          if (fault !== "quiet clock") nowMs += milliseconds
         },
       },
       database: {
@@ -4933,6 +4946,7 @@ describe("causal SSE", () => {
       fault === "early post-release frame" ||
       fault === "early done frame" ||
       fault === "SSE secret" ||
+      fault === "quiet clock" ||
       fault === "release dispatch persistence"
     ) {
       expect(streamReaderCancelCalls).toBeGreaterThan(0)
@@ -4942,6 +4956,7 @@ describe("causal SSE", () => {
       expect(streamMaxReadsInFlight).toBe(1)
       expect(cancelledResponsePaths).toContain(`/threads/${validIds.streamThreadId}/runs/stream`)
     }
+    if (fault === "quiet clock") expect(quietSleepCalls).toBe(9)
   })
 })
 
