@@ -478,7 +478,16 @@ describe("namespace ownership and cleanup", () => {
   })
 
   test("maps roles to exact derived Helm targets before deleting verified namespaces", async () => {
-    const execute = fakeRunner([namespace(management), namespace(sandbox), {}, {}, {}, {}])
+    const execute = fakeRunner([
+      namespace(management),
+      namespace(sandbox),
+      {},
+      {},
+      namespace(management),
+      namespace(sandbox),
+      {},
+      {},
+    ])
 
     await cleanupOwnedCluster(
       {
@@ -516,6 +525,32 @@ describe("namespace ownership and cleanup", () => {
       },
       {
         file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "get",
+          "namespace",
+          management.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ],
+      },
+      {
+        file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "get",
+          "namespace",
+          sandbox.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ],
+      },
+      {
+        file: "kubectl",
         args: ["--context", "kind-dawn", "delete", "namespace", management.name],
       },
       {
@@ -525,8 +560,110 @@ describe("namespace ownership and cleanup", () => {
     ])
   })
 
+  test("skips deletion when infrastructure uninstall removes its owned sandbox namespace", async () => {
+    const execute = fakeRunner([
+      namespace(management),
+      namespace(sandbox),
+      {},
+      namespace(management),
+      "",
+      {},
+    ])
+    const removeTokenFiles = vi.fn(async () => {})
+
+    await cleanupOwnedCluster(
+      {
+        context: "kind-dawn",
+        runId,
+        ownership: [management, sandbox],
+        installedReleases: ["infrastructure"],
+        removeTokenFiles,
+      },
+      execute,
+    )
+
+    expect(removeTokenFiles).toHaveBeenCalledTimes(1)
+    expect(execute.mock.calls.map(([command]) => command)).toEqual([
+      {
+        file: "kubectl",
+        args: ["--context", "kind-dawn", "get", "namespace", management.name, "-o", "json"],
+      },
+      {
+        file: "kubectl",
+        args: ["--context", "kind-dawn", "get", "namespace", sandbox.name, "-o", "json"],
+      },
+      {
+        file: "helm",
+        args: [
+          "--kube-context",
+          "kind-dawn",
+          "uninstall",
+          names.sandboxRelease,
+          "--namespace",
+          names.managementNamespace,
+        ],
+      },
+      {
+        file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "get",
+          "namespace",
+          management.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ],
+      },
+      {
+        file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "get",
+          "namespace",
+          sandbox.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ],
+      },
+      {
+        file: "kubectl",
+        args: ["--context", "kind-dawn", "delete", "namespace", management.name],
+      },
+    ])
+  })
+
+  test("refuses a namespace whose ownership changes between uninstall and final deletion", async () => {
+    const execute = fakeRunner([
+      namespace(management),
+      namespace(sandbox),
+      {},
+      namespace(management, "other-run", "recreated-management"),
+      namespace(sandbox),
+    ])
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management, sandbox],
+          installedReleases: ["infrastructure"],
+          removeTokenFiles: async () => {},
+        },
+        execute,
+      ),
+    ).rejects.toThrow(/UID|label/i)
+    expect(execute.mock.calls.filter(([command]) => command.args.includes("delete"))).toHaveLength(
+      0,
+    )
+  })
+
   test("verifies and deletes management-only ownership before any release exists", async () => {
-    const execute = fakeRunner([namespace(management), {}])
+    const execute = fakeRunner([namespace(management), namespace(management), {}])
 
     await cleanupOwnedCluster(
       {
@@ -543,6 +680,19 @@ describe("namespace ownership and cleanup", () => {
       {
         file: "kubectl",
         args: ["--context", "kind-dawn", "get", "namespace", management.name, "-o", "json"],
+      },
+      {
+        file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "get",
+          "namespace",
+          management.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ],
       },
       {
         file: "kubectl",

@@ -528,7 +528,27 @@ export async function cleanupOwnedCluster(
       helm.command(input.context, ["uninstall", release.name, "--namespace", release.namespace]),
     )
   }
-  for (const ownership of cleanup.ownership) {
+  const survivingOwnership = (
+    await Promise.all(
+      cleanup.ownership.map(async (ownership) => {
+        const result = await execute(
+          kubectl.command(input.context, [
+            "get",
+            "namespace",
+            ownership.name,
+            "-o",
+            "json",
+            "--ignore-not-found",
+          ]),
+        )
+        if (result.stdout.toString("utf8").trim().length === 0) return undefined
+        const value = parseJson(result, `Namespace ${ownership.name}`)
+        verifyNamespaceOwnership(value, ownership)
+        return ownership
+      }),
+    )
+  ).filter((ownership) => ownership !== undefined)
+  for (const ownership of survivingOwnership) {
     await execute(kubectl.command(input.context, ["delete", "namespace", ownership.name]))
   }
   return { retained: false }
