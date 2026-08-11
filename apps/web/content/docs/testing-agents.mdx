@@ -1,4 +1,4 @@
-# Testing your Dawn agent
+# Agent Test Harness
 
 Agent tests in CI should be deterministic and replay committed fixtures. `@dawn-ai/testing` achieves this by intercepting the model's HTTP endpoint with **aimock**, a local mock that replays pre-written fixtures. Your tools, prompts, capabilities, and state all run normally; only the LLM is replaced. Optional, explicitly gated local smoke tests may instead use a live model.
 
@@ -399,7 +399,7 @@ Grow it by:
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/testing", title: "Scenario testing", subtitle: "declarative run.test.ts scenarios for route-output unit tests" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "declarative run.test.ts scenarios for route-output unit tests" },
   { href: "/docs/agents", title: "Agents", subtitle: "the agent route kind that @dawn-ai/testing exercises" },
   { href: "/docs/tools", title: "Tools", subtitle: "tools that run normally during harness tests" },
   { href: "/docs/state", title: "State", subtitle: "the state shape expectState() asserts against" },

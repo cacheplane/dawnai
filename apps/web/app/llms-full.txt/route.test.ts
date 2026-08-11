@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { webContentRoot } from "../../lib/content-root"
 import { DOCS_PAGES } from "../components/docs/nav"
 import { GET } from "./route"
+
+const CONTENT_ROOT = webContentRoot()
 
 describe("full LLM documentation route", () => {
   it("includes every nav page exactly once and in registry order", async () => {
@@ -14,7 +17,7 @@ describe("full LLM documentation route", () => {
     const positions = DOCS_PAGES.map((page) => {
       const slug = page.href.replace(/^\/docs\//, "")
       const file = slug === "recipes" ? "recipes/index.mdx" : `${slug}.mdx`
-      const source = readFileSync(join(process.cwd(), "content/docs", file), "utf8")
+      const source = readFileSync(join(CONTENT_ROOT, "docs", file), "utf8")
       const marker = `### ${page.label}\n\n${source}`
       const position = documentation.indexOf(marker)
 
@@ -33,8 +36,8 @@ describe("full LLM documentation route", () => {
       body.indexOf("## Task-Specific Prompts"),
     )
 
-    for (const file of ["content/docs/recipes/index.mdx", "content/docs/recipes/add-a-tool.mdx"]) {
-      expect(documentation).toContain(readFileSync(join(process.cwd(), file), "utf8"))
+    for (const file of ["docs/recipes/index.mdx", "docs/recipes/add-a-tool.mdx"]) {
+      expect(documentation).toContain(readFileSync(join(CONTENT_ROOT, file), "utf8"))
     }
   })
 })

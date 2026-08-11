@@ -11,6 +11,94 @@ const WRAPPERS_ROOT = join(WEB_ROOT, "app/docs")
 const NAV_PATH = join(dirname(fileURLToPath(import.meta.url)), "nav.ts")
 const CHECK_DOCS_PATH = join(WEB_ROOT, "../../scripts/check-docs.mjs")
 
+const FOUNDATION_DOCS_NAV = [
+  {
+    label: "Get Started",
+    items: [
+      { label: "Getting Started", href: "/docs/getting-started" },
+      { label: "Mental Model", href: "/docs/mental-model" },
+      { label: "Migrating from LangGraph", href: "/docs/migrating-from-langgraph" },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { label: "Routes", href: "/docs/routes" },
+      { label: "Agents", href: "/docs/agents" },
+      { label: "Tools", href: "/docs/tools" },
+      { label: "State", href: "/docs/state" },
+      { label: "Workspace Filesystem", href: "/docs/workspace" },
+      { label: "Memory", href: "/docs/memory" },
+      { label: "Planning", href: "/docs/planning" },
+      { label: "Skills", href: "/docs/skills" },
+      { label: "Subagents", href: "/docs/subagents" },
+      { label: "Context Management", href: "/docs/context-management" },
+      { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
+    ],
+  },
+  {
+    label: "Integrate",
+    items: [
+      { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "Middleware", href: "/docs/middleware" },
+      { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
+      { label: "Blueprints", href: "/docs/blueprints" },
+    ],
+  },
+  {
+    label: "Test",
+    items: [
+      { label: "Scenario Testing", href: "/docs/testing" },
+      { label: "Agent Test Harness", href: "/docs/testing-agents" },
+      { label: "Evals", href: "/docs/evals" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { label: "Access Control", href: "/docs/access-control" },
+      { label: "Permissions", href: "/docs/permissions" },
+      { label: "Retry", href: "/docs/retry" },
+      { label: "Observability", href: "/docs/observability" },
+      { label: "Inspector", href: "/docs/inspector" },
+      { label: "Upgrading", href: "/docs/upgrading" },
+    ],
+  },
+  {
+    label: "Deploy",
+    items: [
+      { label: "Deployment Options", href: "/docs/deployment" },
+      { label: "Execution Sandbox", href: "/docs/sandbox" },
+    ],
+  },
+  {
+    label: "Recipes",
+    items: [
+      { label: "Recipes Overview", href: "/docs/recipes" },
+      { label: "Add a Tool", href: "/docs/recipes/add-a-tool" },
+      { label: "Typed State", href: "/docs/recipes/typed-state" },
+      { label: "Auth Middleware", href: "/docs/recipes/auth-middleware" },
+      { label: "Stream Output", href: "/docs/recipes/stream-output" },
+      {
+        label: "Retry Transient Model Calls",
+        href: "/docs/recipes/retry-flaky-tools",
+      },
+      { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
+      { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { label: "Configuration Reference", href: "/docs/configuration" },
+      { label: "CLI Reference", href: "/docs/cli" },
+      { label: "API Reference", href: "/docs/api" },
+      { label: "Error Codes", href: "/docs/errors" },
+      { label: "FAQ", href: "/docs/faq" },
+    ],
+  },
+] as const
+
 interface CompatibilityStubAnalysis {
   readonly found: boolean
   readonly stub: string
@@ -20,6 +108,18 @@ interface CompatibilityStubAnalysis {
   readonly hasCanonicalLink: boolean
   readonly exceedsMaxChars: boolean
 }
+
+interface DocTitleAnalysis {
+  readonly firstH1: string | null
+  readonly metadataTitle: string | null
+}
+
+interface DocTitleFixture {
+  readonly mdxSource: string
+  readonly wrapperSource: string
+}
+
+let docTitleAnalysisProcessCount = 0
 
 function analyzeCompatibilityStub(
   source: string,
@@ -43,6 +143,26 @@ function analyzeCompatibilityStub(
   expect(result.stderr).toBe("")
   expect(result.stdout).toMatch(/^\{/)
   return JSON.parse(result.stdout) as CompatibilityStubAnalysis
+}
+
+function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly DocTitleAnalysis[] {
+  docTitleAnalysisProcessCount++
+  const result = spawnSync(
+    process.execPath,
+    [CHECK_DOCS_PATH, "--analyze-doc-titles", JSON.stringify(fixtures)],
+    { encoding: "utf8" },
+  )
+
+  expect(result.status).toBe(0)
+  expect(result.stderr).toBe("")
+  expect(result.stdout).toMatch(/^\[/)
+  return JSON.parse(result.stdout) as readonly DocTitleAnalysis[]
+}
+
+function analyzeDocTitles(mdxSource: string, wrapperSource: string): DocTitleAnalysis {
+  const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource }])[0]
+  expect(analysis).toBeDefined()
+  return analysis as DocTitleAnalysis
 }
 
 function filesUnder(
@@ -73,6 +193,10 @@ function wrapperHref(file: string): string {
 }
 
 describe("documentation registry invariants", () => {
+  it("uses the exact eight-section foundation", () => {
+    expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
+  })
+
   it("uses unique section labels, page labels, and hrefs", () => {
     const sectionLabels = DOCS_NAV.map((section) => section.label)
     const pageLabels = DOCS_PAGES.map((page) => page.label)
@@ -85,10 +209,10 @@ describe("documentation registry invariants", () => {
   it("derives breadcrumbs and siblings from the registered order", () => {
     expect(breadcrumbsFor("/docs/ag-ui")).toEqual([
       { label: "Docs", href: "/docs/getting-started" },
-      { label: "Tooling" },
-      { label: "AG-UI & Web Clients" },
+      { label: "Integrate" },
+      { label: "AG-UI and Web Clients" },
     ])
-    expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/dev-server")
+    expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/blueprints")
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
@@ -116,6 +240,167 @@ describe("documentation registry invariants", () => {
 
     expect([...navHrefs].sort()).toEqual(contentHrefs)
     expect([...navHrefs].sort()).toEqual(wrapperHrefs)
+  })
+
+  it("keeps nav labels, first MDX headings, and wrapper titles identical", () => {
+    const processCountBefore = docTitleAnalysisProcessCount
+    const fixtures = DOCS_PAGES.map((item) => {
+      const slug = item.href.replace(/^\/docs\//, "")
+      const contentPath = join(
+        CONTENT_ROOT,
+        slug === "recipes" ? "recipes/index.mdx" : `${slug}.mdx`,
+      )
+      const wrapperPath = join(WRAPPERS_ROOT, slug, "page.tsx")
+      return {
+        mdxSource: readFileSync(contentPath, "utf8"),
+        wrapperSource: readFileSync(wrapperPath, "utf8"),
+      }
+    })
+    const analyses = analyzeDocTitlesBatch(fixtures)
+
+    expect(docTitleAnalysisProcessCount - processCountBefore).toBe(1)
+    expect(analyses).toHaveLength(DOCS_PAGES.length)
+    for (const [index, item] of DOCS_PAGES.entries()) {
+      const { firstH1, metadataTitle } = analyses[index] ?? {}
+
+      expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
+      expect(metadataTitle, `${item.href} metadata.title`).toBe(item.label)
+    }
+  })
+
+  it.each(["deployment.mdx", "evals.mdx", "testing-agents.mdx"])(
+    "uses the exact Scenario Testing title for /docs/testing cards in %s",
+    (file) => {
+      const source = readFileSync(join(CONTENT_ROOT, file), "utf8")
+      expect(source).toContain('{ href: "/docs/testing", title: "Scenario Testing",')
+    },
+  )
+})
+
+describe("documentation title analysis", () => {
+  const wrapper = `import type { Metadata } from "next"
+export const metadata: Metadata = { title: "Real Title" }
+`
+
+  it("ignores fenced pseudo-H1s before the first rendered H1", () => {
+    const analysis = analyzeDocTitles(
+      `\`\`\`md
+# Fake
+\`\`\`
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("ignores MDX-commented pseudo-H1s before the first rendered H1", () => {
+    const analysis = analyzeDocTitles(
+      `{/*
+# Fake
+*/}
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("ignores pseudo-H1s in leading YAML frontmatter", () => {
+    const analysis = analyzeDocTitles(
+      `---
+# Expected
+description: "Documentation metadata"
+---
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("normalizes CommonMark code spans and closing ATX hashes", () => {
+    const analysis = analyzeDocTitles("# Use `` `code` `` Today ###\n", wrapper)
+
+    expect(analysis.firstH1).toBe("Use `code` Today")
+  })
+
+  it("ignores commented-out wrapper metadata", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `// export const metadata: Metadata = { title: "Fake" }
+/* export const metadata: Metadata = { title: "Also Fake" } */
+export const metadata: Metadata = { title: "Real Title" }
+`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Real Title")
+  })
+
+  it("ignores metadata-like text inside JavaScript regex literals", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `const marker = /export const metadata: Metadata = { title: "Fake" }/
+export const metadata: Metadata = { title: "Real Title" }
+`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Real Title")
+  })
+
+  it("ignores metadata-like regex literals after a closing parenthesis", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `if (true) /export const metadata: Metadata = { title: "Fake" }/.test("")
+export const metadata: Metadata = { title: "Real Title" }
+`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Real Title")
+  })
+
+  it("ignores non-exported metadata declarations", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `if (true) {
+  const metadata: Metadata = { title: "Fake" }
+}
+export const metadata: Metadata = { title: "Real Title" }
+`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Real Title")
+  })
+
+  it("reads only a direct title property from exported metadata", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `export const metadata: Metadata = {
+  nested: { title: "Fake" },
+  title: "Real Title",
+}
+`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Real Title")
+  })
+
+  it.each([
+    'export const metadata = ({ title: "Real Title" } as const)',
+    'export const metadata = ({ title: "Real Title" } satisfies Metadata)',
+    'export const metadata = { title: "Real Title" as const }',
+  ])("unwraps supported metadata expressions: %s", (wrapperSource) => {
+    expect(analyzeDocTitles("# Real Title\n", wrapperSource).metadataTitle).toBe("Real Title")
+  })
+
+  it("returns the actual first top-level H1 and exported metadata title", () => {
+    expect(analyzeDocTitles("## Lead-in\n# `Real` Title\n# Later Title\n", wrapper)).toEqual({
+      firstH1: "Real Title",
+      metadataTitle: "Real Title",
+    })
   })
 })
 

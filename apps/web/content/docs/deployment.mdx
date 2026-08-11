@@ -1,4 +1,4 @@
-# Deployment
+# Deployment Options
 
 Dawn is not a managed hosting platform — there's no Dawn-operated cloud you push to. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). `dawn build` emits up to three targets, selected via `build.targets` (default: `["node", "langsmith"]`):
 
@@ -348,6 +348,6 @@ The `langsmith` target's `langgraph.json` and per-route entry files can also be 
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol endpoints and live-server scenarios" },
   { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "opt-in isolation the node target engages in production" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "request gating across Dawn HTTP deployment targets" },
-  { href: "/docs/testing", title: "Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn start, dawn verify, and all other commands" },
 ]} />

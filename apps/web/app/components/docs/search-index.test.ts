@@ -10,4 +10,12 @@ describe("documentation search index", () => {
 
     expect(DOCS_INDEX.map(({ href, section }) => ({ href, section }))).toEqual(expected)
   })
+
+  it("uses the registered page label as every search title", () => {
+    const expected = DOCS_NAV.flatMap((section) =>
+      section.items.map((item) => ({ href: item.href, title: item.label })),
+    )
+
+    expect(DOCS_INDEX.map(({ href, title }) => ({ href, title }))).toEqual(expected)
+  })
 })

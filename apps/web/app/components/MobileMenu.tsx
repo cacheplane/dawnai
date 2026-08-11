@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useId, useRef, useState } from "react"
 import { CopyCommand } from "./CopyCommand"
-import { DOCS_NAV } from "./docs/nav"
+import { MobileDocsNav } from "./docs/MobileDocsNav"
 
 interface SiteLink {
   readonly label: string
@@ -166,35 +166,7 @@ export function MobileMenu() {
               <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-3">
                 Documentation
               </p>
-              <nav className="space-y-5">
-                {DOCS_NAV.map((section) => (
-                  <div key={section.label}>
-                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-1.5 px-3">
-                      {section.label}
-                    </p>
-                    <ul className="space-y-0.5">
-                      {section.items.map((item) => {
-                        const active = pathname === item.href
-                        return (
-                          <li key={item.href}>
-                            <Link
-                              href={item.href}
-                              onClick={() => setIsOpen(false)}
-                              className={`block text-sm px-3 py-2 rounded-md transition-colors ${
-                                active
-                                  ? "text-accent-saas bg-accent-saas-soft"
-                                  : "text-ink-muted hover:text-ink hover:bg-surface"
-                              }`}
-                            >
-                              {item.label}
-                            </Link>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </nav>
+              <MobileDocsNav pathname={pathname} onNavigate={() => setIsOpen(false)} />
             </div>
           )}
         </div>

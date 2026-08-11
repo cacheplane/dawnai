@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import GithubSlugger from "github-slugger"
+import { webContentRoot } from "../../../lib/content-root"
 import { DOCS_NAV, type DocsNavItem } from "./nav"
 
 export interface DocsSearchHeading {
@@ -52,7 +53,7 @@ function slugFromHref(href: string): string {
 }
 
 function readMdx(slug: string): string {
-  const base = path.join(process.cwd(), "content/docs")
+  const base = path.join(webContentRoot(), "docs")
   // Try `<slug>.mdx` first; fall back to `<slug>/index.mdx` for nested
   // section landing pages (e.g. `/docs/recipes` → `recipes/index.mdx`).
   try {
@@ -79,11 +80,7 @@ function buildIndex(): readonly DocsSearchEntry[] {
   const entries: DocsSearchEntry[] = []
   for (const section of DOCS_NAV) {
     for (const item of section.items) {
-      try {
-        entries.push(buildEntry(item, section.label))
-      } catch {
-        // MDX file not present — skip silently rather than crashing the build
-      }
+      entries.push(buildEntry(item, section.label))
     }
   }
   return entries

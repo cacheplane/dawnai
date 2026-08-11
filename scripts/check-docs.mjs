@@ -1,6 +1,19 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { basename, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
+import { NodeFlags, SyntaxKind } from "typescript/unstable/ast"
+import {
+  isAssertionExpression,
+  isIdentifier,
+  isObjectLiteralExpression,
+  isParenthesizedExpression,
+  isPropertyAssignment,
+  isSatisfiesExpression,
+  isStringLiteral,
+  isVariableStatement,
+} from "typescript/unstable/ast/is"
+import { createVirtualFileSystem } from "typescript/unstable/fs"
+import { API } from "typescript/unstable/sync"
 
 const repoRoot = resolve(import.meta.dirname, "..")
 
@@ -93,6 +106,154 @@ function maskMarkdownCodeAndComments(source) {
   return maskInlineCodeAndComments(maskFencedCode(source))
 }
 
+function maskLeadingYamlFrontmatter(source) {
+  const opening = /^(?:\uFEFF)?---[ \t]*(?:\r?\n|$)/.exec(source)
+  if (!opening) return source
+
+  const remainder = source.slice(opening[0].length)
+  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(remainder)
+  if (closing?.index === undefined) return source
+
+  const characters = source.split("")
+  maskRange(characters, 0, opening[0].length + closing.index + closing[0].length)
+  return characters.join("")
+}
+
+function codeSpanDelimiterLength(source, start) {
+  let end = start
+  while (source[end] === "`") end++
+  return end - start
+}
+
+function normalizeCodeSpans(source) {
+  let normalized = ""
+  let index = 0
+  while (index < source.length) {
+    if (source[index] !== "`") {
+      normalized += source[index]
+      index++
+      continue
+    }
+
+    const delimiterLength = codeSpanDelimiterLength(source, index)
+    let closingIndex = index + delimiterLength
+    while (closingIndex < source.length) {
+      const candidate = source.indexOf("`", closingIndex)
+      if (candidate === -1) break
+      const candidateLength = codeSpanDelimiterLength(source, candidate)
+      if (candidateLength === delimiterLength) {
+        let content = source.slice(index + delimiterLength, candidate).replace(/\r\n?|\n/g, " ")
+        if (content.startsWith(" ") && content.endsWith(" ") && /[^ ]/.test(content)) {
+          content = content.slice(1, -1)
+        }
+        normalized += content
+        index = candidate + delimiterLength
+        closingIndex = -1
+        break
+      }
+      closingIndex = candidate + candidateLength
+    }
+
+    if (closingIndex !== -1) {
+      normalized += "`".repeat(delimiterLength)
+      index += delimiterLength
+    }
+  }
+  return normalized
+}
+
+function normalizeAtxHeading(line) {
+  const content = line
+    .replace(/^[ \t]{0,3}#[ \t]+/, "")
+    .replace(/[ \t]+#+[ \t]*$/, "")
+    .trim()
+  return normalizeCodeSpans(content)
+}
+
+function firstRenderedMdxH1(source) {
+  const masked = maskMarkdownCodeAndComments(maskLeadingYamlFrontmatter(source))
+  const heading = /^[ \t]{0,3}#[ \t]+/m.exec(masked)
+  if (heading?.index === undefined) return null
+
+  const lineEnd = source.indexOf("\n", heading.index)
+  return normalizeAtxHeading(source.slice(heading.index, lineEnd === -1 ? source.length : lineEnd))
+}
+
+function unwrapExpression(expression) {
+  let current = expression
+  while (
+    isParenthesizedExpression(current) ||
+    isAssertionExpression(current) ||
+    isSatisfiesExpression(current)
+  ) {
+    current = current.expression
+  }
+  return current
+}
+
+function exportedMetadataTitle(sourceFile) {
+  for (const statement of sourceFile.statements) {
+    if (!isVariableStatement(statement)) continue
+    if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword))
+      continue
+    if (!(statement.declarationList.flags & NodeFlags.Const)) continue
+
+    for (const declaration of statement.declarationList.declarations) {
+      if (!isIdentifier(declaration.name) || declaration.name.text !== "metadata") continue
+      if (!declaration.initializer) return null
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!isObjectLiteralExpression(initializer)) return null
+
+      for (const property of initializer.properties) {
+        if (!isPropertyAssignment(property)) continue
+        const name = property.name
+        if ((!isIdentifier(name) && !isStringLiteral(name)) || name.text !== "title") continue
+        const title = unwrapExpression(property.initializer)
+        return isStringLiteral(title) ? title.text : null
+      }
+      return null
+    }
+  }
+  return null
+}
+
+function exportedMetadataTitles(sources) {
+  const wrapperPaths = sources.map((_, index) => `/wrapper-${index}.tsx`)
+  const virtualFiles = Object.fromEntries(
+    wrapperPaths.map((wrapperPath, index) => [wrapperPath, sources[index]]),
+  )
+  virtualFiles["/tsconfig.json"] = JSON.stringify({
+    compilerOptions: { jsx: "preserve", noLib: true },
+    files: wrapperPaths,
+  })
+
+  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
+  let snapshot
+  try {
+    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
+    return wrapperPaths.map((wrapperPath) => {
+      const project = snapshot.getDefaultProjectForFile(wrapperPath)
+      const sourceFile = project?.program.getSourceFile(wrapperPath)
+      return sourceFile ? exportedMetadataTitle(sourceFile) : null
+    })
+  } finally {
+    snapshot?.dispose()
+    api.close()
+  }
+}
+
+function analyzeDocTitlesBatch(fixtures) {
+  const metadataTitles = exportedMetadataTitles(fixtures.map(({ wrapperSource }) => wrapperSource))
+  return fixtures.map(({ mdxSource }, index) => ({
+    firstH1: firstRenderedMdxH1(mdxSource),
+    metadataTitle: metadataTitles[index] ?? null,
+  }))
+}
+
+function analyzeDocTitles(fixture) {
+  return analyzeDocTitlesBatch([fixture])[0]
+}
+
 function isMarkdownImage(source, linkStart) {
   if (source[linkStart - 1] !== "!") return false
   let backslashes = 0
@@ -159,6 +320,15 @@ function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxC
 if (process.argv[2] === "--analyze-compatibility-stub") {
   const fixture = JSON.parse(process.argv[3] ?? "{}")
   process.stdout.write(`${JSON.stringify(analyzeCompatibilityStub(fixture))}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-doc-titles") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  const analysis = Array.isArray(fixture)
+    ? analyzeDocTitlesBatch(fixture)
+    : analyzeDocTitles(fixture)
+  process.stdout.write(`${JSON.stringify(analysis)}\n`)
   process.exit(0)
 }
 
@@ -597,9 +767,10 @@ for (const filePath of normativeScenarioFiles) {
 // same route set. Link targets and fragments are validated by the web MDX tests.
 const docsNavPath = resolve(repoRoot, "apps/web/app/components/docs/nav.ts")
 const docsNav = readFileSync(docsNavPath, "utf8")
-const navDocHrefs = [
-  ...docsNav.matchAll(/^\s*\{\s*label:\s*"[^"]+",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
-].map((match) => match[1])
+const navDocEntries = [
+  ...docsNav.matchAll(/^\s*\{\s*label:\s*"([^"]+)",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
+].map((match) => ({ label: match[1], href: match[2] }))
+const navDocHrefs = navDocEntries.map(({ href }) => href)
 const uniqueNavDocHrefs = [...new Set(navDocHrefs)].sort()
 const duplicateNavDocHrefs = uniqueNavDocHrefs.filter(
   (href) => navDocHrefs.filter((candidate) => candidate === href).length > 1,
@@ -637,6 +808,28 @@ for (const href of uniqueNavDocHrefs) {
   }
   if (!wrapperDocHrefSet.has(href)) {
     failures.push(`DOCS_NAV references ${href}, but ${docHrefToPagePath(href)} is missing`)
+  }
+}
+
+for (const { label, href } of navDocEntries) {
+  if (!contentDocHrefSet.has(href) || !wrapperDocHrefSet.has(href)) continue
+
+  const contentPath = resolve(repoRoot, docHrefToContentPath(href))
+  const wrapperPath = resolve(repoRoot, docHrefToPagePath(href))
+  const { firstH1, metadataTitle } = analyzeDocTitles({
+    mdxSource: readFileSync(contentPath, "utf8"),
+    wrapperSource: readFileSync(wrapperPath, "utf8"),
+  })
+
+  if (firstH1 !== label) {
+    failures.push(
+      `${docHrefToContentPath(href)} first H1 ${JSON.stringify(firstH1)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
+    )
+  }
+  if (metadataTitle !== label) {
+    failures.push(
+      `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
+    )
   }
 }
 

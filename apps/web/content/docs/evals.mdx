@@ -1,4 +1,4 @@
-# Evaluating your Dawn agent
+# Evals
 
 Scenario tests and `@dawn-ai/testing` pin down behaviour: given this input and these fixtures, the agent calls this tool and says this. They answer "is it correct?" for a handful of cases. Evals answer a different question — "how good is it?" — by running your agent over a whole **dataset** and scoring each output, then aggregating the scores into a single verdict you can **gate** on.
 
@@ -137,7 +137,7 @@ If you set neither `gate` nor `threshold`, the eval is **informational**: it alw
 
 ## Execution: replay vs live
 
-Evals use the same aimock fixture system as agent tests — see [Testing Agents](/docs/testing-agents) for how fixtures, `script()`, and replay-vs-live mode work, and why live runs must never touch CI.
+Evals use the same aimock fixture system as agent tests — see [Agent Test Harness](/docs/testing-agents) for how fixtures, `script()`, and replay-vs-live mode work, and why live runs must never touch CI.
 
 By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` (a `script()` builder inline on the case, or a committed fixture file) through aimock, so the agent's model call is replaced. This is the mode to run in CI. If the eval includes `llmJudge`, the scorer still runs during replay, so include a fixture for its judge request or inject a mocked `fetchImpl`.
 
@@ -299,7 +299,7 @@ The reset starts every dataset case on a fresh thread with a clean fixture set. 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/testing", title: "Scenario testing", subtitle: "declarative run.test.ts scenarios for route-output unit tests" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "declarative run.test.ts scenarios for route-output unit tests" },
   { href: "/docs/cli", title: "CLI", subtitle: "the dawn eval command and its flags" },
   { href: "/docs/agents", title: "Agents", subtitle: "the agent route kind evals exercise" },
   { href: "/docs/tools", title: "Tools", subtitle: "tools that run normally during eval replay" },

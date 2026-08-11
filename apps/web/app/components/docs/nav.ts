@@ -8,7 +8,7 @@ export interface DocsNavSection {
   readonly items: readonly DocsNavItem[]
 }
 
-export const DOCS_NAV: readonly DocsNavSection[] = [
+export const DOCS_NAV = [
   {
     label: "Get Started",
     items: [
@@ -18,68 +18,85 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     ],
   },
   {
-    label: "Concepts",
+    label: "Build",
     items: [
       { label: "Routes", href: "/docs/routes" },
       { label: "Agents", href: "/docs/agents" },
       { label: "Tools", href: "/docs/tools" },
       { label: "State", href: "/docs/state" },
+      { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Memory", href: "/docs/memory" },
-      { label: "Inspector", href: "/docs/inspector" },
       { label: "Planning", href: "/docs/planning" },
       { label: "Skills", href: "/docs/skills" },
       { label: "Subagents", href: "/docs/subagents" },
-      { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
-      { label: "Middleware", href: "/docs/middleware" },
-      { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Context Management", href: "/docs/context-management" },
-      { label: "Access Control", href: "/docs/access-control" },
-      { label: "Permissions", href: "/docs/permissions" },
-      { label: "Sandbox", href: "/docs/sandbox" },
-      { label: "Retry", href: "/docs/retry" },
+      { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
     ],
   },
   {
-    label: "Tooling",
+    label: "Integrate",
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
-      { label: "AG-UI & Web Clients", href: "/docs/ag-ui" },
+      { label: "Middleware", href: "/docs/middleware" },
+      { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
       { label: "Blueprints", href: "/docs/blueprints" },
-      { label: "Testing", href: "/docs/testing" },
-      { label: "Testing Agents", href: "/docs/testing-agents" },
+    ],
+  },
+  {
+    label: "Test",
+    items: [
+      { label: "Scenario Testing", href: "/docs/testing" },
+      { label: "Agent Test Harness", href: "/docs/testing-agents" },
       { label: "Evals", href: "/docs/evals" },
-      { label: "Deployment", href: "/docs/deployment" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { label: "Access Control", href: "/docs/access-control" },
+      { label: "Permissions", href: "/docs/permissions" },
+      { label: "Retry", href: "/docs/retry" },
+      { label: "Observability", href: "/docs/observability" },
+      { label: "Inspector", href: "/docs/inspector" },
+      { label: "Upgrading", href: "/docs/upgrading" },
+    ],
+  },
+  {
+    label: "Deploy",
+    items: [
+      { label: "Deployment Options", href: "/docs/deployment" },
+      { label: "Execution Sandbox", href: "/docs/sandbox" },
     ],
   },
   {
     label: "Recipes",
     items: [
-      { label: "Overview", href: "/docs/recipes" },
-      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-      { label: "Typed state", href: "/docs/recipes/typed-state" },
-      { label: "Auth middleware", href: "/docs/recipes/auth-middleware" },
-      { label: "Stream output", href: "/docs/recipes/stream-output" },
-      { label: "Retry flaky tools", href: "/docs/recipes/retry-flaky-tools" },
-      { label: "Dispatch from a route", href: "/docs/recipes/dispatch-from-route" },
-      { label: "Research web UI", href: "/docs/recipes/research-web-ui" },
+      { label: "Recipes Overview", href: "/docs/recipes" },
+      { label: "Add a Tool", href: "/docs/recipes/add-a-tool" },
+      { label: "Typed State", href: "/docs/recipes/typed-state" },
+      { label: "Auth Middleware", href: "/docs/recipes/auth-middleware" },
+      { label: "Stream Output", href: "/docs/recipes/stream-output" },
+      { label: "Retry Transient Model Calls", href: "/docs/recipes/retry-flaky-tools" },
+      { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
+      { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
     ],
   },
   {
     label: "Reference",
     items: [
-      { label: "API", href: "/docs/api" },
-      { label: "CLI", href: "/docs/cli" },
-      { label: "Configuration", href: "/docs/configuration" },
+      { label: "Configuration Reference", href: "/docs/configuration" },
+      { label: "CLI Reference", href: "/docs/cli" },
+      { label: "API Reference", href: "/docs/api" },
       { label: "Error Codes", href: "/docs/errors" },
-      { label: "Observability", href: "/docs/observability" },
-      { label: "Upgrading", href: "/docs/upgrading" },
       { label: "FAQ", href: "/docs/faq" },
     ],
   },
-]
+] as const
 
 // Flat ordered list of pages — used for prev/next navigation.
-export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap((s) => s.items)
+export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap(
+  (section) => section.items as readonly DocsNavItem[],
+)
 
 export interface DocsCrumb {
   readonly label: string

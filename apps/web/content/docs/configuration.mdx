@@ -1,4 +1,4 @@
-# `dawn.config.ts` Reference
+# Configuration Reference
 
 `dawn.config.ts` is a TypeScript file at your app root that exports a single default object conforming to the `DawnConfig` interface. Dawn loads it (via `tsx`) before every CLI command and at runtime startup. If the file is absent, all keys take their documented defaults — no file is required for a working app.
 
@@ -197,7 +197,7 @@ Stores Agent Protocol thread metadata (create time, status, latest checkpoint re
 
 Path to the `.env` file that `dawn dev` and `dawn inspect` load into the process, relative to the app root. `dawn verify` resolves the same path and reads it to check for required provider keys, but does not load it. `dawn start` does not load `config.env`; pass runtime variables through the shell, host, or deployment platform.
 
-The generated LangSmith target records an env-file path in `.dawn/build/langgraph.json`: `.env.example` when that file exists, otherwise `.env`. LangSmith uses the referenced file to identify variables. This is specific to the LangSmith artifact, not the environment contract for every build target. See [Deployment](/docs/deployment).
+The generated LangSmith target records an env-file path in `.dawn/build/langgraph.json`: `.env.example` when that file exists, otherwise `.env`. LangSmith uses the referenced file to identify variables. This is specific to the LangSmith artifact, not the environment contract for every build target. See [Deployment Options](/docs/deployment).
 
 ---
 
@@ -319,7 +319,7 @@ build?: {
 - `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json` and the per-route materialized graph entry files).
 - `"hono"` — an edge entry point (`.dawn/build/app.mjs`), its module manifest and per-request Postgres store factory, and a `wrangler.toml` scaffold, for Cloudflare Workers and other web-standard runtimes. **Not emitted by default**, and it serves a [subset of Dawn](/docs/deployment#what-the-edge-cannot-serve) — the build fails with `DAWN_E1005` when the app uses something the edge cannot run, and a runtime with no filesystem fallbacks raises the same code on every request for anything that got past the build gate. Neither can fire on the `node` target.
 
-`node` and `langsmith` are emitted by default. Naming `targets` **replaces** that list rather than adding to it: restrict to one — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way, and name every target you want otherwise (`{ build: { targets: ["node", "hono"] } }`). See [Deployment](/docs/deployment) for the full bridge.
+`node` and `langsmith` are emitted by default. Naming `targets` **replaces** that list rather than adding to it: restrict to one — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way, and name every target you want otherwise (`{ build: { targets: ["node", "hono"] } }`). See [Deployment Options](/docs/deployment) for the full bridge.
 
 ---
 
@@ -460,5 +460,5 @@ See [API Reference](/docs/api#dawn-aipostgres-storage) for the full option and t
   { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "backends, tools, and the workspace sandbox model" },
   { href: "/docs/cli", title: "CLI Reference", subtitle: "commands that read dawn.config.ts" },
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "dawn dev flags and the Agent Protocol HTTP endpoints" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "production environment variables and the deploy workflow" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "production environment variables and the deploy workflow" },
 ]} />
