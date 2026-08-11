@@ -69,6 +69,10 @@ export const DOCS_NAV = [
     label: "Deploy",
     items: [
       { label: "Deployment Options", href: "/docs/deployment" },
+      { label: "Node and Docker", href: "/docs/deployment/node" },
+      { label: "Kubernetes", href: "/docs/deployment/kubernetes" },
+      { label: "LangSmith", href: "/docs/deployment/langsmith" },
+      { label: "Edge and Hono", href: "/docs/deployment/edge" },
       { label: "Execution Sandbox", href: "/docs/sandbox" },
     ],
   },

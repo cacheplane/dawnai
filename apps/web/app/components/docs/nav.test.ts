@@ -72,6 +72,10 @@ const FOUNDATION_DOCS_NAV = [
     label: "Deploy",
     items: [
       { label: "Deployment Options", href: "/docs/deployment" },
+      { label: "Node and Docker", href: "/docs/deployment/node" },
+      { label: "Kubernetes", href: "/docs/deployment/kubernetes" },
+      { label: "LangSmith", href: "/docs/deployment/langsmith" },
+      { label: "Edge and Hono", href: "/docs/deployment/edge" },
       { label: "Execution Sandbox", href: "/docs/sandbox" },
     ],
   },
@@ -218,7 +222,7 @@ describe("documentation registry invariants", () => {
     ])
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(46)
+    expect(DOCS_PAGES).toHaveLength(50)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 
@@ -273,7 +277,7 @@ describe("documentation registry invariants", () => {
     }
   })
 
-  it.each(["deployment.mdx", "evals.mdx", "testing-agents.mdx"])(
+  it.each(["evals.mdx", "testing-agents.mdx"])(
     "uses the exact Scenario Testing title for /docs/testing cards in %s",
     (file) => {
       const source = readFileSync(join(CONTENT_ROOT, file), "utf8")
@@ -411,6 +415,19 @@ export const metadata: Metadata = { title: "Real Title" }
 
 describe("compatibility stub analysis", () => {
   const canonicalHref = "/docs/canonical"
+
+  it("recognizes retained heading text that contains inline code", () => {
+    const analysis = analyzeCompatibilityStub(
+      `### The \`@dawn-ai/cli/fetch\` entry point
+[Canonical](${canonicalHref})
+`,
+      "The `@dawn-ai/cli/fetch` entry point",
+      canonicalHref,
+    )
+
+    expect(analysis.found).toBe(true)
+    expect(analysis.hasCanonicalLink).toBe(true)
+  })
 
   it("keeps nested headings and fenced pseudo-headings inside the stub", () => {
     const analysis = analyzeCompatibilityStub(

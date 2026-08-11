@@ -257,6 +257,12 @@ describe("docs links and in-page anchors", () => {
     const deployment = pages.get("deployment.mdx")
     expect(deployment?.ids).toContain("what-the-edge-cannot-serve")
     expect(deployment?.ids).toContain("why-the-stores-are-per-request")
+    expect(deployment?.ids).toContain("what-is-proven-and-what-is-not")
+
+    const edge = pages.get("deployment/edge.mdx")
+    expect(edge?.ids).toContain("what-the-edge-cannot-serve")
+    expect(edge?.ids).toContain("why-the-stores-are-per-request")
+    expect(edge?.ids).toContain("what-is-proven-and-what-is-not")
   })
 
   it("resolves every repository-owned docs link and supplied fragment", () => {

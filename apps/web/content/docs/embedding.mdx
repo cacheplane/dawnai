@@ -132,18 +132,17 @@ A request-store factory owns partial allocation if it throws before returning:
 
 ```ts title="request-stores.ts"
 import { Pool } from "@neondatabase/serverless"
-import type { PermissionMode, PermissionsFile } from "@dawn-ai/permissions"
 import {
   createPostgresPermissionsStore,
   createPostgresThreadsStore,
+  type PostgresPermissionsStoreOptions,
   postgresCheckpointer,
 } from "@dawn-ai/postgres-storage"
 
 type Env = { readonly DATABASE_URL?: string }
-type PermissionPolicy = {
-  readonly mode: PermissionMode
-  readonly config: PermissionsFile
-}
+type PermissionPolicy = Required<
+  Pick<PostgresPermissionsStoreOptions, "mode" | "config">
+>
 
 // These are the application's effective production values. Keep policy
 // resolution in application code; requestStores does not inherit Dawn config.
@@ -218,4 +217,4 @@ Test the assembled host, not only the bare handler:
 6. Invoke shutdown with an active run, await `close()`, then close caller-owned pools.
 7. For Hono, drive the composed `app.route("/", dawnApp)` path with the deployment's real environment binding.
 
-See [Deployment Options](/docs/deployment) for the current generated artifacts and target constraints.
+See [Edge and Hono](/docs/deployment/edge) for generated edge artifacts and target constraints, or [Node and Docker](/docs/deployment/node) for the standalone production server.

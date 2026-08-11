@@ -1,0 +1,175 @@
+# Edge and Hono
+
+The Hono target is an opt-in deployment for web-standard runtimes. Use it only after the app passes Dawn's edge capability gate and after accepting its request-scoped Postgres and filesystem limitations. If those constraints are not named requirements, prefer [Node and Docker](/docs/deployment/node).
+
+## Fit check and evidence boundary
+
+The emitted bundle is tested with local workerd and with a Node Hono round trip. That is useful runtime evidence, but it is not a live Cloudflare deployment test and does not prove another provider's limits, bindings, authentication, networking, or database path.
+
+Before selecting Hono, confirm all of these:
+
+- the app does not need sandbox, workspace, shell, skills, route long-term memory, or tool-output offloading;
+- request-scoped WebSocket Postgres through `@neondatabase/serverless` fits the database environment;
+- the host can preserve the exact incoming `Request` object through Hono routing;
+- every authored route, tool, state module, middleware module, and transitive dependency is web-standard and edge-compatible;
+- the operator will test the deployed provider boundary rather than infer it from a successful bundle.
+
+`DAWN_E1005` checks only Dawn-known capabilities. It does not inspect arbitrary authored code or its dependency graph: arbitrary Node built-ins can pass `dawn check` and then fail during bundling or provider deployment. Bundle and run the actual application artifact under the target's conditions.
+
+## Select Hono
+
+Hono is not a default target. Naming `build.targets` replaces the Node and LangSmith defaults, so list every target you still want:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["node", "hono"] },
+})
+```
+
+Then build normally:
+
+```bash
+dawn check
+dawn build
+dawn verify
+```
+
+## Emitted artifacts
+
+The Hono target writes:
+
+| Artifact | Purpose |
+|---|---|
+| `.dawn/build/modules.edge.mjs` | Edge-oriented static route, tool, state, middleware, and capability manifest; its transitive authored import graph is not guaranteed to be free of Node built-ins |
+| `.dawn/build/stores.mjs` | Request-scoped Postgres checkpointer, thread store, and permission store factory |
+| `.dawn/build/app.mjs` | Hono catch-all around `createRuntimeFetchHandler` |
+| `wrangler.toml` | Scaffold whose `main` is `.dawn/build/app.mjs` |
+
+The emitted runtime imports `@dawn-ai/cli`, `@dawn-ai/postgres-storage`, `@neondatabase/serverless`, and `hono`, plus statically discovered model-provider packages. Declare the packages the application bundles. The build prints a notice when the four runtime packages are missing from the app package manifest.
+
+A root `wrangler.toml` is written only when one does not exist. Dawn does not overwrite a marked prior scaffold or a hand-authored root file; when a hand-authored file already exists, the target writes its scaffold to `.dawn/build/wrangler.toml` for comparison.
+
+## Compose through `@dawn-ai/cli/fetch`
+
+`@dawn-ai/cli/fetch` is the web-standard entry point. It has no filesystem discovery or SQLite fallback, so hand composition must supply the edge manifest, serialized config, stores, environment binding, and a static model-provider importer equivalent to the generated `app.mjs`.
+
+The generated `.dawn/build/app.mjs` remains the complete recommended deployment entry. The JavaScript below is only a **lifecycle/composition skeleton** for a host that must replace that entry. It deliberately omits the generated static provider importer and serialized configuration/environment machinery; copy those responsibilities from the generated entry before deploying a hand-composed variant.
+
+```js title="dawn-edge.mjs"
+import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
+import { Hono } from "hono"
+import modules from "./.dawn/build/modules.edge.mjs"
+import { createRequestStores } from "./.dawn/build/stores.mjs"
+
+const envByRequest = new WeakMap()
+let handlerPromise
+
+const dawnApp = new Hono()
+
+dawnApp.all("*", async (c) => {
+  const request = c.req.raw
+  envByRequest.set(request, c.env)
+  handlerPromise ??= createRuntimeFetchHandler({
+    appRoot: "/my-app",
+    modules,
+    config: {},
+    requestStores: (currentRequest) => {
+      const env = envByRequest.get(currentRequest)
+      if (!env) throw new Error("No environment is bound to this request")
+      return createRequestStores(env)
+    },
+  }).catch((error) => {
+    handlerPromise = undefined
+    throw error
+  })
+  return (await handlerPromise).fetch(request)
+})
+
+export { dawnApp }
+```
+
+`"/my-app"` is a placeholder for the exact rooted namespace baked into `modules.edge.mjs`, currently `/<app-directory-basename>`. It is not a public URL prefix. A mismatch separates the handler's cache/thread identity from the manifest identity.
+
+The generated `app.mjs` additionally seeds the build-discovered static model importer and serializable runtime environment. Reproduce those responsibilities when replacing the generated entry; do not rely on a variable dynamic import that the edge bundler cannot discover.
+
+## Compose the Hono router
+
+Dawn endpoints remain rooted. Compose the generated or hand-built Dawn app at `/`:
+
+```js title="host.mjs"
+import { Hono } from "hono"
+import { dawnApp } from "./dawn-edge.mjs"
+
+const app = new Hono()
+app.use("*", authenticateAndAuthorize)
+app.route("/", dawnApp)
+
+export default app
+```
+
+Keep `app.route("/", dawnApp)` exact. The generated environment lookup is keyed by the original `Request`; Hono's request-rebuilding mount helper breaks that identity. A prefixed route also does not create an arbitrary Dawn base path. The runtime owns rooted `/healthz`, `/threads`, `/agui`, and `/memory` surfaces.
+
+## Why the stores are per-request
+
+On workerd, a WebSocket connection belongs to the request I/O context that opened it. Reusing an idle module-scope pool on a later request can hang until the runtime cancels it. The generated `stores.mjs` therefore creates one `@neondatabase/serverless` pool and three Postgres stores per request, then disposes the pool only after the response body and any run started by that request have settled.
+
+The incoming `Request` is also the identity that joins Hono's environment binding to Dawn's `requestStores` callback. Preserve that object through `app.route`.
+
+The generated factory runs `ready()` for the checkpointer, thread store, and permission store on its first migration pass in an isolate. Ready and migrated does not mean permission-mode, static-policy, or hydration parity: the generated path does not call `permissionsStore.load()`, and it omits the resolved mode plus config-seeded allow/deny rules. Persisted interactive grants are therefore not hydrated by that scaffold. Use app-owned request-store wiring when those controls matter.
+
+The emitted factory supplies no long-term memory store. Reaching an otherwise omitted required store fails with `DAWN_E5301` rather than opening local SQLite.
+
+## What the edge cannot serve
+
+`dawn check` and the Hono build report all current Dawn-known target violations together as `DAWN_E1005`. The request-time fetch guard rejects the corresponding unsupported configured runtime instead of silently dropping it. This gate does not prove that authored code or transitive dependencies avoid Node-only APIs.
+
+| Gate | Source inspected | Why it is rejected |
+|---|---|---|
+| Sandbox | `sandbox` | An edge isolate cannot start or manage the configured container/Pod sandbox |
+| Tool-output offloading | non-empty `toolOutput` | Offloading writes oversized output under `workspace/` |
+| Filesystem backend | `backends.filesystem` | A live backend object cannot cross the serialized build boundary |
+| Exec backend | `backends.exec` | A live backend object cannot cross the serialized build boundary |
+| Custom checkpointer | `checkpointer` | It would be silently replaced by the emitted per-request Postgres checkpointer |
+| Custom thread store | `threadsStore` | It would be silently replaced by the emitted per-request Postgres thread store |
+| Custom permission store | `permissions.store` | It would be silently replaced by the emitted per-request Postgres permission store |
+| Custom memory store | `memory.store` | It is removed from the serialized config and no emitted memory store replaces it |
+| Workspace capability set | an app-root `workspace/` directory | File tools, shell, offloading, and `workspace/AGENTS.md` require a filesystem/process surface |
+| Skills | a route `skills/<name>/SKILL.md` | Skill bodies are read from disk when a route loads |
+| Long-term memory | `memory.ts` on an agent route | The emitted stores omit the memory store needed by `recall` and `remember` |
+
+Filesystem marker capabilities such as route `memory.md` and `plan.md` do not activate without a marker filesystem. The explicit build gates above cover surfaces that would otherwise be silently replaced, dropped, or fail only on first use.
+
+## Configuration is in the artifact
+
+The Hono emitter serializes the JSON-representable portion of `dawn.config.ts` into `.dawn/build/app.mjs`. Functions, class instances, and store handles are stripped; ordinary strings remain. Do not put secret literals in build-time config fields, because those values can become readable bundle content. Use host environment variables, Wrangler secrets, or provider bindings instead.
+
+For Workers, set the database URL as a secret:
+
+```bash
+wrangler secret put DATABASE_URL
+```
+
+## Deploy checklist
+
+1. Run `dawn check` and resolve every `DAWN_E1005` violation.
+2. Inspect `modules.edge.mjs`, `stores.mjs`, `app.mjs`, and the selected `wrangler.toml`.
+3. Declare the emitted runtime dependencies and every discovered model-provider package.
+4. Configure `DATABASE_URL` and model credentials as runtime secrets or bindings.
+5. Put outer authentication and tenant authorization around all rooted Dawn paths.
+6. Validate permission mode, static policy, hydration, and refresh if using generated stores.
+7. Drive Agent Protocol, AG-UI streaming, cancellation, and request-store disposal on the deployed host.
+
+## What is proven, and what is not
+
+The repository proves that the emitted module graph bundles without Dawn-owned Node built-ins, runs against local workerd in a gated lane, and completes a Node Hono round trip. That evidence is not a live Cloudflare deployment and is not observation of Vercel, Deno, or Bun behavior. Provider quotas, compatibility settings, WebSocket reachability, bindings, and production authentication remain deployment-specific validation work.
+
+<RelatedCards
+  items={[
+    { href: "/docs/embedding", title: "Embed the Runtime", description: "Own handler, store, and shutdown lifetimes." },
+    { href: "/docs/persistence", title: "Persistence and Tenancy", description: "Understand request-scoped and durable store boundaries." },
+    { href: "/docs/security-architecture", title: "Security Architecture", description: "Protect every rooted endpoint." },
+    { href: "/docs/deployment/node", title: "Node and Docker", description: "Use the full runtime when edge gates do not fit." },
+  ]}
+/>

@@ -1,0 +1,139 @@
+# Kubernetes
+
+Deploy Kubernetes applications by building the Node target image first, then installing the `dawn-app` chart. The chart runs an image; it does not build one or translate `dawn.config.ts`.
+
+## Prerequisites
+
+Build and publish a Node image as described in [Node and Docker](/docs/deployment/node):
+
+```bash
+dawn check
+dawn build
+docker build -t ghcr.io/you/my-dawn-app:2026-08-10 .
+docker push ghcr.io/you/my-dawn-app:2026-08-10
+```
+
+If the app configures `kubernetesSandbox`, install the sandbox infrastructure first. The default same-namespace path expects the `dawn-sandboxes` namespace and `dawn-orchestrator` ServiceAccount created by that release:
+
+```bash
+helm upgrade --install dawn-sandbox-infra \
+  oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
+```
+
+The application chart does not replace the sandbox infrastructure chart. See the existing [Execution Sandbox](/docs/sandbox) guide for the provider and cluster-side security boundary.
+
+## Install or upgrade the application
+
+For the default same-namespace sandbox path, install the app into `dawn-sandboxes`:
+
+```bash
+helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --set image.repository=ghcr.io/you/my-dawn-app \
+  --set image.tag=2026-08-10
+```
+
+Use the same namespace and image values for upgrades:
+
+```bash
+helm upgrade dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --set image.repository=ghcr.io/you/my-dawn-app \
+  --set image.tag=2026-08-10
+```
+
+`image.repository` is required. Pin an immutable tag or set `image.digest` in production.
+
+## Health probes
+
+The chart sends startup, readiness, and liveness HTTP probes to `healthPath`, which defaults to `/healthz`. Dawn's response is process **liveness**, not dependency readiness: it does not query the model, Postgres, or the sandbox provider.
+
+Some store construction happens while the runtime is assembled, so a boot failure can prevent the listener from starting. In fetch/Hono compositions, a request-store factory runs before route dispatch and can even fail a health request. Neither behavior turns `/healthz` into an active dependency test. Add a separately owned dependency-readiness check if rollout safety requires one.
+
+## Environment and secrets
+
+Set ordinary environment entries through `env`/`envFrom`. For an existing Kubernetes Secret, use the convenience value:
+
+```bash
+helm upgrade dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --reuse-values \
+  --set secretName=my-dawn-secrets
+```
+
+The chart references the Secret but does not create it. Put model credentials and `DATABASE_URL` in an operator-managed Secret, and apply the tenant and authentication boundary described in [Security Architecture](/docs/security-architecture).
+
+Shared Postgres stores and local `.dawn` files have different lifetimes. Configure each state domain with [Persistence and Tenancy](/docs/persistence) before relying on restarts or replicas.
+
+## Filesystem durability
+
+The `dawn-app` chart mounts only an `emptyDir` at `/tmp`. It does not mount the app's `.dawn` directory. Local SQLite checkpoints, threads, permissions, and other `.dawn` data are therefore ephemeral across Pod replacement.
+
+Use external durable stores where replacement must preserve state. Sandbox-provider workspaces have their own volume lifecycle and are not made durable by the app Pod's `/tmp` mount.
+
+## ServiceAccount modes
+
+The chart defaults are:
+
+- `serviceAccount.create=false`;
+- `serviceAccount.name=dawn-orchestrator`;
+- `sandboxNamespace=dawn-sandboxes`, which is informational only;
+- `automountServiceAccountToken=true` on the app Pod.
+
+For the same-namespace sandbox path, install `dawn-sandbox-infra` first and install the app into `dawn-sandboxes`. The existing `dawn-orchestrator` ServiceAccount is then selected by name.
+
+For a separate application namespace, add the planned app ServiceAccount as a subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
+
+```bash
+helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --reuse-values \
+  --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"dawn-app","namespace":"my-app"}'
+
+helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace my-app --create-namespace \
+  --set image.repository=ghcr.io/you/my-dawn-app \
+  --set image.tag=2026-08-10 \
+  --set serviceAccount.create=true \
+  --set serviceAccount.name=dawn-app
+```
+
+Keep the provider's configured namespace, the infrastructure chart namespace, and the informational `sandboxNamespace` value aligned. Changing `sandboxNamespace` alone does not change RBAC or where sandbox Pods are created.
+
+Applications that do not configure `kubernetesSandbox` do not need Kubernetes API credentials or an orchestrator RoleBinding. Install with an application-owned ServiceAccount and disable token mounting as one complete mode:
+
+```bash
+helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace my-app --create-namespace \
+  --set image.repository=ghcr.io/you/my-dawn-app \
+  --set image.tag=2026-08-10 \
+  --set serviceAccount.create=true \
+  --set serviceAccount.name=dawn-app \
+  --set automountServiceAccountToken=false
+```
+
+No orchestrator RoleBinding is needed in this mode because the application does not call the Kubernetes API through `kubernetesSandbox`. If the application needs some unrelated Kubernetes API permission, grant that separately rather than binding the sandbox orchestrator Role.
+
+## Replicas and run coordination
+
+Postgres can provide shared durable stores for checkpoints, thread metadata, and permission decisions. Long-term memory is configured separately. Even with all of those shared, the active one-run-per-thread gate and cancellation registry remain process-local.
+
+More than one replica therefore requires guaranteed thread-aware routing to one owning process, or distributed per-thread serialization plus cancel routing. An HPA changes replica count and a PodDisruptionBudget constrains disruption; neither coordinates Dawn runs or ensures that a cancel request reaches the owning process. Keep the conservative one-replica default until that coordination exists.
+
+See [Production Topology](/docs/production-topology) for request routing, cancellation, and failure-mode design.
+
+## Rollouts and shutdown
+
+The generated Node `server.mjs` does not opt into `serveRuntime` signal handlers. The runtime has a drainable `close()` path, but the generated entry does not currently call it on `SIGTERM`. Set realistic termination grace periods, test streaming requests through a rollout, and use a caller-owned Node entry when coordinated signal handling is required.
+
+## Chart reference
+
+Review the released chart's [`README.md`](https://github.com/cacheplane/dawnai/blob/main/charts/dawn-app/README.md) and [`values.yaml`](https://github.com/cacheplane/dawnai/blob/main/charts/dawn-app/values.yaml) before installation. The chart exposes image, probe, ServiceAccount, environment, ingress, autoscaling, disruption-budget, and security-context values without enforcing Dawn's higher-level replica or persistence requirements.
+
+<RelatedCards
+  items={[
+    { href: "/docs/deployment/node", title: "Node and Docker", description: "Build the image consumed by this chart." },
+    { href: "/docs/sandbox", title: "Execution Sandbox", description: "Configure the Kubernetes sandbox provider and infrastructure." },
+    { href: "/docs/persistence", title: "Persistence and Tenancy", description: "Externalize every state domain that must survive replacement." },
+    { href: "/docs/production-topology", title: "Production Topology", description: "Design thread-aware routing and cancel ownership." },
+  ]}
+/>

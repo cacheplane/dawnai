@@ -282,11 +282,21 @@ function linkDestinations(source) {
 
 function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxChars = 600 }) {
   const headingSource = maskMarkdownCodeAndComments(source)
-  const headings = [...headingSource.matchAll(/^(#{1,6})\s+(.+?)[ \t]*$/gm)].map((match) => ({
-    index: match.index,
-    level: match[1].length,
-    text: match[2],
-  }))
+  const headings = [...headingSource.matchAll(/^(#{1,6})\s+(.+?)[ \t]*$/gm)].map((match) => {
+    const lineEnd = source.indexOf("\n", match.index)
+    const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
+    return {
+      index: match.index,
+      level: match[1].length,
+      // Heading discovery uses the masked source so fences/comments cannot
+      // create boundaries, but matching uses the original line so inline-code
+      // delimiters remain part of an exact retained heading contract.
+      text: originalLine
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/[ \t]+#+[ \t]*$/, "")
+        .trim(),
+    }
+  })
   const headingIndex = headings.findIndex((heading) => heading.text === retainedHeading)
   if (headingIndex === -1) {
     return {
@@ -491,10 +501,9 @@ const accuracyContracts = [
       "handlerPromise = undefined",
       "must exactly match",
       "await permissionsStore.load()",
-      'import type { PermissionMode, PermissionsFile } from "@dawn-ai/permissions"',
-      "type PermissionPolicy = {",
-      "readonly mode: PermissionMode",
-      "readonly config: PermissionsFile",
+      "type PostgresPermissionsStoreOptions,",
+      "type PermissionPolicy = Required<",
+      'Pick<PostgresPermissionsStoreOptions, "mode" | "config">',
       "mode: policy.mode",
       "config: policy.config",
       "used as-is",
@@ -514,6 +523,7 @@ const accuracyContracts = [
       'app.route("/dawn"',
       "const handler = await createRuntimeFetchHandler",
       'mode: "interactive"',
+      'from "@dawn-ai/permissions"',
     ],
   },
   {
@@ -577,16 +587,101 @@ const accuracyContracts = [
   {
     file: "apps/web/content/docs/deployment.mdx",
     required: [
-      "node:24-slim",
-      'node_version: "22"',
-      "not blanket server authentication",
-      "/threads/:thread_id/cancel",
-      "/memory/candidates",
-      "spans namespaces",
-      "entire service",
-      "docker run -p 127.0.0.1:8000:8000",
+      "/docs/deployment/node",
+      "/docs/deployment/kubernetes",
+      "/docs/deployment/langsmith",
+      "/docs/deployment/edge",
+      "Specifying build targets replaces",
     ],
-    forbidden: ["Nothing else is gated"],
+    forbidden: ["backend that does not exist yet"],
+  },
+  {
+    file: "apps/web/content/docs/deployment/node.mdx",
+    required: [
+      "Node 24",
+      ".dawn/build/server.mjs",
+      "127.0.0.1:8000:8000",
+      "does not currently install signal handlers",
+      "COPY . .",
+      "chown -R 1000:1000 /app/.dawn",
+      "USER 1000:1000",
+      "/app/workspace",
+      "root-owned",
+      "EACCES",
+      "COPY --chown",
+    ],
+    forbidden: ["Node 22"],
+  },
+  {
+    file: "apps/web/content/docs/deployment/kubernetes.mdx",
+    required: [
+      "liveness",
+      "not dependency readiness",
+      "dawn-sandboxes",
+      "dawn-orchestrator",
+      "shared durable stores",
+      "thread-aware",
+      "No orchestrator RoleBinding is needed",
+    ],
+    forbidden: ["/healthz proves dependency readiness", "HPA makes"],
+  },
+  {
+    file: "apps/web/content/docs/deployment/langsmith.mdx",
+    required: [
+      'node_version: "22"',
+      "Node 24",
+      "does not include",
+      "middleware",
+      "AG-UI",
+      "sandbox",
+    ],
+    forbidden: ["same runtime"],
+  },
+  {
+    file: "apps/web/content/docs/deployment/edge.mdx",
+    required: [
+      "modules.edge.mjs",
+      '"/my-app"',
+      "app.route",
+      "DAWN_E1005",
+      "local workerd",
+      "not a live",
+      "transitive dependency",
+      "`DAWN_E1005` checks only Dawn-known capabilities",
+      "arbitrary Node built-ins",
+      "not guaranteed to be free of Node built-ins",
+      '```js title="host.mjs"',
+    ],
+    forbidden: ["Nothing else is gated", '```ts title="host.ts"'],
+  },
+  {
+    file: "charts/dawn-app/README.md",
+    required: [
+      "Scaling requirements",
+      ".dawn/build/server.mjs",
+      "helm lint --strict",
+      "returns zero with that warning",
+      "helm template",
+      "fails when `image.repository` is unset",
+    ],
+    forbidden: [
+      "backend that does not exist yet",
+      "until a shared threads and checkpoint backend ships",
+      "langgraphjs dockerfile",
+      "langgraphjs-built image",
+      "image built the alternate way",
+      "containerize the `langsmith` target",
+    ],
+  },
+  {
+    file: "charts/dawn-app/values.yaml",
+    required: [".dawn/build/server.mjs"],
+    forbidden: [
+      "langgraphjs dockerfile",
+      "langgraphjs-built image",
+      "image built the alternate way",
+      "containerize the langsmith target",
+    ],
   },
   {
     file: "apps/web/content/docs/dev-server.mdx",
@@ -787,9 +882,167 @@ for (const contract of accuracyContracts) {
   }
 }
 
+// Every dawn-app installation example must select the image that the guide
+// built, rather than silently falling back to the chart's AppVersion. Keep the
+// expected command counts exact so a new unpinned example cannot hide beside
+// an older pinned one.
+const helmInstallExampleContracts = [
+  { file: "apps/web/content/docs/deployment/kubernetes.mdx", expectedCount: 3 },
+  {
+    file: "charts/dawn-app/README.md",
+    expectedCount: 2,
+    requiredInEveryCommand: [
+      "--namespace dawn-sandboxes",
+      "--set image.repository=ghcr.io/you/your-app",
+      "--set image.tag=2026-08-10",
+    ],
+  },
+]
+
+for (const { file, expectedCount, requiredInEveryCommand = [] } of helmInstallExampleContracts) {
+  const source = readFileSync(resolve(repoRoot, file), "utf8")
+  const commands = [
+    ...source.matchAll(/^helm (?:install|upgrade --install) dawn-app\b[\s\S]*?(?=\n\n|```)/gm),
+  ].map((match) => match[0])
+  if (commands.length !== expectedCount) {
+    failures.push(
+      `${file} contains ${commands.length} dawn-app install examples; expected exactly ${expectedCount}`,
+    )
+  }
+  for (const [index, command] of commands.entries()) {
+    if (!/--set image\.(?:tag|digest)=\S+/.test(command)) {
+      failures.push(
+        `${file} dawn-app install example ${index + 1} does not pin image.tag or image.digest`,
+      )
+    }
+    for (const required of requiredInEveryCommand) {
+      if (!command.includes(required)) {
+        failures.push(`${file} dawn-app install example ${index + 1} is missing: ${required}`)
+      }
+    }
+  }
+}
+
+const chartReadmeSource = readFileSync(resolve(repoRoot, "charts/dawn-app/README.md"), "utf8")
+for (const required of [
+  "dawn check",
+  "dawn build",
+  "docker build -t ghcr.io/you/your-app:2026-08-10 .",
+  "docker push ghcr.io/you/your-app:2026-08-10",
+  "helm upgrade --install dawn-sandbox-infra",
+]) {
+  if (!chartReadmeSource.includes(required)) {
+    failures.push(`charts/dawn-app/README.md copy-complete install prerequisite missing: ${required}`)
+  }
+}
+if (chartReadmeSource.includes("--set image.tag=latest")) {
+  failures.push("charts/dawn-app/README.md install examples must not use mutable image.tag=latest")
+}
+
+const kubernetesDeploymentSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
+  "utf8",
+)
+const crossNamespaceRoleBinding = kubernetesDeploymentSource.indexOf(
+  "helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra",
+)
+const crossNamespaceAppInstall = kubernetesDeploymentSource.indexOf(
+  "helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
+  kubernetesDeploymentSource.indexOf("For a separate application namespace"),
+)
+if (crossNamespaceRoleBinding === -1 || crossNamespaceAppInstall === -1) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must show both cross-namespace RoleBinding update and app install",
+  )
+} else if (crossNamespaceRoleBinding > crossNamespaceAppInstall) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must update the cross-namespace RoleBinding before installing the app ServiceAccount",
+  )
+}
+for (const required of ["future ServiceAccount", "Ready-but-sandbox-broken"]) {
+  if (!kubernetesDeploymentSource.includes(required)) {
+    failures.push(
+      `apps/web/content/docs/deployment/kubernetes.mdx cross-namespace ordering explanation missing: ${required}`,
+    )
+  }
+}
+const noSandboxInstall = [
+  ...kubernetesDeploymentSource.matchAll(
+    /^helm (?:install|upgrade --install) dawn-app\b[\s\S]*?(?=\n\n|```)/gm,
+  ),
+]
+  .map((match) => match[0])
+  .find((command) => command.includes("--set automountServiceAccountToken=false"))
+
+if (!noSandboxInstall) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx is missing a complete no-sandbox dawn-app install with automountServiceAccountToken=false",
+  )
+} else {
+  for (const required of [
+    "--namespace my-app",
+    "--set image.repository=ghcr.io/you/my-dawn-app",
+    "--set image.tag=2026-08-10",
+    "--set serviceAccount.create=true",
+    "--set serviceAccount.name=dawn-app",
+  ]) {
+    if (!noSandboxInstall.includes(required)) {
+      failures.push(
+        `apps/web/content/docs/deployment/kubernetes.mdx no-sandbox install is missing: ${required}`,
+      )
+    }
+  }
+}
+
 // Compatibility stubs keep a moved heading linkable without allowing the old
 // overview to grow back into a second copy of the canonical guide.
-const compatibilityStubContracts = []
+const compatibilityStubContracts = [
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "Deploying to production (Node/Docker)",
+    canonicalHref: "/docs/deployment/node",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "Deploying on Kubernetes",
+    canonicalHref: "/docs/deployment/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "The LangSmith / LangGraph Platform path",
+    canonicalHref: "/docs/deployment/langsmith",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "Edge runtimes",
+    canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "The `@dawn-ai/cli/fetch` entry point",
+    canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "The `hono` build target",
+    canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "Why the stores are per-request",
+    canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "What the edge cannot serve",
+    canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "What is proven, and what is not",
+    canonicalHref: "/docs/deployment/edge",
+  },
+]
 
 for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibilityStubContracts) {
   const filePath = resolve(repoRoot, file)
@@ -878,6 +1131,79 @@ const docsNav = readFileSync(docsNavPath, "utf8")
 const navDocEntries = [
   ...docsNav.matchAll(/^\s*\{\s*label:\s*"([^"]+)",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
 ].map((match) => ({ label: match[1], href: match[2] }))
+const expectedNavDocEntries = [
+  { label: "Getting Started", href: "/docs/getting-started" },
+  { label: "Mental Model", href: "/docs/mental-model" },
+  { label: "Migrating from LangGraph", href: "/docs/migrating-from-langgraph" },
+  { label: "Routes", href: "/docs/routes" },
+  { label: "Agents", href: "/docs/agents" },
+  { label: "Tools", href: "/docs/tools" },
+  { label: "State", href: "/docs/state" },
+  { label: "Workspace Filesystem", href: "/docs/workspace" },
+  { label: "Memory", href: "/docs/memory" },
+  { label: "Planning", href: "/docs/planning" },
+  { label: "Skills", href: "/docs/skills" },
+  { label: "Subagents", href: "/docs/subagents" },
+  { label: "Context Management", href: "/docs/context-management" },
+  { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
+  { label: "Dev Server", href: "/docs/dev-server" },
+  { label: "Middleware", href: "/docs/middleware" },
+  { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
+  { label: "Embed the Runtime", href: "/docs/embedding" },
+  { label: "Blueprints", href: "/docs/blueprints" },
+  { label: "Scenario Testing", href: "/docs/testing" },
+  { label: "Agent Test Harness", href: "/docs/testing-agents" },
+  { label: "Evals", href: "/docs/evals" },
+  { label: "Persistence and Tenancy", href: "/docs/persistence" },
+  { label: "Production Topology", href: "/docs/production-topology" },
+  { label: "Security Architecture", href: "/docs/security-architecture" },
+  { label: "Access Control", href: "/docs/access-control" },
+  { label: "Permissions", href: "/docs/permissions" },
+  { label: "Retry", href: "/docs/retry" },
+  { label: "Observability", href: "/docs/observability" },
+  { label: "Inspector", href: "/docs/inspector" },
+  { label: "Upgrading", href: "/docs/upgrading" },
+  { label: "Deployment Options", href: "/docs/deployment" },
+  { label: "Node and Docker", href: "/docs/deployment/node" },
+  { label: "Kubernetes", href: "/docs/deployment/kubernetes" },
+  { label: "LangSmith", href: "/docs/deployment/langsmith" },
+  { label: "Edge and Hono", href: "/docs/deployment/edge" },
+  { label: "Execution Sandbox", href: "/docs/sandbox" },
+  { label: "Recipes Overview", href: "/docs/recipes" },
+  { label: "Add a Tool", href: "/docs/recipes/add-a-tool" },
+  { label: "Typed State", href: "/docs/recipes/typed-state" },
+  { label: "Auth Middleware", href: "/docs/recipes/auth-middleware" },
+  { label: "Stream Output", href: "/docs/recipes/stream-output" },
+  { label: "Retry Transient Model Calls", href: "/docs/recipes/retry-flaky-tools" },
+  { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
+  { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
+  { label: "Configuration Reference", href: "/docs/configuration" },
+  { label: "CLI Reference", href: "/docs/cli" },
+  { label: "API Reference", href: "/docs/api" },
+  { label: "Error Codes", href: "/docs/errors" },
+  { label: "FAQ", href: "/docs/faq" },
+]
+
+if (navDocEntries.length !== expectedNavDocEntries.length) {
+  failures.push(
+    `DOCS_NAV registry has ${navDocEntries.length} rows; expected exactly ${expectedNavDocEntries.length}`,
+  )
+}
+
+const firstNavRegistryMismatch = Array.from(
+  { length: Math.max(navDocEntries.length, expectedNavDocEntries.length) },
+  (_, index) => index,
+).find((index) => {
+  const actual = navDocEntries[index]
+  const expected = expectedNavDocEntries[index]
+  return actual?.label !== expected?.label || actual?.href !== expected?.href
+})
+
+if (firstNavRegistryMismatch !== undefined) {
+  failures.push(
+    `DOCS_NAV registry row ${firstNavRegistryMismatch + 1} mismatch: expected ${JSON.stringify(expectedNavDocEntries[firstNavRegistryMismatch] ?? null)}, received ${JSON.stringify(navDocEntries[firstNavRegistryMismatch] ?? null)}`,
+  )
+}
 const navDocHrefs = navDocEntries.map(({ href }) => href)
 const uniqueNavDocHrefs = [...new Set(navDocHrefs)].sort()
 const duplicateNavDocHrefs = uniqueNavDocHrefs.filter(

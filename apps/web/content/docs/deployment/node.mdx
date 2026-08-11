@@ -1,0 +1,131 @@
+# Node and Docker
+
+The Node target is the recommended production default. It runs Dawn's complete HTTP runtime and is the target to choose when you need Agent Protocol, AG-UI, middleware, filesystem-backed capabilities, or an execution sandbox.
+
+## Recommendation and prerequisites
+
+- Use Node 24 or newer. Dawn packages require Node 24+.
+- Keep `@dawn-ai/cli` in production `dependencies`, because the emitted server imports it at runtime.
+- Run `dawn build` on the host before building an image. The generated Dockerfile copies `.dawn/build`; it does not run Dawn inside the image.
+- Put blanket authentication, tenant authorization, and network restriction around the full service before exposing it.
+
+For an npm-managed app, this is a runnable way to make the CLI a production dependency:
+
+```bash
+npm install @dawn-ai/cli --save
+```
+
+## Select the Node target
+
+Node and LangSmith are emitted when `build.targets` is absent. To build only Node, specify it explicitly:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["node"] },
+})
+```
+
+An authored target list replaces the defaults.
+
+## Emitted files
+
+`dawn build` writes:
+
+| File | Purpose |
+|---|---|
+| `.dawn/build/modules.mjs` | Static imports for discovered routes, tools, state, route memory, and middleware |
+| `.dawn/build/server.mjs` | Loads that manifest and calls `serveRuntime()` on the production listener |
+| `Dockerfile` | A marker-managed `node:24-slim` image definition |
+
+If the root `Dockerfile` still carries Dawn's generated marker, a later build refreshes it. If the root file has no marker, Dawn preserves it and writes the generated alternative to `.dawn/build/Dockerfile`.
+
+## Run directly
+
+Use `dawn start` to run the same Node assembly without Docker:
+
+```bash
+dawn build
+dawn start
+```
+
+The default listener is `0.0.0.0:8000`. Override it with `--host` and `--port`, or with `HOST` and `PORT`:
+
+```bash
+dawn start --host 127.0.0.1 --port 3000
+```
+
+## Use the generated Dockerfile
+
+Build only after the host has emitted a fresh `.dawn/build` directory:
+
+```bash
+dawn check
+dawn build
+docker build -t my-dawn-app .
+docker run --rm -p 127.0.0.1:8000:8000 --env-file .env my-dawn-app
+```
+
+The loopback-only publish, `127.0.0.1:8000:8000`, is an appropriate local smoke boundary. Production exposure belongs behind the deployment's authenticated proxy or network policy.
+
+The generated image runs `npm ci --omit=dev || npm install --omit=dev`. It does not invoke pnpm or Yarn, even though its copy step tolerates an optional pnpm lockfile in the build context. Use a hand-authored Dockerfile if your production install must use another package manager or stricter lockfile behavior.
+
+Do not exclude `.dawn/build` in `.dockerignore`; the image's command is `node .dawn/build/server.mjs`.
+
+<Callout type="warn" title="The generated image does not make workspace writable">
+  The generated Dockerfile uses `COPY . .`, then runs only `chown -R 1000:1000 /app/.dawn` before `USER 1000:1000`. If the build context contains `/app/workspace`, Docker copies it as root-owned. Local `writeFile`, shell commands that mutate the workspace, and tool-output offloading can then fail with `EACCES`.
+
+  When local workspace writes are required, use a hand-authored Dockerfile that adjusts ownership—for example, `COPY --chown=1000:1000 . .` or an explicit `chown` for `/app/workspace`—and validate the resulting least-privilege boundary. The current emitter does not make that ownership change for you.
+</Callout>
+
+## Environment and secrets
+
+Pass model credentials, database URLs, and provider configuration at runtime. For local Docker smoke tests, `--env-file .env` is convenient; for production, use the orchestrator's secret mechanism and avoid copying secret files into the image.
+
+`src/middleware.ts` is execution middleware, not blanket service authentication. Health, thread management and state routes, cancellation, and memory-candidate management include middleware-bypassing paths. The external authentication and tenant boundary must cover the entire service, with only intentionally public probes exempted.
+
+## Filesystem and sandbox
+
+The Node runtime can use local `.dawn` stores and filesystem-backed capabilities, and it can construct the configured [execution sandbox](/docs/sandbox). Those are separate durability domains:
+
+- `.dawn` inside a container is local to that container unless the deployment mounts or replaces it with durable storage;
+- sandbox workspaces follow the selected sandbox provider's volume lifecycle;
+- shared Postgres checkpoints, threads, and permissions do not automatically make long-term memory or workspace files shared.
+
+Choose those stores deliberately in [Persistence and Tenancy](/docs/persistence), and coordinate replicas as described in [Production Topology](/docs/production-topology).
+
+## Health and shutdown
+
+`GET /healthz` returns a process-level success response. Treat it as **liveness**, not dependency readiness: the handler does not query the model, database, or sandbox provider. In an embedded fetch/Hono assembly with `requestStores`, store construction occurs before route dispatch, so even a health request may fail before the liveness handler runs; that still is not a complete dependency check.
+
+The generated `.dawn/build/server.mjs` does not currently install signal handlers. `serveRuntime()` supports signal handling only when a caller opts into `installSignalHandlers: true`; a larger host may instead own signals and call `await runtime.close()` in its ordered shutdown path. Plan rollout grace periods and request draining around the generated server's current limitation.
+
+## Production checklist
+
+1. Use Node 24+ and keep `@dawn-ai/cli` in `dependencies`.
+2. Run `dawn check`, `dawn build`, and `dawn verify` before image construction.
+3. Test the built image on loopback, including Agent Protocol and AG-UI streaming.
+4. Inject secrets at runtime and authenticate/restrict the whole service.
+5. Configure durable stores and backup/retention policy for every state domain you rely on.
+6. Keep one replica unless thread-aware routing or distributed serialization and cancel routing are guaranteed.
+7. Account for the generated server's missing signal handlers during rollout.
+
+## Troubleshooting
+
+- **Container cannot import `@dawn-ai/cli`:** move it from `devDependencies` to `dependencies`, rebuild on the host, then rebuild the image.
+- **`server.mjs` is missing in the image:** run `dawn build` first and remove `.dawn/build` from `.dockerignore`.
+- **A custom Dockerfile was not replaced:** Dawn preserves unmarked root files; inspect `.dawn/build/Dockerfile`.
+- **The health probe is green but requests fail:** test the actual database, model, sandbox, authentication, and route path; `/healthz` does not validate them.
+- **Cancellation or the one-run gate behaves inconsistently across replicas:** route a thread to its owning process or add distributed serialization and cancel routing.
+
+## Related guides
+
+<RelatedCards
+  items={[
+    { href: "/docs/deployment/kubernetes", title: "Kubernetes", description: "Install the built image with the dawn-app chart." },
+    { href: "/docs/persistence", title: "Persistence and Tenancy", description: "Select and operate every durability domain." },
+    { href: "/docs/production-topology", title: "Production Topology", description: "Design probes, draining, and replica coordination." },
+    { href: "/docs/security-architecture", title: "Security Architecture", description: "Protect the full HTTP surface." },
+  ]}
+/>
