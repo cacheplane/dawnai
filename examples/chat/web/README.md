@@ -11,8 +11,11 @@ This app runs **live** against a real model — there is no aimock/demo mode her
 deterministic, no-key proof that the AG-UI wire protocol works is the `/agui` endpoint's
 test suite in `@dawn-ai/cli`.
 
-Scope: basic chat with the `/chat` route. The AG-UI v1 adapter intentionally
-ignores planning and subagent capability events.
+Scope: basic chat with the `/chat` route. Dawn's AG-UI adapter emits standard
+replacement `dawn.plan` and `dawn.subagent` activity snapshots when matching
+runtime chunks occur, but this client drives only `/chat` and registers no
+activity renderers. It therefore remains a transport-wiring example with no
+planning or subagent presentation, not a coordinator UI.
 
 ## Architecture
 

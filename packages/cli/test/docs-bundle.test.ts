@@ -208,15 +208,17 @@ describe("current AG-UI documentation", () => {
     // are deliberately NOT listed: the canonicalized adapter still surfaces
     // permission gates as AG-UI standard interrupts, and the example UIs render
     // them with CopilotKit's current `useInterrupt` hook (see each example's
-    // PermissionInterrupt.tsx). What must stay gone is the *legacy* vocabulary
-    // below — the custom-event interrupt and the `forwardedProps` resume path.
+    // PermissionInterrupt.tsx). Exact `dawn.subagent` is now a valid standard
+    // activity type. What must stay gone is the *legacy* vocabulary below — the
+    // dotted custom-event family, custom-event interrupt, and `forwardedProps`
+    // resume path.
     const removed = [
       "createAgUiTranslator",
       "mapRunInput",
       'CUSTOM{name:"on_interrupt"}',
       "forwardedProps.command.resume",
       "STATE_SNAPSHOT",
-      "dawn.subagent",
+      "dawn.subagent.",
       "TodosPanel",
     ]
     const roots = [
