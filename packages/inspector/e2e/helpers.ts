@@ -49,18 +49,17 @@ export async function expectPhase(
   await expect(grid(page)).toHaveAttribute("data-pretable-data-phase", phase)
 }
 
-/** Every row id the browse grid has in the DOM, in DOM order. Two things this cannot
- *  show: the grid VIRTUALIZES, so this is the rows that fit the viewport and not the
- *  whole loaded window; and the unscoped browse is GROUPED (`list-page` passes
- *  `groupByNamespace` whenever no namespace facet is selected), so the list is
- *  interleaved with pretable's `__group__:` header ids. A caller that wants records
- *  has to drop those, and one that wants the server's flat order has to scope to a
- *  namespace first.
+/** Every row id the browse grid has in the DOM, in DOM order — group header ids
+ *  included, and only as many rows as the viewport fits. `asDrawn` and `expectDrawnRows`
+ *  below are where those two facts are written down; this is the raw read.
  *
  *  One-shot, and deliberately not retrying: `MemoryGrid` sizes its viewport from a
  *  row-count estimate until the engine's first telemetry callback lands, so the rendered
  *  set can still change a frame after the phase reads `idle`. Callers assert through
- *  `expect.poll`/`toPass` so that settling is retried rather than raced. */
+ *  `expect.poll`/`toPass` so that settling is retried rather than raced — and phrase the
+ *  claim POSITIVELY, because a read taken before the first paint answers `[]`, which
+ *  satisfies every assertion of the form "does not contain" no matter what the page
+ *  went on to draw. */
 export async function rowIds(page: Page): Promise<string[]> {
   return grid(page)
     .locator("[data-pretable-row-id]")
@@ -96,19 +95,30 @@ export function total(page: Page): Locator {
   return page.getByTestId(TEST_IDS.total)
 }
 
+const GROUP_ROW_ID_PREFIX = "__group__:"
+
 /** Pretable's group row id, mirrored: `__group__:<columnId>=s:<value>` with `%`, `/`
  *  and `=` percent-escaped (grid-core `makeGroupId`/`escapeGroupKey`). */
 function groupRowId(namespace: string): string {
   const escaped = namespace.replace(/%/g, "%25").replace(/\//g, "%2F").replace(/=/g, "%3D")
-  return `__group__:namespace=s:${escaped}`
+  return `${GROUP_ROW_ID_PREFIX}namespace=s:${escaped}`
 }
 
-/** Pretable orders group siblings with these exact options (grid-core `sortSiblings`),
- *  ascending unless the active sort targets the grouped column — which nothing in this
- *  lane sorts by. Constructed the same way here so this really is the shipped
- *  comparator and not a lookalike that happens to agree on three lowercase-ASCII
- *  namespaces. */
-const groupCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+/** Group rows share the row-id channel with records, so a caller that wants the records
+ *  has to drop them. Keyed off the same prefix `groupRowId` builds with, so the two
+ *  cannot drift into disagreeing about what a group row looks like. */
+export function recordsOnly(ids: readonly string[]): string[] {
+  return ids.filter((id) => !id.startsWith(GROUP_ROW_ID_PREFIX))
+}
+
+/** Pretable orders group siblings with `Intl.Collator(undefined, { numeric: true,
+ *  sensitivity: "base" })` (grid-core `sortSiblings`), ascending unless the active sort
+ *  targets the grouped column — which nothing in this lane sorts by. The OPTIONS are the
+ *  shipped ones. The locale is pinned rather than left to resolve, which is the one
+ *  deliberate difference: the shipped comparator resolves in the PAGE, and
+ *  `playwright.config` pins that to `en-US`, while a copy left `undefined` here would
+ *  resolve in whatever locale the runner's machine happens to have. */
+const groupCollator = new Intl.Collator("en-US", { numeric: true, sensitivity: "base" })
 
 /**
  * A server window, projected into what the UNSCOPED browse DRAWS.
@@ -127,34 +137,52 @@ export function asDrawn(windowIds: readonly string[]): string[] {
   const namespaceOf = new Map(browseSeedRecords().map((record) => [record.id, record.namespace]))
   const buckets = new Map<string, string[]>()
   for (const id of windowIds) {
-    const namespace = namespaceOf.get(id) as string
+    const namespace = namespaceOf.get(id)
+    // A record the fixture does not describe has no namespace to bucket it under, and
+    // filing it under `undefined` would emit a `__group__:namespace=s:undefined` header
+    // and surface as an unreadable row diff. Scenarios that CREATE records reach here
+    // with ids the seed never had, so this is a scheduled arrival, not a hypothetical.
+    if (namespace === undefined) throw new Error(`asDrawn: "${id}" is not a seeded record`)
     const bucket = buckets.get(namespace)
     if (bucket) bucket.push(id)
     else buckets.set(namespace, [id])
   }
   const out: string[] = []
-  for (const namespace of [...buckets.keys()].sort(groupCollator.compare)) {
+  for (const [namespace, ids] of [...buckets].sort(([left], [right]) =>
+    groupCollator.compare(left, right),
+  )) {
     out.push(groupRowId(namespace))
-    out.push(...(buckets.get(namespace) as string[]))
+    out.push(...ids)
   }
   return out
 }
 
-/** A floor on how much of the window the virtualizer has to actually draw. The grid
- *  caps its viewport height, so only ~19 of a 200-row window is ever in the document —
- *  but without a floor, `slice(0, ids.length)` lets the value under test choose its own
- *  coverage, and a regression that collapsed the grid to a single row would satisfy any
- *  prefix. Well under the ~19 the capped viewport currently fits, because that count is
- *  a rendering detail and this is a floor, not a pin. */
+/** A column's cells over RECORD rows only, in DOM order. Group rows carry cells on the
+ *  same `data-pretable-cell` channel — pretable marks the row itself
+ *  `data-pretable-group-row`, which is what this excludes, so an assertion about a
+ *  column's values is not interleaved with group headers' aggregate slots. */
+export function recordCells(page: Page, columnId: string): Locator {
+  return grid(page)
+    .locator("[data-pretable-row-id]:not([data-pretable-group-row])")
+    .locator(`[data-pretable-cell][data-pretable-column-id="${columnId}"]`)
+}
+
+/** A floor on how much of the window the virtualizer has to actually draw. Without one,
+ *  `slice(0, ids.length)` lets the value under test choose its own coverage, and a
+ *  regression that collapsed the grid to a single row would satisfy any prefix. Set well
+ *  under whatever the capped viewport currently fits, because that count is a rendering
+ *  detail and this is a floor, not a pin. */
 const MIN_RENDERED_ROWS = 15
 
 /**
  * The browse grid draws exactly the head of `expected`.
  *
- * Two facts force "head" rather than "all". The grid VIRTUALIZES, so a 200-row window
- * is never wholly in the document; and the rendered set can still change a frame after
- * the phase reads `idle` (see `rowIds`), so the read is retried rather than raced —
- * inside the retry, so a floor over a single snapshot does not become a flake.
+ * "Head" rather than "all" because the grid VIRTUALIZES: it caps its viewport height, so
+ * a 200-row window is never wholly in the document and rows past the fold are never
+ * asserted here. A scenario that needs the deep window has to scroll it into view first.
+ *
+ * The read is retried rather than raced (see `rowIds`), with the floor INSIDE the retry
+ * so that a short first snapshot settles instead of failing.
  *
  * When `expected` is shorter than the floor it is asserted WHOLE, which is the stronger
  * claim and the one a narrow filter earns.
@@ -204,7 +232,14 @@ export async function applySetFilter(
 ): Promise<void> {
   const menu = await openFilterMenu(page, header)
   for (const value of values) {
-    await menu.locator("[data-pretable-filter-set]").getByRole("checkbox", { name: value }).check()
+    // `exact`, matching the sibling lookup in `openFilterMenu`: the accessible name of
+    // each box is the option's own value (`opt.label ?? opt.value`, and the browse
+    // columns declare no labels), so substring matching would turn any value that
+    // prefixes another into a strict-mode violation rather than a miss.
+    await menu
+      .locator("[data-pretable-filter-set]")
+      .getByRole("checkbox", { name: value, exact: true })
+      .check()
   }
   await page.keyboard.press("Escape")
 }
@@ -229,15 +264,28 @@ export async function sortByHeader(page: Page, header: string): Promise<void> {
 }
 
 /**
- * Time a user action from the gesture to the moment the grid ANSWERS it. This is design
- * §11's "end-to-end interaction" budget, measured rather than asserted by construction.
+ * Wall-clock time, on the RUNNER's clock, from the first step of a gesture to the moment
+ * the grid has drawn the answer to it.
+ *
+ * What this is NOT: design §11's "end-to-end interaction" instrument. Three costs the
+ * user never pays sit inside the number. `act` is driven over CDP, so a multi-step
+ * gesture pays a round-trip per step — `applyTextFilter` is four. `settled` is a
+ * Playwright retry, so any duration is rounded up to its polling grid. And the clock runs
+ * outside the page, so it also carries the driver's own latency. It is a loose upper
+ * bound: enough to catch a regression of KIND — a client round-trip storm — and not
+ * enough to state a p95 with. Tasks 18 and 21 have to measure the budget from inside the
+ * page; reusing this helper there would report the harness.
  *
  * `settled` is the caller's own check that the new answer is on screen, and it is a
  * parameter rather than a phase read for a reason: the grid is already `idle` when the
  * gesture lands, and the request that gesture causes is dispatched from an effect a
  * tick later — so waiting for `idle` alone can be satisfied by the state the gesture
- * was about to leave, and report a duration that timed nothing. The phase is asserted
- * after `settled` anyway, so a number is only ever returned for a fulfilled revision.
+ * was about to leave, and report a duration that timed nothing.
+ *
+ * The phase is asserted only AFTER the clock stops, so a number is still only ever
+ * returned for a fulfilled revision, without charging the gesture for a background poll
+ * (`BROWSE_POLL_INTERVAL_MS`, unconditional at 2 s while live and visible) that happened
+ * to be in flight when the rows settled.
  */
 export async function timeToFulfilled(
   page: Page,
@@ -247,8 +295,9 @@ export async function timeToFulfilled(
   const started = Date.now()
   await act()
   await settled()
+  const elapsed = Date.now() - started
   await expectPhase(page, "idle")
-  return Date.now() - started
+  return elapsed
 }
 
 /** Wait out one poll: block until a browse request that STARTED after this call has

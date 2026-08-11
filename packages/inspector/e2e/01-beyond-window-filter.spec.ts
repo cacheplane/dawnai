@@ -13,7 +13,6 @@ import {
   clearFilter,
   expectDrawnRows,
   openBrowse,
-  rowIds,
   status,
   timeToFulfilled,
   total,
@@ -29,11 +28,15 @@ test.describe("scenario 1 — beyond-window filter", () => {
   }) => {
     void consoleErrors
     await openBrowse(page)
-    const before = await rowIds(page)
-    expect(before).not.toContain(NEEDLE_ID)
-    // The claim the test rests on, and it is about the WINDOW rather than about what
-    // the virtualizer drew: `before` proves the needle is not on screen, this proves
-    // the client never received it, so a local filter had nothing to find.
+    // The pre-filter state, asserted POSITIVELY. A bare `expect(await rowIds(page)).not
+    // .toContain(NEEDLE_ID)` reads as the stronger claim and is the weaker one: taken
+    // before the first paint it answers `[]` and passes without the grid having drawn
+    // anything. Pinning the whole drawn head instead cannot pass vacuously, and says the
+    // same thing about the needle on the way past.
+    await expectDrawnRows(page, asDrawn(seedIdsInDefaultOrder().slice(0, BROWSE_PAGE_SIZE)))
+    // The claim the test rests on, and it is about the WINDOW rather than about what the
+    // virtualizer drew: the client never RECEIVED the needle, so a local filter would
+    // have had nothing to find.
     expect(seedIdsInDefaultOrder().indexOf(NEEDLE_ID)).toBeGreaterThan(BROWSE_PAGE_SIZE)
 
     const elapsed = await timeToFulfilled(
@@ -44,11 +47,12 @@ test.describe("scenario 1 — beyond-window filter", () => {
     // One record matches, so this is the whole answer and not a head of it: the loaded
     // count, the matching total and the rows all describe the same single record.
     await expect(status(page)).toHaveText("1 loaded of 1 matching")
-    // Design §11: p95 < 300 ms against a local server. One sample is not a p95 — and
-    // this one includes the gesture itself, the funnel's 200 ms debounce included — so
-    // the ceiling is deliberately loose. It catches a regression of KIND (a client
-    // round-trip storm), not of degree; tasks 18 and 21 are where the budget is
-    // measured.
+    // Design §11 proposes p95 < 300 ms against a local server. This is not that: one
+    // sample is not a p95, and `timeToFulfilled` measures the driver as well as the page
+    // (its doc lists what rides along). The 200 ms debounce is NOT among the costs — the
+    // menu's unmount cleanup applies the pending draft, so Escape flushes it rather than
+    // waiting it out. The ceiling is deliberately loose: it catches a regression of KIND
+    // (a client round-trip storm), not of degree. Tasks 18 and 21 measure the budget.
     expect(elapsed).toBeLessThan(2_000)
   })
 

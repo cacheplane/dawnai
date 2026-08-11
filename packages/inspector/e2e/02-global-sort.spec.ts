@@ -9,17 +9,12 @@ import {
   asDrawn,
   expectDrawnRows,
   openBrowse,
-  rowIds,
+  recordCells,
+  recordsOnly,
   sortByHeader,
   sortHeader,
   timeToFulfilled,
 } from "./helpers"
-
-/** Pretable's group rows share the row-id channel with records; a caller that wants the
- *  records has to drop them. */
-function recordsOnly(ids: readonly string[]): string[] {
-  return ids.filter((id) => !id.startsWith("__group__:"))
-}
 
 // D1-QUERY-09, D1-QUERY-10. Sorting returns the GLOBALLY correct first window with a
 // deterministic tie-break — not a re-sort of the 200 rows already loaded, which would
@@ -59,14 +54,25 @@ test.describe("scenario 2 — global sort", () => {
     // Read back rather than assumed: an assertion about a descending window means
     // nothing if the click actually produced an ascending one.
     await expect(sortHeader(page, "confidence")).toHaveAttribute("aria-sort", "descending")
+    // A ceiling of KIND, not of degree — `timeToFulfilled`'s doc lists what the number
+    // carries besides the page, and 01 states the §11 position this shares.
     expect(elapsed).toBeLessThan(2_000)
 
-    // The proof taken off the PAGE rather than off the fixture: the top record the grid
-    // shows carries the store's maximum confidence, which the window the client held
-    // before the click did not have at that position.
-    const records = new Map(browseSeedRecords().map((record) => [record.id, record]))
-    const topDrawn = recordsOnly(await rowIds(page))[0] as string
-    expect(records.get(topDrawn)?.confidence).toBe(0.98)
+    // Computed, never transcribed (`seed.ts`'s convention): `0.98` is the store's
+    // maximum only for as long as the seed says so.
+    const maxConfidence = Math.max(...browseSeedRecords().map((record) => record.confidence))
+    // A guard on the scenario's own premise, not a claim about the product. Under
+    // grouping the TOP DRAWN row is the head of the alphabetically-first namespace
+    // bucket, so its carrying the store's maximum is a property of this seed rather than
+    // of the query — pinned here so a seed change reddens with that sentence instead of
+    // reddening the page assertion below with a bare value diff.
+    const byId = new Map(browseSeedRecords().map((record) => [record.id, record.confidence]))
+    expect(byId.get(recordsOnly(expected)[0] ?? "")).toBe(maxConfidence)
+
+    // Taken off the PAGE, and the one thing the id list above cannot show: the cells the
+    // user actually reads carry the values those ids have, through the column's own
+    // `toFixed(2)` format. Auto-retried by `toHaveText`, so it settles rather than races.
+    await expect(recordCells(page, "confidence").first()).toHaveText(maxConfidence.toFixed(2))
   })
 
   test("updated ASC returns the global tail, with the id tie-break still ascending", async ({
@@ -90,8 +96,15 @@ test.describe("scenario 2 — global sort", () => {
       [...seedIdsInDefaultOrder()].reverse().slice(0, BROWSE_PAGE_SIZE),
     )
 
-    // Twice: the first click is descending.
+    // Twice, with the intermediate state pinned rather than passed through: the first
+    // click is descending. There is nothing in the ROWS to settle on between the two —
+    // `updatedAt DESC` is already the default order, so the descending window is the one
+    // on screen — which means the second click does land while the first sort's request
+    // may still be in flight. That path is real and this test does cover it; the
+    // assertion at the end is on the FULFILLED ascending window, so a stale answer
+    // winning the race fails here rather than passing quietly.
     await sortByHeader(page, "updated")
+    await expect(sortHeader(page, "updated")).toHaveAttribute("aria-sort", "descending")
     await sortByHeader(page, "updated")
     await expect(sortHeader(page, "updated")).toHaveAttribute("aria-sort", "ascending")
     await expectDrawnRows(page, asDrawn(ascendingWindow))
