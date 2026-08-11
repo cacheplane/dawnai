@@ -50,6 +50,11 @@ export interface RbacRejectionExpectation {
   readonly namespace: string
 }
 
+export interface NetworkControlLease {
+  readonly url: string
+  cleanup(): Promise<void>
+}
+
 type JsonObject = Record<string, unknown>
 
 const RUN_LABEL = "dawn.sh/compat-run"
@@ -271,23 +276,6 @@ function statusObject(value: unknown): JsonObject {
   return status
 }
 
-function collectStrings(value: unknown, output: string[] = []): readonly string[] {
-  if (typeof value === "string") {
-    output.push(value)
-  } else if (Array.isArray(value)) {
-    for (const item of value) collectStrings(item, output)
-  } else if (typeof value === "object" && value !== null) {
-    for (const key of Object.keys(value).sort()) {
-      collectStrings((value as JsonObject)[key], output)
-    }
-  }
-  return output.sort()
-}
-
-function statusText(status: JsonObject): string {
-  return collectStrings(status).join("\n")
-}
-
 function escapeRegularExpression(value: string): string {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -308,15 +296,18 @@ export function assertQuotaRejection(value: unknown, quotaName: string): void {
 
 export function assertPodSecurityRejection(value: unknown): void {
   const status = statusObject(value)
-  const text = statusText(status)
-  if (!/restricted/i.test(text) || !/runAsNonRoot/i.test(text)) {
+  const message = expectString(status.message, "Kubernetes Status.message")
+  if (
+    !/violates PodSecurity\s+"restricted(?::[^"]*)?"/i.test(message) ||
+    !/runAsNonRoot/i.test(message)
+  ) {
     throw new Error("Expected restricted Pod Security runAsNonRoot rejection")
   }
 }
 
 export function assertRbacRejection(value: unknown, expectation: RbacRejectionExpectation): void {
   const status = statusObject(value)
-  const text = statusText(status)
+  const message = expectString(status.message, "Kubernetes Status.message")
   const required = [
     `cannot ${expectNonEmpty(expectation.verb, "RBAC verb")}`,
     `resource "${expectNonEmpty(expectation.resource, "RBAC resource")}"`,
@@ -324,8 +315,9 @@ export function assertRbacRejection(value: unknown, expectation: RbacRejectionEx
     `namespace "${expectNonEmpty(expectation.namespace, "RBAC namespace")}"`,
   ]
   if (
-    required.some((part) => !text.includes(part)) ||
-    /PodSecurity|exceeded quota|admission webhook/i.test(text)
+    !/\bis forbidden:\s*User\s+"[^"]+"\s+cannot\s+/i.test(message) ||
+    required.some((part) => !message.includes(part)) ||
+    /admission|validating(?:admission)?policy|webhook/i.test(message)
   ) {
     throw new Error(`Expected authorization denial: ${required.sort().join(", ")}`)
   }
@@ -363,6 +355,60 @@ async function cleanupByRunLabel(input: {
       "json",
     ]),
   )
+}
+
+async function cleanupByName(input: {
+  readonly execute: ProbeCommandRunner
+  readonly context: string
+  readonly namespace: string
+  readonly resourceType: string
+  readonly name: string
+}): Promise<void> {
+  await input.execute(
+    kubectl.command(input.context, [
+      "delete",
+      `${input.resourceType}/${input.name}`,
+      "--namespace",
+      input.namespace,
+      "--ignore-not-found=true",
+      "--wait=true",
+      "--output",
+      "json",
+    ]),
+  )
+}
+
+function createNetworkControlLease(input: {
+  readonly execute: ProbeCommandRunner
+  readonly context: string
+  readonly namespace: string
+  readonly runId: string
+  readonly serviceName: string
+}): NetworkControlLease {
+  let cleaned = false
+  let inFlight: Promise<void> | undefined
+  return Object.freeze({
+    url: `http://${input.serviceName}.${input.namespace}.svc.cluster.local:8080/`,
+    cleanup(): Promise<void> {
+      if (cleaned) return Promise.resolve()
+      if (inFlight !== undefined) return inFlight
+      inFlight = (async () => {
+        try {
+          await cleanupByRunLabel({
+            execute: input.execute,
+            context: input.context,
+            namespace: input.namespace,
+            runId: input.runId,
+            resourceTypes: "pod,service",
+          })
+          cleaned = true
+        } finally {
+          inFlight = undefined
+        }
+      })()
+      return inFlight
+    },
+  })
 }
 
 async function withCleanup<T>(
@@ -411,7 +457,9 @@ export async function runSandboxSecretsEmptyProbe(input: AdministrativeProbeInpu
   }
 }
 
-export async function runNetworkControlProbe(input: PolicyProbeInput): Promise<void> {
+export async function runNetworkControlProbe(
+  input: PolicyProbeInput,
+): Promise<NetworkControlLease> {
   const state = probeState(input)
   const serverName = resourceName(state.runId, "network-server")
   const serviceName = resourceName(state.runId, "network-service")
@@ -462,77 +510,88 @@ export async function runNetworkControlProbe(input: PolicyProbeInput): Promise<v
     ],
   })
 
-  await withCleanup(
-    async () => {
-      await submitObject(state.execute, createObjectCommand(state.context, state.namespace), server)
-      await submitObject(
-        state.execute,
-        createObjectCommand(state.context, state.namespace),
-        service,
-      )
-      await state.execute(
-        kubectl.command(state.context, [
-          "wait",
-          "--namespace",
-          state.namespace,
-          "--for=condition=Ready",
-          `pod/${serverName}`,
-          "--timeout=120s",
-          "--output",
-          "json",
-        ]),
-      )
-      await submitObject(state.execute, createObjectCommand(state.context, state.namespace), client)
-      await state.execute(
-        kubectl.command(state.context, [
-          "wait",
-          "--namespace",
-          state.namespace,
-          "--for=jsonpath={.status.phase}=Succeeded",
-          `pod/${clientName}`,
-          "--timeout=120s",
-          "--output",
-          "json",
-        ]),
-      )
-      const observed = await state.execute(
-        kubectl.command(state.context, [
-          "get",
-          `pod/${clientName}`,
-          "--namespace",
-          state.namespace,
-          "--output",
-          "json",
-        ]),
-      )
-      const observedPod = expectObject(
-        JSON.parse(observed.stdout.toString("utf8")),
-        "Network client Pod",
-      )
-      if (expectObject(observedPod.status, "Network client status").phase !== "Succeeded") {
-        throw new Error("Network client Pod did not succeed")
-      }
-      const logs = await state.execute(
-        kubectl.command(state.context, [
-          "logs",
-          `pod/${clientName}`,
-          "--namespace",
-          state.namespace,
-        ]),
-      )
-      if (logs.stdout.toString("utf8") !== "DAWN_NETWORK_CONTROL=reachable\n") {
-        throw new Error("Network control did not emit the exact reachability marker")
-      }
-    },
-    () =>
-      cleanupByRunLabel({
+  try {
+    await submitObject(state.execute, createObjectCommand(state.context, state.namespace), server)
+    await submitObject(state.execute, createObjectCommand(state.context, state.namespace), service)
+    await state.execute(
+      kubectl.command(state.context, [
+        "wait",
+        "--namespace",
+        state.namespace,
+        "--for=condition=Ready",
+        `pod/${serverName}`,
+        "--timeout=120s",
+        "--output",
+        "json",
+      ]),
+    )
+    await submitObject(state.execute, createObjectCommand(state.context, state.namespace), client)
+    await state.execute(
+      kubectl.command(state.context, [
+        "wait",
+        "--namespace",
+        state.namespace,
+        "--for=jsonpath={.status.phase}=Succeeded",
+        `pod/${clientName}`,
+        "--timeout=120s",
+        "--output",
+        "json",
+      ]),
+    )
+    const observed = await state.execute(
+      kubectl.command(state.context, [
+        "get",
+        `pod/${clientName}`,
+        "--namespace",
+        state.namespace,
+        "--output",
+        "json",
+      ]),
+    )
+    const observedPod = expectObject(
+      JSON.parse(observed.stdout.toString("utf8")),
+      "Network client Pod",
+    )
+    if (expectObject(observedPod.status, "Network client status").phase !== "Succeeded") {
+      throw new Error("Network client Pod did not succeed")
+    }
+    const logs = await state.execute(
+      kubectl.command(state.context, ["logs", `pod/${clientName}`, "--namespace", state.namespace]),
+    )
+    if (logs.stdout.toString("utf8") !== "DAWN_NETWORK_CONTROL=reachable\n") {
+      throw new Error("Network control did not emit the exact reachability marker")
+    }
+    await cleanupByName({
+      execute: state.execute,
+      context: state.context,
+      namespace: state.namespace,
+      resourceType: "pod",
+      name: clientName,
+    })
+    return createNetworkControlLease({
+      execute: state.execute,
+      context: state.context,
+      namespace: state.namespace,
+      runId: state.runId,
+      serviceName,
+    })
+  } catch (primary) {
+    try {
+      await cleanupByRunLabel({
         execute: state.execute,
         context: state.context,
         namespace: state.namespace,
         runId: state.runId,
         resourceTypes: "pod,service",
-      }),
-  )
+      })
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [primary, cleanupError],
+        "Network control setup and exact-label cleanup both failed",
+      )
+    }
+    throw primary
+  }
 }
 
 function admissionPod(input: TokenProbeInput, role: string, resources?: JsonObject): JsonObject {
@@ -731,7 +790,7 @@ export async function runSecretReadDeniedProbe(input: TokenKubeconfigProbeInput)
     probe: input,
     path: `/api/v1/namespaces/${encodeURIComponent(state.namespace)}/secrets`,
     name: "Secret read RBAC probe",
-    expectation: { verb: "get", resource: "secrets", apiGroup: "", namespace: state.namespace },
+    expectation: { verb: "list", resource: "secrets", apiGroup: "", namespace: state.namespace },
   })
 }
 

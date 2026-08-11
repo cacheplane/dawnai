@@ -198,7 +198,7 @@ describe("positive and negative pod fixtures", () => {
       return {}
     })
 
-    await runNetworkControlProbe({ context, runId, policy, execute })
+    const lease = await runNetworkControlProbe({ context, runId, policy, execute })
 
     const manifests = allManifests(execute)
     const pods = manifests.filter((item) => item.kind === "Pod")
@@ -214,6 +214,16 @@ describe("positive and negative pod fixtures", () => {
       "app.kubernetes.io/managed-by",
       "dawn",
     )
+    const clientName = metadata(pods[1] as JsonObject).name
+    expect(execute.mock.calls.at(-1)?.[0].args).toEqual(
+      expect.arrayContaining(["delete", `pod/${String(clientName)}`]),
+    )
+    expect(execute.mock.calls.some(([command]) => command.args.includes("pod,service"))).toBe(false)
+    expect(lease.url).toBe(
+      `http://${String(metadata(service).name)}.${names.sandboxNamespace}.svc.cluster.local:8080/`,
+    )
+
+    await Promise.all([lease.cleanup(), lease.cleanup()])
     expect(execute.mock.calls.at(-1)?.[0].args).toEqual(
       expect.arrayContaining([
         "delete",
@@ -222,6 +232,12 @@ describe("positive and negative pod fixtures", () => {
         `dawn.sh/compat-run=${runId}`,
       ]),
     )
+    expect(
+      execute.mock.calls.filter(([command]) => command.args.includes("--selector")),
+    ).toHaveLength(1)
+    const callsAfterCleanup = execute.mock.calls.length
+    await lease.cleanup()
+    expect(execute).toHaveBeenCalledTimes(callsAfterCleanup)
   })
 
   test("quota negative differs from its positive fixture only by requests and limits cpu", async () => {
@@ -421,6 +437,23 @@ describe("structured rejection validation", () => {
     }
   })
 
+  test("rejects a different Pod Security violation when only nested details mention runAsNonRoot", () => {
+    const counterexample = forbidden(
+      'pods "probe" is forbidden: violates PodSecurity "restricted:latest": hostNetwork=true',
+      {
+        kind: "pods",
+        causes: [
+          {
+            reason: "FieldValueForbidden",
+            message: "unrelated diagnostic mentions runAsNonRoot",
+          },
+        ],
+      },
+    )
+
+    expect(() => assertPodSecurityRejection(counterexample)).toThrow(/runAsNonRoot/i)
+  })
+
   test("accepts only authorization-attributable Forbidden Status objects", () => {
     expect(() =>
       assertRbacRejection(rbacStatus, {
@@ -446,6 +479,28 @@ describe("structured rejection validation", () => {
         }),
       ).toThrow()
     }
+  })
+
+  test("rejects validating-policy denial when only nested details resemble RBAC", () => {
+    const expectation = {
+      verb: "create",
+      resource: "roles",
+      apiGroup: "rbac.authorization.k8s.io",
+      namespace: "ns",
+    }
+    const counterexample = forbidden(
+      'roles.rbac.authorization.k8s.io "probe" is forbidden: ValidatingAdmissionPolicy "guard" denied request',
+      {
+        causes: [
+          {
+            message:
+              'User "nested" cannot create resource "roles" in API group "rbac.authorization.k8s.io" in the namespace "ns"',
+          },
+        ],
+      },
+    )
+
+    expect(() => assertRbacRejection(counterexample, expectation)).toThrow(/authorization denial/i)
   })
 })
 
@@ -485,10 +540,10 @@ describe("probe command routing, evidence, and cleanup", () => {
       const pathIndex = command.args.indexOf("--raw") + 1
       const path = command.args[pathIndex] ?? ""
       const message = path.endsWith("/secrets")
-        ? `secrets is forbidden: User cannot get resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`
+        ? `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`
         : path.endsWith("/roles")
-          ? `roles.rbac.authorization.k8s.io is forbidden: User cannot create resource "roles" in API group "rbac.authorization.k8s.io" in the namespace "${names.sandboxNamespace}"`
-          : `configmaps is forbidden: User cannot create resource "configmaps" in API group "" in the namespace "${names.managementNamespace}"`
+          ? `roles.rbac.authorization.k8s.io is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "roles" in API group "rbac.authorization.k8s.io" in the namespace "${names.sandboxNamespace}"`
+          : `configmaps is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot create resource "configmaps" in API group "" in the namespace "${names.managementNamespace}"`
       return { exitCode: 1, body: forbidden(message) }
     })
 
@@ -541,7 +596,7 @@ describe("probe command routing, evidence, and cleanup", () => {
 
   test("extracts the structured Status response body from bounded kubectl diagnostics", async () => {
     const status = forbidden(
-      `secrets is forbidden: User cannot get resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
+      `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
       { kind: "secrets" },
     )
     const stderr = [
@@ -579,6 +634,33 @@ describe("probe command routing, evidence, and cleanup", () => {
         `dawn.sh/compat-run=${runId}`,
       ]),
     )
+  })
+
+  test("allows a failed network lease cleanup to be retried", async () => {
+    const policy = await loadCompatibilityPolicy()
+    let clientPod: JsonObject | undefined
+    let retainedCleanupAttempts = 0
+    const execute = fakeRunner((command, options) => {
+      const manifest = options.stdin === undefined ? undefined : stdinObject(options)
+      if (manifest?.kind === "Pod") {
+        clientPod = manifest
+        return manifest
+      }
+      if (command.args.includes("get") && command.args.some((arg) => arg.startsWith("pod/"))) {
+        return successPod(clientPod as JsonObject)
+      }
+      if (command.args.includes("logs")) return "DAWN_NETWORK_CONTROL=reachable\n"
+      if (command.args.includes("--selector")) {
+        retainedCleanupAttempts += 1
+        if (retainedCleanupAttempts === 1) return new Error("retained cleanup failed")
+      }
+      return {}
+    })
+    const lease = await runNetworkControlProbe({ context, runId, policy, execute })
+
+    await expect(lease.cleanup()).rejects.toThrow(/retained cleanup failed/i)
+    await expect(lease.cleanup()).resolves.toBeUndefined()
+    expect(retainedCleanupAttempts).toBe(2)
   })
 
   test("cleans partial objects by exact run label and preserves primary plus cleanup failures", async () => {
