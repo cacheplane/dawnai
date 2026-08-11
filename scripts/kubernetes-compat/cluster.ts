@@ -77,15 +77,13 @@ export interface NamespaceOwnership {
   readonly runId: string
 }
 
-export interface OwnedRelease {
-  readonly name: string
-  readonly namespace: string
-}
+export type InstalledReleaseRole = "infrastructure" | "application"
 
 export interface OwnedClusterCleanupInput {
   readonly context: string
+  readonly runId: string
   readonly ownership: readonly NamespaceOwnership[]
-  readonly releases: readonly OwnedRelease[]
+  readonly installedReleases: readonly InstalledReleaseRole[]
   readonly removeTokenFiles: () => Promise<void>
   readonly keepOnFailure?: boolean
 }
@@ -103,6 +101,7 @@ const REQUIRED_EXECUTABLES = ["kubectl", "helm", "pnpm"] as const
 const DEFAULT_STORAGE_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
 const RUN_LABEL = "dawn.sh/compat-run"
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const
+const RELEASE_ROLES = ["infrastructure", "application"] as const
 const TARGET_MINOR_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
 function expectNonEmpty(value: string, name: string): string {
@@ -437,15 +436,81 @@ export function verifyNamespaceOwnership(value: unknown, expected: NamespaceOwne
   }
 }
 
+interface ResolvedClusterCleanup {
+  readonly ownership: readonly NamespaceOwnership[]
+  readonly releases: readonly {
+    readonly name: string
+    readonly namespace: string
+  }[]
+}
+
+function isInstalledReleaseRole(value: unknown): value is InstalledReleaseRole {
+  return value === "infrastructure" || value === "application"
+}
+
+function resolveClusterCleanup(input: OwnedClusterCleanupInput): ResolvedClusterCleanup {
+  const runId = expectNonEmpty(input.runId, "Compatibility run ID")
+  const names = deriveClusterNames(runId)
+  const derivedNamespaceNames = new Set([names.managementNamespace, names.sandboxNamespace])
+  const ownershipByName = new Map<string, NamespaceOwnership>()
+
+  for (const ownership of input.ownership) {
+    if (ownership.runId !== runId) {
+      throw new Error(
+        `Namespace ownership run ID ${ownership.runId} does not match cleanup run ID ${runId}`,
+      )
+    }
+    if (!derivedNamespaceNames.has(ownership.name)) {
+      throw new Error(`Namespace ownership target is not a derived namespace: ${ownership.name}`)
+    }
+    if (ownershipByName.has(ownership.name)) {
+      throw new Error(`Duplicate Namespace ownership target: ${ownership.name}`)
+    }
+    ownershipByName.set(ownership.name, ownership)
+  }
+
+  const installedRoles = new Set<InstalledReleaseRole>()
+  for (const role of input.installedReleases as readonly unknown[]) {
+    if (!isInstalledReleaseRole(role)) {
+      throw new Error(`Unknown installed release role: ${String(role)}`)
+    }
+    if (installedRoles.has(role)) {
+      throw new Error(`Duplicate installed release role: ${role}`)
+    }
+    installedRoles.add(role)
+  }
+
+  if (
+    installedRoles.size > 0 &&
+    (!ownershipByName.has(names.managementNamespace) ||
+      !ownershipByName.has(names.sandboxNamespace))
+  ) {
+    throw new Error(
+      "Cleanup of an installed release requires captured ownership for both derived namespaces",
+    )
+  }
+
+  const ownership = [names.managementNamespace, names.sandboxNamespace].flatMap((name) => {
+    const entry = ownershipByName.get(name)
+    return entry === undefined ? [] : [entry]
+  })
+  const releases = RELEASE_ROLES.filter((role) => installedRoles.has(role)).map((role) => ({
+    name: role === "infrastructure" ? names.sandboxRelease : names.appRelease,
+    namespace: names.managementNamespace,
+  }))
+  return { ownership, releases }
+}
+
 export async function cleanupOwnedCluster(
   input: OwnedClusterCleanupInput,
   execute: ClusterCommandRunner = executeCommand,
 ): Promise<{ readonly retained: boolean }> {
   await input.removeTokenFiles()
-  if (input.ownership.length === 0) return { retained: false }
+  const cleanup = resolveClusterCleanup(input)
+  if (cleanup.ownership.length === 0) return { retained: false }
 
   const liveNamespaces = await Promise.all(
-    input.ownership.map(async (ownership) => ({
+    cleanup.ownership.map(async (ownership) => ({
       ownership,
       value: parseJson(
         await execute(
@@ -458,12 +523,12 @@ export async function cleanupOwnedCluster(
   for (const entry of liveNamespaces) verifyNamespaceOwnership(entry.value, entry.ownership)
   if (input.keepOnFailure === true) return { retained: true }
 
-  for (const release of input.releases) {
+  for (const release of cleanup.releases) {
     await execute(
       helm.command(input.context, ["uninstall", release.name, "--namespace", release.namespace]),
     )
   }
-  for (const ownership of input.ownership) {
+  for (const ownership of cleanup.ownership) {
     await execute(kubectl.command(input.context, ["delete", "namespace", ownership.name]))
   }
   return { retained: false }

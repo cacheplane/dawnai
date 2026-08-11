@@ -10,7 +10,9 @@ import {
   cleanupOwnedCluster,
   createSecureTokenKubeconfig,
   deriveClusterNames,
+  type InstalledReleaseRole,
   type NamespaceOwnership,
+  type OwnedClusterCleanupInput,
   preflightCluster,
   registerOwnedResourceSignalCleanup,
   requestServiceAccountToken,
@@ -299,15 +301,17 @@ describe("administrative access and token kubeconfig", () => {
 })
 
 describe("namespace ownership and cleanup", () => {
+  const runId = "run-a"
+  const names = deriveClusterNames(runId)
   const management: NamespaceOwnership = {
-    name: "dawn-management-a",
+    name: names.managementNamespace,
     uid: "uid-management",
-    runId: "run-a",
+    runId,
   }
   const sandbox: NamespaceOwnership = {
-    name: "dawn-sandbox-a",
+    name: names.sandboxNamespace,
     uid: "uid-sandbox",
-    runId: "run-a",
+    runId,
   }
 
   function namespace(ownership: NamespaceOwnership, label = ownership.runId, uid = ownership.uid) {
@@ -317,13 +321,119 @@ describe("namespace ownership and cleanup", () => {
   }
 
   test("captures and verifies exact UID plus run label", () => {
-    expect(captureNamespaceOwnership(namespace(management), "run-a")).toEqual(management)
+    expect(captureNamespaceOwnership(namespace(management), runId)).toEqual(management)
     expect(() =>
       verifyNamespaceOwnership(namespace(management, "run-a", "changed"), management),
     ).toThrow(/UID/i)
     expect(() => verifyNamespaceOwnership(namespace(management, "missing"), management)).toThrow(
       /label/i,
     )
+  })
+
+  test("exposes release roles rather than arbitrary release or namespace targets", () => {
+    const input: OwnedClusterCleanupInput = {
+      context: "kind-dawn",
+      runId,
+      ownership: [],
+      installedReleases: ["infrastructure", "application"],
+      removeTokenFiles: async () => {},
+    }
+
+    expect(input.installedReleases).toEqual(["infrastructure", "application"])
+    expect(input).not.toHaveProperty("releases")
+    // @ts-expect-error Raw release targets are intentionally absent from the cleanup API.
+    const arbitrary: OwnedClusterCleanupInput = { ...input, releases: [] }
+    void arbitrary
+  })
+
+  test.each([
+    {
+      name: "arbitrary namespace",
+      ownership: [{ name: "kube-system", uid: "victim", runId }],
+      installedReleases: [],
+      message: /derived namespace/i,
+    },
+    {
+      name: "duplicate ownership",
+      ownership: [management, management],
+      installedReleases: [],
+      message: /duplicate.*ownership/i,
+    },
+    {
+      name: "mismatched ownership run",
+      ownership: [{ ...management, runId: "other-run" }],
+      installedReleases: [],
+      message: /run ID/i,
+    },
+    {
+      name: "duplicate release role",
+      ownership: [management, sandbox],
+      installedReleases: ["infrastructure", "infrastructure"],
+      message: /duplicate.*release role/i,
+    },
+  ] as const satisfies readonly {
+    readonly name: string
+    readonly ownership: readonly NamespaceOwnership[]
+    readonly installedReleases: readonly InstalledReleaseRole[]
+    readonly message: RegExp
+  }[])("rejects $name before a cluster command", async (testCase) => {
+    const execute = vi.fn<Runner>()
+    const removeTokenFiles = vi.fn(async () => {})
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: testCase.ownership,
+          installedReleases: testCase.installedReleases,
+          removeTokenFiles,
+        },
+        execute,
+      ),
+    ).rejects.toThrow(testCase.message)
+    expect(removeTokenFiles).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  test("rejects an unknown release role before a cluster command", async () => {
+    const execute = vi.fn<Runner>()
+    const removeTokenFiles = vi.fn(async () => {})
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management, sandbox],
+          installedReleases: ["database"] as never,
+          removeTokenFiles,
+        },
+        execute,
+      ),
+    ).rejects.toThrow(/unknown.*release role/i)
+    expect(removeTokenFiles).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  test("requires captured ownership for both derived namespaces before release cleanup", async () => {
+    const execute = vi.fn<Runner>()
+    const removeTokenFiles = vi.fn(async () => {})
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management],
+          installedReleases: ["infrastructure"],
+          removeTokenFiles,
+        },
+        execute,
+      ),
+    ).rejects.toThrow(/both derived namespaces/i)
+    expect(removeTokenFiles).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
   })
 
   test("verifies every namespace before uninstall or deletion", async () => {
@@ -334,11 +444,9 @@ describe("namespace ownership and cleanup", () => {
       cleanupOwnedCluster(
         {
           context: "kind-dawn",
+          runId,
           ownership: [management, sandbox],
-          releases: [
-            { name: "dawn-app-a", namespace: management.name },
-            { name: "dawn-sandbox-a", namespace: management.name },
-          ],
+          installedReleases: ["application", "infrastructure"],
           removeTokenFiles,
         },
         execute,
@@ -355,8 +463,9 @@ describe("namespace ownership and cleanup", () => {
     const outcome = await cleanupOwnedCluster(
       {
         context: "kind-dawn",
+        runId,
         ownership: [management, sandbox],
-        releases: [{ name: "dawn-sandbox-a", namespace: management.name }],
+        installedReleases: ["infrastructure"],
         removeTokenFiles,
         keepOnFailure: true,
       },
@@ -368,17 +477,15 @@ describe("namespace ownership and cleanup", () => {
     expect(execute).toHaveBeenCalledTimes(2)
   })
 
-  test("uninstalls exact releases before deleting surviving namespaces", async () => {
+  test("maps roles to exact derived Helm targets before deleting verified namespaces", async () => {
     const execute = fakeRunner([namespace(management), namespace(sandbox), {}, {}, {}, {}])
 
     await cleanupOwnedCluster(
       {
         context: "kind-dawn",
+        runId,
         ownership: [management, sandbox],
-        releases: [
-          { name: "dawn-app-a", namespace: management.name },
-          { name: "dawn-sandbox-a", namespace: management.name },
-        ],
+        installedReleases: ["application", "infrastructure"],
         removeTokenFiles: async () => {},
       },
       execute,
@@ -391,9 +498,9 @@ describe("namespace ownership and cleanup", () => {
           "--kube-context",
           "kind-dawn",
           "uninstall",
-          "dawn-app-a",
+          names.sandboxRelease,
           "--namespace",
-          management.name,
+          names.managementNamespace,
         ],
       },
       {
@@ -402,9 +509,9 @@ describe("namespace ownership and cleanup", () => {
           "--kube-context",
           "kind-dawn",
           "uninstall",
-          "dawn-sandbox-a",
+          names.appRelease,
           "--namespace",
-          management.name,
+          names.managementNamespace,
         ],
       },
       {
@@ -416,6 +523,52 @@ describe("namespace ownership and cleanup", () => {
         args: ["--context", "kind-dawn", "delete", "namespace", sandbox.name],
       },
     ])
+  })
+
+  test("verifies and deletes management-only ownership before any release exists", async () => {
+    const execute = fakeRunner([namespace(management), {}])
+
+    await cleanupOwnedCluster(
+      {
+        context: "kind-dawn",
+        runId,
+        ownership: [management],
+        installedReleases: [],
+        removeTokenFiles: async () => {},
+      },
+      execute,
+    )
+
+    expect(execute.mock.calls.map(([command]) => command)).toEqual([
+      {
+        file: "kubectl",
+        args: ["--context", "kind-dawn", "get", "namespace", management.name, "-o", "json"],
+      },
+      {
+        file: "kubectl",
+        args: ["--context", "kind-dawn", "delete", "namespace", management.name],
+      },
+    ])
+  })
+
+  test("zero ownership removes token material without cluster commands", async () => {
+    const execute = vi.fn<Runner>()
+    const removeTokenFiles = vi.fn(async () => {})
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [],
+          installedReleases: [],
+          removeTokenFiles,
+        },
+        execute,
+      ),
+    ).resolves.toEqual({ retained: false })
+    expect(removeTokenFiles).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
   })
 
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(

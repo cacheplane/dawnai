@@ -17,6 +17,8 @@ function executableExists(name: string): boolean {
 }
 
 const helmAvailable = executableExists("helm")
+// The root-only compatibility lane does not use Turbo caching.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: this opt-in controls a direct Vitest run.
 const requireHelm = process.env.DAWN_REQUIRE_HELM === "1"
 
 describe("dawn-orchestrator Role parity", () => {
