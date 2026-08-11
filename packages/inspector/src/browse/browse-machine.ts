@@ -86,12 +86,15 @@ export interface BrowseTransition {
   readonly abort: boolean
 }
 
-const NO_KIND_ERRORS: BrowseKindErrors = {}
+/** Frozen because `readonly` is erased at runtime and this ONE object is installed on
+ *  every state that clears its slots: one widening cast downstream would edit them all.
+ *  Same for the initial state below. */
+const NO_KIND_ERRORS: BrowseKindErrors = Object.freeze({})
 
 /** `revision: 0` is a revision nothing can fulfil and `datasetKey: ""` is a key no
  *  canonical query produces, so the first `query-changed` a mounted hook dispatches
  *  is the SAME transition as any later one. Mount is not a special case. */
-export const INITIAL_BROWSE_STATE: BrowseState = {
+export const INITIAL_BROWSE_STATE: BrowseState = Object.freeze({
   revision: 0,
   datasetKey: "",
   fulfilled: null,
@@ -99,7 +102,7 @@ export const INITIAL_BROWSE_STATE: BrowseState = {
   queuedLoadMore: false,
   initialFailure: null,
   kindErrors: NO_KIND_ERRORS,
-}
+})
 
 /** Records held FOR THE DESIRED REVISION. An older revision's records are on screen
  *  but are not a base anything new is built on. */
@@ -140,13 +143,34 @@ export function browsePhase(state: BrowseState): PretableDataState["phase"] {
   return (state.fulfilled?.records.length ?? 0) > 0 ? "stale" : "loading"
 }
 
+/** One object per message-less phase. A consumer holds this as a dependency, and the
+ *  2 s cadence walks `idle → refreshing → idle` forever: a fresh object on the way back
+ *  reports a change that did not happen. Keyed over the whole phase union, so a phase
+ *  added upstream fails to compile rather than falling through. */
+const PHASE_DATA_STATES: Readonly<Record<PretableDataState["phase"], PretableDataState>> =
+  Object.freeze({
+    idle: Object.freeze({ phase: "idle" as const }),
+    loading: Object.freeze({ phase: "loading" as const }),
+    stale: Object.freeze({ phase: "stale" as const }),
+    refreshing: Object.freeze({ phase: "refreshing" as const }),
+    "loading-more": Object.freeze({ phase: "loading-more" as const }),
+    error: Object.freeze({ phase: "error" as const }),
+  })
+
+/** Keyed on the failure rather than the state: message-equality suppression already
+ *  holds that object still across a repeating failure, so the banner keeps one identity
+ *  for as long as it says the same thing. */
+const ERROR_DATA_STATES = new WeakMap<object, PretableDataState>()
+
 export function browseDataState(state: BrowseState): PretableDataState {
   const phase = browsePhase(state)
-  if (phase !== "error") return { phase }
-  const message = state.initialFailure?.message
-  // Spread rather than `{ phase, message }`: `exactOptionalPropertyTypes` rejects an
-  // explicit `undefined` against `message?: string`.
-  return { phase, ...(message === undefined ? {} : { message }) }
+  const failure = state.initialFailure
+  if (phase !== "error" || failure === null) return PHASE_DATA_STATES[phase]
+  const held = ERROR_DATA_STATES.get(failure)
+  if (held !== undefined) return held
+  const derived: PretableDataState = Object.freeze({ phase, message: failure.message })
+  ERROR_DATA_STATES.set(failure, derived)
+  return derived
 }
 
 function noStart(state: BrowseState): BrowseTransition {
@@ -334,7 +358,9 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
       if (!browseCanLoadMore(state)) return noStart(state)
       // User intent is never silently dropped: a load-more asked for during a poll
       // tick is QUEUED and runs when the tick settles.
-      if (state.inFlight?.kind === "refresh") return noStart({ ...state, queuedLoadMore: true })
+      if (state.inFlight?.kind === "refresh") {
+        return noStart(state.queuedLoadMore ? state : { ...state, queuedLoadMore: true })
+      }
       if (state.inFlight !== null) return noStart(state)
       return starting(
         state,

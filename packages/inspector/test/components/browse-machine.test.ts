@@ -377,6 +377,65 @@ describe("browse machine — single-flight arbitration", () => {
   })
 })
 
+describe("browse machine — immutability and identity", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a")], total: 5432 },
+      at: 1000,
+    },
+  )
+
+  it("freezes the singletons it hands out, which `readonly` does not survive to runtime", () => {
+    expect(Object.isFrozen(INITIAL_BROWSE_STATE)).toBe(true)
+    expect(Object.isFrozen(INITIAL_BROWSE_STATE.kindErrors)).toBe(true)
+    // The same empty-slots object is installed on EVERY query change, so one widening
+    // cast downstream would edit the slots of every state that ever cleared them.
+    const cleared = browseReduce(
+      { ...loaded, kindErrors: { refresh: "boom" } },
+      { type: "query-changed", datasetKey: KEY_B },
+    ).state
+    expect(Object.isFrozen(cleared.kindErrors)).toBe(true)
+  })
+
+  it("a load-more asked for twice under one tick keeps the SAME state", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const queued = browseReduce(refreshing, { type: "load-more-requested" }).state
+    expect(queued.queuedLoadMore).toBe(true)
+    expect(browseReduce(queued, { type: "load-more-requested" }).state).toBe(queued)
+  })
+
+  it("hands out one dataState per phase, so a consumer can hold it as a dependency", () => {
+    expect(browseDataState(loaded)).toBe(browseDataState(loaded))
+    // The 2 s cadence walks idle → refreshing → idle forever; coming back to idle is
+    // not a change, and a fresh object each tick says it is.
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const settled = browseReduce(refreshing, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: { records: [record("a")], total: 5432 },
+      at: 2000,
+    }).state
+    expect(browseDataState(refreshing)).not.toBe(browseDataState(loaded))
+    expect(browseDataState(settled)).toBe(browseDataState(loaded))
+  })
+
+  it("holds one dataState per failure, message and all", () => {
+    const failed = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      { type: "failure", revision: 1, kind: "initial", message: "boom" },
+    )
+    expect(browseDataState(failed)).toEqual({ phase: "error", message: "boom" })
+    expect(browseDataState(failed)).toBe(browseDataState(failed))
+  })
+})
+
 describe("browse machine — the resident cap", () => {
   function loadedWith(records: readonly MemoryRecord[], total = 5432): BrowseState {
     return apply(
