@@ -1,8 +1,166 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { basename, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const repoRoot = resolve(import.meta.dirname, "..")
+
+function maskText(value) {
+  return value.replace(/[^\r\n]/g, " ")
+}
+
+function maskFencedCode(source) {
+  let fence = null
+  return source
+    .split(/(?<=\n)/)
+    .map((line) => {
+      const content = line.replace(/\r?\n$/, "")
+      if (fence) {
+        const activeFence = fence
+        const closingRun = /^[ \t]{0,3}([`~]+)[ \t]*$/.exec(content)?.[1]
+        const closesFence =
+          closingRun !== undefined &&
+          closingRun.length >= activeFence.length &&
+          [...closingRun].every((character) => character === activeFence.character)
+        if (closesFence) fence = null
+        return maskText(line)
+      }
+
+      const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
+      if (!opening) return line
+      fence = { character: opening[0], length: opening.length }
+      return maskText(line)
+    })
+    .join("")
+}
+
+function maskRange(characters, start, end) {
+  for (let index = start; index < end; index++) {
+    if (characters[index] !== "\r" && characters[index] !== "\n") characters[index] = " "
+  }
+}
+
+function inlineCodeEnd(source, start, delimiterLength) {
+  let index = start + delimiterLength
+  while (index < source.length && source[index] !== "\r" && source[index] !== "\n") {
+    if (source[index] !== "`") {
+      index++
+      continue
+    }
+    let runEnd = index
+    while (source[runEnd] === "`") runEnd++
+    if (runEnd - index === delimiterLength) return runEnd
+    index = runEnd
+  }
+  return -1
+}
+
+function maskInlineCodeAndComments(source) {
+  const characters = source.split("")
+  let index = 0
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      const closing = source.indexOf("-->", index + 4)
+      const end = closing === -1 ? source.length : closing + 3
+      maskRange(characters, index, end)
+      index = end
+      continue
+    }
+    if (source.startsWith("{/*", index)) {
+      const closing = source.indexOf("*/}", index + 3)
+      const end = closing === -1 ? source.length : closing + 3
+      maskRange(characters, index, end)
+      index = end
+      continue
+    }
+    if (source[index] === "`") {
+      let runEnd = index
+      while (source[runEnd] === "`") runEnd++
+      const end = inlineCodeEnd(source, index, runEnd - index)
+      if (end !== -1) {
+        maskRange(characters, index, end)
+        index = end
+        continue
+      }
+      index = runEnd
+      continue
+    }
+    index++
+  }
+  return characters.join("")
+}
+
+function maskMarkdownCodeAndComments(source) {
+  return maskInlineCodeAndComments(maskFencedCode(source))
+}
+
+function isMarkdownImage(source, linkStart) {
+  if (source[linkStart - 1] !== "!") return false
+  let backslashes = 0
+  for (let index = linkStart - 2; index >= 0 && source[index] === "\\"; index--) backslashes++
+  return backslashes % 2 === 0
+}
+
+function linkDestinations(source) {
+  const masked = maskMarkdownCodeAndComments(source)
+  const destinations = []
+  const markdownLink = /\[[^\]\r\n]*\]\(\s*<?([^\s)>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g
+  for (const match of masked.matchAll(markdownLink)) {
+    if (match[1] && !isMarkdownImage(masked, match.index)) {
+      destinations.push({ index: match.index, destination: match[1] })
+    }
+  }
+  for (const match of masked.matchAll(/\bhref\s*(?::|=)\s*["']([^"']+)["']/g)) {
+    if (match[1]) {
+      destinations.push({ index: match.index, destination: match[1] })
+    }
+  }
+  return destinations
+    .sort((left, right) => left.index - right.index)
+    .map(({ destination }) => destination)
+}
+
+function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxChars = 600 }) {
+  const headingSource = maskMarkdownCodeAndComments(source)
+  const headings = [...headingSource.matchAll(/^(#{1,6})\s+(.+?)[ \t]*$/gm)].map((match) => ({
+    index: match.index,
+    level: match[1].length,
+    text: match[2],
+  }))
+  const headingIndex = headings.findIndex((heading) => heading.text === retainedHeading)
+  if (headingIndex === -1) {
+    return {
+      found: false,
+      stub: "",
+      destinations: [],
+      charCount: 0,
+      maxChars,
+      hasCanonicalLink: false,
+      exceedsMaxChars: false,
+    }
+  }
+
+  const heading = headings[headingIndex]
+  const nextHeading = headings
+    .slice(headingIndex + 1)
+    .find((candidate) => candidate.level <= heading.level)
+  const stub = source.slice(heading.index, nextHeading?.index ?? source.length).trim()
+  const destinations = linkDestinations(stub)
+  return {
+    found: true,
+    stub,
+    destinations,
+    charCount: stub.length,
+    maxChars,
+    hasCanonicalLink: destinations.includes(canonicalHref),
+    exceedsMaxChars: stub.length > maxChars,
+  }
+}
+
+if (process.argv[2] === "--analyze-compatibility-stub") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify(analyzeCompatibilityStub(fixture))}\n`)
+  process.exit(0)
+}
 
 const checks = [
   {
@@ -14,7 +172,7 @@ const checks = [
     patterns: ["dawn.config.ts", "appDir"],
   },
   {
-    file: "apps/web/content/docs/dev-server.mdx",
+    file: "apps/web/content/docs/ag-ui.mdx",
     patterns: ["/agui/{routeId}", "@dawn-ai/ag-ui"],
   },
 ]
@@ -320,7 +478,12 @@ const accuracyContracts = [
 ]
 
 for (const contract of accuracyContracts) {
-  const source = readFileSync(resolve(repoRoot, contract.file), "utf8")
+  const filePath = resolve(repoRoot, contract.file)
+  if (!existsSync(filePath)) {
+    failures.push(`${contract.file} is missing`)
+    continue
+  }
+  const source = readFileSync(filePath, "utf8")
 
   for (const required of contract.required) {
     if (!source.includes(required)) {
@@ -332,6 +495,47 @@ for (const contract of accuracyContracts) {
     if (source.includes(forbidden)) {
       failures.push(`${contract.file} retains forbidden accuracy text: ${forbidden}`)
     }
+  }
+
+  // Future file-specific contracts can reject non-literal prose, for example
+  // forbiddenRegexes: [/\b\d+\s+(?:HTTP\s+)?endpoints\b/i] on Agent Protocol.
+  for (const forbiddenRegex of contract.forbiddenRegexes ?? []) {
+    forbiddenRegex.lastIndex = 0
+    const retainsForbiddenText = forbiddenRegex.test(source)
+    forbiddenRegex.lastIndex = 0
+    if (retainsForbiddenText) {
+      failures.push(`${contract.file} retains forbidden accuracy text: ${forbiddenRegex}`)
+    }
+  }
+}
+
+// Compatibility stubs keep a moved heading linkable without allowing the old
+// overview to grow back into a second copy of the canonical guide.
+const compatibilityStubContracts = []
+
+for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibilityStubContracts) {
+  const filePath = resolve(repoRoot, file)
+  if (!existsSync(filePath)) {
+    failures.push(`${file} is missing`)
+    continue
+  }
+
+  const source = readFileSync(filePath, "utf8")
+  const analysis = analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxChars })
+  if (!analysis.found) {
+    failures.push(`${file} is missing compatibility heading: ${retainedHeading}`)
+    continue
+  }
+
+  if (!analysis.hasCanonicalLink) {
+    failures.push(
+      `${file} compatibility heading ${retainedHeading} is missing canonical link: ${canonicalHref}`,
+    )
+  }
+  if (analysis.exceedsMaxChars) {
+    failures.push(
+      `${file} compatibility heading ${retainedHeading} is ${analysis.charCount} characters (max ${maxChars})`,
+    )
   }
 }
 
@@ -389,26 +593,62 @@ for (const filePath of normativeScenarioFiles) {
   }
 }
 
-// Docs topology check — every docs page in nav must have a content file and
-// a matching app wrapper, and every internal docs link must point to a known
-// docs page. This catches stale links when docs pages are split or moved.
+// Docs topology check — nav, authored MDX, and app wrappers must describe the
+// same route set. Link targets and fragments are validated by the web MDX tests.
 const docsNavPath = resolve(repoRoot, "apps/web/app/components/docs/nav.ts")
 const docsNav = readFileSync(docsNavPath, "utf8")
-const navDocHrefs = [...docsNav.matchAll(/href:\s*"((?:\/docs\/)[^"]+)"/g)].map((m) => m[1])
-const uniqueNavDocHrefs = [...new Set(navDocHrefs)]
+const navDocHrefs = [
+  ...docsNav.matchAll(/^\s*\{\s*label:\s*"[^"]+",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
+].map((match) => match[1])
+const uniqueNavDocHrefs = [...new Set(navDocHrefs)].sort()
+const duplicateNavDocHrefs = uniqueNavDocHrefs.filter(
+  (href) => navDocHrefs.filter((candidate) => candidate === href).length > 1,
+)
+
+if (duplicateNavDocHrefs.length > 0) {
+  failures.push(`DOCS_NAV contains duplicate hrefs: ${duplicateNavDocHrefs.join(", ")}`)
+}
+
+const docsContentRoot = resolve(repoRoot, "apps/web/content/docs")
+const docsWrapperRoot = resolve(repoRoot, "apps/web/app/docs")
+const contentDocHrefs = walkFiles(docsContentRoot, (file) => file.endsWith(".mdx"))
+  .map((file) => {
+    const relativePath = relative(docsContentRoot, file).replaceAll("\\", "/")
+    const slug = relativePath.endsWith("/index.mdx")
+      ? relativePath.slice(0, -"/index.mdx".length)
+      : relativePath.slice(0, -".mdx".length)
+    return `/docs/${slug}`
+  })
+  .sort()
+const wrapperDocHrefs = walkFiles(docsWrapperRoot, (file) => basename(file) === "page.tsx")
+  .filter((file) => file !== join(docsWrapperRoot, "page.tsx"))
+  .map((file) => {
+    const relativePath = relative(docsWrapperRoot, file).replaceAll("\\", "/")
+    return `/docs/${relativePath.slice(0, -"/page.tsx".length)}`
+  })
+  .sort()
+const navDocHrefSet = new Set(uniqueNavDocHrefs)
+const contentDocHrefSet = new Set(contentDocHrefs)
+const wrapperDocHrefSet = new Set(wrapperDocHrefs)
 
 for (const href of uniqueNavDocHrefs) {
-  const contentPath = resolve(repoRoot, docHrefToContentPath(href))
-  const pagePath = resolve(repoRoot, docHrefToPagePath(href))
-  try {
-    statSync(contentPath)
-  } catch {
-    failures.push(`DOCS_NAV references ${href}, but ${relativeToRoot(contentPath)} is missing`)
+  if (!contentDocHrefSet.has(href)) {
+    failures.push(`DOCS_NAV references ${href}, but ${docHrefToContentPath(href)} is missing`)
   }
-  try {
-    statSync(pagePath)
-  } catch {
-    failures.push(`DOCS_NAV references ${href}, but ${relativeToRoot(pagePath)} is missing`)
+  if (!wrapperDocHrefSet.has(href)) {
+    failures.push(`DOCS_NAV references ${href}, but ${docHrefToPagePath(href)} is missing`)
+  }
+}
+
+for (const href of contentDocHrefs) {
+  if (!navDocHrefSet.has(href)) {
+    failures.push(`Authored docs content for ${href} is not registered in DOCS_NAV`)
+  }
+}
+
+for (const href of wrapperDocHrefs) {
+  if (!navDocHrefSet.has(href)) {
+    failures.push(`Docs wrapper for ${href} is not registered in DOCS_NAV`)
   }
 }
 

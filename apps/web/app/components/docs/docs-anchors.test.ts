@@ -37,13 +37,116 @@ interface HastNode {
 interface PageAnchors {
   /** Heading ids the built page will actually carry. */
   readonly ids: ReadonlySet<string>
-  /** In-page and cross-page `#fragment` links found in rendered anchors. */
+  /** Links found in rendered anchors. */
   readonly links: readonly string[]
 }
 
 function walk(node: HastNode, visit: (node: HastNode) => void): void {
   visit(node)
   for (const child of node.children ?? []) walk(child, visit)
+}
+
+function maskText(value: string): string {
+  return value.replace(/[^\r\n]/g, " ")
+}
+
+function maskFencedCode(source: string): string {
+  let fence: { readonly character: string; readonly length: number } | null = null
+  return source
+    .split(/(?<=\n)/)
+    .map((line) => {
+      const content = line.replace(/\r?\n$/, "")
+      if (fence) {
+        const activeFence = fence
+        const closingRun = /^[ \t]{0,3}([`~]+)[ \t]*$/.exec(content)?.[1]
+        const closesFence =
+          closingRun !== undefined &&
+          closingRun.length >= activeFence.length &&
+          [...closingRun].every((character) => character === activeFence.character)
+        if (closesFence) fence = null
+        return maskText(line)
+      }
+
+      const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
+      if (!opening) return line
+      fence = { character: opening[0] ?? "", length: opening.length }
+      return maskText(line)
+    })
+    .join("")
+}
+
+function maskRange(characters: string[], start: number, end: number): void {
+  for (let index = start; index < end; index++) {
+    if (characters[index] !== "\r" && characters[index] !== "\n") characters[index] = " "
+  }
+}
+
+function inlineCodeEnd(source: string, start: number, delimiterLength: number): number {
+  let index = start + delimiterLength
+  while (index < source.length && source[index] !== "\r" && source[index] !== "\n") {
+    if (source[index] !== "`") {
+      index++
+      continue
+    }
+    let runEnd = index
+    while (source[runEnd] === "`") runEnd++
+    if (runEnd - index === delimiterLength) return runEnd
+    index = runEnd
+  }
+  return -1
+}
+
+function maskInlineCodeAndComments(source: string): string {
+  const characters = source.split("")
+  let index = 0
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      const closing = source.indexOf("-->", index + 4)
+      const end = closing === -1 ? source.length : closing + 3
+      maskRange(characters, index, end)
+      index = end
+      continue
+    }
+    if (source.startsWith("{/*", index)) {
+      const closing = source.indexOf("*/}", index + 3)
+      const end = closing === -1 ? source.length : closing + 3
+      maskRange(characters, index, end)
+      index = end
+      continue
+    }
+    if (source[index] === "`") {
+      let runEnd = index
+      while (source[runEnd] === "`") runEnd++
+      const end = inlineCodeEnd(source, index, runEnd - index)
+      if (end !== -1) {
+        maskRange(characters, index, end)
+        index = end
+        continue
+      }
+      index = runEnd
+      continue
+    }
+    index++
+  }
+  return characters.join("")
+}
+
+function maskMdxCodeAndComments(source: string): string {
+  return maskInlineCodeAndComments(maskFencedCode(source))
+}
+
+function collectMdxNavigationHrefs(source: string): string[] {
+  const masked = maskMdxCodeAndComments(source)
+  return [...masked.matchAll(/<RelatedCards\b[\s\S]*?(?:\/>|<\/RelatedCards\s*>)/g)].flatMap(
+    (component) =>
+      [...component[0].matchAll(/\bhref\s*(?::|=)\s*["']([^"']+)["']/g)].flatMap((href) =>
+        href[1] ? [href[1]] : [],
+      ),
+  )
+}
+
+function isDocsPath(path: string): boolean {
+  return path === "/docs" || path.startsWith("/docs/")
 }
 
 type PluginList = NonNullable<CompileOptions["rehypePlugins"]>
@@ -66,7 +169,12 @@ async function resolvePlugins(specs: readonly (readonly [string, unknown])[]): P
  */
 async function analyze(file: string): Promise<PageAnchors> {
   const ids = new Set<string>()
-  const links: string[] = []
+  const links = new Set<string>()
+  const source = readFileSync(join(DOCS_DIR, file), "utf8")
+
+  // MDX JSX such as RelatedCards is not rendered by compile(), so collect its
+  // literal docs hrefs from source in addition to the Markdown anchors below.
+  for (const href of collectMdxNavigationHrefs(source)) links.add(href)
 
   const collect = () => (tree: HastNode) => {
     walk(tree, (node) => {
@@ -77,12 +185,12 @@ async function analyze(file: string): Promise<PageAnchors> {
       }
       if (node.tagName === "a") {
         const href = node.properties?.href
-        if (typeof href === "string" && href.includes("#")) links.push(href)
+        if (typeof href === "string") links.add(href)
       }
     })
   }
 
-  await compile(readFileSync(join(DOCS_DIR, file), "utf8"), {
+  await compile(source, {
     remarkPlugins: await resolvePlugins(MDX_REMARK_PLUGINS),
     // The syntax highlighter is skipped: it is slow and cannot affect heading ids.
     rehypePlugins: [
@@ -93,7 +201,7 @@ async function analyze(file: string): Promise<PageAnchors> {
     ],
   })
 
-  return { ids, links }
+  return { ids, links: [...links] }
 }
 
 const files = docFiles()
@@ -101,7 +209,41 @@ const pages = new Map<string, PageAnchors>(
   await Promise.all(files.map(async (file) => [file, await analyze(file)] as const)),
 )
 
-describe("docs in-page anchors", () => {
+describe("docs links and in-page anchors", () => {
+  it("collects real RelatedCards hrefs but ignores code and comments", () => {
+    const docsRoot = "/docs"
+    const source = `
+[Rendered Markdown](${docsRoot}/rendered-by-hast)
+<RelatedCards items={[{ href: "${docsRoot}/real-jsx" }]} />
+\`{ href: "${docsRoot}/inline-code" }\`
+<!-- <RelatedCards items={[{ href: "${docsRoot}/html-comment" }]} /> -->
+{/* <RelatedCards items={[{ href: "${docsRoot}/mdx-comment" }]} /> */}
+\`\`\`md
+[Fenced Markdown](${docsRoot}/fenced-markdown)
+<RelatedCards items={[{ href: "${docsRoot}/fenced-jsx" }]} />
+\`\`\`
+`
+
+    expect(collectMdxNavigationHrefs(source)).toEqual(["/docs/real-jsx"])
+  })
+
+  it("keeps RelatedCards after an inline-code HTML comment marker visible", () => {
+    const docsRoot = "/docs"
+    const source = `
+\`<!--\`
+<RelatedCards items={[{ href: "${docsRoot}/still-visible" }]} />
+`
+
+    expect(collectMdxNavigationHrefs(source)).toEqual(["/docs/still-visible"])
+  })
+
+  it("recognizes only the docs root and slash-delimited docs routes", () => {
+    expect(isDocsPath("/docs")).toBe(true)
+    expect(isDocsPath("/docs/agents")).toBe(true)
+    expect(isDocsPath("/docs-old")).toBe(false)
+    expect(isDocsPath("/docstore")).toBe(false)
+  })
+
   it("finds docs to check", () => {
     expect(files.length).toBeGreaterThan(20)
   })
@@ -117,17 +259,16 @@ describe("docs in-page anchors", () => {
     expect(deployment?.ids).toContain("why-the-stores-are-per-request")
   })
 
-  it("resolves every fragment link to a heading that exists", () => {
+  it("resolves every repository-owned docs link and supplied fragment", () => {
     const broken: string[] = []
 
     for (const [file, page] of pages) {
       for (const href of page.links) {
         const [path, fragment] = href.split("#")
-        if (fragment === undefined || fragment === "") continue
 
-        // Only fragments into the docs site are checkable here.
+        // External URLs and historical blog links are outside the authored docs topology.
         const target =
-          path === "" ? file : path?.startsWith("/docs") ? hrefToFile(path, pages) : undefined
+          path === "" ? file : path && isDocsPath(path) ? hrefToFile(path, pages) : undefined
         if (target === undefined) continue
 
         const targetPage = pages.get(target)
@@ -135,7 +276,9 @@ describe("docs in-page anchors", () => {
           broken.push(`${file}: ${href} -> no such page`)
           continue
         }
-        if (!targetPage.ids.has(fragment)) broken.push(`${file}: ${href} -> no such heading`)
+        if (fragment && !targetPage.ids.has(fragment)) {
+          broken.push(`${file}: ${href} -> no such heading`)
+        }
       }
     }
 

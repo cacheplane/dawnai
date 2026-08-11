@@ -237,9 +237,10 @@ describe("parseNavOrder()", () => {
     const nav = `
       { label: "Getting Started", href: "/docs/getting-started" },
       { label: "Routes", href: "/docs/routes" },
+      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
       { label: "Routes again", href: "/docs/routes" },
     `
-    expect(parseNavOrder(nav)).toEqual(["getting-started", "routes"])
+    expect(parseNavOrder(nav)).toEqual(["getting-started", "routes", "recipes/add-a-tool"])
   })
 })
 
@@ -248,12 +249,34 @@ describe("parseNav()", () => {
     const nav = `
       { label: "Getting Started", href: "/docs/getting-started" },
       { label: "Tools", href: "/docs/tools" },
+      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
       { label: "Tools again", href: "/docs/tools" },
     `
     expect(parseNav(nav)).toEqual([
       { slug: "getting-started", label: "Getting Started" },
       { slug: "tools", label: "Tools" },
+      { slug: "recipes/add-a-tool", label: "Add a tool" },
     ])
+  })
+})
+
+describe("generated documentation bundle", () => {
+  it("contains exactly one topic file per real nav entry in registry order", () => {
+    const nav = parseNav(
+      readFileSync(join(repoRoot, "apps/web/app/components/docs/nav.ts"), "utf8"),
+    )
+    const readme = readFileSync(join(repoRoot, "packages/cli/docs/README.md"), "utf8")
+    const topicFiles = [...readme.matchAll(/^- \[[^\]]+\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
+      match[1] ? [match[1]] : [],
+    )
+    const expectedFiles = nav.map((entry) =>
+      entry.slug === "recipes" ? "recipes/index.md" : `${entry.slug}.md`,
+    )
+
+    expect(topicFiles).toEqual(expectedFiles)
+    for (const file of topicFiles) {
+      expect(existsSync(join(repoRoot, "packages/cli/docs", file))).toBe(true)
+    }
   })
 })
 
