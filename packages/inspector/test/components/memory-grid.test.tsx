@@ -1,5 +1,5 @@
 import type { MemoryRecord } from "@dawn-ai/memory"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { MemoryGrid } from "../../src/components/memory/memory-grid"
 
@@ -176,5 +176,198 @@ describe("MemoryGrid", () => {
     expect(cellClasses("a").every((cls) => cls.includes("amber"))).toBe(true)
     expect(cellClasses("b").every((cls) => cls.includes("line-through"))).toBe(true)
     expect(cellClasses("c").some((cls) => cls.includes("line-through"))).toBe(false)
+  })
+})
+
+function grid(container: HTMLElement): HTMLElement {
+  const el = container.querySelector<HTMLElement>('[role="grid"]')
+  if (!el) throw new Error("no grid")
+  return el
+}
+
+function bodyState(container: HTMLElement): HTMLElement {
+  const el = container.querySelector<HTMLElement>("[data-pretable-body-state]")
+  if (!el) throw new Error("no body-state block")
+  return el
+}
+
+/** The live region is portaled to `document.body`, and the surface debounces every
+ *  announcement, so a caller must run the timers before reading it. */
+function announcement(): string {
+  return document.querySelector("[data-pretable-live-region]")?.textContent ?? ""
+}
+
+describe("MemoryGrid lifecycle", () => {
+  it("is untouched when dataState is omitted", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a", content: "apple" }), record({ id: "b", content: "banana" })]}
+        onSelect={vi.fn()}
+      />,
+    )
+    expect(container.querySelector("[data-pretable-data-phase]")).toBeNull()
+    expect(container.querySelector("[data-pretable-body-state]")).toBeNull()
+    // Loaded rows plus the header row — the grid speaks only for what it holds.
+    expect(grid(container).getAttribute("aria-rowcount")).toBe("3")
+    fireEvent.click(headerFor(container, "content"))
+    expect(columnText(container, "content")).toEqual(["banana", "apple"])
+    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("descending")
+  })
+
+  it("shows a loading block before the first answer", () => {
+    const { container } = render(
+      <MemoryGrid records={[]} onSelect={vi.fn()} dataState={{ phase: "loading" }} />,
+    )
+    expect(bodyState(container).getAttribute("data-pretable-body-state")).toBe("loading")
+    expect(screen.getByTestId("browse-loading").textContent).toBe("Loading memories…")
+    expect(grid(container).getAttribute("data-pretable-data-phase")).toBe("loading")
+  })
+
+  it("shows the caller's empty copy, exactly once", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        emptyMessage="No memories match these filters."
+      />,
+    )
+    expect(bodyState(container).getAttribute("data-pretable-body-state")).toBe("empty")
+    expect(screen.getByTestId("browse-empty").textContent).toBe("No memories match these filters.")
+    expect(screen.getAllByText("No memories match these filters.")).toHaveLength(1)
+  })
+
+  it("leaves a body block room to be legible when no rows give the grid height", () => {
+    const { container } = render(
+      <MemoryGrid records={[]} onSelect={vi.fn()} dataState={{ phase: "loading" }} />,
+    )
+    // The block is an overlay inset below the sticky header, so the grid's own
+    // height is not what the block gets. jsdom computes no geometry; these are the
+    // inline styles the surface lays itself out with.
+    const available =
+      Number.parseFloat(grid(container).style.height) -
+      Number.parseFloat(bodyState(container).style.top)
+    expect(available).toBeGreaterThanOrEqual(160)
+  })
+
+  it("renders a full-bleed error with a retry when nothing is loaded", () => {
+    const onRetry = vi.fn()
+    const { container } = render(
+      <MemoryGrid
+        records={[]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "error", message: "no memory store configured" }}
+        onRetry={onRetry}
+      />,
+    )
+    expect(bodyState(container).getAttribute("data-pretable-body-state")).toBe("error")
+    const block = screen.getByTestId("browse-error")
+    expect(block.textContent).toContain("no memory store configured")
+    fireEvent.click(within(block).getByRole("button", { name: "Retry" }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it("marks a failure over intact rows as a strip, not a full-bleed error", () => {
+    const onRetry = vi.fn()
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a", content: "banana" }), record({ id: "b", content: "apple" })]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "error", message: "list failed" }}
+        onRetry={onRetry}
+      />,
+    )
+    // A query change whose initial fetch fails leaves the PREVIOUS question's rows
+    // on screen, so the failure is a strip above them rather than a block instead
+    // of them — and a test that cannot tell the two apart cannot catch the swap.
+    expect(bodyState(container).getAttribute("data-pretable-body-state")).toBe("error-strip")
+    expect(screen.queryByTestId("browse-error")).toBeNull()
+    const strip = screen.getByTestId("browse-error-strip")
+    expect(strip.textContent).toContain("list failed")
+    expect(columnText(container, "content")).toEqual(["banana", "apple"])
+    fireEvent.click(within(strip).getByRole("button", { name: "Retry" }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it("claims the server's population, never the loaded window", () => {
+    const records = [record({ id: "a" }), record({ id: "b" }), record({ id: "c" })]
+    const { container } = render(
+      <MemoryGrid
+        records={records}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        resultMeta={{ total: { kind: "exact", count: 4322 } }}
+      />,
+    )
+    expect(grid(container).getAttribute("aria-rowcount")).toBe("4323")
+
+    cleanup()
+    const withoutMeta = render(
+      <MemoryGrid records={records} onSelect={vi.fn()} dataState={{ phase: "idle" }} />,
+    )
+    // Unknown, not 4: under server authority the loaded rows are a window, and
+    // reporting them as the population is the lie the whole design exists to stop.
+    expect(grid(withoutMeta.container).getAttribute("aria-rowcount")).toBe("-1")
+  })
+
+  it("browse headers do not sort — the rows are a server-selected sample", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[
+          record({ id: "a", content: "banana" }),
+          record({ id: "b", content: "apple" }),
+          record({ id: "c", content: "cherry" }),
+        ]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        resultMeta={{ total: { kind: "exact", count: 4322 } }}
+      />,
+    )
+    const header = headerFor(container, "content")
+    fireEvent.click(header)
+    expect(columnText(container, "content")).toEqual(["banana", "apple", "cherry"])
+    expect(header.getAttribute("aria-sort")).toBe("none")
+  })
+
+  it("announces the settled result in the app's own words", () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(
+        <MemoryGrid records={[]} onSelect={vi.fn()} dataState={{ phase: "loading" }} />,
+      )
+      rerender(
+        <MemoryGrid
+          records={[record({ id: "a" })]}
+          onSelect={vi.fn()}
+          dataState={{ phase: "idle" }}
+          resultMeta={{ total: { kind: "exact", count: 4322 } }}
+        />,
+      )
+      act(() => {
+        vi.runAllTimers()
+      })
+      expect(announcement()).toBe("1 loaded of 4,322 matching.")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("announces a failure in the app's own words", () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <MemoryGrid
+          records={[]}
+          onSelect={vi.fn()}
+          dataState={{ phase: "error", message: "list failed" }}
+        />,
+      )
+      act(() => {
+        vi.runAllTimers()
+      })
+      expect(announcement()).toBe("Could not load memories: list failed")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

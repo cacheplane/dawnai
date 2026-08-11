@@ -2,13 +2,13 @@
 import type { MemoryKind, MemoryRecord, MemoryStatus } from "@dawn-ai/memory"
 import {
   type ColumnFilter,
-  type PretableBodyStateKind,
   type PretableColumn,
   type PretableDataState,
   type PretableProcessingOptions,
   type PretableResultMeta,
   PretableSurface,
   type PretableSurfaceMessages,
+  type PretableSurfaceProps,
   type PretableTelemetry,
 } from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
@@ -131,24 +131,35 @@ const BROWSE_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
   sortable: false,
 }))
 
-/** Enough room for a loading/empty/error block to be legible when the body holds
- *  no rows to give the viewport its height. */
+/** Room the body-state block itself needs to stay legible when there are no rows
+ *  to give the viewport its height. The block is an overlay inset below the sticky
+ *  header, so the header's height is not part of it. */
 const MIN_BODY_STATE_PX = 160
 
-/** Lifecycle copy. `emptyStateMessage` is NOT here — filtered-empty and
- *  unfiltered-empty are different answers, and only the caller knows which. */
+/** Announcement copy only. The visible loading/empty/error blocks come from
+ *  `renderBodyState`, which pretable prefers over `loadingStateMessage` and
+ *  `emptyStateMessage` whenever it is supplied — and it always is here. */
 const BROWSE_MESSAGES: PretableSurfaceMessages = {
-  loadingStateMessage: () => "Loading memories…",
   dataErrorAnnouncement: ({ message }) =>
     message === undefined ? "Could not load memories." : `Could not load memories: ${message}`,
   staleAnnouncement: () => "Updating results…",
   focusedRowRemovedAnnouncement: () => "The focused memory was removed.",
   resultsAnnouncement: ({ loaded, total, added, scope }) => {
-    const head =
-      scope === "all" || total.kind !== "exact"
-        ? `${loaded.toLocaleString()} loaded`
-        : `${loaded.toLocaleString()} loaded of ${total.count.toLocaleString()} matching`
-    return added === undefined ? head : `Loaded ${added.toLocaleString()} more. ${head}.`
+    // `scope: "all"` means the loaded records ARE the population and `total`
+    // restates them — say one number. Every other case keeps the qualifier the
+    // total carries, so "of about" never hardens into a count nobody promised.
+    const population =
+      scope === "all"
+        ? ""
+        : total.kind === "exact"
+          ? ` of ${total.count.toLocaleString()} matching`
+          : total.kind === "estimate"
+            ? ` of about ${total.count.toLocaleString()} matching`
+            : total.atLeast === undefined
+              ? ""
+              : ` of more than ${total.atLeast.toLocaleString()} matching`
+    const head = `${loaded.toLocaleString()} loaded${population}.`
+    return added === undefined ? head : `Loaded ${added.toLocaleString()} more. ${head}`
   },
   moreRowsBoundaryAnnouncement: ({ loadedCount, total }) =>
     total === undefined
@@ -213,7 +224,12 @@ export function MemoryGrid({
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
   /** Supply to turn lifecycle presentation ON: body blocks, the phase attribute,
    *  phase announcements, and external processing authority. Omit it — as the
-   *  search results do — and the grid behaves exactly as it did before. */
+   *  search results do — and the grid behaves exactly as it did before.
+   *
+   *  WHETHER it is supplied must be stable for the mount, though its value may
+   *  change freely: presence selects `columns` and `processing`, which pretable
+   *  treats as create-time config and rebuilds the grid around, discarding
+   *  selection, focus, measured heights and column layout. */
   dataState?: PretableDataState
   /** The matching population and the dataset identity, always for the FULFILLED
    *  revision. */
@@ -221,7 +237,7 @@ export function MemoryGrid({
   /** Body copy for the empty block. "Nothing stored" and "nothing matches what you
    *  asked for" are different answers; only the caller knows which applies. */
   emptyMessage?: string
-  /** Retry affordance for the error block. The design routes it through the
+  /** Retry affordance for the error blocks. The design routes it through the
    *  body-state slot rather than a second banner, so exactly one retry control is
    *  ever on screen. */
   onRetry?: () => void
@@ -249,16 +265,59 @@ export function MemoryGrid({
       (contentHeight ?? rows.length * density.rowHeight) + density.headerHeight,
       MAX_VIEWPORT_PX,
     ),
-    dataState !== undefined && rows.length === 0 ? MIN_BODY_STATE_PX : 0,
+    dataState !== undefined && rows.length === 0 ? MIN_BODY_STATE_PX + density.headerHeight : 0,
   )
 
-  const messages = useMemo<PretableSurfaceMessages>(
-    () => ({
-      ...BROWSE_MESSAGES,
-      emptyStateMessage: () => emptyMessage ?? "No memories.",
-    }),
-    [emptyMessage],
-  )
+  // Typed against the prop rather than inline in the JSX spread below: a spread
+  // gets no contextual type, so an inline callback's parameter would have to be
+  // hand-declared, and a hand-declared one silently accepts a shape the library
+  // has since renamed.
+  const renderBodyState: NonNullable<PretableSurfaceProps<GridRow>["renderBodyState"]> = ({
+    kind,
+    errorMessage,
+  }) => {
+    if (kind === "loading") {
+      return (
+        <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+          Loading memories…
+        </p>
+      )
+    }
+    if (kind === "empty") {
+      return (
+        <p data-testid="browse-empty" className="p-4 text-sm text-zinc-400">
+          {emptyMessage ?? "No memories."}
+        </p>
+      )
+    }
+    const message = errorMessage ?? "Could not load memories."
+    const retry = onRetry ? (
+      <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
+        Retry
+      </Button>
+    ) : null
+    // `error-strip` means rows survived the failure and are still on screen
+    // answering the previous question, so the block sits ABOVE them as a band
+    // rather than covering the body — same failure, a different claim about what
+    // is underneath.
+    return kind === "error-strip" ? (
+      <div
+        data-testid="browse-error-strip"
+        className="mb-2 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-700"
+      >
+        <span>{message}</span>
+        {retry}
+      </div>
+    ) : (
+      <div
+        data-testid="browse-error"
+        className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+      >
+        <span>{message}</span>
+        {retry}
+      </div>
+    )
+  }
 
   return (
     <PretableSurface<GridRow>
@@ -270,43 +329,18 @@ export function MemoryGrid({
       // One controlled `state`: a second `state` prop would clobber the first,
       // silently ungrouping the moment a filter was applied.
       state={surfaceState}
-      // Spread-or-omit rather than `prop={undefined}`: `exactOptionalPropertyTypes`
-      // rejects an explicit undefined, and `dataState` has NO default — omitting it
-      // turns lifecycle presentation entirely off.
-      {...(dataState === undefined ? {} : { dataState, processing: SERVER_PROCESSING, messages })}
-      {...(resultMeta === undefined ? {} : { resultMeta })}
+      // All four together or none: `renderBodyState` is what makes the lifecycle
+      // copy in `BROWSE_MESSAGES` reachable, and `SERVER_PROCESSING` is what makes
+      // `resultMeta.total` reachable. Splitting them would leave a half-wired mode.
       {...(dataState === undefined
         ? {}
         : {
-            renderBodyState: ({
-              kind,
-              errorMessage,
-            }: {
-              kind: PretableBodyStateKind
-              errorMessage?: string
-            }) =>
-              kind === "loading" ? (
-                <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
-                  Loading memories…
-                </p>
-              ) : kind === "empty" ? (
-                <p data-testid="browse-empty" className="p-4 text-sm text-zinc-400">
-                  {emptyMessage ?? "No memories."}
-                </p>
-              ) : (
-                <div
-                  data-testid="browse-error"
-                  className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-                >
-                  <span>{errorMessage ?? "Could not load memories."}</span>
-                  {onRetry ? (
-                    <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
-                      Retry
-                    </Button>
-                  ) : null}
-                </div>
-              ),
+            dataState,
+            processing: SERVER_PROCESSING,
+            messages: BROWSE_MESSAGES,
+            renderBodyState,
           })}
+      {...(resultMeta === undefined ? {} : { resultMeta })}
       {...(onTickedChange
         ? {
             rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
