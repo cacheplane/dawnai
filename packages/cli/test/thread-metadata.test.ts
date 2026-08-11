@@ -1,3 +1,5 @@
+import { readdir, readFile } from "node:fs/promises"
+import { dirname, join, relative, resolve } from "node:path"
 import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
 import { describe, expect, it } from "vitest"
 
@@ -64,5 +66,49 @@ describe("assertNoReservedKey", () => {
     expect(() => assertNoReservedKey({ [THREAD_ACCESS_METADATA_KEY]: { ownerId: "x" } })).toThrow(
       /dawn:access/,
     )
+  })
+})
+
+/**
+ * The guard only protects the stamp at call sites that call it, and nothing in
+ * `ThreadsStore` forces that — `updateMetadata` is the store contract, shared
+ * with the operator backfill that legitimately writes the reserved key. So the
+ * enumeration is what a test enumerates: a new runtime write path added without
+ * the guard reds this, instead of being caught by review or not at all.
+ */
+describe("every runtime thread-metadata write goes through the guard", () => {
+  const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), "..")
+
+  async function sourceFiles(): Promise<readonly string[]> {
+    const entries = await readdir(join(packageRoot, "src"), {
+      recursive: true,
+      withFileTypes: true,
+    })
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+      .map((entry) => join(entry.parentPath, entry.name))
+  }
+
+  it("passes a guarded identifier to every updateMetadata call under src/", async () => {
+    const unguarded: string[] = []
+    let sites = 0
+    for (const file of await sourceFiles()) {
+      const source = await readFile(file, "utf8")
+      source.split("\n").forEach((line, index) => {
+        if (!line.includes(".updateMetadata(")) return
+        sites += 1
+        // Only an identifier can have been asserted before the call, so an
+        // inline object literal is reported too rather than silently skipped.
+        const patch = /\.updateMetadata\([^,]+,\s*([A-Za-z_$][\w$]*)\s*\)/.exec(line)?.[1]
+        if (!patch || !source.includes(`assertNoReservedKey(${patch})`)) {
+          unguarded.push(`${relative(packageRoot, file)}:${index + 1}: ${line.trim()}`)
+        }
+      })
+    }
+    expect(unguarded).toEqual([])
+    // Two run-stream writers in runtime-fetch-core.ts and one in
+    // agui-handler.ts. Bump this when a guarded write path is added, so the
+    // scan can never pass by finding nothing.
+    expect(sites).toBe(3)
   })
 })

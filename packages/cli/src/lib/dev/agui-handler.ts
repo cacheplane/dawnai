@@ -24,6 +24,7 @@ import type { RunRegistry } from "./run-registry.js"
 import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { assertNoReservedKey } from "./thread-metadata.js"
 
 export interface AgUiFetchRequestOptions {
   readonly appRoot: string
@@ -251,7 +252,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     if (!(await threadsStore.getThread(threadId))) {
       await threadsStore.createThread({ thread_id: threadId })
     }
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // See the same guard in runtime-fetch-core.ts: the metadata merge is
+    // shallow, so nothing the runtime writes may carry the access stamp's key.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
 
     const accept = request.headers.get("accept") ?? undefined

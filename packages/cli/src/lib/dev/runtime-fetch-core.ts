@@ -49,6 +49,7 @@ import {
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 import { threadAccessBootLine, validateThreadAccessPolicy } from "./thread-access.js"
+import { assertNoReservedKey, stripReservedThreadMetadata } from "./thread-metadata.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
@@ -968,8 +969,13 @@ function buildRouteTable(ctx: {
             metadata = bodyMetadata
           }
         }
+        // Unconditional, hook or no hook: the reserved key is Dawn's, contains
+        // a colon (so it cannot be written as a JS property identifier), and
+        // stripping it always means an app that adopts a policy later can never
+        // inherit a stamp a client forged before it did.
+        const clientMetadata = stripReservedThreadMetadata(metadata)
         const thread = await getThreadsStore(request).createThread(
-          metadata !== undefined ? { metadata } : {},
+          clientMetadata !== undefined ? { metadata: clientMetadata } : {},
         )
         return Response.json(thread, { status: 200 })
       },
@@ -1387,7 +1393,12 @@ async function handleApStreamRequest(options: {
   // metadata persists it to SQLite so resume survives a server restart.
   threadRouteMap.set(threadId, routeKey)
   try {
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // The stamp lives in the same flat metadata object and this merge is
+    // shallow, so a future patch that carried the reserved key would silently
+    // overwrite it. Assertion, not a gate: reaching it is a Dawn bug.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
   } catch (error) {
     // The stream's finally has not been armed yet, so nothing else would ever
@@ -1607,7 +1618,12 @@ async function handleApWaitRequest(options: {
   // Record route for potential resume (in-memory fast-path + durable metadata)
   threadRouteMap.set(threadId, routeKey)
   try {
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // The stamp lives in the same flat metadata object and this merge is
+    // shallow, so a future patch that carried the reserved key would silently
+    // overwrite it. Assertion, not a gate: reaching it is a Dawn bug.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
   } catch (error) {
     // Nothing else will ever free this slot — without an explicit release
