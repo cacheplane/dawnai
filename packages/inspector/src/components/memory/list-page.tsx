@@ -12,7 +12,8 @@ import { BulkBar } from "./bulk-bar"
 import { resolveFilter, toFilter, type ValueSet } from "./column-filters"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
-import { KINDS, MemoryGrid, STATUSES } from "./memory-grid"
+import { KINDS, STATUSES } from "./memory-domain"
+import { MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
 
 interface SearchResponse {

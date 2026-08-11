@@ -15,6 +15,7 @@ import { getDensityHeights } from "@pretable/ui"
 import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
+import { KINDS, STATUSES } from "./memory-domain"
 
 /** Row projection handed to pretable — a plain bag so it satisfies `PretableRow`
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
@@ -29,11 +30,6 @@ interface GridRow extends Record<string, unknown> {
   confidence: number
   updatedAt: string
 }
-
-/** The closed sets the funnels offer, and what `isNoneOf` is complemented
- *  against. Kept here beside the columns that use them. */
-export const STATUSES: readonly MemoryStatus[] = ["candidate", "active", "superseded"]
-export const KINDS: readonly MemoryKind[] = ["semantic", "episodic", "procedural", "reflection"]
 
 /** Tallest the grid grows before it scrolls internally; below this it shrinks to
  *  fit so a two-hit search group doesn't reserve a screenful of empty rows. */
