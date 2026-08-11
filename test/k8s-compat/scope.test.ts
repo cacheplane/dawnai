@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -61,6 +62,10 @@ afterEach(async () => {
 
 function commandResult(stdout: Buffer = Buffer.alloc(0)): { readonly stdout: Buffer } {
   return { stdout }
+}
+
+function git(repository: string, args: readonly string[]): Buffer {
+  return execFileSync("git", args, { cwd: repository })
 }
 
 function targetByRole(
@@ -176,7 +181,10 @@ describe("pull-request scope", () => {
     expect(calls).toEqual([
       { file: "git", args: ["cat-file", "-e", `${BASE_SHA}^{commit}`] },
       { file: "git", args: ["cat-file", "-e", `${HEAD_SHA}^{commit}`] },
-      { file: "git", args: ["diff", "--name-only", "-z", BASE_SHA, HEAD_SHA] },
+      {
+        file: "git",
+        args: ["diff", "--no-renames", "--name-only", "-z", BASE_SHA, HEAD_SHA],
+      },
     ])
   })
 
@@ -193,6 +201,41 @@ describe("pull-request scope", () => {
         { event: "pull_request", base: BASE_SHA, head: HEAD_SHA },
         runCommand,
       ),
+    ).resolves.toBe(true)
+  })
+
+  test("requires compatibility when an owned path is renamed out of scope", async () => {
+    const repository = await mkdtemp(join(tmpdir(), "dawn-k8s-scope-rename-"))
+    temporaryDirectories.push(repository)
+    git(repository, ["init", "--quiet"])
+    git(repository, ["config", "user.name", "Dawn Scope Test"])
+    git(repository, ["config", "user.email", "scope-test@dawn.invalid"])
+    git(repository, ["config", "commit.gpgSign", "false"])
+    git(repository, ["config", "diff.renames", "true"])
+
+    const ownedPath = join(repository, "test/k8s-smoke/renamed-control.sh")
+    const unrelatedDirectory = join(repository, "docs")
+    await mkdir(join(repository, "test/k8s-smoke"), { recursive: true })
+    await writeFile(ownedPath, "locked compatibility behavior\n")
+    git(repository, ["add", "--all"])
+    git(repository, ["commit", "--quiet", "--message", "base"])
+    const base = git(repository, ["rev-parse", "HEAD"]).toString("utf8").trim()
+
+    await mkdir(unrelatedDirectory)
+    await rename(ownedPath, join(unrelatedDirectory, "renamed-control.sh"))
+    git(repository, ["add", "--all"])
+    git(repository, ["commit", "--quiet", "--message", "rename out of compatibility scope"])
+    const head = git(repository, ["rev-parse", "HEAD"]).toString("utf8").trim()
+    const collapsedRename = git(repository, ["diff", "--name-only", "-z", base, head])
+    expect(parseNulDelimitedGitPaths(collapsedRename)).toEqual(["docs/renamed-control.sh"])
+
+    const runCommand: GitCommandRunner = async (file, args) => {
+      if (file !== "git") throw new Error(`Unexpected command: ${file}`)
+      return commandResult(git(repository, args))
+    }
+
+    await expect(
+      classifyKubernetesCompatibilityScope({ event: "pull_request", base, head }, runCommand),
     ).resolves.toBe(true)
   })
 

@@ -614,6 +614,7 @@ describe("positive and negative pod fixtures", () => {
       "app.kubernetes.io/managed-by",
       "dawn",
     )
+    const serverName = metadata(pods[0] as JsonObject).name
     const clientName = metadata(pods[1] as JsonObject).name
     expect(execute.mock.calls.at(-1)?.[0].args).toEqual(
       expect.arrayContaining(["delete", `pod/${String(clientName)}`]),
@@ -624,6 +625,30 @@ describe("positive and negative pod fixtures", () => {
     )
     const networkWaits = execute.mock.calls.filter(([command]) => command.args.includes("wait"))
     expect(networkWaits).toHaveLength(2)
+    expect(networkWaits[0]?.[0].args).toEqual([
+      "--context",
+      context,
+      "wait",
+      "--namespace",
+      names.sandboxNamespace,
+      "--for=condition=Ready",
+      `pod/${String(serverName)}`,
+      "--timeout=120s",
+      "--output",
+      "json",
+    ])
+    expect(networkWaits[1]?.[0].args).toEqual([
+      "--context",
+      context,
+      "wait",
+      "--namespace",
+      names.sandboxNamespace,
+      "--for=jsonpath={.status.phase}=Succeeded",
+      `pod/${String(clientName)}`,
+      "--timeout=120s",
+      "--output",
+      "json",
+    ])
     for (const [command, options] of networkWaits) {
       expect(command.args).toContain("--timeout=120s")
       expect(options?.timeoutMs).toBe(150_000)
@@ -1759,10 +1784,36 @@ describe("reaper and application Service probes", () => {
         command.args.includes(`pvc/${String(metadata(staleClaim as JsonObject).name)}`),
       ),
     ).toBe(true)
+    const jobName = String(metadata(job).name)
+    const jobTemplate = (job.spec as JsonObject).template as JsonObject
+    expect(jobTemplate).toMatchObject({
+      metadata: {
+        labels: {
+          "app.kubernetes.io/name": "dawn-sandbox-infra",
+          "dawn.sh/compat-run": runId,
+          "dawn.sh/compat-component": "reaper-lifecycle",
+        },
+      },
+      spec: {
+        restartPolicy: "Never",
+        containers: [{ name: "reaper", image: `example.invalid/reaper@sha256:${"a".repeat(64)}` }],
+      },
+    })
     const completeWait = execute.mock.calls.find(([command]) =>
-      command.args.includes("--for=condition=Complete"),
+      command.args.includes(`job/${jobName}`),
     )
-    expect(completeWait?.[0].args).toContain("--timeout=120s")
+    expect(completeWait?.[0].args).toEqual([
+      "--context",
+      context,
+      "wait",
+      "--namespace",
+      names.sandboxNamespace,
+      "--for=condition=Complete",
+      `job/${jobName}`,
+      "--timeout=120s",
+      "--output",
+      "json",
+    ])
     expect(completeWait?.[1]?.timeoutMs).toBe(150_000)
     const staleWait = execute.mock.calls.find(([command]) =>
       command.args.includes(`pvc/${String(metadata(staleClaim as JsonObject).name)}`),

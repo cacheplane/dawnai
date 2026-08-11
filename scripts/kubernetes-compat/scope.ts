@@ -125,7 +125,14 @@ export async function classifyKubernetesCompatibilityScope(
 
   await runCommand("git", ["cat-file", "-e", `${base}^{commit}`])
   await runCommand("git", ["cat-file", "-e", `${head}^{commit}`])
-  const { stdout } = await runCommand("git", ["diff", "--name-only", "-z", base, head])
+  const { stdout } = await runCommand("git", [
+    "diff",
+    "--no-renames",
+    "--name-only",
+    "-z",
+    base,
+    head,
+  ])
   if (!Buffer.isBuffer(stdout)) {
     throw new Error("Malformed Git diff output: expected a Buffer")
   }
