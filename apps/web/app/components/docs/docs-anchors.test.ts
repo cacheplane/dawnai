@@ -277,6 +277,19 @@ describe("docs links and in-page anchors", () => {
       expect(agentProtocol?.ids).toContain(anchor)
     }
 
+    const agentHarness = pages.get("testing-agents.mdx")
+    const fixtureGuide = pages.get("testing-agents/fixtures.mdx")
+    for (const anchor of [
+      "fixture-files-author-commit-replay",
+      "author-inline-and-snapshot-to-a-file",
+      "record-from-a-real-model-local-only",
+      "replay-a-fixture-file-in-tests",
+      "live-mode-real-model",
+    ]) {
+      expect(agentHarness?.ids).toContain(anchor)
+      expect(fixtureGuide?.ids).toContain(anchor)
+    }
+
     const memory = pages.get("memory.mdx")
     const longTerm = pages.get("memory/long-term.mdx")
     const retrieval = pages.get("memory/retrieval.mdx")

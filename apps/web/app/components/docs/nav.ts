@@ -53,6 +53,7 @@ export const DOCS_NAV = [
     items: [
       { label: "Scenario Testing", href: "/docs/testing" },
       { label: "Agent Test Harness", href: "/docs/testing-agents" },
+      { label: "Fixtures and Recording", href: "/docs/testing-agents/fixtures" },
       { label: "Evals", href: "/docs/evals" },
     ],
   },

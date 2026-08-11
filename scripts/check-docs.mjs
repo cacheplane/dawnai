@@ -753,8 +753,84 @@ const accuracyContracts = [
   },
   {
     file: "apps/web/content/docs/testing-agents.mdx",
-    required: ['title="test/agent.test.ts"', 'new URL("..", import.meta.url)'],
-    forbidden: ['title="src/app/chat/agent.test.ts"', 'new URL("../..", import.meta.url)'],
+    required: [
+      "# Agent Test Harness",
+      'title="test/agent.test.ts"',
+      'new URL("..", import.meta.url)',
+      "await h.close()",
+      "process-global",
+      "/docs/testing-agents/fixtures",
+      'test -z "$(git status --porcelain -- test/fixtures/)"',
+    ],
+    forbidden: [
+      'title="src/app/chat/agent.test.ts"',
+      'new URL("../..", import.meta.url)',
+      "proxy-record mode",
+      "git diff --exit-code test/fixtures/",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/testing-agents/fixtures.mdx",
+    required: [
+      "# Fixtures and Recording",
+      "inline",
+      "committed fixture file",
+      "user text",
+      "turnIndex",
+      "hasToolResult",
+      "`userMessage` compares against the latest user message that contains text",
+      "`hasToolResult` examines only messages after the latest user message",
+      "Earlier turns' tool results do not make the next turn's initial model call match `hasToolResult: true`",
+      "writeFixtures",
+      "loadFixtures",
+      "supported top-level container",
+      "does not validate every fixture entry",
+      "does not fall back to a provider",
+      "`turnIndex` mismatch is nonfatal by default",
+      "AIMOCK_STRICT_TURN_INDEX=1",
+      "Do not register the same fixture file at both scopes",
+      "aimock selects the first registered matching fixture",
+      "persist across later `h.run()` calls until `h.reset()`",
+      "record: true",
+      "getRecordedFixtures()",
+      "one fresh-thread first run",
+      "first user message in the captured request",
+      "any tool-role message in the captured request",
+      "zero-based index within only that latest run's captured calls",
+      "not a safe way to mint a later-turn fixture for an already-active thread",
+      "record({ out, provider? })",
+      "separate process",
+      "live: true",
+      "registers no fixtures",
+      "OPENAI_API_KEY",
+      "process.cwd()",
+      "relative to the test file",
+      "await h.close()",
+      "process-global",
+      "fixture drift",
+      'test -z "$(git status --porcelain -- test/fixtures/)"',
+      "Never run live mode in CI",
+    ],
+    forbidden: [
+      "proxy-record mode",
+      "every test is offline",
+      "Run-scoped fixtures",
+      "validates the file shape",
+      "git diff --exit-code test/fixtures/",
+    ],
+    forbiddenRegexes: [
+      /`hasToolResult`[^.\n]*\b(?:any|all|anywhere)\b[^.\n]*\b(?:thread|conversation)\b/i,
+      /(?:prior|earlier)[ -]turn tool results?[^.\n]*(?<!do not )(?:make|set|keep)[^.\n]*`hasToolResult`[^.\n]*true/i,
+      /^const\s+\w+\s*=\s*await createAgentHarness\(\{[^\n]*live:\s*true/m,
+      /getRecordedFixtures\(\)[^.\n]*cumulative `turnIndex`/i,
+      /Replay is strict/i,
+    ],
+    requiredRegexes: [
+      /createAgentHarness\(\{\s*appRoot,\s*route:\s*["']\/chat#agent["']\s*\}\)[\s\S]{0,500}?h\.run\(\{[\s\S]{0,300}?fixtures:\s*loadFixtures\(fixturesPath\)/,
+      /createAgentHarness\(\{[\s\S]{0,300}?record:\s*true[\s\S]{0,300}?\}\)[\s\S]{0,800}?await\s+h\.run\([\s\S]{0,500}?getRecordedFixtures\(\)[\s\S]{0,300}?writeFixtures\(/,
+      /record\(\{\s*out:\s*["'][^"']+["'](?:,\s*provider:\s*["'][^"']+["'])?\s*\}\)/,
+      /it\.skipIf\(process\.env\.CI\s*\|\|\s*!process\.env\.OPENAI_API_KEY\)\([\s\S]{0,300}?async\s*\(\)\s*=>\s*\{[\s\S]{0,500}?createAgentHarness\(\{[\s\S]{0,200}?live:\s*true/,
+    ],
   },
   {
     file: "apps/web/content/docs/tools.mdx",
@@ -1205,6 +1281,15 @@ for (const contract of accuracyContracts) {
     }
   }
 
+  for (const requiredRegex of contract.requiredRegexes ?? []) {
+    requiredRegex.lastIndex = 0
+    const containsRequiredText = requiredRegex.test(source)
+    requiredRegex.lastIndex = 0
+    if (!containsRequiredText) {
+      failures.push(`${contract.file} is missing required accuracy pattern: ${requiredRegex}`)
+    }
+  }
+
   // Future file-specific contracts can reject non-literal prose, for example
   // forbiddenRegexes: [/\b\d+\s+(?:HTTP\s+)?endpoints\b/i] on Agent Protocol.
   for (const forbiddenRegex of contract.forbiddenRegexes ?? []) {
@@ -1539,6 +1624,17 @@ const compatibilityStubContracts = [
     retainedHeading: "Env, secrets, and replicas",
     canonicalHref: "/docs/sandbox/kubernetes",
   },
+  ...[
+    "Fixture files: author, commit, replay",
+    "Author inline and snapshot to a file",
+    "Record from a real model (local only)",
+    "Replay a fixture file in tests",
+    "Live mode (real model)",
+  ].map((retainedHeading) => ({
+    file: "apps/web/content/docs/testing-agents.mdx",
+    retainedHeading,
+    canonicalHref: "/docs/testing-agents/fixtures",
+  })),
 ]
 
 for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibilityStubContracts) {
@@ -1655,6 +1751,7 @@ const expectedNavDocEntries = [
   { label: "Blueprints", href: "/docs/blueprints" },
   { label: "Scenario Testing", href: "/docs/testing" },
   { label: "Agent Test Harness", href: "/docs/testing-agents" },
+  { label: "Fixtures and Recording", href: "/docs/testing-agents/fixtures" },
   { label: "Evals", href: "/docs/evals" },
   { label: "Persistence and Tenancy", href: "/docs/persistence" },
   { label: "Production Topology", href: "/docs/production-topology" },

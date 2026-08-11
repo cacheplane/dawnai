@@ -56,6 +56,7 @@ const FOUNDATION_DOCS_NAV = [
     items: [
       { label: "Scenario Testing", href: "/docs/testing" },
       { label: "Agent Test Harness", href: "/docs/testing-agents" },
+      { label: "Fixtures and Recording", href: "/docs/testing-agents/fixtures" },
       { label: "Evals", href: "/docs/evals" },
     ],
   },
@@ -231,7 +232,7 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/dev-server/agent-protocol").next?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(57)
+    expect(DOCS_PAGES).toHaveLength(58)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 
