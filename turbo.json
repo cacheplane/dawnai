@@ -88,6 +88,7 @@
       "dependsOn": ["build", "^test"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.github/kubernetes-compatibility.json",
         "$TURBO_ROOT$/.github/workflows/ci.yml",
         "$TURBO_ROOT$/charts/dawn-sandbox-infra/values.yaml"
       ]

@@ -117,6 +117,18 @@ describe("Kubernetes compatibility path ownership", () => {
   })
 })
 
+describe("Kubernetes compatibility cache inputs", () => {
+  test("invalidates the sandbox test cache when the compatibility policy changes", async () => {
+    const turbo = JSON.parse(await readFile(join(REPO_ROOT, "turbo.json"), "utf8")) as {
+      tasks?: Record<string, { inputs?: string[] }>
+    }
+
+    expect(turbo.tasks?.["@dawn-ai/sandbox#test"]?.inputs).toContain(
+      "$TURBO_ROOT$/.github/kubernetes-compatibility.json",
+    )
+  })
+})
+
 describe("NUL-delimited Git path parsing", () => {
   test("preserves filenames containing spaces and newlines", () => {
     const paths = [
