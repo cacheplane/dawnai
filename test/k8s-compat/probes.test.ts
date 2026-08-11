@@ -356,6 +356,7 @@ interface ReaperRunnerOptions {
   readonly suspendedCronJobUid?: string | null
   readonly jobSnapshots?: readonly (readonly JsonObject[])[]
   readonly delay?: (milliseconds: number) => Promise<void>
+  readonly now?: () => number
   readonly activeWaitError?: Error
   readonly cleanupError?: Error
   readonly restoreError?: Error
@@ -365,10 +366,16 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
   readonly execute: ReturnType<typeof vi.fn<ProbeCommandRunner>>
   readonly submitted: JsonObject[]
   readonly delay: ReturnType<typeof vi.fn<(milliseconds: number) => Promise<void>>>
+  readonly now: ReturnType<typeof vi.fn<() => number>>
+  readonly fixtureCreateTimes: number[]
+  readonly scheduledWaitTimes: Map<string, number>
 } {
   vi.spyOn(Date, "now").mockReturnValue(REAPER_TEST_EPOCH_SECONDS * 1_000)
   const submitted: JsonObject[] = []
+  const fixtureCreateTimes: number[] = []
+  const scheduledWaitTimes = new Map<string, number>()
   const completedScheduledJobUids = new Set<string>()
+  let monotonicTimeMs = 0
   let cleanupCalls = 0
   let patchCalls = 0
   let jobListCalls = 0
@@ -406,7 +413,9 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
           ? options.suspendedCronJobUid
           : cronJobUid,
     })
+  const now = vi.fn(() => options.now?.() ?? monotonicTimeMs)
   const delay = vi.fn(async (milliseconds: number) => {
+    monotonicTimeMs += milliseconds
     await options.delay?.(milliseconds)
   })
   const execute = fakeRunner((command, commandOptions) => {
@@ -433,6 +442,9 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
     if (commandOptions.stdin !== undefined) {
       const manifest = stdinObject(commandOptions)
       submitted.push(manifest)
+      if (manifest.kind === "PersistentVolumeClaim" || manifest.kind === "Pod") {
+        fixtureCreateTimes.push(monotonicTimeMs)
+      }
       return manifest
     }
     if (command.args.includes("cronjob/dawn-reaper")) return currentCronJob()
@@ -457,6 +469,7 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
         return options.activeWaitError
       }
       if (scheduledJob !== undefined) {
+        scheduledWaitTimes.set(requestedName, monotonicTimeMs)
         const observed = structuredClone(scheduledJob)
         const uid = metadata(observed).uid
         if (typeof uid === "string") completedScheduledJobUids.add(uid)
@@ -518,7 +531,7 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
     }
     return {}
   })
-  return { execute, submitted, delay }
+  return { execute, submitted, delay, now, fixtureCreateTimes, scheduledWaitTimes }
 }
 
 describe("probe manifest", () => {
@@ -1133,11 +1146,11 @@ describe("reaper and application Service probes", () => {
     "restores an originally %s CronJob suspend field exactly after success",
     async (_case, initialSuspend, restoredSuspend) => {
       const policy = await loadCompatibilityPolicy()
-      const { execute, delay } = createReaperRunner({
+      const { execute, delay, now } = createReaperRunner({
         ...(initialSuspend !== undefined ? { initialSuspend } : {}),
       })
 
-      await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+      await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now })
 
       const patches = execute.mock.calls.filter(
         ([command]) =>
@@ -1175,10 +1188,12 @@ describe("reaper and application Service probes", () => {
 
   test("requires a concrete UID on the live suspended CronJob before fixture creation", async () => {
     const policy = await loadCompatibilityPolicy()
-    const { execute, submitted, delay } = createReaperRunner({ suspendedCronJobUid: null })
+    const { execute, submitted, delay, now } = createReaperRunner({
+      suspendedCronJobUid: null,
+    })
 
     await expect(
-      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
     ).rejects.toThrow(/Reaper CronJob.*metadata\.uid/i)
 
     expect(submitted).toHaveLength(0)
@@ -1190,7 +1205,7 @@ describe("reaper and application Service probes", () => {
     ).toHaveLength(2)
   })
 
-  test("drains a late owned Job found after an initially empty suspended snapshot", async () => {
+  test("drains a late owned Job and observes a full new quiet period before fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
     const lateJob = scheduledReaperJob({
       name: "dawn-reaper-late",
@@ -1198,7 +1213,7 @@ describe("reaper and application Service probes", () => {
     })
     let submitted: readonly JsonObject[] = []
     const runner = createReaperRunner({
-      jobSnapshots: [[], [lateJob], [], []],
+      jobSnapshots: [[], [], [lateJob], []],
       delay: async (milliseconds) => {
         expect(milliseconds).toBeGreaterThan(0)
         expect(milliseconds).toBeLessThanOrEqual(5_000)
@@ -1213,14 +1228,14 @@ describe("reaper and application Service probes", () => {
 
     await runReaperLifecycleProbe(
       { context, runId, policy, execute: runner.execute },
-      { delay: runner.delay },
+      { delay: runner.delay, now: runner.now },
     )
 
-    expect(runner.delay).toHaveBeenCalledTimes(2)
+    expect(runner.delay.mock.calls.length).toBeGreaterThan(2)
     const jobLists = runner.execute.mock.calls.filter(
       ([command]) => command.args.includes("get") && command.args.includes("jobs"),
     )
-    expect(jobLists).toHaveLength(4)
+    expect(jobLists.length).toBeGreaterThan(3)
     for (const [command, options] of jobLists) {
       expect(command.args).toEqual([
         "--context",
@@ -1247,6 +1262,11 @@ describe("reaper and application Service probes", () => {
     })
     expect(lateWaitIndex).toBeGreaterThan(-1)
     expect(lateWaitIndex).toBeLessThan(firstFixture)
+    const lateWaitTime = runner.scheduledWaitTimes.get("dawn-reaper-late")
+    const firstFixtureTime = runner.fixtureCreateTimes[0]
+    expect(lateWaitTime).toEqual(expect.any(Number))
+    expect(firstFixtureTime).toEqual(expect.any(Number))
+    expect((firstFixtureTime as number) - (lateWaitTime as number)).toBeGreaterThanOrEqual(35_000)
   })
 
   test.each([
@@ -1304,13 +1324,13 @@ describe("reaper and application Service probes", () => {
       })
       const activeReference = activeJobReference(matchingJob)
       const fetchedJob = mutateJob(structuredClone(matchingJob))
-      const { execute, submitted, delay } = createReaperRunner({
+      const { execute, submitted, delay, now } = createReaperRunner({
         activeReferences: [activeReference],
         jobSnapshots: [[fetchedJob]],
       })
 
       await expect(
-        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
       ).rejects.toThrow(/active CronJob reference.*exactly match.*owned Job/i)
 
       expect(submitted).toHaveLength(0)
@@ -1329,22 +1349,21 @@ describe("reaper and application Service probes", () => {
       uid: "88888888-8888-4888-8888-888888888888",
       ownerUid: null,
     })
-    const { execute, submitted, delay } = createReaperRunner({
+    const { execute, submitted, delay, now } = createReaperRunner({
       jobSnapshots: [
         [differentOwner, noOwner],
         [differentOwner, noOwner],
       ],
     })
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now })
 
     expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
-    expect(delay).toHaveBeenCalledTimes(1)
-    expect(
-      execute.mock.calls.filter(
-        ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-      ),
-    ).toHaveLength(2)
+    expect(now()).toBe(35_000)
+    const listCalls = execute.mock.calls.filter(
+      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+    )
+    expect(listCalls.length).toBeGreaterThan(2)
     for (const unrelatedName of ["unrelated-different-owner", "unrelated-no-owner"]) {
       expect(
         execute.mock.calls.some(([command]) => command.args.includes(`job/${unrelatedName}`)),
@@ -1359,19 +1378,18 @@ describe("reaper and application Service probes", () => {
       uid: "99999999-9999-4999-8999-999999999999",
       status: "complete",
     })
-    const { execute, submitted, delay } = createReaperRunner({
+    const { execute, submitted, delay, now } = createReaperRunner({
       jobSnapshots: [[completed], [completed]],
     })
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now })
 
     expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
-    expect(delay).toHaveBeenCalledTimes(1)
-    expect(
-      execute.mock.calls.filter(
-        ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-      ),
-    ).toHaveLength(2)
+    expect(now()).toBe(35_000)
+    const listCalls = execute.mock.calls.filter(
+      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+    )
+    expect(listCalls.length).toBeGreaterThan(2)
     expect(
       execute.mock.calls.some(([command]) => command.args.includes("job/dawn-reaper-completed")),
     ).toBe(false)
@@ -1384,10 +1402,12 @@ describe("reaper and application Service probes", () => {
       uid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       status: "failed",
     })
-    const { execute, submitted, delay } = createReaperRunner({ jobSnapshots: [[failed]] })
+    const { execute, submitted, delay, now } = createReaperRunner({
+      jobSnapshots: [[failed]],
+    })
 
     await expect(
-      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
     ).rejects.toThrow(/owned Reaper Job.*failed/i)
 
     expect(submitted).toHaveLength(0)
@@ -1396,27 +1416,62 @@ describe("reaper and application Service probes", () => {
     ).toBe(false)
   })
 
-  test("fails within a finite number of snapshots when scheduled Jobs never quiesce", async () => {
+  test("fails within a finite settlement budget when scheduled Jobs never quiesce", async () => {
     const policy = await loadCompatibilityPolicy()
     const unfinished = scheduledReaperJob({
       name: "dawn-reaper-never-quiescent",
       uid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     })
-    const { execute, submitted, delay } = createReaperRunner({
-      jobSnapshots: Array.from({ length: 12 }, () => [structuredClone(unfinished)]),
+    const { execute, submitted, delay, now } = createReaperRunner({
+      jobSnapshots: [[unfinished]],
     })
 
     await expect(
-      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
-    ).rejects.toThrow(/scheduled Reaper Jobs.*quiescent/i)
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
+    ).rejects.toThrow(/scheduled Reaper Job settlement budget/i)
 
     const listCalls = execute.mock.calls.filter(
       ([command]) => command.args.includes("get") && command.args.includes("jobs"),
     )
-    expect(listCalls.length).toBeGreaterThan(1)
-    expect(listCalls.length).toBeLessThanOrEqual(10)
+    expect(listCalls.length).toBeGreaterThan(10)
+    expect(listCalls.length).toBeLessThanOrEqual(100)
+    expect(now()).toBeGreaterThanOrEqual(35_000)
+    expect(now()).toBeLessThanOrEqual(180_000)
     expect(submitted).toHaveLength(0)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) =>
+          command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+      ),
+    ).toHaveLength(2)
   })
+
+  test.each(["non-finite", "backwards"] as const)(
+    "fails closed when the monotonic settlement clock is %s",
+    async (failureMode) => {
+      const policy = await loadCompatibilityPolicy()
+      let clockReads = 0
+      const { execute, submitted, delay, now } = createReaperRunner({
+        now: () => {
+          clockReads += 1
+          if (failureMode === "non-finite") return Number.NaN
+          return clockReads === 1 ? 100 : 99
+        },
+      })
+
+      await expect(
+        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
+      ).rejects.toThrow(/monotonic settlement clock.*(?:finite|backwards)/i)
+
+      expect(submitted).toHaveLength(0)
+      expect(
+        execute.mock.calls.filter(
+          ([command]) =>
+            command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+        ),
+      ).toHaveLength(2)
+    },
+  )
 
   test("suspends the CronJob and drains live active Jobs before creating fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
@@ -1436,9 +1491,9 @@ describe("reaper and application Service probes", () => {
         uid: "33333333-3333-4333-8333-333333333333",
       },
     ]
-    const { execute, delay } = createReaperRunner({ activeReferences })
+    const { execute, delay, now } = createReaperRunner({ activeReferences })
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now })
 
     const calls = execute.mock.calls
     const cronReads = calls.flatMap(([command], index) =>
@@ -1536,12 +1591,12 @@ describe("reaper and application Service probes", () => {
     "rejects an invalid active CronJob reference %s before fixture creation and restores suspension",
     async (_case, activeReference) => {
       const policy = await loadCompatibilityPolicy()
-      const { execute, submitted, delay } = createReaperRunner({
+      const { execute, submitted, delay, now } = createReaperRunner({
         activeReferences: [activeReference],
       })
 
       await expect(
-        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
       ).rejects.toThrow(/active.*batch\/v1 Job/i)
 
       expect(submitted).toHaveLength(0)
@@ -1557,7 +1612,7 @@ describe("reaper and application Service probes", () => {
   test("attempts fixture cleanup and suspension restoration when active Job draining fails", async () => {
     const policy = await loadCompatibilityPolicy()
     const activeWaitError = new Error("active reaper Job did not finish")
-    const { execute, submitted, delay } = createReaperRunner({
+    const { execute, submitted, delay, now } = createReaperRunner({
       activeReferences: [
         {
           apiVersion: "batch/v1",
@@ -1571,7 +1626,7 @@ describe("reaper and application Service probes", () => {
     })
 
     await expect(
-      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
     ).rejects.toBe(activeWaitError)
 
     expect(submitted).toHaveLength(0)
@@ -1591,9 +1646,9 @@ describe("reaper and application Service probes", () => {
 
   test("proves stale deletion, fresh marking, and referenced retention with restricted fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
-    const { execute, submitted, delay } = createReaperRunner()
+    const { execute, submitted, delay, now } = createReaperRunner()
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now })
 
     const claims = submitted.filter((manifest) => manifest.kind === "PersistentVolumeClaim")
     const referencePod = submitted.find((manifest) => manifest.kind === "Pod")
@@ -1693,10 +1748,10 @@ describe("reaper and application Service probes", () => {
     ],
   ])("rejects completed reaper Jobs when the %s", async (_case, options, expectedError) => {
     const policy = await loadCompatibilityPolicy()
-    const { execute, delay } = createReaperRunner(options)
+    const { execute, delay, now } = createReaperRunner(options)
 
     await expect(
-      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
     ).rejects.toThrow(expectedError)
   })
 
@@ -1704,11 +1759,15 @@ describe("reaper and application Service probes", () => {
     const policy = await loadCompatibilityPolicy()
     const cleanupError = new Error("reaper cleanup failed")
     const restoreError = new Error("reaper suspension restore failed")
-    const { execute, delay } = createReaperRunner({ markNew: false, cleanupError, restoreError })
+    const { execute, delay, now } = createReaperRunner({
+      markNew: false,
+      cleanupError,
+      restoreError,
+    })
 
     const error = await runReaperLifecycleProbe(
       { context, runId, policy, execute },
-      { delay },
+      { delay, now },
     ).catch((cause: unknown) => cause)
 
     expect(error).toBeInstanceOf(AggregateError)

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { performance } from "node:perf_hooks"
 import { deriveClusterNames } from "./cluster.js"
 import {
   type Command,
@@ -52,6 +53,7 @@ export interface PolicyProbeInput extends AdministrativeProbeInput {
 
 export interface ReaperLifecycleDependencies {
   readonly delay: (milliseconds: number) => Promise<void>
+  readonly now: () => number
 }
 
 export interface TokenKubeconfigProbeInput extends AdministrativeProbeInput {
@@ -86,8 +88,10 @@ const INITIAL_REAPER_SCHEDULE = "17 * * * *"
 const UPGRADED_REAPER_SCHEDULE = "23 * * * *"
 const REAPER_TTL_SECONDS = 168 * 60 * 60
 const REAPER_CLOCK_SKEW_TOLERANCE_SECONDS = 60
-const REAPER_JOB_SETTLEMENT_DELAY_MS = 1_000
-const REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS = 8
+// Kubernetes caps one admission webhook call at 30 seconds; retain observation headroom.
+const REAPER_JOB_QUIET_PERIOD_MS = 35_000
+const REAPER_JOB_SETTLEMENT_POLL_INTERVAL_MS = 2_000
+const REAPER_JOB_SETTLEMENT_BUDGET_MS = 3 * 60 * 1_000
 const HELM_TIMEOUT = "5m"
 const HELM_OUTER_TIMEOUT_MS = 6 * 60 * 1_000
 const KUBECTL_JSON_READ_OUTER_TIMEOUT_MS = 30_000
@@ -105,6 +109,7 @@ const DEFAULT_REAPER_LIFECYCLE_DEPENDENCIES: ReaperLifecycleDependencies = Objec
     new Promise<void>((resolve) => {
       setTimeout(resolve, milliseconds)
     }),
+  now: (): number => performance.now(),
 })
 
 function expectNonEmpty(value: string, name: string): string {
@@ -1691,26 +1696,75 @@ async function drainScheduledReaperJobs(
   dependencies: ReaperLifecycleDependencies,
 ): Promise<void> {
   const activeReferences = activeReaperJobReferences(cronJob, state)
-  let consecutiveEmptySnapshots = 0
-  for (let attempt = 0; attempt < REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
+  let previousTime: number | undefined
+  const readTime = (): number => {
+    const currentTime = dependencies.now()
+    if (!Number.isFinite(currentTime) || currentTime < 0) {
+      throw new Error(
+        "Reaper monotonic settlement clock must return finite non-negative milliseconds",
+      )
+    }
+    if (previousTime !== undefined && currentTime < previousTime) {
+      throw new Error("Reaper monotonic settlement clock moved backwards")
+    }
+    previousTime = currentTime
+    return currentTime
+  }
+  const settlementStartedAt = readTime()
+  const settlementElapsed = (currentTime: number): number => {
+    const elapsed = currentTime - settlementStartedAt
+    if (elapsed >= REAPER_JOB_SETTLEMENT_BUDGET_MS) {
+      throw new Error(
+        `Scheduled Reaper Job settlement budget of ${REAPER_JOB_SETTLEMENT_BUDGET_MS}ms expired`,
+      )
+    }
+    return elapsed
+  }
+  let quietPeriodStartedAt: number | undefined
+  let firstSnapshot = true
+
+  while (true) {
+    settlementElapsed(readTime())
     const jobs = await readScheduledReaperJobs(state)
-    if (attempt === 0) assertActiveReferencesMatchOwnedJobs(activeReferences, jobs, cronJobUid)
+    const observedAt = readTime()
+    settlementElapsed(observedAt)
+    if (firstSnapshot) {
+      assertActiveReferencesMatchOwnedJobs(activeReferences, jobs, cronJobUid)
+      firstSnapshot = false
+    }
     const owned = ownedReaperJobs(jobs, state, cronJobUid)
     const failed = owned.find((job) => job.phase === "failed")
     if (failed !== undefined) throw new Error(`Owned Reaper Job ${failed.identity.name} failed`)
     const unfinished = owned.filter((job) => job.phase === "unfinished")
     if (unfinished.length > 0) {
-      consecutiveEmptySnapshots = 0
-      for (const job of unfinished) await waitForOwnedReaperJob(state, job, cronJobUid)
-      continue
+      quietPeriodStartedAt = undefined
+      for (const job of unfinished) {
+        await waitForOwnedReaperJob(state, job, cronJobUid)
+        settlementElapsed(readTime())
+      }
+    } else {
+      quietPeriodStartedAt ??= observedAt
+      if (observedAt - quietPeriodStartedAt >= REAPER_JOB_QUIET_PERIOD_MS) return
     }
-    consecutiveEmptySnapshots += 1
-    if (consecutiveEmptySnapshots === 2) return
-    await dependencies.delay(REAPER_JOB_SETTLEMENT_DELAY_MS)
+
+    const beforeDelay = readTime()
+    const elapsed = settlementElapsed(beforeDelay)
+    const quietPeriodRemaining =
+      quietPeriodStartedAt === undefined
+        ? REAPER_JOB_QUIET_PERIOD_MS
+        : REAPER_JOB_QUIET_PERIOD_MS - (beforeDelay - quietPeriodStartedAt)
+    if (quietPeriodRemaining <= 0) return
+    const delayMilliseconds = Math.min(
+      REAPER_JOB_SETTLEMENT_POLL_INTERVAL_MS,
+      REAPER_JOB_SETTLEMENT_BUDGET_MS - elapsed,
+      quietPeriodRemaining,
+    )
+    await dependencies.delay(delayMilliseconds)
+    const afterDelay = readTime()
+    if (afterDelay <= beforeDelay) {
+      throw new Error("Reaper monotonic settlement clock did not advance during polling")
+    }
   }
-  throw new Error(
-    `Scheduled Reaper Jobs did not become quiescent after ${REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS} snapshots`,
-  )
 }
 
 function currentEpochSeconds(name: string): number {
