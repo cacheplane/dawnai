@@ -629,8 +629,17 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
       kind: "load-more",
       window: { limit: BROWSE_PAGE_SIZE, offset: 1 },
     })
+    // Both slots filled is the only arrangement that puts the preference to the test:
+    // refresh is also the fallback for a state carrying no failure at all, so a
+    // refresh-only case cannot tell a preference from a default.
+    const bothFailed: BrowseState = { ...loaded, kindErrors: { refresh: "r", "load-more": "l" } }
+    expect(browseReduce(bothFailed, { type: "retry" }).start?.kind).toBe("load-more")
     const refreshFailed: BrowseState = { ...loaded, kindErrors: { refresh: "boom" } }
-    expect(browseReduce(refreshFailed, { type: "retry" }).start?.kind).toBe("refresh")
+    expect(browseReduce(refreshFailed, { type: "retry" }).start).toEqual({
+      revision: 1,
+      kind: "refresh",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+    })
   })
 
   it("retry after the query moved on is simply the new query's initial fetch", () => {
