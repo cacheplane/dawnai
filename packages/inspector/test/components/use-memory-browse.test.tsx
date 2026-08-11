@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { Suspense, startTransition, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { BROWSE_RESIDENT_CAP } from "../../src/browse/browse-machine"
 import { type CanonicalBrowseQuery, canonicalBrowseQuery } from "../../src/browse/canonical-query"
 import {
   fetchBrowsePage,
@@ -204,6 +205,37 @@ describe("useMemoryBrowse", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("reports hasMore from the matching population, not from the resident cap", async () => {
+    const { calls, fetchPage } = deferredFetcher()
+    const query = canonicalBrowseQuery({ view: "list" })
+    const { result } = renderHook(() => useMemoryBrowse({ query, live: false, fetchPage }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    await act(async () => {
+      callAt(calls, 0).resolve({
+        records: Array.from({ length: BROWSE_RESIDENT_CAP }, (_, i) => record(`r${i}`)),
+        total: 5432,
+      })
+    })
+    // The cap closes the load-more REQUEST, and the machine is what refuses it. It does
+    // not make the other 4432 matching records stop existing, and this field is what a
+    // footer quotes the loaded count against — so it must not read as exhaustion.
+    expect(result.current.rows).toHaveLength(BROWSE_RESIDENT_CAP)
+    expect(result.current.hasMore).toBe(true)
+  })
+
+  it("reports hasMore false once every matching record is resident", async () => {
+    const { calls, fetchPage } = deferredFetcher()
+    const query = canonicalBrowseQuery({ view: "list" })
+    const { result } = renderHook(() => useMemoryBrowse({ query, live: false, fetchPage }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    await act(async () => {
+      callAt(calls, 0).resolve({ records: [record("a"), record("b")], total: 2 })
+    })
+    expect(result.current.hasMore).toBe(false)
   })
 
   it("queues a load-more asked for behind a refresh and drains it onto the tail", async () => {

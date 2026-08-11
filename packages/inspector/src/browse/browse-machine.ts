@@ -110,12 +110,20 @@ export function browseResidentCount(state: BrowseState): number {
   return state.fulfilled?.revision === state.revision ? state.fulfilled.records.length : 0
 }
 
-export function browseCanLoadMore(state: BrowseState): boolean {
+/** Whether the server holds matching records this client has not loaded — a fact about
+ *  the POPULATION, which is why the resident cap is deliberately absent from it. A
+ *  surface that quotes the loaded count against the total reads this one: folding the
+ *  cap in would make a window 4432 rows short of its own total report as complete. */
+export function browseHasMore(state: BrowseState): boolean {
   const fulfilled = state.fulfilled
   if (fulfilled === null || fulfilled.revision !== state.revision) return false
-  return (
-    fulfilled.records.length < fulfilled.total && fulfilled.records.length < BROWSE_RESIDENT_CAP
-  )
+  return fulfilled.records.length < fulfilled.total
+}
+
+/** Whether another request may be ISSUED. Narrower than `browseHasMore` by the cap,
+ *  which stays a request gate: past it the extra rows exist but are unreachable. */
+export function browseCanLoadMore(state: BrowseState): boolean {
+  return browseHasMore(state) && browseResidentCount(state) < BROWSE_RESIDENT_CAP
 }
 
 /**

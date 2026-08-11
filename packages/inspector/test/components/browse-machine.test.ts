@@ -7,6 +7,7 @@ import {
   type BrowseState,
   browseCanLoadMore,
   browseDataState,
+  browseHasMore,
   browsePhase,
   browseReduce,
   INITIAL_BROWSE_STATE,
@@ -371,9 +372,28 @@ describe("browse machine — single-flight arbitration", () => {
     expect(browseReduce(atCap, { type: "load-more-requested" }).start).toBeNull()
   })
 
+  it("separates the server's remaining population from the client's resident cap", () => {
+    // Two different questions. `browseCanLoadMore` answers "may this client issue
+    // another request", which the cap closes; `browseHasMore` answers "does the server
+    // hold matching records this client has not loaded", which the cap cannot change.
+    // Folding the cap into the second is what would let a footer render "all loaded"
+    // over a set 4432 rows short of the total it is quoting.
+    const atCap: BrowseState = {
+      ...loaded,
+      fulfilled: {
+        ...fulfilled,
+        records: Array.from({ length: BROWSE_RESIDENT_CAP }, (_, i) => record(`r${i}`)),
+        total: 5432,
+      },
+    }
+    expect(browseHasMore(atCap)).toBe(true)
+    expect(browseCanLoadMore(atCap)).toBe(false)
+  })
+
   it("load-more is unavailable once everything matching is loaded", () => {
     const complete: BrowseState = { ...loaded, fulfilled: { ...fulfilled, total: 2 } }
     expect(browseCanLoadMore(complete)).toBe(false)
+    expect(browseHasMore(complete)).toBe(false)
   })
 })
 

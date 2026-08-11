@@ -8,8 +8,8 @@ import {
   type BrowsePageResponse,
   type BrowseRequest,
   type BrowseState,
-  browseCanLoadMore,
   browseDataState,
+  browseHasMore,
   browsePhase,
   browseReduce,
   INITIAL_BROWSE_STATE,
@@ -83,6 +83,10 @@ export interface UseMemoryBrowseResult {
   readonly updatedAt: number | null
   /** Polling is suspended: live off, tab hidden, or a held error. */
   readonly paused: boolean
+  /** The server holds matching records that are not resident. NOT a promise that
+   *  `loadMore` will fetch them: past the resident cap this stays true while the
+   *  machine refuses the request, so a consumer that offers a control must gate it on
+   *  the loaded count as well — and say which of the two it is refusing on. */
   readonly hasMore: boolean
   loadMore(): void
   refresh(): void
@@ -96,7 +100,7 @@ export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseRes
 
   const [state, setState] = useState<BrowseState>(INITIAL_BROWSE_STATE)
 
-  // Mirrors of the options the async paths read, seeded from the mounting render and
+  // Mirrors of the input the async paths read, seeded from the mounting render and
   // written on COMMIT thereafter — NEVER during render. A render React throws away (a
   // transition that suspends), or a dispatch that lands between a commit and its
   // effect flush, would otherwise build params from a query no state ever matched
@@ -282,7 +286,7 @@ export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseRes
     errors: state.kindErrors,
     updatedAt: fulfilled?.at ?? null,
     paused,
-    hasMore: browseCanLoadMore(state),
+    hasMore: browseHasMore(state),
     loadMore,
     refresh,
     retry,
