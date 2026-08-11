@@ -48,7 +48,8 @@
     "verify:harness:runtime": "node scripts/harness-report.mjs runtime",
     "verify:harness:self-test": "node scripts/harness-report.mjs --self-test",
     "verify:harness:smoke": "node scripts/harness-report.mjs smoke",
-    "typecheck": "turbo run typecheck && tsc -p test/tsconfig.json --noEmit && tsc -p test/security-dependencies/tsconfig.json --noEmit",
+    "typecheck": "turbo run typecheck && tsc -p test/tsconfig.json --noEmit && tsc -p test/security-dependencies/tsconfig.json --noEmit && tsc -p test/k8s-compat/tsconfig.json --noEmit",
+    "verify:k8s:compat": "pnpm --filter @dawn-ai/sandbox... build && pnpm exec tsx scripts/kubernetes-compat.ts",
     "verify:typescript-tooling-pack": "pnpm test:typescript-tooling-pack-smoke && node scripts/typescript-tooling-pack-smoke.mjs"
   },
   "devDependencies": {

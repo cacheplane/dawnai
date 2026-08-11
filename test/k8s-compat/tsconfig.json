@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../packages/config-typescript/node.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "rootDir": "../..",
+    "typeRoots": ["../../packages/config-typescript/node_modules/@types"]
+  },
+  "include": [
+    "../../scripts/kubernetes-compat.ts",
+    "../../scripts/kubernetes-compat/**/*.ts",
+    "./**/*.ts"
+  ]
+}
