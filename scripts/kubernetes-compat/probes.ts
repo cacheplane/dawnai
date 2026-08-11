@@ -82,6 +82,9 @@ const INITIAL_REAPER_SCHEDULE = "17 * * * *"
 const UPGRADED_REAPER_SCHEDULE = "23 * * * *"
 const REAPER_TTL_SECONDS = 168 * 60 * 60
 const HELM_TIMEOUT = "5m"
+const HELM_OUTER_TIMEOUT_MS = 6 * 60 * 1_000
+const KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS = 150_000
+const KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS = 60_000
 const DEFAULT_LIMITS = Object.freeze({
   limits: Object.freeze({ cpu: "1", memory: "512Mi" }),
   requests: Object.freeze({ cpu: "100m", memory: "128Mi" }),
@@ -627,6 +630,7 @@ export async function runNetworkControlProbe(
         "--output",
         "json",
       ]),
+      { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
     )
     await submitObject(state.execute, createObjectCommand(state.context, state.namespace), client)
     await state.execute(
@@ -640,6 +644,7 @@ export async function runNetworkControlProbe(
         "--output",
         "json",
       ]),
+      { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
     )
     const observed = await state.execute(
       kubectl.command(state.context, [
@@ -1051,6 +1056,7 @@ export async function installInfrastructureChart(input: AdministrativeProbeInput
       "--timeout",
       HELM_TIMEOUT,
     ]),
+    { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.sandboxRelease, 1)
   await assertReaperSchedule(state, INITIAL_REAPER_SCHEDULE)
@@ -1072,6 +1078,7 @@ export async function upgradeInfrastructureChart(input: AdministrativeProbeInput
       "--timeout",
       HELM_TIMEOUT,
     ]),
+    { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.sandboxRelease, 2)
   await assertReaperSchedule(state, UPGRADED_REAPER_SCHEDULE)
@@ -1189,6 +1196,7 @@ export async function installApplicationChart(input: PolicyProbeInput): Promise<
       "--timeout",
       HELM_TIMEOUT,
     ]),
+    { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.appRelease, 1)
   await assertApplicationReplicas(state, 1)
@@ -1208,6 +1216,7 @@ export async function upgradeApplicationChart(input: PolicyProbeInput): Promise<
       "--timeout",
       HELM_TIMEOUT,
     ]),
+    { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.appRelease, 2)
   await assertApplicationReplicas(state, 2, 2)
@@ -1440,6 +1449,7 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
         "--output",
         "json",
       ]),
+      { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
     )
     const observedJob = await state.execute(
       kubectl.command(state.context, [
@@ -1461,6 +1471,7 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
         `pvc/${staleName}`,
         "--timeout=30s",
       ]),
+      { timeoutMs: KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS },
     )
 
     const observedClaims = await state.execute(
@@ -1614,6 +1625,7 @@ export async function runApplicationServiceReadyProbe(input: PolicyProbeInput): 
         "--output",
         "json",
       ]),
+      { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
     )
     const observed = await state.execute(
       kubectl.command(state.context, [

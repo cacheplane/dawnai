@@ -410,6 +410,12 @@ describe("positive and negative pod fixtures", () => {
     expect(lease.url).toBe(
       `http://${String(metadata(service).name)}.${names.sandboxNamespace}.svc.cluster.local:8080/`,
     )
+    const networkWaits = execute.mock.calls.filter(([command]) => command.args.includes("wait"))
+    expect(networkWaits).toHaveLength(2)
+    for (const [command, options] of networkWaits) {
+      expect(command.args).toContain("--timeout=120s")
+      expect(options?.timeoutMs).toBe(150_000)
+    }
 
     await Promise.all([lease.cleanup(), lease.cleanup()])
     expect(execute.mock.calls.at(-1)?.[0].args).toEqual(
@@ -648,6 +654,16 @@ describe("same-candidate chart operations", () => {
     expect(upgrade.args).toEqual(
       expect.arrayContaining(["--set-string", "reaper.schedule=23 * * * *"]),
     )
+    const helmMutations = execute.mock.calls.filter(
+      ([command]) =>
+        command.file === "helm" &&
+        (command.args.includes("install") || command.args.includes("upgrade")),
+    )
+    expect(helmMutations).toHaveLength(2)
+    for (const [command, options] of helmMutations) {
+      expect(command.args).toEqual(expect.arrayContaining(["--timeout", "5m"]))
+      expect(options?.timeoutMs).toBe(360_000)
+    }
 
     const statuses = execute.mock.calls
       .map(([command]) => command)
@@ -770,6 +786,16 @@ describe("same-candidate chart operations", () => {
     }
     expect(install.args).toEqual(expect.arrayContaining(["--set", "replicaCount=1"]))
     expect(upgrade.args).toEqual(expect.arrayContaining(["--set", "replicaCount=2"]))
+    const helmMutations = execute.mock.calls.filter(
+      ([command]) =>
+        command.file === "helm" &&
+        (command.args.includes("install") || command.args.includes("upgrade")),
+    )
+    expect(helmMutations).toHaveLength(2)
+    for (const [command, options] of helmMutations) {
+      expect(command.args).toEqual(expect.arrayContaining(["--timeout", "5m"]))
+      expect(options?.timeoutMs).toBe(360_000)
+    }
 
     const statuses = execute.mock.calls
       .map(([command]) => command)
@@ -884,10 +910,15 @@ describe("reaper and application Service probes", () => {
         command.args.includes(`pvc/${String(metadata(staleClaim as JsonObject).name)}`),
       ),
     ).toBe(true)
+    const completeWait = execute.mock.calls.find(([command]) =>
+      command.args.includes("--for=condition=Complete"),
+    )
+    expect(completeWait?.[0].args).toContain("--timeout=120s")
+    expect(completeWait?.[1]?.timeoutMs).toBe(150_000)
     const staleWait = execute.mock.calls.find(([command]) =>
       command.args.includes(`pvc/${String(metadata(staleClaim as JsonObject).name)}`),
-    )?.[0]
-    expect(staleWait?.args).toEqual([
+    )
+    expect(staleWait?.[0].args).toEqual([
       "--context",
       context,
       "wait",
@@ -897,6 +928,7 @@ describe("reaper and application Service probes", () => {
       `pvc/${String(metadata(staleClaim as JsonObject).name)}`,
       "--timeout=30s",
     ])
+    expect(staleWait?.[1]?.timeoutMs).toBe(60_000)
     expect(metadata(job)).toMatchObject({
       namespace: names.sandboxNamespace,
       labels: { "dawn.sh/compat-run": runId },
@@ -1022,6 +1054,14 @@ describe("reaper and application Service probes", () => {
       return stdinObject(options).kind === "Pod"
     })
     expect(submittedPods).toHaveLength(2)
+    const serviceWaits = execute.mock.calls.filter(([command]) =>
+      command.args.includes("--for=jsonpath={.status.phase}=Succeeded"),
+    )
+    expect(serviceWaits).toHaveLength(2)
+    for (const [command, options] of serviceWaits) {
+      expect(command.args).toContain("--timeout=120s")
+      expect(options?.timeoutMs).toBe(150_000)
+    }
     const cleanup = execute.mock.calls.filter(
       ([command]) =>
         command.args.includes("delete") &&
