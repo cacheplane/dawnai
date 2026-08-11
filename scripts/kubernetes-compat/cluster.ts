@@ -591,33 +591,60 @@ export async function cleanupOwnedCluster(
   for (const entry of liveNamespaces) verifyNamespaceOwnership(entry.value, entry.ownership)
   if (input.keepOnFailure === true) return { retained: true }
 
-  for (const release of cleanup.releases) {
-    await execute(
-      helm.command(input.context, ["uninstall", release.name, "--namespace", release.namespace]),
-    )
+  const errors: unknown[] = []
+  const uninstallResults = await Promise.allSettled(
+    cleanup.releases.map((release) =>
+      execute(
+        helm.command(input.context, [
+          "uninstall",
+          release.name,
+          "--namespace",
+          release.namespace,
+          "--ignore-not-found",
+        ]),
+      ),
+    ),
+  )
+  for (const outcome of uninstallResults) {
+    if (outcome.status === "rejected") errors.push(outcome.reason)
   }
-  const survivingOwnership = (
-    await Promise.all(
-      cleanup.ownership.map(async (ownership) => {
-        const result = await execute(
-          kubectl.command(input.context, [
-            "get",
-            "namespace",
-            ownership.name,
-            "-o",
-            "json",
-            "--ignore-not-found",
-          ]),
-        )
-        if (result.stdout.toString("utf8").trim().length === 0) return undefined
-        const value = parseJson(result, `Namespace ${ownership.name}`)
-        verifyNamespaceOwnership(value, ownership)
-        return ownership
-      }),
-    )
-  ).filter((ownership) => ownership !== undefined)
-  for (const ownership of survivingOwnership) {
-    await execute(kubectl.command(input.context, ["delete", "namespace", ownership.name]))
+
+  const ownershipResults = await Promise.allSettled(
+    cleanup.ownership.map(async (ownership) => {
+      const result = await execute(
+        kubectl.command(input.context, [
+          "get",
+          "namespace",
+          ownership.name,
+          "-o",
+          "json",
+          "--ignore-not-found",
+        ]),
+      )
+      if (result.stdout.toString("utf8").trim().length === 0) return undefined
+      const value = parseJson(result, `Namespace ${ownership.name}`)
+      verifyNamespaceOwnership(value, ownership)
+      return ownership
+    }),
+  )
+  const survivingOwnership: NamespaceOwnership[] = []
+  for (const outcome of ownershipResults) {
+    if (outcome.status === "rejected") errors.push(outcome.reason)
+    else if (outcome.value !== undefined) survivingOwnership.push(outcome.value)
+  }
+
+  const deletionResults = await Promise.allSettled(
+    survivingOwnership.map((ownership) =>
+      execute(kubectl.command(input.context, ["delete", "namespace", ownership.name])),
+    ),
+  )
+  for (const outcome of deletionResults) {
+    if (outcome.status === "rejected") errors.push(outcome.reason)
+  }
+
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Owned Kubernetes compatibility cleanup failed")
   }
   return { retained: false }
 }

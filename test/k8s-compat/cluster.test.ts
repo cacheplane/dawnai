@@ -670,6 +670,7 @@ describe("namespace ownership and cleanup", () => {
           names.sandboxRelease,
           "--namespace",
           names.managementNamespace,
+          "--ignore-not-found",
         ],
       },
       {
@@ -681,6 +682,7 @@ describe("namespace ownership and cleanup", () => {
           names.appRelease,
           "--namespace",
           names.managementNamespace,
+          "--ignore-not-found",
         ],
       },
       {
@@ -761,6 +763,7 @@ describe("namespace ownership and cleanup", () => {
           names.sandboxRelease,
           "--namespace",
           names.managementNamespace,
+          "--ignore-not-found",
         ],
       },
       {
@@ -803,6 +806,7 @@ describe("namespace ownership and cleanup", () => {
       {},
       namespace(management, "other-run", "recreated-management"),
       namespace(sandbox),
+      {},
     ])
 
     await expect(
@@ -817,8 +821,141 @@ describe("namespace ownership and cleanup", () => {
         execute,
       ),
     ).rejects.toThrow(/UID|label/i)
+    expect(
+      execute.mock.calls
+        .filter(([command]) => command.args.includes("delete"))
+        .map(([command]) => command.args.at(-1)),
+    ).toEqual([sandbox.name])
+  })
+
+  test("treats an absent attempted release as uninstalled and deletes both owned namespaces", async () => {
+    const execute = fakeRunner([
+      namespace(management),
+      namespace(sandbox),
+      {},
+      namespace(management),
+      namespace(sandbox),
+      {},
+      {},
+    ])
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management, sandbox],
+          installedReleases: ["infrastructure"],
+          removeTokenFiles: async () => {},
+        },
+        execute,
+      ),
+    ).resolves.toEqual({ retained: false })
+
+    expect(execute.mock.calls[2]?.[0]).toEqual({
+      file: "helm",
+      args: [
+        "--kube-context",
+        "kind-dawn",
+        "uninstall",
+        names.sandboxRelease,
+        "--namespace",
+        names.managementNamespace,
+        "--ignore-not-found",
+      ],
+    })
+    expect(
+      execute.mock.calls
+        .filter(([command]) => command.args.includes("delete"))
+        .map(([command]) => command.args.at(-1)),
+    ).toEqual([management.name, sandbox.name])
+  })
+
+  test("continues release and namespace cleanup after the first uninstall fails", async () => {
+    const infrastructureFailure = new Error("infrastructure uninstall failed")
+    const execute = vi.fn<Runner>(async (command) => {
+      if (command.file === "helm" && command.args.includes(names.sandboxRelease)) {
+        throw infrastructureFailure
+      }
+      if (command.args.includes("get") && command.args.includes(management.name)) {
+        return result(command, namespace(management))
+      }
+      if (command.args.includes("get") && command.args.includes(sandbox.name)) {
+        return result(command, namespace(sandbox))
+      }
+      return result(command, {})
+    })
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management, sandbox],
+          installedReleases: ["infrastructure", "application"],
+          removeTokenFiles: async () => {},
+        },
+        execute,
+      ),
+    ).rejects.toBe(infrastructureFailure)
+
+    expect(
+      execute.mock.calls
+        .filter(([command]) => command.file === "helm")
+        .map(([command]) => command.args[3]),
+    ).toEqual([names.sandboxRelease, names.appRelease])
+    expect(
+      execute.mock.calls
+        .filter(([command]) => command.args.includes("delete"))
+        .map(([command]) => command.args.at(-1)),
+    ).toEqual([management.name, sandbox.name])
+  })
+
+  test("aggregates uninstall and namespace failures after every permitted cleanup action", async () => {
+    const failures = new Map<string, Error>([
+      [`helm:${names.sandboxRelease}`, new Error("infrastructure uninstall failed")],
+      [`helm:${names.appRelease}`, new Error("application uninstall failed")],
+      [`delete:${management.name}`, new Error("management delete failed")],
+      [`delete:${sandbox.name}`, new Error("sandbox delete failed")],
+    ])
+    const execute = vi.fn<Runner>(async (command) => {
+      if (command.file === "helm") {
+        const release = command.args[3]
+        throw failures.get(`helm:${release}`)
+      }
+      if (command.args.includes("get") && command.args.includes(management.name)) {
+        return result(command, namespace(management))
+      }
+      if (command.args.includes("get") && command.args.includes(sandbox.name)) {
+        return result(command, namespace(sandbox))
+      }
+      if (command.args.includes("delete")) {
+        throw failures.get(`delete:${command.args.at(-1)}`)
+      }
+      return result(command, {})
+    })
+
+    const error = await cleanupOwnedCluster(
+      {
+        context: "kind-dawn",
+        runId,
+        ownership: [management, sandbox],
+        installedReleases: ["infrastructure", "application"],
+        removeTokenFiles: async () => {},
+      },
+      execute,
+    ).catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors).toEqual([
+      failures.get(`helm:${names.sandboxRelease}`),
+      failures.get(`helm:${names.appRelease}`),
+      failures.get(`delete:${management.name}`),
+      failures.get(`delete:${sandbox.name}`),
+    ])
+    expect(execute.mock.calls.filter(([command]) => command.file === "helm")).toHaveLength(2)
     expect(execute.mock.calls.filter(([command]) => command.args.includes("delete"))).toHaveLength(
-      0,
+      2,
     )
   })
 

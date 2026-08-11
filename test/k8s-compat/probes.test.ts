@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { deriveClusterNames } from "../../scripts/kubernetes-compat/cluster.ts"
+import {
+  deriveClusterNames,
+  type NamespaceOwnership,
+  verifyNamespaceOwnership,
+} from "../../scripts/kubernetes-compat/cluster.ts"
 import type {
   Command,
   CommandExecutionOptions,
@@ -38,6 +42,11 @@ const context = "kind-dawn"
 const kubeconfig = "/secure/token-kubeconfig"
 const runId = "run-a"
 const names = deriveClusterNames(runId)
+const sandboxOwnership: NamespaceOwnership = {
+  name: names.sandboxNamespace,
+  uid: "sandbox-uid",
+  runId,
+}
 const REAPER_TEST_EPOCH_SECONDS = 2_000_000_000
 const REAPER_CRONJOB_UID = "11111111-1111-4111-8111-111111111111"
 
@@ -588,6 +597,7 @@ describe("positive and negative pod fixtures", () => {
       policy,
       execute,
       cleanupExecute: execute,
+      verifyCleanupOwnership: async () => {},
     })
 
     const manifests = allManifests(execute)
@@ -659,6 +669,7 @@ describe("positive and negative pod fixtures", () => {
       policy,
       execute,
       cleanupExecute: execute,
+      verifyCleanupOwnership: async () => {},
     })
 
     const manifests = allManifests(execute)
@@ -2361,6 +2372,7 @@ describe("probe command routing, evidence, and cleanup", () => {
       policy,
       execute,
       cleanupExecute: execute,
+      verifyCleanupOwnership: async () => {},
     })
 
     await expect(lease.cleanup()).rejects.toThrow(/retained cleanup failed/i)
@@ -2384,6 +2396,7 @@ describe("probe command routing, evidence, and cleanup", () => {
       policy,
       execute,
       cleanupExecute: execute,
+      verifyCleanupOwnership: async () => {},
     }).catch((cause: unknown) => cause)
 
     expect(error).toBeInstanceOf(AggregateError)
@@ -2435,6 +2448,7 @@ describe("probe command routing, evidence, and cleanup", () => {
       policy,
       execute,
       cleanupExecute,
+      verifyCleanupOwnership: async () => {},
     }).catch((cause: unknown) => cause)
 
     expect(setupCalls.filter((command) => command.args.includes("create"))).toHaveLength(2)
@@ -2444,5 +2458,139 @@ describe("probe command routing, evidence, and cleanup", () => {
     expect(cleanupCalls.every((command) => command.args.includes("--selector"))).toBe(true)
     expect(error).toBeInstanceOf(AggregateError)
     expect((error as AggregateError).errors).toEqual([setupFailure, cleanupFailure])
+  })
+
+  test.each([
+    {
+      name: "UID replacement",
+      replacement: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: names.sandboxNamespace,
+          uid: "replacement-uid",
+          labels: { "dawn.sh/compat-run": runId },
+        },
+      },
+    },
+    {
+      name: "run-label replacement",
+      replacement: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: names.sandboxNamespace,
+          uid: sandboxOwnership.uid,
+          labels: { "dawn.sh/compat-run": "another-run" },
+        },
+      },
+    },
+  ])("blocks returned network lease deletion after a same-name $name", async ({ replacement }) => {
+    const policy = await loadCompatibilityPolicy()
+    let clientPod: JsonObject | undefined
+    let replaced = false
+    const execute = fakeRunner((command, options) => {
+      const manifest = options.stdin === undefined ? undefined : stdinObject(options)
+      if (manifest?.kind === "Pod") {
+        clientPod = manifest
+        return manifest
+      }
+      if (command.args.includes("get") && command.args.some((arg) => arg.startsWith("pod/"))) {
+        return successPod(clientPod as JsonObject)
+      }
+      if (command.args.includes("logs")) return "DAWN_NETWORK_CONTROL=reachable\n"
+      return {}
+    })
+    const verifyCleanupOwnership = vi.fn(async () => {
+      verifyNamespaceOwnership(
+        replaced
+          ? replacement
+          : {
+              apiVersion: "v1",
+              kind: "Namespace",
+              metadata: {
+                name: names.sandboxNamespace,
+                uid: sandboxOwnership.uid,
+                labels: { "dawn.sh/compat-run": runId },
+              },
+            },
+        sandboxOwnership,
+      )
+    })
+    const lease = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute: execute,
+      verifyCleanupOwnership,
+    })
+    const callCountBeforeReplacement = execute.mock.calls.length
+    replaced = true
+
+    await expect(lease.cleanup()).rejects.toThrow(/UID|label/i)
+
+    const postReplacementDeletes = execute.mock.calls
+      .slice(callCountBeforeReplacement)
+      .filter(([command]) => command.args.includes("delete"))
+    expect(postReplacementDeletes).toHaveLength(0)
+    expect(verifyCleanupOwnership.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  test.each([
+    {
+      name: "UID replacement",
+      replacement: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: names.sandboxNamespace,
+          uid: "replacement-uid",
+          labels: { "dawn.sh/compat-run": runId },
+        },
+      },
+    },
+    {
+      name: "run-label replacement",
+      replacement: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: names.sandboxNamespace,
+          uid: sandboxOwnership.uid,
+          labels: { "dawn.sh/compat-run": "another-run" },
+        },
+      },
+    },
+  ])("blocks partial network cleanup after a same-name $name", async ({ replacement }) => {
+    const policy = await loadCompatibilityPolicy()
+    const setupFailure = new Error("network setup failed after mutation")
+    const cleanupExecute = fakeRunner(() => ({}))
+    const execute = fakeRunner((command) => (command.args.includes("wait") ? setupFailure : {}))
+    const verifyCleanupOwnership = vi.fn(async () => {
+      verifyNamespaceOwnership(replacement, sandboxOwnership)
+    })
+
+    const error = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute,
+      verifyCleanupOwnership,
+    }).catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors[0]).toBe(setupFailure)
+    expect((error as AggregateError).errors.slice(1)).toHaveLength(3)
+    expect(
+      (error as AggregateError).errors
+        .slice(1)
+        .every((cause) => cause instanceof Error && /UID|label/i.test(cause.message)),
+    ).toBe(true)
+    expect(
+      cleanupExecute.mock.calls.filter(([command]) => command.args.includes("delete")),
+    ).toEqual([])
+    expect(verifyCleanupOwnership).toHaveBeenCalled()
   })
 })

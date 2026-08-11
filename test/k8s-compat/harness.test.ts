@@ -701,6 +701,7 @@ describe("portable compatibility lifecycle", () => {
       expect(call.options?.stderrLimitBytes).toBeGreaterThan(0)
       expect(call.options?.acceptedExitCodes).toEqual([1])
       expect(call.options?.terminateProcessTree).toBe(true)
+      expect(call.options?.sensitiveOutput).toBe(true)
       expect(call.options?.env).toMatchObject({
         DAWN_TEST_K8S: "1",
         DAWN_TEST_K8S_NS: NAMES.sandboxNamespace,
@@ -1073,7 +1074,7 @@ describe("failure boundaries and cleanup", () => {
     })
   })
 
-  test("ownership verification gates retention and destructive cleanup without suppressing lease cleanup", async () => {
+  test("fresh ownership failure blocks network and cluster cleanup without suppressing token cleanup", async () => {
     const fixture = createHarnessFixture({
       failAt: "probe.reaper.lifecycle.before-upgrade",
       failOwnershipVerification: true,
@@ -1090,7 +1091,9 @@ describe("failure boundaries and cleanup", () => {
         "ownership verification failed",
       ]),
     )
-    expect(fixture.events).toContain("network.cleanup")
+    expect(fixture.events).not.toContain("network.cleanup")
+    expect(fixture.events).toContain("token.destroy.1")
+    expect(fixture.events).toContain("token.destroy.2")
     expect(fixture.events).not.toContain("cleanup.destroy")
     expect(fixture.reports.at(-1)?.cleanup.status).toBe("failed")
   })
@@ -1205,6 +1208,7 @@ describe("failure boundaries and cleanup", () => {
       if (!options?.acceptedExitCodes?.includes(1)) {
         throw new Error("provider command exited with code 1")
       }
+      expect(options.sensitiveOutput).toBe(true)
       return result(command, "", 1)
     })
     const {
@@ -1235,6 +1239,76 @@ describe("failure boundaries and cleanup", () => {
     )
     expect(tokenDirectories).toHaveLength(1)
     await expect(readFile(reportPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test.each([
+    {
+      name: "abnormal exit",
+      timeoutMs: 2_000,
+      script: (stderr: string) => `process.stderr.write(${JSON.stringify(stderr)});process.exit(2)`,
+      outcome: "exit",
+    },
+    {
+      name: "timeout",
+      timeoutMs: 75,
+      script: (stderr: string) =>
+        `process.stderr.write(${JSON.stringify(stderr)});setInterval(()=>{},1000)`,
+      outcome: "timeout",
+    },
+  ])("never exposes provider stderr credentials on $name", async (testCase) => {
+    const fixture = createHarnessFixture()
+    const credentialValues = [
+      "OPENAI_API_KEY=plain-api-key-value",
+      "PASSWORD=hunter2",
+      "postgres://user:pass@db.internal/dawn",
+    ]
+    const providerStderr = credentialValues.join("\n")
+    const baseExecute = fixture.dependencies.execute as Runner
+    let serializedCommandError = ""
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (command.file !== "pnpm") return baseExecute(command, options)
+      fixture.commandCalls.push({ command, options })
+      fixture.events.push("provider.execute.provider-before-upgrade")
+      try {
+        return await executeCommand(
+          {
+            file: process.execPath,
+            args: ["-e", testCase.script(providerStderr)],
+          },
+          { ...options, timeoutMs: testCase.timeoutMs },
+        )
+      } catch (error) {
+        serializedCommandError = JSON.stringify(error)
+        throw error
+      }
+    })
+    let stderr = ""
+
+    const exitCode = await runKubernetesCompatibilityMain(
+      ["--target", TARGET, "--context", CONTEXT],
+      {
+        ...fixture.dependencies,
+        execute,
+        writeStderr: (chunk) => {
+          stderr += chunk
+        },
+      },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(serializedCommandError).toContain(`"kind":"${testCase.outcome}"`)
+    for (const forbidden of credentialValues) {
+      expect(serializedCommandError).not.toContain(forbidden)
+      expect(JSON.stringify(fixture.reports)).not.toContain(forbidden)
+      expect(stderr).not.toContain(forbidden)
+    }
+    expect(serializedCommandError).not.toContain("plain-api-key-value")
+    expect(serializedCommandError).not.toContain("hunter2")
+    expect(serializedCommandError).not.toContain("OPENAI_API_KEY")
+    expect(serializedCommandError).not.toContain("PASSWORD")
+    expect(serializedCommandError).not.toContain("postgres://")
+    expect(stderr).not.toContain("plain-api-key-value")
+    expect(stderr).not.toContain("hunter2")
   })
 
   test("fails explicitly after successful accounting when a provider command still exits one", async () => {
@@ -1336,57 +1410,68 @@ describe("signal cleanup", () => {
     },
   )
 
-  test("does not begin token or cluster cleanup when provider tree termination is unconfirmed", async () => {
-    const fixture = createHarnessFixture()
-    const emitter = new EventEmitter()
-    const providerStarted = deferred()
-    const terminated = deferred()
-    const baseExecute = fixture.dependencies.execute as Runner
-    const execute = vi.fn<Runner>(async (command, options) => {
-      if (command.file !== "pnpm") return baseExecute(command, options)
-      fixture.commandCalls.push({ command, options })
-      fixture.events.push("provider.execute.provider-before-upgrade")
-      providerStarted.resolve()
-      await new Promise<void>((resolveAbort) => {
-        if (options?.signal?.aborted === true) resolveAbort()
-        else options?.signal?.addEventListener("abort", () => resolveAbort(), { once: true })
+  test.each([
+    { name: "token destroy succeeds", failTokenDestroy: false },
+    { name: "token destroy fails", failTokenDestroy: true },
+  ])(
+    "always attempts local $name while unconfirmed containment blocks remote cleanup",
+    async ({ failTokenDestroy }) => {
+      const fixture = createHarnessFixture({ failTokenDestroy })
+      const emitter = new EventEmitter()
+      const providerStarted = deferred()
+      const terminated = deferred()
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (command.file !== "pnpm") return baseExecute(command, options)
+        fixture.commandCalls.push({ command, options })
+        fixture.events.push("provider.execute.provider-before-upgrade")
+        providerStarted.resolve()
+        await new Promise<void>((resolveAbort) => {
+          if (options?.signal?.aborted === true) resolveAbort()
+          else options?.signal?.addEventListener("abort", () => resolveAbort(), { once: true })
+        })
+        const error = new CommandExecutionError(
+          "Command was aborted; process-tree termination failed: process tree termination could not be confirmed",
+          command,
+          { kind: "aborted" },
+          { sensitiveOutput: true, processTreeTermination: "unconfirmed" },
+        )
+        throw error
       })
-      const error = new CommandExecutionError(
-        "Command was aborted; process-tree termination failed: process tree termination could not be confirmed",
-        command,
-        { kind: "aborted" },
-        { sensitiveOutput: true, processTreeTermination: "unconfirmed" },
-      )
-      throw error
-    })
-    const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
-      fixture.dependencies
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
 
-    const run = runKubernetesCompatibility(OPTIONS, {
-      ...dependenciesWithoutFakeRegistration,
-      execute,
-      registerSignalCleanup: registerOwnedResourceSignalCleanup,
-      signalCleanupOptions: {
-        emitter,
-        terminate: (observedSignal) => {
-          fixture.events.push(`terminate.${observedSignal}`)
-          terminated.resolve()
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
         },
-        timeoutMs: 5_000,
-      },
-    }).catch((error: unknown) => error)
+      }).catch((error: unknown) => error)
 
-    await providerStarted.promise
-    emitter.emit("SIGINT")
-    await terminated.promise
-    const error = await run
+      await providerStarted.promise
+      emitter.emit("SIGINT")
+      await terminated.promise
+      const error = await run
 
-    expect(error).toBeInstanceOf(Error)
-    expect(fixture.events).not.toContain("token.destroy.1")
-    expect(fixture.events).not.toContain("cleanup.verify")
-    expect(fixture.events).not.toContain("cleanup.destroy")
-    expect(fixture.events).toContain("terminate.SIGINT")
-  })
+      expect(error).toBeInstanceOf(Error)
+      expect(fixture.events).toContain("token.destroy.1")
+      if (failTokenDestroy) {
+        expect(flattenErrorMessages(error)).toContain("token destroy 1 failed")
+      }
+      expect(flattenErrorMessages(error).join("\n")).toMatch(/process tree termination/i)
+      expect(fixture.events).not.toContain("network.cleanup")
+      expect(fixture.events).not.toContain("cleanup.verify")
+      expect(fixture.events).not.toContain("cleanup.destroy")
+      expect(fixture.events).toContain("terminate.SIGINT")
+    },
+  )
 
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
     "cleans partial network setup with the raw executor before failing cluster cleanup on %s",
@@ -1455,6 +1540,14 @@ describe("signal cleanup", () => {
       expect(rawCleanupCalls).toHaveLength(3)
       expect(rawCleanupCalls.every(({ options }) => options?.signal === undefined)).toBe(true)
       expect(fixture.events.filter((event) => event === "network.raw.cleanup")).toHaveLength(3)
+      const ownershipGuardCalls = fixture.commandCalls.filter(
+        ({ command }) =>
+          command.file === "kubectl" &&
+          command.args.join(" ") ===
+            `--context ${CONTEXT} get namespace ${NAMES.sandboxNamespace} --output=json`,
+      )
+      expect(ownershipGuardCalls).toHaveLength(3)
+      expect(ownershipGuardCalls.every(({ options }) => options?.signal === undefined)).toBe(true)
       expect(flattenErrorMessages(error)).toEqual(
         expect.arrayContaining(["network setup aborted", "cluster destruction failed"]),
       )

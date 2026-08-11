@@ -677,18 +677,23 @@ async function terminateWindowsProcessTree(
   child: CommandChild,
   signal: NodeJS.Signals,
   dependencies: CommandTerminationDependencies,
+  directChildExited: () => boolean,
 ): Promise<boolean> {
+  if (directChildExited()) return true
   const pid = child.pid
   if (pid === undefined || !isSafeProcessId(pid)) {
     killDirectChild(child, signal)
     return false
   }
+  if (directChildExited()) return true
   try {
     await dependencies.taskkillProcessTree(pid, WINDOWS_TREE_TERMINATION_TIMEOUT_MS)
   } catch {
+    if (directChildExited()) return true
     killDirectChild(child, signal)
     return false
   }
+  if (directChildExited()) return true
   for (let attempt = 0; attempt < PROCESS_TREE_VERIFY_ATTEMPTS; attempt += 1) {
     try {
       if (!dependencies.processExists(pid)) return true
@@ -707,9 +712,10 @@ async function terminateProcessTree(
   signal: NodeJS.Signals,
   dependencies: CommandTerminationDependencies,
   tracker: ProcessTreeTracker | undefined,
+  directChildExited: () => boolean,
 ): Promise<boolean> {
   return dependencies.platform === "win32"
-    ? terminateWindowsProcessTree(child, signal, dependencies)
+    ? terminateWindowsProcessTree(child, signal, dependencies, directChildExited)
     : terminatePosixProcessTree(child, signal, dependencies, tracker)
 }
 
@@ -717,9 +723,10 @@ async function confirmProcessTreeTermination(
   child: CommandChild,
   dependencies: CommandTerminationDependencies,
   tracker: ProcessTreeTracker | undefined,
+  directChildExited: () => boolean,
 ): Promise<boolean> {
   try {
-    return await terminateProcessTree(child, "SIGKILL", dependencies, tracker)
+    return await terminateProcessTree(child, "SIGKILL", dependencies, tracker, directChildExited)
   } catch {
     return false
   }
@@ -821,6 +828,7 @@ export function createCommandExecutor(
       let spawned = false
       let settled = false
       let terminalStarted = false
+      let childClosed = false
       let pendingFailure: PendingFailure | undefined
       let closedAfterFailure = false
       let terminationDispatch: Promise<boolean> | undefined
@@ -878,7 +886,12 @@ export function createCommandExecutor(
         pendingFailure = failure
         terminationDispatch = Promise.resolve().then(() =>
           options.terminateProcessTree
-            ? confirmProcessTreeTermination(child, terminationDependencies, processTreeTracker)
+            ? confirmProcessTreeTermination(
+                child,
+                terminationDependencies,
+                processTreeTracker,
+                () => childClosed || child.exitCode !== null || child.signalCode !== null,
+              )
             : killDirectChild(child, "SIGKILL"),
         )
         void terminationDispatch.then((dispatched) => {
@@ -981,6 +994,7 @@ export function createCommandExecutor(
       }
 
       function onClose(code: number | null, signal: NodeJS.Signals | null): void {
+        childClosed = true
         if (pendingFailure !== undefined) {
           const failure = pendingFailure
           closedAfterFailure = true
@@ -1012,6 +1026,11 @@ export function createCommandExecutor(
           else settle(undefined, code ?? 0)
           return
         }
+        if (terminationDependencies.platform === "win32") {
+          if (failure !== undefined) settle(createError(failure, stderr))
+          else settle(undefined, code ?? 0)
+          return
+        }
 
         const terminalOutcome: PendingFailure = failure ?? {
           message:
@@ -1021,7 +1040,12 @@ export function createCommandExecutor(
           outcome: { kind: "exit" as const, exitCode: code ?? 0 },
         }
         terminationDispatch = Promise.resolve().then(() =>
-          confirmProcessTreeTermination(child, terminationDependencies, processTreeTracker),
+          confirmProcessTreeTermination(
+            child,
+            terminationDependencies,
+            processTreeTracker,
+            () => childClosed || child.exitCode !== null || child.signalCode !== null,
+          ),
         )
         void terminationDispatch.then((terminated) => {
           if (settled) return

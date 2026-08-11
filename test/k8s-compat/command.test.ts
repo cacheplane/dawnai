@@ -151,6 +151,8 @@ class ControlledChild extends EventEmitter {
   readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
   pid: number | undefined
+  exitCode: number | null = null
+  signalCode: NodeJS.Signals | null = null
   readonly kill = vi.fn((_signal?: NodeJS.Signals | number) => true)
 }
 
@@ -774,14 +776,113 @@ describe("shell-free command executor", () => {
     child.emit("spawn")
 
     controller.abort()
+    await Promise.resolve()
+    expect(taskkillProcessTree).toHaveBeenCalledTimes(1)
     child.emit("close", 1, null)
     await Promise.resolve()
     expect(settled).toBe(false)
     dispatch.resolve()
 
     await expect(observed).resolves.toMatchObject({ outcome: { kind: "aborted" } })
-    expect(taskkillProcessTree).toHaveBeenCalledWith(7_654, expect.any(Number))
+    expect(taskkillProcessTree).toHaveBeenCalledWith(7_654, 5_000)
     expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { name: "normal exit 0", exitCode: 0, acceptedExitCodes: [] as const, rejected: false },
+    { name: "accepted exit 1", exitCode: 1, acceptedExitCodes: [1] as const, rejected: false },
+    { name: "rejected exit 2", exitCode: 2, acceptedExitCodes: [] as const, rejected: true },
+  ])("does not taskkill an exited Windows child after $name", async (input) => {
+    const child = new ControlledChild()
+    child.pid = 7_700 + input.exitCode
+    const taskkillProcessTree = vi.fn(async () => {})
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "win32",
+      taskkillProcessTree,
+      processExists: () => false,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        acceptedExitCodes: input.acceptedExitCodes,
+        terminateProcessTree: true,
+      },
+    )
+    const observed = execution.catch((error: unknown) => error)
+    child.emit("spawn")
+
+    child.exitCode = input.exitCode
+    child.emit("close", input.exitCode, null)
+
+    const outcome = await observed
+    if (input.rejected) {
+      expect(outcome).toMatchObject({ outcome: { kind: "exit", exitCode: input.exitCode } })
+    } else {
+      expect(outcome).toMatchObject({ exitCode: input.exitCode })
+    }
+    expect(taskkillProcessTree).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { name: "abort", trigger: "abort" as const, outcome: "aborted" as const },
+    { name: "timeout", trigger: "timeout" as const, outcome: "timeout" as const },
+  ])(
+    "taskkills one live Windows child exactly once on forced $name",
+    async ({ trigger, outcome }) => {
+      const child = new ControlledChild()
+      child.pid = trigger === "abort" ? 7_801 : 7_802
+      const controller = new AbortController()
+      const taskkillProcessTree = vi.fn(async () => {})
+      const executor = createCommandExecutor(() => child as never, {
+        platform: "win32",
+        taskkillProcessTree,
+        processExists: () => false,
+      })
+      const execution = executor(
+        { file: "controlled", args: [] },
+        {
+          ...CONTROLLED_COMMAND_OPTIONS,
+          ...(trigger === "abort" ? { signal: controller.signal } : { timeoutMs: 20 }),
+          terminateProcessTree: true,
+        },
+      )
+      child.emit("spawn")
+
+      if (trigger === "abort") controller.abort()
+
+      await expect(execution).rejects.toMatchObject({ outcome: { kind: outcome } })
+      expect(taskkillProcessTree).toHaveBeenCalledTimes(1)
+      expect(taskkillProcessTree).toHaveBeenCalledWith(child.pid, 5_000)
+    },
+  )
+
+  test("does not issue a late Windows taskkill when close wins a forced-termination race", async () => {
+    const child = new ControlledChild()
+    child.pid = 7_900
+    const controller = new AbortController()
+    const taskkillProcessTree = vi.fn(async () => {})
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "win32",
+      taskkillProcessTree,
+      processExists: () => false,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    child.emit("spawn")
+
+    controller.abort()
+    child.exitCode = 0
+    child.emit("close", 0, null)
+
+    await expect(execution).rejects.toMatchObject({ outcome: { kind: "aborted" } })
+    expect(taskkillProcessTree).not.toHaveBeenCalled()
   })
 
   test("keeps direct-child spawn and termination semantics when tree termination is absent", async () => {

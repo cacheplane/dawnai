@@ -1235,21 +1235,10 @@ export async function runKubernetesCompatibility(
           errors.push(normalizeError(error, "Signal ownership recovery failed"))
         }
       }
-      if (unconfirmedProcessTreeError !== undefined) {
-        const cleanupError = new AggregateError(
-          [...errors, unconfirmedProcessTreeError],
-          "Kubernetes compatibility cleanup blocked by unconfirmed process-tree termination",
-        )
-        return {
-          result: Object.freeze({
-            status: "failed",
-            diagnostics: { blocked: true, errors: errorDiagnostics(cleanupError) },
-          }),
-          error: cleanupError,
-        }
-      }
+      const remoteCleanupBlocked = unconfirmedProcessTreeError !== undefined
+      if (unconfirmedProcessTreeError !== undefined) errors.push(unconfirmedProcessTreeError)
       let ownershipVerified = ownership.length === 0
-      if (ownership.length > 0) {
+      if (!remoteCleanupBlocked && ownership.length > 0) {
         try {
           await resolved.cleanupCluster({
             context: options.context,
@@ -1266,7 +1255,12 @@ export async function runKubernetesCompatibility(
       }
 
       const localActions: (() => Promise<void>)[] = [
-        ...(networkLease !== undefined ? [() => networkLease?.cleanup() ?? Promise.resolve()] : []),
+        ...(!remoteCleanupBlocked &&
+        ownershipVerified &&
+        ownership.some(({ name }) => name === derivedNames.sandboxNamespace) &&
+        networkLease !== undefined
+          ? [() => networkLease?.cleanup() ?? Promise.resolve()]
+          : []),
         ...tokenDestroyers,
       ]
       const localResults = await Promise.allSettled(
@@ -1278,8 +1272,9 @@ export async function runKubernetesCompatibility(
         }
       }
 
-      const retained = retainClusterResources && ownershipVerified && ownership.length > 0
-      if (ownershipVerified && !retained && ownership.length > 0) {
+      const retained =
+        !remoteCleanupBlocked && retainClusterResources && ownershipVerified && ownership.length > 0
+      if (!remoteCleanupBlocked && ownershipVerified && !retained && ownership.length > 0) {
         const hasBothNamespaceOwnership = [
           derivedNames.managementNamespace,
           derivedNames.sandboxNamespace,
@@ -1302,6 +1297,7 @@ export async function runKubernetesCompatibility(
         status: cleanupError === undefined ? "passed" : "failed",
         diagnostics: redactSensitive({
           retained,
+          ...(remoteCleanupBlocked ? { blocked: true } : {}),
           ...(cleanupError !== undefined ? { errors: errorDiagnostics(cleanupError) } : {}),
         }),
       })
@@ -1377,6 +1373,26 @@ export async function runKubernetesCompatibility(
     trackOwnership(
       captureNamespaceOwnership(parseCommandJson(response, `Namespace ${name}`), runId),
       name,
+    )
+  }
+
+  const verifySandboxCleanupOwnership = async (): Promise<void> => {
+    const expected = ownership.find(({ name }) => name === derivedNames.sandboxNamespace)
+    if (expected === undefined) {
+      throw new Error("Network cleanup requires captured sandbox Namespace ownership")
+    }
+    const response = await resolved.execute(
+      kubectl.command(options.context, [
+        "get",
+        "namespace",
+        derivedNames.sandboxNamespace,
+        "--output=json",
+      ]),
+      namespaceCommandOptions(),
+    )
+    verifyNamespaceOwnership(
+      parseCommandJson(response, `Network cleanup Namespace ${derivedNames.sandboxNamespace}`),
+      expected,
     )
   }
 
@@ -1465,7 +1481,6 @@ export async function runKubernetesCompatibility(
         const unconfirmed = findUnconfirmedProcessTreeError(operationOutcome.reason)
         if (unconfirmed !== undefined) {
           unconfirmedProcessTreeError ??= unconfirmed
-          throw operationOutcome.reason
         }
       }
       const destroyOutcome = await destroy().then(
@@ -1568,6 +1583,7 @@ export async function runKubernetesCompatibility(
         policy: activePolicy,
         execute,
         cleanupExecute: resolved.execute,
+        verifyCleanupOwnership: verifySandboxCleanupOwnership,
       }),
     )
     networkLease = networkControlLease
@@ -1600,6 +1616,7 @@ export async function runKubernetesCompatibility(
             stderrLimitBytes: PROVIDER_STDERR_LIMIT_BYTES,
             acceptedExitCodes: [1],
             terminateProcessTree: true,
+            sensitiveOutput: true,
             env: {
               ...process.env,
               DAWN_TEST_K8S: "1",

@@ -53,6 +53,7 @@ export interface PolicyProbeInput extends AdministrativeProbeInput {
 
 export interface NetworkControlProbeInput extends PolicyProbeInput {
   readonly cleanupExecute: ProbeCommandRunner
+  readonly verifyCleanupOwnership: () => Promise<void>
 }
 
 export interface ReaperLifecycleDependencies {
@@ -509,6 +510,7 @@ async function cleanupByName(input: {
 
 function createNetworkControlLease(input: {
   readonly execute: ProbeCommandRunner
+  readonly verifyCleanupOwnership: () => Promise<void>
   readonly context: string
   readonly namespace: string
   readonly runId: string
@@ -526,6 +528,7 @@ function createNetworkControlLease(input: {
         try {
           await cleanupExactRunComponents({
             execute: input.execute,
+            verifyCleanupOwnership: input.verifyCleanupOwnership,
             context: input.context,
             namespace: input.namespace,
             runId: input.runId,
@@ -546,6 +549,7 @@ function createNetworkControlLease(input: {
 
 async function cleanupExactRunComponents(input: {
   readonly execute: ProbeCommandRunner
+  readonly verifyCleanupOwnership: () => Promise<void>
   readonly context: string
   readonly namespace: string
   readonly runId: string
@@ -555,16 +559,17 @@ async function cleanupExactRunComponents(input: {
   }[]
 }): Promise<void> {
   const settled = await Promise.allSettled(
-    input.resources.map(({ resourceTypes, component }) =>
-      cleanupByRunLabel({
+    input.resources.map(async ({ resourceTypes, component }) => {
+      await input.verifyCleanupOwnership()
+      return cleanupByRunLabel({
         execute: input.execute,
         context: input.context,
         namespace: input.namespace,
         runId: input.runId,
         resourceTypes,
         component,
-      }),
-    ),
+      })
+    }),
   )
   const errors = settled.flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
@@ -665,6 +670,9 @@ export async function runNetworkControlProbe(
   const state = probeState(input)
   if (typeof input.cleanupExecute !== "function") {
     throw new Error("Network control cleanup executor must be provided")
+  }
+  if (typeof input.verifyCleanupOwnership !== "function") {
+    throw new Error("Network control cleanup ownership verifier must be provided")
   }
   const serverName = resourceName(state.runId, "network-server")
   const serviceName = resourceName(state.runId, "network-service")
@@ -768,6 +776,7 @@ export async function runNetworkControlProbe(
     if (logs.stdout.toString("utf8") !== "DAWN_NETWORK_CONTROL=reachable\n") {
       throw new Error("Network control did not emit the exact reachability marker")
     }
+    await input.verifyCleanupOwnership()
     await cleanupByName({
       execute: state.execute,
       context: state.context,
@@ -777,6 +786,7 @@ export async function runNetworkControlProbe(
     })
     return createNetworkControlLease({
       execute: input.cleanupExecute,
+      verifyCleanupOwnership: input.verifyCleanupOwnership,
       context: state.context,
       namespace: state.namespace,
       runId: state.runId,
@@ -787,6 +797,7 @@ export async function runNetworkControlProbe(
     try {
       await cleanupExactRunComponents({
         execute: input.cleanupExecute,
+        verifyCleanupOwnership: input.verifyCleanupOwnership,
         context: state.context,
         namespace: state.namespace,
         runId: state.runId,
