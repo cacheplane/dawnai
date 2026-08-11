@@ -95,43 +95,47 @@ describe("MemoryGrid", () => {
     expect(onSelect.mock.calls).toEqual([["b"]])
   })
 
+  // These two drive sorting through `confidence` rather than `content` because
+  // `content` is deliberately unsortable — `BrowseSortField` has no content
+  // field. Which column carries the click is incidental to both; the row order
+  // is still read off the content cells.
   it("clicking a column header sorts the rows by that column", () => {
     const { container } = render(
       <MemoryGrid
         records={[
-          record({ id: "a", content: "banana" }),
-          record({ id: "b", content: "apple" }),
-          record({ id: "c", content: "cherry" }),
+          record({ id: "a", content: "middle", confidence: 0.5 }),
+          record({ id: "b", content: "lowest", confidence: 0.1 }),
+          record({ id: "c", content: "highest", confidence: 0.9 }),
         ]}
         onSelect={vi.fn()}
       />,
     )
-    expect(columnText(container, "content")).toEqual(["banana", "apple", "cherry"])
+    expect(columnText(container, "content")).toEqual(["middle", "lowest", "highest"])
 
-    const header = headerFor(container, "content")
+    const header = headerFor(container, "confidence")
     fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
     expect(header.getAttribute("aria-sort")).toBe("descending")
 
     fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["apple", "banana", "cherry"])
+    expect(columnText(container, "content")).toEqual(["lowest", "middle", "highest"])
     expect(header.getAttribute("aria-sort")).toBe("ascending")
   })
 
   it("keeps the sort when a poll hands down a fresh records array", () => {
     const records = [
-      record({ id: "a", content: "banana" }),
-      record({ id: "b", content: "apple" }),
-      record({ id: "c", content: "cherry" }),
+      record({ id: "a", content: "middle", confidence: 0.5 }),
+      record({ id: "b", content: "lowest", confidence: 0.1 }),
+      record({ id: "c", content: "highest", confidence: 0.9 }),
     ]
     const { container, rerender } = render(<MemoryGrid records={records} onSelect={vi.fn()} />)
-    fireEvent.click(headerFor(container, "content"))
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
+    fireEvent.click(headerFor(container, "confidence"))
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
 
     // Live mode refetches every 2s; each response is a new array of equal records.
     rerender(<MemoryGrid records={records.map((rec) => ({ ...rec }))} onSelect={vi.fn()} />)
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
-    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("descending")
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
+    expect(headerFor(container, "confidence").getAttribute("aria-sort")).toBe("descending")
   })
 
   it("sorts the updated column chronologically, not by its displayed text", () => {
@@ -177,6 +181,62 @@ describe("MemoryGrid", () => {
     expect(cellClasses("b").every((cls) => cls.includes("line-through"))).toBe(true)
     expect(cellClasses("c").some((cls) => cls.includes("line-through"))).toBe(false)
   })
+
+  it("offers only the operators the store can honor, on every column", () => {
+    // Pretable appends isEmpty/isNotEmpty to every type by default and no
+    // BrowseFilter arm expresses them, so an unpruned menu would show two
+    // controls the server ignores.
+    const expected: Record<string, string[]> = {
+      status: ["is any of", "is none of"],
+      kind: ["is any of", "is none of"],
+      namespace: ["equals", "starts with"],
+      content: [
+        "contains",
+        "does not contain",
+        "equals",
+        "does not equal",
+        "starts with",
+        "ends with",
+      ],
+      confidence: [
+        "equals",
+        "does not equal",
+        "greater than",
+        "greater than or equal",
+        "less than",
+        "less than or equal",
+        "is between",
+      ],
+      updated: ["on", "before", "after", "is between"],
+    }
+    for (const [columnId, options] of Object.entries(expected)) {
+      cleanup()
+      render(<MemoryGrid records={[record({ id: "a" })]} onSelect={vi.fn()} />)
+      fireEvent.click(screen.getByRole("button", { name: `Filter ${columnId}` }))
+      const dialog = screen.getByRole("dialog", { name: `Filter ${columnId}` })
+      const select = within(dialog).getByRole("combobox")
+      expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(options)
+    }
+  })
+
+  it("gives content no sort affordance — the store has no content sort field", () => {
+    const onSortChange = vi.fn()
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a" }), record({ id: "b" })]}
+        onSelect={vi.fn()}
+        onSortChange={onSortChange}
+      />,
+    )
+    fireEvent.click(headerFor(container, "content"))
+    // `onSortChange` never firing is the real discriminator. `aria-sort` is NOT:
+    // @pretable/react 0.3.0 emits it unconditionally ("none" when unsorted), so
+    // asserting null here would contradict both the shipped behavior and this
+    // file's own sibling test "browse headers do not sort — the rows are a
+    // server-selected sample". Pinning "none" documents what actually ships.
+    expect(onSortChange).not.toHaveBeenCalled()
+    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("none")
+  })
 })
 
 function grid(container: HTMLElement): HTMLElement {
@@ -201,7 +261,10 @@ describe("MemoryGrid lifecycle", () => {
   it("is untouched when dataState is omitted", () => {
     const { container } = render(
       <MemoryGrid
-        records={[record({ id: "a", content: "apple" }), record({ id: "b", content: "banana" })]}
+        records={[
+          record({ id: "a", content: "apple", confidence: 0.2 }),
+          record({ id: "b", content: "banana", confidence: 0.8 }),
+        ]}
         onSelect={vi.fn()}
       />,
     )
@@ -209,9 +272,11 @@ describe("MemoryGrid lifecycle", () => {
     expect(container.querySelector("[data-pretable-body-state]")).toBeNull()
     // Loaded rows plus the header row — the grid speaks only for what it holds.
     expect(grid(container).getAttribute("aria-rowcount")).toBe("3")
-    fireEvent.click(headerFor(container, "content"))
+    // Through `confidence`: engine sort authority is the point, not the column,
+    // and `content` is unsortable by design.
+    fireEvent.click(headerFor(container, "confidence"))
     expect(columnText(container, "content")).toEqual(["banana", "apple"])
-    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("descending")
+    expect(headerFor(container, "confidence").getAttribute("aria-sort")).toBe("descending")
   })
 
   it("shows a loading block before the first answer", () => {

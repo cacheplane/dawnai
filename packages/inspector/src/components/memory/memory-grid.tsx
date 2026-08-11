@@ -6,6 +6,7 @@ import {
   type PretableDataState,
   type PretableProcessingOptions,
   type PretableResultMeta,
+  type PretableSortEntry,
   PretableSurface,
   type PretableSurfaceMessages,
   type PretableSurfaceProps,
@@ -38,7 +39,17 @@ const MAX_VIEWPORT_PX = 560
 /** Everything but `content` is sized to what it holds — a status badge, a
  *  namespace, a timestamp — and `content` takes whatever is left over, so the
  *  row ends on the container's edge at any window width. It carries the slack
- *  because it's the only column with unbounded text. */
+ *  because it's the only column with unbounded text.
+ *
+ *  Every column declares `type`, and every FILTERABLE column declares
+ *  `filterOperators` matching the `BrowseFilter` grammar exactly. That list is
+ *  load-bearing, not cosmetic: Pretable appends `isEmpty`/`isNotEmpty` to every
+ *  type's menu by default and no `BrowseFilter` arm expresses them (correctly —
+ *  every browse field is NOT NULL), so an unpruned menu would offer two
+ *  operators the server ignores. `operatorsForType` INTERSECTS this list with
+ *  the per-type set, so a name that is not valid for the declared `type` is
+ *  dropped — and a list that intersects to nothing dev-warns and falls back to
+ *  the full menu. Change `type` and you must re-check this list. */
 const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "status",
@@ -46,6 +57,7 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     widthPx: 104,
     type: "enum",
     filterable: true,
+    filterOperators: ["isAnyOf", "isNoneOf"],
     options: STATUSES.map((value) => ({ value })),
     value: (row) => row.status,
     render: ({ row }) => <Badge variant={row.status}>{row.status}</Badge>,
@@ -53,11 +65,14 @@ const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "content",
     header: "content",
-    // Only status and kind are translated into the server query, and this list
-    // is one page of a larger store — a funnel here would filter the rows that
-    // happen to be loaded and quietly answer a different question. Search does
-    // content, across everything.
-    filterable: false,
+    type: "text",
+    filterable: true,
+    filterOperators: ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith"],
+    // Design §14 Q2: the sort whitelist has no `content` field, so a sortable
+    // header here would emit an orderBy the store rejects — and byte-order text
+    // sorting over memory bodies is rarely what anyone wanted anyway. Search is
+    // the ranked path.
+    sortable: false,
     flex: 1,
     minWidthPx: 240,
     value: (row) => row.content,
@@ -70,8 +85,12 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "namespace",
     header: "namespace",
     widthPx: 190,
-    // The facet rail already scopes namespace server-side, with real counts.
-    filterable: false,
+    type: "text",
+    filterable: true,
+    // Machine identifiers: byte-exact and case-sensitive on both backends, and
+    // `startsWith` is served sargably as a range. `contains` is deliberately
+    // absent — the store has no substring index for namespaces.
+    filterOperators: ["equals", "startsWith"],
     value: (row) => row.namespace,
   },
   {
@@ -80,6 +99,7 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     widthPx: 100,
     type: "enum",
     filterable: true,
+    filterOperators: ["isAnyOf", "isNoneOf"],
     options: KINDS.map((value) => ({ value })),
     value: (row) => row.kind,
   },
@@ -87,7 +107,9 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "confidence",
     header: "confidence",
     widthPx: 100,
-    filterable: false,
+    type: "number",
+    filterable: true,
+    filterOperators: ["equals", "notEquals", "gt", "gte", "lt", "lte", "between"],
     value: (row) => row.confidence,
     format: ({ value }) => Number(value).toFixed(2),
   },
@@ -95,7 +117,11 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "updated",
     header: "updated",
     widthPx: 180,
-    filterable: false,
+    // `date` gives the funnel a real date input, whose value is the
+    // "YYYY-MM-DD" day `toBrowseQuery` maps onto the store's UTC day buckets.
+    type: "date",
+    filterable: true,
+    filterOperators: ["on", "before", "after", "dateBetween"],
     value: (row) => row.updatedAt,
     format: ({ value }) => new Date(String(value)).toLocaleString(),
   },
@@ -199,6 +225,8 @@ export function MemoryGrid({
   groupByNamespace = false,
   filters,
   onFiltersChange,
+  sort,
+  onSortChange,
   dataState,
   resultMeta,
   emptyMessage,
@@ -218,6 +246,11 @@ export function MemoryGrid({
    *  column filtering — the grouped search results filter nothing. */
   filters?: Record<string, ColumnFilter>
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
+  /** Ordered sort intent to display, and where changes go. Under server
+   *  authority this is display state only — the model order is the order the
+   *  server returned. Omit both to render without sort control. */
+  sort?: PretableSortEntry[]
+  onSortChange?: (next: PretableSortEntry[]) => void
   /** Supply to turn lifecycle presentation ON: body blocks, the phase attribute,
    *  phase announcements, and external processing authority. Omit it — as the
    *  search results do — and the grid behaves exactly as it did before.
@@ -244,8 +277,9 @@ export function MemoryGrid({
     () => ({
       rowGroups: groupByNamespace ? GROUP_BY_NAMESPACE : FLAT_ROWS,
       ...(filters ? { filters } : {}),
+      ...(sort ? { sort } : {}),
     }),
-    [groupByNamespace, filters],
+    [groupByNamespace, filters, sort],
   )
 
   // The engine reports the exact height of all rows; until the first layout
@@ -344,6 +378,7 @@ export function MemoryGrid({
           }
         : {})}
       {...(onFiltersChange ? { onFiltersChange } : {})}
+      {...(onSortChange ? { onSortChange } : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
       tabBehavior="exit"
