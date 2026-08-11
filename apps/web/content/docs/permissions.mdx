@@ -189,7 +189,7 @@ The `subagent` key uses exact matching, like the reserved `tool` key. Explicit d
 
 ## Memory write approval (`writes: "ask"`)
 
-Routes with [long-term memory](/docs/memory) can gate belief *changes*: with `memory: { writes: "ask" }` in `dawn.config.ts`, a `remember` call that would **supersede** an existing active memory interrupts with the old and new values. New facts and idempotent refreshes never prompt.
+Routes with [long-term memory](/docs/memory/long-term) can gate belief *changes*: with `memory: { writes: "ask" }` in `dawn.config.ts`, a `remember` call that would **supersede** an existing active memory interrupts with the old and new values. New facts and idempotent refreshes never prompt.
 
 - **Once** — this supersede proceeds.
 - **Always** — persists the route's namespace prefix under the `memory` key; all future overwrites in the route proceed silently.
@@ -304,5 +304,5 @@ In `@dawn-ai/testing`, use `expectInterrupt` and `harness.resume` to drive the a
 
 <RelatedCards items={[
   { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the runBash tool and the four agent-facing workspace tools" },
-  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including the full permissions block" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "dawn.config.ts reference including the full permissions block" },
 ]} />

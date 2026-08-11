@@ -97,6 +97,6 @@ pnpm --filter @dawn-ai/testing exec vitest run test/memory-example-dogfood.test.
 DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/testing exec vitest run test/memory-example-dogfood.test.ts
 ```
 
-[distill]: https://dawnai.org/docs/memory#distillation
+[distill]: https://dawnai.org/docs/memory/distillation
 [pgvector]: https://github.com/pgvector/pgvector
 [Testcontainers]: https://testcontainers.com/

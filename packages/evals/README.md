@@ -7,8 +7,8 @@
 Evaluation harness for Dawn agents — running and scoring agent behavior against datasets and scenarios.
 
 This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai).
-Conceptual docs: [Evaluating your Dawn agent](https://dawnai.org/docs/evals) and
-[Testing your Dawn agent](https://dawnai.org/docs/testing-agents).
+Conceptual docs: [Evals](https://dawnai.org/docs/evals) and
+[Fixtures and Recording](https://dawnai.org/docs/testing-agents/fixtures).
 
 ## Install
 

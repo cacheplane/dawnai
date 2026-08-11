@@ -6,23 +6,31 @@ Concept pages explain the pieces. Recipes show the pieces wired up.
 
 For route-level agent behavior, start with [Memory](/docs/memory), [Planning](/docs/planning), [Skills](/docs/skills), [Subagents](/docs/subagents), and [Reasoning Effort](/docs/reasoning-effort). Those features are building blocks rather than single recipes today.
 
-## Available recipes
+## Build
 
 - [Add a Tool](/docs/recipes/add-a-tool) — author a tool, get type-safe access from a route
 - [Typed State](/docs/recipes/typed-state) — declare route state shapes and defaults
-- [Auth Middleware](/docs/recipes/auth-middleware) — short-circuit unauthorized requests
-- [Stream Output](/docs/recipes/stream-output) — incremental responses via `runs/stream`
 - [Retry Transient Model Calls](/docs/recipes/retry-flaky-tools) — recover from transient model/provider failures
 - [Dispatch from a Route](/docs/recipes/dispatch-from-route) — call one route from another
+
+## Integrate
+
+- [Auth Middleware](/docs/recipes/auth-middleware) — short-circuit unauthorized requests
+- [Stream Output](/docs/recipes/stream-output) — send incremental responses via `runs/stream`
 - [Research Assistant Web UI](/docs/recipes/research-web-ui) — wire a CopilotKit client to the research demo over AG-UI
 
-## Related
+## Test
 
-<RelatedCards items={[
-  { href: "/docs/mental-model", title: "Mental Model", subtitle: "the framework's shape" },
-  { href: "/docs/memory", title: "Memory", subtitle: "workspace-level prompt context" },
-  { href: "/docs/planning", title: "Planning", subtitle: "route-local todo state" },
-  { href: "/docs/skills", title: "Skills", subtitle: "load long instructions on demand" },
-  { href: "/docs/subagents", title: "Subagents", subtitle: "delegate to child routes" },
-  { href: "/docs/api", title: "API Reference", subtitle: "type signatures" },
-]} />
+These canonical guides cover testing workflows rather than hidden recipe leaves:
+
+- [Scenario Testing](/docs/testing)
+- [Agent Test Harness](/docs/testing-agents)
+- [Fixtures and Recording](/docs/testing-agents/fixtures)
+
+## Deploy
+
+These canonical guides cover each supported deployment path:
+
+- [Deployment Options](/docs/deployment)
+- [Node and Docker](/docs/deployment/node)
+- [Kubernetes](/docs/deployment/kubernetes)

@@ -282,7 +282,7 @@ See [Middleware](/docs/middleware).
 
 ### Memory
 
-Functions and types for declaring a route's typed long-term memory. See [Memory](/docs/memory).
+Functions and types for declaring a route's typed long-term memory. See [Long-term Memory](/docs/memory/long-term).
 
 ### `defineMemory(def)`
 
@@ -312,7 +312,7 @@ export default defineMemory({
 })
 ```
 
-See [Memory](/docs/memory) and the [`memory`](/docs/configuration#memory) config key.
+See [Long-term Memory](/docs/memory/long-term) and the [`memory`](/docs/configuration#memory) config key.
 
 ### `DefinedMemory`
 
@@ -327,7 +327,7 @@ export interface DefinedMemory<S extends z.ZodTypeAny = z.ZodTypeAny> {
 
 The descriptor returned by `defineMemory()`. Carry it as a route's `memory.ts` default export; do not construct it manually.
 
-See [Memory](/docs/memory).
+See [Long-term Memory](/docs/memory/long-term).
 
 ### `MemoryScopeDimension`
 
@@ -342,7 +342,7 @@ export type MemoryScopeDimension =
 
 The namespace dimensions a memory can be partitioned by, used in `DefinedMemory.scope`. `workspace` and `route` are derived automatically; `tenant`, `user`, and `agent` come from the config-level `memory.resolveScope` callback.
 
-See [Memory](/docs/memory).
+See [Long-term Memory](/docs/memory/long-term).
 
 ---
 
@@ -1008,7 +1008,7 @@ import {
 } from "@dawn-ai/ag-ui"
 ```
 
-See [Dev Server](/docs/dev-server#ag-ui-endpoint).
+See [AG-UI and Web Clients](/docs/ag-ui).
 
 ### ID factories
 
@@ -1401,7 +1401,7 @@ import {
 } from "@dawn-ai/memory-pgvector"
 ```
 
-See [Memory](/docs/memory#postgres-backend-pgvector).
+See [Recall and Retrieval](/docs/memory/retrieval#postgres-backend-pgvector).
 
 ### `pgvectorMemoryStore(options)`
 
@@ -1495,7 +1495,7 @@ import {
 } from "@dawn-ai/postgres-storage"
 ```
 
-The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
+The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment/edge) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
 
 See [Configuration](/docs/configuration#postgres-backend) for the shared-pool setup, teardown ownership, and the storage-shape limits.
 
@@ -1632,7 +1632,7 @@ import {
 } from "@dawn-ai/testing"
 ```
 
-See [Testing your Dawn agent](/docs/testing-agents), [Memory](/docs/memory#testing), and [Evals](/docs/evals).
+See [Agent Test Harness](/docs/testing-agents), [Fixtures and Recording](/docs/testing-agents/fixtures), [Long-term Memory testing](/docs/memory/long-term#testing), and [Evals](/docs/evals).
 
 ### Harnesses
 
@@ -1880,5 +1880,5 @@ See [Routes](/docs/routes), [State](/docs/state).
   { href: "/docs/reasoning-effort", title: "Reasoning Effort", subtitle: "configuring ReasoningConfig on an agent" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "using AgentConfig.subagents" },
   { href: "/docs/state", title: "State", subtitle: "per-route typed state and RouteState<P>" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "building and deploying a Dawn project" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "building and deploying a Dawn project" },
 ]} />

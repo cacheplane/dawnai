@@ -54,11 +54,11 @@ Yes. `dawn build`'s `node` target emits a `server.mjs` that boots the real Dawn 
 
 Yes, for apps that fit the edge subset. Add `"hono"` to `build.targets` and `dawn build` emits an `app.mjs` plus a `wrangler.toml` you deploy with `wrangler deploy`; durable state goes to Postgres over a `@neondatabase/serverless` WebSocket pool, set through a `DATABASE_URL` binding. No `nodejs_compat` flag is needed. The sandbox, workspace file and shell tools, tool-output offloading, skills, and long-term memory are unavailable there, and the build fails naming them rather than degrading quietly — as does the runtime, per request, for anything that reached a filesystem-less runtime without passing that build gate.
 
-Read [Edge runtimes](/docs/deployment#edge-runtimes) before you commit to this path. The evidence behind that "yes" is a gated CI lane serving real AG-UI turns under **local** workerd — the same binary Cloudflare runs — and not a deploy to Cloudflare itself, which nobody has performed yet. [What is proven, and what is not](/docs/deployment#what-is-proven-and-what-is-not) lists the gaps that leaves, bundle size and production connection limits among them.
+Read [Edge and Hono](/docs/deployment/edge) before you commit to this path. The evidence behind that "yes" is a gated CI lane serving real AG-UI turns under **local** workerd — the same binary Cloudflare runs — and not a deploy to Cloudflare itself, which nobody has performed yet. [What is proven, and what is not](/docs/deployment/edge#what-is-proven-and-what-is-not) lists the gaps that leaves, bundle size and production connection limits among them.
 
 ### Can Dawn use Postgres for long-term memory?
 
-Yes. SQLite is the default local store, but `@dawn-ai/memory-pgvector` provides a Postgres + pgvector backend for production and multi-instance deployments. Add `pgvectorMemoryStore({ connectionString, dimensions })` to `memory.store`, and add `openaiEmbedder()` when you want hybrid keyword + vector recall. See [Memory](/docs/memory#postgres-backend-pgvector).
+Yes. SQLite is the default local store, but `@dawn-ai/memory-pgvector` provides a Postgres + pgvector backend for production and multi-instance deployments. Add `pgvectorMemoryStore({ connectionString, dimensions })` to `memory.store`, and add `openaiEmbedder()` when you want hybrid keyword + vector recall. See [Recall and Retrieval](/docs/memory/retrieval#postgres-backend-pgvector).
 
 ### How do I gradually migrate an existing LangGraph project?
 
@@ -68,6 +68,6 @@ Move one graph at a time. Create a Dawn route, named-export your existing `State
 
 <RelatedCards items={[
   { href: "/docs/mental-model", title: "Mental Model", subtitle: "the framework's shape" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "runtime targets" },
-  { href: "/docs/recipes", title: "Recipes", subtitle: "task-oriented how-tos" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "runtime targets" },
+  { href: "/docs/recipes", title: "Recipes Overview", subtitle: "task-oriented how-tos" },
 ]} />

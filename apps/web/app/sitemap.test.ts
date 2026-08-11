@@ -8,6 +8,7 @@ describe("sitemap documentation entries", () => {
       .map((entry) => entry.url)
       .filter((url) => new URL(url).pathname.startsWith("/docs"))
 
+    expect(DOCS_PAGES).toHaveLength(58)
     expect(docsUrls).toEqual(DOCS_PAGES.map((page) => `https://dawnai.org${page.href}`))
     expect(docsUrls).not.toContain("https://dawnai.org/docs")
   })

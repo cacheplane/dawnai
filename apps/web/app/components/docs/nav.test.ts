@@ -17,7 +17,10 @@ const FOUNDATION_DOCS_NAV = [
     items: [
       { label: "Getting Started", href: "/docs/getting-started" },
       { label: "Mental Model", href: "/docs/mental-model" },
-      { label: "Migrating from LangGraph", href: "/docs/migrating-from-langgraph" },
+      {
+        label: "Migrating from LangGraph",
+        href: "/docs/migrating-from-langgraph",
+      },
     ],
   },
   {
@@ -56,7 +59,10 @@ const FOUNDATION_DOCS_NAV = [
     items: [
       { label: "Scenario Testing", href: "/docs/testing" },
       { label: "Agent Test Harness", href: "/docs/testing-agents" },
-      { label: "Fixtures and Recording", href: "/docs/testing-agents/fixtures" },
+      {
+        label: "Fixtures and Recording",
+        href: "/docs/testing-agents/fixtures",
+      },
       { label: "Evals", href: "/docs/evals" },
     ],
   },
@@ -99,8 +105,14 @@ const FOUNDATION_DOCS_NAV = [
         label: "Retry Transient Model Calls",
         href: "/docs/recipes/retry-flaky-tools",
       },
-      { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
-      { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
+      {
+        label: "Dispatch from a Route",
+        href: "/docs/recipes/dispatch-from-route",
+      },
+      {
+        label: "Research Assistant Web UI",
+        href: "/docs/recipes/research-web-ui",
+      },
     ],
   },
   {
@@ -133,6 +145,11 @@ interface DocTitleAnalysis {
 interface DocTitleFixture {
   readonly mdxSource: string
   readonly wrapperSource: string
+}
+
+interface DocLinkGuardAnalysis {
+  readonly movedViolations: readonly string[]
+  readonly canonicalViolations: readonly string[]
 }
 
 let docTitleAnalysisProcessCount = 0
@@ -179,6 +196,19 @@ function analyzeDocTitles(mdxSource: string, wrapperSource: string): DocTitleAna
   const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource }])[0]
   expect(analysis).toBeDefined()
   return analysis as DocTitleAnalysis
+}
+
+function analyzeDocLinkGuards(fixture: Record<string, unknown>): DocLinkGuardAnalysis {
+  const result = spawnSync(
+    process.execPath,
+    [CHECK_DOCS_PATH, "--analyze-doc-link-guards", JSON.stringify(fixture)],
+    { encoding: "utf8" },
+  )
+
+  expect(result.status).toBe(0)
+  expect(result.stderr).toBe("")
+  expect(result.stdout).toMatch(/^\{/)
+  return JSON.parse(result.stdout) as DocLinkGuardAnalysis
 }
 
 function filesUnder(
@@ -294,6 +324,73 @@ describe("documentation registry invariants", () => {
       expect(source).toContain('{ href: "/docs/testing", title: "Scenario Testing",')
     },
   )
+
+  it("uses registered labels for every visible RelatedCards destination", () => {
+    const labels = new Map(DOCS_PAGES.map((item) => [item.href, item.label]))
+    const mismatches: string[] = []
+
+    for (const file of filesUnder(CONTENT_ROOT, (name) => name.endsWith(".mdx"))) {
+      const source = readFileSync(join(CONTENT_ROOT, file), "utf8")
+      for (const match of source.matchAll(
+        /\{\s*href:\s*"(\/docs\/[^"]+)",\s*title:\s*"([^"]+)"/g,
+      )) {
+        const href = match[1] ?? ""
+        const title = match[2] ?? ""
+        const expected = labels.get(href)
+        if (expected !== undefined && title !== expected) {
+          mismatches.push(
+            `${file}: ${href} uses ${JSON.stringify(title)}; expected ${JSON.stringify(expected)}`,
+          )
+        }
+      }
+    }
+
+    expect(mismatches).toEqual([])
+  })
+
+  it("keeps Getting Started focused on the first app journey", () => {
+    const source = readFileSync(join(CONTENT_ROOT, "getting-started.mdx"), "utf8")
+    const finalCards = source.slice(source.indexOf("## Where to go next"))
+    const cardTitles = [...finalCards.matchAll(/\btitle:\s*"([^"]+)"/g)].flatMap((match) =>
+      match[1] ? [match[1]] : [],
+    )
+
+    expect(source).toContain("[Deployment Options](/docs/deployment)")
+    expect(source).toContain("[Node and Docker](/docs/deployment/node)")
+    expect(source).not.toContain("## 5. Ship it")
+    expect(source).not.toContain("docker run -p 8000:8000")
+    expect(cardTitles).toEqual(["Mental Model", "Add a Tool", "Deployment Options"])
+  })
+
+  it("groups Recipes Overview around build, integrate, test, and deploy tasks", () => {
+    const source = readFileSync(join(CONTENT_ROOT, "recipes/index.mdx"), "utf8")
+    const recipeLabels = [
+      "Add a Tool",
+      "Typed State",
+      "Retry Transient Model Calls",
+      "Dispatch from a Route",
+      "Auth Middleware",
+      "Stream Output",
+      "Research Assistant Web UI",
+    ]
+
+    for (const heading of ["Build", "Integrate", "Test", "Deploy"]) {
+      expect(source).toContain(`## ${heading}`)
+    }
+    for (const label of recipeLabels) {
+      expect(source.split(`[${label}]`)).toHaveLength(2)
+    }
+    for (const link of [
+      "[Scenario Testing](/docs/testing)",
+      "[Agent Test Harness](/docs/testing-agents)",
+      "[Fixtures and Recording](/docs/testing-agents/fixtures)",
+      "[Deployment Options](/docs/deployment)",
+      "[Node and Docker](/docs/deployment/node)",
+      "[Kubernetes](/docs/deployment/kubernetes)",
+    ]) {
+      expect(source).toContain(link)
+    }
+  })
 })
 
 describe("documentation title analysis", () => {
@@ -585,5 +682,51 @@ ${"x".repeat(650)}
     expect(defaultCap.exceedsMaxChars).toBe(true)
     expect(overrideCap.maxChars).toBe(800)
     expect(overrideCap.exceedsMaxChars).toBe(false)
+  })
+})
+
+describe("canonical docs link guard analysis", () => {
+  it("uses only active destinations and scopes focused ownership to its subject section", () => {
+    const legacyHref = "/docs/memory#how-recall-ranks"
+    const ignoredSource = [
+      `The former destination was ${legacyHref}.`,
+      `\`${legacyHref}\``,
+      `<!-- [comment](${legacyHref}) -->`,
+      "```md",
+      `[fenced](${legacyHref})`,
+      "```",
+      "",
+      "[Memory overview](/docs/memory)",
+      "",
+      "## Recall",
+      "",
+      "[Focused owner](/docs/memory/retrieval)",
+    ].join("\n")
+    const fixture = {
+      file: "other.mdx",
+      source: ignoredSource,
+      movedContracts: [
+        {
+          legacyFile: "memory.mdx",
+          legacyHref,
+          canonicalHref: "/docs/memory/retrieval",
+        },
+      ],
+      canonicalContracts: [{ heading: "Recall", required: ["/docs/memory/retrieval"] }],
+    }
+
+    expect(analyzeDocLinkGuards(fixture)).toEqual({
+      movedViolations: [],
+      canonicalViolations: [],
+    })
+    expect(
+      analyzeDocLinkGuards({
+        ...fixture,
+        source: `## Recall\n\n[Overview only](/docs/memory)\n\n[Active old link](${legacyHref})`,
+      }),
+    ).toEqual({
+      movedViolations: [`other.mdx: ${legacyHref} -> /docs/memory/retrieval`],
+      canonicalViolations: ["Recall: missing /docs/memory/retrieval"],
+    })
   })
 })

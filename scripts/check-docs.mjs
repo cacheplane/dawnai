@@ -26,6 +26,9 @@ import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
 
 const repoRoot = resolve(import.meta.dirname, "..")
+const { default: GithubSlugger } = await import(
+  pathToFileURL(resolve(repoRoot, "apps/web/node_modules/github-slugger/index.js")).href
+)
 
 function maskText(value) {
   return value.replace(/[^\r\n]/g, " ")
@@ -271,28 +274,35 @@ function isMarkdownImage(source, linkStart) {
   return backslashes % 2 === 0
 }
 
-function linkDestinations(source) {
+function linkDestinationOccurrences(source) {
   const masked = maskMarkdownCodeAndComments(source)
-  const destinations = []
-  const markdownLink = /\[[^\]\r\n]*\]\(\s*<?([^\s)>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g
+  const occurrences = []
+  const markdownLink = /\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g
   for (const match of masked.matchAll(markdownLink)) {
     if (match[1] && !isMarkdownImage(masked, match.index)) {
-      destinations.push({ index: match.index, destination: match[1] })
+      occurrences.push({ index: match.index, destination: match[1] })
     }
   }
   for (const match of masked.matchAll(/\bhref\s*(?::|=)\s*["']([^"']+)["']/g)) {
     if (match[1]) {
-      destinations.push({ index: match.index, destination: match[1] })
+      occurrences.push({ index: match.index, destination: match[1] })
     }
   }
-  return destinations
-    .sort((left, right) => left.index - right.index)
-    .map(({ destination }) => destination)
+  for (const match of masked.matchAll(/^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*<?([^\s>]+)>?/gm)) {
+    if (match[1]) {
+      occurrences.push({ index: match.index, destination: match[1] })
+    }
+  }
+  return occurrences.sort((left, right) => left.index - right.index)
+}
+
+function linkDestinations(source) {
+  return linkDestinationOccurrences(source).map(({ destination }) => destination)
 }
 
 function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxChars = 600 }) {
   const headingSource = maskMarkdownCodeAndComments(source)
-  const headings = [...headingSource.matchAll(/^(#{1,6})\s+(.+?)[ \t]*$/gm)].map((match) => {
+  const headings = [...headingSource.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*$/gm)].map((match) => {
     const lineEnd = source.indexOf("\n", match.index)
     const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
     return {
@@ -335,6 +345,92 @@ function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxC
     hasCanonicalLink: destinations.includes(canonicalHref),
     exceedsMaxChars: stub.length > maxChars,
   }
+}
+
+function markdownHeadings(source) {
+  const masked = maskMarkdownCodeAndComments(source)
+  const slugger = new GithubSlugger()
+  return [...masked.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*$/gm)].flatMap((match) => {
+    if (match.index === undefined || !match[1]) return []
+    const lineEnd = source.indexOf("\n", match.index)
+    const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
+    const text = normalizeCodeSpans(
+      originalLine
+        .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
+        .replace(/[ \t]+#+[ \t]*$/, "")
+        .trim(),
+    )
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/<[^>]+>/g, "")
+      .trim()
+    return [{ id: slugger.slug(text), index: match.index, level: match[1].length, text }]
+  })
+}
+
+function markdownSectionRange(source, predicate) {
+  const headings = markdownHeadings(source)
+  const headingIndex = headings.findIndex(predicate)
+  const heading = headings[headingIndex]
+  if (!heading) return null
+  const nextHeading = headings.slice(headingIndex + 1).find((entry) => entry.level <= heading.level)
+  return { start: heading.index, end: nextHeading?.index ?? source.length }
+}
+
+function movedLinkGuardViolations(file, source, contracts) {
+  const contractsByHref = new Map(contracts.map((contract) => [contract.legacyHref, contract]))
+  return linkDestinationOccurrences(source).flatMap(({ index, destination }) => {
+    const normalized = normalizeMaintainedDocsDestination(destination)
+    const contract = normalized ? contractsByHref.get(normalized) : undefined
+    if (!contract) return []
+    const fragment = contract.legacyHref.split("#")[1]
+    const compatibilityRange = fragment
+      ? markdownSectionRange(source, (heading) => heading.id === fragment)
+      : null
+    if (
+      file === contract.legacyFile &&
+      compatibilityRange &&
+      index >= compatibilityRange.start &&
+      index < compatibilityRange.end
+    ) {
+      return []
+    }
+    return [`${file}: ${contract.legacyHref} -> ${contract.canonicalHref}`]
+  })
+}
+
+function canonicalOwnerGuardViolations(source, contracts) {
+  return contracts.flatMap(({ heading, required }) => {
+    const range = markdownSectionRange(source, (candidate) => candidate.text === heading)
+    const destinations = range
+      ? linkDestinationOccurrences(source.slice(range.start, range.end)).flatMap(
+          ({ destination }) => {
+            const normalized = normalizeMaintainedDocsDestination(destination)
+            return normalized ? [normalized] : []
+          },
+        )
+      : []
+    return required
+      .filter((href) => !destinations.includes(href))
+      .map((href) => `${heading}: missing ${href}`)
+  })
+}
+
+if (process.argv[2] === "--analyze-doc-link-guards") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(
+    `${JSON.stringify({
+      movedViolations: movedLinkGuardViolations(
+        fixture.file ?? "fixture.mdx",
+        fixture.source ?? "",
+        fixture.movedContracts ?? [],
+      ),
+      canonicalViolations: canonicalOwnerGuardViolations(
+        fixture.source ?? "",
+        fixture.canonicalContracts ?? [],
+      ),
+    })}\n`,
+  )
+  process.exit(0)
 }
 
 if (process.argv[2] === "--analyze-compatibility-stub") {
@@ -424,6 +520,81 @@ for (const check of checks) {
     if (!source.includes(pattern)) {
       failures.push(`${check.file} is missing required docs text: ${pattern}`)
     }
+  }
+}
+
+const gettingStartedSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/getting-started.mdx"),
+  "utf8",
+)
+for (const required of [
+  "[Deployment Options](/docs/deployment)",
+  "[Node and Docker](/docs/deployment/node)",
+]) {
+  if (!gettingStartedSource.includes(required)) {
+    failures.push(`apps/web/content/docs/getting-started.mdx is missing journey link: ${required}`)
+  }
+}
+for (const forbidden of ["## 5. Ship it", "docker run -p 8000:8000"]) {
+  if (gettingStartedSource.includes(forbidden)) {
+    failures.push(
+      `apps/web/content/docs/getting-started.mdx retains removed shipping tutorial text: ${forbidden}`,
+    )
+  }
+}
+const gettingStartedFinalCards = gettingStartedSource.slice(
+  gettingStartedSource.indexOf("## Where to go next"),
+)
+const gettingStartedDecisionTitles = [
+  ...gettingStartedFinalCards.matchAll(/\btitle:\s*"([^"]+)"/g),
+].map((match) => match[1])
+const expectedGettingStartedDecisionTitles = ["Mental Model", "Add a Tool", "Deployment Options"]
+if (
+  JSON.stringify(gettingStartedDecisionTitles) !==
+  JSON.stringify(expectedGettingStartedDecisionTitles)
+) {
+  failures.push(
+    `apps/web/content/docs/getting-started.mdx final decision cards must be ${expectedGettingStartedDecisionTitles.join(", ")}; found ${gettingStartedDecisionTitles.join(", ")}`,
+  )
+}
+
+const recipesOverviewSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/recipes/index.mdx"),
+  "utf8",
+)
+for (const heading of ["Build", "Integrate", "Test", "Deploy"]) {
+  if (!recipesOverviewSource.includes(`## ${heading}`)) {
+    failures.push(`apps/web/content/docs/recipes/index.mdx is missing task group: ${heading}`)
+  }
+}
+for (const label of [
+  "Add a Tool",
+  "Typed State",
+  "Retry Transient Model Calls",
+  "Dispatch from a Route",
+  "Auth Middleware",
+  "Stream Output",
+  "Research Assistant Web UI",
+]) {
+  const count = recipesOverviewSource.split(`[${label}]`).length - 1
+  if (count !== 1) {
+    failures.push(
+      `apps/web/content/docs/recipes/index.mdx must link recipe label ${label} exactly once; found ${count}`,
+    )
+  }
+}
+for (const required of [
+  "[Scenario Testing](/docs/testing)",
+  "[Agent Test Harness](/docs/testing-agents)",
+  "[Fixtures and Recording](/docs/testing-agents/fixtures)",
+  "[Deployment Options](/docs/deployment)",
+  "[Node and Docker](/docs/deployment/node)",
+  "[Kubernetes](/docs/deployment/kubernetes)",
+]) {
+  if (!recipesOverviewSource.includes(required)) {
+    failures.push(
+      `apps/web/content/docs/recipes/index.mdx is missing canonical guide link: ${required}`,
+    )
   }
 }
 
@@ -1919,6 +2090,11 @@ const compatibilityStubContracts = [
   },
   {
     file: "apps/web/content/docs/deployment.mdx",
+    retainedHeading: "Self-hosting",
+    canonicalHref: "/docs/deployment/node",
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
     retainedHeading: "Deploying on Kubernetes",
     canonicalHref: "/docs/deployment/kubernetes",
   },
@@ -1965,6 +2141,11 @@ const compatibilityStubContracts = [
   {
     file: "apps/web/content/docs/dev-server.mdx",
     retainedHeading: "Agent Protocol endpoints",
+    canonicalHref: "/docs/dev-server/agent-protocol",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "SSE event types",
     canonicalHref: "/docs/dev-server/agent-protocol",
   },
   {
@@ -2043,6 +2224,11 @@ const compatibilityStubContracts = [
     retainedHeading,
     canonicalHref: "/docs/testing-agents/fixtures",
   })),
+  {
+    file: "apps/web/content/docs/memory.mdx",
+    retainedHeading: "Updating it",
+    canonicalHref: "/docs/workspace",
+  },
 ]
 
 for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibilityStubContracts) {
@@ -2053,7 +2239,12 @@ for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibi
   }
 
   const source = readFileSync(filePath, "utf8")
-  const analysis = analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxChars })
+  const analysis = analyzeCompatibilityStub({
+    source,
+    retainedHeading,
+    canonicalHref,
+    maxChars,
+  })
   if (!analysis.found) {
     failures.push(`${file} is missing compatibility heading: ${retainedHeading}`)
     continue
@@ -2068,6 +2259,303 @@ for (const { file, retainedHeading, canonicalHref, maxChars = 600 } of compatibi
     failures.push(
       `${file} compatibility heading ${retainedHeading} is ${analysis.charCount} characters (max ${maxChars})`,
     )
+  }
+}
+
+function movedDeepLinks(legacyPath, canonicalHref, fragments) {
+  return fragments.map((fragment) => ({
+    legacyFile: docHrefToContentPath(legacyPath),
+    legacyHref: `${legacyPath}#${fragment}`,
+    canonicalHref,
+  }))
+}
+
+const movedDeepLinkContracts = [
+  ...movedDeepLinks("/docs/memory", "/docs/memory/long-term", [
+    "long-term-collection-memoryts",
+    "generated-tools",
+    "write-governance",
+    "ask-mode",
+    "reviewing-candidates",
+    "configuration",
+    "testing",
+    "verifying-against-a-real-model",
+    "whats-deferred",
+  ]),
+  ...movedDeepLinks("/docs/memory", "/docs/memory/retrieval", [
+    "how-recall-ranks",
+    "semantic-recall-opt-in",
+    "postgres-backend-pgvector",
+    "the-injected-index",
+  ]),
+  ...movedDeepLinks("/docs/memory", "/docs/memory/episodes", [
+    "episodic-memory",
+    "enabling-the-run-recorder",
+    "what-gets-recorded",
+    "retention",
+    "time-windowed-recall",
+    "governance",
+    "agent-authored-episodes",
+  ]),
+  ...movedDeepLinks("/docs/memory", "/docs/memory/distillation", [
+    "distillation",
+    "consolidation",
+    "reflection",
+    "distilled-records-are-found-by-keyword",
+    "provenance",
+    "cost",
+    "running-it-on-a-schedule",
+    "distillation-configuration",
+  ]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment/node", [
+    "deploying-to-production-nodedocker",
+  ]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment/kubernetes", ["deploying-on-kubernetes"]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment/langsmith", [
+    "the-langsmith--langgraph-platform-path",
+  ]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment/edge", [
+    "edge-runtimes",
+    "the-dawn-aiclifetch-entry-point",
+    "the-hono-build-target",
+    "why-the-stores-are-per-request",
+    "what-the-edge-cannot-serve",
+    "what-is-proven-and-what-is-not",
+  ]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment", [
+    "what-dawn-does-not-do",
+    "troubleshooting",
+    "related",
+  ]),
+  ...movedDeepLinks("/docs/deployment", "/docs/deployment/node", ["self-hosting"]),
+  ...movedDeepLinks("/docs/sandbox", "/docs/sandbox/kubernetes", [
+    "kubernetes-provider",
+    "security-hardening-on-kubernetes",
+    "network-policy-on-kubernetes",
+    "deploying-the-sandbox-infrastructure-helm",
+    "key-caveats",
+    "deploying-a-dawn-app-helm",
+    "serviceaccount-and-namespace-wiring",
+    "env-secrets-and-replicas",
+  ]),
+  ...movedDeepLinks("/docs/dev-server", "/docs/dev-server/agent-protocol", [
+    "agent-protocol-endpoints",
+    "sse-event-types",
+    "thread-lifecycle-with-curl",
+    "one-run-at-a-time-per-thread",
+    "client-disconnect",
+  ]),
+  ...movedDeepLinks("/docs/dev-server", "/docs/ag-ui", ["ag-ui-endpoint"]),
+  ...movedDeepLinks("/docs/dev-server", "/docs/observability", ["tracing"]),
+  ...movedDeepLinks("/docs/dev-server", "/docs/middleware", ["middleware"]),
+  ...movedDeepLinks("/docs/memory", "/docs/workspace", ["updating-it"]),
+  ...movedDeepLinks("/docs/testing-agents", "/docs/testing-agents/fixtures", [
+    "fixture-files-author-commit-replay",
+    "author-inline-and-snapshot-to-a-file",
+    "record-from-a-real-model-local-only",
+    "replay-a-fixture-file-in-tests",
+    "live-mode-real-model",
+  ]),
+]
+
+const maintainedDeepLinkFiles = [
+  ...walkFiles(resolve(repoRoot, "apps/web/content/docs"), (file) => file.endsWith(".mdx")),
+  ...walkFiles(resolve(repoRoot, "packages"), (file) => basename(file) === "README.md"),
+  ...walkFiles(resolve(repoRoot, "examples"), (file) => basename(file) === "README.md"),
+]
+for (const filePath of maintainedDeepLinkFiles) {
+  const source = readFileSync(filePath, "utf8")
+  failures.push(
+    ...movedLinkGuardViolations(relativeToRoot(filePath), source, movedDeepLinkContracts).map(
+      (violation) => `${violation} links a moved compatibility anchor`,
+    ),
+  )
+}
+
+function normalizeMaintainedDocsDestination(destination) {
+  const [path] = destination.split("#")
+  if (path === "/docs" || path?.startsWith("/docs/")) return destination
+  try {
+    const url = new URL(destination)
+    if (
+      url.protocol === "https:" &&
+      url.hostname === "dawnai.org" &&
+      (url.pathname === "/docs" || url.pathname.startsWith("/docs/"))
+    ) {
+      return `${url.pathname}${url.hash}`
+    }
+  } catch {
+    // Relative non-doc links are outside the maintained docs topology.
+  }
+  return null
+}
+
+const canonicalOwnerContracts = [
+  {
+    file: "apps/web/content/docs/agents.mdx",
+    heading: "Streaming",
+    required: ["/docs/dev-server/agent-protocol"],
+  },
+  ...[
+    "apps/web/content/docs/cli.mdx",
+    "apps/web/content/docs/middleware.mdx",
+    "apps/web/content/docs/mental-model.mdx",
+    "apps/web/content/docs/observability.mdx",
+    "apps/web/content/docs/planning.mdx",
+    "apps/web/content/docs/recipes/dispatch-from-route.mdx",
+    "apps/web/content/docs/recipes/stream-output.mdx",
+    "apps/web/content/docs/subagents.mdx",
+  ].map((file) => ({
+    file,
+    heading: "Related",
+    required: ["/docs/dev-server/agent-protocol"],
+  })),
+  {
+    file: "apps/web/content/docs/cli.mdx",
+    heading: "dawn dev",
+    required: ["/docs/dev-server/agent-protocol"],
+  },
+  {
+    file: "apps/web/content/docs/observability.mdx",
+    heading: "Live SSE streaming (no account required)",
+    required: ["/docs/dev-server/agent-protocol"],
+  },
+  {
+    file: "apps/web/content/docs/routes.mdx",
+    heading: "Running a route",
+    required: ["/docs/dev-server/agent-protocol"],
+  },
+  {
+    file: "packages/ag-ui/README.md",
+    heading: "@dawn-ai/ag-ui",
+    required: ["/docs/ag-ui", "/docs/dev-server/agent-protocol"],
+  },
+  ...["dawn memory", "dawn inspect"].map((heading) => ({
+    file: "apps/web/content/docs/cli.mdx",
+    heading,
+    required: ["/docs/memory/browse"],
+  })),
+  ...["Inspector", "Related"].map((heading) => ({
+    file: "apps/web/content/docs/inspector.mdx",
+    heading,
+    required: ["/docs/memory/browse"],
+  })),
+  {
+    file: "apps/web/content/docs/configuration.mdx",
+    heading: "memory",
+    required: [
+      "/docs/memory/long-term",
+      "/docs/memory/retrieval",
+      "/docs/memory/episodes",
+      "/docs/memory/distillation",
+    ],
+  },
+  {
+    file: "packages/memory-pgvector/README.md",
+    heading: "@dawn-ai/memory-pgvector",
+    required: ["/docs/memory/retrieval"],
+  },
+  {
+    file: "apps/web/content/docs/permissions.mdx",
+    heading: 'Memory write approval (writes: "ask")',
+    required: ["/docs/memory/long-term"],
+  },
+  {
+    file: "apps/web/content/docs/recipes/research-web-ui.mdx",
+    heading: "Related",
+    required: ["/docs/memory/long-term"],
+  },
+  ...["Execution: replay vs live", "Related"].map((heading) => ({
+    file: "apps/web/content/docs/evals.mdx",
+    heading,
+    required: ["/docs/testing-agents/fixtures"],
+  })),
+  {
+    file: "apps/web/content/docs/testing.mdx",
+    heading: "Related",
+    required: ["/docs/testing-agents/fixtures"],
+  },
+  {
+    file: "packages/evals/README.md",
+    heading: "@dawn-ai/evals",
+    required: ["/docs/testing-agents/fixtures"],
+  },
+  {
+    file: "apps/web/content/docs/api.mdx",
+    heading: "Memory",
+    required: ["/docs/memory/long-term"],
+  },
+  {
+    file: "apps/web/content/docs/api.mdx",
+    heading: "@dawn-ai/testing",
+    required: ["/docs/testing-agents/fixtures"],
+  },
+  {
+    file: "apps/web/content/docs/access-control.mdx",
+    heading: "Execution sandbox — what a call can touch",
+    required: ["/docs/sandbox/kubernetes"],
+  },
+  {
+    file: "apps/web/content/docs/recipes/auth-middleware.mdx",
+    heading: "Related",
+    required: ["/docs/middleware"],
+  },
+]
+
+for (const { file, heading, required } of canonicalOwnerContracts) {
+  failures.push(
+    ...canonicalOwnerGuardViolations(readFileSync(resolve(repoRoot, file), "utf8"), [
+      { heading, required },
+    ]).map((violation) => `${file} ${violation}`),
+  )
+}
+
+const docsContentForLinkValidation = resolve(repoRoot, "apps/web/content/docs")
+const maintainedDocsPages = new Map(
+  walkFiles(docsContentForLinkValidation, (file) => file.endsWith(".mdx")).map((file) => {
+    const relativePath = relative(docsContentForLinkValidation, file).replaceAll("\\", "/")
+    const route = relativePath.endsWith("/index.mdx")
+      ? `/docs/${relativePath.slice(0, -"/index.mdx".length)}`
+      : `/docs/${relativePath.slice(0, -".mdx".length)}`
+    const source = readFileSync(file, "utf8")
+    const masked = maskMarkdownCodeAndComments(source)
+    const slugger = new GithubSlugger()
+    const headings = new Set(
+      [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
+        if (match.index === undefined) return []
+        const lineEnd = source.indexOf("\n", match.index)
+        const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
+        const text = normalizeCodeSpans(
+          originalLine
+            .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
+            .replace(/[ \t]+#+[ \t]*$/, "")
+            .trim(),
+        )
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+          .replace(/<[^>]+>/g, "")
+          .trim()
+        return [slugger.slug(text)]
+      }),
+    )
+    return [route, headings]
+  }),
+)
+
+const maintainedReadmeFiles = [
+  ...walkFiles(resolve(repoRoot, "packages"), (file) => basename(file) === "README.md"),
+  ...walkFiles(resolve(repoRoot, "examples"), (file) => basename(file) === "README.md"),
+]
+for (const filePath of maintainedReadmeFiles) {
+  for (const destination of linkDestinations(readFileSync(filePath, "utf8"))) {
+    const normalized = normalizeMaintainedDocsDestination(destination)
+    if (!normalized) continue
+    const [path, fragment] = normalized.split("#")
+    const headings = maintainedDocsPages.get(path)
+    if (!headings) {
+      failures.push(`${relativeToRoot(filePath)} links missing docs page ${normalized}`)
+    } else if (fragment && !headings.has(fragment)) {
+      failures.push(`${relativeToRoot(filePath)} links missing docs heading ${normalized}`)
+    }
   }
 }
 
@@ -2101,7 +2589,10 @@ const normativeScenarioFiles = [
   resolve(repoRoot, "apps/web/content/prompts/index.ts"),
 ]
 const legacyScenarioPatterns = [
-  { pattern: /\brun\.url\b/, message: "uses legacy per-scenario run.url configuration" },
+  {
+    pattern: /\brun\.url\b/,
+    message: "uses legacy per-scenario run.url configuration",
+  },
   {
     pattern: /\brun:\s*\{\s*url\b/,
     message: "uses a legacy raw scenario run.url object",
@@ -2183,7 +2674,10 @@ const expectedNavDocEntries = [
   { label: "Typed State", href: "/docs/recipes/typed-state" },
   { label: "Auth Middleware", href: "/docs/recipes/auth-middleware" },
   { label: "Stream Output", href: "/docs/recipes/stream-output" },
-  { label: "Retry Transient Model Calls", href: "/docs/recipes/retry-flaky-tools" },
+  {
+    label: "Retry Transient Model Calls",
+    href: "/docs/recipes/retry-flaky-tools",
+  },
   { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
   { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
   { label: "Configuration Reference", href: "/docs/configuration" },
@@ -2192,6 +2686,13 @@ const expectedNavDocEntries = [
   { label: "Error Codes", href: "/docs/errors" },
   { label: "FAQ", href: "/docs/faq" },
 ]
+
+if (/\bhref:\s*"\/docs"/.test(docsNav)) {
+  failures.push("DOCS_NAV must omit the redirect-only /docs route")
+}
+if (!/export const DOCS_PAGES[^=]*=\s*DOCS_NAV\.flatMap\(/s.test(docsNav)) {
+  failures.push("DOCS_PAGES must derive its reading order directly from DOCS_NAV")
+}
 
 if (navDocEntries.length !== expectedNavDocEntries.length) {
   failures.push(
@@ -2306,10 +2807,14 @@ const docsBundle = await import(docsBundleUrl).catch((error) => {
   return null
 })
 
-if (sdkEntry?.DAWN_ERRORS && docsBundle?.parseNav) {
+if (sdkEntry?.DAWN_ERRORS && docsBundle?.loadNav) {
   const registry = sdkEntry.DAWN_ERRORS
   const codes = Object.keys(registry)
-  const navSlugs = new Set(docsBundle.parseNav(docsNav).map((entry) => entry.slug))
+  const navSlugs = new Set(
+    (await docsBundle.loadNav(resolve(repoRoot, "apps/web/app/components/docs/nav.ts"))).map(
+      (entry) => entry.slug,
+    ),
+  )
 
   for (const code of codes) {
     const docsPath = registry[code].docsPath
@@ -2440,7 +2945,10 @@ function collectExportedBindings(source) {
   const sourcePath = "/api-barrel.ts"
   const virtualFiles = {
     [sourcePath]: source,
-    "/tsconfig.json": JSON.stringify({ compilerOptions: { noLib: true }, files: [sourcePath] }),
+    "/tsconfig.json": JSON.stringify({
+      compilerOptions: { noLib: true },
+      files: [sourcePath],
+    }),
   }
   const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
   let snapshot
@@ -2711,7 +3219,10 @@ const apiSubpathAuthorities = [
   {
     manifest: "packages/cli/package.json",
     subpath: "./fetch",
-    expected: { types: "./dist/fetch-exports.d.ts", default: "./dist/fetch-exports.js" },
+    expected: {
+      types: "./dist/fetch-exports.d.ts",
+      default: "./dist/fetch-exports.js",
+    },
   },
   {
     manifest: "packages/memory/package.json",
@@ -2741,7 +3252,10 @@ for (const authority of apiSubpathAuthorities) {
     failures.push(`${authority.manifest} ${authority.subpath} removal mutation was not detected`)
   }
   const redirected = JSON.parse(JSON.stringify(manifest))
-  redirected.exports[authority.subpath] = { ...authority.expected, default: "./dist/wrong.js" }
+  redirected.exports[authority.subpath] = {
+    ...authority.expected,
+    default: "./dist/wrong.js",
+  }
   if (hasExactSubpathExport(redirected, authority.subpath, authority.expected)) {
     failures.push(`${authority.manifest} ${authority.subpath} redirect mutation was not detected`)
   }

@@ -10,7 +10,7 @@ instances, a shared production database, or enough embedded memories that
 Postgres HNSW retrieval is a better fit than in-process cosine scans.
 
 This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai).
-Conceptual docs: [Memory](https://dawnai.org/docs/memory) and
+Conceptual docs: [Recall and Retrieval](https://dawnai.org/docs/memory/retrieval) and
 [Configuration](https://dawnai.org/docs/configuration#memory).
 
 ## Install

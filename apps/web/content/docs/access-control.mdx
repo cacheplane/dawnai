@@ -31,7 +31,7 @@ Two more gates ride the same interrupt machinery: `tools: { approve: [...] }` re
 
 ## Execution sandbox — what a call can touch
 
-Even a tool that's allowed and approved still runs somewhere. By default that's the local `workspace/` directory on the host. Adding a `sandbox` key to `dawn.config.ts` routes every `readFile`, `writeFile`, `listDir`, and `runBash` call for a thread into an isolated environment instead — filesystem, shell, and (optionally) network. Dawn ships a Docker reference provider and a Kubernetes provider behind the same `SandboxProvider` contract. See [Sandbox](/docs/sandbox).
+Even a tool that's allowed and approved still runs somewhere. By default that's the local `workspace/` directory on the host. Adding a `sandbox` key to `dawn.config.ts` routes every `readFile`, `writeFile`, `listDir`, and `runBash` call for a thread into an isolated environment instead — filesystem, shell, and (optionally) network. Dawn ships a Docker reference provider and a [Kubernetes provider](/docs/sandbox/kubernetes) behind the same `SandboxProvider` contract. See [Execution Sandbox](/docs/sandbox) for the provider-neutral boundary.
 
 ## Guarded delegation — whether a child receives input
 
@@ -83,5 +83,5 @@ export default agent({
   { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "per-thread filesystem, shell, and network isolation" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "guarded delegation before a child receives input" },
   { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "outer authentication and tenant authorization" },
-  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including permissions and sandbox" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "dawn.config.ts reference including permissions and sandbox" },
 ]} />

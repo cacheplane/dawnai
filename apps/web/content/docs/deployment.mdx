@@ -55,7 +55,15 @@ Deployment packaging does not decide data durability, replica coordination, or t
   ]}
 />
 
-## Cross-target troubleshooting
+## What Dawn does not do
+
+Dawn emits deployment artifacts; it does not provision infrastructure, host applications, or manage secrets. Use the [Deployment Options](/docs/deployment) chooser with the target platform's hosting and security controls.
+
+## Self-hosting
+
+Use [Node and Docker](/docs/deployment/node) when you want to run the full Dawn HTTP runtime on infrastructure you operate.
+
+## Troubleshooting
 
 - If expected files are missing, inspect `build.targets`: an authored list replaces the Node and LangSmith defaults.
 - If `dawn build` succeeds but the deployed host cannot import a package, verify that packages imported by emitted artifacts are declared where the host installs or bundles production dependencies.
@@ -96,3 +104,7 @@ See [Edge and Hono](/docs/deployment/edge).
 #### What is proven, and what is not
 
 See [Edge and Hono](/docs/deployment/edge).
+
+## Related
+
+Continue with [Production Topology](/docs/production-topology), [Persistence and Tenancy](/docs/persistence), and [Security Architecture](/docs/security-architecture) before exposing a deployment.

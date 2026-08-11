@@ -36,7 +36,11 @@ describe("full LLM documentation route", () => {
       body.indexOf("## Task-Specific Prompts"),
     )
 
-    for (const file of ["docs/recipes/index.mdx", "docs/recipes/add-a-tool.mdx"]) {
+    for (const file of [
+      "docs/recipes/index.mdx",
+      "docs/recipes/add-a-tool.mdx",
+      "docs/memory/long-term.mdx",
+    ]) {
       expect(documentation).toContain(readFileSync(join(CONTENT_ROOT, file), "utf8"))
     }
   })

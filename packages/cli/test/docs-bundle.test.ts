@@ -17,6 +17,7 @@ import {
   buildReadme,
   extractSummary,
   extractTitle,
+  loadNav,
   mdxToMarkdown,
   parseFrontmatter,
   parseNav,
@@ -24,6 +25,66 @@ import {
 } from "../src/lib/docs-bundle.js"
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..")
+const EXPECTED_DOCS_NAV = [
+  { slug: "getting-started", label: "Getting Started" },
+  { slug: "mental-model", label: "Mental Model" },
+  { slug: "migrating-from-langgraph", label: "Migrating from LangGraph" },
+  { slug: "routes", label: "Routes" },
+  { slug: "agents", label: "Agents" },
+  { slug: "tools", label: "Tools" },
+  { slug: "state", label: "State" },
+  { slug: "workspace", label: "Workspace Filesystem" },
+  { slug: "memory", label: "Memory" },
+  { slug: "memory/long-term", label: "Long-term Memory" },
+  { slug: "memory/retrieval", label: "Recall and Retrieval" },
+  { slug: "memory/episodes", label: "Episodes" },
+  { slug: "memory/distillation", label: "Distillation" },
+  { slug: "planning", label: "Planning" },
+  { slug: "skills", label: "Skills" },
+  { slug: "subagents", label: "Subagents" },
+  { slug: "context-management", label: "Context Management" },
+  { slug: "reasoning-effort", label: "Reasoning Effort" },
+  { slug: "dev-server", label: "Dev Server" },
+  { slug: "dev-server/agent-protocol", label: "Agent Protocol" },
+  { slug: "middleware", label: "Middleware" },
+  { slug: "ag-ui", label: "AG-UI and Web Clients" },
+  { slug: "embedding", label: "Embed the Runtime" },
+  { slug: "blueprints", label: "Blueprints" },
+  { slug: "testing", label: "Scenario Testing" },
+  { slug: "testing-agents", label: "Agent Test Harness" },
+  { slug: "testing-agents/fixtures", label: "Fixtures and Recording" },
+  { slug: "evals", label: "Evals" },
+  { slug: "persistence", label: "Persistence and Tenancy" },
+  { slug: "production-topology", label: "Production Topology" },
+  { slug: "security-architecture", label: "Security Architecture" },
+  { slug: "access-control", label: "Access Control" },
+  { slug: "permissions", label: "Permissions" },
+  { slug: "retry", label: "Retry" },
+  { slug: "observability", label: "Observability" },
+  { slug: "inspector", label: "Inspector" },
+  { slug: "memory/browse", label: "Browse and Manage Memory" },
+  { slug: "upgrading", label: "Upgrading" },
+  { slug: "deployment", label: "Deployment Options" },
+  { slug: "deployment/node", label: "Node and Docker" },
+  { slug: "deployment/kubernetes", label: "Kubernetes" },
+  { slug: "deployment/langsmith", label: "LangSmith" },
+  { slug: "deployment/edge", label: "Edge and Hono" },
+  { slug: "sandbox", label: "Execution Sandbox" },
+  { slug: "sandbox/kubernetes", label: "Kubernetes Sandbox" },
+  { slug: "recipes", label: "Recipes Overview" },
+  { slug: "recipes/add-a-tool", label: "Add a Tool" },
+  { slug: "recipes/typed-state", label: "Typed State" },
+  { slug: "recipes/auth-middleware", label: "Auth Middleware" },
+  { slug: "recipes/stream-output", label: "Stream Output" },
+  { slug: "recipes/retry-flaky-tools", label: "Retry Transient Model Calls" },
+  { slug: "recipes/dispatch-from-route", label: "Dispatch from a Route" },
+  { slug: "recipes/research-web-ui", label: "Research Assistant Web UI" },
+  { slug: "configuration", label: "Configuration Reference" },
+  { slug: "cli", label: "CLI Reference" },
+  { slug: "api", label: "API Reference" },
+  { slug: "errors", label: "Error Codes" },
+  { slug: "faq", label: "FAQ" },
+] as const
 const scannedTextExtensions = new Set([
   ".cjs",
   ".css",
@@ -233,28 +294,78 @@ describe("mdxToMarkdown()", () => {
 })
 
 describe("parseNavOrder()", () => {
-  it("returns doc slugs in source order without duplicates", () => {
-    const nav = `
-      { label: "Getting Started", href: "/docs/getting-started" },
-      { label: "Routes", href: "/docs/routes" },
-      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-      { label: "Routes again", href: "/docs/routes" },
-    `
-    expect(parseNavOrder(nav)).toEqual(["getting-started", "routes", "recipes/add-a-tool"])
+  it("returns nested doc slugs in source order without duplicates", () => {
+    const nav = [
+      {
+        items: [
+          { label: "Getting Started", href: "/docs/getting-started" },
+          { label: "Routes", href: "/docs/routes" },
+          { label: "Long-term Memory", href: "/docs/memory/long-term" },
+          { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
+          { label: "Routes again", href: "/docs/routes" },
+        ],
+      },
+    ]
+    expect(parseNavOrder(nav)).toEqual([
+      "getting-started",
+      "routes",
+      "memory/long-term",
+      "recipes/add-a-tool",
+    ])
+  })
+
+  it("loads the complete real registry in an independently pinned reading order", async () => {
+    expect(await loadNav(join(repoRoot, "apps/web/app/components/docs/nav.ts"))).toEqual(
+      EXPECTED_DOCS_NAV,
+    )
+  })
+
+  it("loads only exported DOCS_NAV, ignoring comments, strings, and non-exported lookalikes", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-docs-nav-"))
+    const navFile = join(fixtureRoot, "nav.ts")
+    try {
+      writeFileSync(
+        navFile,
+        `
+// { label: "Comment decoy", href: "/docs/faq" },
+const text = '{ label: "String decoy", href: "/docs/errors" }'
+const OTHER_NAV = [{
+  label: "Other",
+  items: [{ label: "Non-exported decoy", href: "/docs/api" }],
+}]
+export const DOCS_NAV = [{
+  label: "Build",
+  items: [{ label: "Routes", href: "/docs/routes" }],
+}]
+void text
+void OTHER_NAV
+`,
+      )
+
+      expect(await loadNav(navFile)).toEqual([{ slug: "routes", label: "Routes" }])
+    } finally {
+      rmSync(fixtureRoot, { recursive: true })
+    }
   })
 })
 
 describe("parseNav()", () => {
-  it("returns ordered slug/label pairs, deduped by slug", () => {
-    const nav = `
-      { label: "Getting Started", href: "/docs/getting-started" },
-      { label: "Tools", href: "/docs/tools" },
-      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-      { label: "Tools again", href: "/docs/tools" },
-    `
+  it("returns ordered nested slug/label pairs, deduped by slug", () => {
+    const nav = [
+      {
+        items: [
+          { label: "Getting Started", href: "/docs/getting-started" },
+          { label: "Tools", href: "/docs/tools" },
+          { label: "Long-term Memory", href: "/docs/memory/long-term" },
+          { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
+          { label: "Tools again", href: "/docs/tools" },
+        ],
+      },
+    ]
     expect(parseNav(nav)).toEqual([
       { slug: "getting-started", label: "Getting Started" },
       { slug: "tools", label: "Tools" },
+      { slug: "memory/long-term", label: "Long-term Memory" },
       { slug: "recipes/add-a-tool", label: "Add a tool" },
     ])
   })
@@ -262,20 +373,36 @@ describe("parseNav()", () => {
 
 describe("generated documentation bundle", () => {
   it("contains exactly one topic file per real nav entry in registry order", () => {
-    const nav = parseNav(
-      readFileSync(join(repoRoot, "apps/web/app/components/docs/nav.ts"), "utf8"),
-    )
     const readme = readFileSync(join(repoRoot, "packages/cli/docs/README.md"), "utf8")
-    const topicFiles = [...readme.matchAll(/^- \[[^\]]+\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
-      match[1] ? [match[1]] : [],
+    const topics = [...readme.matchAll(/^- \[([^\]]+)\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
+      match[1] && match[2] ? [{ title: match[1], file: match[2] }] : [],
     )
-    const expectedFiles = nav.map((entry) =>
+    const expectedFiles = EXPECTED_DOCS_NAV.map((entry) =>
       entry.slug === "recipes" ? "recipes/index.md" : `${entry.slug}.md`,
     )
 
-    expect(topicFiles).toEqual(expectedFiles)
-    for (const file of topicFiles) {
-      expect(existsSync(join(repoRoot, "packages/cli/docs", file))).toBe(true)
+    expect(topics).toEqual(
+      EXPECTED_DOCS_NAV.map((entry, index) => ({
+        title: entry.label,
+        file: expectedFiles[index] ?? "",
+      })),
+    )
+    expect(topics).toContainEqual({
+      title: "Recipes Overview",
+      file: "recipes/index.md",
+    })
+    expect(topics).toContainEqual({
+      title: "Long-term Memory",
+      file: "memory/long-term.md",
+    })
+    expect(topics).toContainEqual({
+      title: "Fixtures and Recording",
+      file: "testing-agents/fixtures.md",
+    })
+    for (const { title, file } of topics) {
+      const topicPath = join(repoRoot, "packages/cli/docs", file)
+      expect(existsSync(topicPath), file).toBe(true)
+      expect(extractTitle(readFileSync(topicPath, "utf8")), file).toBe(title)
     }
   })
 })
@@ -303,7 +430,12 @@ describe("extractSummary()", () => {
 describe("buildReadme()", () => {
   it("renders an index linking each topic file with its description", () => {
     const md = buildReadme([
-      { slug: "tools", title: "Tools", description: "Co-located tools", file: "tools.md" },
+      {
+        slug: "tools",
+        title: "Tools",
+        description: "Co-located tools",
+        file: "tools.md",
+      },
       { slug: "state", title: "State", description: "", file: "state.md" },
     ])
     expect(md).toContain("# Dawn — Documentation")

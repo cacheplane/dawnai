@@ -41,6 +41,10 @@ If `workspace/AGENTS.md` exists and has content, Dawn injects it under `# Memory
 
 The default local app root makes this a shared host prompt source. A per-thread sandbox does not isolate that host file automatically. Use separate app roots or trust domains for tenants, constrain untrusted writes, and review seeded content. The [Workspace Filesystem](/docs/workspace) guide explains the file tools and backend boundary.
 
+### Updating it
+
+See [Workspace Filesystem](/docs/workspace) for controlled `writeFile` access and backend behavior.
+
 ## Route memory (`memory.md`)
 
 For stable context that applies to one agent route, place `memory.md` beside its `index.ts`:
