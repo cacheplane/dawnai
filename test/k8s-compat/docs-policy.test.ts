@@ -14,6 +14,7 @@ const documentationPaths = {
   chart: resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
   chartValues: resolve(repoRoot, "charts/dawn-sandbox-infra/values.yaml"),
   chartNotes: resolve(repoRoot, "charts/dawn-sandbox-infra/templates/NOTES.txt"),
+  dawnAppNotes: resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
   package: resolve(repoRoot, "packages/sandbox/README.md"),
   website: resolve(repoRoot, "apps/web/content/docs/sandbox.mdx"),
   bundled: resolve(repoRoot, "packages/cli/docs/sandbox.md"),
@@ -27,7 +28,14 @@ const policyDocumentation = ["chart", "package", "website", "bundled"] as const
 const commandDocumentation = [...policyDocumentation, "contributors"] as const
 const compatibilityDisclaimer =
   "Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers."
+const publishedInfrastructureChart = "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra"
 const sentenceSegmenter = new Intl.Segmenter("en", { granularity: "sentence" })
+
+interface HelmCommandBlock {
+  readonly command: string
+  readonly context: string
+  readonly verb: "install" | "upgrade"
+}
 
 async function loadDocumentation(): Promise<Documentation> {
   const entries = await Promise.all(
@@ -71,6 +79,49 @@ function normalizedProseStatements(source: string): readonly string[] {
   }
 
   return statements
+}
+
+function infrastructureHelmCommands(source: string): readonly HelmCommandBlock[] {
+  const lines = source.replaceAll(/\r\n?/g, "\n").split("\n")
+  const commands: HelmCommandBlock[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const firstLine = lines[index]?.trim() ?? ""
+    const match = /^helm\s+(install|upgrade)\s+/.exec(firstLine)
+    if (!match) continue
+
+    const commandLines: string[] = []
+    let commandIndex = index
+    while (commandIndex < lines.length) {
+      const line = lines[commandIndex] ?? ""
+      commandLines.push(
+        line
+          .trim()
+          .replace(/\\\s*$/, "")
+          .trim(),
+      )
+      if (!/\\\s*$/.test(line)) break
+      commandIndex += 1
+    }
+
+    const command = commandLines.join(" ").replaceAll(/\s+/g, " ").trim()
+    if (!command.includes("dawn-sandbox-infra")) continue
+
+    const context = lines
+      .slice(Math.max(0, index - 8), index)
+      .filter((line) => !/^\s*```/.test(line))
+      .join(" ")
+      .replaceAll(/\s+/g, " ")
+      .trim()
+    commands.push({
+      command,
+      context,
+      verb: match[1] as HelmCommandBlock["verb"],
+    })
+    index = commandIndex
+  }
+
+  return commands
 }
 
 function calicoVersion(policy: CompatibilityPolicy): string {
@@ -118,6 +169,14 @@ function isDynamicRwoStoragePrerequisite(text: string): boolean {
       text,
     )
   return driverMustSupport || driverIsRequired || provisioningRequiresDriver
+}
+
+function isStorageCompatibilityBoundary(text: string): boolean {
+  return /^Dawn does not certify storage[- ]drivers?[.!?]?$/i.test(text)
+}
+
+function isCniCompatibilityBoundary(text: string): boolean {
+  return /^Other CNI implementations require separate validation[.!?]?$/i.test(text)
 }
 
 function isApprovedCniPreflightWarning(text: string): boolean {
@@ -168,6 +227,7 @@ function hasBroadCniQualifier(text: string): boolean {
 
 function isUnsupportedCniClaim(text: string): boolean {
   if (!/\bCNIs?(?:\s+(?:implementations?|plugins?))?\b/i.test(text)) return false
+  if (isCniCompatibilityBoundary(text)) return false
   if (hasBroadCniQualifier(text) && !isApprovedCniPreflightWarning(text)) return true
   return hasPositiveCniClaimLanguage(text)
 }
@@ -176,7 +236,13 @@ function makesUnsupportedCompatibilityClaim(source: string): boolean {
   const text = markdownText(source).replaceAll(/\s+/g, " ").trim()
   if (text === compatibilityDisclaimer) return false
   const namesStorageDriver = /\bstorage[- ]drivers?\b/i.test(text)
-  if (namesStorageDriver && !isDynamicRwoStoragePrerequisite(text)) return true
+  if (
+    namesStorageDriver &&
+    !isDynamicRwoStoragePrerequisite(text) &&
+    !isStorageCompatibilityBoundary(text)
+  ) {
+    return true
+  }
 
   if (isUnsupportedCniClaim(text)) return true
 
@@ -308,6 +374,8 @@ managed Kubernetes services.`,
     "Kind does not guarantee CNI compatibility, but Kind validates CNI implementations.",
     "Kind provides CNI certification.",
     "The Kind suite is proving CNI compatibility.",
+    "Other CNI implementations require separate validation, but Kind validates them.",
+    "Dawn does not certify storage drivers, but Kind validates them.",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
     expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
@@ -322,6 +390,8 @@ other CNI implementations, or storage drivers.`,
     "Preflight warns when a policy-capable CNI cannot be confirmed; it does not guarantee enforcement.",
     "Kind does not guarantee CNI compatibility.",
     "Kind provides no CNI certification.",
+    "Other CNI implementations require separate validation.",
+    "Dawn does not certify storage drivers.",
     "Dynamic ReadWriteOnce storage provisioning is required.",
     "The storage driver must support dynamic ReadWriteOnce provisioning.",
     "Managed Kubernetes services are outside Kind evidence.",
@@ -350,6 +420,97 @@ Managed Kubernetes services require separate validation.`,
       )
       expect(source, `${name} must require a policy-enforcing CNI`).toMatch(/policy-enforcing CNI/)
     }
+  })
+
+  test("distinguishes storage selection preflight from runtime provisioning", async () => {
+    const { contributors } = await loadDocumentation()
+    const source = proseText(contributors)
+
+    expect(source).toMatch(/preflights?[^.]*storage selection/i)
+    expect(source).not.toMatch(/preflights?[^.]*dynamic(?:ally)? (?:RWO|ReadWriteOnce)/i)
+    expect(source).toMatch(
+      /dynamic(?:ally)? (?:RWO|ReadWriteOnce) provisioning is a runtime prerequisite verified by the lifecycle, not proven by preflight/i,
+    )
+  })
+
+  test("keeps Baseline guidance limited to actual Restricted admission violations", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of [
+      "chart",
+      "chartValues",
+      "chartNotes",
+      "package",
+      "website",
+      "bundled",
+    ] as const) {
+      const source = proseText(documentation[name])
+      expect(source, `${name} must limit Baseline to actual Restricted violations`).toMatch(
+        /Baseline is (?:needed|required) only for [^.]*actually violate Restricted admission/i,
+      )
+      expect(source, `${name} must give runAsNonRoot: false as the Baseline example`).toMatch(
+        /runAsNonRoot:\s*false/i,
+      )
+      expect(
+        source,
+        `${name} must state that readOnlyRootFilesystem: false alone stays Restricted-compatible`,
+      ).toMatch(/readOnlyRootFilesystem:\s*false alone [^.]*does not require [^.]*Baseline/i)
+    }
+  })
+
+  test("publishes complete infrastructure Helm commands with a management release namespace", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of [
+      "chart",
+      "chartNotes",
+      "dawnAppNotes",
+      "package",
+      "website",
+      "bundled",
+    ] as const) {
+      const commands = infrastructureHelmCommands(documentation[name])
+      expect(
+        commands.length,
+        `${name} must publish an infrastructure Helm command`,
+      ).toBeGreaterThan(0)
+
+      for (const { command, context, verb } of commands) {
+        const commandTokens = command.split(/\s+/)
+        const hasLiteralManagementNamespace = /(?:^|\s)--namespace\s+dawn-app(?=\s|$)/.test(command)
+        const hasRenderedReleaseNamespace =
+          /--namespace\s+"?\{\{\s*\.Release\.Namespace\s*\}\}"?/.test(command)
+        expect(
+          hasLiteralManagementNamespace || hasRenderedReleaseNamespace,
+          `${name} command must target the management release namespace: ${command}`,
+        ).toBe(true)
+
+        if (verb === "install") {
+          expect(
+            commandTokens.includes("--create-namespace"),
+            `${name} install must create the management namespace: ${command}`,
+          ).toBe(true)
+        }
+
+        if (!commandTokens.includes(publishedInfrastructureChart)) {
+          expect(context, `${name} local chart command must be explicitly labeled`).toMatch(
+            /local checkout/i,
+          )
+          expect(
+            commandTokens.includes("./charts/dawn-sandbox-infra"),
+            `${name} local chart command must use the checkout-relative path`,
+          ).toBe(true)
+        }
+      }
+    }
+
+    const chartNotesCommands = infrastructureHelmCommands(documentation.chartNotes)
+    expect(chartNotesCommands).toHaveLength(1)
+    expect(chartNotesCommands[0]?.command).toContain(
+      `helm upgrade {{ .Release.Name }} ${publishedInfrastructureChart}`,
+    )
+    expect(chartNotesCommands[0]?.command).toContain("--version {{ .Chart.Version }}")
+    expect(chartNotesCommands[0]?.command).toContain("--namespace {{ .Release.Namespace }}")
   })
 
   test("requires credential-safe cross-namespace ServiceAccount wiring in chart NOTES", async () => {

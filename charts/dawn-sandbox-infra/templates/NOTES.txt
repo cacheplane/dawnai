@@ -1,5 +1,8 @@
 dawn-sandbox-infra installed.
 
+Helm release namespace:
+  {{ .Release.Namespace }} (management namespace; keep separate from the sandbox namespace)
+
 Namespace:
   {{ include "dawn-sandbox-infra.namespace" . }}
 {{- if .Values.namespace.create }} (created by this chart){{- else }} (must already exist — namespace.create=false){{- end }}
@@ -18,7 +21,9 @@ Configure the app Pod to use that management-namespace ServiceAccount.
 Then bind that cross-namespace subject into this sandbox namespace's
 orchestrator RoleBinding through `orchestrator.subjects`:
 
-  helm upgrade dawn-sandbox-infra charts/dawn-sandbox-infra \
+  helm upgrade {{ .Release.Name }} oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --version {{ .Chart.Version }} \
+    --namespace {{ .Release.Namespace }} \
     --reuse-values \
     --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"<app-service-account>","namespace":"<management-namespace>"}'
 
@@ -38,10 +43,11 @@ management namespace.
 Pod Security Standards on this namespace:
   enforce={{ .Values.podSecurityStandard.enforce }}  warn={{ .Values.podSecurityStandard.warn }}  audit={{ .Values.podSecurityStandard.audit }}
 
-The chart default is enforce=restricted. Sandbox images must satisfy that
-profile. To run a workload that intentionally opts out of restricted-compatible
-provider hardening, explicitly set podSecurityStandard.enforce=baseline; there
-is no automatic downgrade.
+The chart default is enforce=restricted. Baseline is needed only for workloads
+or settings that actually violate Restricted admission, such as
+security.runAsNonRoot: false. security.readOnlyRootFilesystem: false alone
+remains Restricted-compatible and does not require lowering the namespace to
+Baseline. There is no automatic downgrade.
 
 Operational prerequisites:
   - Pod Security Admission for the labels above.
@@ -51,8 +57,8 @@ Operational prerequisites:
 
 Keep this namespace free of application credentials. Direct Secret API reads
 are denied, but the orchestrator's Pod-create permission can mount a known
-Secret into a Pod. Store Dawn app and Helm release Secrets in a separate
-management namespace.
+Secret into a Pod. Store the Dawn app, application credentials, and Helm release
+Secrets in the separate management namespace shown above.
 
 namespace.extraLabels may add operator labels, but Pod Security labels and the
 chart ownership labels are reserved and rejected during rendering.

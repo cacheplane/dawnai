@@ -26,9 +26,12 @@ Service URL:
 ServiceAccount / namespace wiring (the sandbox crux):
 
 This app's Pod runs under ServiceAccount "{{ include "dawn-app.serviceAccountName" . }}"
-in namespace "{{ .Release.Namespace }}". For the in-cluster kubernetesSandbox
-provider (baked into your image's dawn.config.ts) to work, that ServiceAccount
-must be bound to the dawn-sandbox-infra chart's orchestrator Role.
+in management namespace "{{ .Release.Namespace }}". Keep this namespace, the
+app credentials, and both charts' Helm release Secrets separate from the
+sandbox namespace "{{ .Values.sandboxNamespace }}". For the in-cluster
+kubernetesSandbox provider (baked into your image's dawn.config.ts) to work,
+that ServiceAccount must be bound to the dawn-sandbox-infra chart's orchestrator
+Role.
 
 {{- if .Values.serviceAccount.create }}
 

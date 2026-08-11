@@ -25,14 +25,25 @@ application-deployment chart.
 
 ## Install
 
+Install the published chart with its Helm release in the separate `dawn-app`
+management namespace. The chart still creates sandbox resources in
+`dawn-sandboxes`, while the Helm release Secret stays with the application and
+other credentials in `dawn-app`.
+
 ```sh
-helm install dawn-sandbox-infra charts/dawn-sandbox-infra
+helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --version 0.1.3 \
+  --namespace dawn-app \
+  --create-namespace
 ```
 
-Or, once published, from GHCR:
+For testing from a local checkout only, use the checkout-relative chart path
+but keep the same management release namespace:
 
 ```sh
-helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
+helm install dawn-sandbox-infra ./charts/dawn-sandbox-infra \
+  --namespace dawn-app \
+  --create-namespace
 ```
 
 Then point `dawn.config.ts` at the same namespace:
@@ -126,12 +137,18 @@ The chart rejects `namespace.extraLabels` keys under
 `app.kubernetes.io/managed-by`. This prevents extra labels from weakening Pod
 Security or replacing chart identity.
 
-The chart enforces `restricted` by default. A workload that intentionally opts
-out of the provider's restricted-compatible security defaults must also opt the
-namespace down explicitly; there is no automatic fallback:
+The chart enforces `restricted` by default. Baseline is needed only for
+workloads or settings that actually violate Restricted admission, such as
+`security.runAsNonRoot: false`. Setting
+`security.readOnlyRootFilesystem: false` alone remains Restricted-compatible
+and does not require lowering the namespace to Baseline. There is no automatic
+downgrade:
 
 ```sh
-helm install dawn-sandbox-infra charts/dawn-sandbox-infra \
+helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --version 0.1.3 \
+  --namespace dawn-app \
+  --reuse-values \
   --set podSecurityStandard.enforce=baseline
 ```
 

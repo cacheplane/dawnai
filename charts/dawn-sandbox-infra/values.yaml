@@ -22,9 +22,11 @@ namespace:
   extraLabels: {}
 
 podSecurityStandard:
-  # Restricted is the default. Workloads that intentionally opt out of the
-  # provider's restricted-compatible hardening must explicitly set baseline;
-  # the chart never downgrades automatically.
+  # Restricted is the default. Baseline is needed only for workloads or
+  # settings that actually violate Restricted admission, such as
+  # security.runAsNonRoot: false. security.readOnlyRootFilesystem: false alone
+  # remains Restricted-compatible and does not require lowering the namespace
+  # to Baseline. The chart never downgrades automatically.
   # enforce: baseline | restricted | privileged
   enforce: restricted
   warn: restricted

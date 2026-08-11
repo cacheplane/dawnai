@@ -104,9 +104,11 @@ pnpm verify:k8s:compat -- --target <1.34|1.35|1.36> --context <exact-context> [-
 ```
 
 The context argument must exactly match the current context. The command
-preflights its tools, server minor, dynamic RWO StorageClass, unused temporary
+preflights its tools, server minor, storage selection, unused temporary
 namespaces, and complete administrative permission set before installation; it
-also requires Pod Security Admission and a policy-enforcing CNI.
+also requires Pod Security Admission and a policy-enforcing CNI. Dynamic RWO
+provisioning is a runtime prerequisite verified by the lifecycle, not proven by
+preflight.
 
 The policy-pinned Kind/Calico matrix covers Kubernetes 1.34, Kubernetes 1.35,
 and Kubernetes 1.36. The lower and upper endpoint Kind lanes are scoped to
