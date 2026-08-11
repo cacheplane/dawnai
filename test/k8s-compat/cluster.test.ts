@@ -925,31 +925,47 @@ describe("namespace ownership and cleanup", () => {
     expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGHUP")
   })
 
-  test("times out bounded cleanup and terminates exactly once even if cleanup later settles", async () => {
+  test("handles cleanup rejection after timeout without an unhandled rejection", async () => {
     vi.useFakeTimers()
     const processEvents = new EventEmitter()
     const terminate = vi.fn()
-    let finishCleanup: (() => void) | undefined
+    const cleanupError = new Error("cleanup rejected after timeout")
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    let rejectCleanup: ((reason: unknown) => void) | undefined
     const registration = registerOwnedResourceSignalCleanup(
       [management],
       async () =>
-        new Promise<void>((resolve) => {
-          finishCleanup = resolve
+        new Promise<void>((_resolve, reject) => {
+          rejectCleanup = reject
         }),
       { emitter: processEvents, terminate, timeoutMs: 25 },
     )
 
-    processEvents.emit("SIGTERM")
-    await vi.advanceTimersByTimeAsync(25)
+    process.on("unhandledRejection", onUnhandledRejection)
+    try {
+      processEvents.emit("SIGTERM")
+      await vi.advanceTimersByTimeAsync(25)
 
-    await expect(registration.completion).resolves.toEqual({
-      signal: "SIGTERM",
-      status: "timed-out",
-    })
-    expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGTERM")
-    finishCleanup?.()
-    await vi.runAllTimersAsync()
-    expect(terminate).toHaveBeenCalledTimes(1)
+      await expect(registration.completion).resolves.toEqual({
+        signal: "SIGTERM",
+        status: "timed-out",
+      })
+      expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGTERM")
+
+      rejectCleanup?.(cleanupError)
+      const nextTurn = new Promise<void>((resolve) => setImmediate(resolve))
+      await vi.runAllTimersAsync()
+      await nextTurn
+      await Promise.resolve()
+
+      expect(unhandledRejections).toEqual([])
+      expect(terminate).toHaveBeenCalledTimes(1)
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection)
+    }
   })
 
   test("dispose removes listeners and prevents cleanup or termination", async () => {
