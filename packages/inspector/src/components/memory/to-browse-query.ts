@@ -92,12 +92,24 @@ const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
  *    funnel parses out of a typed `1e999` — as the literal `null`. Echoing that
  *    shows the user a value nobody entered.
  *
- * `filterOperators` makes an unmappable operator rare, NOT unreachable —
- * pretable's `operatorsForType` warns once and falls back to the full set,
- * `isEmpty`/`isNotEmpty` included, when the declared list prunes every operator
- * the column type offers (operator names that do not match the `type` do that).
- * The user then sees "is empty" on the menu and clicks it, so this backstop
- * catches a live path and not only a coding slip.
+ * `filterOperators` is what keeps an unmappable operator off the menu, and today
+ * it holds: every declared list in `memory-grid.tsx` intersects its column `type`
+ * non-emptily, so no funnel offers `isEmpty`/`isNotEmpty` and no click reaches
+ * `badOperator`. That refusal is UNREACHABLE from the UI as the columns stand —
+ * only the unit tests call it directly.
+ *
+ * It is kept because that is a property of the current declarations, not of the
+ * design. Pretable's `operatorsForType` INTERSECTS the declared list with the
+ * per-type set and, when the intersection comes out empty, warns once and falls
+ * back to the FULL menu — `isEmpty`/`isNotEmpty` included, an empty menu being the
+ * worse failure. Any operator name invalid for the declared `type` prunes away, so
+ * retyping a column, or editing a list without re-checking it against the type,
+ * puts "is empty" back on the menu for the user to click. Throwing then is the
+ * honest answer; dropping the clause would leave a funnel that looks applied.
+ *
+ * The "today" is checked, not asserted: memory-grid.test.tsx's "offers only the
+ * operators the store can honor" reads each rendered menu and reddens the moment
+ * one gains an operator its column never declared.
  *
  * `BrowseQueryError` is extended rather than replaced so the Inspector has ONE
  * rejection family; the base constructor sets `name` and this passes the same
