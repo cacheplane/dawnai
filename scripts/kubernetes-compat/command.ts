@@ -490,7 +490,10 @@ function killDirectChild(child: CommandChild, signal: NodeJS.Signals): boolean {
 
 interface ProcessTreeTracker {
   readonly rootPid: number
-  readonly identities: Map<number, string>
+  readonly identities: Map<number, ProcessIdentity>
+  rootIdentity: ProcessIdentity | undefined
+  originalProcessGroup: number | undefined
+  rootExited: boolean
   scanFailed: boolean
   lastActivityScanStartedAt: number
   scanRequested: boolean
@@ -500,30 +503,49 @@ interface ProcessTreeTracker {
   readonly warmupTimers: NodeJS.Timeout[]
 }
 
+interface ProcessIdentity {
+  readonly startedAt: string
+  readonly pgid: number
+}
+
 function updateTrackedProcesses(
   tracker: ProcessTreeTracker,
   processes: readonly ProcessTableEntry[],
 ): void {
   const byPid = new Map(processes.map((entry) => [entry.pid, entry]))
-  const retained = new Map<number, string>()
-  for (const [pid, startedAt] of tracker.identities) {
-    if (byPid.get(pid)?.startedAt === startedAt) retained.set(pid, startedAt)
+  const retained = new Map<number, ProcessIdentity>()
+  for (const [pid, identity] of tracker.identities) {
+    const current = byPid.get(pid)
+    if (current?.startedAt === identity.startedAt) {
+      retained.set(pid, { startedAt: current.startedAt, pgid: current.pgid })
+    }
   }
 
   const root = byPid.get(tracker.rootPid)
-  if (root !== undefined) retained.set(root.pid, root.startedAt)
-  const discovered = new Set<number>([tracker.rootPid, ...retained.keys()])
+  if (tracker.rootIdentity === undefined && !tracker.rootExited && root?.pgid === tracker.rootPid) {
+    tracker.rootIdentity = { startedAt: root.startedAt, pgid: root.pgid }
+    tracker.originalProcessGroup = root.pgid
+    retained.set(root.pid, tracker.rootIdentity)
+  } else if (
+    tracker.rootIdentity !== undefined &&
+    root?.startedAt === tracker.rootIdentity.startedAt
+  ) {
+    retained.set(root.pid, { startedAt: root.startedAt, pgid: root.pgid })
+  }
+
+  const discovered = new Set<number>(retained.keys())
   let changed = true
   while (changed) {
     changed = false
     for (const candidate of processes) {
       if (
+        candidate.pid !== tracker.rootPid &&
         !discovered.has(candidate.pid) &&
         discovered.has(candidate.ppid) &&
         isSafeProcessId(candidate.pid)
       ) {
         discovered.add(candidate.pid)
-        retained.set(candidate.pid, candidate.startedAt)
+        retained.set(candidate.pid, { startedAt: candidate.startedAt, pgid: candidate.pgid })
         changed = true
       }
     }
@@ -575,6 +597,9 @@ function createProcessTreeTracker(
   const tracker: ProcessTreeTracker = {
     rootPid,
     identities: new Map(),
+    rootIdentity: undefined,
+    originalProcessGroup: undefined,
+    rootExited: false,
     scanFailed: false,
     lastActivityScanStartedAt: 0,
     scanRequested: false,
@@ -626,6 +651,7 @@ async function terminatePosixProcessTree(
   signal: NodeJS.Signals,
   dependencies: CommandTerminationDependencies,
   tracker: ProcessTreeTracker | undefined,
+  directChildExited: () => boolean,
 ): Promise<boolean> {
   const pid = child.pid
   if (pid === undefined || !isSafeProcessId(pid)) {
@@ -633,18 +659,36 @@ async function terminatePosixProcessTree(
     return false
   }
 
+  const rootHasExited = (): boolean => {
+    const exited = directChildExited() || tracker?.rootExited === true
+    if (exited && tracker !== undefined) tracker.rootExited = true
+    return exited
+  }
+  rootHasExited()
   await stopProcessTreeTracker(tracker, dependencies)
   const dispatchFailures: unknown[] = []
+  const provenProcessGroup = (): number | undefined => {
+    if (!rootHasExited()) return tracker?.originalProcessGroup ?? pid
+    const originalProcessGroup = tracker?.originalProcessGroup
+    if (originalProcessGroup === undefined) return undefined
+    for (const identity of tracker?.identities.values() ?? []) {
+      if (identity.pgid === originalProcessGroup) return originalProcessGroup
+    }
+    return undefined
+  }
   const dispatch = (): void => {
+    const processGroup = provenProcessGroup()
+    if (processGroup !== undefined) {
+      dispatchPosixKill(() => dependencies.killProcessGroup(processGroup, signal), dispatchFailures)
+    }
     for (const descendantPid of tracker?.identities.keys() ?? []) {
       if (descendantPid !== pid && isSafeProcessId(descendantPid)) {
         dispatchPosixKill(() => dependencies.killProcess(descendantPid, signal), dispatchFailures)
       }
     }
-    dispatchPosixKill(() => dependencies.killProcessGroup(pid, signal), dispatchFailures)
   }
   dispatch()
-  if (dispatchFailures.length > 0) killDirectChild(child, signal)
+  if (dispatchFailures.length > 0 && !rootHasExited()) killDirectChild(child, signal)
 
   for (let attempt = 0; attempt < PROCESS_TREE_VERIFY_ATTEMPTS; attempt += 1) {
     let processes: readonly ProcessTableEntry[]
@@ -655,15 +699,22 @@ async function terminatePosixProcessTree(
       dispatchFailures.push(cause)
       break
     }
-    let groupAlive: boolean
-    try {
-      groupAlive = dependencies.processGroupExists(pid)
-    } catch (cause) {
-      dispatchFailures.push(cause)
-      break
+    const processGroup = provenProcessGroup()
+    let groupAlive = false
+    if (processGroup !== undefined) {
+      try {
+        groupAlive = dependencies.processGroupExists(processGroup)
+      } catch (cause) {
+        dispatchFailures.push(cause)
+        break
+      }
     }
     if ((tracker?.identities.size ?? 0) === 0 && !groupAlive) {
-      return dispatchFailures.length === 0 && tracker?.scanFailed !== true
+      return (
+        dispatchFailures.length === 0 &&
+        tracker?.scanFailed !== true &&
+        (tracker === undefined || tracker.rootIdentity !== undefined || !rootHasExited())
+      )
     }
     dispatch()
     if (attempt + 1 < PROCESS_TREE_VERIFY_ATTEMPTS) {
@@ -716,7 +767,7 @@ async function terminateProcessTree(
 ): Promise<boolean> {
   return dependencies.platform === "win32"
     ? terminateWindowsProcessTree(child, signal, dependencies, directChildExited)
-    : terminatePosixProcessTree(child, signal, dependencies, tracker)
+    : terminatePosixProcessTree(child, signal, dependencies, tracker, directChildExited)
 }
 
 async function confirmProcessTreeTermination(
@@ -995,6 +1046,7 @@ export function createCommandExecutor(
 
       function onClose(code: number | null, signal: NodeJS.Signals | null): void {
         childClosed = true
+        if (processTreeTracker !== undefined) processTreeTracker.rootExited = true
         if (pendingFailure !== undefined) {
           const failure = pendingFailure
           closedAfterFailure = true

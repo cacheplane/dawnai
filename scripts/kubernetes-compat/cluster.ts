@@ -634,9 +634,18 @@ export async function cleanupOwnedCluster(
   }
 
   const deletionResults = await Promise.allSettled(
-    survivingOwnership.map((ownership) =>
-      execute(kubectl.command(input.context, ["delete", "namespace", ownership.name])),
-    ),
+    survivingOwnership.map((ownership) => {
+      const path = `/api/v1/namespaces/${encodeURIComponent(ownership.name)}`
+      const body = JSON.stringify({
+        apiVersion: "v1",
+        kind: "DeleteOptions",
+        preconditions: { uid: ownership.uid },
+      })
+      return execute(
+        kubectl.command(input.context, ["delete", `--raw=${path}`, "--filename", "-"]),
+        { stdin: body },
+      )
+    }),
   )
   for (const outcome of deletionResults) {
     if (outcome.status === "rejected") errors.push(outcome.reason)
@@ -650,13 +659,9 @@ export async function cleanupOwnedCluster(
 }
 
 export function registerOwnedResourceSignalCleanup(
-  ownership: readonly [NamespaceOwnership, ...NamespaceOwnership[]],
   cleanup: () => Promise<void>,
   options: SignalCleanupOptions = {},
 ): SignalCleanupRegistration {
-  if (ownership.length === 0) {
-    throw new Error("Signal cleanup requires at least one owned resource")
-  }
   const timeoutMs = options.timeoutMs ?? SIGNAL_CLEANUP_TIMEOUT_MS
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("Signal cleanup timeout must be positive and finite")

@@ -57,6 +57,12 @@ export const ADMIN_PERMISSION_GROUPS = [
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"],
   },
   {
+    scope: "management",
+    apiGroup: "apps",
+    resources: ["replicasets"],
+    verbs: ["get", "list"],
+  },
+  {
     scope: "sandbox",
     apiGroup: "batch",
     resources: ["cronjobs", "jobs"],
@@ -67,6 +73,12 @@ export const ADMIN_PERMISSION_GROUPS = [
     apiGroup: "networking.k8s.io",
     resources: ["networkpolicies"],
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"],
+  },
+  {
+    scope: "management",
+    apiGroup: "networking.k8s.io",
+    resources: ["networkpolicies"],
+    verbs: ["get", "list", "watch", "delete"],
   },
   {
     scope: "sandbox",

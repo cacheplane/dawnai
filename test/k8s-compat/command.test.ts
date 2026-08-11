@@ -560,14 +560,34 @@ describe("shell-free command executor", () => {
     const child = new ControlledChild()
     child.pid = 4_321
     const controller = new AbortController()
-    const killProcessGroup = vi.fn()
+    let processAlive = true
+    const listProcesses = vi.fn(async () =>
+      processAlive
+        ? [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:00:00 2026",
+            },
+          ]
+        : [],
+    )
+    const killProcessGroup = vi.fn(() => {
+      processAlive = false
+    })
     let spawnOptions: unknown
     const executor = createCommandExecutor(
       (_file, _args, options) => {
         spawnOptions = options
         return child as never
       },
-      { platform: "linux", killProcessGroup },
+      {
+        platform: "linux",
+        listProcesses,
+        killProcessGroup,
+        processGroupExists: () => processAlive,
+      },
     )
     const execution = executor(
       { file: "controlled", args: [] },
@@ -578,6 +598,8 @@ describe("shell-free command executor", () => {
       },
     )
     child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
 
     controller.abort()
     child.emit("close", null, "SIGKILL")
@@ -622,22 +644,170 @@ describe("shell-free command executor", () => {
   test("terminates an opted-in process group after an unaccepted wrapper exit", async () => {
     const child = new ControlledChild()
     child.pid = 5_987
-    const killProcessGroup = vi.fn()
+    const descendantPid = 5_988
+    let wrapperExited = false
+    let processGroupAlive = true
+    const listProcesses = vi.fn(async () => {
+      if (!processGroupAlive) return []
+      return wrapperExited
+        ? [
+            {
+              pid: descendantPid,
+              ppid: 1,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:10:01 2026",
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:10:00 2026",
+            },
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:10:01 2026",
+            },
+          ]
+    })
+    const killProcessGroup = vi.fn(() => {
+      processGroupAlive = false
+    })
     const executor = createCommandExecutor(() => child as never, {
       platform: "linux",
+      listProcesses,
       killProcessGroup,
+      killProcess: vi.fn(),
+      processGroupExists: () => processGroupAlive,
     })
     const execution = executor(
       { file: "controlled", args: [] },
       { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
     )
     child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
 
+    wrapperExited = true
     child.emit("close", 2, null)
 
     await expect(execution).rejects.toMatchObject({ outcome: { kind: "exit", exitCode: 2 } })
     expect(killProcessGroup).toHaveBeenCalledWith(5_987, "SIGKILL")
     expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("does not adopt a reused root PID or signal its unrelated group after wrapper exit", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_001
+    let rootReused = false
+    const listProcesses = vi.fn(async () =>
+      rootReused
+        ? [
+            {
+              pid: child.pid as number,
+              ppid: 1,
+              pgid: 9_001,
+              startedAt: "Tue Aug 11 03:00:01 2026",
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 03:00:00 2026",
+            },
+          ],
+    )
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const processGroupExists = vi.fn(() => false)
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists,
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    rootReused = true
+    child.exitCode = 0
+    child.emit("close", 0, null)
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(killProcess).not.toHaveBeenCalled()
+    expect(processGroupExists).not.toHaveBeenCalled()
+  })
+
+  test("does not signal a reused descendant PID from a stale-parent process snapshot", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_021
+    const descendantPid = 6_022
+    let descendantReused = false
+    const listProcesses = vi.fn(async () =>
+      descendantReused
+        ? [
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: descendantPid,
+              startedAt: "Tue Aug 11 03:10:02 2026",
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 03:10:00 2026",
+            },
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 03:10:01 2026",
+            },
+          ],
+    )
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const processGroupExists = vi.fn(() => false)
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists,
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    descendantReused = true
+    child.exitCode = 0
+    child.emit("close", 0, null)
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(killProcess).not.toHaveBeenCalledWith(descendantPid, expect.anything())
+    expect(processGroupExists).not.toHaveBeenCalled()
   })
 
   test("fails boundedly when descendant termination cannot be confirmed", async () => {

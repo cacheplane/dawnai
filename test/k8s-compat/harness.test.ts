@@ -363,7 +363,7 @@ function createHarnessFixture(options: FixtureOptions = {}): HarnessFixture {
       }
       return { retained: false }
     },
-    registerSignalCleanup: (_ownership, cleanup) => {
+    registerSignalCleanup: (cleanup) => {
       mark("signal.register")
       signalCleanup = cleanup
       return {
@@ -570,8 +570,8 @@ describe("portable compatibility lifecycle", () => {
       "preflight",
       "permissions",
       "provider.accounting.create",
-      "management.create",
       "signal.register",
+      "management.create",
       "infrastructure.install",
       "sandbox.capture",
       "probe.namespace.sandbox-secrets-empty",
@@ -743,6 +743,24 @@ describe("portable compatibility lifecycle", () => {
 
     expect(source).toContain('requiredLiveEnvironment("DAWN_TEST_K8S_STORAGE_CLASS")')
     expect(source).toMatch(/kubernetesSandbox\(\{[^}]*storageClass:\s*STORAGE_CLASS/s)
+  })
+
+  test("accounts production preflight in both live provider phases", async () => {
+    const title = "production preflight validates the short-lived token permissions"
+    const fullName = `kubernetesSandbox (real cluster) ${title}`
+    const source = await readFile(
+      join(REPOSITORY_ROOT, "packages/sandbox/test/kube-sandbox.integration.test.ts"),
+      "utf8",
+    )
+    const manifest = JSON.parse(
+      await readFile(join(REPOSITORY_ROOT, "test/k8s-compat/expected-tests.json"), "utf8"),
+    ) as {
+      readonly providerPhases: Readonly<Record<string, readonly string[]>>
+    }
+
+    expect(source).toContain(`test(${JSON.stringify(title)}`)
+    expect(manifest.providerPhases["provider-before-upgrade"]).toContain(fullName)
+    expect(manifest.providerPhases["provider-after-upgrade"]).toContain(fullName)
   })
 
   test("accounts both provider manifests before finish and exact probe IDs once in declaration order", async () => {
@@ -925,9 +943,9 @@ describe("failure boundaries and cleanup", () => {
       "preflight",
       "permissions",
       "provider.accounting.create",
+      "signal.register",
       "management.create",
       "management.recover",
-      "signal.register",
       "diagnostics.collect",
     ])
     const destructiveInput = fixture.cleanupInputs.at(-1) as {
@@ -1331,6 +1349,103 @@ describe("failure boundaries and cleanup", () => {
 })
 
 describe("signal cleanup", () => {
+  test.each([
+    { name: "returns the accepted Namespace", rejectResponse: false },
+    { name: "loses the response after API acceptance", rejectResponse: true },
+  ])(
+    "registers before management Namespace creation, waits when creation $name, and recovers ownership",
+    async ({ rejectResponse }) => {
+      const fixture = createHarnessFixture()
+      const emitter = new EventEmitter()
+      const createStarted = deferred()
+      const releaseCreate = deferred()
+      const terminated = deferred()
+      let createSignal: AbortSignal | undefined
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (
+          command.file === "kubectl" &&
+          command.args.includes("create") &&
+          typeof options?.stdin === "string" &&
+          options.stdin.includes('"kind":"Namespace"')
+        ) {
+          fixture.commandCalls.push({ command, options })
+          fixture.events.push("management.create.started")
+          createSignal = options.signal
+          createStarted.resolve()
+          await releaseCreate.promise
+          fixture.events.push("management.create.settled")
+          if (rejectResponse) throw new Error("management Namespace response was lost")
+          return result(command, namespace(NAMES.managementNamespace, "management-uid"))
+        }
+        if (
+          command.file === "kubectl" &&
+          command.args.includes("get") &&
+          command.args.includes(NAMES.sandboxNamespace)
+        ) {
+          fixture.commandCalls.push({ command, options })
+          return result(command, "")
+        }
+        return baseExecute(command, options)
+      })
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
+        },
+      }).catch((error: unknown) => error)
+
+      await createStarted.promise
+      try {
+        expect(emitter.listenerCount("SIGTERM")).toBe(1)
+        emitter.emit("SIGTERM")
+        await nextEventLoopTurn()
+        expect(createSignal?.aborted).toBe(true)
+        expect(fixture.events).not.toContain("terminate.SIGTERM")
+
+        releaseCreate.resolve()
+        await terminated.promise
+        const error = await run
+
+        expect(error).toBeInstanceOf(Error)
+        expect(fixture.events.indexOf("management.create.settled")).toBeLessThan(
+          fixture.events.lastIndexOf("management.recover"),
+        )
+        expect(fixture.events.lastIndexOf("management.recover")).toBeLessThan(
+          fixture.events.indexOf("cleanup.verify"),
+        )
+        expect(fixture.events.indexOf("cleanup.verify")).toBeLessThan(
+          fixture.events.indexOf("cleanup.destroy"),
+        )
+        expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
+          fixture.events.indexOf("terminate.SIGTERM"),
+        )
+        expect(fixture.cleanupInputs.at(-1)).toMatchObject({
+          ownership: [
+            {
+              name: NAMES.managementNamespace,
+              uid: "management-uid",
+              runId: RUN_ID,
+            },
+          ],
+          installedReleases: [],
+        })
+      } finally {
+        releaseCreate.resolve()
+        await run
+      }
+    },
+  )
+
   test.skipIf(process.platform === "win32")(
     "waits for confirmed detached provider descendants before token and cluster cleanup",
     async () => {
@@ -1862,16 +1977,16 @@ describe("signal cleanup", () => {
     },
   )
 
-  test("registers only after first UID ownership capture and closes over later state", async () => {
+  test("registers after non-mutating gates and before the first cluster mutation", async () => {
     const fixture = createHarnessFixture({ failAt: "probe.network.control-ready" })
 
     await expect(runKubernetesCompatibility(OPTIONS, fixture.dependencies)).rejects.toThrow()
 
-    expect(fixture.events.indexOf("management.create")).toBeLessThan(
+    expect(fixture.events.indexOf("provider.accounting.create")).toBeLessThan(
       fixture.events.indexOf("signal.register"),
     )
     expect(fixture.events.indexOf("signal.register")).toBeLessThan(
-      fixture.events.indexOf("infrastructure.install"),
+      fixture.events.indexOf("management.create"),
     )
     expect(fixture.getSignalCleanup()).toBeTypeOf("function")
   })

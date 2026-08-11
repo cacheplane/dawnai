@@ -72,6 +72,15 @@ async function waitForPodDeletion(core: CoreV1Api, name: string): Promise<void> 
 describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000 }, () => {
   runProviderConformance({ name: "kubernetesSandbox", makeProvider: make, describe })
 
+  test("production preflight validates the short-lived token permissions", async () => {
+    const provider = make()
+    if (provider.preflight === undefined) throw new Error("Kubernetes preflight is unavailable")
+    const result = await provider.preflight()
+
+    expect(result.ok, result.detail).toBe(true)
+    expect(result.detail).toBe(`Kubernetes reachable; required permissions granted in "${NS}".`)
+  })
+
   test("runs with the restricted object and kernel security contract", async () => {
     const provider = make()
     const threadId = `restricted-${randomUUID().slice(0, 8)}`

@@ -667,6 +667,17 @@ describe("positive and negative pod fixtures", () => {
         `dawn.sh/compat-run=${runId},dawn.sh/compat-component=${String(metadata(service).name)}`,
       ]),
     )
+    const cleanupCommands = execute.mock.calls
+      .map(([command]) => command)
+      .filter((command) => command.args.includes("delete"))
+    expect(
+      cleanupCommands.some((command) => command.args.includes(`pod/${String(clientName)}`)),
+    ).toBe(true)
+    expect(cleanupCommands.some((command) => command.args.includes("--selector"))).toBe(true)
+    for (const cleanupCommand of cleanupCommands) {
+      expect(cleanupCommand.args).not.toContain("--output")
+      expect(cleanupCommand.args).not.toContain("-o")
+    }
     const callsAfterCleanup = execute.mock.calls.length
     await lease.cleanup()
     expect(execute).toHaveBeenCalledTimes(callsAfterCleanup)
@@ -1851,8 +1862,6 @@ describe("reaper and application Service probes", () => {
           `dawn.sh/compat-run=${runId},dawn.sh/compat-component=reaper-lifecycle`,
           "--ignore-not-found=true",
           "--wait=true",
-          "--output",
-          "json",
         ]),
       )
     }
@@ -2270,8 +2279,6 @@ describe("probe command routing, evidence, and cleanup", () => {
         `dawn.sh/compat-run=${runId},dawn.sh/compat-component=outside-namespace-rbac-probe`,
         "--ignore-not-found=true",
         "--wait=true",
-        "--output",
-        "json",
       ],
     })
   })

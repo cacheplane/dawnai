@@ -18,6 +18,7 @@ const SERVER_PARITY_ROOTS = [
   "test",
   "workspace",
 ] as const
+const RESEARCH_PARITY_RUNTIME_PATHS = ["workspace/tool-outputs", "workspace/reports"] as const
 
 const SERVER_PARITY_IGNORED_PATHS = new Set(["workspace/reports", "workspace/tool-outputs"])
 
@@ -90,6 +91,12 @@ function isMissingPathError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT"
 }
 
+function isRuntimeParityPath(normalizedPath: string): boolean {
+  return RESEARCH_PARITY_RUNTIME_PATHS.some(
+    (runtimePath) => normalizedPath === runtimePath || normalizedPath.startsWith(`${runtimePath}/`),
+  )
+}
+
 async function inventoryParityTree(
   root: string,
   options: { readonly normalizeTemplateSuffix: boolean; readonly scope: ParityScope },
@@ -103,7 +110,6 @@ async function inventoryParityTree(
     const physicalPath = physicalSegments.join("/")
     const normalizedPath = normalizedSegments.join("/")
     if (options.scope.ignoredPaths.has(normalizedPath)) return
-
     const stats = await lstat(join(root, ...physicalSegments)).catch((error: unknown) => {
       if (isMissingPathError(error)) return undefined
       throw error
@@ -400,6 +406,37 @@ describe("research template parity with examples/research/server", () => {
           },
         ],
         unexpectedTemplatePaths: ["src/unexpected.ts"],
+      })
+    } finally {
+      await rm(fixtureRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("excludes only documented runtime workspace subtrees from parity", async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "dawn-research-parity-runtime-"))
+    const fixtureExampleRoot = join(fixtureRoot, "example")
+    const fixtureTemplateRoot = join(fixtureRoot, "template")
+
+    try {
+      await Promise.all([
+        mkdir(join(fixtureExampleRoot, "workspace/tool-outputs"), { recursive: true }),
+        mkdir(join(fixtureTemplateRoot, "workspace/reports"), { recursive: true }),
+      ])
+      await Promise.all([
+        writeFile(join(fixtureExampleRoot, "workspace/source.ts"), "example source"),
+        writeFile(join(fixtureExampleRoot, "workspace/tool-outputs/runtime.txt"), "runtime output"),
+        writeFile(join(fixtureTemplateRoot, "workspace/source.ts.template"), "template source"),
+        writeFile(
+          join(fixtureTemplateRoot, "workspace/reports/runtime.txt.template"),
+          "runtime report",
+        ),
+      ])
+
+      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+        contentDriftedPaths: ["workspace/source.ts"],
+        missingTemplatePaths: [],
+        normalizedPathCollisions: [],
+        unexpectedTemplatePaths: [],
       })
     } finally {
       await rm(fixtureRoot, { force: true, recursive: true })

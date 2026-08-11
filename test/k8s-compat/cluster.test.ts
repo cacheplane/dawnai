@@ -480,6 +480,10 @@ describe("namespace ownership and cleanup", () => {
     }
   }
 
+  function namespaceDeletePath(ownership: NamespaceOwnership): string {
+    return `--raw=/api/v1/namespaces/${encodeURIComponent(ownership.name)}`
+  }
+
   test("captures and verifies exact UID plus run label", () => {
     expect(captureNamespaceOwnership(namespace(management), runId)).toEqual(management)
     expect(() =>
@@ -713,13 +717,79 @@ describe("namespace ownership and cleanup", () => {
       },
       {
         file: "kubectl",
-        args: ["--context", "kind-dawn", "delete", "namespace", management.name],
+        args: [
+          "--context",
+          "kind-dawn",
+          "delete",
+          namespaceDeletePath(management),
+          "--filename",
+          "-",
+        ],
       },
       {
         file: "kubectl",
-        args: ["--context", "kind-dawn", "delete", "namespace", sandbox.name],
+        args: ["--context", "kind-dawn", "delete", namespaceDeletePath(sandbox), "--filename", "-"],
       },
     ])
+  })
+
+  test("deletes a verified namespace through a UID-preconditioned raw request", async () => {
+    const execute = fakeRunner([namespace(management), namespace(management), {}])
+
+    await cleanupOwnedCluster(
+      {
+        context: "kind-dawn",
+        runId,
+        ownership: [management],
+        installedReleases: [],
+        removeTokenFiles: async () => {},
+      },
+      execute,
+    )
+
+    expect(execute.mock.calls.at(-1)).toEqual([
+      {
+        file: "kubectl",
+        args: [
+          "--context",
+          "kind-dawn",
+          "delete",
+          `--raw=/api/v1/namespaces/${encodeURIComponent(management.name)}`,
+          "--filename",
+          "-",
+        ],
+      },
+      {
+        stdin: JSON.stringify({
+          apiVersion: "v1",
+          kind: "DeleteOptions",
+          preconditions: { uid: management.uid },
+        }),
+      },
+    ])
+  })
+
+  test("surfaces a replacement namespace UID-precondition conflict", async () => {
+    const conflict = new Error("the UID in the precondition does not match: Conflict")
+    const rawPath = namespaceDeletePath(management)
+    const execute = vi.fn<Runner>(async (command) => {
+      if (command.args.includes(rawPath)) throw conflict
+      if (command.args.includes("get")) return result(command, namespace(management))
+      return result(command, {})
+    })
+
+    await expect(
+      cleanupOwnedCluster(
+        {
+          context: "kind-dawn",
+          runId,
+          ownership: [management],
+          installedReleases: [],
+          removeTokenFiles: async () => {},
+        },
+        execute,
+      ),
+    ).rejects.toBe(conflict)
   })
 
   test("skips deletion when infrastructure uninstall removes its owned sandbox namespace", async () => {
@@ -794,7 +864,14 @@ describe("namespace ownership and cleanup", () => {
       },
       {
         file: "kubectl",
-        args: ["--context", "kind-dawn", "delete", "namespace", management.name],
+        args: [
+          "--context",
+          "kind-dawn",
+          "delete",
+          namespaceDeletePath(management),
+          "--filename",
+          "-",
+        ],
       },
     ])
   })
@@ -824,8 +901,8 @@ describe("namespace ownership and cleanup", () => {
     expect(
       execute.mock.calls
         .filter(([command]) => command.args.includes("delete"))
-        .map(([command]) => command.args.at(-1)),
-    ).toEqual([sandbox.name])
+        .map(([command]) => command.args.find((argument) => argument.startsWith("--raw="))),
+    ).toEqual([namespaceDeletePath(sandbox)])
   })
 
   test("treats an absent attempted release as uninstalled and deletes both owned namespaces", async () => {
@@ -867,8 +944,8 @@ describe("namespace ownership and cleanup", () => {
     expect(
       execute.mock.calls
         .filter(([command]) => command.args.includes("delete"))
-        .map(([command]) => command.args.at(-1)),
-    ).toEqual([management.name, sandbox.name])
+        .map(([command]) => command.args.find((argument) => argument.startsWith("--raw="))),
+    ).toEqual([namespaceDeletePath(management), namespaceDeletePath(sandbox)])
   })
 
   test("continues release and namespace cleanup after the first uninstall fails", async () => {
@@ -907,8 +984,8 @@ describe("namespace ownership and cleanup", () => {
     expect(
       execute.mock.calls
         .filter(([command]) => command.args.includes("delete"))
-        .map(([command]) => command.args.at(-1)),
-    ).toEqual([management.name, sandbox.name])
+        .map(([command]) => command.args.find((argument) => argument.startsWith("--raw="))),
+    ).toEqual([namespaceDeletePath(management), namespaceDeletePath(sandbox)])
   })
 
   test("aggregates uninstall and namespace failures after every permitted cleanup action", async () => {
@@ -930,7 +1007,10 @@ describe("namespace ownership and cleanup", () => {
         return result(command, namespace(sandbox))
       }
       if (command.args.includes("delete")) {
-        throw failures.get(`delete:${command.args.at(-1)}`)
+        const target = command.args.includes(namespaceDeletePath(management))
+          ? management.name
+          : sandbox.name
+        throw failures.get(`delete:${target}`)
       }
       return result(command, {})
     })
@@ -993,7 +1073,14 @@ describe("namespace ownership and cleanup", () => {
       },
       {
         file: "kubectl",
-        args: ["--context", "kind-dawn", "delete", "namespace", management.name],
+        args: [
+          "--context",
+          "kind-dawn",
+          "delete",
+          namespaceDeletePath(management),
+          "--filename",
+          "-",
+        ],
       },
     ])
   })
@@ -1028,7 +1115,7 @@ describe("namespace ownership and cleanup", () => {
           expect(processEvents.listenerCount(registeredSignal)).toBe(0)
         }
       })
-      const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+      const registration = registerOwnedResourceSignalCleanup(cleanup, {
         emitter: processEvents,
         terminate,
         timeoutMs: 100,
@@ -1051,7 +1138,7 @@ describe("namespace ownership and cleanup", () => {
           finishCleanup = resolve
         }),
     )
-    const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+    const registration = registerOwnedResourceSignalCleanup(cleanup, {
       emitter: processEvents,
       terminate,
       timeoutMs: 100,
@@ -1073,7 +1160,6 @@ describe("namespace ownership and cleanup", () => {
     const terminate = vi.fn()
     const cleanupError = new Error("cleanup failed")
     const registration = registerOwnedResourceSignalCleanup(
-      [management],
       async () => Promise.reject(cleanupError),
       { emitter: processEvents, terminate, timeoutMs: 100 },
     )
@@ -1107,7 +1193,7 @@ describe("namespace ownership and cleanup", () => {
             : outcome === "failed"
               ? async (): Promise<void> => Promise.reject(cleanupError)
               : async (): Promise<void> => new Promise(() => undefined)
-        registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+        registration = registerOwnedResourceSignalCleanup(cleanup, {
           emitter: processEvents,
           timeoutMs: 25,
         })
@@ -1142,7 +1228,6 @@ describe("namespace ownership and cleanup", () => {
     }
     let rejectCleanup: ((reason: unknown) => void) | undefined
     const registration = registerOwnedResourceSignalCleanup(
-      [management],
       async () =>
         new Promise<void>((_resolve, reject) => {
           rejectCleanup = reject
@@ -1178,7 +1263,7 @@ describe("namespace ownership and cleanup", () => {
     const processEvents = new EventEmitter()
     const cleanup = vi.fn(async () => {})
     const terminate = vi.fn()
-    const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+    const registration = registerOwnedResourceSignalCleanup(cleanup, {
       emitter: processEvents,
       terminate,
       timeoutMs: 100,
@@ -1206,7 +1291,7 @@ describe("namespace ownership and cleanup", () => {
       const processEvents = new EventEmitter()
 
       expect(() =>
-        registerOwnedResourceSignalCleanup([management], async () => {}, {
+        registerOwnedResourceSignalCleanup(async () => {}, {
           emitter: processEvents,
           terminate: vi.fn(),
           timeoutMs,

@@ -1220,13 +1220,6 @@ export async function runKubernetesCompatibility(
   const cleanupCurrentState = (retainClusterResources: boolean): Promise<CleanupExecution> => {
     if (cleanupOperation !== undefined) return cleanupOperation
     cleanupOperation = (async () => {
-      const hadWork =
-        ownership.length > 0 ||
-        releaseCleanupCandidates.size > 0 ||
-        networkLease !== undefined ||
-        tokenDestroyers.size > 0
-      if (!hadWork) return { result: Object.freeze({ status: "skipped" }) }
-
       const errors: Error[] = []
       if (shutdownRecoveryOperation !== undefined) {
         try {
@@ -1234,6 +1227,14 @@ export async function runKubernetesCompatibility(
         } catch (error) {
           errors.push(normalizeError(error, "Signal ownership recovery failed"))
         }
+      }
+      const hadWork =
+        ownership.length > 0 ||
+        releaseCleanupCandidates.size > 0 ||
+        networkLease !== undefined ||
+        tokenDestroyers.size > 0
+      if (!hadWork && errors.length === 0) {
+        return { result: Object.freeze({ status: "skipped" }) }
       }
       const remoteCleanupBlocked = unconfirmedProcessTreeError !== undefined
       if (unconfirmedProcessTreeError !== undefined) errors.push(unconfirmedProcessTreeError)
@@ -1331,11 +1332,8 @@ export async function runKubernetesCompatibility(
   }
 
   const ensureSignalRegistration = (): void => {
-    if (signalRegistration !== undefined || ownership.length === 0) return
-    const first = ownership[0]
-    if (first === undefined) return
+    if (signalRegistration !== undefined) return
     signalRegistration = resolved.registerSignalCleanup(
-      [first, ...ownership.slice(1)],
       signalCleanup,
       resolved.signalCleanupOptions,
     )
@@ -1355,7 +1353,6 @@ export async function runKubernetesCompatibility(
       return
     }
     ownership.push(candidate)
-    ensureSignalRegistration()
   }
 
   const recoverNamespaceOwnership = async (name: string): Promise<void> => {
@@ -1408,31 +1405,32 @@ export async function runKubernetesCompatibility(
     throw primary
   }
 
-  const createManagementNamespace = async (): Promise<void> => {
-    const manifest = JSON.stringify({
-      apiVersion: "v1",
-      kind: "Namespace",
-      metadata: {
-        name: derivedNames.managementNamespace,
-        labels: { [RUN_LABEL]: runId },
-      },
+  const createManagementNamespace = (): Promise<void> =>
+    runTrackedLifecyclePhase("management Namespace creation", async (execute) => {
+      const manifest = JSON.stringify({
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: derivedNames.managementNamespace,
+          labels: { [RUN_LABEL]: runId },
+        },
+      })
+      try {
+        const response = await execute(
+          kubectl.command(options.context, ["create", "-f", "-", "--output=json"]),
+          namespaceCommandOptions(manifest),
+        )
+        trackOwnership(
+          captureNamespaceOwnership(
+            parseCommandJson(response, "Management Namespace creation"),
+            runId,
+          ),
+          derivedNames.managementNamespace,
+        )
+      } catch (error) {
+        await failAfterRecovery(error, derivedNames.managementNamespace)
+      }
     })
-    try {
-      const response = await resolved.execute(
-        kubectl.command(options.context, ["create", "-f", "-", "--output=json"]),
-        namespaceCommandOptions(manifest),
-      )
-      trackOwnership(
-        captureNamespaceOwnership(
-          parseCommandJson(response, "Management Namespace creation"),
-          runId,
-        ),
-        derivedNames.managementNamespace,
-      )
-    } catch (error) {
-      await failAfterRecovery(error, derivedNames.managementNamespace)
-    }
-  }
 
   const withTokenKubeconfig = async <T>(
     operation: (secure: SecureTokenKubeconfig, execute: ProbeCommandRunner) => Promise<T>,
@@ -1554,6 +1552,7 @@ export async function runKubernetesCompatibility(
     const providerAccounting = await resolved.createProviderAccountingSession({
       manifestPath: resolved.expectedTestsPath,
     })
+    ensureSignalRegistration()
     await createManagementNamespace()
 
     registerReleaseCleanupCandidate("infrastructure")

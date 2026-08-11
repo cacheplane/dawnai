@@ -481,8 +481,6 @@ async function cleanupByRunLabel(input: {
       selector,
       "--ignore-not-found=true",
       "--wait=true",
-      "--output",
-      "json",
     ]),
   )
 }
@@ -502,8 +500,6 @@ async function cleanupByName(input: {
       input.namespace,
       "--ignore-not-found=true",
       "--wait=true",
-      "--output",
-      "json",
     ]),
   )
 }
