@@ -155,11 +155,11 @@ describe("column filters drive the server query", () => {
 
     const before = listUrls(mock).length
     await waitFor(() => {
-      expect(screen.getByTestId("no-matches")).toBeDefined()
+      expect(screen.getByTestId("browse-empty")).toBeDefined()
     })
     // Over HTTP a param that appears zero times is *absent*, so re-asking the
     // server would come back unfiltered — the page must answer it here.
     expect(listUrls(mock).length).toBe(before)
-    expect(screen.getByTestId("no-matches").textContent).toContain("match these filters")
+    expect(screen.getByTestId("browse-empty").textContent).toContain("match these filters")
   })
 })

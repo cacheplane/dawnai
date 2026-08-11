@@ -88,38 +88,41 @@ describe("ListPage", () => {
     fireEvent.click(facet)
     await vi.waitFor(() => {
       const scoped = callsTo(mock, "/api/memory/list").filter(
-        (u) => u.searchParams.get("namespacePrefix") === "route=/notes",
+        (u) => u.searchParams.get("namespace") === "route=/notes",
       )
       expect(scoped.length).toBeGreaterThan(0)
     })
   })
 
-  it("a selected facet filters the page to the exact namespace, not the prefix", async () => {
+  it("a selected facet asks the server for the exact namespace", async () => {
     const sibling: MemoryRecord = {
       ...candidate,
       id: "cand2",
       namespace: "route=/notes2",
       content: "sibling prefix record",
     }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL) => {
-        const u = String(url)
-        if (u.includes("/api/memory/stats")) {
-          return jsonResponse({
-            ...stats,
-            total: 2,
-            byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
-          })
-        }
-        if (u.includes("/api/memory/list")) {
-          // The server narrows by PREFIX, so a route=/notes selection still
-          // returns the route=/notes2 sibling — the client must filter exactly.
-          return jsonResponse({ records: [candidate, sibling], total: 2 })
-        }
-        return jsonResponse({ groups: [] })
-      }),
-    )
+    const mock = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url)
+      if (u.includes("/api/memory/stats")) {
+        return jsonResponse({
+          ...stats,
+          total: 2,
+          byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
+        })
+      }
+      if (u.includes("/api/memory/list")) {
+        // The request now carries the EXACT namespace, so the server answers with
+        // exactly that namespace's rows — no client-side narrowing left to do.
+        const exact = new URL(u, "http://localhost").searchParams.get("namespace")
+        return jsonResponse(
+          exact === "route=/notes"
+            ? { records: [candidate], total: 1 }
+            : { records: [candidate, sibling], total: 2 },
+        )
+      }
+      return jsonResponse({ groups: [] })
+    })
+    vi.stubGlobal("fetch", mock)
     render(<ListPage />)
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
     expect(await screen.findByText("sibling prefix record")).toBeDefined()
@@ -134,6 +137,10 @@ describe("ListPage", () => {
       expect(screen.queryByText("sibling prefix record")).toBeNull()
     })
     expect(screen.getByText("acme threshold is 750")).toBeDefined()
+    const exact = callsTo(mock, "/api/memory/list").filter(
+      (u) => u.searchParams.get("namespace") === "route=/notes",
+    )
+    expect(exact.length).toBeGreaterThan(0)
   })
 
   it("typing a query fires a debounced search and renders grouped results", async () => {
