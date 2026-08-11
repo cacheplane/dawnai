@@ -591,6 +591,7 @@ export async function createRuntimeFetchHandler(
       },
       cancel: (threadId, reason) =>
         reason === undefined ? runRegistry.cancel(threadId) : runRegistry.cancel(threadId, reason),
+      claim: (threadId) => runRegistry.claim(threadId),
       has: (threadId) => runRegistry.has(threadId),
     }
   }
@@ -1035,20 +1036,23 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        // Cancel first: it is synchronous, so nothing can interleave between
-        // observing the slot and aborting it. Awaiting getThread beforehand
-        // would open a window in which the run we cancel is not the run the
-        // caller observed (run N finishes and releases its slot, run N+1
-        // begins on the same thread, and the cancel — issued against N — hits
-        // N+1 instead).
+        // Synchronous, FIRST statement, nothing awaited before it: the claim
+        // binds to the run the caller observed, so anything that runs after it
+        // (in a later slice, an awaited authorization check) can no longer make
+        // the cancel land on run N+1. `cancel(threadId)` resolved the entry at
+        // call time, which is why that ordering used to be load-bearing.
         //
         // Known, accepted race: a cancel arriving between the route finishing
         // and its idle-status write completing still finds the slot and reports
         // "interrupted" for a run that actually completed. The window is a
         // single DB write wide and corrupts nothing — the streaming client has
-        // already received the real output. Closing it would require tracking a
-        // settled state per run, which is not worth the complexity.
-        if (getRunRegistry(request).cancel(threadId)) {
+        // already received the real output.
+        const claim = getRunRegistry(request).claim(threadId)
+        // A stale claim falls through to the existing 409: "the run you
+        // observed already finished" is the honest answer, where cancelling
+        // through the registry by thread id would silently kill a run the
+        // caller never saw.
+        if (claim?.cancel()) {
           return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
         }
         const thread = await getThreadsStore(request).getThread(threadId)

@@ -82,3 +82,41 @@ describe("createRunRegistry", () => {
     expect(run?.signal.aborted).toBe(false)
   })
 })
+
+describe("RunRegistry.claim", () => {
+  it("returns undefined when no run is in flight", () => {
+    const registry = createRunRegistry()
+    expect(registry.claim("t1")).toBeUndefined()
+  })
+
+  it("aborts the exact run it bound to", () => {
+    const registry = createRunRegistry()
+    const run = registry.begin("t1", shutdown())
+    const claim = registry.claim("t1")
+    expect(claim?.cancel()).toBe(true)
+    expect(run?.cancelled).toBe(true)
+    expect(run?.signal.aborted).toBe(true)
+  })
+
+  it("refuses to abort a later run that replaced the one it bound to", () => {
+    // The direct sibling of release()'s identity guard: a cancel issued against
+    // run N must never land on run N+1.
+    const registry = createRunRegistry()
+    const first = registry.begin("t1", shutdown())
+    const claim = registry.claim("t1")
+    first?.release()
+    const second = registry.begin("t1", shutdown())
+    expect(claim?.cancel()).toBe(false)
+    expect(second?.cancelled).toBe(false)
+    expect(second?.signal.aborted).toBe(false)
+    second?.release()
+  })
+
+  it("leaves cancel(threadId) untouched for its other callers", () => {
+    const registry = createRunRegistry()
+    const run = registry.begin("t1", shutdown())
+    expect(registry.cancel("t1")).toBe(true)
+    expect(run?.cancelled).toBe(true)
+    expect(registry.cancel("t-absent")).toBe(false)
+  })
+})
