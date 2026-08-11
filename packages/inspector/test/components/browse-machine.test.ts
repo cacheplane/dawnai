@@ -1,4 +1,4 @@
-import type { MemoryRecord } from "@dawn-ai/memory/browse"
+import { BROWSE_MAX_LIMIT, type MemoryRecord } from "@dawn-ai/memory/browse"
 import { describe, expect, it } from "vitest"
 import {
   BROWSE_PAGE_SIZE,
@@ -26,6 +26,22 @@ function record(id: string, updatedAt = "2026-08-01T00:00:00.000Z"): MemoryRecor
     createdAt: "2026-07-13T00:00:00.000Z",
     updatedAt,
   }
+}
+
+/** Rows in the default browse order — `updatedAt` DESCENDS as the index rises, so a
+ *  generated window agrees with the order the reconciler compares spans in. */
+function rows(count: number, from = 0): MemoryRecord[] {
+  return Array.from({ length: count }, (_, i) =>
+    record(`r${from + i}`, new Date(Date.UTC(2026, 7, 1) - (from + i) * 60_000).toISOString()),
+  )
+}
+
+/** Rows a day newer than every `rows()` row: a refresh window made entirely of head
+ *  inserts, which is what pushes residents past the span rule 3 retains. */
+function inserted(count: number): MemoryRecord[] {
+  return Array.from({ length: count }, (_, i) =>
+    record(`n${i}`, new Date(Date.UTC(2026, 7, 2) - i * 60_000).toISOString()),
+  )
 }
 
 /** Apply a list of events, returning the final state. Mirrors what the hook does:
@@ -358,6 +374,70 @@ describe("browse machine — single-flight arbitration", () => {
   it("load-more is unavailable once everything matching is loaded", () => {
     const complete: BrowseState = { ...loaded, fulfilled: { ...fulfilled, total: 2 } }
     expect(browseCanLoadMore(complete)).toBe(false)
+  })
+})
+
+describe("browse machine — the resident cap", () => {
+  function loadedWith(records: readonly MemoryRecord[], total = 5432): BrowseState {
+    return apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      { type: "response", revision: 1, kind: "initial", page: { records, total }, at: 1000 },
+    )
+  }
+
+  it("is the route's own BROWSE_MAX_LIMIT, so one refresh can ask for the whole set", () => {
+    expect(BROWSE_RESIDENT_CAP).toBe(BROWSE_MAX_LIMIT)
+  })
+
+  it("holds the resident set at the cap however the pages land", () => {
+    // A resident count off the 200 boundary is ordinary, not exotic: `dedupeById` drops
+    // a paging duplicate whenever an insert shifts the offsets under a load-more.
+    let state = loadedWith(rows(197))
+    for (let guard = 0; browseCanLoadMore(state) && guard < 20; guard += 1) {
+      const transition = browseReduce(state, { type: "load-more-requested" })
+      const request = transition.start
+      if (request === null) throw new Error("unreachable")
+      expect(request.window.offset + request.window.limit).toBeLessThanOrEqual(BROWSE_RESIDENT_CAP)
+      state = browseReduce(transition.state, {
+        type: "response",
+        revision: 1,
+        kind: "load-more",
+        page: { records: rows(request.window.limit, request.window.offset), total: 5432 },
+        at: 2000,
+      }).state
+    }
+    expect(state.fulfilled?.records).toHaveLength(BROWSE_RESIDENT_CAP)
+    expect(browseCanLoadMore(state)).toBe(false)
+  })
+
+  it("truncates a reconciled refresh, so rule 3's tail stays inside a later window", () => {
+    const state = loadedWith(rows(900))
+    const refreshing = browseReduce(state, { type: "poll-tick" })
+    expect(refreshing.start?.window).toEqual({ limit: 900, offset: 0 })
+    const settled = browseReduce(refreshing.state, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: { records: inserted(900), total: 6000 },
+      at: 2000,
+    }).state
+    expect(settled.fulfilled?.records).toHaveLength(BROWSE_RESIDENT_CAP)
+    // Dropped from the FAR end: a row the next window can still reach is worth more
+    // than one parked past the limit, which no refresh can ever re-cover again.
+    expect(settled.fulfilled?.records.at(-1)?.id).toBe("r99")
+    expect(browseReduce(settled, { type: "poll-tick" }).start?.window.limit).toBe(
+      BROWSE_RESIDENT_CAP,
+    )
+  })
+
+  it("retry does not re-issue a load-more the cap has already closed", () => {
+    const atCap: BrowseState = {
+      ...loadedWith(rows(BROWSE_RESIDENT_CAP)),
+      kindErrors: { "load-more": "boom" },
+    }
+    expect(browseCanLoadMore(atCap)).toBe(false)
+    expect(browseReduce(atCap, { type: "retry" }).start?.kind).toBe("refresh")
   })
 })
 

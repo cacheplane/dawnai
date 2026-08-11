@@ -171,8 +171,23 @@ function refreshWindow(state: BrowseState): BrowseWindow {
   }
 }
 
+/** Never asks past the cap: the resident count is not a multiple of the page size
+ *  whenever `dedupeById` has dropped a paging duplicate, so a fixed page would ask for
+ *  rows the cap then discards. Callers guard on `browseCanLoadMore`, which is what
+ *  keeps the limit above zero. */
 function loadMoreWindow(state: BrowseState): BrowseWindow {
-  return { limit: BROWSE_PAGE_SIZE, offset: browseResidentCount(state) }
+  const resident = browseResidentCount(state)
+  return { limit: Math.min(BROWSE_PAGE_SIZE, BROWSE_RESIDENT_CAP - resident), offset: resident }
+}
+
+/** The cap is enforced HERE because this is the only place the resident set grows, and
+ *  it grows by more than a window: reconciliation rule 3 retains a tail the refresh
+ *  limit never asked for. Past the cap the refresh limit stops growing, so a row there
+ *  falls outside every future window — and `supersede` demotes without touching
+ *  `updatedAt`, so it cannot re-enter the head span either, and renders active for
+ *  good. Dropping from the far end keeps what a later window can still re-cover. */
+function withinCap(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
+  return records.length <= BROWSE_RESIDENT_CAP ? records : records.slice(0, BROWSE_RESIDENT_CAP)
 }
 
 /** Success clears only ITS OWN slot. */
@@ -283,7 +298,11 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
           false,
         )
       }
-      if (state.kindErrors["load-more"] !== undefined) {
+      // The banner outlives its request: a load-more slot is cleared only by a
+      // load-more success, so the set can complete — or reach the cap — under a
+      // failure that is still on screen. Re-attempting then would ask for rows past
+      // the cap.
+      if (state.kindErrors["load-more"] !== undefined && browseCanLoadMore(state)) {
         return starting(
           state,
           { revision: state.revision, kind: "load-more", window: loadMoreWindow(state) },
@@ -316,7 +335,7 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
       // Aborting is an optimization layered on top; correctness never depends on it.
       if (event.revision !== state.revision) return noStart(state)
       const base = state.fulfilled?.revision === state.revision ? state.fulfilled.records : []
-      const records =
+      const records = withinCap(
         event.kind === "refresh"
           ? reconcileRefreshedWindow(base, event.page.records, {
               // The store issues a continuation exactly when a window fills its limit,
@@ -328,7 +347,8 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
             })
           : event.kind === "load-more"
             ? dedupeById(base, event.page.records)
-            : event.page.records
+            : event.page.records,
+      )
       return drainQueuedLoadMore({
         ...state,
         inFlight: null,
