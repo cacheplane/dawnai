@@ -154,6 +154,18 @@ async function rejectedError(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected promise to reject")
 }
 
+function thrownError(callback: () => unknown): Error {
+  try {
+    callback()
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw new Error("Expected thrown value to contain an Error")
+  }
+  throw new Error("Expected callback to throw")
+}
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -198,9 +210,10 @@ describe("Calico manifest verification", () => {
   ] as const)("rejects too few %s source occurrences", (_name, source, manifestImages) => {
     const raw = encode(syntheticManifest(manifestImages))
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw))).toThrow(
-      new RegExp(`${source.replaceAll("/", "\\/")}.*expected.*observed`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw)))
+
+    expect(error.message).toContain(source)
+    expect(error.message).toMatch(/occurrence mismatch: expected \d+, observed \d+/i)
   })
 
   it.each([
@@ -210,9 +223,10 @@ describe("Calico manifest verification", () => {
   ] as const)("rejects too many %s source occurrences", (_name, source) => {
     const raw = encode(syntheticManifest({ extra: [source] }))
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw))).toThrow(
-      new RegExp(`${source.replaceAll("/", "\\/")}.*expected.*observed`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw)))
+
+    expect(error.message).toContain(source)
+    expect(error.message).toMatch(/occurrence mismatch: expected \d+, observed \d+/i)
   })
 
   it("reports every malformed YAML document with document context", () => {
@@ -231,12 +245,56 @@ metadata:
     )
   })
 
+  it("rejects an alias in a non-container field with document context", () => {
+    const raw = encode(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: first
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aliased
+data:
+  source: &source ${CNI_SOURCE}
+  copy: *source
+`)
+
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw)))
+
+    expect(error.message).toBe(
+      "Calico manifest YAML document 2 contains a YAML alias; YAML aliases are unsupported",
+    )
+  })
+
+  it("rejects an alias used as an eligible container entry before rewriting", () => {
+    const raw = encode(`apiVersion: v1
+kind: Pod
+metadata:
+  name: aliased-container
+x-container: &shared-container
+  name: install-cni
+  image: ${CNI_SOURCE}
+spec:
+  containers:
+    - *shared-container
+`)
+    const images = [{ source: CNI_SOURCE, occurrences: 1, target: CNI_TARGET }]
+
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images)))
+
+    expect(error.message).toBe(
+      "Calico manifest YAML document 1 contains a YAML alias; YAML aliases are unsupported",
+    )
+  })
+
   it("rejects an unknown eligible image left after configured rewrites", () => {
     const raw = encode(syntheticManifest({ extra: [UNKNOWN_SOURCE] }))
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw))).toThrow(
-      new RegExp(`unknown.*${UNKNOWN_SOURCE.replaceAll("/", "\\/")}`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw)))
+
+    expect(error.message).toMatch(/unknown/i)
+    expect(error.message).toContain(UNKNOWN_SOURCE)
   })
 
   it("rejects a configured source image that remains after rewrite", () => {
@@ -247,9 +305,10 @@ metadata:
       EXPECTED_IMAGES[2],
     ]
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images))).toThrow(
-      new RegExp(`${CNI_SOURCE.replaceAll("/", "\\/")}.*remains.*after rewrite`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images)))
+
+    expect(error.message).toContain(CNI_SOURCE)
+    expect(error.message).toMatch(/remains.*after rewrite/i)
   })
 
   it("rejects duplicate source mappings instead of choosing one", () => {
@@ -259,18 +318,20 @@ metadata:
       { ...EXPECTED_IMAGES[0], target: `${CNI_SOURCE}@sha256:${"d".repeat(64)}` },
     ]
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images))).toThrow(
-      new RegExp(`duplicate.*${CNI_SOURCE.replaceAll("/", "\\/")}`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images)))
+
+    expect(error.message).toMatch(/duplicate/i)
+    expect(error.message).toContain(CNI_SOURCE)
   })
 
   it("rejects an eligible source whose expected mapping is missing", () => {
     const raw = encode(syntheticManifest())
     const images = [EXPECTED_IMAGES[0], EXPECTED_IMAGES[2]]
 
-    expect(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images))).toThrow(
-      new RegExp(`unknown.*${CONTROLLER_SOURCE.replaceAll("/", "\\/")}`, "i"),
-    )
+    const error = thrownError(() => verifyAndRewriteCalico(raw, calicoPolicy(raw, images)))
+
+    expect(error.message).toMatch(/unknown/i)
+    expect(error.message).toContain(CONTROLLER_SOURCE)
   })
 })
 
@@ -367,6 +428,28 @@ describe("Calico manifest download", () => {
       expect(error.message).toMatch(/503/)
       await expect(readFile(outputPath, "utf8")).resolves.toBe("existing destination")
       expect(await readdir(directory)).toEqual(["calico.yaml"])
+    } finally {
+      await rm(directory, { recursive: true })
+    }
+  })
+
+  it("wraps response body read failures with the original cause", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dawn-calico-body-read-"))
+    const outputPath = join(directory, "calico.yaml")
+    const raw = encode(syntheticManifest())
+    const bodyReadCause = new Error("synthetic response body failure")
+    const response = new Response()
+    vi.spyOn(response, "arrayBuffer").mockRejectedValue(bodyReadCause)
+    const fetchImpl: typeof fetch = async () => response
+
+    try {
+      const error = await rejectedError(
+        downloadAndPrepareCalico(outputPath, calicoPolicy(raw), fetchImpl),
+      )
+
+      expect(error.message).toBe("Failed to read Calico manifest response body")
+      expect(error.cause).toBe(bodyReadCause)
+      expect(await readdir(directory)).toEqual([])
     } finally {
       await rm(directory, { recursive: true })
     }

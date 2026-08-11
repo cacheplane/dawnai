@@ -3,7 +3,7 @@ import { rename, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { TextDecoder } from "node:util"
 
-import { parseAllDocuments } from "yaml"
+import { isAlias, parseAllDocuments, visit } from "yaml"
 
 import type { CompatibilityPolicy } from "./policy.js"
 
@@ -91,6 +91,23 @@ function mappingBySource(policy: CalicoPolicy): ReadonlyMap<string, ImageMapping
     mappings.set(mapping.source, mapping)
   }
   return mappings
+}
+
+function assertNoAliases(documents: ReturnType<typeof parseAllDocuments>): void {
+  for (const [documentIndex, document] of documents.entries()) {
+    let aliasFound = false
+    visit(document, (_key, node) => {
+      if (isAlias(node)) {
+        aliasFound = true
+        return visit.BREAK
+      }
+    })
+    if (aliasFound) {
+      throw new Error(
+        `Calico manifest YAML document ${documentIndex + 1} contains a YAML alias; YAML aliases are unsupported`,
+      )
+    }
+  }
 }
 
 function toDocumentValues(documents: ReturnType<typeof parseAllDocuments>): {
@@ -189,6 +206,7 @@ export function verifyAndRewriteCalico(raw: Uint8Array, policy: CalicoPolicy): s
     throw new Error(`Invalid Calico manifest YAML:\n${documentErrors.join("\n")}`)
   }
 
+  assertNoAliases(documents)
   const mappings = mappingBySource(policy)
   const { fields } = toDocumentValues(documents)
   assertExpectedOccurrences(fields, mappings)
@@ -234,7 +252,13 @@ export async function downloadAndPrepareCalico(
       throw new Error(`Failed to download Calico manifest: HTTP ${status}`)
     }
 
-    const raw = new Uint8Array(await response.arrayBuffer())
+    let body: ArrayBuffer
+    try {
+      body = await response.arrayBuffer()
+    } catch (cause) {
+      throw new Error("Failed to read Calico manifest response body", { cause })
+    }
+    const raw = new Uint8Array(body)
     const prepared = verifyAndRewriteCalico(raw, policy)
     temporaryPath = join(
       dirname(outputPath),
