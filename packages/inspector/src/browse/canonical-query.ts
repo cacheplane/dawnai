@@ -1,12 +1,21 @@
 import type { MemoryKind, MemoryStatus } from "@dawn-ai/memory/browse"
 
-/** Which surface the records are being browsed for. Part of the dataset identity:
- *  timeline defaults the kind funnel to episodic, so the two views ask different
- *  questions and must never share a fulfilled result. */
+/** Which surface is browsing. Never sent to the server: it selects the kind default
+ *  and the component that consumes the page.
+ *
+ *  It is part of the dataset identity anyway. A timeline query and a list query
+ *  narrowed to episodic serialize to the SAME params, so keying on `view` costs a
+ *  refetch on that one toggle — paid deliberately, because the resident window and
+ *  the offset it implies belong to the surface that paged them, and a switch that
+ *  inherited them would resume another surface's walk. */
 export type BrowseView = "list" | "timeline"
 
 /**
- * The canonical form of everything that decides WHICH records the server returns.
+ * The canonical form of everything that narrows WHICH records the server returns.
+ *
+ * The inverse of `src/store/browse-params.ts`, which decodes what this encodes; the
+ * expiry cutoff is the one narrowing that lives in neither — `browseSearchParams`
+ * switches it off rather than carrying it, for the reason stated there.
  *
  * `null` means unfiltered and `[]` means matches-nothing — the same distinction
  * `BrowseQuery` draws, kept rather than collapsed so an emptied funnel cannot read
@@ -22,16 +31,28 @@ export interface CanonicalBrowseQuery {
 }
 
 /** Timeline is an episode view: the kind funnel still overrides, but with nothing
- *  ticked it asks for episodes rather than for everything. */
-const TIMELINE_DEFAULT_KIND: readonly MemoryKind[] = ["episodic"]
+ *  ticked it asks for episodes rather than for everything. Handed out by reference to
+ *  every call that takes the default, so a mutation would reach all of them. */
+const TIMELINE_DEFAULT_KIND: readonly MemoryKind[] = Object.freeze(["episodic"])
 
 /** Sorted and deduped, so two funnels that tick the same boxes in a different order
- *  produce ONE dataset key rather than two. */
+ *  produce ONE dataset key rather than two. Frozen because `readonly` is erased at
+ *  runtime, and one widening cast downstream would let a `.sort()` or `.push()` edit
+ *  a set the key was already taken over. */
 function normalizeSet<T extends string>(values: readonly T[] | undefined): readonly T[] | null {
   if (values === undefined) return null
-  return [...new Set(values)].sort()
+  return Object.freeze([...new Set(values)].sort())
 }
 
+/**
+ * MEMOIZE the result. Identity is fresh on every call, so `datasetKeyOf` is the only
+ * comparison that answers "same question"; anything keyed on the object itself sees a
+ * new dataset every render.
+ *
+ * A `since` derived from the clock must be pinned to the moment its window changed,
+ * never recomputed per render: it is part of the identity, so a moving `since` bumps
+ * the key on every render and refetches forever.
+ */
 export function canonicalBrowseQuery(input: {
   readonly view: BrowseView
   readonly namespace?: string | undefined
@@ -42,7 +63,9 @@ export function canonicalBrowseQuery(input: {
   const kind = normalizeSet(input.kind)
   return {
     view: input.view,
-    namespace: input.namespace ?? null,
+    // `||`, not `??`: `""` is not a namespace the server can express — `browse-params.ts`
+    // drops a falsy one — so it must not read as a narrowing on this side either.
+    namespace: input.namespace || null,
     status: normalizeSet(input.status),
     // `[] ?? x` is `[]`, so an emptied funnel survives the timeline default intact.
     kind: kind ?? (input.view === "timeline" ? TIMELINE_DEFAULT_KIND : null),
@@ -51,9 +74,10 @@ export function canonicalBrowseQuery(input: {
 }
 
 /**
- * The dataset identity. Two queries share a key exactly when they ask the same
- * question; any change bumps the desired revision, invalidates the loaded records
- * and the total together, and pivots the grid's `resultMeta.datasetKey`.
+ * The dataset identity. One direction only: a shared key guarantees the same
+ * question, while two keys do not guarantee two questions — `view` splits one pair
+ * that serializes identically. Any change bumps the desired revision, invalidates the
+ * loaded records and the total together, and pivots the grid's `resultMeta.datasetKey`.
  *
  * The canonical JSON IS the key. A hash would only shorten a string that nothing
  * but `===` ever reads, and would buy a collision class in exchange — while an
@@ -70,11 +94,20 @@ export function browseMatchesNothing(query: CanonicalBrowseQuery): boolean {
   return query.status?.length === 0 || query.kind?.length === 0
 }
 
-/** One window of `query`, as the params `/api/memory/list` parses. */
+/**
+ * One window of `query`, as the params `/api/memory/list` parses.
+ *
+ * THROWS on a matches-nothing query. `browseMatchesNothing` is the guard, and a
+ * caller that skips it has to fail loudly: the params for an empty set are the params
+ * for no set at all, so the request would come back unfiltered — every record, in
+ * answer to "none of them".
+ */
 export function browseSearchParams(
   query: CanonicalBrowseQuery,
   window: { readonly limit: number; readonly offset: number },
 ): URLSearchParams {
+  if (browseMatchesNothing(query))
+    throw new Error("browseSearchParams: this query matches nothing; resolve it locally")
   const params = new URLSearchParams()
   // EXACT namespace, not `namespacePrefix`: a prefix answer and an exact total
   // describe different sets, and this UI displays the two side by side.
@@ -82,6 +115,13 @@ export function browseSearchParams(
   for (const value of query.status ?? []) params.append("status", value)
   for (const value of query.kind ?? []) params.append("kind", value)
   if (query.since !== null) params.set("since", query.since)
+  // The expiry cutoff is switched OFF rather than pinned, which is what makes the
+  // dataset key total. Left to default, the route stamps `now` per request, so an
+  // episode expiring mid-walk shifts every later offset up by one and that row is
+  // skipped for good — and two requests sharing a key answer different sets. Pinning
+  // a `now` here would instead freeze the cutoff for a view that re-polls every two
+  // seconds, and advancing it would pivot the whole dataset just to move a clock.
+  params.set("includeExpired", "1")
   params.set("limit", String(window.limit))
   params.set("offset", String(window.offset))
   return params

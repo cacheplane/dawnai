@@ -36,6 +36,19 @@ describe("canonicalBrowseQuery", () => {
     expect(canonicalBrowseQuery({ view: "timeline", kind: [] }).kind).toEqual([])
   })
 
+  it("reads an empty namespace as unfiltered, the way the server does", () => {
+    const empty = canonicalBrowseQuery({ view: "list", namespace: "" })
+    expect(empty.namespace).toBeNull()
+    expect(datasetKeyOf(empty)).toBe(datasetKeyOf(canonicalBrowseQuery({ view: "list" })))
+  })
+
+  it("freezes value sets, so the shared timeline default cannot be mutated for the process", () => {
+    expect(Object.isFrozen(canonicalBrowseQuery({ view: "timeline" }).kind)).toBe(true)
+    expect(Object.isFrozen(canonicalBrowseQuery({ view: "list", status: ["active"] }).status)).toBe(
+      true,
+    )
+  })
+
   it("gives a different key to every identity field", () => {
     const base = canonicalBrowseQuery({ view: "list" })
     const variants = [
@@ -89,6 +102,20 @@ describe("browseSearchParams", () => {
     expect(params.get("namespace")).toBeNull()
     expect(params.getAll("status")).toEqual([])
     expect(params.get("since")).toBeNull()
+  })
+
+  it("takes the expiry cutoff out of the answer, so one key means one set", () => {
+    const params = browseSearchParams(canonicalBrowseQuery({ view: "timeline" }), {
+      limit: 200,
+      offset: 400,
+    })
+    expect(params.get("includeExpired")).toBe("1")
+    expect(params.get("now")).toBeNull()
+  })
+
+  it("refuses a matches-nothing query instead of asking for everything", () => {
+    const nothing = canonicalBrowseQuery({ view: "list", status: [] })
+    expect(() => browseSearchParams(nothing, { limit: 200, offset: 0 })).toThrow(/matches nothing/)
   })
 
   it("threads the pinned timeline window bound", () => {
