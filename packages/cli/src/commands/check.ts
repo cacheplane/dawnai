@@ -106,14 +106,17 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
         )
       }
 
-      // The same gate the hono target applies at emit time, mirrored here so a
-      // user finds out from `dawn check` rather than from a failed build — and
-      // finds out about EVERY unsupported feature at once. Only when `hono` is
-      // actually configured: an app on the node target may use all of this.
-      if (buildTargets.includes("hono")) {
-        const notice = await collectEdgeDependencyNotice(manifest.appRoot)
+      // The same gate edge targets apply at emit time, mirrored here so a user
+      // finds out from `dawn check` rather than from a failed build. An app on
+      // the node target may use all of these features.
+      for (const targetName of buildTargets) {
+        if (targetName !== "hono" && targetName !== "vercel") continue
+        const notice = await collectEdgeDependencyNotice(manifest.appRoot, targetName)
         if (notice) writeLine(io.stdout, `\n${notice}`)
-        assertEdgeCapabilities({ appRoot: manifest.appRoot, config: loadedConfig, manifest })
+        assertEdgeCapabilities(
+          { appRoot: manifest.appRoot, config: loadedConfig, manifest },
+          targetName,
+        )
       }
     }
 

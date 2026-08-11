@@ -438,6 +438,94 @@
       },
       {
         "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 4,
+        "step": "Build packages",
+        "kind": "run",
+        "value": "pnpm build"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 5,
+        "step": "Prepare native Vercel artifact directory",
+        "kind": "run",
+        "value": "install -d -m 0700 -- \"${{ runner.temp }}/vercel-native\""
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 6,
+        "step": "Run native Vercel previews",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts --reporter=json --outputFile.json=\"${{ runner.temp }}/vercel-native/vitest.json\""
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 7,
+        "step": "Reconcile and remove native Vercel resources",
+        "kind": "run",
+        "value": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --cleanup"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 8,
+        "step": "Assert closed native Vercel receipt",
+        "kind": "run",
+        "value": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --assert-receipt"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 9,
+        "step": "Prepare native Vercel diagnostics",
+        "kind": "run",
+        "value": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --prepare-artifacts"
+      },
+      {
+        "classification": "safe",
+        "job": "vercel-native",
+        "stepIndex": 10,
+        "step": "Upload native Vercel diagnostics",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
         "job": "inspector-e2e",
         "stepIndex": 0,
         "step": "Checkout",
