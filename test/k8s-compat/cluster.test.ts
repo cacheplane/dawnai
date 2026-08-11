@@ -16,6 +16,7 @@ import {
   preflightCluster,
   registerOwnedResourceSignalCleanup,
   requestServiceAccountToken,
+  type SecureTokenKubeconfigDependencies,
   selectStorageClass,
   verifyNamespaceOwnership,
 } from "../../scripts/kubernetes-compat/cluster.ts"
@@ -51,6 +52,7 @@ function fakeRunner(responses: readonly unknown[]): ReturnType<typeof vi.fn<Runn
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   await Promise.all(
     temporaryDirectories.splice(0).map(async (directory) => {
       await import("node:fs/promises").then(({ rm }) =>
@@ -297,6 +299,138 @@ describe("administrative access and token kubeconfig", () => {
     await material.destroy()
     await expect(stat(material.directory)).rejects.toMatchObject({ code: "ENOENT" })
     temporaryDirectories.pop()
+  })
+
+  test.each(["directory chmod", "write", "file chmod"] as const)(
+    "removes the temporary directory when %s setup fails",
+    async (failurePoint) => {
+      const setupError = new Error(`${failurePoint} failed`)
+      const chmod = vi.fn(async (path: string) => {
+        if (
+          failurePoint === "directory chmod" ||
+          (failurePoint === "file chmod" && path.endsWith("kubeconfig.yaml"))
+        ) {
+          throw setupError
+        }
+      })
+      const writeFile = vi.fn(async () => {
+        if (failurePoint === "write") throw setupError
+      })
+      const rm = vi.fn(async () => {})
+      const dependencies: SecureTokenKubeconfigDependencies = {
+        mkdtemp: async () => "/secure/token-directory",
+        chmod,
+        writeFile,
+        rm,
+      }
+
+      await expect(
+        createSecureTokenKubeconfig(
+          {
+            context: "kind-dawn",
+            access: {
+              server: "https://cluster.example",
+              certificateAuthorityData: "Y2VydA==",
+            },
+            token: "secret-token",
+          },
+          dependencies,
+        ),
+      ).rejects.toBe(setupError)
+      expect(rm).toHaveBeenCalledWith("/secure/token-directory", {
+        recursive: true,
+        force: true,
+      })
+    },
+  )
+
+  test("preserves setup and cleanup failures when guarded setup cannot remove the directory", async () => {
+    const setupError = new Error("directory chmod failed")
+    const cleanupError = new Error("temporary directory removal failed")
+    const rm = vi.fn(async () => Promise.reject(cleanupError))
+
+    const error = await createSecureTokenKubeconfig(
+      {
+        context: "kind-dawn",
+        access: {
+          server: "https://cluster.example",
+          certificateAuthorityData: "Y2VydA==",
+        },
+        token: "secret-token",
+      },
+      {
+        mkdtemp: async () => "/secure/token-directory",
+        chmod: async () => Promise.reject(setupError),
+        writeFile: async () => {},
+        rm,
+      },
+    ).catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors).toEqual([setupError, cleanupError])
+    expect(rm).toHaveBeenCalledTimes(1)
+  })
+
+  test("shares concurrent destroy work and remains idempotent after successful removal", async () => {
+    let finishRemoval: (() => void) | undefined
+    const rm = vi.fn(
+      async () =>
+        new Promise<void>((resolve) => {
+          finishRemoval = resolve
+        }),
+    )
+    const material = await createSecureTokenKubeconfig(
+      {
+        context: "kind-dawn",
+        access: {
+          server: "https://cluster.example",
+          certificateAuthorityData: "Y2VydA==",
+        },
+        token: "secret-token",
+      },
+      {
+        mkdtemp: async () => "/secure/token-directory",
+        chmod: async () => {},
+        writeFile: async () => {},
+        rm,
+      },
+    )
+
+    const first = material.destroy()
+    const second = material.destroy()
+    expect(rm).toHaveBeenCalledTimes(1)
+    finishRemoval?.()
+    await Promise.all([first, second])
+    await material.destroy()
+    expect(rm).toHaveBeenCalledTimes(1)
+  })
+
+  test("retries destroy after a failed removal", async () => {
+    const removalError = new Error("temporary directory removal failed")
+    const rm = vi
+      .fn<SecureTokenKubeconfigDependencies["rm"]>()
+      .mockRejectedValueOnce(removalError)
+      .mockResolvedValueOnce(undefined)
+    const material = await createSecureTokenKubeconfig(
+      {
+        context: "kind-dawn",
+        access: {
+          server: "https://cluster.example",
+          certificateAuthorityData: "Y2VydA==",
+        },
+        token: "secret-token",
+      },
+      {
+        mkdtemp: async () => "/secure/token-directory",
+        chmod: async () => {},
+        writeFile: async () => {},
+        rm,
+      },
+    )
+
+    await expect(material.destroy()).rejects.toBe(removalError)
+    await expect(material.destroy()).resolves.toBeUndefined()
+    expect(rm).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -722,17 +856,141 @@ describe("namespace ownership and cleanup", () => {
   })
 
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
-    "%s enters one cleanup path after an owned resource exists",
+    "%s removes listeners, completes cleanup, and terminates with the same signal",
     async (signal) => {
       const processEvents = new EventEmitter()
-      const cleanup = vi.fn(async () => {})
-      const unregister = registerOwnedResourceSignalCleanup([management], cleanup, processEvents)
+      const terminate = vi.fn()
+      const cleanup = vi.fn(async () => {
+        for (const registeredSignal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+          expect(processEvents.listenerCount(registeredSignal)).toBe(0)
+        }
+      })
+      const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+        emitter: processEvents,
+        terminate,
+        timeoutMs: 100,
+      })
 
       processEvents.emit(signal)
-      processEvents.emit(signal)
-      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1))
-      unregister()
+      await expect(registration.completion).resolves.toEqual({ signal, status: "passed" })
+      expect(cleanup).toHaveBeenCalledTimes(1)
+      expect(terminate).toHaveBeenCalledExactlyOnceWith(signal)
+    },
+  )
+
+  test("removes listeners synchronously and ignores a second signal", async () => {
+    const processEvents = new EventEmitter()
+    const terminate = vi.fn()
+    let finishCleanup: (() => void) | undefined
+    const cleanup = vi.fn(
+      async () =>
+        new Promise<void>((resolve) => {
+          finishCleanup = resolve
+        }),
+    )
+    const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+      emitter: processEvents,
+      terminate,
+      timeoutMs: 100,
+    })
+
+    expect(processEvents.emit("SIGINT")).toBe(true)
+    expect(processEvents.emit("SIGTERM")).toBe(false)
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    finishCleanup?.()
+    await expect(registration.completion).resolves.toEqual({
+      signal: "SIGINT",
+      status: "passed",
+    })
+    expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGINT")
+  })
+
+  test("retains cleanup rejection in a failed completion and terminates once", async () => {
+    const processEvents = new EventEmitter()
+    const terminate = vi.fn()
+    const cleanupError = new Error("cleanup failed")
+    const registration = registerOwnedResourceSignalCleanup(
+      [management],
+      async () => Promise.reject(cleanupError),
+      { emitter: processEvents, terminate, timeoutMs: 100 },
+    )
+
+    processEvents.emit("SIGHUP")
+
+    await expect(registration.completion).resolves.toEqual({
+      signal: "SIGHUP",
+      status: "failed",
+      error: cleanupError,
+    })
+    expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGHUP")
+  })
+
+  test("times out bounded cleanup and terminates exactly once even if cleanup later settles", async () => {
+    vi.useFakeTimers()
+    const processEvents = new EventEmitter()
+    const terminate = vi.fn()
+    let finishCleanup: (() => void) | undefined
+    const registration = registerOwnedResourceSignalCleanup(
+      [management],
+      async () =>
+        new Promise<void>((resolve) => {
+          finishCleanup = resolve
+        }),
+      { emitter: processEvents, terminate, timeoutMs: 25 },
+    )
+
+    processEvents.emit("SIGTERM")
+    await vi.advanceTimersByTimeAsync(25)
+
+    await expect(registration.completion).resolves.toEqual({
+      signal: "SIGTERM",
+      status: "timed-out",
+    })
+    expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGTERM")
+    finishCleanup?.()
+    await vi.runAllTimersAsync()
+    expect(terminate).toHaveBeenCalledTimes(1)
+  })
+
+  test("dispose removes listeners and prevents cleanup or termination", async () => {
+    const processEvents = new EventEmitter()
+    const cleanup = vi.fn(async () => {})
+    const terminate = vi.fn()
+    const registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+      emitter: processEvents,
+      terminate,
+      timeoutMs: 100,
+    })
+
+    registration.dispose()
+    registration.dispose()
+
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
       expect(processEvents.listenerCount(signal)).toBe(0)
+      expect(processEvents.emit(signal)).toBe(false)
+    }
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(terminate).not.toHaveBeenCalled()
+    const state = await Promise.race([
+      registration.completion.then(() => "settled"),
+      Promise.resolve("pending"),
+    ])
+    expect(state).toBe("pending")
+  })
+
+  test.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid signal cleanup timeout %s before registration",
+    (timeoutMs) => {
+      const processEvents = new EventEmitter()
+
+      expect(() =>
+        registerOwnedResourceSignalCleanup([management], async () => {}, {
+          emitter: processEvents,
+          terminate: vi.fn(),
+          timeoutMs,
+        }),
+      ).toThrow(/timeout.*positive/i)
+      expect(processEvents.eventNames()).toEqual([])
     },
   )
 })

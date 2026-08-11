@@ -71,6 +71,20 @@ export interface SecureTokenKubeconfig {
   destroy(): Promise<void>
 }
 
+export interface SecureTokenKubeconfigDependencies {
+  readonly mkdtemp: (prefix: string) => Promise<string>
+  readonly chmod: (path: string, mode: number) => Promise<void>
+  readonly writeFile: (
+    path: string,
+    data: string,
+    options: { readonly encoding: "utf8"; readonly flag: "wx"; readonly mode: number },
+  ) => Promise<void>
+  readonly rm: (
+    path: string,
+    options: { readonly recursive: true; readonly force: true },
+  ) => Promise<void>
+}
+
 export interface NamespaceOwnership {
   readonly name: string
   readonly uid: string
@@ -93,6 +107,22 @@ export interface SignalEmitter {
   off(event: NodeJS.Signals, listener: () => void): unknown
 }
 
+export type SignalCleanupResult =
+  | { readonly signal: NodeJS.Signals; readonly status: "passed" }
+  | { readonly signal: NodeJS.Signals; readonly status: "failed"; readonly error: Error }
+  | { readonly signal: NodeJS.Signals; readonly status: "timed-out" }
+
+export interface SignalCleanupRegistration {
+  readonly completion: Promise<SignalCleanupResult>
+  dispose(): void
+}
+
+export interface SignalCleanupOptions {
+  readonly emitter?: SignalEmitter
+  readonly terminate?: (signal: NodeJS.Signals) => void
+  readonly timeoutMs?: number
+}
+
 interface JsonObject {
   readonly [key: string]: unknown
 }
@@ -103,10 +133,22 @@ const RUN_LABEL = "dawn.sh/compat-run"
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const
 const RELEASE_ROLES = ["infrastructure", "application"] as const
 const TARGET_MINOR_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const SIGNAL_CLEANUP_TIMEOUT_MS = 30_000
+
+const DEFAULT_TOKEN_KUBECONFIG_DEPENDENCIES: SecureTokenKubeconfigDependencies = {
+  mkdtemp,
+  chmod,
+  writeFile: async (path, data, options) => writeFile(path, data, options),
+  rm,
+}
 
 function expectNonEmpty(value: string, name: string): string {
   if (value.trim().length === 0) throw new Error(`${name} must be a non-empty string`)
   return value
+}
+
+function normalizeError(cause: unknown, message: string): Error {
+  return cause instanceof Error ? cause : new Error(message, { cause })
 }
 
 function expectObject(value: unknown, name: string): JsonObject {
@@ -361,50 +403,71 @@ export async function requestServiceAccountToken(
 
 export async function createSecureTokenKubeconfig(
   input: SecureTokenKubeconfigInput,
+  dependencies: SecureTokenKubeconfigDependencies = DEFAULT_TOKEN_KUBECONFIG_DEPENDENCIES,
 ): Promise<SecureTokenKubeconfig> {
   const context = expectNonEmpty(input.context, "Kubernetes context")
   const token = expectNonEmpty(input.token, "ServiceAccount token")
-  const directory = await mkdtemp(join(tmpdir(), "dawn-kubernetes-compat-"))
-  await chmod(directory, 0o700)
-  const path = join(directory, "kubeconfig.yaml")
-  const config = {
-    apiVersion: "v1",
-    kind: "Config",
-    clusters: [
-      {
-        name: "cluster",
-        cluster: {
-          server: input.access.server,
-          "certificate-authority-data": input.access.certificateAuthorityData,
-        },
-      },
-    ],
-    users: [{ name: "orchestrator", user: { token } }],
-    contexts: [
-      {
-        name: context,
-        context: { cluster: "cluster", user: "orchestrator" },
-      },
-    ],
-    "current-context": context,
-  }
+  const directory = await dependencies.mkdtemp(join(tmpdir(), "dawn-kubernetes-compat-"))
   try {
-    await writeFile(path, stringify(config), { encoding: "utf8", flag: "wx", mode: 0o600 })
-    await chmod(path, 0o600)
-  } catch (cause) {
-    await rm(directory, { recursive: true, force: true })
-    throw cause
+    const path = join(directory, "kubeconfig.yaml")
+    await dependencies.chmod(directory, 0o700)
+    const config = {
+      apiVersion: "v1",
+      kind: "Config",
+      clusters: [
+        {
+          name: "cluster",
+          cluster: {
+            server: input.access.server,
+            "certificate-authority-data": input.access.certificateAuthorityData,
+          },
+        },
+      ],
+      users: [{ name: "orchestrator", user: { token } }],
+      contexts: [
+        {
+          name: context,
+          context: { cluster: "cluster", user: "orchestrator" },
+        },
+      ],
+      "current-context": context,
+    }
+    await dependencies.writeFile(path, stringify(config), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    })
+    await dependencies.chmod(path, 0o600)
+    let removed = false
+    let removal: Promise<void> | undefined
+    return Object.freeze({
+      directory,
+      path,
+      destroy(): Promise<void> {
+        if (removed) return Promise.resolve()
+        if (removal !== undefined) return removal
+        removal = (async () => {
+          try {
+            await dependencies.rm(directory, { recursive: true, force: true })
+            removed = true
+          } finally {
+            removal = undefined
+          }
+        })()
+        return removal
+      },
+    })
+  } catch (setupError) {
+    try {
+      await dependencies.rm(directory, { recursive: true, force: true })
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [setupError, cleanupError],
+        "Token kubeconfig setup failed and its temporary directory could not be removed",
+      )
+    }
+    throw setupError
   }
-  let destroyed = false
-  return Object.freeze({
-    directory,
-    path,
-    async destroy(): Promise<void> {
-      if (destroyed) return
-      destroyed = true
-      await rm(directory, { recursive: true, force: true })
-    },
-  })
 }
 
 export function captureNamespaceOwnership(value: unknown, runId: string): NamespaceOwnership {
@@ -557,19 +620,66 @@ export async function cleanupOwnedCluster(
 export function registerOwnedResourceSignalCleanup(
   ownership: readonly [NamespaceOwnership, ...NamespaceOwnership[]],
   cleanup: () => Promise<void>,
-  emitter: SignalEmitter = process,
-): () => void {
+  options: SignalCleanupOptions = {},
+): SignalCleanupRegistration {
   if (ownership.length === 0) {
     throw new Error("Signal cleanup requires at least one owned resource")
   }
+  const timeoutMs = options.timeoutMs ?? SIGNAL_CLEANUP_TIMEOUT_MS
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Signal cleanup timeout must be positive and finite")
+  }
+  const emitter = options.emitter ?? process
+  const terminate =
+    options.terminate ?? ((signal: NodeJS.Signals) => process.kill(process.pid, signal))
+  let resolveCompletion: (result: SignalCleanupResult) => void = () => undefined
+  const completion = new Promise<SignalCleanupResult>((resolve) => {
+    resolveCompletion = resolve
+  })
   let started = false
-  const onSignal = (): void => {
-    if (started) return
+  let disposed = false
+  let finished = false
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const listeners = new Map<NodeJS.Signals, () => void>()
+  const removeListeners = (): void => {
+    for (const [signal, listener] of listeners) emitter.off(signal, listener)
+  }
+  const finish = (result: SignalCleanupResult): void => {
+    if (finished) return
+    finished = true
+    if (timeout !== undefined) clearTimeout(timeout)
+    resolveCompletion(Object.freeze(result))
+    terminate(result.signal)
+  }
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (started || disposed) return
     started = true
-    void cleanup().catch(() => undefined)
+    removeListeners()
+    timeout = setTimeout(() => finish({ signal, status: "timed-out" }), timeoutMs)
+    let operation: Promise<void>
+    try {
+      operation = Promise.resolve(cleanup())
+    } catch (cause) {
+      finish({ signal, status: "failed", error: normalizeError(cause, "Signal cleanup failed") })
+      return
+    }
+    void operation.then(
+      () => finish({ signal, status: "passed" }),
+      (cause: unknown) =>
+        finish({ signal, status: "failed", error: normalizeError(cause, "Signal cleanup failed") }),
+    )
   }
-  for (const signal of SIGNALS) emitter.on(signal, onSignal)
-  return () => {
-    for (const signal of SIGNALS) emitter.off(signal, onSignal)
+  for (const signal of SIGNALS) {
+    const listener = (): void => onSignal(signal)
+    listeners.set(signal, listener)
+    emitter.on(signal, listener)
   }
+  return Object.freeze({
+    completion,
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      removeListeners()
+    },
+  })
 }
