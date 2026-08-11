@@ -20,7 +20,7 @@ helm upgrade --install dawn-sandbox-infra \
   oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
 ```
 
-The application chart does not replace the sandbox infrastructure chart. See the existing [Execution Sandbox](/docs/sandbox) guide for the provider and cluster-side security boundary.
+The application chart does not replace the sandbox infrastructure chart. See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for the provider and cluster-side security boundary.
 
 ## Install or upgrade the application
 
@@ -132,7 +132,7 @@ Review the released chart's [`README.md`](https://github.com/cacheplane/dawnai/b
 <RelatedCards
   items={[
     { href: "/docs/deployment/node", title: "Node and Docker", description: "Build the image consumed by this chart." },
-    { href: "/docs/sandbox", title: "Execution Sandbox", description: "Configure the Kubernetes sandbox provider and infrastructure." },
+    { href: "/docs/sandbox/kubernetes", title: "Kubernetes Sandbox", description: "Configure the Kubernetes sandbox provider and infrastructure." },
     { href: "/docs/persistence", title: "Persistence and Tenancy", description: "Externalize every state domain that must survive replacement." },
     { href: "/docs/production-topology", title: "Production Topology", description: "Design thread-aware routing and cancel ownership." },
   ]}

@@ -11,7 +11,7 @@
 # probes require this Node-target server contract; LangSmith graph artifacts
 # are platform deployment artifacts, not compatible chart images. See
 # apps/web/content/docs/deployment/kubernetes.mdx for app deployment and
-# apps/web/content/docs/sandbox.mdx for Execution Sandbox.
+# https://dawnai.org/docs/sandbox/kubernetes for Kubernetes Sandbox operations.
 
 image:
   # repository: REQUIRED at install time. Defaults to "" so `helm lint`

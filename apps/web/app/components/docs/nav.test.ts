@@ -77,6 +77,7 @@ const FOUNDATION_DOCS_NAV = [
       { label: "LangSmith", href: "/docs/deployment/langsmith" },
       { label: "Edge and Hono", href: "/docs/deployment/edge" },
       { label: "Execution Sandbox", href: "/docs/sandbox" },
+      { label: "Kubernetes Sandbox", href: "/docs/sandbox/kubernetes" },
     ],
   },
   {
@@ -222,7 +223,7 @@ describe("documentation registry invariants", () => {
     ])
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(50)
+    expect(DOCS_PAGES).toHaveLength(51)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 

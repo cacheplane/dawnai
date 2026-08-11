@@ -626,6 +626,79 @@ const accuracyContracts = [
     forbidden: ["/healthz proves dependency readiness", "HPA makes"],
   },
   {
+    file: "apps/web/content/docs/sandbox.mdx",
+    required: [
+      "## Quickstart",
+      "## What it is — and isn't",
+      "Docker reference implementation",
+      "--pids-limit 512",
+      "resources.timeoutMs",
+      "code `124`",
+      "--network none",
+      "best-effort",
+      "preflight?():",
+      "warnings?: readonly string[]",
+      "pnpm add @dawn-ai/sandbox",
+      'import type { SandboxHandle, SandboxPolicy } from "@dawn-ai/sandbox"',
+      "Provider retention can shorten this lifecycle",
+      "sandbox-docker-e2e",
+      "/docs/sandbox/kubernetes",
+    ],
+    forbidden: [
+      "provider: kubernetesSandbox({",
+      "helm upgrade --install dawn-sandbox-infra",
+      'from "@dawn-ai/workspace"',
+      'import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/sandbox"',
+      "workspace can survive idle reap, process restart, or compute replacement",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/sandbox/kubernetes.mdx",
+    required: [
+      "# Kubernetes Sandbox",
+      'namespace: "dawn-sandboxes"',
+      "ReadWriteOnce",
+      "automountServiceAccountToken: false",
+      "policy-enforcing CNI",
+      "DNS remains allowed",
+      'network: { mode: "allow" }',
+      "cannot override",
+      "PID limits",
+      "node/runtime",
+      "Pod-create authorization only",
+      "NetworkPolicy enforcement is unknown",
+      "every unreferenced Dawn PVC",
+      "still-live thread",
+      "reaper.ttlHours",
+      "scheduled reaper run deletes a currently unreferenced PVC",
+      "stored marker is older than `reaper.ttlHours`",
+      "reattachment resets the marker only if a reaper run observes",
+      "short reattachment entirely between scheduled runs",
+      "after recent use",
+      "starts with an empty workspace",
+      "tune `reaper.ttlHours` or disable the reaper",
+      "emits no per-thread NetworkPolicy",
+      "does not enforce `denylist`",
+      "egress is open",
+      "sandbox-k8s-e2e",
+      "does not test DNS or blocked egress",
+      "sandbox-k8s",
+      "Calico",
+      "combined evidence",
+      "sleep infinity",
+      "POSIX `sh`",
+      "`timeout` when `resources.timeoutMs` is set",
+      "UID/GID",
+      "/docs/deployment/kubernetes",
+    ],
+    forbidden: [
+      "helm install dawn-app",
+      "helm upgrade --install dawn-app",
+      "readOnlyRootFilesystem: false violates",
+      "remains unreferenced longer than `reaper.ttlHours`",
+    ],
+  },
+  {
     file: "apps/web/content/docs/deployment/langsmith.mdx",
     required: [
       'node_version: "22"',
@@ -675,8 +748,10 @@ const accuracyContracts = [
   },
   {
     file: "charts/dawn-app/values.yaml",
-    required: [".dawn/build/server.mjs"],
+    required: [".dawn/build/server.mjs", "https://dawnai.org/docs/sandbox/kubernetes"],
     forbidden: [
+      "apps/web/content/docs/sandbox.mdx",
+      "# /docs/sandbox/kubernetes",
       "langgraphjs dockerfile",
       "langgraphjs-built image",
       "image built the alternate way",
@@ -882,6 +957,16 @@ for (const contract of accuracyContracts) {
   }
 }
 
+const appChartValuesSource = readFileSync(resolve(repoRoot, "charts/dawn-app/values.yaml"), "utf8")
+const canonicalKubernetesSandboxUrl = "https://dawnai.org/docs/sandbox/kubernetes"
+const canonicalKubernetesSandboxUrlCount =
+  appChartValuesSource.split(canonicalKubernetesSandboxUrl).length - 1
+if (canonicalKubernetesSandboxUrlCount !== 1) {
+  failures.push(
+    `charts/dawn-app/values.yaml must contain the canonical Kubernetes Sandbox URL exactly once; found ${canonicalKubernetesSandboxUrlCount}`,
+  )
+}
+
 // Every dawn-app installation example must select the image that the guide
 // built, rather than silently falling back to the chart's AppVersion. Keep the
 // expected command counts exact so a new unpinned example cannot hide beside
@@ -932,7 +1017,9 @@ for (const required of [
   "helm upgrade --install dawn-sandbox-infra",
 ]) {
   if (!chartReadmeSource.includes(required)) {
-    failures.push(`charts/dawn-app/README.md copy-complete install prerequisite missing: ${required}`)
+    failures.push(
+      `charts/dawn-app/README.md copy-complete install prerequisite missing: ${required}`,
+    )
   }
 }
 if (chartReadmeSource.includes("--set image.tag=latest")) {
@@ -1041,6 +1128,46 @@ const compatibilityStubContracts = [
     file: "apps/web/content/docs/deployment.mdx",
     retainedHeading: "What is proven, and what is not",
     canonicalHref: "/docs/deployment/edge",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Kubernetes provider",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Security hardening on Kubernetes",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Network policy on Kubernetes",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Deploying the sandbox infrastructure (Helm)",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Key caveats",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Deploying a Dawn app (Helm)",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "ServiceAccount and namespace wiring",
+    canonicalHref: "/docs/sandbox/kubernetes",
+  },
+  {
+    file: "apps/web/content/docs/sandbox.mdx",
+    retainedHeading: "Env, secrets, and replicas",
+    canonicalHref: "/docs/sandbox/kubernetes",
   },
 ]
 
@@ -1169,6 +1296,7 @@ const expectedNavDocEntries = [
   { label: "LangSmith", href: "/docs/deployment/langsmith" },
   { label: "Edge and Hono", href: "/docs/deployment/edge" },
   { label: "Execution Sandbox", href: "/docs/sandbox" },
+  { label: "Kubernetes Sandbox", href: "/docs/sandbox/kubernetes" },
   { label: "Recipes Overview", href: "/docs/recipes" },
   { label: "Add a Tool", href: "/docs/recipes/add-a-tool" },
   { label: "Typed State", href: "/docs/recipes/typed-state" },
