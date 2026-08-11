@@ -120,14 +120,48 @@ function isDynamicRwoStoragePrerequisite(text: string): boolean {
   return driverMustSupport || driverIsRequired || provisioningRequiresDriver
 }
 
+function isApprovedCniPreflightWarning(text: string): boolean {
+  return /^Only after (?:every required permission is granted|all permissions pass) does it (?:check|probe) NetworkPolicy enforcement; an unconfirmed policy-capable CNI produces a warning (?:rather than a successful enforcement claim|instead of an enforcement claim)[.!?]?$/i.test(
+    text,
+  )
+}
+
+function hasPositiveCniClaimLanguage(text: string): boolean {
+  const positiveClaim =
+    /\b(?:certif(?:y|ies|ied|ying)|compatible|validat(?:e|es|ed|ing)|support(?:s|ed|ing)?|prov(?:e|es|ed|en)|guarantee(?:s|d|ing)?|work(?:s|ed|ing)?\s+with)\b/gi
+  for (const match of text.matchAll(positiveClaim)) {
+    const prefix = text.slice(Math.max(0, match.index - 32), match.index)
+    const isNegated =
+      /(?:\b(?:not|never|cannot|can't|doesn't|don't|isn't|aren't)\s+|\b(?:rather than|instead of)\s+|\bnon-)$/i.test(
+        prefix,
+      )
+    if (!isNegated) return true
+  }
+  return false
+}
+
+function hasBroadCniQualifier(text: string): boolean {
+  for (const match of text.matchAll(/\b(?:any|arbitrary|other|every|all)\b/gi)) {
+    const prefix = text.slice(0, match.index)
+    if (match[0].toLowerCase() === "all" && /\bat\s+$/i.test(prefix)) continue
+    return true
+  }
+  return false
+}
+
+function isUnsupportedCniClaim(text: string): boolean {
+  if (!/\bCNIs?(?:\s+(?:implementations?|plugins?))?\b/i.test(text)) return false
+  if (hasBroadCniQualifier(text) && !isApprovedCniPreflightWarning(text)) return true
+  return hasPositiveCniClaimLanguage(text)
+}
+
 function makesUnsupportedCompatibilityClaim(source: string): boolean {
   const text = markdownText(source).replaceAll(/\s+/g, " ").trim()
   if (text === compatibilityDisclaimer) return false
   const namesStorageDriver = /\bstorage[- ]drivers?\b/i.test(text)
   if (namesStorageDriver && !isDynamicRwoStoragePrerequisite(text)) return true
 
-  const namesQuantifiedCni = /\b(?:any|arbitrary|other|every|all)\b[^.!?;:]*\bCNIs?\b/i.test(text)
-  if (namesQuantifiedCni) return true
+  if (isUnsupportedCniClaim(text)) return true
 
   const namesManagedKubernetes =
     /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)\b/i.test(text)
@@ -245,6 +279,16 @@ managed Kubernetes services.`,
     "The storage driver must support dynamic ReadWriteOnce provisioning, and Kind validates all storage drivers.",
     "Kind works with every policy-enforcing standards-compliant CNI.",
     "Kind works with every broadly-used policy-enforcing standards-compliant CNI.",
+    "Kind supports CNI implementations other than Calico.",
+    "Kind certifies all of the following: CNI implementations.",
+    "Kind certifies CNI implementations.",
+    "Kind is compatible with CNI implementations.",
+    "Kind validates CNI implementations.",
+    "Kind supports CNI implementations.",
+    "Kind proves CNI compatibility.",
+    "Kind guarantees CNI compatibility.",
+    "Kind works with CNI implementations.",
+    "Kind does not guarantee CNI compatibility, but Kind validates CNI implementations.",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
     expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
@@ -254,6 +298,10 @@ managed Kubernetes services.`,
     `Dawn's Kind/Calico coverage does not certify managed Kubernetes services,
 other CNI implementations, or storage drivers.`,
     "A policy-enforcing CNI is required for NetworkPolicy egress controls.",
+    "CNIs that do not enforce NetworkPolicy leave egress open.",
+    "A CNI that ignores NetworkPolicy does not provide egress isolation.",
+    "Preflight warns when a policy-capable CNI cannot be confirmed; it does not guarantee enforcement.",
+    "Kind does not guarantee CNI compatibility.",
     "Dynamic ReadWriteOnce storage provisioning is required.",
     "The storage driver must support dynamic ReadWriteOnce provisioning.",
     "Managed Kubernetes services are outside Kind evidence.",
