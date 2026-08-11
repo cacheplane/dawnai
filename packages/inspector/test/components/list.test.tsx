@@ -55,11 +55,26 @@ function stubApi() {
   return mock
 }
 
-function callsTo(mock: ReturnType<typeof stubApi>, path: string): URL[] {
+/** Structural on purpose: the mutation stubs below take an `init` the read-only
+ *  stub does not, so a `ReturnType<typeof stubApi>` parameter would reject them. */
+function callsTo(mock: { mock: { calls: readonly (readonly unknown[])[] } }, path: string): URL[] {
   return mock.mock.calls
     .map((call) => String(call[0]))
     .filter((u) => u.includes(path))
     .map((u) => new URL(u, "http://localhost"))
+}
+
+function rowCheckbox(container: HTMLElement, rowId: string): HTMLElement {
+  const box = container.querySelector(
+    `[data-pretable-row-id="${rowId}"] button[data-pretable-row-select]`,
+  )
+  if (!box) throw new Error(`no checkbox for ${rowId}`)
+  return box as HTMLElement
+}
+
+function postCount(mock: { mock: { calls: readonly (readonly unknown[])[] } }): number {
+  return mock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === "POST")
+    .length
 }
 
 describe("ListPage", () => {
@@ -88,38 +103,41 @@ describe("ListPage", () => {
     fireEvent.click(facet)
     await vi.waitFor(() => {
       const scoped = callsTo(mock, "/api/memory/list").filter(
-        (u) => u.searchParams.get("namespacePrefix") === "route=/notes",
+        (u) => u.searchParams.get("namespace") === "route=/notes",
       )
       expect(scoped.length).toBeGreaterThan(0)
     })
   })
 
-  it("a selected facet filters the page to the exact namespace, not the prefix", async () => {
+  it("a selected facet asks the server for the exact namespace", async () => {
     const sibling: MemoryRecord = {
       ...candidate,
       id: "cand2",
       namespace: "route=/notes2",
       content: "sibling prefix record",
     }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL) => {
-        const u = String(url)
-        if (u.includes("/api/memory/stats")) {
-          return jsonResponse({
-            ...stats,
-            total: 2,
-            byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
-          })
-        }
-        if (u.includes("/api/memory/list")) {
-          // The server narrows by PREFIX, so a route=/notes selection still
-          // returns the route=/notes2 sibling — the client must filter exactly.
-          return jsonResponse({ records: [candidate, sibling], total: 2 })
-        }
-        return jsonResponse({ groups: [] })
-      }),
-    )
+    const mock = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url)
+      if (u.includes("/api/memory/stats")) {
+        return jsonResponse({
+          ...stats,
+          total: 2,
+          byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
+        })
+      }
+      if (u.includes("/api/memory/list")) {
+        // The request now carries the EXACT namespace, so the server answers with
+        // exactly that namespace's rows — no client-side narrowing left to do.
+        const exact = new URL(u, "http://localhost").searchParams.get("namespace")
+        return jsonResponse(
+          exact === "route=/notes"
+            ? { records: [candidate], total: 1 }
+            : { records: [candidate, sibling], total: 2 },
+        )
+      }
+      return jsonResponse({ groups: [] })
+    })
+    vi.stubGlobal("fetch", mock)
     render(<ListPage />)
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
     expect(await screen.findByText("sibling prefix record")).toBeDefined()
@@ -134,6 +152,10 @@ describe("ListPage", () => {
       expect(screen.queryByText("sibling prefix record")).toBeNull()
     })
     expect(screen.getByText("acme threshold is 750")).toBeDefined()
+    const exact = callsTo(mock, "/api/memory/list").filter(
+      (u) => u.searchParams.get("namespace") === "route=/notes",
+    )
+    expect(exact.length).toBeGreaterThan(0)
   })
 
   it("typing a query fires a debounced search and renders grouped results", async () => {
@@ -154,5 +176,151 @@ describe("ListPage", () => {
     render(<ListPage />)
     const banner = await screen.findByRole("alert")
     expect(banner.textContent).toContain("no memory store configured")
+  })
+
+  it("surfaces a browse failure in the timeline view, with a way out", async () => {
+    let fail = true
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          return fail
+            ? jsonResponse({ error: "no memory store configured" }, 500)
+            : jsonResponse({ records: [candidate], total: 1 })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+
+    const entry = await screen.findByTestId("error-browse")
+    expect(entry.textContent).toContain("no memory store configured")
+    // The error phase suspends polling, so without a control here the timeline never
+    // asks again and the failure reads as an empty window for the rest of the session.
+    fail = false
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(await screen.findByText("acme threshold is 750")).toBeDefined()
+    expect(screen.queryByTestId("error-browse")).toBeNull()
+  })
+
+  it("puts exactly one retry on screen for a failed browse", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          return jsonResponse({ error: "no memory store configured" }, 500)
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    const block = await screen.findByTestId("browse-error")
+    expect(block.textContent).toContain("no memory store configured")
+    // The grid's body-state block owns the error PHASE wherever the grid is mounted;
+    // a banner for the same failure would put a second retry on screen for one failure.
+    expect(screen.queryByTestId("error-browse")).toBeNull()
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1)
+  })
+
+  it("leaves a failed bulk action to the bar that reports it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url)
+        if (init?.method === "POST") return jsonResponse({ error: "would supersede" }, 409)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) return jsonResponse({ records: [candidate], total: 1 })
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    const { container } = render(<ListPage />)
+    await screen.findByText("acme threshold is 750")
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
+
+    const report = await screen.findByTestId("bulk-error")
+    expect(report.textContent).toContain("1 of 1 failed")
+    // One failure, one channel. A banner repeating it announces the same event a second
+    // time, and — cleared by nothing the bar does — outlives the bar it points at.
+    expect(screen.queryByTestId("error-mutation")).toBeNull()
+    expect(screen.queryByText(/bulk action\(s\) failed/)).toBeNull()
+  })
+
+  it("a mutation still refetches when a request was already in flight", async () => {
+    let release: (() => void) | undefined
+    let hold = false
+    const mock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (init?.method === "POST") return jsonResponse({ ok: true })
+      if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+      if (u.includes("/api/memory/list")) {
+        if (hold) {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        return jsonResponse({ records: [candidate], total: 1 })
+      }
+      return jsonResponse({ groups: [] })
+    })
+    vi.stubGlobal("fetch", mock)
+    const { container } = render(<ListPage />)
+    await screen.findByText("acme threshold is 750")
+
+    // Live off: the post-mutation refresh is the only thing that will ever ask again.
+    fireEvent.click(screen.getByLabelText("live"))
+    hold = true
+    const rail = screen.getByRole("navigation")
+    fireEvent.click(within(rail).getByRole("button", { name: /route=\/notes/ }))
+    await vi.waitFor(() => {
+      expect(release).toBeDefined()
+    })
+
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
+    await vi.waitFor(() => {
+      expect(postCount(mock)).toBe(1)
+    })
+
+    hold = false
+    const before = callsTo(mock, "/api/memory/list").length
+    release?.()
+    await vi.waitFor(() => {
+      expect(callsTo(mock, "/api/memory/list").length).toBeGreaterThan(before)
+    })
+  })
+
+  it("does not call an unanswered timeline window empty", async () => {
+    let release: (() => void) | undefined
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return jsonResponse({ records: [candidate], total: 1 })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+
+    expect(await screen.findByTestId("browse-loading")).toBeDefined()
+    // "No episodes in this window." is an ANSWER, and the server has not given one.
+    expect(screen.queryByText("No episodes in this window.")).toBeNull()
+
+    release?.()
+    expect(await screen.findByText("acme threshold is 750")).toBeDefined()
+    // Counts and freshness describe the browse, not the grid — both surfaces get them.
+    expect(screen.getByTestId("browse-status").textContent).toContain("1 loaded of 1 matching")
   })
 })
