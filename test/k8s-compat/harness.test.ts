@@ -11,10 +11,11 @@ import {
   registerOwnedResourceSignalCleanup,
   type SecureTokenKubeconfig,
 } from "../../scripts/kubernetes-compat/cluster.ts"
-import type {
-  Command,
-  CommandExecutionOptions,
-  CommandResult,
+import {
+  type Command,
+  type CommandExecutionOptions,
+  type CommandResult,
+  helm,
 } from "../../scripts/kubernetes-compat/command.ts"
 import {
   type CompatibilityDiagnosticsInput,
@@ -29,11 +30,15 @@ import {
   runKubernetesCompatibilityMain,
 } from "../../scripts/kubernetes-compat/harness.ts"
 import type { CompatibilityPolicy } from "../../scripts/kubernetes-compat/policy.ts"
-import { KUBERNETES_COMPAT_PROBE_IDS } from "../../scripts/kubernetes-compat/probes.ts"
+import {
+  KUBERNETES_COMPAT_PROBE_IDS,
+  runNetworkControlProbe,
+} from "../../scripts/kubernetes-compat/probes.ts"
 import {
   ARTIFACT_DIRECTORY,
   assertExactStepAccounting,
   type CompatibilityReport,
+  persistCompatibilityReport,
 } from "../../scripts/kubernetes-compat/report.ts"
 
 type Runner = (command: Command, options?: CommandExecutionOptions) => Promise<CommandResult>
@@ -657,6 +662,7 @@ describe("portable compatibility lifecycle", () => {
       expect(call.options?.stdoutLimitBytes).toBeGreaterThan(0)
       expect(call.options?.stderrLimitBytes).toBeGreaterThan(0)
       expect(call.options?.acceptedExitCodes).toEqual([1])
+      expect(call.options?.terminateProcessTree).toBe(true)
       expect(call.options?.env).toMatchObject({
         DAWN_TEST_K8S: "1",
         DAWN_TEST_K8S_NS: NAMES.sandboxNamespace,
@@ -731,6 +737,76 @@ describe("portable compatibility lifecycle", () => {
     const finalReport = fixture.reports.at(-1)
     expect(finalReport?.steps).toHaveLength(KUBERNETES_COMPAT_PROBE_IDS.length)
     expect(finalReport?.steps.every(({ status }) => status === "passed")).toBe(true)
+  })
+
+  test("anchors relative chart commands to the repository when invoked outside it", async () => {
+    const fixture = createHarnessFixture()
+    const originalCwd = process.cwd()
+    const outsideRepository = tmpdir()
+    const explicitCommandCwd = join(REPOSITORY_ROOT, "packages/sandbox")
+    const runChartCommand = async (
+      event: string,
+      verb: "install" | "upgrade",
+      chart: string,
+      runCommand: Runner | undefined,
+    ): Promise<void> => {
+      if (runCommand === undefined) throw new Error("Expected injected lifecycle executor")
+      fixture.events.push(event)
+      await runCommand(helm.command(CONTEXT, [verb, `${verb}-release`, chart]))
+    }
+
+    process.chdir(outsideRepository)
+    try {
+      await runKubernetesCompatibility(OPTIONS, {
+        ...fixture.dependencies,
+        probes: {
+          ...fixture.dependencies.probes,
+          installInfrastructure: async ({ execute }) =>
+            runChartCommand(
+              "infrastructure.install",
+              "install",
+              "charts/dawn-sandbox-infra",
+              execute,
+            ),
+          upgradeInfrastructure: async ({ execute }) =>
+            runChartCommand(
+              "probe.upgrade.infrastructure",
+              "upgrade",
+              "charts/dawn-sandbox-infra",
+              execute,
+            ),
+          installApplication: async ({ execute }) =>
+            runChartCommand("application.install", "install", "charts/dawn-app", execute),
+          upgradeApplication: async ({ execute }) =>
+            runChartCommand("probe.upgrade.application", "upgrade", "charts/dawn-app", execute),
+          sandboxSecretsEmpty: async ({ execute }) => {
+            if (execute === undefined) throw new Error("Expected injected lifecycle executor")
+            fixture.events.push("probe.namespace.sandbox-secrets-empty")
+            await execute({ file: "safe-command", args: [] }, { cwd: explicitCommandCwd })
+          },
+        },
+      })
+    } finally {
+      process.chdir(originalCwd)
+    }
+
+    const chartCalls = fixture.commandCalls.filter(({ command }) =>
+      command.args.some((argument) => argument.startsWith("charts/")),
+    )
+    expect(chartCalls).toHaveLength(4)
+    expect(chartCalls.map(({ options }) => options?.cwd)).toEqual([
+      REPOSITORY_ROOT,
+      REPOSITORY_ROOT,
+      REPOSITORY_ROOT,
+      REPOSITORY_ROOT,
+    ])
+    expect(chartCalls.every(({ options }) => options?.terminateProcessTree === undefined)).toBe(
+      true,
+    )
+    const explicitCwdCall = fixture.commandCalls.find(
+      ({ command }) => command.file === "safe-command",
+    )
+    expect(explicitCwdCall?.options?.cwd).toBe(explicitCommandCwd)
   })
 })
 
@@ -1145,6 +1221,85 @@ describe("failure boundaries and cleanup", () => {
 
 describe("signal cleanup", () => {
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "cleans partial network setup with the raw executor before failing cluster cleanup on %s",
+    async (signal) => {
+      const fixture = createHarnessFixture({ failClusterDestruction: true })
+      const emitter = new EventEmitter()
+      const networkWaitStarted = deferred()
+      const terminated = deferred()
+      let networkWaitSignal: AbortSignal | undefined
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (
+          command.file === "kubectl" &&
+          command.args.includes("wait") &&
+          command.args.includes("--for=condition=Ready")
+        ) {
+          fixture.commandCalls.push({ command, options })
+          networkWaitSignal = options?.signal
+          networkWaitStarted.resolve()
+          await new Promise<never>((_resolve, reject) => {
+            if (options?.signal?.aborted === true) {
+              reject(new Error("network setup aborted"))
+              return
+            }
+            options?.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("network setup aborted")),
+              { once: true },
+            )
+          })
+        }
+        if (command.file === "kubectl" && command.args.includes("--selector")) {
+          fixture.events.push("network.raw.cleanup")
+        }
+        return baseExecute(command, options)
+      })
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
+        },
+        probes: {
+          ...fixture.dependencies.probes,
+          networkControl: runNetworkControlProbe,
+        },
+      }).catch((error: unknown) => error)
+
+      await networkWaitStarted.promise
+      emitter.emit(signal)
+      await terminated.promise
+      const error = await run
+
+      expect(networkWaitSignal?.aborted).toBe(true)
+      const rawCleanupCalls = fixture.commandCalls.filter(
+        ({ command }) => command.file === "kubectl" && command.args.includes("--selector"),
+      )
+      expect(rawCleanupCalls).toHaveLength(3)
+      expect(rawCleanupCalls.every(({ options }) => options?.signal === undefined)).toBe(true)
+      expect(fixture.events.filter((event) => event === "network.raw.cleanup")).toHaveLength(3)
+      expect(flattenErrorMessages(error)).toEqual(
+        expect.arrayContaining(["network setup aborted", "cluster destruction failed"]),
+      )
+      expect(fixture.events.indexOf("network.raw.cleanup")).toBeLessThan(
+        fixture.events.indexOf("cleanup.destroy"),
+      )
+      expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
+        fixture.events.indexOf(`terminate.${signal}`),
+      )
+    },
+  )
+
+  test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
     "waits for an in-flight infrastructure install and recovers its ownership before %s cleanup",
     async (signal) => {
       const fixture = createHarnessFixture()
@@ -1343,14 +1498,16 @@ describe("signal cleanup", () => {
         },
         probes: {
           ...fixture.dependencies.probes,
-          networkControl: async ({ execute: runCommand }) => {
-            if (runCommand === undefined) throw new Error("Expected injected lifecycle executor")
+          networkControl: async ({ cleanupExecute }) => {
+            if (cleanupExecute === undefined) {
+              throw new Error("Expected injected network cleanup executor")
+            }
             fixture.events.push("probe.network.control-ready")
             return {
               url: `http://network.${NAMES.sandboxNamespace}.svc.cluster.local:8080/`,
               async cleanup(): Promise<void> {
                 fixture.events.push("network.cleanup")
-                await runCommand({ file: "kubectl", args: ["test-network-cleanup"] })
+                await cleanupExecute({ file: "kubectl", args: ["test-network-cleanup"] })
               },
             }
           },
@@ -1536,7 +1693,7 @@ describe("failure reports and diagnostics", () => {
     expect(diagnosticStart).toBeGreaterThan(0)
     const diagnosticCalls = fixture.commandCalls.slice(diagnosticStart)
     expect(diagnosticCalls.some(({ command }) => command.args.includes("events"))).toBe(true)
-    expect(diagnosticCalls.some(({ command }) => command.args.includes("describe"))).toBe(true)
+    expect(diagnosticCalls.some(({ command }) => command.args.includes("describe"))).toBe(false)
     expect(diagnosticCalls.some(({ command }) => command.args.includes("logs"))).toBe(true)
     expect(
       diagnosticCalls.some(
@@ -1565,11 +1722,17 @@ describe("failure reports and diagnostics", () => {
     expect(serializedReport).toContain("[REDACTED]")
   })
 
-  test("collects unlabeled chart objects and validated provider Pod descriptions and logs inside owned Namespaces", async () => {
+  test("collects unlabeled chart objects plus validated provider Pod summaries and logs inside live-owned Namespaces", async () => {
     const calls: CommandCall[] = []
     const execute = vi.fn<Runner>(async (command, options) => {
       calls.push({ command, options })
       const args = command.args
+      if (command.file === "kubectl" && args.includes("get") && args.includes("namespace")) {
+        const name = args[args.indexOf("namespace") + 1]
+        return name === NAMES.managementNamespace
+          ? result(command, namespace(NAMES.managementNamespace, "management-uid"))
+          : result(command, namespace(NAMES.sandboxNamespace, "sandbox-uid"))
+      }
       const namespaceName = args[args.indexOf("--namespace") + 1]
       if (command.file === "kubectl" && args.includes("get") && args.includes("pods")) {
         return result(command, {
@@ -1580,6 +1743,17 @@ describe("failure reports and diagnostics", () => {
               apiVersion: "v1",
               kind: "Pod",
               metadata: { name: "provider-unlabeled", namespace: namespaceName },
+              status: {
+                phase: "Failed",
+                containerStatuses: [
+                  {
+                    name: "provider",
+                    ready: false,
+                    restartCount: 2,
+                    state: { terminated: { exitCode: 1, reason: "Error" } },
+                  },
+                ],
+              },
             },
           ],
         })
@@ -1630,10 +1804,11 @@ describe("failure reports and diagnostics", () => {
 
     expect(JSON.stringify(diagnostics)).toContain("helm-deployment")
     expect(JSON.stringify(diagnostics)).toContain("helm-cronjob")
+    expect(JSON.stringify(diagnostics)).toContain('"restartCount":2')
     const describeCalls = calls.filter(
       ({ command }) => command.file === "kubectl" && command.args.includes("describe"),
     )
-    expect(describeCalls).toHaveLength(2)
+    expect(describeCalls).toHaveLength(0)
     const logCalls = calls.filter(
       ({ command }) => command.file === "kubectl" && command.args.includes("logs"),
     )
@@ -1645,9 +1820,249 @@ describe("failure reports and diagnostics", () => {
       expect(options?.timeoutMs).toBeGreaterThan(0)
       expect(options?.stdoutLimitBytes).toBeGreaterThan(0)
       expect(options?.stderrLimitBytes).toBeGreaterThan(0)
-      expect(command.args).toContain("--namespace")
+      if (command.file === "kubectl" && command.args.includes("namespace")) {
+        expect(command.args).toEqual(
+          expect.arrayContaining(["--context", CONTEXT, "--output=json"]),
+        )
+      } else {
+        expect(command.args).toContain("--namespace")
+      }
       expect(command.args).not.toContain("--selector")
       expect(command.args.some((argument) => /secret|\benv\b/i.test(argument))).toBe(false)
+    }
+  })
+
+  test.each([
+    {
+      name: "replacement UID",
+      live: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: NAMES.sandboxNamespace,
+          uid: "replacement-uid",
+          labels: { "dawn.sh/compat-run": RUN_ID },
+        },
+      },
+    },
+    {
+      name: "replacement run label",
+      live: {
+        apiVersion: "v1",
+        kind: "Namespace",
+        metadata: {
+          name: NAMES.sandboxNamespace,
+          uid: "sandbox-uid",
+          labels: { "dawn.sh/compat-run": "another-run" },
+        },
+      },
+    },
+  ])(
+    "gates namespaced diagnostics against a same-name Namespace with a $name",
+    async ({ live }) => {
+      const calls: CommandCall[] = []
+      const execute = vi.fn<Runner>(async (command, options) => {
+        calls.push({ command, options })
+        const args = command.args
+        if (command.file === "kubectl" && args.includes("get") && args.includes("namespace")) {
+          const name = args[args.indexOf("namespace") + 1]
+          return result(
+            command,
+            name === NAMES.managementNamespace
+              ? namespace(NAMES.managementNamespace, "management-uid")
+              : live,
+          )
+        }
+        if (command.file === "kubectl" && args.includes("get") && args.includes("pods")) {
+          const namespaceName = args[args.indexOf("--namespace") + 1]
+          return result(command, { apiVersion: "v1", kind: "PodList", items: [], namespaceName })
+        }
+        return result(command, {})
+      })
+
+      const diagnostics = await collectKubernetesCompatibilityDiagnostics({
+        context: CONTEXT,
+        runId: RUN_ID,
+        names: NAMES,
+        ownership: [
+          { name: NAMES.managementNamespace, uid: "management-uid", runId: RUN_ID },
+          { name: NAMES.sandboxNamespace, uid: "sandbox-uid", runId: RUN_ID },
+        ],
+        attemptedReleases: ["infrastructure", "application"],
+        execute,
+      })
+
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: `${NAMES.sandboxNamespace}.ownership`, status: "failed" }),
+        ]),
+      )
+      const sandboxNamespacedCalls = calls.filter(({ command }) => {
+        const namespaceIndex = command.args.indexOf("--namespace")
+        return namespaceIndex >= 0 && command.args[namespaceIndex + 1] === NAMES.sandboxNamespace
+      })
+      expect(sandboxNamespacedCalls).toEqual([])
+      const sandboxOwnershipRead = calls.find(
+        ({ command }) =>
+          command.file === "kubectl" &&
+          command.args.includes("namespace") &&
+          command.args.includes(NAMES.sandboxNamespace),
+      )
+      expect(sandboxOwnershipRead?.command.args).toEqual([
+        "--context",
+        CONTEXT,
+        "get",
+        "namespace",
+        NAMES.sandboxNamespace,
+        "--output=json",
+      ])
+    },
+  )
+
+  test("removes Pod and workload environment data before diagnostics are persisted", async () => {
+    const environmentValues = [
+      "postgres://ordinary-user:ordinary-password@db.internal/dawn",
+      "plain-api-key-value",
+      "ordinary-non-jwt-credential",
+    ]
+    const execute = vi.fn<Runner>(async (command) => {
+      const args = command.args
+      if (command.file === "helm") {
+        return result(command, {
+          name: "compatibility-release",
+          info: {
+            status: "deployed",
+            notes: `OPENAI_API_KEY=${environmentValues[1]}`,
+          },
+          manifest: ["env:", "- name: DATABASE_URL", `  value: ${environmentValues[0]}`].join("\n"),
+          config: { PLAIN_PASSWORD: environmentValues[2] },
+        })
+      }
+      if (command.file === "kubectl" && args.includes("get") && args.includes("namespace")) {
+        const name = args[args.indexOf("namespace") + 1]
+        return name === NAMES.managementNamespace
+          ? result(command, namespace(NAMES.managementNamespace, "management-uid"))
+          : result(command, namespace(NAMES.sandboxNamespace, "sandbox-uid"))
+      }
+      if (command.file === "kubectl" && args.includes("get") && args.includes("pods")) {
+        const namespaceName = args[args.indexOf("--namespace") + 1]
+        return result(command, {
+          apiVersion: "v1",
+          kind: "PodList",
+          items: [
+            {
+              metadata: { name: "provider-pod", namespace: namespaceName, uid: "pod-uid" },
+              spec: {
+                containers: [
+                  {
+                    name: "provider",
+                    env: [
+                      { name: "DATABASE_URL", value: environmentValues[0] },
+                      { name: "OPENAI_API_KEY", value: environmentValues[1] },
+                      { name: "PLAIN_PASSWORD", value: environmentValues[2] },
+                    ],
+                    envFrom: [{ secretRef: { name: "provider-secrets" } }],
+                  },
+                ],
+              },
+              status: {
+                phase: "Failed",
+                conditions: [{ type: "Ready", status: "False", reason: "PodFailed" }],
+                containerStatuses: [
+                  {
+                    name: "provider",
+                    ready: false,
+                    restartCount: 1,
+                    state: { terminated: { exitCode: 9, reason: "Error", signal: 9 } },
+                  },
+                ],
+              },
+            },
+          ],
+        })
+      }
+      if (
+        command.file === "kubectl" &&
+        args.includes("get") &&
+        args.some((argument) => argument.includes(","))
+      ) {
+        const namespaceName = args[args.indexOf("--namespace") + 1]
+        return result(command, {
+          apiVersion: "v1",
+          kind: "List",
+          items: [
+            {
+              apiVersion: "apps/v1",
+              kind: "Deployment",
+              metadata: { name: "application", namespace: namespaceName },
+              spec: {
+                template: {
+                  spec: {
+                    containers: [
+                      {
+                        name: "application",
+                        env: [{ name: "DATABASE_URL", value: environmentValues[0] }],
+                        envFrom: [{ secretRef: { name: "application-secrets" } }],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        })
+      }
+      if (command.file === "kubectl" && args.includes("logs")) {
+        return result(command, "bounded provider log\n")
+      }
+      return result(command, {})
+    })
+
+    const diagnostics = await collectKubernetesCompatibilityDiagnostics({
+      context: CONTEXT,
+      runId: RUN_ID,
+      names: NAMES,
+      ownership: [
+        { name: NAMES.managementNamespace, uid: "management-uid", runId: RUN_ID },
+        { name: NAMES.sandboxNamespace, uid: "sandbox-uid", runId: RUN_ID },
+      ],
+      attemptedReleases: ["infrastructure", "application"],
+      execute,
+    })
+    const report: CompatibilityReport = {
+      schemaVersion: 1,
+      target: TARGET,
+      observedServer: "v1.35.5",
+      runId: RUN_ID,
+      startedAt: "2030-01-01T00:00:00.000Z",
+      finishedAt: "2030-01-01T00:01:00.000Z",
+      steps: [],
+      cleanup: { status: "failed" },
+      diagnostics,
+    }
+    const temporaryRepository = await mkdtemp(join(tmpdir(), "dawn-k8s-diagnostics-"))
+    try {
+      const reportPath = await persistCompatibilityReport(
+        temporaryRepository,
+        "environment-redaction.json",
+        report,
+      )
+      const serialized = await readFile(reportPath, "utf8")
+
+      expect(serialized).toContain("provider-pod")
+      expect(serialized).toContain('"restartCount": 1')
+      expect(serialized).toContain('"status": "deployed"')
+      for (const forbidden of [
+        ...environmentValues,
+        "DATABASE_URL",
+        "OPENAI_API_KEY",
+        "PLAIN_PASSWORD",
+        "envFrom",
+      ]) {
+        expect(serialized).not.toContain(forbidden)
+      }
+    } finally {
+      await rm(temporaryRepository, { recursive: true, force: true })
     }
   })
 

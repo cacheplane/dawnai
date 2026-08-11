@@ -582,7 +582,13 @@ describe("positive and negative pod fixtures", () => {
       return {}
     })
 
-    const lease = await runNetworkControlProbe({ context, runId, policy, execute })
+    const lease = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute: execute,
+    })
 
     const manifests = allManifests(execute)
     const pods = manifests.filter((item) => item.kind === "Pod")
@@ -614,17 +620,18 @@ describe("positive and negative pod fixtures", () => {
     }
 
     await Promise.all([lease.cleanup(), lease.cleanup()])
-    expect(execute.mock.calls.at(-1)?.[0].args).toEqual(
+    const retainedCleanupCalls = execute.mock.calls.filter(([command]) =>
+      command.args.includes("--selector"),
+    )
+    expect(retainedCleanupCalls).toHaveLength(2)
+    expect(
+      retainedCleanupCalls.map(([command]) => command.args[command.args.indexOf("--selector") + 1]),
+    ).toEqual(
       expect.arrayContaining([
-        "delete",
-        "pod,service",
-        "--selector",
-        `dawn.sh/compat-run=${runId}`,
+        `dawn.sh/compat-run=${runId},dawn.sh/compat-component=${String(metadata(pods[0] as JsonObject).name)}`,
+        `dawn.sh/compat-run=${runId},dawn.sh/compat-component=${String(metadata(service).name)}`,
       ]),
     )
-    expect(
-      execute.mock.calls.filter(([command]) => command.args.includes("--selector")),
-    ).toHaveLength(1)
     const callsAfterCleanup = execute.mock.calls.length
     await lease.cleanup()
     expect(execute).toHaveBeenCalledTimes(callsAfterCleanup)
@@ -646,7 +653,13 @@ describe("positive and negative pod fixtures", () => {
       return {}
     })
 
-    await runNetworkControlProbe({ context, runId, policy, execute })
+    await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute: execute,
+    })
 
     const manifests = allManifests(execute)
     const client = manifests.filter((manifest) => manifest.kind === "Pod")[1] as JsonObject
@@ -2342,11 +2355,17 @@ describe("probe command routing, evidence, and cleanup", () => {
       }
       return {}
     })
-    const lease = await runNetworkControlProbe({ context, runId, policy, execute })
+    const lease = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute: execute,
+    })
 
     await expect(lease.cleanup()).rejects.toThrow(/retained cleanup failed/i)
     await expect(lease.cleanup()).resolves.toBeUndefined()
-    expect(retainedCleanupAttempts).toBe(2)
+    expect(retainedCleanupAttempts).toBe(4)
   })
 
   test("cleans partial objects by exact run label and preserves primary plus cleanup failures", async () => {
@@ -2359,24 +2378,71 @@ describe("probe command routing, evidence, and cleanup", () => {
       return {}
     })
 
-    const error = await runNetworkControlProbe({ context, runId, policy, execute }).catch(
-      (cause: unknown) => cause,
-    )
+    const error = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute: execute,
+    }).catch((cause: unknown) => cause)
 
     expect(error).toBeInstanceOf(AggregateError)
-    expect((error as AggregateError).errors).toEqual([primary, cleanup])
-    const cleanupCommand = execute.mock.calls.at(-1)?.[0]
-    expect(cleanupCommand?.args).toEqual(
-      expect.arrayContaining([
-        "--context",
-        context,
-        "delete",
-        "pod,service",
-        "--namespace",
-        names.sandboxNamespace,
-        "--selector",
-        `dawn.sh/compat-run=${runId}`,
-      ]),
-    )
+    expect((error as AggregateError).errors).toEqual([primary, cleanup, cleanup, cleanup])
+    const cleanupCommands = execute.mock.calls
+      .map(([command]) => command)
+      .filter((command) => command.args.includes("delete"))
+    expect(cleanupCommands).toHaveLength(3)
+    for (const cleanupCommand of cleanupCommands) {
+      expect(cleanupCommand.args).toEqual(
+        expect.arrayContaining([
+          "--context",
+          context,
+          "--namespace",
+          names.sandboxNamespace,
+          "--selector",
+        ]),
+      )
+      const selector = cleanupCommand.args[cleanupCommand.args.indexOf("--selector") + 1]
+      expect(selector).toContain(`dawn.sh/compat-run=${runId}`)
+      expect(selector).toContain("dawn.sh/compat-component=")
+    }
+  })
+
+  test("uses the non-aborted cleanup executor for every partial network object", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const setupCalls: Command[] = []
+    const cleanupCalls: Command[] = []
+    const setupFailure = new Error("network setup aborted")
+    const cleanupFailure = new Error("independent network cleanup failed")
+    let cleanupFailed = false
+    const execute = fakeRunner((command, _options) => {
+      setupCalls.push(command)
+      if (command.args.includes("wait")) return setupFailure
+      return {}
+    })
+    const cleanupExecute = fakeRunner((command) => {
+      cleanupCalls.push(command)
+      if (!cleanupFailed) {
+        cleanupFailed = true
+        return cleanupFailure
+      }
+      return {}
+    })
+
+    const error = await runNetworkControlProbe({
+      context,
+      runId,
+      policy,
+      execute,
+      cleanupExecute,
+    }).catch((cause: unknown) => cause)
+
+    expect(setupCalls.filter((command) => command.args.includes("create"))).toHaveLength(2)
+    expect(setupCalls.some((command) => command.args.includes("delete"))).toBe(false)
+    expect(cleanupCalls).toHaveLength(3)
+    expect(cleanupCalls.every((command) => command.args.includes("delete"))).toBe(true)
+    expect(cleanupCalls.every((command) => command.args.includes("--selector"))).toBe(true)
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors).toEqual([setupFailure, cleanupFailure])
   })
 })

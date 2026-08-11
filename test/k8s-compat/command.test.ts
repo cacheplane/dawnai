@@ -52,6 +52,19 @@ async function rejectedError(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected command to reject")
 }
 
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolvePromise: (() => void) | undefined
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve
+  })
+  return {
+    promise,
+    resolve(): void {
+      resolvePromise?.()
+    },
+  }
+}
+
 async function waitForFile(path: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -93,6 +106,7 @@ class ControlledChild extends EventEmitter {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
+  pid: number | undefined
   readonly kill = vi.fn((_signal?: NodeJS.Signals | number) => true)
 }
 
@@ -385,6 +399,236 @@ describe("shell-free command executor", () => {
     expect(error.message).not.toContain("abort-reason-must-not-leak")
     expect(JSON.parse(JSON.stringify(error))).toMatchObject({ outcome: { kind: "aborted" } })
     await expectRecordedProcessStopped(pidPath)
+  })
+
+  test("terminates an opted-in descendant process tree before reporting abort", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-command-tree-abort-")
+    const readyPath = join(directory, "wrapper-ready")
+    const sentinelPath = join(directory, "descendant-sentinel")
+    const descendantScript = [
+      'const { writeFileSync } = require("node:fs")',
+      'setTimeout(() => writeFileSync(process.argv[1], "descendant survived"), 350)',
+    ].join(";")
+    const wrapperScript = [
+      'const { spawn } = require("node:child_process")',
+      'const { writeFileSync } = require("node:fs")',
+      `spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}, ${JSON.stringify(sentinelPath)}], { stdio: "ignore" })`,
+      `writeFileSync(${JSON.stringify(readyPath)}, "ready")`,
+      "setInterval(() => {}, 1_000)",
+    ].join(";")
+    const controller = new AbortController()
+    const execution = executeCommand(
+      { file: process.execPath, args: ["-e", wrapperScript] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    await waitForFile(readyPath)
+
+    controller.abort()
+
+    const error = await rejectedError(execution)
+    expect(error).toMatchObject({ outcome: { kind: "aborted" } })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await expect(readFile(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("opts into a detached POSIX process group and dispatches termination to its PID", async () => {
+    const child = new ControlledChild()
+    child.pid = 4_321
+    const controller = new AbortController()
+    const killProcessGroup = vi.fn()
+    let spawnOptions: unknown
+    const executor = createCommandExecutor(
+      (_file, _args, options) => {
+        spawnOptions = options
+        return child as never
+      },
+      { platform: "linux", killProcessGroup },
+    )
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    child.emit("spawn")
+
+    controller.abort()
+    child.emit("close", null, "SIGKILL")
+
+    await expect(execution).rejects.toMatchObject({ outcome: { kind: "aborted" } })
+    expect(spawnOptions).toMatchObject({ shell: false, detached: true })
+    expect(killProcessGroup).toHaveBeenCalledWith(4_321, "SIGKILL")
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("preserves the original outcome when process-tree termination dispatch fails", async () => {
+    const child = new ControlledChild()
+    child.pid = 5_432
+    child.kill.mockReturnValue(false)
+    const controller = new AbortController()
+    const killProcessGroup = vi.fn(() => {
+      throw new Error("group dispatch failed")
+    })
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      killProcessGroup,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    child.emit("spawn")
+
+    controller.abort()
+
+    const error = await rejectedError(execution)
+    expect(error).toMatchObject({ outcome: { kind: "aborted" } })
+    expect(error.message).toMatch(/process-tree termination failed/i)
+    expect(killProcessGroup).toHaveBeenCalledWith(5_432, "SIGKILL")
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL")
+  })
+
+  test("terminates an opted-in process group after an unaccepted wrapper exit", async () => {
+    const child = new ControlledChild()
+    child.pid = 5_987
+    const killProcessGroup = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      killProcessGroup,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+
+    child.emit("close", 2, null)
+
+    await expect(execution).rejects.toMatchObject({ outcome: { kind: "exit", exitCode: 2 } })
+    expect(killProcessGroup).toHaveBeenCalledWith(5_987, "SIGKILL")
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("falls back safely when an opted-in child has no PID", async () => {
+    const child = new ControlledChild()
+    const controller = new AbortController()
+    const killProcessGroup = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      killProcessGroup,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    child.emit("spawn")
+
+    controller.abort()
+    child.emit("close", null, "SIGKILL")
+
+    await expect(execution).rejects.toMatchObject({ outcome: { kind: "aborted" } })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL")
+  })
+
+  test("does not dispatch tree termination for a pre-spawn child error", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_543
+    const killProcessGroup = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      killProcessGroup,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    const spawnError = Object.assign(new Error("spawn failed"), { code: "ENOENT" })
+
+    child.emit("error", spawnError)
+
+    await expect(execution).rejects.toMatchObject({
+      outcome: { kind: "spawn-error", code: "ENOENT" },
+    })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("waits for bounded Windows tree termination dispatch before settling", async () => {
+    const child = new ControlledChild()
+    child.pid = 7_654
+    const controller = new AbortController()
+    const dispatch = deferred()
+    const taskkillProcessTree = vi.fn(() => dispatch.promise)
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "win32",
+      taskkillProcessTree,
+    })
+    let settled = false
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    ).finally(() => {
+      settled = true
+    })
+    const observed = execution.catch((error: unknown) => error)
+    child.emit("spawn")
+
+    controller.abort()
+    child.emit("close", 1, null)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    dispatch.resolve()
+
+    await expect(observed).resolves.toMatchObject({ outcome: { kind: "aborted" } })
+    expect(taskkillProcessTree).toHaveBeenCalledWith(7_654, expect.any(Number))
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("keeps direct-child spawn and termination semantics when tree termination is absent", async () => {
+    const child = new ControlledChild()
+    child.pid = 8_765
+    const controller = new AbortController()
+    const killProcessGroup = vi.fn()
+    let spawnOptions: unknown
+    const executor = createCommandExecutor(
+      (_file, _args, options) => {
+        spawnOptions = options
+        return child as never
+      },
+      { platform: "linux", killProcessGroup },
+    )
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, signal: controller.signal },
+    )
+    child.emit("spawn")
+
+    controller.abort()
+    child.emit("close", null, "SIGKILL")
+
+    await expect(execution).rejects.toMatchObject({ outcome: { kind: "aborted" } })
+    expect(spawnOptions).not.toMatchObject({ detached: true })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL")
   })
 
   test("does not spawn for an already-aborted signal", async () => {

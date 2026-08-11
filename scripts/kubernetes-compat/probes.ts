@@ -51,6 +51,10 @@ export interface PolicyProbeInput extends AdministrativeProbeInput {
   readonly policy: CompatibilityPolicy
 }
 
+export interface NetworkControlProbeInput extends PolicyProbeInput {
+  readonly cleanupExecute: ProbeCommandRunner
+}
+
 export interface ReaperLifecycleDependencies {
   readonly delay: (milliseconds: number) => Promise<void>
   readonly now: () => number
@@ -508,6 +512,7 @@ function createNetworkControlLease(input: {
   readonly context: string
   readonly namespace: string
   readonly runId: string
+  readonly serverName: string
   readonly serviceName: string
 }): NetworkControlLease {
   let cleaned = false
@@ -519,12 +524,15 @@ function createNetworkControlLease(input: {
       if (inFlight !== undefined) return inFlight
       inFlight = (async () => {
         try {
-          await cleanupByRunLabel({
+          await cleanupExactRunComponents({
             execute: input.execute,
             context: input.context,
             namespace: input.namespace,
             runId: input.runId,
-            resourceTypes: "pod,service",
+            resources: [
+              { resourceTypes: "pod", component: input.serverName },
+              { resourceTypes: "service", component: input.serviceName },
+            ],
           })
           cleaned = true
         } finally {
@@ -534,6 +542,37 @@ function createNetworkControlLease(input: {
       return inFlight
     },
   })
+}
+
+async function cleanupExactRunComponents(input: {
+  readonly execute: ProbeCommandRunner
+  readonly context: string
+  readonly namespace: string
+  readonly runId: string
+  readonly resources: readonly {
+    readonly resourceTypes: string
+    readonly component: string
+  }[]
+}): Promise<void> {
+  const settled = await Promise.allSettled(
+    input.resources.map(({ resourceTypes, component }) =>
+      cleanupByRunLabel({
+        execute: input.execute,
+        context: input.context,
+        namespace: input.namespace,
+        runId: input.runId,
+        resourceTypes,
+        component,
+      }),
+    ),
+  )
+  const errors = settled.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  )
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Exact-label network cleanup actions failed")
+  }
 }
 
 async function withCleanup<T>(
@@ -621,9 +660,12 @@ export async function runSandboxSecretsEmptyProbe(input: AdministrativeProbeInpu
 }
 
 export async function runNetworkControlProbe(
-  input: PolicyProbeInput,
+  input: NetworkControlProbeInput,
 ): Promise<NetworkControlLease> {
   const state = probeState(input)
+  if (typeof input.cleanupExecute !== "function") {
+    throw new Error("Network control cleanup executor must be provided")
+  }
   const serverName = resourceName(state.runId, "network-server")
   const serviceName = resourceName(state.runId, "network-service")
   const clientName = resourceName(state.runId, "network-client")
@@ -734,24 +776,32 @@ export async function runNetworkControlProbe(
       name: clientName,
     })
     return createNetworkControlLease({
-      execute: state.execute,
+      execute: input.cleanupExecute,
       context: state.context,
       namespace: state.namespace,
       runId: state.runId,
+      serverName,
       serviceName,
     })
   } catch (primary) {
     try {
-      await cleanupByRunLabel({
-        execute: state.execute,
+      await cleanupExactRunComponents({
+        execute: input.cleanupExecute,
         context: state.context,
         namespace: state.namespace,
         runId: state.runId,
-        resourceTypes: "pod,service",
+        resources: [
+          { resourceTypes: "pod", component: serverName },
+          { resourceTypes: "service", component: serviceName },
+          { resourceTypes: "pod", component: clientName },
+        ],
       })
     } catch (cleanupError) {
       throw new AggregateError(
-        [primary, cleanupError],
+        [
+          primary,
+          ...(cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError]),
+        ],
         "Network control setup and exact-label cleanup both failed",
       )
     }

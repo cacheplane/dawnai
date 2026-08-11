@@ -20,6 +20,7 @@ import {
   type SecureTokenKubeconfigInput,
   type SignalCleanupOptions,
   type SignalCleanupRegistration,
+  verifyNamespaceOwnership,
 } from "./cluster.js"
 import {
   type CommandExecutionOptions,
@@ -216,7 +217,7 @@ interface CleanupExecution {
 interface DiagnosticRequest {
   readonly id: string
   readonly command: ReturnType<typeof kubectl.command> | ReturnType<typeof helm.command>
-  readonly format: "json" | "text"
+  readonly format: "json" | "helm-json" | "text"
 }
 
 interface DiagnosticResult {
@@ -467,16 +468,154 @@ function diagnosticOutput(result: CommandResult, format: DiagnosticRequest["form
   const text = result.stdout.toString("utf8")
   if (format === "text") return redactSensitive(text)
   try {
-    return redactSensitive(JSON.parse(text))
-  } catch {
-    return redactSensitive(text)
+    return redactSensitive(sanitizeDiagnosticJson(JSON.parse(text), format === "helm-json"))
+  } catch (cause) {
+    throw new Error("Diagnostic command returned invalid JSON", { cause })
   }
+}
+
+const DIAGNOSTIC_ENVIRONMENT_KEYS = new Set(["env", "envFrom"])
+const DIAGNOSTIC_HELM_PAYLOAD_KEYS = new Set(["config", "hooks", "manifest", "notes", "values"])
+
+function sanitizeDiagnosticJson(value: unknown, helmStatus: boolean): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDiagnosticJson(item, helmStatus))
+  }
+  if (typeof value !== "object" || value === null) return value
+
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, nested] of Object.entries(value)) {
+    if (DIAGNOSTIC_ENVIRONMENT_KEYS.has(key)) continue
+    if (helmStatus && DIAGNOSTIC_HELM_PAYLOAD_KEYS.has(key.toLowerCase())) continue
+    sanitized[key] = sanitizeDiagnosticJson(nested, helmStatus)
+  }
+  return sanitized
 }
 
 const DIAGNOSTIC_POD_NAME_PATTERN =
   /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/
+const DIAGNOSTIC_SAFE_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/+@-]*$/
 
-function diagnosticPodNames(result: CommandResult, namespace: string): readonly string[] {
+function diagnosticSafeToken(value: unknown, maxLength = 253): string | undefined {
+  return typeof value === "string" &&
+    value.length <= maxLength &&
+    DIAGNOSTIC_SAFE_TOKEN_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
+function diagnosticNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined
+}
+
+function diagnosticContainerState(value: unknown): unknown | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const state = value as Record<string, unknown>
+  const waiting =
+    typeof state.waiting === "object" && state.waiting !== null && !Array.isArray(state.waiting)
+      ? (state.waiting as Record<string, unknown>)
+      : undefined
+  const running =
+    typeof state.running === "object" && state.running !== null && !Array.isArray(state.running)
+      ? (state.running as Record<string, unknown>)
+      : undefined
+  const terminated =
+    typeof state.terminated === "object" &&
+    state.terminated !== null &&
+    !Array.isArray(state.terminated)
+      ? (state.terminated as Record<string, unknown>)
+      : undefined
+  const waitingReason = diagnosticSafeToken(waiting?.reason, 128)
+  const runningStartedAt = diagnosticSafeToken(running?.startedAt, 64)
+  const exitCode = diagnosticNonNegativeInteger(terminated?.exitCode)
+  const terminationSignal = diagnosticNonNegativeInteger(terminated?.signal)
+  const terminationReason = diagnosticSafeToken(terminated?.reason, 128)
+  const terminationStartedAt = diagnosticSafeToken(terminated?.startedAt, 64)
+  const terminationFinishedAt = diagnosticSafeToken(terminated?.finishedAt, 64)
+  const summary = {
+    ...(waiting !== undefined
+      ? { waiting: { ...(waitingReason !== undefined ? { reason: waitingReason } : {}) } }
+      : {}),
+    ...(running !== undefined
+      ? {
+          running: {
+            ...(runningStartedAt !== undefined ? { startedAt: runningStartedAt } : {}),
+          },
+        }
+      : {}),
+    ...(terminated !== undefined
+      ? {
+          terminated: {
+            ...(exitCode !== undefined ? { exitCode } : {}),
+            ...(terminationSignal !== undefined ? { signal: terminationSignal } : {}),
+            ...(terminationReason !== undefined ? { reason: terminationReason } : {}),
+            ...(terminationStartedAt !== undefined ? { startedAt: terminationStartedAt } : {}),
+            ...(terminationFinishedAt !== undefined ? { finishedAt: terminationFinishedAt } : {}),
+          },
+        }
+      : {}),
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined
+}
+
+function diagnosticPodStatus(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {}
+  const status = value as Record<string, unknown>
+  const phase = diagnosticSafeToken(status.phase, 64)
+  const conditions = Array.isArray(status.conditions)
+    ? status.conditions.flatMap((candidate) => {
+        if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+          return []
+        }
+        const condition = candidate as Record<string, unknown>
+        const type = diagnosticSafeToken(condition.type, 128)
+        const conditionStatus = diagnosticSafeToken(condition.status, 32)
+        const reason = diagnosticSafeToken(condition.reason, 128)
+        const lastTransitionTime = diagnosticSafeToken(condition.lastTransitionTime, 64)
+        if (type === undefined || conditionStatus === undefined) return []
+        return [
+          {
+            type,
+            status: conditionStatus,
+            ...(reason !== undefined ? { reason } : {}),
+            ...(lastTransitionTime !== undefined ? { lastTransitionTime } : {}),
+          },
+        ]
+      })
+    : []
+  const containerStatuses = Array.isArray(status.containerStatuses)
+    ? status.containerStatuses.flatMap((candidate) => {
+        if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+          return []
+        }
+        const container = candidate as Record<string, unknown>
+        const name = diagnosticSafeToken(container.name, 253)
+        if (name === undefined) return []
+        const restartCount = diagnosticNonNegativeInteger(container.restartCount)
+        const state = diagnosticContainerState(container.state)
+        const lastState = diagnosticContainerState(container.lastState)
+        return [
+          {
+            name,
+            ...(typeof container.ready === "boolean" ? { ready: container.ready } : {}),
+            ...(restartCount !== undefined ? { restartCount } : {}),
+            ...(state !== undefined ? { state } : {}),
+            ...(lastState !== undefined ? { lastState } : {}),
+          },
+        ]
+      })
+    : []
+  return {
+    ...(phase !== undefined ? { phase } : {}),
+    ...(conditions.length > 0 ? { conditions } : {}),
+    ...(containerStatuses.length > 0 ? { containerStatuses } : {}),
+  }
+}
+
+function diagnosticPodSnapshot(
+  result: CommandResult,
+  namespace: string,
+): { readonly names: readonly string[]; readonly output: unknown } {
   const value = parseCommandJson(result, `Pod list for Namespace ${namespace}`)
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`Pod list for Namespace ${namespace} must be an object`)
@@ -486,6 +625,7 @@ function diagnosticPodNames(result: CommandResult, namespace: string): readonly 
     throw new Error(`Pod list for Namespace ${namespace} must contain items`)
   }
   const names = new Set<string>()
+  const summaries: unknown[] = []
   for (const [index, item] of items.entries()) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) {
       throw new Error(`Pod list item ${index} for Namespace ${namespace} must be an object`)
@@ -507,8 +647,24 @@ function diagnosticPodNames(result: CommandResult, namespace: string): readonly 
       throw new Error(`Pod list item ${podName} does not belong to Namespace ${namespace}`)
     }
     names.add(podName)
+    const uid = diagnosticSafeToken((metadata as { readonly uid?: unknown }).uid, 128)
+    summaries.push({
+      metadata: {
+        name: podName,
+        namespace,
+        ...(uid !== undefined ? { uid } : {}),
+      },
+      status: diagnosticPodStatus((item as { readonly status?: unknown }).status),
+    })
   }
-  return Object.freeze([...names])
+  return Object.freeze({
+    names: Object.freeze([...names]),
+    output: Object.freeze({
+      apiVersion: "v1",
+      kind: "PodDiagnosticSummaryList",
+      items: Object.freeze(summaries),
+    }),
+  })
 }
 
 async function settleDiagnosticRequests(
@@ -537,13 +693,42 @@ async function settleDiagnosticRequests(
 export async function collectKubernetesCompatibilityDiagnostics(
   input: CompatibilityDiagnosticsInput,
 ): Promise<readonly DiagnosticResult[]> {
-  const ownedNames = new Set(input.ownership.map(({ name }) => name))
-  const ownedNamespaces = [input.names.managementNamespace, input.names.sandboxNamespace].filter(
-    (namespace) => ownedNames.has(namespace),
+  const candidateNamespaces = [input.names.managementNamespace, input.names.sandboxNamespace]
+  const ownershipByName = new Map(input.ownership.map((candidate) => [candidate.name, candidate]))
+  const liveOwnership = await Promise.allSettled(
+    candidateNamespaces.map(async (namespace): Promise<string> => {
+      const expected = ownershipByName.get(namespace)
+      if (expected === undefined || expected.runId !== input.runId) {
+        throw new Error(`Namespace ${namespace} has no captured ownership for this run`)
+      }
+      const commandResult = await input.execute(
+        kubectl.command(input.context, ["get", "namespace", namespace, "--output=json"]),
+        diagnosticCommandOptions(),
+      )
+      verifyNamespaceOwnership(
+        parseCommandJson(commandResult, `Diagnostic ownership read for Namespace ${namespace}`),
+        expected,
+      )
+      return namespace
+    }),
   )
+  const results: DiagnosticResult[] = liveOwnership.map((outcome, index) => {
+    const namespace = candidateNamespaces[index] as string
+    return outcome.status === "fulfilled"
+      ? Object.freeze({ id: `${namespace}.ownership`, status: "passed" })
+      : Object.freeze({
+          id: `${namespace}.ownership`,
+          status: "failed",
+          error: errorDiagnostics(outcome.reason),
+        })
+  })
+  const ownedNamespaces = liveOwnership.flatMap((outcome) =>
+    outcome.status === "fulfilled" ? [outcome.value] : [],
+  )
+  const verifiedNames = new Set(ownedNamespaces)
   const requests: DiagnosticRequest[] = []
   const addNamespaceDiagnostics = (namespace: string, resources: string): void => {
-    if (!ownedNames.has(namespace)) return
+    if (!verifiedNames.has(namespace)) return
     requests.push(
       {
         id: `${namespace}.events`,
@@ -568,11 +753,6 @@ export async function collectKubernetesCompatibilityDiagnostics(
         ]),
         format: "json",
       },
-      {
-        id: `${namespace}.pod-descriptions`,
-        command: kubectl.command(input.context, ["describe", "pods", "--namespace", namespace]),
-        format: "text",
-      },
     )
   }
 
@@ -582,7 +762,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
     "services,jobs,cronjobs,resourcequotas,limitranges,networkpolicies,persistentvolumeclaims",
   )
 
-  if (ownedNames.has(input.names.managementNamespace)) {
+  if (verifiedNames.has(input.names.managementNamespace)) {
     for (const role of new Set(input.attemptedReleases)) {
       const release =
         role === "infrastructure" ? input.names.sandboxRelease : input.names.appRelease
@@ -595,19 +775,19 @@ export async function collectKubernetesCompatibilityDiagnostics(
           input.names.managementNamespace,
           "--output=json",
         ]),
-        format: "json",
+        format: "helm-json",
       })
     }
   }
 
-  const results = await settleDiagnosticRequests(requests, input.execute)
+  results.push(...(await settleDiagnosticRequests(requests, input.execute)))
   const podLists = await Promise.allSettled(
     ownedNamespaces.map(async (namespace) => {
       const commandResult = await input.execute(
         kubectl.command(input.context, ["get", "pods", "--namespace", namespace, "--output=json"]),
         diagnosticCommandOptions(),
       )
-      return { namespace, commandResult, names: diagnosticPodNames(commandResult, namespace) }
+      return { namespace, snapshot: diagnosticPodSnapshot(commandResult, namespace) }
     }),
   )
   const logRequests: DiagnosticRequest[] = []
@@ -627,10 +807,10 @@ export async function collectKubernetesCompatibilityDiagnostics(
       Object.freeze({
         id: `${namespace}.pods`,
         status: "passed",
-        output: diagnosticOutput(outcome.value.commandResult, "json"),
+        output: redactSensitive(outcome.value.snapshot.output),
       }),
     )
-    for (const podName of outcome.value.names) {
+    for (const podName of outcome.value.snapshot.names) {
       logRequests.push({
         id: `${namespace}.pod-logs.${podName}`,
         command: kubectl.command(input.context, [
@@ -733,7 +913,11 @@ export async function runKubernetesCompatibility(
       executionOptions.signal === undefined
         ? lifecycleAbort.signal
         : AbortSignal.any([lifecycleAbort.signal, executionOptions.signal])
-    return resolved.execute(command, { ...executionOptions, signal })
+    return resolved.execute(command, {
+      cwd: resolved.repositoryRoot,
+      ...executionOptions,
+      signal,
+    })
   }
 
   const runTrackedLifecyclePhase = <T>(
@@ -741,10 +925,12 @@ export async function runKubernetesCompatibility(
     operation: (execute: ProbeCommandRunner) => Promise<T>,
   ): Promise<T> => {
     let phaseActive = true
-    const phaseExecute: ProbeCommandRunner = (command, executionOptions) =>
-      phaseActive
-        ? lifecycleExecute(command, executionOptions)
-        : resolved.execute(command, executionOptions)
+    const phaseExecute: ProbeCommandRunner = (command, executionOptions) => {
+      if (!phaseActive) {
+        return Promise.reject(new Error(`Lifecycle phase ${name} is no longer active`))
+      }
+      return lifecycleExecute(command, executionOptions)
+    }
     const tracked = Promise.resolve().then(async () => {
       assertLifecycleActive(`starting ${name}`)
       try {
@@ -1104,6 +1290,7 @@ export async function runKubernetesCompatibility(
         runId,
         policy: activePolicy,
         execute,
+        cleanupExecute: resolved.execute,
       }),
     )
     networkLease = networkControlLease
@@ -1135,6 +1322,7 @@ export async function runKubernetesCompatibility(
             stdoutLimitBytes: PROVIDER_STDOUT_LIMIT_BYTES,
             stderrLimitBytes: PROVIDER_STDERR_LIMIT_BYTES,
             acceptedExitCodes: [1],
+            terminateProcessTree: true,
             env: {
               ...process.env,
               DAWN_TEST_K8S: "1",

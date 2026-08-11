@@ -1,5 +1,6 @@
 import {
   type ChildProcessByStdio,
+  execFile,
   type SpawnOptionsWithStdioTuple,
   spawn,
 } from "node:child_process"
@@ -20,6 +21,7 @@ export interface CommandExecutionOptions {
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
   readonly acceptedExitCodes?: readonly number[]
+  readonly terminateProcessTree?: boolean
 }
 
 interface ResolvedCommandExecutionOptions {
@@ -32,6 +34,7 @@ interface ResolvedCommandExecutionOptions {
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
   readonly acceptedExitCodes: ReadonlySet<number>
+  readonly terminateProcessTree: boolean
 }
 
 export type CommandSpawnOptions = SpawnOptionsWithStdioTuple<"pipe", "pipe", "pipe"> & {
@@ -45,6 +48,12 @@ export type CommandSpawner = (
   args: readonly string[],
   options: CommandSpawnOptions,
 ) => CommandChild
+
+export interface CommandTerminationDependencies {
+  readonly platform: NodeJS.Platform
+  readonly killProcessGroup: (pid: number, signal: NodeJS.Signals) => void
+  readonly taskkillProcessTree: (pid: number, timeoutMs: number) => Promise<void>
+}
 
 export type CommandOutcome =
   | { readonly kind: "exit"; readonly exitCode: number }
@@ -94,6 +103,7 @@ const CREDENTIAL_ARGUMENT_PATTERN =
 const SENSITIVE_ARGUMENT_FLAG_PATTERN =
   /^--?(?:authorization|password|secret|token|kubeconfig)(?:=|$)/i
 const WRAPPER_OWNED_ARGUMENT_PATTERN = /^--(?:context|kube-context|kubeconfig)(?:=|$)/
+const WINDOWS_TREE_TERMINATION_TIMEOUT_MS = 5_000
 
 export const COMMAND_DEFAULTS = Object.freeze({
   timeoutMs: 30_000,
@@ -146,6 +156,12 @@ function resolveOptions(options: CommandExecutionOptions): ResolvedCommandExecut
   ) {
     throw new Error("Command accepted exit codes must be unique integers between 1 and 255")
   }
+  if (
+    options.terminateProcessTree !== undefined &&
+    typeof options.terminateProcessTree !== "boolean"
+  ) {
+    throw new Error("Command process-tree termination option must be a boolean")
+  }
   return {
     timeoutMs: resolvePositiveInteger(
       options.timeoutMs,
@@ -164,6 +180,7 @@ function resolveOptions(options: CommandExecutionOptions): ResolvedCommandExecut
     ),
     sensitiveOutput: options.sensitiveOutput === true,
     acceptedExitCodes: new Set(acceptedExitCodes),
+    terminateProcessTree: options.terminateProcessTree === true,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
@@ -297,6 +314,64 @@ function diagnosticSuffix(stderr: BoundedBuffer, sensitiveOutput: boolean): stri
 
 const defaultSpawner: CommandSpawner = (file, args, options) => spawn(file, args, options)
 
+function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolveTaskkill, rejectTaskkill) => {
+    execFile(
+      "taskkill.exe",
+      ["/PID", String(pid), "/T", "/F"],
+      {
+        windowsHide: true,
+        timeout: Math.max(1, timeoutMs),
+        maxBuffer: 64 * 1_024,
+      },
+      (error) => (error === null ? resolveTaskkill() : rejectTaskkill(error)),
+    )
+  })
+}
+
+const DEFAULT_TERMINATION_DEPENDENCIES: CommandTerminationDependencies = Object.freeze({
+  platform: process.platform,
+  killProcessGroup: (pid: number, signal: NodeJS.Signals): void => {
+    process.kill(-pid, signal)
+  },
+  taskkillProcessTree,
+})
+
+function killDirectChild(child: CommandChild, signal: NodeJS.Signals): boolean {
+  try {
+    return child.kill(signal)
+  } catch {
+    return false
+  }
+}
+
+async function dispatchProcessTreeTermination(
+  child: CommandChild,
+  signal: NodeJS.Signals,
+  dependencies: CommandTerminationDependencies,
+): Promise<boolean> {
+  const pid = child.pid
+  if (pid === undefined) return killDirectChild(child, signal)
+
+  if (dependencies.platform === "win32") {
+    try {
+      await dependencies.taskkillProcessTree(pid, WINDOWS_TREE_TERMINATION_TIMEOUT_MS)
+      return true
+    } catch {
+      killDirectChild(child, signal)
+      return false
+    }
+  }
+
+  try {
+    dependencies.killProcessGroup(pid, signal)
+    return true
+  } catch {
+    killDirectChild(child, signal)
+    return false
+  }
+}
+
 export type CommandExecutor = (
   command: Command,
   options?: CommandExecutionOptions,
@@ -304,7 +379,17 @@ export type CommandExecutor = (
 
 export function createCommandExecutor(
   spawnCommand: CommandSpawner = defaultSpawner,
+  injectedTerminationDependencies: Partial<CommandTerminationDependencies> = {},
 ): CommandExecutor {
+  const terminationDependencies: CommandTerminationDependencies = {
+    platform: injectedTerminationDependencies.platform ?? DEFAULT_TERMINATION_DEPENDENCIES.platform,
+    killProcessGroup:
+      injectedTerminationDependencies.killProcessGroup ??
+      DEFAULT_TERMINATION_DEPENDENCIES.killProcessGroup,
+    taskkillProcessTree:
+      injectedTerminationDependencies.taskkillProcessTree ??
+      DEFAULT_TERMINATION_DEPENDENCIES.taskkillProcessTree,
+  }
   return (command, executionOptions = {}) => {
     let normalizedCommand: Command
     let options: ResolvedCommandExecutionOptions
@@ -340,6 +425,9 @@ export function createCommandExecutor(
         child = spawnCommand(normalizedCommand.file, normalizedCommand.args, {
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
+          ...(options.terminateProcessTree && terminationDependencies.platform !== "win32"
+            ? { detached: true }
+            : {}),
           ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
           ...(options.env !== undefined ? { env: options.env } : {}),
         })
@@ -366,6 +454,8 @@ export function createCommandExecutor(
       let spawned = false
       let settled = false
       let pendingFailure: PendingFailure | undefined
+      let closedAfterFailure = false
+      let terminationDispatch: Promise<boolean> | undefined
       let timeout: NodeJS.Timeout | undefined
 
       const cleanup = (): void => {
@@ -408,23 +498,27 @@ export function createCommandExecutor(
           return
         }
         pendingFailure = failure
-        try {
-          if (!child.kill("SIGKILL")) {
+        terminationDispatch = Promise.resolve().then(() =>
+          options.terminateProcessTree
+            ? dispatchProcessTreeTermination(child, "SIGKILL", terminationDependencies)
+            : killDirectChild(child, "SIGKILL"),
+        )
+        void terminationDispatch.then((dispatched) => {
+          if (settled) return
+          if (!dispatched) {
             settle(
-              createError({
-                message: `${failure.message}; child termination failed`,
-                outcome: failure.outcome,
-              }),
+              createError(
+                {
+                  message: `${failure.message}; ${options.terminateProcessTree ? "process-tree" : "child"} termination failed`,
+                  outcome: failure.outcome,
+                },
+                stderr,
+              ),
             )
+            return
           }
-        } catch {
-          settle(
-            createError({
-              message: `${failure.message}; child termination failed`,
-              outcome: failure.outcome,
-            }),
-          )
-        }
+          if (closedAfterFailure) settle(createError(failure, stderr))
+        })
       }
 
       function onSpawn(): void {
@@ -488,7 +582,15 @@ export function createCommandExecutor(
 
       function onClose(code: number | null, signal: NodeJS.Signals | null): void {
         if (pendingFailure !== undefined) {
-          settle(createError(pendingFailure, stderr))
+          const failure = pendingFailure
+          closedAfterFailure = true
+          if (terminationDispatch === undefined) {
+            settle(createError(failure, stderr))
+          } else {
+            void terminationDispatch.then((dispatched) => {
+              if (dispatched) settle(createError(failure, stderr))
+            })
+          }
           return
         }
         if (code === 0 || (code !== null && options.acceptedExitCodes.has(code))) {
@@ -496,26 +598,28 @@ export function createCommandExecutor(
           return
         }
         if (signal !== null) {
-          settle(
-            createError(
-              {
-                message: `Command failed with signal ${signal}`,
-                outcome: { kind: "signal", signal },
-              },
-              stderr,
-            ),
-          )
+          const failure: PendingFailure = {
+            message: `Command failed with signal ${signal}`,
+            outcome: { kind: "signal", signal },
+          }
+          if (options.terminateProcessTree) {
+            terminate(failure)
+            closedAfterFailure = true
+          } else {
+            settle(createError(failure, stderr))
+          }
           return
         }
-        settle(
-          createError(
-            {
-              message: `Command failed with exit code ${String(code)}`,
-              outcome: { kind: "exit", exitCode: code ?? -1 },
-            },
-            stderr,
-          ),
-        )
+        const failure: PendingFailure = {
+          message: `Command failed with exit code ${String(code)}`,
+          outcome: { kind: "exit", exitCode: code ?? -1 },
+        }
+        if (options.terminateProcessTree) {
+          terminate(failure)
+          closedAfterFailure = true
+        } else {
+          settle(createError(failure, stderr))
+        }
       }
 
       function onAbort(): void {
