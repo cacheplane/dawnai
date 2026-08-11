@@ -69,14 +69,14 @@ import { assertNoReservedKey, stripReservedThreadMetadata } from "./thread-metad
 // Route-table types
 // ---------------------------------------------------------------------------
 
-type RouteHandler = (request: Request, params: Record<string, string>) => Promise<Response>
+export type RouteHandler = (request: Request, params: Record<string, string>) => Promise<Response>
 
 /**
  * Boot state threaded verbatim into every route execution: the supplied
  * DawnConfig (so no route re-reads `dawn.config.ts`) and the node filesystem
  * fallback bag (absent on edge runtimes, where every store is injected).
  */
-type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
+export type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
 
 /**
  * Fail loudly for the inputs a correct run cannot do without. Which inputs
@@ -196,7 +196,7 @@ export function isEventStream(contentType: string | null): boolean {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
 }
 
-interface RouteMatcher {
+export interface RouteMatcher {
   readonly method: string
   readonly pattern: RegExp
   readonly handle: RouteHandler
@@ -1097,7 +1097,13 @@ function makeThreadGate(
  * them once, up front, and hands the resolved values to the sub-handlers below
  * — whose signatures are unchanged.
  */
-function buildRouteTable(ctx: {
+/**
+ * Exported for `test/thread-access-coverage.test.ts`, which walks every entry
+ * and requires each to be classified as gated, deferred or exempt. Not part of
+ * any package barrel — `fetch-exports.ts` and `runtime-exports.ts` re-export
+ * only `createRuntimeFetchHandler`.
+ */
+export function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
