@@ -61,7 +61,7 @@ import {
   confidence.
 - `DEFAULT_RECALL_WEIGHTS`, `DEFAULT_RECENCY_HALF_LIFE_MS`, and
   `DEFAULT_CANDIDATE_POOL` match the defaults documented in
-  [Memory](https://dawnai.org/docs/memory#how-recall-ranks).
+  [Recall and Retrieval](https://dawnai.org/docs/memory/retrieval#how-recall-ranks).
 - `RecallWeights` and `RecallRankingOptions` configure the default SQLite
   store's ranked recall.
 - `idf(df, corpusSize)` and `tokenize(text)` expose the deterministic tokenizer
@@ -86,7 +86,7 @@ export default {
 } satisfies import("@dawn-ai/core").DawnConfig
 ```
 
-See [Memory configuration](https://dawnai.org/docs/memory#configuration) for
+See [Long-term Memory configuration](https://dawnai.org/docs/memory/long-term#configuration) for
 write modes, namespace scope, and recall tuning.
 
 ## Testing Notes

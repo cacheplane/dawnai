@@ -1,0 +1,138 @@
+# Distillation
+
+Distillation is explicit maintenance for long-lived memory collections. Nothing runs automatically: Dawn consolidates or reflects only when you invoke `dawn memory consolidate` or `dawn memory reflect`, by hand or from an application-owned schedule.
+
+## Distillation
+
+Use the two passes for different jobs:
+
+| Command | Input | Output |
+|---|---|---|
+| `dawn memory consolidate` | Old active episodes grouped by namespace and ISO week | One active episodic summary per selected batch |
+| `dawn memory reflect` | New active semantic and episodic records per namespace | Zero or more durable reflection insights |
+
+Both commands are threshold-aware no-ops. Their common flags are:
+
+```bash
+dawn memory consolidate --dry-run --namespace 'workspace=my-app|route=/support' --max-batches 5
+dawn memory reflect --dry-run --namespace 'workspace=my-app|route=/support' --max-batches 5
+```
+
+- `--dry-run` selects and reports work but constructs no model, makes zero model calls, and writes nothing.
+- `--namespace <prefix>` narrows the pass to matching namespaces.
+- `--model <id>` and `--provider <id>` override model selection.
+- `--max-batches <n>` caps batches for consolidation and namespaces for reflection.
+- `--cwd <path>` selects another app root like other Dawn commands.
+
+`--namespace` is a raw prefix. A short `route=/support` prefix works only when `route` is the leading namespace dimension. If the route also declares `workspace`, use the full canonical namespace prefix, such as `workspace=my-app|route=/support`; derive it with the namespace helpers rather than guessing from a filesystem path.
+
+## Consolidation
+
+By default, consolidation selects active episodes older than seven days, groups them by namespace and ISO week, skips groups smaller than five, and splits groups at 50 records. Oldest batches run first so a capped invocation advances the backlog predictably.
+
+For each batch it:
+
+1. asks the model for a summary;
+2. writes the summary record first;
+3. links each source as superseded by that summary;
+4. stamps each source with the configured source-retention expiry.
+
+The write-before-link boundary is deliberate. A failure after the summary write can leave a redundant active summary; linking first could hide sources without a durable replacement. The multi-record operation is not transactional.
+
+There is no generic safe-to-rerun guarantee. A failure before any source link, or a whole link failure that leaves the original batch active, may select the same batch again and retry its deterministic summary ID. After a partial link failure, however, the remaining active, unstamped sources can fall below `minBatchSize` or be regrouped, so a later pass may never reconcile them. An expiry update can also fail after supersession, leaving a superseded source without the planned expiry. The command reports the affected source IDs and exits non-zero; inspect the summary's `derivedFrom` list and source states, then perform manual reconciliation before scheduling another pass.
+
+The summary contains `data.period`, `sourceCount`, and `derivedFrom`, is tagged `consolidated`, and uses the end of the source window as `effectiveAt`. That keeps it newer than its own superseded sources under the episodic cap. Derived summaries are excluded from later consolidation.
+
+Superseded source rows remain inspectable for `sourceTtlMs` (seven days by default), then normal pruning removes them. Without that expiry they would remain invisible to recall while still consuming the status-agnostic episodic cap. A source can expire before a scheduled pass if its original retention window is shorter, so align episode TTL, consolidation age, and schedule.
+
+## Reflection
+
+Reflection asks “what has been learned?” rather than “what happened?” It operates on each exact namespace's active semantic and episodic records.
+
+The pass reads the newest prior `data.coveredUntil` watermark, selects records strictly newer than it, requires at least ten by default, and feeds at most `maxRecords` (100 by default) to the model. If a namespace has a larger backlog, only the newest window is processed and the watermark advances through its newest record. Older excess rows then fall behind that watermark and are not picked up by a later pass. Run reflection often enough or raise `maxRecords` so a namespace cannot build an unreviewed backlog beyond the cap.
+
+Insights are reflection records with `derivedFrom` provenance and default to `candidate` status. Approve them through the [Long-term Memory candidate workflow](/docs/memory/long-term#reviewing-candidates), or set `memory.distill.reflect.writes` to `auto`.
+
+Each insight record carries the reflection watermark. Candidate rejection is a hard delete: rejecting every candidate insight deletes every persisted watermark for that pass. With no surviving watermark, a later run can select the same inputs, repeat the model call and its cost. Approve at least one valid insight or deliberately preserve/reconstruct the watermark before rejecting the entire batch.
+
+When the model returns no insights, Dawn writes a superseded no-insight sentinel. It advances the watermark without becoming recallable, so a schedule does not pay repeatedly for the same barren input.
+
+## Model and data trust
+
+On a live pass, active memory content is sent to the configured model provider. That can include user text, tool output, semantic facts, and episodes. Apply data-classification, residency, retention, and provider policy before enabling distillation; redact or exclude secrets and regulated data at collection time.
+
+Treat stored memory as untrusted prompt input. Source content can contain prompt injection intended to steer the distillation model, and model output can be inaccurate or malicious. Consolidation model output is written active before source linking begins; reflection output is candidate by default but can also be configured active. Review and monitor derived records, restrict model/provider changes, and alert on unexpected summaries, insights, or link failures.
+
+## Distilled records are found by keyword
+
+Consolidation and reflection writes currently do not create embeddings. Their summaries and insights remain available to keyword recall, query-less recall, and time filters. If your application requires semantic reachability for derived records, add an explicit re-embedding workflow and test its model-id handling; do not assume distillation did it.
+
+Use specific, stable vocabulary in prompts and outputs so future keyword queries can find the result. Exact names, ticket IDs, and domain terms are especially valuable.
+
+## Provenance
+
+Every derived record lists source IDs in `data.derivedFrom`. Consolidation additionally links sources through supersession; reflection leaves its inputs active and records the covered watermark. These links are an audit trail, not a guarantee that all source rows remain forever—retention can delete them.
+
+Before deleting source records, decide how long operators need to inspect the evidence and whether an external audit store must preserve it. Distillation does not provide an account-erasure transaction or immutable archive.
+
+## Cost
+
+Each selected consolidation batch uses one model call. Each selected reflection namespace uses one model call, even when it produces the no-insight sentinel. Control spend with thresholds, `maxBatches`, a narrow namespace prefix, and `--dry-run` before the first live pass.
+
+The default model is `gpt-5-mini`; provider selection follows the resolved model unless an authored provider deliberately overrides it. Pin model/provider in production if changes would affect cost or output shape.
+
+## Running it on a schedule
+
+The CLI commands can run behind cron or a job runner, and empty passes do no model work. Start with a dry run using the same namespace and batch cap, then run the live command only after reviewing counts. Treat a non-zero exit as a reconciliation event, not an instruction to retry blindly.
+
+Schedule against a single application-owned store and prevent overlapping jobs for the same namespace. Consolidation's write/link sequence and reflection watermarks are retry-oriented, not a distributed lease. Alert on failed batches and “more not examined” output so a capped backlog does not grow unnoticed.
+
+## Distillation configuration
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    distill: {
+      model: "gpt-5-mini",
+      maxBatches: 5,
+      consolidate: {
+        olderThanMs: 7 * 24 * 60 * 60 * 1000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 24 * 60 * 60 * 1000,
+      },
+      reflect: {
+        minNewRecords: 10,
+        maxRecords: 100,
+        writes: "candidate",
+      },
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+`consolidate.ttlMs` optionally expires summaries; leaving it unset keeps them. Validate that summary TTL exceeds the source review window if the summary is meant to outlive its evidence.
+
+## Testing
+
+Use a fake model and fixed `now` to assert selection and writes:
+
+1. `--dry-run` creates no model and performs no write;
+2. consolidation writes before attempting supersession;
+3. a link failure leaves the summary available for reconciliation;
+4. source expiry is stamped and derived summaries are not selected again;
+5. reflection respects the exact-namespace watermark and `maxRecords` bound;
+6. a zero-insight response writes only the superseded sentinel;
+7. reflection output defaults to candidates and remains keyword-reachable;
+8. batch caps report unexamined work.
+
+Keep model-output parsing tests separate from store lifecycle tests so failures identify whether selection, generation, or persistence broke.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory/episodes", title: "Episodes", subtitle: "capture the run history being compacted" },
+  { href: "/docs/memory/long-term", title: "Long-term Memory", subtitle: "review reflection candidates" },
+  { href: "/docs/memory/retrieval", title: "Recall and Retrieval", subtitle: "find distilled records by keyword" },
+  { href: "/docs/memory/browse", title: "Browse and Manage Memory", subtitle: "inspect provenance and status" },
+]} />

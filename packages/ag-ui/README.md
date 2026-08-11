@@ -9,7 +9,8 @@ Dawn agent stream chunks to AG-UI events and maps AG-UI run input back to a
 Dawn-shaped run input. It does not host an HTTP server or import LangGraph.
 
 This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai).
-Conceptual docs: [Dev Server](https://dawnai.org/docs/dev-server) and the
+Conceptual docs: [AG-UI and Web Clients](https://dawnai.org/docs/ag-ui),
+[Agent Protocol](https://dawnai.org/docs/dev-server/agent-protocol), and the
 [chat web example](https://github.com/cacheplane/dawnai/tree/main/examples/chat/web).
 
 ## Install

@@ -1,0 +1,99 @@
+# Security Architecture
+
+Dawn's route middleware is an execution hook, not a service-wide security boundary. Put outer authentication and tenant authorization in front of every non-local runtime endpoint, then layer Dawn's inner agent controls behind it.
+
+## Start at the service edge
+
+Authenticate the caller before the request reaches the Dawn service and restrict network reachability where possible. The outer layer should reject unauthenticated access consistently, apply rate and body-size limits, terminate TLS, and attach verified identity for authorization and audit.
+
+This boundary must cover the entire service. Do not expose management or health routes on the assumption that `src/middleware.ts` will see them.
+
+## Endpoint coverage
+
+Dawn middleware runs only when a request is about to execute a route. Management surfaces bypass it.
+
+| Surface | Examples | Dawn middleware | Outer auth required |
+|---|---|---|---|
+| Health | `GET /healthz` | No | Yes on a non-local service; a platform may expose a separately constrained probe path |
+| Thread management | `POST /threads`, `GET /threads/:thread_id`, `DELETE /threads/:thread_id` | No | Yes, with per-thread ownership checks |
+| State | `GET /threads/:thread_id/state` | No | Yes, with per-thread ownership checks |
+| Cancellation | `POST /threads/:thread_id/cancel` | No | Yes; it controls process-local execution |
+| Agent Protocol execution | `/threads/:thread_id/runs/wait`, `/runs/stream`, and `/resume` | Yes | Yes; middleware is an additional execution decision |
+| AG-UI execution | `POST /agui/:routeId` | Yes | Yes |
+| Memory candidate management | `GET /memory/candidates` and approve/reject routes under `/memory/candidates/:id` | No | Yes; listing can span namespaces |
+
+Apply authorization before dispatch so create, read, delete, state, cancel, memory candidates, and health cannot reach their narrower Dawn handlers unauthenticated.
+
+## Authorize the tenant, not the identifier
+
+Verified claims answer *who the caller is*. Route parameters, `thread_id`, AG-UI `threadId`, tenant strings in route input, and memory namespaces answer *which resource was requested*. Compare the two using application-owned records.
+
+A robust request path resolves the verified principal, determines its tenant and roles, loads or checks thread ownership, and only then forwards the request. A thread identifier is not proof of ownership, even if it is difficult to guess. Use the same rule for state, cancellation, deletion, resume, and any custom list endpoint.
+
+Memory deserves the same care. Candidate management can operate across namespaces, and `memory.resolveScope` receives route/app-root context—not verified request identity automatically. Do not let model-selected or caller-selected scope strings establish ownership.
+
+## Pass verified identity to tools
+
+For execution routes, outer authentication can forward a signed/internal identity header or trusted request context to Dawn middleware. The middleware verifies or consumes only that trusted value and returns canonical identity through `allow({ ... })`. Tools read it from `ctx.middleware`.
+
+```ts title="src/middleware.ts"
+import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  const identity = await verifyInternalIdentity(req.headers.authorization)
+  if (!identity) return reject(401, { error: "Unauthorized" })
+  return allow({ userId: identity.userId, tenantId: identity.tenantId })
+})
+```
+
+The model and request body must not choose those canonical fields. Keep authorization-sensitive tool arguments separate from verified identity, and have the tool derive tenant filters and credentials from `ctx.middleware`.
+
+## Inner agent controls
+
+After service authentication and tenant authorization, use [Access Control](/docs/access-control) to compose narrower controls:
+
+- [tool scope](/docs/tools#scoping-a-routes-tools) limits which tools are offered;
+- [Permissions](/docs/permissions) gates commands, paths, approved tools, delegations, and selected memory writes;
+- [Execution Sandbox](/docs/sandbox) constrains Dawn's workspace filesystem and shell backends;
+- [Subagents](/docs/subagents#delegation-policy) can guard the input sent to a child.
+
+These controls do not isolate arbitrary application code. Authored tools execute in the app process unless they isolate themselves; give their database clients, cloud credentials, network access, and filesystem behavior least privilege of their own.
+
+## Secrets and stored data
+
+Do not put secrets in `dawn.config.ts` values that cross a build boundary. The Hono target serializes JSON-compatible configuration into the generated `app.mjs` build artifact. Use platform bindings or environment variables for secrets, and keep emitted artifacts out of places where their contents are exposed.
+
+Protect `.env`, provider keys, database URLs, internal identity-signing keys, and sandbox credentials with the host's secret system. Scrub verified tokens and sensitive tool arguments from logs and traces.
+
+Postgres rows are plaintext application data unless the app or platform adds encryption. Apply transport encryption, storage encryption, backup protection, database roles, row or schema isolation where appropriate, and an audited deletion workflow.
+
+## Target differences
+
+| Target | Service boundary | Inner behavior |
+|---|---|---|
+| Node (`dawn start`, `serveRuntime`, generated server) | Your reverse proxy or Node host owns blanket auth | Dawn middleware covers execution/AG-UI only; Node can use configured sandboxes |
+| Hono | Hono/platform middleware must protect the rooted Dawn app | Dawn execution middleware is included in the static manifest; filesystem workspace and Dawn sandbox features are gated off this target |
+| LangSmith | The LangSmith/platform boundary owns authentication | Generated graph entries do not include Dawn HTTP middleware; route tool scope and applicable agent controls remain part of graph materialization |
+
+Review the exact capabilities of the selected [Deployment Options](/docs/deployment) instead of assuming a control transfers unchanged between targets.
+
+## Production checklist
+
+- Restrict network access and require authentication on every endpoint group in the matrix.
+- Map verified principals to application-owned tenant and thread records.
+- Reject cross-tenant reads, state access, runs, resume, cancellation, and deletion.
+- Treat memory-candidate routes as privileged administrative operations.
+- Pass canonical identity to tools through trusted middleware context, never model input.
+- Run with least-privilege database roles, provider keys, authored tools, and sandbox credentials.
+- Keep secrets out of generated artifacts and redact them from logs and traces.
+- Test middleware-bypassing routes and cross-tenant attempts in the deployed topology.
+- Re-review boundaries whenever the build target or embedding host changes.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/middleware", title: "Middleware", subtitle: "execution gating and verified context flow" },
+  { href: "/docs/access-control", title: "Access Control", subtitle: "tool scope, permissions, sandbox, and delegation" },
+  { href: "/docs/persistence", title: "Persistence and Tenancy", subtitle: "data ownership, deletion, and encryption" },
+  { href: "/docs/production-topology", title: "Production Topology", subtitle: "replica and cancellation routing" },
+]} />

@@ -1,3 +1,6 @@
+import { pathToFileURL } from "node:url"
+import { tsImport } from "tsx/esm/api"
+
 export interface DocFrontmatter {
   title?: string
   description?: string
@@ -79,27 +82,63 @@ export interface NavEntry {
   readonly label: string
 }
 
-/** Extract ordered `{ slug, label }` pairs from the website nav source, deduped by slug. */
-export function parseNav(navSource: string): NavEntry[] {
+interface DocsNavSectionValue {
+  readonly items: readonly unknown[]
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null
+}
+
+/** Validate and flatten an evaluated `DOCS_NAV` export, deduped by slug. */
+export function parseNav(navValue: unknown): NavEntry[] {
+  if (!Array.isArray(navValue)) {
+    throw new TypeError("DOCS_NAV must be an array")
+  }
+
   const entries: NavEntry[] = []
   const seen = new Set<string>()
-  const re = /label:\s*["']([^"']+)["'],\s*href:\s*["']\/docs\/([^"']+)["']/g
-  let m: RegExpExecArray | null = re.exec(navSource)
-  while (m !== null) {
-    const label = m[1] ?? ""
-    const slug = m[2] ?? ""
-    if (slug !== "" && !seen.has(slug)) {
-      seen.add(slug)
-      entries.push({ slug, label })
+  for (const [sectionIndex, section] of navValue.entries()) {
+    if (!isRecord(section) || !Array.isArray(section.items)) {
+      throw new TypeError(`DOCS_NAV[${sectionIndex}] must contain an items array`)
     }
-    m = re.exec(navSource)
+    for (const [itemIndex, item] of (section as unknown as DocsNavSectionValue).items.entries()) {
+      if (!isRecord(item) || typeof item.label !== "string" || typeof item.href !== "string") {
+        throw new TypeError(
+          `DOCS_NAV[${sectionIndex}].items[${itemIndex}] must contain string label and href fields`,
+        )
+      }
+      if (!item.href.startsWith("/docs/") || item.href.includes("#") || item.href.includes("?")) {
+        throw new TypeError(
+          `DOCS_NAV[${sectionIndex}].items[${itemIndex}].href must be an unfragmented /docs/<slug> path`,
+        )
+      }
+      const slug = item.href.slice("/docs/".length)
+      if (slug !== "" && !seen.has(slug)) {
+        const label = item.label
+        seen.add(slug)
+        entries.push({ slug, label })
+      }
+    }
   }
   return entries
 }
 
-/** Extract `/docs/<slug>` hrefs from the website nav source, in order, deduped. */
-export function parseNavOrder(navSource: string): string[] {
-  return parseNav(navSource).map((entry) => entry.slug)
+/** Load exactly the exported `DOCS_NAV` runtime value from a TypeScript module. */
+export async function loadNav(navFile: string): Promise<NavEntry[]> {
+  const loaded = (await tsImport(pathToFileURL(navFile).href, import.meta.url)) as Record<
+    string,
+    unknown
+  >
+  if (!("DOCS_NAV" in loaded)) {
+    throw new TypeError(`${navFile} does not export DOCS_NAV`)
+  }
+  return parseNav(loaded.DOCS_NAV)
+}
+
+/** Flatten an evaluated `DOCS_NAV` value to doc slugs in reading order. */
+export function parseNavOrder(navValue: unknown): string[] {
+  return parseNav(navValue).map((entry) => entry.slug)
 }
 
 /** The text of the first `# ` heading in a markdown document, if any. */

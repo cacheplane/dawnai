@@ -1,0 +1,95 @@
+# LangSmith
+
+Choose the LangSmith target when LangSmith or another LangGraph deployment platform must own the transport and execution envelope. This target emits graph entries; it does not run Dawn's HTTP server.
+
+## Select the target
+
+LangSmith is emitted by default alongside Node. To emit only the platform artifact:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["langsmith"] },
+})
+```
+
+An authored `build.targets` list replaces the defaults.
+
+## Build output
+
+Run the ordinary validation and build flow:
+
+```bash
+dawn check
+dawn build
+dawn verify
+```
+
+The target writes `.dawn/build/langgraph.json` and one `.dawn/build/<route-slug>.ts` entry per discovered route. A representative config is:
+
+```json title=".dawn/build/langgraph.json"
+{
+  "graphs": {
+    "/research#agent": "./.dawn/build/research.ts:graph"
+  },
+  "dependencies": ["."],
+  "env": ".env.example",
+  "node_version": "22"
+}
+```
+
+Each graph key is `<routeId>#<kind>`. Use that exact value, such as `/research#agent`, as the platform `assistant_id`.
+
+## Route entry behavior
+
+Agent routes receive a generated entry that calls `materializeResolvedRouteGraph`. That path loads the agent descriptor and applies Dawn's agent materialization, including discovered route tools, tool scope, capabilities, and permission gates.
+
+Workflow, graph, and chain routes are different: the generated entry imports the route's authored `workflow`, `graph`, or `chain` export and re-exports that value as `graph`. They are not passed through agent materialization.
+
+Test every kind you deploy at the platform boundary. Dawn HTTP scenario coverage does not validate the platform's `assistant_id` request envelope.
+
+## Environment file path
+
+The generated `env` field is `.env.example` when that file exists at the app root; otherwise it is `.env`. This is a path consumed by the platform build. Review the selected file before deployment and keep secret values in the platform's secret manager rather than committing them.
+
+## Merge precedence
+
+If the app root contains a hand-authored `langgraph.json`, Dawn shallow-merges it into the generated output. User-defined extra keys survive. The generated `graphs`, `dependencies`, `env`, and `node_version` fields overwrite user values with those names.
+
+This is a shallow merge: a user `graphs` map is replaced rather than merged route by route.
+
+## Platform authentication and missing Dawn surfaces
+
+Configure authentication and tenant authorization at the LangSmith or hosting-platform boundary. The generated target does not include Dawn HTTP `middleware`, the AG-UI server, or the Dawn `sandbox` manager. It also does not expose Dawn's Agent Protocol thread-management server.
+
+Agent materialization preserves policy-aware graph construction for agent routes, but that does not add the absent HTTP or sandbox surfaces. If those surfaces are requirements, deploy [Node and Docker](/docs/deployment/node) or, after passing its capability gate, [Edge and Hono](/docs/deployment/edge).
+
+## Node version mismatch
+
+The emitter currently writes `node_version: "22"`, while Dawn packages require Node 24 or newer. This is an unresolved compatibility mismatch. Do not treat the generated value as evidence that the current Dawn package set runs correctly on Node 22; confirm the platform's supported Node versions before deploying.
+
+## Deployment checklist
+
+1. Confirm that every route has the expected `<routeId>#<kind>` entry and use it as `assistant_id`.
+2. Inspect the environment-file path and move actual secrets into platform-managed configuration.
+3. Add platform authentication and tenant authorization.
+4. Test agent materialization and raw workflow/graph/chain entries through the platform transport.
+5. Resolve the Node 22/Node 24 incompatibility with the target platform before production use.
+6. Confirm that no requirement depends on Dawn HTTP middleware, AG-UI, or the sandbox manager.
+
+## Troubleshooting
+
+- **A user config field disappeared:** generated `graphs`, `dependencies`, `env`, and `node_version` intentionally take precedence.
+- **The platform cannot find an assistant:** use the full `<routeId>#<kind>` key from generated `graphs`.
+- **HTTP middleware did not run:** it is not materialized into these entries; enforce authentication at the platform boundary.
+- **Local Node HTTP tests pass but platform calls fail:** exercise the platform transport and its environment/build process directly.
+
+<RelatedCards
+  items={[
+    { href: "/docs/deployment", title: "Deployment Options", description: "Compare the target boundaries." },
+    { href: "/docs/deployment/node", title: "Node and Docker", description: "Run Dawn's complete HTTP runtime." },
+    { href: "/docs/security-architecture", title: "Security Architecture", description: "Place authentication at the actual serving boundary." },
+    { href: "/docs/testing", title: "Scenario Testing", description: "Exercise route behavior before platform validation." },
+  ]}
+/>

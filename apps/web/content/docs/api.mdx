@@ -2,6 +2,16 @@
 
 This page lists public symbols exported from `@dawn-ai/sdk`, selected runtime packages, and the generated `dawn:routes` module. It is reference documentation — for concepts and examples, see the individual concept pages. Symbols are grouped by category and linked back to the page that explains them in depth.
 
+## Package and surface index
+
+1. **Application-facing:** [`@dawn-ai/sdk`](#dawn-aisdk), [`@dawn-ai/cli`](#dawn-aicli), [`@dawn-ai/cli/fetch`](#dawn-aiclifetch), [`@dawn-ai/testing`](#dawn-aitesting), [`@dawn-ai/evals`](#dawn-aievals), and generated [`dawn:routes`](#dawnroutes-generated).
+2. **Lower-level stores and integrations:** [`@dawn-ai/core`](#dawn-aicore), [`@dawn-ai/ag-ui`](#dawn-aiag-ui), [`@dawn-ai/memory`](#dawn-aimemory), [`@dawn-ai/memory-pgvector`](#dawn-aimemory-pgvector), and [`@dawn-ai/postgres-storage`](#dawn-aipostgres-storage).
+3. **CLI/runtime tooling:** [`@dawn-ai/cli/runtime`](#dawn-aicliruntime) supports Dawn tooling and testing internals; it is not the application embedding entry point.
+
+## Reference conventions
+
+Package roots are Node-only when their export graph includes filesystem, HTTP-server, SQLite, or CLI machinery. A subpath described as **edge-safe** excludes those dependencies; it does not make authored routes or every transitive application dependency edge-compatible. Types under `dawn:routes` are generated for one app by `dawn typegen` or `dawn build`. Signatures and return types live here; focused application examples live in the linked guides and recipes.
+
 ## @dawn-ai/sdk
 
 ### Agent
@@ -272,7 +282,7 @@ See [Middleware](/docs/middleware).
 
 ### Memory
 
-Functions and types for declaring a route's typed long-term memory. See [Memory](/docs/memory).
+Functions and types for declaring a route's typed long-term memory. See [Long-term Memory](/docs/memory/long-term).
 
 ### `defineMemory(def)`
 
@@ -302,7 +312,7 @@ export default defineMemory({
 })
 ```
 
-See [Memory](/docs/memory) and the [`memory`](/docs/configuration#memory) config key.
+See [Long-term Memory](/docs/memory/long-term) and the [`memory`](/docs/configuration#memory) config key.
 
 ### `DefinedMemory`
 
@@ -317,7 +327,7 @@ export interface DefinedMemory<S extends z.ZodTypeAny = z.ZodTypeAny> {
 
 The descriptor returned by `defineMemory()`. Carry it as a route's `memory.ts` default export; do not construct it manually.
 
-See [Memory](/docs/memory).
+See [Long-term Memory](/docs/memory/long-term).
 
 ### `MemoryScopeDimension`
 
@@ -332,7 +342,7 @@ export type MemoryScopeDimension =
 
 The namespace dimensions a memory can be partitioned by, used in `DefinedMemory.scope`. `workspace` and `route` are derived automatically; `tenant`, `user`, and `agent` come from the config-level `memory.resolveScope` callback.
 
-See [Memory](/docs/memory).
+See [Long-term Memory](/docs/memory/long-term).
 
 ---
 
@@ -644,6 +654,204 @@ Resolves intersection and mapped types into a flat object shape. Makes IDE hover
 
 ---
 
+## @dawn-ai/cli
+
+Stable application-runtime exports from the package root. This entry is Node-only: use it when Dawn owns a listener or when Node loads the generated static manifest. See [Embed the Runtime](/docs/embedding) for complete lifecycle examples.
+
+### `serveRuntime(options)`
+
+```ts
+export async function serveRuntime(
+  opts: ServeRuntimeOptions,
+): Promise<ServeRuntimeHandle>
+
+export interface ServeRuntimeHandle {
+  readonly url: string
+  readonly close: () => Promise<void>
+}
+
+export interface ServeRuntimeOptions {
+  readonly appRoot: string
+  readonly host?: string
+  readonly port?: number
+  readonly installSignalHandlers?: boolean
+  readonly modules?: DawnStaticModules
+  readonly config?: DawnConfig
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?:
+    | PermissionsStore
+    | (() => Promise<PermissionsStore>)
+  readonly memoryStore?: () => Promise<MemoryStore>
+  readonly middleware?: DawnMiddleware
+}
+```
+
+`serveRuntime()` starts the production Node HTTP runtime once, without file watching or boot-time typegen. `host` defaults to `HOST` then `"0.0.0.0"`; `port` defaults to numeric `PORT` then `8000`. `installSignalHandlers` defaults to `false`. When enabled, Dawn listens for `SIGINT` and `SIGTERM`; either way, the owning application should await `handle.close()` before closing injected pools or exiting.
+
+Injected stores and middleware take precedence over config-backed Node fallbacks. The runtime does not own or close injected boot stores. Its close handle owns the listener, active-request/run drain, request-store disposal wait, and sandbox release.
+
+### `loadStaticModules(manifestUrl)`
+
+```ts
+export async function loadStaticModules(
+  manifestUrl: URL | string,
+): Promise<DawnStaticModules>
+```
+
+Registers the TS loader, imports a generated Node `modules.mjs`, and validates its route and middleware shape. This loader is Node-only; the edge manifest is statically imported instead.
+
+### `DawnStaticModules` and `StaticRouteModule`
+
+```ts
+export interface DawnStaticModules {
+  readonly middleware?: DawnMiddleware
+  readonly routes: readonly StaticRouteModule[]
+}
+
+export interface StaticRouteModule {
+  readonly assistantId: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly routeFile: string
+  readonly kind: RouteKind
+  readonly module: NormalizedRouteModule
+  readonly tools: readonly DiscoveredToolDefinition[]
+  readonly stateFields: readonly ResolvedStateField[] | undefined
+  readonly memory: LoadedRouteMemory | null
+  readonly skills?: readonly string[]
+}
+```
+
+`DawnStaticModules` is the build-time route manifest consumed by the runtime. Each route entry already carries normalized route, tool, state, and memory data; `skills`, when present, is capability-diagnostic metadata rather than loaded skill content.
+
+### @dawn-ai/cli/fetch
+
+The edge-safe fetch surface has no route discovery, local config loading, or SQLite fallback. It serves Dawn's endpoints at the request URL root: `/healthz`, `/threads...`, `/agui/:routeId`, and `/memory/candidates...`. Mount or route it at `/`; it has no configurable base path.
+
+With no filesystem fallback, this entry requires `modules` during handler construction; otherwise it cannot build the route registry. Without `requestStores`, boot `threadsStore` and `checkpointer` must be instances, while boot `permissionsStore` may be an instance or an async factory. Supply them directly or through an explicit fallback. Only the boot `memoryStore` thunk is lazy: Dawn invokes it on the first memory use rather than during construction.
+
+`requestStores` runs before route dispatch for every accepted request, so the application may eagerly create its per-request memory store or other resources there. Each field returned by the factory overrides the boot value; an omitted field falls through to the corresponding boot store. If neither layer supplies a dependency, the route accessor that needs it raises the missing-store error. That accessor timing does not make factory allocation lazy—the factory may connect, allocate, or fail before Dawn knows which endpoint will match.
+
+```ts
+export async function createRuntimeFetchHandler(
+  options: StartRuntimeServerOptions & {
+    readonly drainDeadlineMs?: number
+    readonly apSseHeartbeatIntervalMs?: number
+  },
+): Promise<RuntimeFetchHandler>
+
+export interface RuntimeFetchHandler {
+  readonly fetch: (request: Request) => Promise<Response>
+  readonly close: () => Promise<void>
+  readonly state: {
+    acceptingRequests: boolean
+    activeRequests: number
+    closed: boolean
+  }
+  /** @deprecated Await close() for shutdown completion. */
+  readonly shutdownController: AbortController
+}
+```
+
+`close()` stops acceptance, aborts shutdown-aware work, and waits for requests, runs, and request-store disposal until the configured drain deadline before releasing sandboxes. The deprecated `shutdownController` is vestigial and has no request-path listeners. Await `close()` for shutdown completion.
+
+`StartRuntimeServerOptions` supplies `appRoot`, generated `modules`, serializable `config`, middleware, sandbox manager, boot stores, and optional `requestStores(request)`. The `appRoot` must match the rooted namespace embedded in the generated manifest. Store precedence and failure timing follow the construction, boot, and per-request rules above.
+
+```ts
+export interface RequestStores {
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?: PermissionsStore
+  readonly memoryStore?: MemoryStore
+  readonly dispose?: () => Promise<void>
+}
+
+export interface StartRuntimeServerOptions {
+  readonly appRoot: string
+  readonly host?: string
+  readonly port?: number
+  readonly permissionsMode?: "per-request" | "boot"
+  readonly modules?: DawnStaticModules
+  readonly config?: DawnConfig
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?:
+    | PermissionsStore
+    | (() => Promise<PermissionsStore>)
+  readonly memoryStore?: () => Promise<MemoryStore>
+  readonly middleware?: DawnMiddleware
+  readonly sandboxManager?: SandboxManager
+  readonly bootFallbacks?: RuntimeBootFallbacks
+  readonly requestStores?: (
+    request: Request,
+  ) => RequestStores | Promise<RequestStores>
+}
+```
+
+A request-store value overrides the matching boot store and is used as-is. Dawn calls its `dispose()` once both the response body and any run started by that request have settled. If the factory allocates a resource and then throws before returning, the application must clean up that partial allocation itself: the runtime received no `RequestStores` value to dispose. Injected boot stores remain application-owned and are not closed by the handler.
+
+The public static-manifest helpers are:
+
+```ts
+export function buildStaticRouteModule(
+  input: StaticRouteModuleInput,
+): StaticRouteModule
+
+export function normalizeMiddlewareModule(
+  mod: unknown,
+): DawnMiddleware | undefined
+
+export interface StaticToolModuleInput {
+  readonly filePath: string
+  readonly module: unknown
+  readonly name: string
+  readonly scope: ToolScope
+}
+
+export interface StaticRouteModuleInput {
+  readonly kind: RouteKind
+  readonly memoryModule?: unknown
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routeModule: unknown
+  readonly routePath: string
+  readonly skills?: readonly string[]
+  readonly stateDefaults?: readonly (readonly [string, unknown])[]
+  readonly stateReducers?: readonly (readonly [
+    string,
+    (current: unknown, incoming: unknown) => unknown,
+  ])[]
+  readonly toolSchemas?: Record<string, unknown>
+  readonly tools: readonly StaticToolModuleInput[]
+}
+
+export type {
+  DawnStaticModules,
+  StaticRouteModule,
+} from "./lib/runtime/static-modules-core.js"
+export type {
+  BootResolvedInstances,
+  RuntimeBootFallbacks,
+} from "./lib/runtime/execute-route-core.js"
+export type { StreamChunk } from "./lib/runtime/stream-types.js"
+export {
+  type RuntimeEnv,
+  readRuntimeEnv,
+  seedDawnConfig,
+  seedRuntimeEnv,
+} from "@dawn-ai/core"
+export { seedModelImporter } from "@dawn-ai/langchain"
+```
+
+The subpath also exports `DawnStaticModules`, `StaticRouteModule`, `RequestStores`, `StartRuntimeServerOptions`, `BootResolvedInstances`, `RuntimeBootFallbacks`, `StreamChunk`, `RuntimeEnv`, `readRuntimeEnv`, `seedDawnConfig`, `seedRuntimeEnv`, and `seedModelImporter`. These exports support generated edge entries; application code normally consumes the generated `.dawn/build/app.mjs` or the handler factory.
+
+### @dawn-ai/cli/runtime
+
+This is a lower-level tooling surface for `@dawn-ai/testing` and runtime integrations. It exposes Node-oriented registries, execution internals, dynamic module loading, and server assembly. It is not the application embedding entry point; use the package-root `serveRuntime()` or edge-safe `@dawn-ai/cli/fetch` surface above.
+
+---
+
 ## @dawn-ai/core
 
 Low-level config, discovery, capability, workspace, and typegen primitives used by the Dawn CLI and runtime integrations. Route code usually imports author-facing helpers from `@dawn-ai/sdk`; use `@dawn-ai/core` when building tooling, tests, or adapters.
@@ -800,7 +1008,7 @@ import {
 } from "@dawn-ai/ag-ui"
 ```
 
-See [Dev Server](/docs/dev-server#ag-ui-endpoint).
+See [AG-UI and Web Clients](/docs/ag-ui).
 
 ### ID factories
 
@@ -870,6 +1078,315 @@ Encodes one AG-UI event as an SSE frame using `@ag-ui/encoder`. This transport h
 
 ---
 
+## @dawn-ai/memory
+
+Lower-level deterministic storage, ranking, and administration contracts for typed long-term memory. Agent recall uses `MemoryStore.search()`; administrative listing uses `MemoryStore.browse()`. See [Recall and Retrieval](/docs/memory/retrieval) for ranking and [Browse and Manage Memory](/docs/memory/browse) for operator workflows.
+
+The package root also exports the SQLite implementation and ranking, namespace, reconciliation, distillation, and vector helpers, so treat the root as Node-only. Import the pure browse contract from `@dawn-ai/memory/browse` when a bundle must not pull `node:sqlite`.
+
+### `MemoryStore`
+
+```ts
+export interface MemoryStore {
+  put(
+    rec: MemoryRecord,
+    opts?: {
+      readonly embedding?: Float32Array
+      readonly embeddingModel?: string
+    },
+  ): Promise<void>
+  get(id: string): Promise<MemoryRecord | null>
+  search(q: MemoryQuery): Promise<readonly MemoryRecord[]>
+  update(id: string, patch: Partial<MemoryRecord>): Promise<void>
+  supersede(id: string, bySupersedingId: string): Promise<void>
+  delete(id: string): Promise<void>
+  listCandidates(namespacePrefix: string): Promise<readonly MemoryRecord[]>
+  browse(q?: BrowseQuery): Promise<BrowsePage>
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<MemoryStats>
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{
+    readonly deletedExpired: number
+    readonly deletedOverCap: number
+  }>
+}
+```
+
+`supersede()` demotes the old record and records the new record's link; repeating the same pair is idempotent. `stats()` returns facet counts. `prune()` removes expired rows of every kind and, when `cap` is set, the oldest episodic rows beyond that per-namespace cap.
+
+### `MemoryRecord`
+
+```ts
+export type MemoryKind =
+  | "semantic"
+  | "episodic"
+  | "procedural"
+  | "reflection"
+export type MemoryStatus = "candidate" | "active" | "superseded"
+
+export interface MemorySource {
+  readonly type: "run" | "user" | "tool" | "eval" | "human"
+  readonly id: string
+}
+
+export interface MemoryRecord {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly namespace: string
+  readonly content: string
+  readonly data: Record<string, unknown>
+  readonly source: MemorySource
+  readonly confidence: number
+  readonly tags: readonly string[]
+  readonly status: MemoryStatus
+  readonly supersedes?: readonly string[]
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly effectiveAt?: string
+  readonly expiresAt?: string
+}
+```
+
+### `MemoryQuery`
+
+```ts
+export interface MemoryQuery {
+  readonly namespace: string
+  readonly query?: string
+  readonly kind?: MemoryKind
+  readonly tags?: readonly string[]
+  readonly status?: MemoryStatus
+  readonly limit?: number
+  readonly now?: string
+  readonly since?: string
+  readonly until?: string
+  readonly queryEmbedding?: Float32Array
+  readonly embedderId?: string
+  readonly vector?: VectorRankingOptions
+}
+
+export interface VectorRankingOptions {
+  readonly weights?: {
+    readonly keyword?: number
+    readonly vector?: number
+  }
+  readonly rrfK?: number
+  readonly vectorK?: number
+  readonly recencyWeight?: number
+  readonly confidenceWeight?: number
+  readonly recencyHalfLifeMs?: number
+}
+```
+
+When `now` is absent, ranked search measures recency from the newest candidate's `updatedAt`; the library does not read a clock. Hybrid keyword/vector retrieval requires `queryEmbedding`, `embedderId`, and at least one query token. The query-less branch runs first, so a missing or token-empty `query` uses recency/event-time listing even when both embedding fields are present.
+
+### `BrowseQuery`, `BrowsePage`, and `MemoryStats`
+
+```ts
+export interface BrowseQuery {
+  readonly namespacePrefix?: string
+  readonly namespace?: string
+  readonly status?: MemoryStatus | readonly MemoryStatus[]
+  readonly kind?: MemoryKind | readonly MemoryKind[]
+  readonly sourceType?: MemorySource["type"]
+  readonly limit?: number
+  readonly offset?: number
+  readonly since?: string
+  readonly until?: string
+  readonly now?: string
+  readonly filters?: readonly BrowseFilter[]
+  readonly orderBy?: readonly BrowseSortEntry[]
+  readonly cursor?: string
+}
+
+export interface BrowsePage {
+  readonly records: readonly MemoryRecord[]
+  readonly total: number
+  readonly continuation: string | null
+}
+
+export interface MemoryStats {
+  readonly total: number
+  readonly byStatus: Readonly<Record<string, number>>
+  readonly byKind: Readonly<Record<string, number>>
+  readonly byNamespace: Readonly<Record<string, number>>
+  readonly bySourceType: Readonly<Record<string, number>>
+}
+```
+
+`BrowseFilter` is the closed union of status/kind set filters, content text filters, exact/prefix namespace filters, confidence comparisons/ranges, and UTC-day `updatedAt` filters. `BrowseSortEntry` accepts only `updatedAt`, `createdAt`, `confidence`, `namespace`, `kind`, or `status`, each with `"asc"` or `"desc"`. The store appends an `id ASC` tie-break. `BrowsePage.total` counts the full matching set rather than the current cursor window; the two in-repo stores read rows and total in one transaction snapshot. A full page receives a continuation, so an exact multiple of the limit can end with a valid empty final page.
+
+### @dawn-ai/memory/browse
+
+Pure validation, ordering, range, and cursor exports. This subpath does not import the SQLite store or `node:sqlite`.
+
+```ts
+export const BROWSE_DEFAULT_LIMIT = 50
+export const BROWSE_MAX_LIMIT = 1000
+export const BROWSE_CURSOR_VERSION = 1
+export const BROWSE_SORT_FIELDS = [
+  "updatedAt",
+  "createdAt",
+  "confidence",
+  "namespace",
+  "kind",
+  "status",
+] as const
+
+export type BrowseCursorValue = string | number
+
+export interface BrowseCursorPayload {
+  readonly key: readonly BrowseCursorValue[]
+  readonly id: string
+}
+
+export type BrowseSortField =
+  | "updatedAt"
+  | "createdAt"
+  | "confidence"
+  | "namespace"
+  | "kind"
+  | "status"
+
+export interface BrowseSortEntry {
+  readonly field: BrowseSortField
+  readonly dir: "asc" | "desc"
+}
+
+export interface ResolvedBrowseSort {
+  readonly field: BrowseSortField
+  readonly column: string
+  readonly dir: "asc" | "desc"
+  readonly numeric: boolean
+  readonly collateC: boolean
+}
+
+export type BrowseFilter =
+  | {
+      readonly field: "status"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryStatus[]
+    }
+  | {
+      readonly field: "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryKind[]
+    }
+  | {
+      readonly field: "content"
+      readonly op:
+        | "contains"
+        | "notContains"
+        | "equals"
+        | "notEquals"
+        | "startsWith"
+        | "endsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "namespace"
+      readonly op: "equals" | "startsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
+      readonly value: number
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "between"
+      readonly min: number
+      readonly max: number
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "onDay" | "beforeDay" | "afterDay"
+      readonly day: string
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "betweenDays"
+      readonly fromDay: string
+      readonly untilDay: string
+    }
+
+export function validateBrowseQuery(
+  query: BrowseQuery,
+  opts?: { readonly maxLimit?: number },
+): void
+
+export function normalizeSetFilter<T extends string>(
+  value: T | readonly T[] | undefined,
+): readonly T[] | undefined
+
+export function resolveBrowseOrder(
+  orderBy?: readonly BrowseSortEntry[],
+): readonly ResolvedBrowseSort[]
+
+export const DEFAULT_BROWSE_ORDER: readonly ResolvedBrowseSort[] =
+  Object.freeze([
+    Object.freeze({
+      field: "updatedAt",
+      column: "updated_at",
+      dir: "desc",
+      numeric: false,
+      collateC: false,
+    }),
+  ])
+
+export function utcDayStart(day: string): string
+export function utcDayAfter(day: string): string
+export function namespacePrefixUpperBound(
+  prefix: string,
+): string | undefined
+
+export function browseQueryFingerprint(query: BrowseQuery): string
+export function browseCursorKey(
+  record: MemoryRecord,
+  order: readonly ResolvedBrowseSort[],
+): readonly BrowseCursorValue[]
+export function encodeBrowseCursor(
+  fingerprint: string,
+  payload: BrowseCursorPayload,
+): string
+export function decodeBrowseCursor(
+  cursor: string,
+  fingerprint: string,
+  order: readonly ResolvedBrowseSort[],
+): BrowseCursorPayload
+
+export class BrowseQueryError extends Error {
+  readonly code: string
+  constructor(message: string, code?: string)
+}
+
+export type {
+  BrowsePage,
+  BrowseQuery,
+  MemoryKind,
+  MemoryRecord,
+  MemorySource,
+  MemoryStatus,
+} from "./types.js"
+```
+
+The subpath also exports `BrowseCursorPayload`, `BrowseCursorValue`, `ResolvedBrowseSort`, `BrowseFilter`, `BrowsePage`, `BrowseQuery`, `BrowseSortEntry`, `BrowseSortField`, `MemoryKind`, `MemoryRecord`, `MemorySource`, and `MemoryStatus`.
+
+`DEFAULT_BROWSE_ORDER` resolves to `updatedAt DESC`; stores append `id ASC` as the deterministic tie-break. `utcDayStart(day)` returns the inclusive UTC-day lower bound. `utcDayAfter(day)` returns the next day's start, the exclusive upper bound for that day. `namespacePrefixUpperBound(prefix)` returns the smallest string above every string with that prefix. An empty prefix or all-maximal prefix has no finite upper bound, so it returns `undefined`.
+
+The stores apply `BROWSE_DEFAULT_LIMIT` when `limit` is absent. Trusted in-process callers may request more than 1,000 rows. `BROWSE_MAX_LIMIT` is not enforced automatically: an untrusted-boundary caller must invoke `validateBrowseQuery(query, { maxLimit: BROWSE_MAX_LIMIT })` to impose the 1,000-row ceiling.
+
+Validation requires non-empty namespace and filter strings of at most 1,024 UTF-8 bytes, a non-empty cursor of at most 4,096 characters, and full millisecond UTC instants in `YYYY-MM-DDTHH:MM:SS.sssZ` form. A query may have at most eight filters and three sort entries, with at most one filter and one sort entry per field. A cursor cannot be combined with a nonzero offset; an omitted or zero offset is compatible. Empty top-level `status` or `kind` arrays are valid and match nothing, while an empty set-filter `values` array is invalid.
+
+The query fingerprint includes `namespace`, `namespacePrefix`, `status`, `kind`, `sourceType`, `since`, `until`, `now`, canonicalized filters, and resolved order. It excludes `limit`, `offset`, and `cursor`, which change pagination rather than dataset identity. Set-member and filter-array ordering do not change the fingerprint. Keep one fixed `now` while following continuations.
+
+`BrowseQueryError.code` is `"invalid-query"` for validation and checked ordering/range failures. Cursor decoding uses `"continuation-invalid"` for malformed cursors, unsupported versions, fingerprint mismatches, wrong key shapes/types, or missing cursor ids.
+
+---
+
 ## @dawn-ai/memory-pgvector
 
 Postgres + pgvector backend for Dawn's typed long-term memory store. Use it through `DawnConfig.memory.store` when an app needs a shared production store, multiple app instances, or indexed vector retrieval.
@@ -884,7 +1401,7 @@ import {
 } from "@dawn-ai/memory-pgvector"
 ```
 
-See [Memory](/docs/memory#postgres-backend-pgvector).
+See [Recall and Retrieval](/docs/memory/retrieval#postgres-backend-pgvector).
 
 ### `pgvectorMemoryStore(options)`
 
@@ -978,7 +1495,7 @@ import {
 } from "@dawn-ai/postgres-storage"
 ```
 
-The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
+The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment/edge) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
 
 See [Configuration](/docs/configuration#postgres-backend) for the shared-pool setup, teardown ownership, and the storage-shape limits.
 
@@ -1115,7 +1632,7 @@ import {
 } from "@dawn-ai/testing"
 ```
 
-See [Testing your Dawn agent](/docs/testing-agents), [Memory](/docs/memory#testing), and [Evals](/docs/evals).
+See [Agent Test Harness](/docs/testing-agents), [Fixtures and Recording](/docs/testing-agents/fixtures), [Long-term Memory testing](/docs/memory/long-term#testing), and [Evals](/docs/evals).
 
 ### Harnesses
 
@@ -1363,5 +1880,5 @@ See [Routes](/docs/routes), [State](/docs/state).
   { href: "/docs/reasoning-effort", title: "Reasoning Effort", subtitle: "configuring ReasoningConfig on an agent" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "using AgentConfig.subagents" },
   { href: "/docs/state", title: "State", subtitle: "per-route typed state and RouteState<P>" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "building and deploying a Dawn project" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "building and deploying a Dawn project" },
 ]} />
