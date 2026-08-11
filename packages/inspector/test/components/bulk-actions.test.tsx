@@ -282,8 +282,15 @@ describe("bulk actions", () => {
 
     hold = false
     release?.()
-    // And the answer landing does not bring it back: the pivot dropped the selection.
-    await vi.waitFor(() => expect(checkboxFor(container, "c1")).toBeDefined())
+    // And the answer landing does not bring it back, because by then the selection
+    // itself is gone: `resultMeta.datasetKey` pivots on the FULFILLED revision, so
+    // the engine drops the ticks as the new rows land. Waiting on the BOX going
+    // unticked is what dates this to after the response was applied — c1 is in the
+    // document the whole time, so waiting on the row's mere existence would resolve
+    // on the first tick and re-assert the withheld-while-stale case above.
+    await vi.waitFor(() =>
+      expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false"),
+    )
     expect(screen.queryByTestId("bulk-bar")).toBeNull()
   })
 
