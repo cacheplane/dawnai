@@ -276,6 +276,29 @@ describe("docs links and in-page anchors", () => {
       expect(devServer?.ids).toContain(anchor)
       expect(agentProtocol?.ids).toContain(anchor)
     }
+
+    const memory = pages.get("memory.mdx")
+    const longTerm = pages.get("memory/long-term.mdx")
+    const retrieval = pages.get("memory/retrieval.mdx")
+    const episodes = pages.get("memory/episodes.mdx")
+    const distillation = pages.get("memory/distillation.mdx")
+
+    for (const anchor of [
+      "how-recall-ranks",
+      "semantic-recall-opt-in",
+      "postgres-backend-pgvector",
+    ]) {
+      expect(memory?.ids).toContain(anchor)
+      expect(retrieval?.ids).toContain(anchor)
+    }
+    expect(memory?.ids).toContain("episodic-memory")
+    expect(episodes?.ids).toContain("episodic-memory")
+    expect(memory?.ids).toContain("distillation")
+    expect(distillation?.ids).toContain("distillation")
+    for (const anchor of ["write-governance", "reviewing-candidates", "configuration", "testing"]) {
+      expect(memory?.ids).toContain(anchor)
+      expect(longTerm?.ids).toContain(anchor)
+    }
   })
 
   it("resolves every repository-owned docs link and supplied fragment", () => {

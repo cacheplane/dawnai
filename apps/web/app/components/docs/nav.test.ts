@@ -29,6 +29,10 @@ const FOUNDATION_DOCS_NAV = [
       { label: "State", href: "/docs/state" },
       { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Memory", href: "/docs/memory" },
+      { label: "Long-term Memory", href: "/docs/memory/long-term" },
+      { label: "Recall and Retrieval", href: "/docs/memory/retrieval" },
+      { label: "Episodes", href: "/docs/memory/episodes" },
+      { label: "Distillation", href: "/docs/memory/distillation" },
       { label: "Planning", href: "/docs/planning" },
       { label: "Skills", href: "/docs/skills" },
       { label: "Subagents", href: "/docs/subagents" },
@@ -66,6 +70,7 @@ const FOUNDATION_DOCS_NAV = [
       { label: "Retry", href: "/docs/retry" },
       { label: "Observability", href: "/docs/observability" },
       { label: "Inspector", href: "/docs/inspector" },
+      { label: "Browse and Manage Memory", href: "/docs/memory/browse" },
       { label: "Upgrading", href: "/docs/upgrading" },
     ],
   },
@@ -226,7 +231,7 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/dev-server/agent-protocol").next?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(52)
+    expect(DOCS_PAGES).toHaveLength(57)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 
