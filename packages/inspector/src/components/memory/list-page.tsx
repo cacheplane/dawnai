@@ -50,6 +50,12 @@ function sinceFor(window: TimelineWindow): string | undefined {
 const selectClass =
   "h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
 
+/** One sentence, one id: the description every browse-only control points at
+ *  while a search is running. `aria-disabled` keeps those controls focusable so
+ *  a keyboard or screen-reader user actually reaches this explanation — a
+ *  native `disabled` would remove them from the tab order and hide it. */
+const BROWSE_ONLY_REASON = "Not applied to search"
+
 export function ListPage() {
   const [namespace, setNamespace] = useState<string>()
   // The grid's own vocabulary, held verbatim. The ValueSet round-trip this
@@ -261,10 +267,6 @@ export function ListPage() {
   )
 
   const byStatus = stats?.byStatus ?? {}
-  // Group headers count the rows the grid HOLDS. On a truncated window that count is
-  // an artifact of where the cap fell, so group only when the window is the whole
-  // answer; the facet rail stays the honest navigator for anything larger.
-  const pageIsComplete = browse.total !== null && browse.rows.length >= browse.total
   const filtersActive = Object.keys(filters).length > 0 || namespace !== undefined
   // "Nothing stored" and "nothing matches what you asked for" are different answers;
   // telling a filtered view to go run its agent sends you looking for a bug that
@@ -319,10 +321,15 @@ export function ListPage() {
                 key={v}
                 type="button"
                 aria-pressed={view === v}
-                onClick={() => chooseView(v)}
+                aria-disabled={searching ? "true" : undefined}
+                {...(searching ? { "aria-describedby": "browse-scope-note" } : {})}
+                onClick={() => {
+                  if (searching) return
+                  chooseView(v)
+                }}
                 className={`h-9 px-3 text-sm ${
                   view === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50"
-                }`}
+                } ${searching ? "opacity-50" : ""}`}
               >
                 {v}
               </button>
@@ -332,7 +339,12 @@ export function ListPage() {
             <select
               aria-label="Window"
               value={timelineWindow}
-              onChange={(e) => chooseTimelineWindow(e.target.value as TimelineWindow)}
+              aria-disabled={searching ? "true" : undefined}
+              {...(searching ? { "aria-describedby": "browse-scope-note" } : {})}
+              onChange={(e) => {
+                if (searching) return
+                chooseTimelineWindow(e.target.value as TimelineWindow)
+              }}
               className={selectClass}
             >
               {(["24h", "7d", "30d", "all"] as const).map((w) => (
@@ -373,6 +385,15 @@ export function ListPage() {
               asOf={browse.paused ? browse.updatedAt : null}
             />
           )}
+          <p
+            id="browse-scope-note"
+            hidden={!searching}
+            className="mb-2 text-xs text-zinc-500"
+            data-testid="browse-scope-note"
+          >
+            Search ranks active memories across every namespace. The view toggle, the timeline
+            window and the load-more control are not applied to search.
+          </p>
           {searching ? (
             search && search.groups.length > 0 ? (
               <div className="space-y-4">
@@ -381,6 +402,10 @@ export function ListPage() {
                     <h2 className="mb-1.5 font-mono text-xs font-medium text-zinc-500">
                       {group.namespace}
                     </h2>
+                    {/* No dataState, so the grid picks SEARCH_COLUMNS: sorting a
+                        group locally is honest (a group IS its whole result set)
+                        but filtering it is not — these rows are the store's
+                        ranked top-8, not everything that matches. */}
                     <MemoryGrid records={group.records} onSelect={setSelectedId} />
                   </section>
                 ))}
@@ -388,53 +413,72 @@ export function ListPage() {
             ) : (
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
-          ) : view === "timeline" ? (
-            // TimelineView owns its empty state ("No episodes in this window.") — but
-            // that copy is an ANSWER, so it must not stand in for one that has not
-            // arrived, or for one that failed.
-            browsePhase === "loading" ? (
-              <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
-                Loading memories…
-              </p>
-            ) : timelineFailure !== undefined && browse.rows.length === 0 ? null : (
-              <TimelineView records={browse.rows} onSelect={setSelectedId} />
-            )
-          ) : (
+          ) : null}
+          {/* TimelineView owns its empty state ("No episodes in this window.") — but
+              that copy is an ANSWER, so it must not stand in for one that has not
+              arrived, or for one that failed. */}
+          {searching || view === "list" ? null : browsePhase === "loading" ? (
+            <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+              Loading memories…
+            </p>
+          ) : timelineFailure !== undefined && browse.rows.length === 0 ? null : (
+            <TimelineView records={browse.rows} onSelect={setSelectedId} />
+          )}
+          {/* Timeline REPLACES the browse surface instead of hiding it: both render
+              the same rows, so a mounted-but-hidden grid would put a second copy of
+              every record's text in the document and a second `browse-loading` block
+              beside the timeline's. What retention across this boundary needs lives
+              in the hook above the branch (rows, continuation, freshness); the
+              engine-owned selection and measured heights are lost here, and only
+              here — across the search boundary below, the grid stays mounted. */}
+          {view === "timeline" ? null : (
             <>
-              {sortCapped ? (
-                <p
-                  role="status"
-                  className="mb-2 text-xs text-zinc-500"
-                  data-testid="sort-cap-notice"
-                >
-                  {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
-                </p>
-              ) : null}
-              <MemoryGrid
-                onGridReady={handleGridReady}
-                records={browse.rows}
-                onSelect={setSelectedId}
-                onTickedChange={setTicked}
-                // Only while looking at everything: scoped to one namespace by the
-                // rail, every row would sit under a single group header.
-                groupByNamespace={namespace === undefined && pageIsComplete}
-                // Both are server-side: the funnels and the headers only decide the
-                // query, and these props are what the grid DISPLAYS while it waits.
-                filters={filters}
-                onFiltersChange={handleFiltersChange}
-                sort={sort}
-                onSortChange={handleSortChange}
-                dataState={dataState}
-                resultMeta={browse.resultMeta}
-                emptyMessage={emptyMessage}
-                onRetry={retryBrowse}
-              />
+              {/* The browse surface stays MOUNTED across the search boundary. Hiding
+                  rather than unmounting keeps the engine-owned selection, focus and
+                  the id-keyed measured row heights alive, and `hidden` also takes
+                  the whole subtree out of the tab order — so nothing inside it can
+                  be a control that looks active while a search is running. */}
+              <div data-testid="browse-region" hidden={searching}>
+                {sortCapped ? (
+                  <p
+                    role="status"
+                    className="mb-2 text-xs text-zinc-500"
+                    data-testid="sort-cap-notice"
+                  >
+                    {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
+                  </p>
+                ) : null}
+                <MemoryGrid
+                  onGridReady={handleGridReady}
+                  records={browse.rows}
+                  onSelect={setSelectedId}
+                  onTickedChange={setTicked}
+                  // Only while looking at everything: scoped to one namespace by the
+                  // rail, every row would sit under a single group header. A partial
+                  // window no longer withholds the structure — the counts say
+                  // "loaded" and claim nothing about the population.
+                  groupByNamespace={namespace === undefined}
+                  // Both are server-side: the funnels and the headers only decide the
+                  // query, and these props are what the grid DISPLAYS while it waits.
+                  filters={filters}
+                  onFiltersChange={handleFiltersChange}
+                  sort={sort}
+                  onSortChange={handleSortChange}
+                  dataState={dataState}
+                  resultMeta={browse.resultMeta}
+                  emptyMessage={emptyMessage}
+                  onRetry={retryBrowse}
+                />
+              </div>
+              {/* The footer is browse-only chrome, so it stays VISIBLE during a
+                  search and says it does not apply — the grid's own controls are
+                  already unreachable inside the hidden region above. */}
               <LoadMoreFooter
                 state={footerState}
                 loaded={browse.rows.length}
                 total={loadedTotal}
                 onLoadMore={browse.loadMore}
-                browseOnlyReason={undefined}
+                browseOnlyReason={searching ? BROWSE_ONLY_REASON : undefined}
               />
             </>
           )}

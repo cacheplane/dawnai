@@ -200,7 +200,10 @@ describe("load-more in the page", () => {
     stubPages([record({ id: "a" })], [])
     const { container } = render(<ListPage />)
     await screen.findByText("content a")
-    const grid = container.querySelector('[role="grid"]')
+    // Either role: the surface is a `treegrid` while grouped by namespace and a
+    // `grid` when flat. The claim below is about the footer's PLACEMENT, which
+    // holds for both.
+    const grid = container.querySelector('[role="grid"],[role="treegrid"]')
     const footer = screen.getByTestId("load-more-footer").querySelector("button")
     if (!grid || !footer) throw new Error("grid or footer missing")
     expect(grid.contains(footer)).toBe(false)
