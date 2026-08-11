@@ -34,6 +34,20 @@ function headerFor(container: HTMLElement, label: string): HTMLElement {
   return header as HTMLElement
 }
 
+/** Leaves the keyboard on one row's cell and returns it. Pointer-down moves the
+ *  grid's focus without activating the row; a click does both, and activation is
+ *  what the callers are testing. Which key walks focus in from outside the grid
+ *  is pretable's contract, not the Inspector's — deliberately not asserted. */
+function focusRow(container: HTMLElement, id: string): HTMLElement {
+  const cell = container.querySelector<HTMLElement>(
+    `[data-pretable-row][data-pretable-row-id="${id}"] [role="gridcell"]`,
+  )
+  if (!cell) throw new Error(`no row for ${id}`)
+  fireEvent.pointerDown(cell, { button: 0, pointerId: 1 })
+  expect(document.activeElement).toBe(cell)
+  return cell
+}
+
 afterEach(cleanup)
 
 describe("MemoryGrid", () => {
@@ -44,7 +58,6 @@ describe("MemoryGrid", () => {
         onSelect={vi.fn()}
       />,
     )
-    expect(screen.getByText("acme threshold is 750")).toBeDefined()
     expect(columnText(container, "content")).toEqual(["acme threshold is 750", "content b"])
     expect(screen.getAllByText("route=/notes")).toHaveLength(2)
   })
@@ -61,16 +74,14 @@ describe("MemoryGrid", () => {
     expect(onSelect.mock.calls).toEqual([["b"]])
   })
 
-  it("a keyboard user can reach a row and activate it with Enter", () => {
+  it("Enter activates the focused row", () => {
     const onSelect = vi.fn()
     const { container } = render(
       <MemoryGrid records={[record({ id: "a" }), record({ id: "b" })]} onSelect={onSelect} />,
     )
-    // Tab lands on the first column header; Down moves into the body.
-    const header = headerFor(container, "status")
-    header.focus()
-    fireEvent.keyDown(header, { key: "ArrowDown" })
-    fireEvent.keyDown(document.activeElement ?? header, { key: "Enter" })
+    const cell = focusRow(container, "a")
+    expect(onSelect.mock.calls).toEqual([])
+    fireEvent.keyDown(cell, { key: "Enter" })
     expect(onSelect.mock.calls).toEqual([["a"]])
   })
 
@@ -79,11 +90,8 @@ describe("MemoryGrid", () => {
     const { container } = render(
       <MemoryGrid records={[record({ id: "a" }), record({ id: "b" })]} onSelect={onSelect} />,
     )
-    const header = headerFor(container, "status")
-    header.focus()
-    fireEvent.keyDown(header, { key: "ArrowDown" })
-    fireEvent.keyDown(document.activeElement ?? header, { key: "ArrowDown" })
-    fireEvent.keyDown(document.activeElement ?? header, { key: " " })
+    const cell = focusRow(container, "b")
+    fireEvent.keyDown(cell, { key: " " })
     expect(onSelect.mock.calls).toEqual([["b"]])
   })
 
@@ -160,7 +168,11 @@ describe("MemoryGrid", () => {
           `[data-pretable-row][data-pretable-row-id="${id}"] [role="gridcell"]`,
         ),
       ].map((cell) => cell.className)
+    // `every`/`some` over an empty list would pass without testing anything, and
+    // the selector hangs off pretable-owned attributes that can be renamed.
     expect(cellClasses("a").length).toBeGreaterThan(0)
+    expect(cellClasses("b").length).toBeGreaterThan(0)
+    expect(cellClasses("c").length).toBeGreaterThan(0)
     expect(cellClasses("a").every((cls) => cls.includes("amber"))).toBe(true)
     expect(cellClasses("b").every((cls) => cls.includes("line-through"))).toBe(true)
     expect(cellClasses("c").some((cls) => cls.includes("line-through"))).toBe(false)
