@@ -10,32 +10,35 @@ export interface BrowseErrorEntry {
 }
 
 /**
- * One line per failing source, in a single live region.
+ * One line per failing source, with the lines — and only the lines — in a live
+ * region.
  *
  * Keyed by SOURCE and not by message: two sources failing with the same text must
  * not collide as React keys, and a source that succeeds must clear only its own
- * line. The retry control appears only for browse-request failures — the error
- * PHASE's retry lives in the grid's body-state block instead, so exactly one retry
- * control is ever on screen.
+ * line. `role="alert"` is atomic, so the retry control sits outside the region;
+ * within it, the button's label would be announced as part of the failure text.
+ *
+ * Callers pass `onRetry` for browse-REQUEST failures only. The error PHASE's retry
+ * lives in the grid's body-state block, and the two must never be on screen
+ * together — a rule this component cannot enforce.
  */
 export function BrowseErrorBanners({
   errors,
   onRetry,
 }: {
   errors: readonly BrowseErrorEntry[]
-  onRetry?: (() => void) | undefined
+  onRetry?: () => void
 }) {
   if (errors.length === 0) return null
   return (
-    <div
-      role="alert"
-      className="mb-3 space-y-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-    >
-      {errors.map((entry) => (
-        <div key={entry.source} data-testid={`error-${entry.source}`}>
-          {entry.message}
-        </div>
-      ))}
+    <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+      <div role="alert" className="space-y-1">
+        {errors.map((entry) => (
+          <div key={entry.source} data-testid={`error-${entry.source}`}>
+            {entry.message}
+          </div>
+        ))}
+      </div>
       {onRetry ? (
         <Button variant="outline" className="mt-1 h-7 px-2" onClick={onRetry}>
           Retry
@@ -48,12 +51,10 @@ export function BrowseErrorBanners({
 /**
  * Counts and freshness.
  *
- * `total` is the matching population for the FULFILLED revision, so before the
- * first response the bar says only what it knows. `asOf` is non-null only while
- * polling is paused: a live grid stamping "updated 14:32:07" two seconds before it
- * changes again is noise, while a paused one that says nothing is a lie by
- * omission. With nothing fulfilled there is no instant to quote, so the caller
- * passes null and the stamp stays off.
+ * `total` is the matching population for the FULFILLED revision, and null until the
+ * first response lands. `asOf` is the caller's decision, not this component's: it
+ * passes an instant only while polling is paused, and null whenever no revision has
+ * been fulfilled.
  */
 export function BrowseStatusBar({
   loaded,
