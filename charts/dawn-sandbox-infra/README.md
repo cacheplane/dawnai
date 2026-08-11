@@ -7,7 +7,7 @@ Cluster-side infrastructure for the Dawn `kubernetesSandbox` provider
   Security Standard** labels.
 - Least-privilege **RBAC** for the orchestrator — exactly the API surface
   the provider needs (pods, pods/exec, persistentvolumeclaims,
-  networkpolicies), nothing more.
+  networkpolicies), with no direct Secret API reads.
 - A **default-deny egress NetworkPolicy** backstop (+ DNS carve-out) for
   Dawn-managed sandbox Pods selected by `app.kubernetes.io/managed-by=dawn`.
   Helm-managed reaper and control-plane Pods are excluded so they retain
@@ -43,13 +43,66 @@ sandbox: {
 }
 ```
 
+## Runtime prerequisites
+
+Sandbox workloads require dynamic provisioning for `ReadWriteOnce` PVCs. The
+provider can name a StorageClass explicitly; otherwise the cluster must have
+exactly one annotated default StorageClass. The namespace also requires Pod
+Security Admission for the chart's `restricted` labels. A policy-enforcing CNI
+is required for the chart backstop and provider-created NetworkPolicies to
+enforce egress; creating NetworkPolicy objects alone is not enforcement.
+
+Keep this namespace dedicated to disposable sandbox infrastructure. The
+orchestrator Role denies direct Secret API reads, but its Pod-create permission
+can mount a known Secret into a Pod. The sandbox namespace must therefore
+contain no application credentials, including Helm release Secrets or Dawn app
+Secrets.
+
+## Compatibility evidence
+
+The canonical compatibility policy pins Kind v0.32.0, kubectl v1.35.6, and
+Calico v3.32.1. Dawn exercises these policy-pinned patch releases:
+
+- Kubernetes 1.34 (1.34.8)
+- Kubernetes 1.35 (1.35.5)
+- Kubernetes 1.36 (1.36.1)
+
+The Kind node images are digest-pinned and the Calico manifest and images are
+checksum-verified.
+
+Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers.
+
+Run the same focused chart/provider lifecycle against an already selected
+cluster with:
+
+```sh
+pnpm verify:k8s:compat -- --target <1.34|1.35|1.36> --context <exact-context> [--storage-class <name>] [--keep-on-failure]
+```
+
+`--target` must match the server minor, and `--context` must exactly equal the
+current kubeconfig context; the command refuses to switch contexts. It requires
+`pnpm`, Helm, and kubectl, a dynamically provisioned RWO StorageClass (the
+single annotated default or the exact `--storage-class`), Pod Security
+Admission, and a policy-enforcing CNI.
+
+Before changing the cluster, the command checks the server minor, unused
+temporary namespace names, storage selection, and every administrative
+permission it will use. The permission preflight reports every denial and every
+failed authorization review, covering namespace lifecycle and StorageClass
+reads at cluster scope; Helm release Secrets, ServiceAccounts and token
+requests, Roles, RoleBindings, ConfigMaps, ResourceQuotas, LimitRanges, PVCs,
+Services, Pods and `pods/exec`/`pods/log`, Deployments, CronJobs, Jobs,
+NetworkPolicies, Events, and SelfSubjectAccessReviews at their required
+management or sandbox scope.
+
 ## Values
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `namespace.create` | `true` | Whether the chart creates the namespace. |
 | `namespace.name` | `dawn-sandboxes` | Namespace the provider's `opts.namespace` must match. |
-| `podSecurityStandard.enforce` | `baseline` | `privileged` \| `baseline` \| `restricted`. |
+| `namespace.extraLabels` | `{}` | Extra labels for a chart-created namespace. Pod Security and chart ownership labels are reserved. |
+| `podSecurityStandard.enforce` | `restricted` | `privileged` \| `baseline` \| `restricted`. |
 | `podSecurityStandard.warn` | `restricted` | Same enum. |
 | `podSecurityStandard.audit` | `restricted` | Same enum. |
 | `orchestrator.serviceAccount.create` | `true` | Create the orchestrator ServiceAccount. |
@@ -67,14 +120,38 @@ sandbox: {
 | `reaper.ttlHours` | `168` | Hours a PVC may stay continuously unbound before deletion. |
 | `reaper.image` | `docker.io/alpine/k8s:1.35.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807` | Image bundling `sh`, `date`, `sort`, `grep`, and `kubectl`. |
 
+The chart rejects `namespace.extraLabels` keys under
+`pod-security.kubernetes.io/` and the ownership keys `helm.sh/chart`,
+`app.kubernetes.io/name`, `app.kubernetes.io/instance`, and
+`app.kubernetes.io/managed-by`. This prevents extra labels from weakening Pod
+Security or replacing chart identity.
+
+The chart enforces `restricted` by default. A workload that intentionally opts
+out of the provider's restricted-compatible security defaults must also opt the
+namespace down explicitly; there is no automatic fallback:
+
+```sh
+helm install dawn-sandbox-infra charts/dawn-sandbox-infra \
+  --set podSecurityStandard.enforce=baseline
+```
+
+## Provider preflight
+
+`dawn check` runs a SelfSubjectAccessReview for every Kubernetes API operation
+the provider can perform: create/get/delete Pods; create/get/delete PVCs;
+create/get `pods/exec`; and create/get/list/update/delete NetworkPolicies. It
+runs the complete set even when one review is denied or fails, then reports
+missing permissions, authorization-review failures, and API transport failures
+separately. Only after every required permission is granted does it check
+NetworkPolicy enforcement; an unconfirmed policy-capable CNI produces a warning
+rather than a successful enforcement claim.
+
 ## Reaper compatibility
 
-The default reaper image provides Kubernetes client 1.35.6. Under the upstream
-[`kubectl` one-minor version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl),
-it supports Kubernetes API servers 1.34 through 1.36. For API servers outside
-that window, override `reaper.image` with an image containing a compatible
-Kubernetes client. The image must provide `sh`, `date`, `sort`, `grep`, and
-`kubectl`.
+The default reaper image provides the policy-pinned kubectl v1.35.6. For API
+servers outside the tested minors above, override `reaper.image` with an image
+containing a compatible Kubernetes client. The image must provide `sh`, `date`,
+`sort`, `grep`, and `kubectl`.
 
 Invalid or tampered reaper markers on unbound PVCs are re-marked, non-empty
 markers on referenced PVCs are cleared (empty annotations may remain and are

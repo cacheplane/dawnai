@@ -27,6 +27,25 @@ Orchestrator ServiceAccount:
 Pod Security Standards on this namespace:
   enforce={{ .Values.podSecurityStandard.enforce }}  warn={{ .Values.podSecurityStandard.warn }}  audit={{ .Values.podSecurityStandard.audit }}
 
+The chart default is enforce=restricted. Sandbox images must satisfy that
+profile. To run a workload that intentionally opts out of restricted-compatible
+provider hardening, explicitly set podSecurityStandard.enforce=baseline; there
+is no automatic downgrade.
+
+Operational prerequisites:
+  - Pod Security Admission for the labels above.
+  - Dynamic provisioning for ReadWriteOnce PVCs (a default StorageClass or an
+    explicit kubernetesSandbox storageClass).
+  - A policy-enforcing CNI for NetworkPolicy egress controls.
+
+Keep this namespace free of application credentials. Direct Secret API reads
+are denied, but the orchestrator's Pod-create permission can mount a known
+Secret into a Pod. Store Dawn app and Helm release Secrets in a separate
+management namespace.
+
+namespace.extraLabels may add operator labels, but Pod Security labels and the
+chart ownership labels are reserved and rejected during rendering.
+
 {{- if .Values.networkPolicy.defaultDenyEgress }}
 
 A default-deny-egress NetworkPolicy selects Dawn-managed sandbox Pods via
