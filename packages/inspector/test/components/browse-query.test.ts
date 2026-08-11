@@ -1,3 +1,4 @@
+import type { BrowseFilter, BrowseSortEntry } from "@dawn-ai/memory/browse"
 import { describe, expect, it } from "vitest"
 import {
   browseMatchesNothing,
@@ -5,6 +6,10 @@ import {
   canonicalBrowseQuery,
   datasetKeyOf,
 } from "../../src/browse/canonical-query"
+import { parseBrowseQuery } from "../../src/store/browse-params"
+
+const STATUS_IN_ACTIVE: BrowseFilter = { field: "status", op: "in", values: ["active"] }
+const CONFIDENCE_DESC: BrowseSortEntry = { field: "confidence", dir: "desc" }
 
 describe("canonicalBrowseQuery", () => {
   it("uses null for unfiltered and keeps an empty set as itself", () => {
@@ -15,6 +20,8 @@ describe("canonicalBrowseQuery", () => {
       status: null,
       kind: null,
       since: null,
+      filters: null,
+      orderBy: null,
     })
     const nothing = canonicalBrowseQuery({ view: "list", status: [] })
     expect(nothing.status).toEqual([])
@@ -61,6 +68,73 @@ describe("canonicalBrowseQuery", () => {
     for (const variant of variants) {
       expect(datasetKeyOf(variant)).not.toBe(datasetKeyOf(base))
     }
+  })
+
+  it("pivots the key on the predicate and on the order, which decide the answer too", () => {
+    // Without this the pivot never fires for a funnel or a header click: the grid
+    // would keep a selection made under one question while the rows underneath it
+    // answered another — the exact corruption `datasetKey` exists to prevent.
+    const base = canonicalBrowseQuery({ view: "list" })
+    const filtered = canonicalBrowseQuery({ view: "list", filters: [STATUS_IN_ACTIVE] })
+    const ordered = canonicalBrowseQuery({ view: "list", orderBy: [CONFIDENCE_DESC] })
+    expect(datasetKeyOf(filtered)).not.toBe(datasetKeyOf(base))
+    expect(datasetKeyOf(ordered)).not.toBe(datasetKeyOf(base))
+    expect(datasetKeyOf(filtered)).not.toBe(datasetKeyOf(ordered))
+    // Same field, same value, different OPERATOR — a different answer.
+    expect(datasetKeyOf(filtered)).not.toBe(
+      datasetKeyOf(
+        canonicalBrowseQuery({
+          view: "list",
+          filters: [{ field: "status", op: "notIn", values: ["active"] }],
+        }),
+      ),
+    )
+  })
+
+  it("keeps ONE key for two equal predicates, so a re-render is not a new dataset", () => {
+    const rebuilt = canonicalBrowseQuery({
+      view: "list",
+      filters: [{ field: "status", op: "in", values: ["active"] }],
+      orderBy: [{ field: "confidence", dir: "desc" }],
+    })
+    const held = canonicalBrowseQuery({
+      view: "list",
+      filters: [STATUS_IN_ACTIVE],
+      orderBy: [CONFIDENCE_DESC],
+    })
+    expect(datasetKeyOf(rebuilt)).toBe(datasetKeyOf(held))
+  })
+
+  it("pivots on orderBy ORDER — sort priority decides the answer, unlike a value set", () => {
+    const a = canonicalBrowseQuery({
+      view: "list",
+      orderBy: [CONFIDENCE_DESC, { field: "status", dir: "asc" }],
+    })
+    const b = canonicalBrowseQuery({
+      view: "list",
+      orderBy: [{ field: "status", dir: "asc" }, CONFIDENCE_DESC],
+    })
+    expect(datasetKeyOf(a)).not.toBe(datasetKeyOf(b))
+  })
+
+  it("reads an empty predicate list as absent, so an emptied funnel is not a new dataset", () => {
+    const emptied = canonicalBrowseQuery({ view: "list", filters: [], orderBy: [] })
+    expect(emptied.filters).toBeNull()
+    expect(emptied.orderBy).toBeNull()
+    expect(datasetKeyOf(emptied)).toBe(datasetKeyOf(canonicalBrowseQuery({ view: "list" })))
+  })
+
+  it("drops the timeline kind default once a predicate claims the field", () => {
+    // Both narrowings reach the server as an AND, so leaving the default on beside a
+    // `kind` predicate would answer "episodic AND semantic" — nothing — under a
+    // funnel that reads as applied.
+    const claimed = canonicalBrowseQuery({
+      view: "timeline",
+      filters: [{ field: "kind", op: "in", values: ["semantic"] }],
+    })
+    expect(claimed.kind).toBeNull()
+    const unclaimed = canonicalBrowseQuery({ view: "timeline", filters: [STATUS_IN_ACTIVE] })
+    expect(unclaimed.kind).toEqual(["episodic"])
   })
 })
 
@@ -116,6 +190,60 @@ describe("browseSearchParams", () => {
   it("refuses a matches-nothing query instead of asking for everything", () => {
     const nothing = canonicalBrowseQuery({ view: "list", status: [] })
     expect(() => browseSearchParams(nothing, { limit: 200, offset: 0 })).toThrow(/matches nothing/)
+  })
+
+  it("sends predicates and order as the JSON params the route already parses", () => {
+    const params = browseSearchParams(
+      canonicalBrowseQuery({
+        view: "list",
+        filters: [STATUS_IN_ACTIVE],
+        orderBy: [CONFIDENCE_DESC],
+      }),
+      { limit: 200, offset: 0 },
+    )
+    expect(JSON.parse(params.get("filters") ?? "null")).toEqual([
+      { field: "status", op: "in", values: ["active"] },
+    ])
+    expect(JSON.parse(params.get("orderBy") ?? "null")).toEqual([
+      { field: "confidence", dir: "desc" },
+    ])
+    // One grammar per field: the shorthand is not ALSO sent, or the server would AND
+    // two narrowings of the same field for one funnel.
+    expect(params.getAll("status")).toEqual([])
+  })
+
+  it("omits both when the grid asked for neither", () => {
+    const params = browseSearchParams(canonicalBrowseQuery({ view: "list" }), {
+      limit: 200,
+      offset: 0,
+    })
+    expect(params.get("filters")).toBeNull()
+    expect(params.get("orderBy")).toBeNull()
+  })
+
+  it("emits params the store's own parser accepts", () => {
+    // These two are the halves of ONE wire format, and only the parser runs the
+    // validator. A shape invented on this side would otherwise surface as a 400 at
+    // runtime and nowhere in these tests.
+    const params = browseSearchParams(
+      canonicalBrowseQuery({
+        view: "timeline",
+        namespace: "route=/notes",
+        filters: [STATUS_IN_ACTIVE, { field: "confidence", op: "between", min: 0.1, max: 0.9 }],
+        orderBy: [CONFIDENCE_DESC],
+        since: "2026-08-01T00:00:00.000Z",
+      }),
+      { limit: 200, offset: 400 },
+    )
+    expect(parseBrowseQuery(params, {})).toEqual({
+      namespace: "route=/notes",
+      kind: ["episodic"],
+      since: "2026-08-01T00:00:00.000Z",
+      filters: [STATUS_IN_ACTIVE, { field: "confidence", op: "between", min: 0.1, max: 0.9 }],
+      orderBy: [CONFIDENCE_DESC],
+      limit: 200,
+      offset: 400,
+    })
   })
 
   it("threads the pinned timeline window bound", () => {

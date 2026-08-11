@@ -1,6 +1,6 @@
 "use client"
-import type { MemoryKind, MemoryRecord, MemoryStats, MemoryStatus } from "@dawn-ai/memory"
-import type { ColumnFilter } from "@pretable/react"
+import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
+import type { ColumnFilter, PretableSortEntry } from "@pretable/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { canonicalBrowseQuery } from "../../browse/canonical-query"
 import { useMemoryBrowse } from "../../browse/use-memory-browse"
@@ -9,12 +9,12 @@ import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BrowseErrorBanners, type BrowseErrorEntry, BrowseStatusBar } from "./browse-chrome"
 import { BulkBar } from "./bulk-bar"
-import { resolveFilter, toFilter, type ValueSet } from "./column-filters"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
-import { KINDS, STATUSES } from "./memory-domain"
+import { STATUSES } from "./memory-domain"
 import { MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
+import { capSortEntries, MAX_BROWSE_SORT_ENTRIES, toBrowseQuery } from "./to-browse-query"
 
 interface SearchResponse {
   readonly groups: readonly {
@@ -43,13 +43,26 @@ const selectClass =
 
 export function ListPage() {
   const [namespace, setNamespace] = useState<string>()
-  // undefined = unfiltered, [] = matches nothing — the same distinction the
-  // store's BrowseQuery draws, so an emptied funnel cannot read as "show all".
-  const [status, setStatus] = useState<ValueSet<MemoryStatus>>(undefined)
-  const [kind, setKind] = useState<ValueSet<MemoryKind>>(undefined)
+  // The grid's own vocabulary, held verbatim. The ValueSet round-trip this
+  // replaced existed only because the store could not express operators; it can
+  // now, so there is exactly ONE translation (`toBrowseQuery`) and it happens
+  // where the request is built.
+  const [filters, setFilters] = useState<Record<string, ColumnFilter>>({})
+  const [sort, setSort] = useState<PretableSortEntry[]>([])
+  const [sortCapped, setSortCapped] = useState(false)
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
+  // Pinned when the control moves, never recomputed per render: `since` is part of
+  // the dataset identity, and `useMemo` is a hint React may drop — a `Date.now()`
+  // re-read on a later render would mint a new identity and refetch forever.
+  const [timelineSince, setTimelineSince] = useState<string>()
+  const chooseTimelineWindow = useCallback((next: TimelineWindow) => {
+    setTimelineWindow(next)
+    setTimelineSince(
+      next === "all" ? undefined : new Date(Date.now() - WINDOWS[next]).toISOString(),
+    )
+  }, [])
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [ticked, setTicked] = useState<readonly string[]>([])
@@ -93,41 +106,33 @@ export function ListPage() {
     [fetchJson],
   )
 
-  const filters = useMemo(() => {
-    const next: Record<string, ColumnFilter> = {}
-    const statusFilter = toFilter(status, STATUSES)
-    if (statusFilter) next.status = statusFilter
-    const kindFilter = toFilter(kind, KINDS)
-    if (kindFilter) next.kind = kindFilter
-    return next
-  }, [status, kind])
-
   const handleFiltersChange = useCallback((next: Record<string, ColumnFilter>) => {
-    setStatus(resolveFilter(next.status, STATUSES))
-    setKind(resolveFilter(next.kind, KINDS))
+    setFilters(next)
   }, [])
 
-  // PINNED at the moment the window changes, not recomputed per render: `since` is
-  // part of the dataset identity, so a fresh `Date.now()` on every render would bump
-  // the desired revision on every render and refetch forever.
-  const since = useMemo(
-    () =>
-      view === "timeline" && timelineWindow !== "all"
-        ? new Date(Date.now() - WINDOWS[timelineWindow]).toISOString()
-        : undefined,
-    [view, timelineWindow],
-  )
+  /** Pretable's shift-click appends the new key at the LOWEST priority, so a
+   *  fourth key is the one declined and the ordering the user already built
+   *  survives. The notice is what keeps that honest: the control did something,
+   *  and the page says what. */
+  const handleSortChange = useCallback((next: PretableSortEntry[]) => {
+    setSortCapped(next.length > MAX_BROWSE_SORT_ENTRIES)
+    // Copied, not aliased: `capSortEntries` hands back its ARGUMENT when the sort
+    // already fits, and that array is pretable's.
+    setSort([...capSortEntries(next)])
+  }, [])
 
   const browseQuery = useMemo(
     () =>
       canonicalBrowseQuery({
         view,
+        // EXACT namespace, not a prefix: the rail selects one namespace and the
+        // server answers that question itself, so the rows and `total` describe the
+        // same set with no client-side narrowing after the fact.
         ...(namespace === undefined ? {} : { namespace }),
-        ...(status === undefined ? {} : { status }),
-        ...(kind === undefined ? {} : { kind }),
-        ...(since === undefined ? {} : { since }),
+        ...toBrowseQuery(filters, sort),
+        ...(view === "timeline" && timelineSince !== undefined ? { since: timelineSince } : {}),
       }),
-    [view, namespace, status, kind, since],
+    [filters, sort, namespace, view, timelineSince],
   )
 
   // Search replaces the browse view entirely, so browse stops polling behind it.
@@ -205,15 +210,11 @@ export function ListPage() {
   )
 
   const byStatus = stats?.byStatus ?? {}
-  // Filtering here would make "N loaded of M matching" a lie the moment a facet was
-  // clicked: the request carries the EXACT namespace, so the rows and `total` already
-  // describe the same set.
-  const pageRecords = browse.rows
   // Group headers count the rows the grid HOLDS. On a truncated window that count is
   // an artifact of where the cap fell, so group only when the window is the whole
   // answer; the facet rail stays the honest navigator for anything larger.
-  const pageIsComplete = browse.total !== null && pageRecords.length >= browse.total
-  const filtersActive = status !== undefined || kind !== undefined || namespace !== undefined
+  const pageIsComplete = browse.total !== null && browse.rows.length >= browse.total
+  const filtersActive = Object.keys(filters).length > 0 || namespace !== undefined
   // "Nothing stored" and "nothing matches what you asked for" are different answers;
   // telling a filtered view to go run its agent sends you looking for a bug that
   // isn't there.
@@ -280,7 +281,7 @@ export function ListPage() {
             <select
               aria-label="Window"
               value={timelineWindow}
-              onChange={(e) => setTimelineWindow(e.target.value as TimelineWindow)}
+              onChange={(e) => chooseTimelineWindow(e.target.value as TimelineWindow)}
               className={selectClass}
             >
               {(["24h", "7d", "30d", "all"] as const).map((w) => (
@@ -315,7 +316,7 @@ export function ListPage() {
           />
           {searching ? null : (
             <BrowseStatusBar
-              loaded={pageRecords.length}
+              loaded={browse.rows.length}
               total={browse.total}
               phase={browsePhase}
               asOf={browse.paused ? browse.updatedAt : null}
@@ -344,33 +345,47 @@ export function ListPage() {
               <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
                 Loading memories…
               </p>
-            ) : timelineFailure !== undefined && pageRecords.length === 0 ? null : (
-              <TimelineView records={pageRecords} onSelect={setSelectedId} />
+            ) : timelineFailure !== undefined && browse.rows.length === 0 ? null : (
+              <TimelineView records={browse.rows} onSelect={setSelectedId} />
             )
           ) : (
-            <MemoryGrid
-              key={gridEpoch}
-              records={pageRecords}
-              onSelect={setSelectedId}
-              onTickedChange={setTicked}
-              // Only while looking at everything: scoped to one namespace by the
-              // rail, every row would sit under a single group header.
-              groupByNamespace={namespace === undefined && pageIsComplete}
-              // Filtering is server-side: the funnels only decide the query.
-              filters={filters}
-              onFiltersChange={handleFiltersChange}
-              dataState={dataState}
-              resultMeta={browse.resultMeta}
-              emptyMessage={emptyMessage}
-              onRetry={retryBrowse}
-            />
+            <>
+              {sortCapped ? (
+                <p
+                  role="status"
+                  className="mb-2 text-xs text-zinc-500"
+                  data-testid="sort-cap-notice"
+                >
+                  {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
+                </p>
+              ) : null}
+              <MemoryGrid
+                key={gridEpoch}
+                records={browse.rows}
+                onSelect={setSelectedId}
+                onTickedChange={setTicked}
+                // Only while looking at everything: scoped to one namespace by the
+                // rail, every row would sit under a single group header.
+                groupByNamespace={namespace === undefined && pageIsComplete}
+                // Both are server-side: the funnels and the headers only decide the
+                // query, and these props are what the grid DISPLAYS while it waits.
+                filters={filters}
+                onFiltersChange={handleFiltersChange}
+                sort={sort}
+                onSortChange={handleSortChange}
+                dataState={dataState}
+                resultMeta={browse.resultMeta}
+                emptyMessage={emptyMessage}
+                onRetry={retryBrowse}
+              />
+            </>
           )}
         </main>
       </div>
       {ticked.length > 0 ? (
         <BulkBar
           ticked={ticked}
-          records={pageRecords}
+          records={browse.rows}
           onDone={handleBulkDone}
           onClear={clearTicked}
         />

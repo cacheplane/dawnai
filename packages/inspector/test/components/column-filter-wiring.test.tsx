@@ -1,13 +1,13 @@
 import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
-import { STATUSES } from "../../src/components/memory/memory-domain"
 
 /**
- * The grid's funnels replaced the header's status/kind selects. Filtering has
- * to stay SERVER-side: the list endpoint caps at a page, so narrowing only the
- * rows already loaded would quietly answer a different question.
+ * The grid's funnels replaced the header's status/kind selects. Filtering and
+ * ordering have to stay SERVER-side: the list endpoint answers with a window, so
+ * narrowing or re-ranking the rows already loaded would quietly answer a different
+ * question — over the wrong sample, under a truthful-looking header.
  */
 
 const stats: MemoryStats = {
@@ -80,94 +80,59 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe("column filters drive the server query", () => {
-  it("offers a funnel on status instead of a header select", async () => {
-    stubApi()
-    render(<ListPage />)
-
-    expect(await screen.findByRole("button", { name: "Filter status" })).toBeDefined()
-    // The selects these replaced are gone.
-    expect(screen.queryByLabelText("Status")).toBeNull()
-    expect(screen.queryByLabelText("Kind")).toBeNull()
-  })
-
-  it("sends the ticked status to the server, not just to the grid", async () => {
+describe("column funnels drive the server query", () => {
+  it("sends a ticked status as a filters JSON predicate", async () => {
     const mock = stubApi()
     render(<ListPage />)
     await screen.findByText("content a1")
-
     await tickStatus("candidate")
-
-    await waitFor(() => {
-      const scoped = listUrls(mock).filter(
-        (u) => u.searchParams.getAll("status").join(",") === "candidate",
-      )
-      expect(scoped.length).toBeGreaterThan(0)
+    await vi.waitFor(() => {
+      const sent = listUrls(mock)
+        .map((u) => u.searchParams.get("filters"))
+        .filter((v): v is string => v !== null)
+        .map((v) => JSON.parse(v))
+      expect(sent).toContainEqual([{ field: "status", op: "in", values: ["candidate"] }])
     })
   })
 
-  it("repeats the param when two values are ticked", async () => {
+  it("never sends the legacy status shorthand param", async () => {
+    // One encoding, one code path: every predicate goes through `filters`, so a
+    // stray shorthand would be a second grammar to keep in step.
     const mock = stubApi()
     render(<ListPage />)
     await screen.findByText("content a1")
-
     await tickStatus("candidate")
-    await tickStatus("active")
-
-    await waitFor(() => {
-      const both = listUrls(mock).filter(
-        (u) => u.searchParams.getAll("status").sort().join(",") === "active,candidate",
-      )
-      expect(both.length).toBeGreaterThan(0)
+    await vi.waitFor(() => {
+      expect(listUrls(mock).some((u) => u.searchParams.get("filters") !== null)).toBe(true)
     })
+    expect(listUrls(mock).every((u) => u.searchParams.getAll("status").length === 0)).toBe(true)
   })
 
-  it("returns to unfiltered when the last ticked value is removed", async () => {
+  it("sends no filters param at all when nothing is ticked", async () => {
     const mock = stubApi()
     render(<ListPage />)
     await screen.findByText("content a1")
-
-    await tickStatus("candidate")
-    await waitFor(() => {
-      expect(listUrls(mock).some((u) => u.searchParams.has("status"))).toBe(true)
-    })
-
-    // An emptied checklist is an INACTIVE filter to the grid, not a filter that
-    // matches nothing — so the query drops the param rather than narrowing to
-    // zero. ("none of every status", below, is what really means "nothing".)
-    await tickStatus("candidate")
-
-    await waitFor(() => {
-      const latest = listUrls(mock).at(-1)
-      expect(latest?.searchParams.has("status")).toBe(false)
-    })
+    await vi.waitFor(() => expect(listUrls(mock).length).toBeGreaterThan(0))
+    const first = listUrls(mock)[0]
+    if (!first) throw new Error("no list request")
+    expect(first.searchParams.get("filters")).toBeNull()
   })
 
-  it("answers a match-nothing filter locally instead of asking unfiltered", async () => {
+  it("sends a header sort as an orderBy JSON entry", async () => {
     const mock = stubApi()
-    render(<ListPage />)
+    const { container } = render(<ListPage />)
     await screen.findByText("content a1")
-
-    fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
-    const dialog = await screen.findByRole("dialog", { name: "Filter status" })
-    const operator = dialog.querySelector("select") as HTMLSelectElement
-    // "none of every status" is the only match-nothing shape the funnel still
-    // offers: `isEmpty` left the menu once the columns declared exactly the
-    // operators the store honors, and every browse field is NOT NULL anyway.
-    // Operator FIRST — a complement over an empty tick list is the full set,
-    // which reads as unfiltered and would take the funnel back to `isAnyOf`.
-    fireEvent.change(operator, { target: { value: "isNoneOf" } })
-    for (const value of STATUSES) await tickStatus(value)
-
-    const before = listUrls(mock).length
-    await waitFor(() => {
-      expect(screen.getByTestId("browse-empty")).toBeDefined()
+    const header = [...container.querySelectorAll('[role="columnheader"]')].find((el) =>
+      el.textContent?.startsWith("confidence"),
+    )
+    if (!header) throw new Error("no confidence header")
+    fireEvent.click(header)
+    await vi.waitFor(() => {
+      const sent = listUrls(mock)
+        .map((u) => u.searchParams.get("orderBy"))
+        .filter((v): v is string => v !== null)
+        .map((v) => JSON.parse(v))
+      expect(sent).toContainEqual([{ field: "confidence", dir: "desc" }])
     })
-    // Over HTTP a param that appears zero times is *absent*, so re-asking the
-    // server would come back unfiltered — the page must answer it here, and it
-    // must not have taken an unfiltered detour on the way.
-    expect(listUrls(mock).length).toBe(before)
-    expect(listUrls(mock).at(-1)?.searchParams.has("status")).toBe(true)
-    expect(screen.getByTestId("browse-empty").textContent).toContain("match these filters")
   })
 })

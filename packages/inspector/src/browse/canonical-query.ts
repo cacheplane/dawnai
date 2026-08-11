@@ -1,4 +1,9 @@
-import type { MemoryKind, MemoryStatus } from "@dawn-ai/memory/browse"
+import type {
+  BrowseFilter,
+  BrowseSortEntry,
+  MemoryKind,
+  MemoryStatus,
+} from "@dawn-ai/memory/browse"
 
 /** Which surface is browsing. Never sent to the server: it selects the kind default
  *  and the component that consumes the page.
@@ -28,6 +33,12 @@ export interface CanonicalBrowseQuery {
   readonly status: readonly MemoryStatus[] | null
   readonly kind: readonly MemoryKind[] | null
   readonly since: string | null
+  /** The grid's funnels, already mapped to store predicates by `toBrowseQuery`.
+   *  Nothing Pretable-shaped reaches this type. */
+  readonly filters: readonly BrowseFilter[] | null
+  /** The grid's header sort, in PRIORITY order — which is why this one is never
+   *  reordered on the way through. */
+  readonly orderBy: readonly BrowseSortEntry[] | null
 }
 
 /** Timeline is an episode view: the kind funnel still overrides, but with nothing
@@ -45,6 +56,25 @@ function normalizeSet<T extends string>(values: readonly T[] | undefined): reado
 }
 
 /**
+ * An empty list is ABSENT, unlike a value set.
+ *
+ * The two say different things: `status: []` is a narrowing to nothing, while an
+ * empty `filters` is a grid with every funnel cleared — and `validateBrowseQuery`
+ * agrees, rejecting a filter entry with no values as a construction bug. Collapsing
+ * it here is what keeps an unfiltered query serializing one way however it was
+ * reached, so clearing the last funnel returns to the key the page started on
+ * instead of minting a third dataset.
+ *
+ * Order is the CALLER's: `toBrowseQuery` sorts predicates by column id so a
+ * re-ordered funnel map cannot fork the key, and leaves `orderBy` alone because
+ * its order is the sort priority.
+ */
+function normalizeList<T>(values: readonly T[] | undefined): readonly T[] | null {
+  if (values === undefined || values.length === 0) return null
+  return Object.freeze([...values])
+}
+
+/**
  * MEMOIZE the result. Identity is fresh on every call, so `datasetKeyOf` is the only
  * comparison that answers "same question"; anything keyed on the object itself sees a
  * new dataset every render.
@@ -59,8 +89,16 @@ export function canonicalBrowseQuery(input: {
   readonly status?: readonly MemoryStatus[] | undefined
   readonly kind?: readonly MemoryKind[] | undefined
   readonly since?: string | undefined
+  readonly filters?: readonly BrowseFilter[] | undefined
+  readonly orderBy?: readonly BrowseSortEntry[] | undefined
 }): CanonicalBrowseQuery {
   const kind = normalizeSet(input.kind)
+  const filters = normalizeList(input.filters)
+  // The shorthand and a predicate on the same field reach the server as an AND, so
+  // the timeline default has to stand down once the funnel claims `kind` — left on,
+  // it would answer "episodic AND semantic", which is nothing, under a funnel that
+  // reads as applied.
+  const kindClaimed = filters?.some((filter) => filter.field === "kind") === true
   return {
     view: input.view,
     // `||`, not `??`: `""` is not a namespace the server can express — `browse-params.ts`
@@ -68,8 +106,10 @@ export function canonicalBrowseQuery(input: {
     namespace: input.namespace || null,
     status: normalizeSet(input.status),
     // `[] ?? x` is `[]`, so an emptied funnel survives the timeline default intact.
-    kind: kind ?? (input.view === "timeline" ? TIMELINE_DEFAULT_KIND : null),
+    kind: kind ?? (input.view === "timeline" && !kindClaimed ? TIMELINE_DEFAULT_KIND : null),
     since: input.since ?? null,
+    filters,
+    orderBy: normalizeList(input.orderBy),
   }
 }
 
@@ -84,7 +124,18 @@ export function canonicalBrowseQuery(input: {
  * unhashed key stays legible in a failing assertion.
  */
 export function datasetKeyOf(query: CanonicalBrowseQuery): string {
-  return JSON.stringify([query.view, query.namespace, query.status, query.kind, query.since])
+  return JSON.stringify([
+    query.view,
+    query.namespace,
+    query.status,
+    query.kind,
+    query.since,
+    // A predicate and an order narrow and rank the answer, so both are identity: a
+    // key that ignored them would never pivot for a funnel or a header click, and a
+    // selection taken over one question would survive into another's rows.
+    query.filters,
+    query.orderBy,
+  ])
 }
 
 /** A set narrowed to nothing matches nothing. Over HTTP a repeated param that
@@ -115,6 +166,10 @@ export function browseSearchParams(
   for (const value of query.status ?? []) params.append("status", value)
   for (const value of query.kind ?? []) params.append("kind", value)
   if (query.since !== null) params.set("since", query.since)
+  // JSON, because that is the grammar `src/store/browse-params.ts` parses for these
+  // two — operators and directions have no repeated-param spelling.
+  if (query.filters !== null) params.set("filters", JSON.stringify(query.filters))
+  if (query.orderBy !== null) params.set("orderBy", JSON.stringify(query.orderBy))
   // The expiry cutoff is switched OFF rather than pinned, which is what makes the
   // dataset key total. Left to default, the route stamps `now` per request, so an
   // episode expiring mid-walk shifts every later offset up by one and that row is

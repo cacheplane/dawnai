@@ -81,7 +81,9 @@ describe("useMemoryBrowse", () => {
     expect(result.current.rows.map((r) => r.id)).toEqual(["a"])
     expect(result.current.total).toBe(5432)
     expect(result.current.resultMeta.total).toEqual({ kind: "exact", count: 5432 })
-    expect(result.current.resultMeta.datasetKey).toBe('["list",null,null,null,null]')
+    // Spelled out rather than computed: the point is that the grid receives the
+    // canonical JSON itself, which `datasetKeyOf(query)` here would assume.
+    expect(result.current.resultMeta.datasetKey).toBe('["list",null,null,null,null,null,null]')
   })
 
   it("publishes the FULFILLED dataset key, so the grid pivots when the answer lands", async () => {
