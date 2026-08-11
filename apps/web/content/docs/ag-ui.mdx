@@ -112,6 +112,12 @@ AG-UI and Agent Protocol requests execute the same route code and use the same
 thread store and checkpointer. A caller can inspect state through Agent Protocol
 while a UI drives later turns through AG-UI.
 
+A turn that parks on a permission prompt leaves the thread `interrupted` rather
+than `idle`, on both surfaces. The park is written to the checkpointer, so it
+outlives the response that carried it: a client reading `GET /threads/:thread_id`
+after a reload sees that a human is still being waited on instead of being told
+the agent finished.
+
 ## Disconnect and reconnect
 
 <Callout type="warn" title="No reconnect or replay support">
@@ -121,6 +127,10 @@ while a UI drives later turns through AG-UI.
   request against the same thread starts a new run from the latest completed
   checkpoint.
 </Callout>
+
+Aborting the run does not discard a park it already reached. A permission prompt
+raised before the disconnect is durable, so the thread stays `interrupted` and
+the next request can resume it.
 
 Agent Protocol has the opposite disconnect policy: closing a `runs/stream`,
 `runs/wait`, or `resume` connection only disconnects the viewer, and the run

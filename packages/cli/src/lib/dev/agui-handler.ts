@@ -24,6 +24,7 @@ import type { RunRegistry } from "./run-registry.js"
 import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { terminalStatus } from "./terminal-status.js"
 
 export interface AgUiFetchRequestOptions {
   readonly appRoot: string
@@ -65,6 +66,26 @@ export interface AgUiFetchRequestOptions {
 interface AgUiRequestOptions extends Omit<AgUiFetchRequestOptions, "request"> {
   readonly request: IncomingMessage
   readonly response: ServerResponse
+}
+
+/**
+ * Pass-through tap that records whether the turn parked.
+ *
+ * Separate from `normalizeDawnStream`, and upstream of it, because that one has
+ * already translated chunks into AG-UI's vocabulary by the time anything
+ * downstream sees them, while a park has to be recognised by Dawn's own
+ * `interrupt` chunk. Being upstream also means the flag is set before the
+ * enqueue, so a park observed after the client has gone — the controller closed,
+ * every write a no-op — still counts.
+ */
+async function* observeInterrupts(
+  chunks: AsyncIterable<StreamChunk>,
+  onInterrupt: () => void,
+): AsyncGenerator<StreamChunk> {
+  for await (const chunk of chunks) {
+    if (chunk.type === "interrupt") onInterrupt()
+    yield chunk
+  }
 }
 
 async function* normalizeDawnStream(
@@ -258,6 +279,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     const encoder = new TextEncoder()
     const releaseClaimWhenSettled = releaseResumeClaim
     let sourceCleanup: Promise<void> | undefined
+    // A parked turn takes the NORMAL completion path — the adapter yields the
+    // interrupt chunk and then `done` — so a drained loop does not mean the turn
+    // finished. The handler's own flag, so parked-status honesty depends on
+    // nothing outside this request.
+    let sawInterrupt = false
     // From here on, the stream owns both the request listeners and any resume
     // claim. Its execution-finally path releases the claim only after the
     // interrupted route has actually unwound.
@@ -295,14 +321,36 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
                 sourceCleanup = cleanup
               },
             )
-            for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
+            const observedRouteStream = observeInterrupts(abortableRouteStream, () => {
+              sawInterrupt = true
+            })
+            for await (const event of toAguiEvents(normalizeDawnStream(observedRouteStream), {
               threadId,
               runId: input.runId,
             })) {
               safeEnqueue(controller, encoder.encode(encodeAgUiSse(event, accept)))
             }
           } finally {
-            await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+            // One write covers the drained turn, the failed one and the
+            // disconnected one, because `toAguiEvents` never throws into its
+            // consumer: an upstream error or abort arrives as a RUN_ERROR event
+            // and the loop above ends normally. All three want the same answer —
+            // a turn that parked and then failed, or parked and then lost its
+            // client, is still parked.
+            //
+            // Deliberately not `run.cancelled`. AG-UI ends the run when the
+            // client goes away, and a disconnect leaves nothing durable to come
+            // back to, so it is not an interruption; what survives a disconnect
+            // is the park, which this already reports.
+            //
+            // Bounded by what the stream can see: a client that disconnects
+            // mid-superstep can abort the route after LangGraph has durably
+            // written `__interrupt__` but before the adapter yields the chunk
+            // for it, and that park still reads back as idle. Closing that needs
+            // a checkpoint read here rather than a flag.
+            await threadsStore
+              .updateStatus(threadId, terminalStatus({ cancelled: false, sawInterrupt }))
+              .catch(() => undefined)
             releaseSignalListeners()
           }
           safeClose(controller)
