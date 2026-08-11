@@ -51,10 +51,11 @@ const MAX_VIEWPORT_PX = 560
  *  dropped — and a list that intersects to nothing dev-warns and falls back to
  *  the full menu. Change `type` and you must re-check this list.
  *
- *  This is the DECLARATION, and neither grid renders it directly: `BROWSE_COLUMNS`
- *  and `SEARCH_COLUMNS` below each mask the affordances their mode cannot honor.
- *  Exported so a test can pin every declared operator against `toBrowseQuery`'s
- *  arms — an operator with no arm throws on the user's click. */
+ *  Browse renders this list DIRECTLY, so every affordance declared here is one the
+ *  store answers — `SEARCH_COLUMNS` below is the only masked view, because search
+ *  results carry no server authority to mask against. Exported so a test can pin
+ *  every declared operator AND every sortable column against `toBrowseQuery`'s
+ *  arms — either one with no arm throws on the user's click. */
 export const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "status",

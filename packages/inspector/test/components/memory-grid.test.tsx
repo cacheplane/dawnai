@@ -302,12 +302,16 @@ describe("MemoryGrid", () => {
       <MemoryGrid
         records={[record({ id: "a" }), record({ id: "b" })]}
         onSelect={vi.fn()}
+        // BROWSE. The constraint named above is the store's, and browse is the only
+        // mode that reaches it — search sorts in the engine, so a click there proves
+        // nothing about `SORT_FIELD_BY_COLUMN`.
+        dataState={{ phase: "idle" }}
         onSortChange={onSortChange}
       />,
     )
     fireEvent.click(headerFor(container, "content"))
     // The contract: silence. A sortable column fires on the identical click —
-    // `confidence` does, in this file's own header-sort tests.
+    // `confidence` does, in this file's own browse header-sort test.
     expect(onSortChange).not.toHaveBeenCalled()
     // KNOWN DEFECT, pinned so it stays visible rather than endorsed. @pretable/react
     // 0.3.0 renders EVERY header as `<button aria-label="Sort …" aria-sort="none">`
