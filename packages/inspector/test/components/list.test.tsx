@@ -242,7 +242,14 @@ describe("ListPage", () => {
     // asks again and the failure reads as an empty window for the rest of the session.
     fail = false
     fireEvent.click(screen.getByRole("button", { name: "Retry" }))
-    expect(await screen.findByText("acme threshold is 750")).toBeDefined()
+    // Scoped to the timeline: the browse grid stays MOUNTED behind it (Flow 10)
+    // and draws the same rows, so a document-wide text query matches the hidden
+    // copy as well. The claim — this row is on the timeline after the retry — is
+    // unchanged, and asserting it on the whole document would let the hidden copy
+    // satisfy it.
+    expect(
+      await within(screen.getByTestId("timeline-region")).findByText("acme threshold is 750"),
+    ).toBeDefined()
     expect(screen.queryByTestId("error-browse")).toBeNull()
   })
 
@@ -358,12 +365,16 @@ describe("ListPage", () => {
     render(<ListPage />)
     fireEvent.click(screen.getByRole("button", { name: "timeline" }))
 
-    expect(await screen.findByTestId("browse-loading")).toBeDefined()
+    // Scoped to the timeline: the mounted-but-hidden browse grid renders its own
+    // lifecycle block under the same test id, and the same rows. The subject is the
+    // block the timeline shows, so the query has to name that surface.
+    const timeline = () => within(screen.getByTestId("timeline-region"))
+    expect(await timeline().findByTestId("browse-loading")).toBeDefined()
     // "No episodes in this window." is an ANSWER, and the server has not given one.
     expect(screen.queryByText("No episodes in this window.")).toBeNull()
 
     release?.()
-    expect(await screen.findByText("acme threshold is 750")).toBeDefined()
+    expect(await timeline().findByText("acme threshold is 750")).toBeDefined()
     // Counts and freshness describe the browse, not the grid — both surfaces get them.
     expect(screen.getByTestId("browse-status").textContent).toContain("1 loaded of 1 matching")
   })

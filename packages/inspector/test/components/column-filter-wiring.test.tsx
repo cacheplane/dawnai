@@ -234,6 +234,16 @@ describe("column funnels drive the server query", () => {
     const rail = screen.getByRole("navigation")
     fireEvent.click(within(rail).getByRole("button", { name: /route=\/notes/ }))
     expect(screen.queryByTestId("sort-cap-notice")).toBeNull()
+
+    // A search does not move the browse query — it REPLACES the surface the notice
+    // sits on. Left standing, the notice is hidden for the length of the search and
+    // then reappears explaining a click from before it.
+    fireEvent.click(headerFor(container, "updated"), { shiftKey: true })
+    expect(await screen.findByTestId("sort-cap-notice")).toBeDefined()
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
+      target: { value: "acme" },
+    })
+    expect(screen.queryByTestId("sort-cap-notice")).toBeNull()
   })
 
   it("does not carry a header sort into the timeline, which offers no headers", async () => {

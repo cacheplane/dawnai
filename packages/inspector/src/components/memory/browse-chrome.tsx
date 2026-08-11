@@ -19,10 +19,11 @@ export interface BrowseErrorEntry {
  * within it, the button's label would be announced as part of the failure text.
  *
  * Callers pass `onRetry` only for a failure this banner is the sole channel for: the
- * browse REQUEST kinds always, and the error PHASE only on a surface with no
- * body-state block of its own. Wherever the grid is mounted it owns that phase, and
- * the two retries must never be on screen together — a rule this component cannot
- * enforce.
+ * browse REQUEST kinds always, and the error PHASE only while the grid's own
+ * body-state block cannot be read. MOUNTED is not the test — the browse grid stays
+ * mounted behind a search and behind the timeline, where its block is in the
+ * document and hidden; VISIBLE is. The two retries must never be on screen
+ * together — a rule this component cannot enforce.
  */
 export function BrowseErrorBanners({
   errors,

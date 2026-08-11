@@ -47,13 +47,21 @@ function sinceFor(window: TimelineWindow): string | undefined {
   return window === "all" ? undefined : new Date(Date.now() - WINDOWS[window]).toISOString()
 }
 
-const selectClass =
-  "h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
+/** Inactive states are keyed on `aria-disabled`, never on a `searching` branch:
+ *  these controls are deliberately never natively `disabled` (that removes them
+ *  from the tab order and hides the reason with them), so without a rule keyed on
+ *  the marker they render identically to the active ones and still answer hover. */
+const INACTIVE_CLASS = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
 
-/** One sentence, one id: the description every browse-only control points at
- *  while a search is running. `aria-disabled` keeps those controls focusable so
- *  a keyboard or screen-reader user actually reaches this explanation — a
- *  native `disabled` would remove them from the tab order and hide it. */
+const selectClass = `h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300 ${INACTIVE_CLASS}`
+
+/** The sentence the load-more footer renders beside itself and points its OWN
+ *  `aria-describedby` at — it owns a reason element because it sits far down the
+ *  page from the note below. The header controls point at `#browse-scope-note`
+ *  instead, which additionally names WHICH controls are inert. Two elements, and
+ *  both must carry "not applied to search": `aria-describedby` is the only channel
+ *  a keyboard or AT user has for the reason, since `aria-disabled` is what keeps
+ *  these controls reachable in the first place. */
 const BROWSE_ONLY_REASON = "Not applied to search"
 
 export function ListPage() {
@@ -245,6 +253,7 @@ export function ListPage() {
   // clear happens on its own: a query change pivots `datasetKey`, and the engine
   // drops selection, focus and group expansion as part of that single emit.
   const gridRef = useRef<PretableGrid<GridRow> | null>(null)
+  const browseRegionRef = useRef<HTMLDivElement>(null)
   const handleGridReady = useCallback((grid: PretableGrid<GridRow>) => {
     gridRef.current = grid
   }, [])
@@ -276,20 +285,57 @@ export function ListPage() {
     : "No memories yet — run your agent and watch them appear."
   const searching = query.length > 0
   const dataState = browse.dataState
-  // The grid's body-state block owns the error PHASE, and the timeline has no such
-  // block — this entry is the only channel a timeline failure has. Exactly one of the
-  // two surfaces is mounted, so one failure still gets one retry control.
-  const timelineFailure =
-    !searching && view === "timeline" && dataState.phase === "error"
+  // The browse grid is MOUNTED in every view (Flow 10) and VISIBLE in only one of
+  // them. Everything keyed on this reads "the grid is in the document, and nobody
+  // can see it or reach it".
+  const browseSurfaceHidden = searching || view === "timeline"
+  // The grid's body-state block owns the error PHASE only while the grid is
+  // VISIBLE; hidden, that block is in the document and unreadable, and this entry
+  // is the failure's only channel. A retry offered for THIS entry can never sit
+  // beside the grid's own, because the condition that produces it is the one that
+  // hides the block.
+  const hiddenSurfaceFailure =
+    browseSurfaceHidden && dataState.phase === "error"
       ? (dataState.message ?? "Could not load memories.")
       : undefined
+  // Pretable's live region is portaled to <body> — OUTSIDE the hidden region — and
+  // its announcement effect fires on every phase transition with no visibility
+  // gate. The facet stays active during a search, so the hidden grid really does
+  // refetch, and an unfrozen phase would read a count for a population nobody can
+  // see at the exact moment `BrowseStatusBar` is withholding the same number from
+  // sighted users. Rows are NOT frozen: they announce nothing, and the grid has to
+  // be current the instant it is revealed.
+  const lastVisibleDataState = useRef(dataState)
+  useEffect(() => {
+    if (!browseSurfaceHidden) lastVisibleDataState.current = dataState
+  })
+  const gridDataState = browseSurfaceHidden ? lastVisibleDataState.current : dataState
+
+  // `hidden` is `display: none`, which destroys the scroll box: the element comes
+  // back at 0 while the engine's snapshot still holds the offset it had, so the
+  // virtualizer paints the rows for that offset over a viewport at the top — a
+  // blank body until some later scroll event resyncs the two. The engine is the
+  // authority on where the browse is, so re-assert it on the way back in. Writing
+  // `scrollTop` fires a scroll event, which is how the engine learns it agreed.
+  useEffect(() => {
+    if (browseSurfaceHidden) return
+    const viewport = browseRegionRef.current?.querySelector<HTMLElement>(
+      "[data-pretable-scroll-viewport]",
+    )
+    const scrollTop = gridRef.current?.getSnapshot().viewport.scrollTop
+    if (!viewport || scrollTop === undefined) return
+    viewport.scrollTop = scrollTop
+  }, [browseSurfaceHidden])
+
   const browseRequestFailed =
     browse.errors.refresh !== undefined || browse.errors["load-more"] !== undefined
   const errorEntries: BrowseErrorEntry[] = [
     ...Object.entries(errors).flatMap(([source, message]) =>
       message ? [{ source, message }] : [],
     ),
-    ...(timelineFailure === undefined ? [] : [{ source: "browse", message: timelineFailure }]),
+    ...(hiddenSurfaceFailure === undefined
+      ? []
+      : [{ source: "browse", message: hiddenSurfaceFailure }]),
     ...(browse.errors.refresh === undefined
       ? []
       : [{ source: "refresh", message: `Refresh failed: ${browse.errors.refresh}` }]),
@@ -327,9 +373,11 @@ export function ListPage() {
                   if (searching) return
                   chooseView(v)
                 }}
-                className={`h-9 px-3 text-sm ${
-                  view === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50"
-                } ${searching ? "opacity-50" : ""}`}
+                className={`h-9 px-3 text-sm ${INACTIVE_CLASS} ${
+                  view === v
+                    ? "bg-zinc-900 text-white"
+                    : `bg-white text-zinc-600 ${searching ? "" : "hover:bg-zinc-50"}`
+                }`}
               >
                 {v}
               </button>
@@ -359,7 +407,13 @@ export function ListPage() {
             aria-label="Search memories"
             placeholder="Search memories…"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              // Search replaces the surface the notice describes, and the notice
+              // explains ONE header click — left standing it comes back when the
+              // search clears, explaining an action several steps in the past.
+              setSortCapped(false)
+              setQuery(e.target.value)
+            }}
             className="w-64"
           />
           <label className="flex items-center gap-1.5 text-sm text-zinc-600">
@@ -373,7 +427,7 @@ export function ListPage() {
         <main className="min-w-0 flex-1 overflow-y-auto p-4">
           <BrowseErrorBanners
             errors={errorEntries}
-            {...(browseRequestFailed || timelineFailure !== undefined
+            {...(browseRequestFailed || hiddenSurfaceFailure !== undefined
               ? { onRetry: retryBrowse }
               : {})}
           />
@@ -385,14 +439,25 @@ export function ListPage() {
               asOf={browse.paused ? browse.updatedAt : null}
             />
           )}
+          {/* Named one at a time, and only the ones THIS view shows — a note listing
+              a control the user cannot see reads as one more thing that broke.
+              §8.2 asks for the browse funnels themselves to be `aria-disabled` +
+              focusable + described here; they live inside the grid, and the grid is
+              inside the hidden region below, so they are unreachable rather than
+              reachable-and-marked. That meets the requirement's purpose (nothing
+              looks active while it is ignored) but not its letter, and this note is
+              what carries the reason in their place — which is why it has to name
+              the column filters the search request drops. */}
           <p
             id="browse-scope-note"
             hidden={!searching}
             className="mb-2 text-xs text-zinc-500"
             data-testid="browse-scope-note"
           >
-            Search ranks active memories across every namespace. The view toggle, the timeline
-            window and the load-more control are not applied to search.
+            Search ranks active memories, and the namespace facet applies to it. Column filters, the
+            view toggle
+            {view === "timeline" ? ", the timeline window" : ""} and the load-more control are not
+            applied to search.
           </p>
           {searching ? (
             search && search.groups.length > 0 ? (
@@ -414,74 +479,73 @@ export function ListPage() {
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
           ) : null}
-          {/* TimelineView owns its empty state ("No episodes in this window.") — but
-              that copy is an ANSWER, so it must not stand in for one that has not
-              arrived, or for one that failed. */}
-          {searching || view === "list" ? null : browsePhase === "loading" ? (
-            <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
-              Loading memories…
-            </p>
-          ) : timelineFailure !== undefined && browse.rows.length === 0 ? null : (
-            <TimelineView records={browse.rows} onSelect={setSelectedId} />
+          {/* Wrapped so a test can scope to this surface: the timeline draws the SAME
+              rows as the hidden grid beside it, and its lifecycle block carries the
+              same test id, so both are in the document at once. */}
+          {searching || view === "list" ? null : (
+            <div data-testid="timeline-region">
+              {/* TimelineView owns its empty state ("No episodes in this window.") —
+                  but that copy is an ANSWER, so it must not stand in for one that has
+                  not arrived, or for one that failed. */}
+              {browsePhase === "loading" ? (
+                <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+                  Loading memories…
+                </p>
+              ) : hiddenSurfaceFailure !== undefined && browse.rows.length === 0 ? null : (
+                <TimelineView records={browse.rows} onSelect={setSelectedId} />
+              )}
+            </div>
           )}
-          {/* Timeline REPLACES the browse surface instead of hiding it: both render
-              the same rows, so a mounted-but-hidden grid would put a second copy of
-              every record's text in the document and a second `browse-loading` block
-              beside the timeline's. What retention across this boundary needs lives
-              in the hook above the branch (rows, continuation, freshness); the
-              engine-owned selection and measured heights are lost here, and only
-              here — across the search boundary below, the grid stays mounted. */}
-          {view === "timeline" ? null : (
-            <>
-              {/* The browse surface stays MOUNTED across the search boundary. Hiding
-                  rather than unmounting keeps the engine-owned selection, focus and
-                  the id-keyed measured row heights alive, and `hidden` also takes
-                  the whole subtree out of the tab order — so nothing inside it can
-                  be a control that looks active while a search is running. */}
-              <div data-testid="browse-region" hidden={searching}>
-                {sortCapped ? (
-                  <p
-                    role="status"
-                    className="mb-2 text-xs text-zinc-500"
-                    data-testid="sort-cap-notice"
-                  >
-                    {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
-                  </p>
-                ) : null}
-                <MemoryGrid
-                  onGridReady={handleGridReady}
-                  records={browse.rows}
-                  onSelect={setSelectedId}
-                  onTickedChange={setTicked}
-                  // Only while looking at everything: scoped to one namespace by the
-                  // rail, every row would sit under a single group header. A partial
-                  // window no longer withholds the structure — the counts say
-                  // "loaded" and claim nothing about the population.
-                  groupByNamespace={namespace === undefined}
-                  // Both are server-side: the funnels and the headers only decide the
-                  // query, and these props are what the grid DISPLAYS while it waits.
-                  filters={filters}
-                  onFiltersChange={handleFiltersChange}
-                  sort={sort}
-                  onSortChange={handleSortChange}
-                  dataState={dataState}
-                  resultMeta={browse.resultMeta}
-                  emptyMessage={emptyMessage}
-                  onRetry={retryBrowse}
-                />
-              </div>
-              {/* The footer is browse-only chrome, so it stays VISIBLE during a
-                  search and says it does not apply — the grid's own controls are
-                  already unreachable inside the hidden region above. */}
-              <LoadMoreFooter
-                state={footerState}
-                loaded={browse.rows.length}
-                total={loadedTotal}
-                onLoadMore={browse.loadMore}
-                browseOnlyReason={searching ? BROWSE_ONLY_REASON : undefined}
-              />
-            </>
-          )}
+          {/* The browse surface stays MOUNTED across EVERY view switch (Flow 10).
+              Hiding rather than unmounting keeps the engine-owned selection, focus,
+              scroll offset and id-keyed measured row heights alive, and `hidden`
+              also takes the whole subtree out of the tab order — so nothing inside
+              it can be a control that looks active while it is being ignored.
+
+              The price is that these rows are in the document alongside whichever
+              surface replaced them, and the search results overlap them by
+              construction. Invisible and outside the a11y tree, but NOT outside a
+              document-wide text query: anything asserting on row text has to scope
+              itself to the surface it means, or the hidden copy will answer. */}
+          <div data-testid="browse-region" hidden={browseSurfaceHidden} ref={browseRegionRef}>
+            {sortCapped ? (
+              <p role="status" className="mb-2 text-xs text-zinc-500" data-testid="sort-cap-notice">
+                {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
+              </p>
+            ) : null}
+            <MemoryGrid
+              onGridReady={handleGridReady}
+              records={browse.rows}
+              onSelect={setSelectedId}
+              onTickedChange={setTicked}
+              // Only while looking at everything: scoped to one namespace by the
+              // rail, every row would sit under a single group header. A partial
+              // window no longer withholds the structure — the counts say
+              // "loaded" and claim nothing about the population.
+              groupByNamespace={namespace === undefined}
+              // Both are server-side: the funnels and the headers only decide the
+              // query, and these props are what the grid DISPLAYS while it waits.
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              sort={sort}
+              onSortChange={handleSortChange}
+              dataState={gridDataState}
+              resultMeta={browse.resultMeta}
+              emptyMessage={emptyMessage}
+              onRetry={retryBrowse}
+            />
+          </div>
+          {/* Browse-only chrome that stays MOUNTED and VISIBLE in every view, because
+              unmounting it drops keyboard focus to <body>. It pages `browse.rows`,
+              which is exactly what the timeline draws, so it stays LIVE there and
+              says it does not apply only during a search. */}
+          <LoadMoreFooter
+            state={footerState}
+            loaded={browse.rows.length}
+            total={loadedTotal}
+            onLoadMore={browse.loadMore}
+            browseOnlyReason={searching ? BROWSE_ONLY_REASON : undefined}
+          />
         </main>
       </div>
       {/* Acting on rows a newly-desired query is about to replace is exactly the
