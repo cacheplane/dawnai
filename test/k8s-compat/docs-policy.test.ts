@@ -88,15 +88,46 @@ function portableCommand(policy: CompatibilityPolicy): string {
   return `pnpm verify:k8s:compat -- --target <${targets}> --context <exact-context> [--storage-class <name>] [--keep-on-failure]`
 }
 
+function isManagedKubernetesBoundary(text: string): boolean {
+  const requiresSeparateValidation =
+    /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:requires? separate validation|(?:must|should) be validated separately)\b/i.test(
+      text,
+    )
+  const outsideKindEvidence =
+    /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:is|are|being) (?:outside (?:the )?Kind(?:\/Calico)? (?:coverage|evidence)|not covered by (?:the )?Kind(?:\/Calico)? (?:coverage|evidence))\b/i.test(
+      text,
+    )
+  const kindEvidenceExcludesScope =
+    /\bKind(?:\/Calico)? (?:coverage|evidence) (?:does not|doesn't) cover managed[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)\b/i.test(
+      text,
+    )
+  return requiresSeparateValidation || outsideKindEvidence || kindEvidenceExcludesScope
+}
+
+function isDynamicRwoStoragePrerequisite(text: string): boolean {
+  const namesDynamicRwo =
+    /\bdynamic(?:ally)?\b/i.test(text) && /\b(?:ReadWriteOnce|RWO)\b/i.test(text)
+  const namesProvisioning = /\bprovision(?:ed|er|ers|ing)?\b/i.test(text)
+  const statesRequirement =
+    /\bstorage[- ]driver(?:s|\s+support)?\s+(?:(?:must|needs? to)\b|(?:is|are)\s+(?:required|(?:an?\s+)?prerequisite)\b)/i.test(
+      text,
+    ) || /\b(?:requires?|needs?)\s+(?:an?\s+)?storage[- ]drivers?\b/i.test(text)
+  return namesDynamicRwo && namesProvisioning && statesRequirement
+}
+
 function makesUnsupportedCompatibilityClaim(source: string): boolean {
   const text = markdownText(source).replaceAll(/\s+/g, " ").trim()
   if (text === compatibilityDisclaimer) return false
-  const makesClaim = /\b(?:certif(?:y|ies|ied|ication)|proves?|supports?|guarantees?)\b/i.test(text)
-  const namesUnsupportedScope =
-    /\b(?:managed (?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)|(?:arbitrary|other|every|all)\s+(?:CNIs?|storage drivers?|managed clusters?)|storage drivers?)\b/i.test(
-      text,
-    )
-  return makesClaim && namesUnsupportedScope
+  const namesStorageDriver = /\bstorage[- ]drivers?\b/i.test(text)
+  if (namesStorageDriver && !isDynamicRwoStoragePrerequisite(text)) return true
+
+  const namesQuantifiedCni =
+    /\b(?:any|arbitrary|other|every|all)(?:\s+[\w-]+){0,2}\s+CNIs?\b/i.test(text)
+  if (namesQuantifiedCni) return true
+
+  const namesManagedKubernetes =
+    /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)\b/i.test(text)
+  return namesManagedKubernetes && !isManagedKubernetesBoundary(text)
 }
 
 describe("Kubernetes compatibility documentation policy", () => {
@@ -196,12 +227,16 @@ describe("Kubernetes compatibility documentation policy", () => {
 
   test.each([
     "Dawn certifies managed Kubernetes services.",
+    "Kind is compatible with every CNI.",
+    "Kind validates managed Kubernetes services.",
     `Kind coverage proves compatibility across all
 managed Kubernetes services.`,
     "Kind proves every managed cluster, CNI, and storage driver",
     "Kind supports managed Kubernetes services",
     "Kind guarantees compatibility for other CNIs",
     "Kind coverage proves storage driver compatibility",
+    "Kind validates managed Kubernetes services that require separate validation.",
+    "Kind validates storage drivers required for dynamic RWO provisioning.",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
     expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
@@ -212,6 +247,10 @@ managed Kubernetes services.`,
 other CNI implementations, or storage drivers.`,
     "A policy-enforcing CNI is required for NetworkPolicy egress controls.",
     "Dynamic ReadWriteOnce storage provisioning is required.",
+    "The storage driver must support dynamic ReadWriteOnce provisioning.",
+    "Managed Kubernetes services are outside Kind evidence.",
+    "Managed Kubernetes services are not covered by Kind evidence.",
+    "Kind evidence does not cover managed Kubernetes services.",
     "The compatibility suite tests Kind with Calico.",
     "Kind coverage proves compatibility for the policy-pinned versions. Managed Kubernetes services require separate validation.",
     `Kind coverage proves compatibility for the policy-pinned versions.
