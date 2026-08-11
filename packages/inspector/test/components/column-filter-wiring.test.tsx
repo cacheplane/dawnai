@@ -122,6 +122,9 @@ async function typeInto(column: string, text: string) {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  // `unstubAllGlobals` does not touch `spyOn`, and one test here silences
+  // `console.warn` — left in place it would swallow the next test's output too.
+  vi.restoreAllMocks()
 })
 
 describe("column funnels drive the server query", () => {
@@ -313,6 +316,34 @@ describe("column funnels drive the server query", () => {
     // Declined means NOT SENT: a request carrying the value would mean the page
     // accepted it and only decorated the failure.
     expect(listUrls(mock).length).toBe(before)
+  })
+
+  it("states the refusal in the user's words, and keeps the mapping's own for the log", async () => {
+    // Two audiences, two strings. The developer half names the column, operator and
+    // value, and quotes the value with `JSON.stringify` — which renders the
+    // `Infinity` pretable parsed out of a typed `1e999` as the literal `null`. Put
+    // that in the alert and the page shows the user a value they never entered,
+    // wrapped in vocabulary ("grid intent", "browse query") that names this
+    // codebase's internals rather than anything on screen. The alert therefore gets
+    // its own sentence; the specific one still has to reach the console, because it
+    // is the only place the failing column and operator are named.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a1")
+
+    await typeInto("confidence", "1e999")
+
+    const notice = await screen.findByTestId("filter-refusal-notice")
+    const text = notice.textContent ?? ""
+    // Names the control the user just used, and says it did nothing.
+    expect(text).toContain("confidence")
+    expect(text).toContain("not applied")
+    expect(text).not.toContain("grid intent")
+    expect(text).not.toContain("null")
+
+    const logged = warn.mock.calls.flat().map((arg) => (arg instanceof Error ? arg.message : arg))
+    expect(logged.some((entry) => String(entry).includes("cannot map grid intent"))).toBe(true)
   })
 
   it("retires the refusal once a mappable value replaces it", async () => {

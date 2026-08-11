@@ -74,11 +74,23 @@ const DAY_OP: Partial<Record<FilterOperator, DayOp>> = {
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 /**
- * Every refusal in this module.
+ * Every refusal in this module, carrying the TWO strings its two audiences need.
  *
  * It THROWS rather than dropping the clause: dropping it silently would leave a
  * funnel that looks applied and is not, the exact dishonesty this whole design
  * exists to remove.
+ *
+ * `message` is the developer half — it names the column, the operator and the
+ * offending value, and goes to the console. `userMessage` is the half the page
+ * renders, and it is NOT a reworded copy of the other one. It obeys two rules the
+ * developer half cannot:
+ *
+ *  - It never names anything the user cannot see. "grid intent", "browse query"
+ *    and "BrowseFilter arm" are this repo's words, not the screen's.
+ *  - It never quotes the offending VALUE. `JSON.stringify` is what makes the
+ *    developer half specific, and it renders `Infinity` — what pretable's number
+ *    funnel parses out of a typed `1e999` — as the literal `null`. Echoing that
+ *    shows the user a value nobody entered.
  *
  * `filterOperators` makes an unmappable operator rare, NOT unreachable —
  * pretable's `operatorsForType` warns once and falls back to the full set,
@@ -87,39 +99,92 @@ const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
  * The user then sees "is empty" on the menu and clicks it, so this backstop
  * catches a live path and not only a coding slip.
  *
- * `BrowseQueryError` is reused so the Inspector has ONE rejection family, and
- * `isBrowseQueryError` (src/store/browse-params.ts) matches on `error.name`, so
- * it recognises this across the two module copies Next's bundler produces.
+ * `BrowseQueryError` is extended rather than replaced so the Inspector has ONE
+ * rejection family; the base constructor sets `name` and this passes the same
+ * code, so `isBrowseQueryError` (src/store/browse-params.ts), which matches on
+ * `error.name`, still recognises it across the two module copies Next's bundler
+ * produces.
  */
-function unmappable(detail: string): never {
-  throw new BrowseQueryError(
-    `cannot map grid intent to a browse query: ${detail}`,
-    "unmappable-intent",
-  )
+class IntentRefusalError extends BrowseQueryError {
+  readonly userMessage: string
+  constructor(userMessage: string, detail: string) {
+    super(`cannot map grid intent to a browse query: ${detail}`, "unmappable-intent")
+    this.userMessage = userMessage
+  }
+}
+
+/**
+ * The user-facing half of a refusal, or `undefined` for any other failure.
+ *
+ * Read STRUCTURALLY rather than with `instanceof`, for the reason
+ * `isBrowseQueryError` matches on `name`: an identity check fails whenever the
+ * error crosses a module-copy boundary, and here it would fail SILENTLY — the
+ * caller would fall back to generic copy and nobody would see a defect.
+ */
+export function intentRefusalMessage(error: unknown): string | undefined {
+  const message = (error as { userMessage?: unknown } | null | undefined)?.userMessage
+  return typeof message === "string" && message !== "" ? message : undefined
+}
+
+// The two sentences the page can render. Each refusal supplies the clause naming
+// what is wrong; the clause saying the control did nothing is fixed here, so the
+// promise the notice makes cannot drift from site to site. Which suffix applies is
+// decided by WHERE the refusal is raised, not by which control the user touched —
+// see `commitIntent` in list-page.tsx, which only ever offers one unvetted half.
+function filterRefusal(problem: string): string {
+  return `${problem}, so the filter was not applied.`
+}
+
+function sortRefusal(problem: string): string {
+  return `${problem}, so the sort was not applied.`
+}
+
+function unmappable(userMessage: string, detail: string): never {
+  throw new IntentRefusalError(userMessage, detail)
 }
 
 function badOperator(columnId: string, operator: FilterOperator): never {
-  return unmappable(`operator "${operator}" on column "${columnId}" has no BrowseFilter arm`)
+  // The operator is named in the developer half only: pretable's spelling
+  // ("isNotEmpty") is not the label on the menu item the user clicked ("is not
+  // empty"), and this module does not have that label.
+  return unmappable(
+    filterRefusal(`That condition is not available for the ${columnId} column`),
+    `operator "${operator}" on column "${columnId}" has no BrowseFilter arm`,
+  )
 }
 
+// The four operand checks below all put `label` in BOTH halves of their refusal, so
+// it has to be the user's word for the box holding the value, not the store's field
+// name: pretable labels a range funnel's two inputs "Filter minimum" and "Filter
+// maximum", and its single-operand funnels sit under the column header, so the
+// callers pass "confidence minimum", "updated date" and so on.
 function asText(value: ColumnFilter["value"], label: string): string {
   // Trimmed to DECIDE, returned untrimmed: an all-whitespace box is an empty one the
   // user cannot see, while a leading or trailing space inside a real value is part of
   // the predicate — the store compares the bytes it is given.
   if (typeof value !== "string" || value.trim() === "")
-    unmappable(`${label} needs a non-empty text value, got ${JSON.stringify(value)}`)
+    unmappable(
+      filterRefusal(`That ${label} is empty`),
+      `${label} needs non-blank text, got ${JSON.stringify(value)}`,
+    )
   return value
 }
 
 function asNumber(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isFinite(value))
-    unmappable(`${label} needs a finite number, got ${JSON.stringify(value)}`)
+    unmappable(
+      filterRefusal(`That ${label} is out of range`),
+      `${label} needs a finite number, got ${JSON.stringify(value)}`,
+    )
   return value
 }
 
 function asDay(value: unknown, label: string): string {
   if (typeof value !== "string" || !DAY_PATTERN.test(value))
-    unmappable(`${label} needs a "YYYY-MM-DD" day, got ${JSON.stringify(value)}`)
+    unmappable(
+      filterRefusal(`That ${label} is not a valid date`),
+      `${label} needs a "YYYY-MM-DD" day, got ${JSON.stringify(value)}`,
+    )
   return value
 }
 
@@ -129,18 +194,27 @@ function asDay(value: unknown, label: string): string {
 function asPair(value: ColumnFilter["value"], label: string): readonly [unknown, unknown] {
   const list = value as readonly unknown[] | null
   if (!Array.isArray(list) || list.length !== 2)
-    unmappable(`${label} needs a two-element range, got ${JSON.stringify(value)}`)
+    unmappable(
+      filterRefusal(`That ${label} needs both a minimum and a maximum`),
+      `${label} needs both operands, got ${JSON.stringify(value)}`,
+    )
   return [list[0], list[1]] as const
 }
 
 function asValues(value: ColumnFilter["value"], label: string): readonly string[] {
   const list = value as readonly unknown[] | null
   if (!Array.isArray(list) || list.length === 0)
-    unmappable(`${label} needs a non-empty value list, got ${JSON.stringify(value)}`)
+    unmappable(
+      filterRefusal(`No ${label} values are selected`),
+      `${label} needs a non-empty value list, got ${JSON.stringify(value)}`,
+    )
   const out: string[] = []
   for (const entry of list) {
     if (typeof entry !== "string")
-      unmappable(`${label} values must be strings, got ${JSON.stringify(entry)}`)
+      unmappable(
+        filterRefusal(`That ${label} selection cannot be used`),
+        `${label} values must be strings, got ${JSON.stringify(entry)}`,
+      )
     out.push(entry)
   }
   return out
@@ -154,7 +228,11 @@ function setOp(columnId: string, operator: FilterOperator): "in" | "notIn" {
 
 function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
   const field = FILTER_FIELD_BY_COLUMN[columnId as keyof typeof FILTER_FIELD_BY_COLUMN]
-  if (field === undefined) unmappable(`column "${columnId}" has no browse filter field`)
+  if (field === undefined)
+    unmappable(
+      filterRefusal("That column cannot be filtered"),
+      `column "${columnId}" has no browse filter field`,
+    )
   const { operator, value } = filter
 
   switch (field) {
@@ -162,7 +240,15 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
       const op = setOp(columnId, operator)
       const values: MemoryStatus[] = []
       for (const entry of asValues(value, "status")) {
-        if (!isMemoryStatus(entry)) unmappable(`"${entry}" is not a memory status`)
+        // The ticked value IS the user's own, so naming it in the user half would
+        // be honest — but the funnel's options come from the same list this checks
+        // against, so reaching here means the two have drifted, and the value is
+        // then more confusing than the column name alone.
+        if (!isMemoryStatus(entry))
+          unmappable(
+            filterRefusal("That status is not one this server recognizes"),
+            `"${entry}" is not a memory status`,
+          )
         values.push(entry)
       }
       return { field: "status", op, values }
@@ -171,7 +257,11 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
       const op = setOp(columnId, operator)
       const values: MemoryKind[] = []
       for (const entry of asValues(value, "kind")) {
-        if (!isMemoryKind(entry)) unmappable(`"${entry}" is not a memory kind`)
+        if (!isMemoryKind(entry))
+          unmappable(
+            filterRefusal("That kind is not one this server recognizes"),
+            `"${entry}" is not a memory kind`,
+          )
         values.push(entry)
       }
       return { field: "kind", op, values }
@@ -179,39 +269,39 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
     case "content": {
       const op = CONTENT_OP[operator]
       if (op === undefined) return badOperator(columnId, operator)
-      return { field: "content", op, value: asText(value, "content") }
+      return { field: "content", op, value: asText(value, "content value") }
     }
     case "namespace": {
       if (operator !== "equals" && operator !== "startsWith") return badOperator(columnId, operator)
-      return { field: "namespace", op: operator, value: asText(value, "namespace") }
+      return { field: "namespace", op: operator, value: asText(value, "namespace value") }
     }
     case "confidence": {
       if (operator === "between") {
-        const [min, max] = asPair(value, "confidence between")
+        const [min, max] = asPair(value, "confidence range")
         return {
           field: "confidence",
           op: "between",
-          min: asNumber(min, "confidence min"),
-          max: asNumber(max, "confidence max"),
+          min: asNumber(min, "confidence minimum"),
+          max: asNumber(max, "confidence maximum"),
         }
       }
       const op = CONFIDENCE_OP[operator]
       if (op === undefined) return badOperator(columnId, operator)
-      return { field: "confidence", op, value: asNumber(value, "confidence") }
+      return { field: "confidence", op, value: asNumber(value, "confidence value") }
     }
     case "updatedAt": {
       if (operator === "dateBetween") {
-        const [from, until] = asPair(value, "updated between")
+        const [from, until] = asPair(value, "updated range")
         return {
           field: "updatedAt",
           op: "betweenDays",
-          fromDay: asDay(from, "updated fromDay"),
-          untilDay: asDay(until, "updated untilDay"),
+          fromDay: asDay(from, "updated minimum"),
+          untilDay: asDay(until, "updated maximum"),
         }
       }
       const op = DAY_OP[operator]
       if (op === undefined) return badOperator(columnId, operator)
-      return { field: "updatedAt", op, day: asDay(value, "updated day") }
+      return { field: "updatedAt", op, day: asDay(value, "updated date") }
     }
   }
 }
@@ -245,11 +335,18 @@ export function toBrowseQuery(
   }
 
   if (sort.length > MAX_BROWSE_SORT_ENTRIES)
-    unmappable(`at most ${MAX_BROWSE_SORT_ENTRIES} sort columns, got ${sort.length}`)
+    unmappable(
+      sortRefusal(`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns`),
+      `at most ${MAX_BROWSE_SORT_ENTRIES} sort columns, got ${sort.length}`,
+    )
   const orderBy: BrowseSortEntry[] = []
   for (const entry of sort) {
     const field = SORT_FIELD_BY_COLUMN[entry.columnId as keyof typeof SORT_FIELD_BY_COLUMN]
-    if (field === undefined) unmappable(`column "${entry.columnId}" is not a sortable browse field`)
+    if (field === undefined)
+      unmappable(
+        sortRefusal("That column cannot be sorted"),
+        `column "${entry.columnId}" is not a sortable browse field`,
+      )
     orderBy.push({ field, dir: entry.direction })
   }
 

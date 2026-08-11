@@ -16,7 +16,12 @@ import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
 import { type GridRow, MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
-import { capSortEntries, MAX_BROWSE_SORT_ENTRIES, toBrowseQuery } from "./to-browse-query"
+import {
+  capSortEntries,
+  intentRefusalMessage,
+  MAX_BROWSE_SORT_ENTRIES,
+  toBrowseQuery,
+} from "./to-browse-query"
 
 interface SearchResponse {
   readonly groups: readonly {
@@ -73,10 +78,12 @@ export function ListPage() {
   const [filters, setFilters] = useState<Record<string, ColumnFilter>>({})
   const [sort, setSort] = useState<PretableSortEntry[]>([])
   const [sortCapped, setSortCapped] = useState(false)
-  /** Set when `toBrowseQuery` REFUSED the intent a control just produced, so that
-   *  intent was not committed. Distinct from `sortCapped`, which reports a change
-   *  that WAS committed after trimming — and so is retired by any later control,
-   *  while this stands until intent the mapping accepts replaces it. */
+  /** The USER-facing sentence for intent `toBrowseQuery` REFUSED, so that intent was
+   *  not committed. Distinct from `sortCapped`, which reports a change that WAS
+   *  committed after trimming — and so is retired by any later control, while this
+   *  stands until intent the mapping accepts replaces it. Never the error's
+   *  `message`: that half names this repo's internals and quotes the offending value
+   *  through `JSON.stringify`, which prints `Infinity` as `null`. */
   const [intentRefusal, setIntentRefusal] = useState<string>()
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
@@ -163,13 +170,28 @@ export function ListPage() {
    * Declining rather than applying-and-warning is the honest half: the funnel the
    * user typed is not a question the server can be asked, so the rows keep answering
    * the one it can, and the notice says which control was refused and why.
+   *
+   * Every caller hands one ALREADY-ACCEPTED half and one new one — `filters` and
+   * `sort` only ever hold intent that came back through here — so the refusal always
+   * describes the control the user just used, which is what lets the mapping pick
+   * "the filter was not applied" or "the sort was not applied" at the point it
+   * refuses. A caller that changed both halves at once would break that.
    */
   const commitIntent = useCallback(
     (nextFilters: Record<string, ColumnFilter>, nextSort: readonly PretableSortEntry[]) => {
       try {
         toBrowseQuery(nextFilters, nextSort)
       } catch (error) {
-        setIntentRefusal(error instanceof Error ? error.message : String(error))
+        // The console gets the developer half: it is the only place the failing
+        // column, operator and raw value are named, and the notice deliberately
+        // carries none of them.
+        console.warn("[inspector] declined grid intent", error)
+        setIntentRefusal(
+          intentRefusalMessage(error) ??
+            // Anything that is not one of the mapping's own refusals — a coding slip
+            // rather than a value the user chose. Claims only what is certain.
+            "That change was not applied.",
+        )
         return false
       }
       setIntentRefusal(undefined)
@@ -566,12 +588,17 @@ export function ListPage() {
               // `alert`, not `status`: this reports that the control the user just
               // used did NOT take effect, which has to interrupt rather than wait
               // for the next pause in output.
+              //
+              // Rendered whole, with nothing prepended: the sentence already says
+              // WHICH control did nothing, and it is the mapping that knows whether
+              // that was a funnel or a sort header. A fixed lead-in here would say
+              // "filter" over a declined sort.
               <p
                 role="alert"
                 className="mb-2 text-xs text-red-700"
                 data-testid="filter-refusal-notice"
               >
-                {`That filter was not applied — ${intentRefusal}`}
+                {intentRefusal}
               </p>
             )}
             <MemoryGrid

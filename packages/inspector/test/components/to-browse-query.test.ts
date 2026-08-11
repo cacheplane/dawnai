@@ -3,6 +3,7 @@ import type { ColumnFilter, PretableSortEntry } from "@pretable/react"
 import { describe, expect, it } from "vitest"
 import {
   capSortEntries,
+  intentRefusalMessage,
   MAX_BROWSE_SORT_ENTRIES,
   toBrowseQuery,
 } from "../../src/components/memory/to-browse-query"
@@ -162,6 +163,117 @@ describe("toBrowseQuery — refusals", () => {
     expect(() => filters({ tags: { operator: "contains", value: "x" } })).toThrow(
       /column "tags" has no browse filter field/,
     )
+  })
+})
+
+/**
+ * A refusal has TWO audiences and therefore two strings: the developer half names
+ * the column, operator and value for the log, and the user half is the sentence the
+ * page renders. Neither may stand in for the other — the developer half quotes the
+ * value through `JSON.stringify`, which renders the `Infinity` pretable parses out
+ * of a typed `1e999` as the literal `null`, and putting that on screen shows the
+ * user a value they never entered.
+ */
+describe("toBrowseQuery — refusals speak to both audiences", () => {
+  function refusalFrom(run: () => unknown): { user: string; developer: string } {
+    try {
+      run()
+    } catch (error) {
+      const user = intentRefusalMessage(error)
+      if (user === undefined) throw new Error(`refusal carries no user-facing half: ${error}`)
+      return { user, developer: error instanceof Error ? error.message : String(error) }
+    }
+    throw new Error("expected a refusal, got a mapped query")
+  }
+
+  it("names the confidence box and not the value the mapping saw", () => {
+    // The exact pair, pinned. `1e999` is what the user types; `Infinity` is what
+    // pretable's free-text number funnel hands the mapping; `null` is what
+    // `JSON.stringify` makes of it. Only the last of those three is unfit to show,
+    // and it is the one the single string used to carry.
+    const { user, developer } = refusalFrom(() =>
+      filters({ confidence: { operator: "gt", value: Number.POSITIVE_INFINITY } }),
+    )
+    expect(user).toBe("That confidence value is out of range, so the filter was not applied.")
+    expect(developer).toBe(
+      "cannot map grid intent to a browse query: confidence value needs a finite number, got null",
+    )
+  })
+
+  it("says SORT, not filter, when it is a sort key being declined", () => {
+    // One notice renders both, so the sentence has to name the control that did
+    // nothing. A fixed "that filter was not applied" lead-in reads as a lie here.
+    const { user } = refusalFrom(() =>
+      toBrowseQuery({}, [{ columnId: "content", direction: "asc" }]),
+    )
+    expect(user).toBe("That column cannot be sorted, so the sort was not applied.")
+  })
+
+  /** Every refusal site in the module, so a new one cannot ship with only half its
+   *  audience served — the user half is a required constructor argument, but nothing
+   *  else stops it being filled with the developer's wording. */
+  const SITES: [string, () => unknown][] = [
+    ["column with no filter field", () => filters({ tags: { operator: "contains", value: "x" } })],
+    ["operator with no arm", () => filters({ content: { operator: "isEmpty" } })],
+    ["set operator on an enum", () => filters({ status: { operator: "contains", value: "x" } })],
+    ["empty text value", () => filters({ content: { operator: "contains", value: "   " } })],
+    ["non-finite confidence", () => filters({ confidence: { operator: "gt", value: 1 / 0 } })],
+    [
+      "non-finite confidence minimum",
+      () => filters({ confidence: { operator: "between", value: [1 / 0, 1] } }),
+    ],
+    [
+      "non-finite confidence maximum",
+      () => filters({ confidence: { operator: "between", value: [0, 1 / 0] } }),
+    ],
+    ["malformed day", () => filters({ updated: { operator: "on", value: "13/07/2026" } })],
+    [
+      "malformed day range",
+      () => filters({ updated: { operator: "dateBetween", value: ["nope", "2026-07-13"] } }),
+    ],
+    // A `between` carrying ONE operand instead of two. Spelled as a bare number
+    // because pretable's `FilterValue` has no one-element array member — a
+    // shorter list is not a shape the type can even express.
+    ["half a range", () => filters({ confidence: { operator: "between", value: 0.5 } })],
+    ["empty value list", () => filters({ status: { operator: "isAnyOf", value: [] } })],
+    [
+      "non-string in a value list",
+      () => filters({ kind: { operator: "isAnyOf", value: [1, 2] as const } }),
+    ],
+    ["unknown status", () => filters({ status: { operator: "isAnyOf", value: ["actve"] } })],
+    ["unknown kind", () => filters({ kind: { operator: "isAnyOf", value: ["semanic"] } })],
+    [
+      "past the sort ceiling",
+      () =>
+        toBrowseQuery(
+          {},
+          ["status", "kind", "namespace", "confidence"].map((columnId) => ({
+            columnId,
+            direction: "asc" as const,
+          })),
+        ),
+    ],
+    ["unsortable column", () => toBrowseQuery({}, [{ columnId: "content", direction: "asc" }])],
+  ]
+
+  it.each(SITES)("gives %s a sentence fit to render", (_name, run) => {
+    const { user, developer } = refusalFrom(run)
+    // A whole sentence about the control, ending in what it did: nothing.
+    expect(user).toMatch(/^[A-Z].* was not applied\.$/)
+    // Nothing from this repo's vocabulary, and nothing from `JSON.stringify` — the
+    // `null` in particular is a value no user ever typed.
+    expect(user).not.toMatch(/grid intent|browse query|BrowseFilter|orderBy|operand|arm\b/)
+    expect(user).not.toMatch(/null|undefined|NaN|Infinity|"/)
+    // The specific half survives for the log — that is the whole point of splitting.
+    expect(developer).toContain("cannot map grid intent to a browse query: ")
+  })
+
+  it("reports no user half for anything that is not one of these refusals", () => {
+    // The page falls back to generic copy on this, so a wrong answer here would put
+    // a raw internal message on screen — exactly what the split exists to prevent.
+    expect(intentRefusalMessage(new Error("boom"))).toBeUndefined()
+    expect(intentRefusalMessage(undefined)).toBeUndefined()
+    expect(intentRefusalMessage({ userMessage: 7 })).toBeUndefined()
   })
 })
 

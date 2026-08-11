@@ -25,6 +25,9 @@ than drawn as an active sort the server never applied.
 A funnel value the mapping cannot express is refused the same way: the query mapping
 rejects rather than silently dropping a clause, so the intent is declined and named
 in a notice, and the rows keep answering the question the server was actually asked.
+The notice names the control in the words on screen — "That confidence value is out
+of range, so the filter was not applied." — while the mapping's own message, which
+quotes the value it was handed, goes to the console for whoever is debugging.
 
 Also in this release:
 
