@@ -11,18 +11,29 @@ kubernetesSandbox provider agrees with the chart:
     provider: kubernetesSandbox({ namespace: "{{ include "dawn-sandbox-infra.namespace" . }}" })
   }
 
-Orchestrator ServiceAccount:
-{{- if .Values.orchestrator.serviceAccount.create }}
-  {{ include "dawn-sandbox-infra.orchestratorSAName" . }} (created by this chart, namespace-scoped)
+Application ServiceAccount / namespace wiring:
 
-  Bind an in-cluster Dawn app to this ServiceAccount (e.g.
-  `serviceAccountName: {{ include "dawn-sandbox-infra.orchestratorSAName" . }}` on the app's Pod spec)
-  so it can create/get/delete pods + pods/exec + persistentvolumeclaims,
-  and create/get/list/update/delete networkpolicies in this namespace.
-{{- else }}
-  orchestrator.serviceAccount.create=false — binding to the existing
-  ServiceAccount/subjects supplied in values.
-{{- end }}
+Create or use the Dawn app ServiceAccount in a separate management namespace.
+Configure the app Pod to use that management-namespace ServiceAccount.
+Then bind that cross-namespace subject into this sandbox namespace's
+orchestrator RoleBinding through `orchestrator.subjects`:
+
+  helm upgrade dawn-sandbox-infra charts/dawn-sandbox-infra \
+    --reuse-values \
+    --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"<app-service-account>","namespace":"<management-namespace>"}'
+
+The equivalent values shape is:
+
+  orchestrator:
+    subjects:
+      - kind: ServiceAccount
+        name: <app-service-account>
+        namespace: <management-namespace>
+
+That subject receives create/get/delete pods and persistentvolumeclaims,
+create/get pods/exec, and create/get/list/update/delete networkpolicies in this
+sandbox namespace. Keep the app Pod and all application credentials in the
+management namespace.
 
 Pod Security Standards on this namespace:
   enforce={{ .Values.podSecurityStandard.enforce }}  warn={{ .Values.podSecurityStandard.warn }}  audit={{ .Values.podSecurityStandard.audit }}
