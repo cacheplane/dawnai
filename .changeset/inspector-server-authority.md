@@ -52,6 +52,10 @@ Also in this release:
 - While a search is running, browse-only controls are marked `aria-disabled` and stay
   focusable with an `aria-describedby` explanation, rather than staying active and
   being silently ignored.
+- An open column funnel closes when a search or the timeline takes the browse grid off
+  screen. The funnel's panel is rendered outside the grid, so hiding the grid left it
+  floating over whatever replaced it — the one browse control that stayed undimmed,
+  unexplained and able to change the browse query from a surface nobody could see.
 - The timeline's episodic default now stands beside an *excluding* `kind` funnel. It
   stands down only for a narrowing one, where leaving it on would AND two narrowings
   into the empty set; standing down for an exclusion instead widened the timeline to

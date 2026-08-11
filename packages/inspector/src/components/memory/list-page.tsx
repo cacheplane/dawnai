@@ -382,6 +382,37 @@ export function ListPage() {
   })
   const gridDataState = browseSurfaceHidden ? lastVisibleDataState.current : dataState
 
+  // The funnel's popover is PORTALED to `<body>`, so it is the one part of the grid
+  // `hidden` on the region below does not reach. Left open it floats over the search
+  // results or the timeline: undimmed, with no `aria-disabled` and no
+  // `aria-describedby`, and fully interactive — while every other control this page
+  // renders inert is marked and explained. Ticking a value in it would move the
+  // browse query from a panel whose own surface nobody can see.
+  //
+  // The funnel is the ONLY header popover this grid has: pretable's other one, the
+  // column menu, needs `groupPanel.enabled`, which `MemoryGrid` does not pass. A
+  // selector arm for a trigger that is never rendered would be a dead branch no test
+  // could reach, so this names the one that exists.
+  //
+  // 0.3.0 exposes no imperative close — the open state lives inside `PretableSurface`
+  // — so the dismissal is the toggle a second user click on the trigger would take,
+  // and `aria-expanded` is how the trigger reports it is the open one. At most one
+  // popover is ever open (pretable holds a single open-state), hence the singular
+  // query. `.click()` moves no focus, so a user already typing in the search box
+  // keeps their caret.
+  //
+  // Mouse users rarely reach this: pretable closes on a `pointerdown` outside the
+  // panel, which travelling to the search box or the view toggle produces. Reaching
+  // either by keyboard fires no pointer event at all, so for them the popover simply
+  // survives — and the timeline boundary is newly reachable at all, because it used
+  // to unmount the grid.
+  useEffect(() => {
+    if (!browseSurfaceHidden) return
+    browseRegionRef.current
+      ?.querySelector<HTMLElement>("[data-pretable-filter-funnel][aria-expanded='true']")
+      ?.click()
+  }, [browseSurfaceHidden])
+
   // `hidden` is `display: none`, which destroys the scroll box: the element comes
   // back at 0 while the engine's snapshot still holds the offset it had, so the
   // virtualizer paints the rows for that offset over a viewport at the top — a
@@ -515,7 +546,9 @@ export function ListPage() {
               §8.2 asks for the browse funnels themselves to be `aria-disabled` +
               focusable + described here; they live inside the grid, and the grid is
               inside the hidden region below, so they are unreachable rather than
-              reachable-and-marked. That meets the requirement's purpose (nothing
+              reachable-and-marked — the popover one of them portals to `<body>`
+              included, which the effect above closes because `hidden` does not reach
+              it. That meets the requirement's purpose (nothing
               looks active while it is ignored) but not its letter, and this note is
               what carries the reason in their place — which is why it has to name
               the column filters the search request drops. */}
@@ -570,8 +603,10 @@ export function ListPage() {
           {/* The browse surface stays MOUNTED across EVERY view switch (Flow 10).
               Hiding rather than unmounting keeps the engine-owned selection, focus,
               scroll offset and id-keyed measured row heights alive, and `hidden`
-              also takes the whole subtree out of the tab order — so nothing inside
-              it can be a control that looks active while it is being ignored.
+              takes the subtree that is actually IN here out of the tab order — so
+              nothing rendered below can be a control that looks active while it is
+              being ignored. An open funnel popover is portaled OUT of this subtree
+              and so escapes that, which is why the effect above closes it by hand.
 
               The price is that these rows are in the document alongside whichever
               surface replaced them, and the search results overlap them by

@@ -102,6 +102,23 @@ function scopeNote(): string {
   return screen.getByTestId("browse-scope-note").textContent ?? ""
 }
 
+/** Open the status funnel WITHOUT a pointerdown anywhere else first. Pretable's own
+ *  popovers close on an outside `pointerdown`, so a mouse user usually dismisses one
+ *  on the way to the search box or the view toggle; a keyboard user never does, and
+ *  `fireEvent.click` reproduces that — it dispatches `click` alone. */
+async function openStatusFunnel(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
+  return await screen.findByRole("dialog", { name: "Filter status" })
+}
+
+/** Every pretable popover in the document, found by the attribute rather than by role
+ *  so this does not have to agree with the role each one picks. They portal to
+ *  `<body>`, so neither a `within()` scope nor the `hidden` attribute on the browse
+ *  region reaches them — which is the whole bug. */
+function popovers(): Element[] {
+  return [...document.querySelectorAll("[data-pretable-popover]")]
+}
+
 describe("view scope", () => {
   it("keeps the browse grid mounted while search results are showing", async () => {
     // Same element ⇒ same engine, and the engine is what owns the selection, the
@@ -129,6 +146,58 @@ describe("view scope", () => {
     await screen.findByTestId("timeline-region")
     expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(true)
     expect(browseGrid()).toBe(grid)
+  })
+
+  it("closes an open column popover when a search hides the browse region", async () => {
+    // The funnel lives inside the browse region, but its popover is PORTALED to
+    // `<body>` — so `hidden` on the region takes the funnel out of the a11y tree and
+    // leaves the popover it opened standing over the search results: undimmed, with
+    // no `aria-disabled` and no description, and fully interactive. Every other
+    // ignored control on this page is marked; this one would be the sole exception,
+    // and the loudest, because it is a floating panel rather than a header button.
+    stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a")
+    await openStatusFunnel()
+    searchBox().focus()
+    await startSearch()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(popovers()).toHaveLength(0)
+    // The dismissal must cost nothing: the user is mid-keystroke in this box, and a
+    // close that focused the trigger it acts on would take the caret out from under
+    // them. (The other tempting route, a synthetic Escape at `document`, leaves focus
+    // alone but is rejected for a different reason — `DetailSheet` listens for Escape
+    // on `window`, so it would close an open sheet as a side effect.)
+    expect(document.activeElement).toBe(searchBox())
+  })
+
+  it("closes an open column popover when the timeline hides the browse region", async () => {
+    // The boundary this fix is FOR: the timeline used to unmount the grid, which took
+    // the popover with it. Hiding instead of unmounting is what made this reachable.
+    stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a")
+    await openStatusFunnel()
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+    await screen.findByTestId("timeline-region")
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(popovers()).toHaveLength(0)
+  })
+
+  it("does not reopen the popover when the browse region comes back", async () => {
+    // Closed, not stashed. A popover restored on reveal would reappear pointing at a
+    // funnel the user last touched several steps ago — and pretable positions it from
+    // the anchor's rect at OPEN time, which `display: none` has since zeroed.
+    stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a")
+    await openStatusFunnel()
+    await startSearch()
+    await typeSearch("")
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(false),
+    )
+    expect(popovers()).toHaveLength(0)
   })
 
   it("puts the browse viewport back where it was when the search clears", async () => {
