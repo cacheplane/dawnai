@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-import { describe, expect, test, vi } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import { deriveClusterNames } from "../../scripts/kubernetes-compat/cluster.ts"
 import type {
   Command,
@@ -38,6 +38,11 @@ const context = "kind-dawn"
 const kubeconfig = "/secure/token-kubeconfig"
 const runId = "run-a"
 const names = deriveClusterNames(runId)
+const REAPER_TEST_EPOCH_SECONDS = 2_000_000_000
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function commandResult(command: Command, value: unknown, exitCode = 0): CommandResult {
   const output = typeof value === "string" ? value : JSON.stringify(value)
@@ -200,13 +205,20 @@ function helmStatus(release: string, revision: number): JsonObject {
   }
 }
 
-function reaperCronJob(schedule: string): JsonObject {
+function reaperCronJob(
+  schedule: string,
+  options: {
+    readonly suspend?: boolean
+    readonly active?: readonly JsonObject[]
+  } = {},
+): JsonObject {
   return {
     apiVersion: "batch/v1",
     kind: "CronJob",
     metadata: { name: "dawn-reaper", namespace: names.sandboxNamespace },
     spec: {
       schedule,
+      ...(options.suspend !== undefined ? { suspend: options.suspend } : {}),
       jobTemplate: {
         spec: {
           template: {
@@ -224,10 +236,15 @@ function reaperCronJob(schedule: string): JsonObject {
         },
       },
     },
+    ...(options.active !== undefined ? { status: { active: options.active } } : {}),
   }
 }
 
-function deploymentList(replicas: number, availableReplicas: number): JsonObject {
+function deploymentList(
+  replicas: number,
+  availableReplicas: number,
+  containers: readonly JsonObject[],
+): JsonObject {
   return {
     apiVersion: "apps/v1",
     kind: "DeploymentList",
@@ -240,7 +257,7 @@ function deploymentList(replicas: number, availableReplicas: number): JsonObject
           namespace: names.managementNamespace,
           labels: { "app.kubernetes.io/instance": names.appRelease },
         },
-        spec: { replicas },
+        spec: { replicas, template: { spec: { containers } } },
         status: { availableReplicas },
       },
     ],
@@ -270,28 +287,77 @@ interface ReaperRunnerOptions {
   readonly retainStale?: boolean
   readonly markNew?: boolean
   readonly markReferenced?: boolean
+  readonly deletingNew?: boolean
+  readonly deletingReferenced?: boolean
+  readonly newMarker?: string
+  readonly initialSuspend?: boolean
+  readonly activeReferences?: readonly JsonObject[]
+  readonly activeWaitError?: Error
   readonly cleanupError?: Error
+  readonly restoreError?: Error
 }
 
 function createReaperRunner(options: ReaperRunnerOptions = {}): {
   readonly execute: ReturnType<typeof vi.fn<ProbeCommandRunner>>
   readonly submitted: JsonObject[]
 } {
+  vi.spyOn(Date, "now").mockReturnValue(REAPER_TEST_EPOCH_SECONDS * 1_000)
   const submitted: JsonObject[] = []
   let cleanupCalls = 0
+  let patchCalls = 0
+  let suspendPresent = options.initialSuspend !== undefined
+  let suspend = options.initialSuspend
+  const activeReferences = options.activeReferences ?? []
+  const currentCronJob = (): JsonObject =>
+    reaperCronJob("17 * * * *", {
+      ...(suspendPresent ? { suspend: suspend as boolean } : {}),
+      ...(activeReferences.length > 0 ? { active: activeReferences } : {}),
+    })
   const execute = fakeRunner((command, commandOptions) => {
     if (command.args.includes("delete") && command.args.includes("job,pod,persistentvolumeclaim")) {
       cleanupCalls += 1
       if (cleanupCalls > 1 && options.cleanupError !== undefined) return options.cleanupError
       return {}
     }
+    if (command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper")) {
+      patchCalls += 1
+      if (patchCalls > 1 && options.restoreError !== undefined) return options.restoreError
+      const patchIndex = command.args.indexOf("--patch")
+      const patch = JSON.parse(command.args[patchIndex + 1] as string) as JsonObject
+      const requested = ((patch.spec as JsonObject).suspend ?? null) as boolean | null
+      if (requested === null) {
+        suspendPresent = false
+        suspend = undefined
+      } else {
+        suspendPresent = true
+        suspend = requested
+      }
+      return currentCronJob()
+    }
     if (commandOptions.stdin !== undefined) {
       const manifest = stdinObject(commandOptions)
       submitted.push(manifest)
       return manifest
     }
-    if (command.args.includes("cronjob/dawn-reaper")) return reaperCronJob("17 * * * *")
+    if (command.args.includes("cronjob/dawn-reaper")) return currentCronJob()
     if (command.args.some((argument) => argument.startsWith("job/"))) {
+      const requestedName = (
+        command.args.find((argument) => argument.startsWith("job/")) as string
+      ).slice("job/".length)
+      if (
+        activeReferences.some((reference) => reference.name === requestedName) &&
+        options.activeWaitError !== undefined
+      ) {
+        return options.activeWaitError
+      }
+      if (activeReferences.some((reference) => reference.name === requestedName)) {
+        return {
+          apiVersion: "batch/v1",
+          kind: "Job",
+          metadata: { name: requestedName, namespace: names.sandboxNamespace },
+          status: { conditions: [{ type: "Complete", status: "True" }] },
+        }
+      }
       const job = submitted.find((manifest) => manifest.kind === "Job")
       if (job === undefined) throw new Error("Expected submitted reaper Job")
       return {
@@ -318,11 +384,21 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
       }
       const observedFresh = structuredClone(fresh)
       if (options.markNew !== false) {
-        metadata(observedFresh).annotations = { "dawn.sh/unbound-since": "2000000000" }
+        metadata(observedFresh).annotations = {
+          "dawn.sh/unbound-since": options.newMarker ?? String(REAPER_TEST_EPOCH_SECONDS),
+        }
+      }
+      if (options.deletingNew === true) {
+        metadata(observedFresh).deletionTimestamp = "2033-05-18T03:33:20Z"
       }
       const observedReferenced = structuredClone(referenced)
       metadata(observedReferenced).annotations =
-        options.markReferenced === true ? { "dawn.sh/unbound-since": "2000000000" } : {}
+        options.markReferenced === true
+          ? { "dawn.sh/unbound-since": String(REAPER_TEST_EPOCH_SECONDS) }
+          : {}
+      if (options.deletingReferenced === true) {
+        metadata(observedReferenced).deletionTimestamp = "2033-05-18T03:33:20Z"
+      }
       return {
         apiVersion: "v1",
         kind: "PersistentVolumeClaimList",
@@ -742,7 +818,11 @@ describe("same-candidate chart operations", () => {
       if (command.file === "helm" && command.args.includes("status")) {
         return helmStatus(names.appRelease, revision)
       }
-      if (command.args.includes("deployments")) return deploymentList(desired, available)
+      if (command.args.includes("deployments")) {
+        return deploymentList(desired, available, [
+          { name: "app", image: policy.images.placeholderApp },
+        ])
+      }
       return {}
     })
 
@@ -833,13 +913,77 @@ describe("same-candidate chart operations", () => {
     }
   })
 
+  test.each(["install", "upgrade"] as const)(
+    "rejects a successful application %s when the live Deployment image is wrong",
+    async (operation) => {
+      const policy = await loadCompatibilityPolicy()
+      const revision = operation === "install" ? 1 : 2
+      const replicas = operation === "install" ? 1 : 2
+      const wrongImage = `example.invalid/wrong@sha256:${"f".repeat(64)}`
+      const execute = fakeRunner((command) =>
+        command.file === "helm" && command.args.includes("status")
+          ? helmStatus(names.appRelease, revision)
+          : command.args.includes("deployments")
+            ? deploymentList(replicas, replicas, [{ name: "app", image: wrongImage }])
+            : {},
+      )
+
+      const result =
+        operation === "install"
+          ? installApplicationChart({ context, runId, policy, execute })
+          : upgradeApplicationChart({ context, runId, policy, execute })
+      await expect(result).rejects.toThrow(/Deployment container image/i)
+
+      const mutation = execute.mock.calls.find(
+        ([command]) => command.file === "helm" && command.args.includes(operation),
+      )?.[0]
+      const [repository, digest] = policy.images.placeholderApp.split("@")
+      expect(mutation?.args).toEqual(
+        expect.arrayContaining([
+          "--set-string",
+          `image.repository=${repository}`,
+          "--set-string",
+          `image.digest=${digest}`,
+        ]),
+      )
+    },
+  )
+
+  test.each([
+    ["missing", []],
+    [
+      "multiple",
+      [
+        { name: "app", image: "placeholder" },
+        { name: "sidecar", image: "placeholder" },
+      ],
+    ],
+  ])("rejects a live Deployment with %s containers", async (_case, containers) => {
+    const policy = await loadCompatibilityPolicy()
+    const liveContainers = containers.map((container) => ({
+      ...container,
+      image: policy.images.placeholderApp,
+    }))
+    const execute = fakeRunner((command) =>
+      command.file === "helm" && command.args.includes("status")
+        ? helmStatus(names.appRelease, 1)
+        : command.args.includes("deployments")
+          ? deploymentList(1, 1, liveContainers)
+          : {},
+    )
+
+    await expect(installApplicationChart({ context, runId, policy, execute })).rejects.toThrow(
+      /exactly one.*container/i,
+    )
+  })
+
   test("rejects a successful application install with the wrong live replica count", async () => {
     const policy = await loadCompatibilityPolicy()
     const execute = fakeRunner((command) =>
       command.file === "helm" && command.args.includes("status")
         ? helmStatus(names.appRelease, 1)
         : command.args.includes("deployments")
-          ? deploymentList(2, 2)
+          ? deploymentList(2, 2, [{ name: "app", image: policy.images.placeholderApp }])
           : {},
     )
 
@@ -860,7 +1004,9 @@ describe("same-candidate chart operations", () => {
         command.file === "helm" && command.args.includes("status")
           ? helmStatus(names.appRelease, observedRevision)
           : command.args.includes("deployments")
-            ? deploymentList(desiredReplicas, availableReplicas)
+            ? deploymentList(desiredReplicas, availableReplicas, [
+                { name: "app", image: policy.images.placeholderApp },
+              ])
             : {},
       )
 
@@ -872,6 +1018,208 @@ describe("same-candidate chart operations", () => {
 })
 
 describe("reaper and application Service probes", () => {
+  test.each([
+    ["absent", undefined, null],
+    ["false", false, false],
+    ["true", true, true],
+  ])(
+    "restores an originally %s CronJob suspend field exactly after success",
+    async (_case, initialSuspend, restoredSuspend) => {
+      const policy = await loadCompatibilityPolicy()
+      const { execute } = createReaperRunner({
+        ...(initialSuspend !== undefined ? { initialSuspend } : {}),
+      })
+
+      await runReaperLifecycleProbe({ context, runId, policy, execute })
+
+      const patches = execute.mock.calls.filter(
+        ([command]) =>
+          command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+      )
+      expect(patches).toHaveLength(2)
+      expect(patches[0]?.[0].args).toEqual([
+        "--context",
+        context,
+        "patch",
+        "cronjob/dawn-reaper",
+        "--namespace",
+        names.sandboxNamespace,
+        "--type=merge",
+        "--patch",
+        JSON.stringify({ spec: { suspend: true } }),
+        "--output",
+        "json",
+      ])
+      expect(patches[1]?.[0].args).toEqual([
+        "--context",
+        context,
+        "patch",
+        "cronjob/dawn-reaper",
+        "--namespace",
+        names.sandboxNamespace,
+        "--type=merge",
+        "--patch",
+        JSON.stringify({ spec: { suspend: restoredSuspend } }),
+        "--output",
+        "json",
+      ])
+    },
+  )
+
+  test("suspends the CronJob and drains live active Jobs before creating fixtures", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const activeReferences = [
+      {
+        apiVersion: "batch/v1",
+        kind: "Job",
+        name: "dawn-reaper-existing-a",
+        namespace: names.sandboxNamespace,
+      },
+      {
+        apiVersion: "batch/v1",
+        kind: "Job",
+        name: "dawn-reaper-existing-b",
+        namespace: names.sandboxNamespace,
+      },
+    ]
+    const { execute } = createReaperRunner({ activeReferences })
+
+    await runReaperLifecycleProbe({ context, runId, policy, execute })
+
+    const calls = execute.mock.calls
+    const cronReads = calls.flatMap(([command], index) =>
+      command.args.includes("get") && command.args.includes("cronjob/dawn-reaper") ? [index] : [],
+    )
+    const patches = calls.flatMap(([command], index) =>
+      command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper") ? [index] : [],
+    )
+    const firstFixture = calls.findIndex(([, options]) => {
+      if (options?.stdin === undefined) return false
+      const kind = stdinObject(options).kind
+      return kind === "PersistentVolumeClaim" || kind === "Pod"
+    })
+    expect(cronReads).toHaveLength(2)
+    expect(patches).toHaveLength(2)
+    expect(cronReads[0]).toBeLessThan(patches[0] as number)
+    expect(patches[0]).toBeLessThan(cronReads[1] as number)
+
+    for (const reference of activeReferences) {
+      const waitIndex = calls.findIndex(([command]) =>
+        command.args.includes(`job/${String(reference.name)}`),
+      )
+      expect(waitIndex).toBeGreaterThan(cronReads[1] as number)
+      expect(waitIndex).toBeLessThan(firstFixture)
+      expect(calls[waitIndex]?.[0].args).toEqual([
+        "--context",
+        context,
+        "wait",
+        "--namespace",
+        names.sandboxNamespace,
+        "--for=condition=Complete",
+        `job/${String(reference.name)}`,
+        "--timeout=120s",
+        "--output",
+        "json",
+      ])
+      expect(calls[waitIndex]?.[1]?.timeoutMs).toBe(150_000)
+    }
+    expect(firstFixture).toBeGreaterThan(cronReads[1] as number)
+    expect(patches[1]).toBeGreaterThan(firstFixture)
+  })
+
+  test.each([
+    [
+      "apiVersion",
+      {
+        apiVersion: "v1",
+        kind: "Job",
+        name: "dawn-reaper-existing",
+        namespace: names.sandboxNamespace,
+      },
+    ],
+    [
+      "kind",
+      {
+        apiVersion: "batch/v1",
+        kind: "Pod",
+        name: "dawn-reaper-existing",
+        namespace: names.sandboxNamespace,
+      },
+    ],
+    [
+      "namespace",
+      {
+        apiVersion: "batch/v1",
+        kind: "Job",
+        name: "dawn-reaper-existing",
+        namespace: names.managementNamespace,
+      },
+    ],
+    [
+      "name",
+      {
+        apiVersion: "batch/v1",
+        kind: "Job",
+        name: "",
+        namespace: names.sandboxNamespace,
+      },
+    ],
+  ])(
+    "rejects an invalid active CronJob reference %s before fixture creation and restores suspension",
+    async (_case, activeReference) => {
+      const policy = await loadCompatibilityPolicy()
+      const { execute, submitted } = createReaperRunner({
+        activeReferences: [activeReference],
+      })
+
+      await expect(runReaperLifecycleProbe({ context, runId, policy, execute })).rejects.toThrow(
+        /active.*batch\/v1 Job/i,
+      )
+
+      expect(submitted).toHaveLength(0)
+      expect(
+        execute.mock.calls.filter(
+          ([command]) =>
+            command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+        ),
+      ).toHaveLength(2)
+    },
+  )
+
+  test("attempts fixture cleanup and suspension restoration when active Job draining fails", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const activeWaitError = new Error("active reaper Job did not finish")
+    const { execute, submitted } = createReaperRunner({
+      activeReferences: [
+        {
+          apiVersion: "batch/v1",
+          kind: "Job",
+          name: "dawn-reaper-existing",
+          namespace: names.sandboxNamespace,
+        },
+      ],
+      activeWaitError,
+    })
+
+    await expect(runReaperLifecycleProbe({ context, runId, policy, execute })).rejects.toBe(
+      activeWaitError,
+    )
+
+    expect(submitted).toHaveLength(0)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) =>
+          command.args.includes("delete") && command.args.includes("job,pod,persistentvolumeclaim"),
+      ),
+    ).toHaveLength(1)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) =>
+          command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+      ),
+    ).toHaveLength(2)
+  })
+
   test("proves stale deletion, fresh marking, and referenced retention with restricted fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
     const { execute, submitted } = createReaperRunner()
@@ -962,6 +1310,18 @@ describe("reaper and application Service probes", () => {
     ["stale PVC is retained", { retainStale: true }, /stale PVC.*deleted/i],
     ["new PVC is unmarked", { markNew: false }, /new PVC.*marker/i],
     ["referenced PVC remains marked", { markReferenced: true }, /referenced PVC.*unmarked/i],
+    ["new PVC is terminating", { deletingNew: true }, /new PVC.*deletionTimestamp/i],
+    [
+      "referenced PVC is terminating",
+      { deletingReferenced: true },
+      /referenced PVC.*deletionTimestamp/i,
+    ],
+    ["new PVC marker is ancient", { newMarker: "1" }, /new PVC marker.*execution window/i],
+    [
+      "new PVC marker is far in the future",
+      { newMarker: "4000000000" },
+      /new PVC marker.*execution window/i,
+    ],
   ])("rejects completed reaper Jobs when the %s", async (_case, options, expectedError) => {
     const policy = await loadCompatibilityPolicy()
     const { execute } = createReaperRunner(options)
@@ -971,10 +1331,11 @@ describe("reaper and application Service probes", () => {
     )
   })
 
-  test("preserves both the reaper assertion and exact-label cleanup failure", async () => {
+  test("preserves the primary, fixture cleanup, and suspension restoration failures", async () => {
     const policy = await loadCompatibilityPolicy()
     const cleanupError = new Error("reaper cleanup failed")
-    const { execute } = createReaperRunner({ markNew: false, cleanupError })
+    const restoreError = new Error("reaper suspension restore failed")
+    const { execute } = createReaperRunner({ markNew: false, cleanupError, restoreError })
 
     const error = await runReaperLifecycleProbe({ context, runId, policy, execute }).catch(
       (cause: unknown) => cause,
@@ -982,10 +1343,11 @@ describe("reaper and application Service probes", () => {
 
     expect(error).toBeInstanceOf(AggregateError)
     const errors = (error as AggregateError).errors
-    expect(errors).toHaveLength(2)
+    expect(errors).toHaveLength(3)
     expect(errors[0]).toBeInstanceOf(Error)
     expect((errors[0] as Error).message).toMatch(/new PVC.*marker/i)
     expect(errors[1]).toBe(cleanupError)
+    expect(errors[2]).toBe(restoreError)
   })
 
   test("reruns chart Service reachability with digest-pinned restricted Pods that exit zero", async () => {

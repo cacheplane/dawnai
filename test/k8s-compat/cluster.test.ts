@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { readFile, stat } from "node:fs/promises"
 
@@ -191,6 +192,31 @@ describe("storage, names, and namespace safety", () => {
     }
     expect(deriveClusterNames("same input")).toEqual(deriveClusterNames("same input"))
     expect(deriveClusterNames("same-input")).not.toEqual(deriveClusterNames("same input"))
+  })
+
+  test.each([
+    ["normal UUID", "123e4567-e89b-12d3-a456-426614174000"],
+    ["maximum valid run ID", "a".repeat(63)],
+  ])("bounds Helm release names independently for a %s", (_case, candidateRunId) => {
+    const names = deriveClusterNames(candidateRunId)
+    const hash = createHash("sha256").update(candidateRunId).digest("hex").slice(0, 8)
+
+    expect(deriveClusterNames(candidateRunId)).toEqual(names)
+    expect(names.sandboxRelease).not.toBe(names.appRelease)
+    expect(names.sandboxRelease).toMatch(new RegExp(`-infra-${hash}$`))
+    expect(names.appRelease).toMatch(new RegExp(`-app-${hash}$`))
+    for (const release of [names.sandboxRelease, names.appRelease]) {
+      expect(release).toMatch(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/)
+      expect(release.length).toBeLessThanOrEqual(53)
+    }
+    for (const namespace of [names.managementNamespace, names.sandboxNamespace]) {
+      expect(namespace).toMatch(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/)
+      expect(namespace.length).toBeLessThanOrEqual(63)
+    }
+    if (candidateRunId.length === 63) {
+      expect(names.managementNamespace.length).toBeGreaterThan(53)
+      expect(names.sandboxNamespace.length).toBeGreaterThan(53)
+    }
   })
 
   test("retains collision resistance when long normalized prefixes are identical", () => {

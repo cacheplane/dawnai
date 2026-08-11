@@ -134,6 +134,8 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const
 const RELEASE_ROLES = ["infrastructure", "application"] as const
 const TARGET_MINOR_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const SIGNAL_CLEANUP_TIMEOUT_MS = 30_000
+const KUBERNETES_DNS_NAME_MAX_LENGTH = 63
+const HELM_RELEASE_NAME_MAX_LENGTH = 53
 
 const DEFAULT_TOKEN_KUBECONFIG_DEPENDENCIES: SecureTokenKubeconfigDependencies = {
   mkdtemp,
@@ -206,8 +208,8 @@ function dnsComponent(value: string): string {
     .replaceAll(/^-+|-+$/g, "")
 }
 
-function boundedName(base: string, suffix: string): string {
-  const maximumBase = 63 - suffix.length - 1
+function boundedName(base: string, suffix: string, maximumLength: number): string {
+  const maximumBase = maximumLength - suffix.length - 1
   const bounded = base.slice(0, maximumBase).replaceAll(/-+$/g, "")
   return `${bounded}-${suffix}`
 }
@@ -218,13 +220,16 @@ export function deriveClusterNames(runId: string): ClusterNames {
   if (slug.length === 0) throw new Error("Compatibility run ID must contain a letter or number")
   const hash = hashSuffix(rawRunId)
   const base = `dawn-${slug}`
-  const name = (role: string): string => boundedName(base, `${role}-${hash}`)
+  const kubernetesName = (role: string): string =>
+    boundedName(base, `${role}-${hash}`, KUBERNETES_DNS_NAME_MAX_LENGTH)
+  const helmReleaseName = (role: string): string =>
+    boundedName(base, `${role}-${hash}`, HELM_RELEASE_NAME_MAX_LENGTH)
   return Object.freeze({
-    runName: boundedName(base, hash),
-    managementNamespace: name("management"),
-    sandboxNamespace: name("sandbox"),
-    sandboxRelease: name("infra"),
-    appRelease: name("app"),
+    runName: boundedName(base, hash, KUBERNETES_DNS_NAME_MAX_LENGTH),
+    managementNamespace: kubernetesName("management"),
+    sandboxNamespace: kubernetesName("sandbox"),
+    sandboxRelease: helmReleaseName("infra"),
+    appRelease: helmReleaseName("app"),
   })
 }
 

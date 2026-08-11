@@ -81,6 +81,7 @@ const SERVICE_COMPONENT = "app-service-ready"
 const INITIAL_REAPER_SCHEDULE = "17 * * * *"
 const UPGRADED_REAPER_SCHEDULE = "23 * * * *"
 const REAPER_TTL_SECONDS = 168 * 60 * 60
+const REAPER_CLOCK_SKEW_TOLERANCE_SECONDS = 60
 const HELM_TIMEOUT = "5m"
 const HELM_OUTER_TIMEOUT_MS = 6 * 60 * 1_000
 const KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS = 150_000
@@ -537,6 +538,44 @@ async function withCleanup<T>(
   }
   await cleanup()
   return result
+}
+
+async function withCleanupActions<T>(
+  operation: () => Promise<T>,
+  cleanupActions: readonly (() => Promise<void>)[],
+): Promise<T> {
+  let outcome:
+    | { readonly status: "fulfilled"; readonly value: T }
+    | { readonly status: "rejected"; readonly reason: unknown }
+  try {
+    outcome = { status: "fulfilled", value: await operation() }
+  } catch (reason) {
+    outcome = { status: "rejected", reason }
+  }
+
+  const cleanupErrors: unknown[] = []
+  for (const cleanup of cleanupActions) {
+    try {
+      await cleanup()
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+  }
+
+  if (outcome.status === "rejected") {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [outcome.reason, ...cleanupErrors],
+        "Kubernetes probe and lifecycle cleanup actions failed",
+      )
+    }
+    throw outcome.reason
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0]
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(cleanupErrors, "Kubernetes lifecycle cleanup actions failed")
+  }
+  return outcome.value
 }
 
 export async function runSandboxSecretsEmptyProbe(input: AdministrativeProbeInput): Promise<void> {
@@ -1020,6 +1059,73 @@ async function readReaperCronJob(state: ResolvedProbeState): Promise<JsonObject>
   return cronJob
 }
 
+function reaperSuspendState(cronJob: JsonObject): boolean | null {
+  const spec = expectObject(cronJob.spec, "Reaper CronJob.spec")
+  if (!Object.hasOwn(spec, "suspend")) return null
+  if (typeof spec.suspend !== "boolean") {
+    throw new Error("Reaper CronJob.spec.suspend must be a boolean when present")
+  }
+  return spec.suspend
+}
+
+async function patchReaperSuspend(
+  state: ResolvedProbeState,
+  suspend: boolean | null,
+): Promise<void> {
+  const result = await state.execute(
+    kubectl.command(state.context, [
+      "patch",
+      `cronjob/${REAPER_CRONJOB}`,
+      "--namespace",
+      state.namespace,
+      "--type=merge",
+      "--patch",
+      JSON.stringify({ spec: { suspend } }),
+      "--output",
+      "json",
+    ]),
+  )
+  const cronJob = expectObject(commandJson(result, "Patched Reaper CronJob"), "Reaper CronJob")
+  assertObjectIdentity(cronJob, {
+    apiVersion: "batch/v1",
+    kind: "CronJob",
+    name: REAPER_CRONJOB,
+    namespace: state.namespace,
+  })
+  if (reaperSuspendState(cronJob) !== suspend) {
+    throw new Error("Reaper CronJob suspend patch did not produce the requested live state")
+  }
+}
+
+function activeReaperJobNames(cronJob: JsonObject, state: ResolvedProbeState): readonly string[] {
+  if (cronJob.status === undefined) return []
+  const status = expectObject(cronJob.status, "Reaper CronJob.status")
+  if (status.active === undefined) return []
+  if (!Array.isArray(status.active)) {
+    throw new Error("Reaper CronJob.status.active must be an array")
+  }
+  const names = new Set<string>()
+  for (const [index, value] of status.active.entries()) {
+    const reference = expectObject(value, `Reaper CronJob.status.active[${index}]`)
+    const name = reference.name
+    if (
+      reference.apiVersion !== "batch/v1" ||
+      reference.kind !== "Job" ||
+      reference.namespace !== state.namespace ||
+      typeof name !== "string" ||
+      name.length > 63 ||
+      !DNS_NAME_PATTERN.test(name) ||
+      names.has(name)
+    ) {
+      throw new Error(
+        `Reaper CronJob active references must be unique batch/v1 Job references in ${state.namespace}`,
+      )
+    }
+    names.add(name)
+  }
+  return [...names]
+}
+
 async function assertReaperSchedule(
   state: ResolvedProbeState,
   expectedSchedule: string,
@@ -1159,15 +1265,36 @@ async function readApplicationDeployment(state: ResolvedProbeState): Promise<Jso
   return deployment
 }
 
-async function assertApplicationReplicas(
+async function assertApplicationDeployment(
   state: ResolvedProbeState,
   desiredReplicas: number,
+  expectedImage: string,
   availableReplicas?: number,
 ): Promise<void> {
   const deployment = await readApplicationDeployment(state)
-  const desired = expectObject(deployment.spec, "Application Deployment.spec").replicas
+  const spec = expectObject(deployment.spec, "Application Deployment.spec")
+  const desired = spec.replicas
   if (desired !== desiredReplicas) {
     throw new Error(`Application Deployment desired replicas must be exactly ${desiredReplicas}`)
+  }
+  const template = expectObject(spec.template, "Application Deployment.spec.template")
+  const podSpec = expectObject(template.spec, "Application Deployment.spec.template.spec")
+  const containers = podSpec.containers
+  if (!Array.isArray(containers) || containers.length !== 1) {
+    throw new Error("Application Deployment pod template must contain exactly one container")
+  }
+  const container = expectObject(
+    containers[0],
+    "Application Deployment.spec.template.spec.containers[0]",
+  )
+  const image = expectString(
+    container.image,
+    "Application Deployment.spec.template.spec.containers[0].image",
+  )
+  if (image !== expectedImage) {
+    throw new Error(
+      `Application Deployment container image must be exactly ${JSON.stringify(expectedImage)}`,
+    )
   }
   if (availableReplicas !== undefined) {
     const available = expectObject(
@@ -1199,7 +1326,7 @@ export async function installApplicationChart(input: PolicyProbeInput): Promise<
     { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.appRelease, 1)
-  await assertApplicationReplicas(state, 1)
+  await assertApplicationDeployment(state, 1, input.policy.images.placeholderApp)
 }
 
 export async function upgradeApplicationChart(input: PolicyProbeInput): Promise<void> {
@@ -1219,7 +1346,7 @@ export async function upgradeApplicationChart(input: PolicyProbeInput): Promise<
     { timeoutMs: HELM_OUTER_TIMEOUT_MS },
   )
   await assertHelmRelease(state, state.appRelease, 2)
-  await assertApplicationReplicas(state, 2, 2)
+  await assertApplicationDeployment(state, 2, input.policy.images.placeholderApp, 2)
 }
 
 function reaperFixtureLabels(runId: string): Readonly<Record<string, string>> {
@@ -1315,6 +1442,31 @@ function assertCompletedJob(value: unknown, state: ResolvedProbeState, name: str
   }
 }
 
+async function waitForCompletedReaperJob(state: ResolvedProbeState, name: string): Promise<void> {
+  const result = await state.execute(
+    kubectl.command(state.context, [
+      "wait",
+      "--namespace",
+      state.namespace,
+      "--for=condition=Complete",
+      `job/${name}`,
+      "--timeout=120s",
+      "--output",
+      "json",
+    ]),
+    { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
+  )
+  assertCompletedJob(commandJson(result, `Reaper Job ${name}`), state, name)
+}
+
+function currentEpochSeconds(name: string): number {
+  const epoch = Math.floor(Date.now() / 1_000)
+  if (!Number.isSafeInteger(epoch) || epoch <= 0) {
+    throw new Error(`${name} must be a positive safe integer epoch`)
+  }
+  return epoch
+}
+
 function assertReaperPvcOutcomes(
   value: unknown,
   input: {
@@ -1322,6 +1474,8 @@ function assertReaperPvcOutcomes(
     readonly staleName: string
     readonly newName: string
     readonly referencedName: string
+    readonly manualRunStartedAt: number
+    readonly manualRunCompletedAt: number
   },
 ): void {
   const claims = exactListItems(value, {
@@ -1346,6 +1500,9 @@ function assertReaperPvcOutcomes(
     throw new Error("Reaper must retain exactly the new and referenced PVCs")
   }
   const newMetadata = objectMetadata(byName.get(input.newName) as JsonObject, "Reaper new PVC")
+  if (Object.hasOwn(newMetadata, "deletionTimestamp")) {
+    throw new Error("Reaper new PVC must be retained without metadata.deletionTimestamp")
+  }
   const newAnnotations =
     newMetadata.annotations === undefined
       ? {}
@@ -1354,10 +1511,23 @@ function assertReaperPvcOutcomes(
   if (typeof marker !== "string" || !/^[1-9]\d*$/.test(marker)) {
     throw new Error("Reaper new PVC marker must be a positive integer")
   }
+  const markerEpoch = Number(marker)
+  const minimumMarker = input.manualRunStartedAt - REAPER_CLOCK_SKEW_TOLERANCE_SECONDS
+  const maximumMarker = input.manualRunCompletedAt + REAPER_CLOCK_SKEW_TOLERANCE_SECONDS
+  if (
+    !Number.isSafeInteger(markerEpoch) ||
+    markerEpoch < minimumMarker ||
+    markerEpoch > maximumMarker
+  ) {
+    throw new Error("Reaper new PVC marker must fall within the manual Job execution window")
+  }
   const referencedMetadata = objectMetadata(
     byName.get(input.referencedName) as JsonObject,
     "Reaper referenced PVC",
   )
+  if (Object.hasOwn(referencedMetadata, "deletionTimestamp")) {
+    throw new Error("Reaper referenced PVC must be retained without metadata.deletionTimestamp")
+  }
   const referencedAnnotations =
     referencedMetadata.annotations === undefined
       ? {}
@@ -1374,7 +1544,7 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
   const referencedName = resourceName(state.runId, "reaper-referenced-pvc")
   const referencePodName = resourceName(state.runId, "reaper-reference-pod")
   const jobName = resourceName(state.runId, "reaper-job")
-  const staleMarker = Math.floor(Date.now() / 1_000) - REAPER_TTL_SECONDS - 1
+  const staleMarker = currentEpochSeconds("Reaper fixture setup time") - REAPER_TTL_SECONDS - 1
   if (!Number.isSafeInteger(staleMarker) || staleMarker <= 0) {
     throw new Error("Reaper stale PVC marker must be a positive safe integer")
   }
@@ -1387,9 +1557,21 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
       resourceTypes: "job,pod,persistentvolumeclaim",
       component: REAPER_COMPONENT,
     })
+  const originalCronJob = await readReaperCronJob(state)
+  const originalSuspend = reaperSuspendState(originalCronJob)
+  const restoreSuspend = (): Promise<void> => patchReaperSuspend(state, originalSuspend)
 
-  await cleanup()
-  await withCleanup(async () => {
+  await withCleanupActions(async () => {
+    await patchReaperSuspend(state, true)
+    const suspendedCronJob = await readReaperCronJob(state)
+    if (reaperSuspendState(suspendedCronJob) !== true) {
+      throw new Error("Reaper CronJob must be live with spec.suspend=true before fixture creation")
+    }
+    for (const activeJobName of activeReaperJobNames(suspendedCronJob, state)) {
+      await waitForCompletedReaperJob(state, activeJobName)
+    }
+
+    await cleanup()
     const fixtures = [
       reaperPvc({
         name: staleName,
@@ -1432,25 +1614,17 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
       referencePod,
     )
 
-    const cronJob = await readReaperCronJob(state)
+    const manualRunStartedAt = currentEpochSeconds("Reaper manual Job start time")
     await submitObject(
       state.execute,
       createObjectCommand(state.context, state.namespace),
-      reaperJob(cronJob, state, jobName),
+      reaperJob(suspendedCronJob, state, jobName),
     )
-    await state.execute(
-      kubectl.command(state.context, [
-        "wait",
-        "--namespace",
-        state.namespace,
-        "--for=condition=Complete",
-        `job/${jobName}`,
-        "--timeout=120s",
-        "--output",
-        "json",
-      ]),
-      { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
-    )
+    await waitForCompletedReaperJob(state, jobName)
+    const manualRunCompletedAt = currentEpochSeconds("Reaper manual Job completion time")
+    if (manualRunCompletedAt < manualRunStartedAt) {
+      throw new Error("Reaper manual Job execution window must not move backwards")
+    }
     const observedJob = await state.execute(
       kubectl.command(state.context, [
         "get",
@@ -1491,8 +1665,10 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
       staleName,
       newName,
       referencedName,
+      manualRunStartedAt,
+      manualRunCompletedAt,
     })
-  }, cleanup)
+  }, [cleanup, restoreSuspend])
 }
 
 async function readApplicationService(state: ResolvedProbeState): Promise<{
