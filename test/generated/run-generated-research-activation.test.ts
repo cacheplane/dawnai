@@ -26,6 +26,8 @@ const ACTIVATION_TIMEOUT_MS = 600_000
 const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
 const SAFE_PROMPT = "What are common agent architectures? Write a short cited report."
 const SUBQUESTION = "Identify common agent architectures and cite the corpus."
+const CHILD_REPLY =
+  "ReAct and plan-and-execute are common agent architectures. [corpus/agent-architectures.md]"
 const GATED_PROMPT =
   "The corpus has nothing on quantum computing — run the external fetch script for it with runBash."
 const FETCH_COMMAND = "node scripts/fetch-source.mjs quantum computing"
@@ -79,9 +81,7 @@ function createSafeResearchFixtures() {
     .user(SUBQUESTION)
     .callsTool("searchCorpus", { query: "agent architectures" })
     .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
-    .replies(
-      "ReAct and plan-and-execute are common agent architectures. [corpus/agent-architectures.md]",
-    )
+    .replies(CHILD_REPLY)
     .build()
   return [...root, ...child]
 }
@@ -172,6 +172,10 @@ function reconstructAssistantText(events: readonly AgUiEvent[]): string {
       return event.delta
     })
     .join("")
+}
+
+function expectNoActivitySnapshots(events: readonly AgUiEvent[]): void {
+  expect(events.filter((event) => event.type === "ACTIVITY_SNAPSHOT")).toEqual([])
 }
 
 function parseAgUiSse(rawSse: string): AgUiEvent[] {
@@ -455,7 +459,161 @@ function assertSafeResearchJourney(
     subagent: "researcher",
     input: SUBQUESTION,
   })
-  expect(reconstructAssistantText(events)).toContain("[corpus/agent-architectures.md]")
+  const assistantText = reconstructAssistantText(events)
+  expect(assistantText).toContain("[corpus/agent-architectures.md]")
+  expect(assistantText).not.toContain(CHILD_REPLY)
+
+  const activities = events.filter((event) => event.type === "ACTIVITY_SNAPSHOT")
+  expect(activities).toEqual([
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: `dawn:plan:${ids.runId}`,
+      activityType: "dawn.plan",
+      replace: true,
+      content: { todos },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [],
+        totalToolCount: 0,
+      },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [{ name: "searchCorpus", status: "running" }],
+        totalToolCount: 1,
+      },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [{ name: "searchCorpus", status: "completed" }],
+        totalToolCount: 1,
+      },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [
+          { name: "searchCorpus", status: "completed" },
+          { name: "readDoc", status: "running" },
+        ],
+        totalToolCount: 2,
+      },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "running",
+        tools: [
+          { name: "searchCorpus", status: "completed" },
+          { name: "readDoc", status: "completed" },
+        ],
+        totalToolCount: 2,
+      },
+    },
+    {
+      type: "ACTIVITY_SNAPSHOT",
+      messageId: "dawn:subagent:call_task_0_2",
+      activityType: "dawn.subagent",
+      replace: true,
+      content: {
+        name: "researcher",
+        depth: 1,
+        status: "completed",
+        tools: [
+          { name: "searchCorpus", status: "completed" },
+          { name: "readDoc", status: "completed" },
+        ],
+        totalToolCount: 2,
+      },
+    },
+  ])
+
+  const startByName = new Map(
+    events
+      .filter((event) => event.type === "TOOL_CALL_START")
+      .map((event) => [event.toolCallName, event.toolCallId]),
+  )
+  const writeTodosId = startByName.get("writeTodos")
+  const taskId = startByName.get("task")
+  expect(typeof writeTodosId).toBe("string")
+  expect(typeof taskId).toBe("string")
+  const writeTodosEndIndex = events.findIndex(
+    (event) => event.type === "TOOL_CALL_END" && event.toolCallId === writeTodosId,
+  )
+  const writeTodosResultIndex = events.findIndex(
+    (event) => event.type === "TOOL_CALL_RESULT" && event.toolCallId === writeTodosId,
+  )
+  const taskEndIndex = events.findIndex(
+    (event) => event.type === "TOOL_CALL_END" && event.toolCallId === taskId,
+  )
+  const taskResultIndex = events.findIndex(
+    (event) => event.type === "TOOL_CALL_RESULT" && event.toolCallId === taskId,
+  )
+  const activityIndices = activities.map((activity) => events.indexOf(activity))
+  const firstFinalTextIndex = events.findIndex((event) => event.type === "TEXT_MESSAGE_CONTENT")
+  expect(activityIndices[0]).toBeGreaterThan(writeTodosEndIndex)
+  expect(activityIndices[0]).toBeLessThan(writeTodosResultIndex)
+  expect(activityIndices[1]).toBeGreaterThan(taskEndIndex)
+  expect(activityIndices[6]).toBeLessThan(taskResultIndex)
+  expect(firstFinalTextIndex).toBeGreaterThanOrEqual(0)
+  expect(activityIndices.every((index) => index < firstFinalTextIndex)).toBe(true)
+
+  const serializedActivityContent = JSON.stringify(activities.map((activity) => activity.content))
+  for (const privateValue of [
+    SUBQUESTION,
+    CHILD_REPLY,
+    report,
+    "corpus/agent-architectures.md",
+    "call_task_0_2",
+    "call_searchCorpus_0_0",
+    "call_readDoc_0_1",
+    '"call_id"',
+    '"route_id"',
+    '"id"',
+    '"input"',
+    '"output"',
+    '"final_message"',
+  ]) {
+    expect(serializedActivityContent).not.toContain(privateValue)
+  }
+  const kinds = events.map((event) => event.type)
+  expect(kinds).not.toContain("ACTIVITY_DELTA")
+  expect(kinds).not.toContain("CUSTOM")
+  expect(kinds).not.toContain("RAW")
+  expect(kinds).not.toContain("STATE_SNAPSHOT")
 }
 
 function assertGatedResearchInterrupt(
@@ -539,6 +697,7 @@ function assertGatedResearchInterrupt(
     ),
   ).toEqual([])
   expect(events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT")).toEqual([])
+  expectNoActivitySnapshots(events)
 
   return { interruptId }
 }
@@ -612,6 +771,7 @@ function assertResumedGatedJourney(
   expect(resultIndex).toBeGreaterThanOrEqual(0)
   expect(firstTextIndex).toBeGreaterThan(resultIndex)
   expect(reconstructAssistantText(events)).toBe(GATED_REPLY)
+  expectNoActivitySnapshots(events)
 }
 
 function assertBuiltArtifactJourney(
@@ -621,6 +781,7 @@ function assertBuiltArtifactJourney(
   assertSuccessfulTerminal(events, ids)
   expect(events.filter((event) => event.type === "TOOL_CALL_START")).toEqual([])
   expect(reconstructAssistantText(events)).toBe(BUILT_REPLY)
+  expectNoActivitySnapshots(events)
 }
 
 function assertRecordedServerExit(

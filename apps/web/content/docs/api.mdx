@@ -992,6 +992,8 @@ Pure, transport-agnostic AG-UI translation utilities. The CLI uses the same adap
 
 ```ts
 import {
+  DAWN_PLAN_ACTIVITY_TYPE,
+  DAWN_SUBAGENT_ACTIVITY_TYPE,
   createCounterIdFactory,
   createDefaultIdFactory,
   fromRunAgentInput,
@@ -1000,8 +1002,10 @@ import {
   type DawnAgentStreamChunk,
   type DawnInterruptEnvelope,
   type DawnMessage,
+  type DawnPlanActivityContent,
   type DawnResumeRequest,
   type DawnRunInput,
+  type DawnSubagentActivityContent,
   type IdFactory,
   type RunContext,
   type ToAguiOptions,
@@ -1040,7 +1044,26 @@ export function toAguiEvents(
 
 Maps Dawn `token`, `tool_call`, `tool_result`, `interrupt`, and `done` chunks to canonical AG-UI lifecycle, text, and tool events. Upstream tool invocation ids are preserved. Interrupts produce a standard `RUN_FINISHED` interrupt outcome, successful runs produce a success outcome, and upstream failures produce one `RUN_ERROR`.
 
-Planning updates, subagent capability events, and other unknown chunk types have no v1 mapping and are ignored.
+A valid root `plan_update` produces a complete replacement
+`ACTIVITY_SNAPSHOT` with message id `dawn:plan:${runId}`, activity type
+`DAWN_PLAN_ACTIVITY_TYPE` (`dawn.plan`), and `DawnPlanActivityContent` containing
+only the complete todo list, whose status values are `pending`, `in_progress`,
+or `completed`. A recognized subagent lifecycle produces complete replacement
+snapshots with message id `dawn:subagent:${call_id}`, activity type
+`DAWN_SUBAGENT_ACTIVITY_TYPE` (`dawn.subagent`), and
+`DawnSubagentActivityContent`: name, depth, `running`/`completed`/`failed`
+status, optional todos, at most five child-tool name/status summaries, total
+tool count, and an optional failure string capped at 400 characters. Tool
+summary status is `running`, `completed`, or `incomplete`.
+
+Child updates are accepted only when `{ call_id, subagent, route_id, depth }`
+exactly matches the start identity. `subagent.message` is consumed without
+emission. Child reasoning or prose, prompts, tool inputs, tool outputs, final
+child answers, route ids, and raw runtime ids are never copied into activity
+content. Other unknown chunks retain the existing flush-and-ignore behavior;
+the adapter does not synthesize seeded plans or emit activity deltas. Activity
+messages are informational, while permissions remain on the standard interrupt
+and resume path.
 
 ### `fromRunAgentInput(input)`
 

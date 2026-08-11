@@ -41,6 +41,11 @@ browser
 CopilotKit's sidebar uses the literal agent id `default` when none is supplied,
 so the example registers the Dawn route under that key. See
 `examples/chat/web/README.md` for the complete setup and smoke checklist.
+That basic client registers no activity renderers. For plan and researcher
+cards, use the [activity-aware research recipe](/docs/recipes/research-web-ui)
+and its
+[`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
+implementation.
 
 ## Adapter API
 
@@ -77,13 +82,44 @@ correlation.
 | `token` | `TEXT_MESSAGE_START` once, then `TEXT_MESSAGE_CONTENT` per delta |
 | `tool_call` | close open text, then `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END` |
 | `tool_result` | close open text, then `TOOL_CALL_RESULT` |
+| root `plan_update` | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.plan` |
+| `subagent.start` and matching child plan/tool/result/end chunks | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.subagent` |
 | `interrupt` | terminal `RUN_FINISHED` with `outcome.type: "interrupt"` |
 | `done` | terminal `RUN_FINISHED` with `outcome.type: "success"` |
 | upstream error | terminal `RUN_ERROR` |
 
-Planning updates, subagent capability events, and unknown chunk types have no v1
-mapping and are ignored. The adapter does not invent application state or
-protocol-specific custom events.
+### Activity snapshots
+
+Activities use standard AG-UI framing and complete replacement snapshots. A
+root plan has stable message id `dawn:plan:${runId}`, activity type `dawn.plan`,
+and content containing only the complete todo list. Todo status is exactly
+`pending`, `in_progress`, or `completed`. Dawn emits no seeded-plan activity at
+run start; the first snapshot follows a valid root `plan_update`.
+
+Each subagent has stable message id `dawn:subagent:${call_id}`, activity type
+`dawn.subagent`, and complete content with its name, positive integer depth,
+`running`/`completed`/`failed` status, an optional current todo list, up to five
+recent child-tool name/status summaries, and the total observed tool count.
+Tool-summary status is exactly `running`, `completed`, or `incomplete`. A failed
+activity can also contain a human-readable error capped at 400 characters.
+Because every event has `replace: true`, later snapshots replace the same
+stable activity message.
+
+The adapter validates the full internal identity
+`{ call_id, subagent, route_id, depth }` on every recognized child event. Only
+an exact match with the original `subagent.start` can update its activity;
+`call_id` is used only to form the stable standard message id, while `route_id`
+and child tool ids remain internal. None is duplicated in public content.
+`subagent.message` is consumed without emission.
+
+This boundary excludes child reasoning and prose, prompts, tool inputs, tool
+outputs, final child answers, route ids, and raw runtime ids. It is an explicit
+allowlist rather than a generic capability mapping: unknown capability chunks
+retain the existing behavior of closing any open text message and then being
+ignored. Dawn emits neither activity deltas nor a raw advanced child stream.
+Activities are informational; standard interrupt UI remains the only place to
+resolve or cancel permission requests. No queued, waiting, cancelled, or
+parent-task correlation state is inferred.
 
 ### Inbound input
 

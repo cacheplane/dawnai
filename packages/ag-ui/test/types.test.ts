@@ -1,5 +1,41 @@
 import { describe, expect, test } from "vitest"
+import {
+  DAWN_PLAN_ACTIVITY_TYPE,
+  DAWN_SUBAGENT_ACTIVITY_TYPE,
+  type DawnPlanActivityContent,
+  type DawnSubagentActivityContent,
+} from "../src/index.js"
 import { asToolCallData, asToolResultData, type DawnAgentStreamChunk } from "../src/types.js"
+
+const planActivityContent = {
+  todos: [
+    { content: "Search the corpus", status: "completed" },
+    { content: "Read the best source", status: "in_progress" },
+  ],
+} satisfies DawnPlanActivityContent
+
+const subagentActivityContent = {
+  name: "researcher",
+  depth: 1,
+  status: "failed",
+  todos: planActivityContent.todos,
+  tools: [
+    { name: "searchCorpus", status: "completed" },
+    { name: "readDoc", status: "incomplete" },
+  ],
+  totalToolCount: 2,
+  error: "Source unavailable",
+} satisfies DawnSubagentActivityContent
+
+const planActivityType: "dawn.plan" = DAWN_PLAN_ACTIVITY_TYPE
+const subagentActivityType: "dawn.subagent" = DAWN_SUBAGENT_ACTIVITY_TYPE
+
+test("exposes the activity content and literal constant types", () => {
+  expect(planActivityContent.todos).toHaveLength(2)
+  expect(subagentActivityContent.tools).toHaveLength(2)
+  expect(planActivityType).toBe("dawn.plan")
+  expect(subagentActivityType).toBe("dawn.subagent")
+})
 
 describe("DawnAgentStreamChunk", () => {
   test("accepts canonical chunks and open extension chunks", () => {

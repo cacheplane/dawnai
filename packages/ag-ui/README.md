@@ -37,6 +37,8 @@ POST http://127.0.0.1:3001/agui/%2Fchat%23agent
 
 ```ts
 import {
+  DAWN_PLAN_ACTIVITY_TYPE,
+  DAWN_SUBAGENT_ACTIVITY_TYPE,
   createCounterIdFactory,
   createDefaultIdFactory,
   fromRunAgentInput,
@@ -45,8 +47,10 @@ import {
   type DawnAgentStreamChunk,
   type DawnInterruptEnvelope,
   type DawnMessage,
+  type DawnPlanActivityContent,
   type DawnResumeRequest,
   type DawnRunInput,
+  type DawnSubagentActivityContent,
   type IdFactory,
   type RunContext,
   type ToAguiOptions,
@@ -104,8 +108,10 @@ type DawnAgentStreamChunk =
 `dawnChunks` can be any `AsyncIterable<DawnAgentStreamChunk>`, including the
 LangChain adapter's `AgentStreamChunk` stream. An interrupt maps when its data is
 a `DawnInterruptEnvelope` with a non-empty `interruptId`. Tool call ids from
-Dawn chunks are preserved as AG-UI `toolCallId`. Capability-contributed and
-other unknown chunk types are ignored.
+Dawn chunks are preserved as AG-UI `toolCallId`. Valid root planning and
+correlated subagent chunks map to the activity snapshots described below.
+Other capability-contributed and unknown chunk types retain the existing
+flush-and-ignore behavior.
 
 ### `fromRunAgentInput(input)`
 
@@ -151,8 +157,67 @@ Each interrupt uses the Dawn `interruptId` as its AG-UI `id`, and the complete
 Dawn envelope is retained in `metadata`. Successful runs finish with
 `outcome: { type: "success" }`; upstream failures become one `RUN_ERROR`.
 
-Planning updates, subagent capability events, and other unknown Dawn chunk types
-have no v1 mapping and are ignored.
+## Planning and subagent activities
+
+The adapter projects an explicit allowlist of Dawn capability chunks into
+standard `ACTIVITY_SNAPSHOT` events. Every snapshot has `replace: true`, so a
+compatible client replaces the stable activity message instead of appending a
+revision history.
+
+A valid root `plan_update` uses the `messageId` value
+`dawn:plan:${runId}` and
+`activityType: DAWN_PLAN_ACTIVITY_TYPE` (`"dawn.plan"`). Its
+`DawnPlanActivityContent` contains only the complete source todo list:
+
+```ts
+interface DawnPlanActivityContent {
+  readonly todos: ReadonlyArray<{
+    readonly content: string
+    readonly status: "pending" | "in_progress" | "completed"
+  }>
+}
+```
+
+The adapter does not synthesize an initial activity from a seeded `plan.md`;
+the first plan snapshot follows the first valid `plan_update`.
+
+`subagent.start` and matching `subagent.plan_update`,
+`subagent.tool_call`, `subagent.tool_result`, and `subagent.end` chunks use
+the `messageId` value `dawn:subagent:${call_id}` and
+`activityType: DAWN_SUBAGENT_ACTIVITY_TYPE` (`"dawn.subagent"`). Each complete
+replacement has this bounded public content:
+
+```ts
+interface DawnSubagentActivityContent {
+  readonly name: string
+  readonly depth: number
+  readonly status: "running" | "completed" | "failed"
+  readonly todos?: DawnPlanActivityContent["todos"]
+  readonly tools: ReadonlyArray<{
+    readonly name: string
+    readonly status: "running" | "completed" | "incomplete"
+  }>
+  readonly totalToolCount: number
+  readonly error?: string
+}
+```
+
+Only the five most recent child-tool name/status summaries are retained; the
+total count still covers every observed child tool. A failure may include one
+human-readable error truncated to 400 characters. A lifecycle event can update
+an activity only when its full internal identity
+`{ call_id, subagent, route_id, depth }` matches the original start.
+
+`subagent.message` is consumed without emission. Public activity content never
+contains child reasoning or prose, prompts, tool inputs, tool outputs, final
+child answers, route ids, child tool ids, or raw runtime correlation ids;
+`call_id` is used only to form the stable standard message id. This is not a
+generic capability mapping, activity-delta API, or raw advanced stream. Unknown
+chunks continue to flush any open assistant text message and are then ignored.
+
+Activities are informational. Permission requests and decisions remain on the
+standard interrupt and resume path; activity content does not add queued,
+waiting, cancelled, or parent-task correlation states.
 
 ## SSE Transport
 
@@ -170,9 +235,17 @@ The SSE helper is a focused subpath; it is not exported from the root adapter.
 
 ## CopilotKit
 
-The canonical example is `examples/chat/web`. It registers a CopilotKit
-`HttpAgent` that points at Dawn's AG-UI endpoint. The web app does not need
-model credentials; the Dawn server holds `OPENAI_API_KEY`.
+The canonical basic transport example is
+[`examples/chat/web`](https://github.com/cacheplane/dawnai/tree/main/examples/chat/web).
+It registers a CopilotKit `HttpAgent` that points at Dawn's AG-UI endpoint but
+registers no activity renderers. The web app does not need model credentials;
+the Dawn server holds `OPENAI_API_KEY`.
+
+For an activity-aware client that renders plan and researcher cards, follow the
+[Research assistant web UI recipe](https://dawnai.org/docs/recipes/research-web-ui)
+or browse the
+[`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
+source.
 
 ```text
 browser
@@ -191,6 +264,8 @@ browser
 - Dawn middleware gates Agent Protocol run, wait, and resume execution plus
   AG-UI route execution. It does not gate thread create, read, delete, or state
   endpoints. Allowed middleware context is exposed to tools as `ctx.middleware`.
+- Activity projection is request-local. The adapter does not buffer activity
+  state or provide reconnect, replay, or durable activity history.
 - The package translates protocol events; it does not host a web UI.
 
 ## License
