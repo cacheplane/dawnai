@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
-import { readFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { describe, expect, test, vi } from "vitest"
@@ -16,6 +17,8 @@ import type {
   CommandResult,
 } from "../../scripts/kubernetes-compat/command.ts"
 import {
+  type CompatibilityDiagnosticsInput,
+  collectKubernetesCompatibilityDiagnostics,
   KUBERNETES_COMPAT_USAGE,
   type KubernetesCompatibilityHarnessDependencies,
   type KubernetesCompatibilityOptions,
@@ -94,14 +97,14 @@ const OPTIONS: KubernetesCompatibilityOptions = {
   context: CONTEXT,
 }
 
-function result(command: Command, value: unknown = ""): CommandResult {
+function result(command: Command, value: unknown = "", exitCode = 0): CommandResult {
   return {
     command,
     stdout: Buffer.from(typeof value === "string" ? value : JSON.stringify(value)),
     stderr: Buffer.alloc(0),
-    exitCode: 0,
+    exitCode,
     signal: null,
-    toJSON: () => ({ command, outcome: { kind: "exit", exitCode: 0 } }),
+    toJSON: () => ({ command, outcome: { kind: "exit", exitCode } }),
   }
 }
 
@@ -127,6 +130,26 @@ function flattenErrorMessages(error: unknown): readonly string[] {
   return [error instanceof Error ? error.message : String(error)]
 }
 
+function deferred(): {
+  readonly promise: Promise<void>
+  resolve(): void
+} {
+  let resolvePromise: (() => void) | undefined
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve
+  })
+  return {
+    promise,
+    resolve(): void {
+      resolvePromise?.()
+    },
+  }
+}
+
+async function nextEventLoopTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
 interface FixtureOptions {
   readonly failAt?: string
   readonly failTokenDestroy?: boolean
@@ -134,6 +157,7 @@ interface FixtureOptions {
   readonly failNetworkCleanupSynchronously?: boolean
   readonly failOwnershipVerification?: boolean
   readonly failClusterDestruction?: boolean
+  readonly failFinalPersistence?: boolean
 }
 
 interface CommandCall {
@@ -161,6 +185,7 @@ function createHarnessFixture(options: FixtureOptions = {}): HarnessFixture {
   const tokenKubeconfigs: SecureTokenKubeconfig[] = []
   let signalCleanup: (() => Promise<void>) | undefined
   let tokenCount = 0
+  let persistenceCount = 0
 
   const mark = (name: string): void => {
     events.push(name)
@@ -269,7 +294,11 @@ function createHarnessFixture(options: FixtureOptions = {}): HarnessFixture {
     },
     persistReport: async (_root, _filename, report) => {
       mark("report.persist")
+      persistenceCount += 1
       reports.push(report)
+      if (options.failFinalPersistence === true && persistenceCount === 2) {
+        throw new Error("final report persistence failed")
+      }
       return join(REPOSITORY_ROOT, ARTIFACT_DIRECTORY, "compat-report.json")
     },
     collectDiagnostics: async () => {
@@ -627,10 +656,12 @@ describe("portable compatibility lifecycle", () => {
       expect(call.options?.timeoutMs).toBe(12 * 60 * 1_000)
       expect(call.options?.stdoutLimitBytes).toBeGreaterThan(0)
       expect(call.options?.stderrLimitBytes).toBeGreaterThan(0)
+      expect(call.options?.acceptedExitCodes).toEqual([1])
       expect(call.options?.env).toMatchObject({
         DAWN_TEST_K8S: "1",
         DAWN_TEST_K8S_NS: NAMES.sandboxNamespace,
         DAWN_TEST_K8S_IMAGE: POLICY.images.sandboxWorkload,
+        DAWN_TEST_K8S_STORAGE_CLASS: "standard",
         DAWN_TEST_K8S_EGRESS_CONTROL_URL: `http://network.${NAMES.sandboxNamespace}.svc.cluster.local:8080/`,
         KUBECONFIG: secure?.path,
       })
@@ -658,6 +689,16 @@ describe("portable compatibility lifecycle", () => {
       "token.destroy.3",
       "token.destroy.4",
     ])
+  })
+
+  test("requires and passes the harness-selected StorageClass in the live provider suite", async () => {
+    const source = await readFile(
+      join(REPOSITORY_ROOT, "packages/sandbox/test/kube-sandbox.integration.test.ts"),
+      "utf8",
+    )
+
+    expect(source).toContain('requiredLiveEnvironment("DAWN_TEST_K8S_STORAGE_CLASS")')
+    expect(source).toMatch(/kubernetesSandbox\(\{[^}]*storageClass:\s*STORAGE_CLASS/s)
   })
 
   test("accounts both provider manifests before finish and exact probe IDs once in declaration order", async () => {
@@ -799,6 +840,96 @@ describe("failure boundaries and cleanup", () => {
       NAMES.managementNamespace,
       NAMES.sandboxNamespace,
     ])
+    expect(destructiveInput.installedReleases).toEqual(["infrastructure"])
+  })
+
+  test("keeps the infrastructure cleanup candidate when the first live ownership assertion fails", async () => {
+    const fixture = createHarnessFixture()
+    const baseExecute = fixture.dependencies.execute as Runner
+    let sandboxReads = 0
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (
+        command.file === "kubectl" &&
+        command.args.includes("namespace") &&
+        command.args.includes(NAMES.sandboxNamespace)
+      ) {
+        sandboxReads += 1
+        if (sandboxReads === 1) {
+          fixture.commandCalls.push({ command, options })
+          fixture.events.push("sandbox.capture.invalid")
+          return result(command, {
+            apiVersion: "v1",
+            kind: "Namespace",
+            metadata: {
+              name: NAMES.sandboxNamespace,
+              uid: "sandbox-uid",
+              labels: { "dawn.sh/compat-run": "another-run" },
+            },
+          })
+        }
+      }
+      return baseExecute(command, options)
+    })
+
+    await expect(
+      runKubernetesCompatibility(OPTIONS, { ...fixture.dependencies, execute }),
+    ).rejects.toThrow(/ownership label/i)
+
+    const destructiveInput = fixture.cleanupInputs.at(-1) as {
+      readonly installedReleases: readonly string[]
+    }
+    expect(sandboxReads).toBe(2)
+    expect(destructiveInput.installedReleases).toEqual(["infrastructure"])
+  })
+
+  test("keeps the application cleanup candidate when its Helm install mutates then fails", async () => {
+    const fixture = createHarnessFixture({ failAt: "application.install" })
+    let attemptedReleases: readonly string[] | undefined
+    const collectDiagnostics = vi.fn(async (input: CompatibilityDiagnosticsInput) => {
+      attemptedReleases = input.attemptedReleases
+      return { collected: true }
+    })
+
+    await expect(
+      runKubernetesCompatibility(OPTIONS, { ...fixture.dependencies, collectDiagnostics }),
+    ).rejects.toThrow("application.install failed")
+
+    const destructiveInput = fixture.cleanupInputs.at(-1) as {
+      readonly installedReleases: readonly string[]
+    }
+    expect(destructiveInput.installedReleases).toEqual(["infrastructure", "application"])
+    expect(new Set(destructiveInput.installedReleases).size).toBe(
+      destructiveInput.installedReleases.length,
+    )
+    expect(collectDiagnostics).toHaveBeenCalledOnce()
+    expect(attemptedReleases).toEqual(["infrastructure", "application"])
+  })
+
+  test("fails closed without an infrastructure uninstall when sandbox ownership cannot be recovered", async () => {
+    const fixture = createHarnessFixture({ failAt: "infrastructure.install" })
+    const baseExecute = fixture.dependencies.execute as Runner
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (
+        command.file === "kubectl" &&
+        command.args.includes("namespace") &&
+        command.args.includes(NAMES.sandboxNamespace)
+      ) {
+        fixture.commandCalls.push({ command, options })
+        fixture.events.push("sandbox.capture.missing")
+        return result(command)
+      }
+      return baseExecute(command, options)
+    })
+
+    await expect(
+      runKubernetesCompatibility(OPTIONS, { ...fixture.dependencies, execute }),
+    ).rejects.toThrow("infrastructure.install failed")
+
+    const destructiveInput = fixture.cleanupInputs.at(-1) as {
+      readonly ownership: readonly { readonly name: string }[]
+      readonly installedReleases: readonly string[]
+    }
+    expect(destructiveInput.ownership.map(({ name }) => name)).toEqual([NAMES.managementNamespace])
     expect(destructiveInput.installedReleases).toEqual([])
   })
 
@@ -910,33 +1041,365 @@ describe("failure boundaries and cleanup", () => {
     )
     expect(fixture.events).not.toContain("provider.finish")
   })
+
+  test("accounts an exit-one provider JSON report and surfaces the named failed assertion", async () => {
+    const fixture = createHarnessFixture()
+    const manifest = JSON.parse(
+      await readFile(join(REPOSITORY_ROOT, "test/k8s-compat/expected-tests.json"), "utf8"),
+    ) as { readonly providerPhases: { readonly "provider-before-upgrade": readonly string[] } }
+    const failedId = manifest.providerPhases["provider-before-upgrade"][0] as string
+    const tokenDirectories: string[] = []
+    let reportPath = ""
+    let tokenIndex = 0
+    const createTokenKubeconfig = vi.fn(async (): Promise<SecureTokenKubeconfig> => {
+      tokenIndex += 1
+      fixture.events.push(`token.create.${tokenIndex}`)
+      const directory = await mkdtemp(join(tmpdir(), "dawn-harness-provider-"))
+      tokenDirectories.push(directory)
+      return {
+        directory,
+        path: join(directory, "kubeconfig.yaml"),
+        async destroy(): Promise<void> {
+          fixture.events.push(`token.destroy.${tokenIndex}`)
+          await rm(directory, { recursive: true, force: true })
+        },
+      }
+    })
+    const baseExecute = fixture.dependencies.execute as Runner
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (command.file !== "pnpm") return baseExecute(command, options)
+      fixture.commandCalls.push({ command, options })
+      fixture.events.push("provider.execute.provider-before-upgrade")
+      reportPath =
+        command.args.find((argument) => argument.startsWith("--outputFile="))?.slice(13) ?? ""
+      await writeFile(
+        reportPath,
+        JSON.stringify({
+          success: false,
+          numPendingTestSuites: 0,
+          numPendingTests: 0,
+          numTodoTests: 0,
+          testResults: [
+            {
+              assertionResults: manifest.providerPhases["provider-before-upgrade"].map(
+                (fullName, index) => ({ fullName, status: index === 0 ? "failed" : "passed" }),
+              ),
+            },
+          ],
+        }),
+      )
+      if (!options?.acceptedExitCodes?.includes(1)) {
+        throw new Error("provider command exited with code 1")
+      }
+      return result(command, "", 1)
+    })
+    const {
+      createProviderAccountingSession: _fakeAccounting,
+      createTokenKubeconfig: _fakeTokenKubeconfig,
+      ...dependencies
+    } = fixture.dependencies
+    let stderr = ""
+
+    const exitCode = await runKubernetesCompatibilityMain(
+      ["--target", TARGET, "--context", CONTEXT],
+      {
+        ...dependencies,
+        createTokenKubeconfig,
+        execute,
+        writeStderr: (chunk) => {
+          stderr += chunk
+        },
+      },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain(failedId)
+    expect(stderr).not.toContain("provider command exited with code 1")
+    expect(JSON.stringify(fixture.reports.at(-1))).toContain(failedId)
+    expect(fixture.events.indexOf("provider.execute.provider-before-upgrade")).toBeLessThan(
+      fixture.events.indexOf("token.destroy.1"),
+    )
+    expect(tokenDirectories).toHaveLength(1)
+    await expect(readFile(reportPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("fails explicitly after successful accounting when a provider command still exits one", async () => {
+    const fixture = createHarnessFixture()
+    const baseExecute = fixture.dependencies.execute as Runner
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (command.file !== "pnpm") return baseExecute(command, options)
+      fixture.commandCalls.push({ command, options })
+      fixture.events.push("provider.execute.provider-before-upgrade")
+      return result(command, "", 1)
+    })
+
+    await expect(
+      runKubernetesCompatibility(OPTIONS, { ...fixture.dependencies, execute }),
+    ).rejects.toThrow(/provider-before-upgrade.*exit(?:ed)? with code 1/i)
+
+    expect(fixture.events.indexOf("provider.account.provider-before-upgrade")).toBeLessThan(
+      fixture.events.indexOf("token.destroy.1"),
+    )
+  })
 })
 
 describe("signal cleanup", () => {
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
-    "cleans current ownership, releases, lease, and token material before preserving %s termination",
+    "waits for an in-flight infrastructure install and recovers its ownership before %s cleanup",
     async (signal) => {
       const fixture = createHarnessFixture()
       const emitter = new EventEmitter()
-      let providerStartedResolve: (() => void) | undefined
-      let releaseProviderResolve: (() => void) | undefined
-      let terminatedResolve: (() => void) | undefined
-      const providerStarted = new Promise<void>((resolve) => {
-        providerStartedResolve = resolve
+      const installStarted = deferred()
+      const releaseInstall = deferred()
+      const terminated = deferred()
+      let terminatedEarly = false
+      let installSignal: AbortSignal | undefined
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (command.file === "helm" && command.args.includes("test-infrastructure-install")) {
+          fixture.commandCalls.push({ command, options })
+          fixture.events.push("infrastructure.install")
+          installSignal = options?.signal
+          installStarted.resolve()
+          await releaseInstall.promise
+          fixture.events.push("infrastructure.install.settled")
+          throw new Error("infrastructure install stopped after signal")
+        }
+        return baseExecute(command, options)
       })
-      const releaseProvider = new Promise<void>((resolve) => {
-        releaseProviderResolve = resolve
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
+        },
+        probes: {
+          ...fixture.dependencies.probes,
+          installInfrastructure: async ({ execute: runCommand }) => {
+            if (runCommand === undefined) throw new Error("Expected injected lifecycle executor")
+            await runCommand({ file: "helm", args: ["test-infrastructure-install"] })
+          },
+        },
+      }).catch((error: unknown) => error)
+
+      await installStarted.promise
+      emitter.emit(signal)
+      await nextEventLoopTurn()
+      terminatedEarly = fixture.events.includes(`terminate.${signal}`)
+      const abortedBeforeSettlement = installSignal?.aborted === true
+      releaseInstall.resolve()
+      await terminated.promise
+      const error = await run
+
+      expect(flattenErrorMessages(error)).toContain("infrastructure install stopped after signal")
+      expect(terminatedEarly).toBe(false)
+      expect(abortedBeforeSettlement).toBe(true)
+      expect(fixture.events.indexOf("infrastructure.install.settled")).toBeLessThan(
+        fixture.events.lastIndexOf("sandbox.capture"),
+      )
+      expect(fixture.events.lastIndexOf("sandbox.capture")).toBeLessThan(
+        fixture.events.indexOf("cleanup.destroy"),
+      )
+      expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
+        fixture.events.indexOf(`terminate.${signal}`),
+      )
+      expect(fixture.events).not.toContain("probe.namespace.sandbox-secrets-empty")
+      const sandboxRecoveryCalls = fixture.commandCalls.filter(
+        ({ command }) =>
+          command.file === "kubectl" && command.args.includes(NAMES.sandboxNamespace),
+      )
+      expect(sandboxRecoveryCalls.length).toBeGreaterThan(0)
+      expect(sandboxRecoveryCalls.every(({ options }) => options?.signal === undefined)).toBe(true)
+      const destructiveInput = fixture.cleanupInputs.at(-1) as {
+        readonly installedReleases: readonly string[]
+      }
+      expect(destructiveInput.installedReleases).toEqual(["infrastructure"])
+    },
+  )
+
+  test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "waits for an in-flight application install and includes its release in %s cleanup",
+    async (signal) => {
+      const fixture = createHarnessFixture()
+      const emitter = new EventEmitter()
+      const installStarted = deferred()
+      const releaseInstall = deferred()
+      const terminated = deferred()
+      let installSignal: AbortSignal | undefined
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (command.file === "helm" && command.args.includes("test-application-install")) {
+          fixture.commandCalls.push({ command, options })
+          fixture.events.push("application.install")
+          installSignal = options?.signal
+          installStarted.resolve()
+          await releaseInstall.promise
+          fixture.events.push("application.install.settled")
+          throw new Error("application install stopped after signal")
+        }
+        return baseExecute(command, options)
       })
-      const terminated = new Promise<void>((resolve) => {
-        terminatedResolve = resolve
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
+        },
+        probes: {
+          ...fixture.dependencies.probes,
+          installApplication: async ({ execute: runCommand }) => {
+            if (runCommand === undefined) throw new Error("Expected injected lifecycle executor")
+            await runCommand({ file: "helm", args: ["test-application-install"] })
+          },
+        },
+      }).catch((error: unknown) => error)
+
+      await installStarted.promise
+      emitter.emit(signal)
+      await nextEventLoopTurn()
+      const terminatedEarly = fixture.events.includes(`terminate.${signal}`)
+      const abortedBeforeSettlement = installSignal?.aborted === true
+      releaseInstall.resolve()
+      await terminated.promise
+      const error = await run
+
+      expect(flattenErrorMessages(error)).toContain("application install stopped after signal")
+      expect(terminatedEarly).toBe(false)
+      expect(abortedBeforeSettlement).toBe(true)
+      expect(fixture.events.indexOf("application.install.settled")).toBeLessThan(
+        fixture.events.indexOf("cleanup.destroy"),
+      )
+      expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
+        fixture.events.indexOf(`terminate.${signal}`),
+      )
+      expect(fixture.events).not.toContain("probe.app.service-ready.before-upgrade")
+      const destructiveInput = fixture.cleanupInputs.at(-1) as {
+        readonly installedReleases: readonly string[]
+      }
+      expect(destructiveInput.installedReleases).toEqual(["infrastructure", "application"])
+    },
+  )
+
+  test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "waits for token kubeconfig creation, registers its destroyer, and stops before provider work on %s",
+    async (signal) => {
+      const fixture = createHarnessFixture()
+      const emitter = new EventEmitter()
+      const createStarted = deferred()
+      const releaseCreate = deferred()
+      const terminated = deferred()
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (command.file === "pnpm") {
+          fixture.commandCalls.push({ command, options })
+          fixture.events.push("provider.started-after-shutdown")
+          throw new Error("provider started after shutdown")
+        }
+        return baseExecute(command, options)
       })
+      const createTokenKubeconfig = vi.fn(async (): Promise<SecureTokenKubeconfig> => {
+        fixture.events.push("token.create.1")
+        createStarted.resolve()
+        await releaseCreate.promise
+        fixture.events.push("token.create.1.settled")
+        return {
+          directory: "/secure/token-signal",
+          path: "/secure/token-signal/kubeconfig.yaml",
+          async destroy(): Promise<void> {
+            fixture.events.push("token.destroy.1")
+          },
+        }
+      })
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+      const run = runKubernetesCompatibility(OPTIONS, {
+        ...dependenciesWithoutFakeRegistration,
+        createTokenKubeconfig,
+        execute,
+        registerSignalCleanup: registerOwnedResourceSignalCleanup,
+        signalCleanupOptions: {
+          emitter,
+          terminate: (observedSignal) => {
+            fixture.events.push(`terminate.${observedSignal}`)
+            terminated.resolve()
+          },
+          timeoutMs: 5_000,
+        },
+        probes: {
+          ...fixture.dependencies.probes,
+          networkControl: async ({ execute: runCommand }) => {
+            if (runCommand === undefined) throw new Error("Expected injected lifecycle executor")
+            fixture.events.push("probe.network.control-ready")
+            return {
+              url: `http://network.${NAMES.sandboxNamespace}.svc.cluster.local:8080/`,
+              async cleanup(): Promise<void> {
+                fixture.events.push("network.cleanup")
+                await runCommand({ file: "kubectl", args: ["test-network-cleanup"] })
+              },
+            }
+          },
+        },
+      }).catch((error: unknown) => error)
+
+      await createStarted.promise
+      emitter.emit(signal)
+      await nextEventLoopTurn()
+      const terminatedEarly = fixture.events.includes(`terminate.${signal}`)
+      releaseCreate.resolve()
+      await terminated.promise
+      const error = await run
+
+      expect(error).toBeInstanceOf(Error)
+      expect(terminatedEarly).toBe(false)
+      expect(fixture.events).not.toContain("provider.started-after-shutdown")
+      expect(fixture.events.indexOf("token.create.1.settled")).toBeLessThan(
+        fixture.events.indexOf("token.destroy.1"),
+      )
+      expect(fixture.events.indexOf("token.destroy.1")).toBeLessThan(
+        fixture.events.indexOf(`terminate.${signal}`),
+      )
+      const leaseCleanupCall = fixture.commandCalls.find(({ command }) =>
+        command.args.includes("test-network-cleanup"),
+      )
+      expect(leaseCleanupCall).toBeDefined()
+      expect(leaseCleanupCall?.options?.signal).toBeUndefined()
+    },
+  )
+
+  test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "aborts and settles an in-flight provider command before token and cluster cleanup on %s",
+    async (signal) => {
+      const fixture = createHarnessFixture()
+      const emitter = new EventEmitter()
+      const providerStarted = deferred()
+      const releaseProvider = deferred()
+      const terminated = deferred()
+      let providerSignal: AbortSignal | undefined
       const baseExecute = fixture.dependencies.execute as Runner
       const execute = vi.fn<Runner>(async (command, options) => {
         if (command.file === "pnpm") {
           fixture.commandCalls.push({ command, options })
           fixture.events.push("provider.execute.provider-before-upgrade")
-          providerStartedResolve?.()
-          await releaseProvider
+          providerSignal = options?.signal
+          providerStarted.resolve()
+          await releaseProvider.promise
+          fixture.events.push("provider.execute.provider-before-upgrade.settled")
           throw new Error("provider stopped after signal")
         }
         return baseExecute(command, options)
@@ -951,26 +1414,29 @@ describe("signal cleanup", () => {
           emitter,
           terminate: (observedSignal) => {
             fixture.events.push(`terminate.${observedSignal}`)
-            terminatedResolve?.()
+            terminated.resolve()
           },
-          timeoutMs: 1_000,
+          timeoutMs: 5_000,
         },
-      })
+      }).catch((error: unknown) => error)
 
-      await providerStarted
+      await providerStarted.promise
       emitter.emit(signal)
-      await terminated
-      releaseProviderResolve?.()
-      await expect(run).rejects.toThrow("provider stopped after signal")
+      await nextEventLoopTurn()
+      const terminatedEarly = fixture.events.includes(`terminate.${signal}`)
+      const abortedBeforeSettlement = providerSignal?.aborted === true
+      releaseProvider.resolve()
+      await terminated.promise
+      const error = await run
 
-      expect(fixture.events.indexOf("cleanup.verify")).toBeLessThan(
-        fixture.events.indexOf(`terminate.${signal}`),
-      )
-      expect(fixture.events.indexOf("network.cleanup")).toBeLessThan(
-        fixture.events.indexOf(`terminate.${signal}`),
-      )
+      expect(flattenErrorMessages(error)).toContain("provider stopped after signal")
+      expect(terminatedEarly).toBe(false)
+      expect(abortedBeforeSettlement).toBe(true)
+      expect(
+        fixture.events.indexOf("provider.execute.provider-before-upgrade.settled"),
+      ).toBeLessThan(fixture.events.indexOf("token.destroy.1"))
       expect(fixture.events.indexOf("token.destroy.1")).toBeLessThan(
-        fixture.events.indexOf(`terminate.${signal}`),
+        fixture.events.indexOf("cleanup.destroy"),
       )
       expect(fixture.events.indexOf("cleanup.destroy")).toBeLessThan(
         fixture.events.indexOf(`terminate.${signal}`),
@@ -1027,6 +1493,23 @@ describe("failure reports and diagnostics", () => {
     let diagnosticFailureInjected = false
     const execute = vi.fn<Runner>(async (command, options) => {
       if (
+        command.file === "kubectl" &&
+        command.args.includes("get") &&
+        command.args.includes("pods")
+      ) {
+        fixture.commandCalls.push({ command, options })
+        const namespaceName = command.args[command.args.indexOf("--namespace") + 1]
+        return result(command, {
+          apiVersion: "v1",
+          kind: "PodList",
+          items: [
+            {
+              metadata: { name: "diagnostic-pod", namespace: namespaceName },
+            },
+          ],
+        })
+      }
+      if (
         !diagnosticFailureInjected &&
         command.file === "kubectl" &&
         command.args.includes("events")
@@ -1082,6 +1565,120 @@ describe("failure reports and diagnostics", () => {
     expect(serializedReport).toContain("[REDACTED]")
   })
 
+  test("collects unlabeled chart objects and validated provider Pod descriptions and logs inside owned Namespaces", async () => {
+    const calls: CommandCall[] = []
+    const execute = vi.fn<Runner>(async (command, options) => {
+      calls.push({ command, options })
+      const args = command.args
+      const namespaceName = args[args.indexOf("--namespace") + 1]
+      if (command.file === "kubectl" && args.includes("get") && args.includes("pods")) {
+        return result(command, {
+          apiVersion: "v1",
+          kind: "PodList",
+          items: [
+            {
+              apiVersion: "v1",
+              kind: "Pod",
+              metadata: { name: "provider-unlabeled", namespace: namespaceName },
+            },
+          ],
+        })
+      }
+      if (
+        command.file === "kubectl" &&
+        args.includes("get") &&
+        args.some((arg) => arg.includes(","))
+      ) {
+        return result(command, {
+          apiVersion: "v1",
+          kind: "List",
+          items:
+            namespaceName === NAMES.managementNamespace
+              ? [
+                  {
+                    apiVersion: "apps/v1",
+                    kind: "Deployment",
+                    metadata: { name: "helm-deployment", namespace: namespaceName },
+                  },
+                ]
+              : [
+                  {
+                    apiVersion: "batch/v1",
+                    kind: "CronJob",
+                    metadata: { name: "helm-cronjob", namespace: namespaceName },
+                  },
+                ],
+        })
+      }
+      if (command.file === "kubectl" && args.includes("logs")) {
+        return result(command, "provider diagnostic log\n")
+      }
+      return result(command, {})
+    })
+
+    const diagnostics = await collectKubernetesCompatibilityDiagnostics({
+      context: CONTEXT,
+      runId: RUN_ID,
+      names: NAMES,
+      ownership: [
+        { name: NAMES.managementNamespace, uid: "management-uid", runId: RUN_ID },
+        { name: NAMES.sandboxNamespace, uid: "sandbox-uid", runId: RUN_ID },
+      ],
+      attemptedReleases: ["infrastructure", "application"],
+      execute,
+    })
+
+    expect(JSON.stringify(diagnostics)).toContain("helm-deployment")
+    expect(JSON.stringify(diagnostics)).toContain("helm-cronjob")
+    const describeCalls = calls.filter(
+      ({ command }) => command.file === "kubectl" && command.args.includes("describe"),
+    )
+    expect(describeCalls).toHaveLength(2)
+    const logCalls = calls.filter(
+      ({ command }) => command.file === "kubectl" && command.args.includes("logs"),
+    )
+    expect(logCalls).toHaveLength(2)
+    for (const { command } of logCalls) {
+      expect(command.args).toContain("pod/provider-unlabeled")
+    }
+    for (const { command, options } of calls) {
+      expect(options?.timeoutMs).toBeGreaterThan(0)
+      expect(options?.stdoutLimitBytes).toBeGreaterThan(0)
+      expect(options?.stderrLimitBytes).toBeGreaterThan(0)
+      expect(command.args).toContain("--namespace")
+      expect(command.args).not.toContain("--selector")
+      expect(command.args.some((argument) => /secret|\benv\b/i.test(argument))).toBe(false)
+    }
+  })
+
+  test("does not advertise a checkpoint as final when cleanup and final persistence fail", async () => {
+    const fixture = createHarnessFixture({
+      failAt: "probe.reaper.lifecycle.before-upgrade",
+      failClusterDestruction: true,
+      failFinalPersistence: true,
+    })
+    let stderr = ""
+
+    const exitCode = await runKubernetesCompatibilityMain(
+      ["--target", TARGET, "--context", CONTEXT],
+      {
+        ...fixture.dependencies,
+        writeStderr: (chunk) => {
+          stderr += chunk
+        },
+      },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("probe.reaper.lifecycle.before-upgrade failed")
+    expect(stderr).toContain("cluster destruction failed")
+    expect(stderr).toContain("final report persistence failed")
+    expect(stderr).not.toContain("Report:")
+    expect(fixture.reports).toHaveLength(2)
+    expect(fixture.reports[0]?.cleanup.status).toBe("skipped")
+    expect(fixture.reports[1]?.cleanup.status).toBe("failed")
+  })
+
   test("returns runtime exit 1 with a redacted assertion and report path", async () => {
     const fixture = createHarnessFixture({ failAt: "provider.execute.provider-before-upgrade" })
     let stderr = ""
@@ -1113,21 +1710,40 @@ describe("shell supersession mapping", () => {
           behavior: "server Pod becomes Ready",
           evidence: 'wait --for=condition=Ready "pod/$SERVER"',
           probeIds: ["network.control-ready"],
+          structuredEvidence: [
+            'resourceName(state.runId, "network-server")',
+            '"--for=condition=Ready"',
+            `\`pod/\${serverName}\``,
+          ],
         },
         {
-          behavior: "client Pod becomes Ready before the request",
+          behavior:
+            "client Ready prerequisite is subsumed by admitted, scheduled, exit-zero Succeeded completion with the exact HTTP marker",
           evidence: 'wait --for=condition=Ready "pod/$CLIENT"',
           probeIds: ["network.control-ready"],
+          structuredEvidence: [
+            "createObjectCommand(state.context, state.namespace), client",
+            '"--for=jsonpath={.status.phase}=Succeeded"',
+            'phase !== "Succeeded"',
+            'logs.stdout.toString("utf8") !== "DAWN_NETWORK_CONTROL=reachable\\n"',
+          ],
         },
         {
           behavior: "the Service path returns exact HTTP 200",
           evidence: "expected HTTP 200",
           probeIds: ["network.control-ready"],
+          structuredEvidence: [
+            "response.statusCode===200",
+            'logs.stdout.toString("utf8") !== "DAWN_NETWORK_CONTROL=reachable\\n"',
+          ],
         },
         {
           behavior: "the stable in-cluster Service URL is exposed to provider tests",
           evidence: '"http://$SERVICE:8080/"',
           probeIds: ["network.control-ready"],
+          structuredEvidence: [
+            `url: \`http://\${input.serviceName}.\${input.namespace}.svc.cluster.local:8080/\``,
+          ],
         },
       ],
     },
@@ -1167,7 +1783,7 @@ describe("shell supersession mapping", () => {
   test("maps every locked shell assertion to the structured network and repeated reaper probes", async () => {
     const requiredBehaviors = [
       "server Pod becomes Ready",
-      "client Pod becomes Ready before the request",
+      "client Ready prerequisite is subsumed by admitted, scheduled, exit-zero Succeeded completion with the exact HTTP marker",
       "the Service path returns exact HTTP 200",
       "the stable in-cluster Service URL is exposed to provider tests",
       "a manual Job is created from the installed CronJob and completes",
@@ -1185,6 +1801,23 @@ describe("shell supersession mapping", () => {
       expect(createHash("sha256").update(source).digest("hex")).toBe(entry.sha256)
       for (const assertion of entry.assertions) {
         expect(source).toContain(assertion.evidence)
+        if ("structuredEvidence" in assertion) {
+          const probeSource = await readFile(
+            join(REPOSITORY_ROOT, "scripts/kubernetes-compat/probes.ts"),
+            "utf8",
+          )
+          for (const evidence of assertion.structuredEvidence) {
+            expect(probeSource).toContain(evidence)
+          }
+          const clientCompletion = probeSource.slice(
+            probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
+            probeSource.indexOf(
+              "return createNetworkControlLease",
+              probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
+            ),
+          )
+          expect(clientCompletion).not.toContain('"--for=condition=Ready"')
+        }
         for (const probeId of assertion.probeIds) {
           expect(KUBERNETES_COMPAT_PROBE_IDS).toContain(probeId)
         }

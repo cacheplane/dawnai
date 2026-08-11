@@ -630,6 +630,59 @@ describe("positive and negative pod fixtures", () => {
     expect(execute).toHaveBeenCalledTimes(callsAfterCleanup)
   })
 
+  test("subsumes the shell client Ready prerequisite with admitted-to-Succeeded HTTP completion", async () => {
+    const policy = await loadCompatibilityPolicy()
+    let clientPod: JsonObject | undefined
+    const execute = fakeRunner((command, options) => {
+      const manifest = options.stdin === undefined ? undefined : stdinObject(options)
+      if (manifest?.kind === "Pod") {
+        clientPod = manifest
+        return manifest
+      }
+      if (command.args.includes("get") && command.args.some((arg) => arg.startsWith("pod/"))) {
+        return successPod(clientPod as JsonObject)
+      }
+      if (command.args.includes("logs")) return "DAWN_NETWORK_CONTROL=reachable\n"
+      return {}
+    })
+
+    await runNetworkControlProbe({ context, runId, policy, execute })
+
+    const manifests = allManifests(execute)
+    const client = manifests.filter((manifest) => manifest.kind === "Pod")[1] as JsonObject
+    const clientName = String(metadata(client).name)
+    const clientCommand = String((podContainer(client).args as readonly string[])[1])
+    const clientCreateIndex = execute.mock.calls.findIndex(([_command, options]) => {
+      if (options?.stdin === undefined) return false
+      return metadata(stdinObject(options)).name === clientName
+    })
+    const succeededWaitIndex = execute.mock.calls.findIndex(([command]) =>
+      command.args.includes("--for=jsonpath={.status.phase}=Succeeded"),
+    )
+    const liveSucceededReadIndex = execute.mock.calls.findIndex(
+      ([command]) => command.args.includes("get") && command.args.includes(`pod/${clientName}`),
+    )
+    const markerReadIndex = execute.mock.calls.findIndex(([command]) =>
+      command.args.includes("logs"),
+    )
+
+    expect(clientCreateIndex).toBeGreaterThan(-1)
+    expect(clientCreateIndex).toBeLessThan(succeededWaitIndex)
+    expect(succeededWaitIndex).toBeLessThan(liveSucceededReadIndex)
+    expect(liveSucceededReadIndex).toBeLessThan(markerReadIndex)
+    expect(clientCommand).toContain("response.statusCode===200")
+    expect(clientCommand).toContain('console.log("DAWN_NETWORK_CONTROL=reachable")')
+    expect(clientCommand).toContain("process.exit(0)")
+    expect(clientCommand).toContain("attempts>=30")
+    expect(
+      execute.mock.calls.some(
+        ([command]) =>
+          command.args.includes(`pod/${clientName}`) &&
+          command.args.includes("--for=condition=Ready"),
+      ),
+    ).toBe(false)
+  })
+
   test("quota negative differs from its positive fixture only by requests and limits cpu", async () => {
     const policy = await loadCompatibilityPolicy()
     const submitted: JsonObject[] = []

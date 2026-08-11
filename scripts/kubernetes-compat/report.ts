@@ -471,11 +471,12 @@ function parseExpectedProviderManifest(
 }
 
 function parseVitestProviderReport(value: unknown): {
+  readonly success: boolean
   readonly observed: readonly AccountedStep[]
   readonly suiteCounts: ProviderAccountingInput["suiteCounts"]
 } {
   const report = expectObject(value, "Vitest output")
-  if (report.success !== true) {
+  if (typeof report.success !== "boolean") {
     throw new Error("Vitest output success must be true")
   }
   if (!Array.isArray(report.testResults)) {
@@ -507,6 +508,7 @@ function parseVitestProviderReport(value: unknown): {
   }
 
   return {
+    success: report.success,
     observed,
     suiteCounts: {
       skipped: expectNonNegativeInteger(
@@ -609,7 +611,14 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
 
       const report = parseJson(await handle.readFile("utf8"), "Vitest output")
       const parsedReport = parseVitestProviderReport(report)
-      assertProviderAccounting({ expectedIds: this.#expected[phase], ...parsedReport })
+      assertProviderAccounting({
+        expectedIds: this.#expected[phase],
+        observed: parsedReport.observed,
+        suiteCounts: parsedReport.suiteCounts,
+      })
+      if (!parsedReport.success) {
+        throw new Error("Vitest output success must be true")
+      }
       if (this.#finished) {
         throw new Error("Vitest provider accounting session finished before record completed")
       }

@@ -33,11 +33,18 @@ function requiredLiveEnvironment(name: string): string {
 
 const IMAGE = requiredLiveEnvironment("DAWN_TEST_K8S_IMAGE")
 const NS = requiredLiveEnvironment("DAWN_TEST_K8S_NS")
+const STORAGE_CLASS = requiredLiveEnvironment("DAWN_TEST_K8S_STORAGE_CLASS")
 const EGRESS_CONTROL_URL = enabled
   ? parseEgressControlUrl(requiredLiveEnvironment("DAWN_TEST_K8S_EGRESS_CONTROL_URL"))
   : ""
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
-const make = () => kubernetesSandbox({ image: IMAGE, namespace: NS, startupTimeoutMs: 120_000 })
+const make = () =>
+  kubernetesSandbox({
+    image: IMAGE,
+    namespace: NS,
+    storageClass: STORAGE_CLASS,
+    startupTimeoutMs: 120_000,
+  })
 
 function liveClients(): { readonly core: CoreV1Api; readonly networking: NetworkingV1Api } {
   const kubeconfig = new KubeConfig()

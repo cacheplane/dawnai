@@ -140,11 +140,14 @@ export interface KubernetesCompatibilityHarnessDependencies {
   readonly executableExists?: (name: string) => Promise<boolean>
   readonly preflight?: (input: ClusterPreflightInput) => Promise<ClusterPreflightResult>
   readonly assertPermissions?: (input: AdministrativePermissionPreflightInput) => Promise<unknown>
-  readonly requestToken?: (input: {
-    readonly context: string
-    readonly namespace: string
-    readonly serviceAccount: string
-  }) => Promise<string>
+  readonly requestToken?: (
+    input: {
+      readonly context: string
+      readonly namespace: string
+      readonly serviceAccount: string
+    },
+    execute?: CommandExecutor,
+  ) => Promise<string>
   readonly createTokenKubeconfig?: (
     input: SecureTokenKubeconfigInput,
   ) => Promise<SecureTokenKubeconfig>
@@ -355,7 +358,8 @@ function resolveDependencies(
       dependencies.assertPermissions ??
       ((input) => assertAdministrativePermissions(input, execute)),
     requestToken:
-      dependencies.requestToken ?? ((input) => requestServiceAccountToken(input, execute)),
+      dependencies.requestToken ??
+      ((input, commandExecutor = execute) => requestServiceAccountToken(input, commandExecutor)),
     createTokenKubeconfig:
       dependencies.createTokenKubeconfig ?? ((input) => createSecureTokenKubeconfig(input)),
     createProviderAccountingSession:
@@ -469,10 +473,74 @@ function diagnosticOutput(result: CommandResult, format: DiagnosticRequest["form
   }
 }
 
+const DIAGNOSTIC_POD_NAME_PATTERN =
+  /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/
+
+function diagnosticPodNames(result: CommandResult, namespace: string): readonly string[] {
+  const value = parseCommandJson(result, `Pod list for Namespace ${namespace}`)
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Pod list for Namespace ${namespace} must be an object`)
+  }
+  const items = (value as { readonly items?: unknown }).items
+  if (!Array.isArray(items)) {
+    throw new Error(`Pod list for Namespace ${namespace} must contain items`)
+  }
+  const names = new Set<string>()
+  for (const [index, item] of items.entries()) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`Pod list item ${index} for Namespace ${namespace} must be an object`)
+    }
+    const metadata = (item as { readonly metadata?: unknown }).metadata
+    if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+      throw new Error(`Pod list item ${index} for Namespace ${namespace} is missing metadata`)
+    }
+    const podName = (metadata as { readonly name?: unknown }).name
+    const podNamespace = (metadata as { readonly namespace?: unknown }).namespace
+    if (
+      typeof podName !== "string" ||
+      podName.length > 253 ||
+      !DIAGNOSTIC_POD_NAME_PATTERN.test(podName)
+    ) {
+      throw new Error(`Pod list item ${index} for Namespace ${namespace} has an invalid name`)
+    }
+    if (podNamespace !== namespace) {
+      throw new Error(`Pod list item ${podName} does not belong to Namespace ${namespace}`)
+    }
+    names.add(podName)
+  }
+  return Object.freeze([...names])
+}
+
+async function settleDiagnosticRequests(
+  requests: readonly DiagnosticRequest[],
+  execute: CommandExecutor,
+): Promise<DiagnosticResult[]> {
+  const settled = await Promise.allSettled(
+    requests.map(async (request): Promise<DiagnosticResult> => {
+      const commandResult = await execute(request.command, diagnosticCommandOptions())
+      return Object.freeze({
+        id: request.id,
+        status: "passed",
+        output: diagnosticOutput(commandResult, request.format),
+      })
+    }),
+  )
+  return settled.map((outcome, index): DiagnosticResult => {
+    const request = requests[index]
+    const id = request?.id ?? `diagnostic-${index}`
+    return outcome.status === "fulfilled"
+      ? outcome.value
+      : Object.freeze({ id, status: "failed", error: errorDiagnostics(outcome.reason) })
+  })
+}
+
 export async function collectKubernetesCompatibilityDiagnostics(
   input: CompatibilityDiagnosticsInput,
 ): Promise<readonly DiagnosticResult[]> {
   const ownedNames = new Set(input.ownership.map(({ name }) => name))
+  const ownedNamespaces = [input.names.managementNamespace, input.names.sandboxNamespace].filter(
+    (namespace) => ownedNames.has(namespace),
+  )
   const requests: DiagnosticRequest[] = []
   const addNamespaceDiagnostics = (namespace: string, resources: string): void => {
     if (!ownedNames.has(namespace)) return
@@ -496,49 +564,26 @@ export async function collectKubernetesCompatibilityDiagnostics(
           resources,
           "--namespace",
           namespace,
-          "--selector",
-          `${RUN_LABEL}=${input.runId}`,
           "--output=json",
         ]),
         format: "json",
       },
       {
         id: `${namespace}.pod-descriptions`,
-        command: kubectl.command(input.context, [
-          "describe",
-          "pods",
-          "--namespace",
-          namespace,
-          "--selector",
-          `${RUN_LABEL}=${input.runId}`,
-        ]),
-        format: "text",
-      },
-      {
-        id: `${namespace}.pod-logs`,
-        command: kubectl.command(input.context, [
-          "logs",
-          "--namespace",
-          namespace,
-          "--selector",
-          `${RUN_LABEL}=${input.runId}`,
-          "--all-containers=true",
-          "--prefix=true",
-          "--tail=200",
-        ]),
+        command: kubectl.command(input.context, ["describe", "pods", "--namespace", namespace]),
         format: "text",
       },
     )
   }
 
-  addNamespaceDiagnostics(input.names.managementNamespace, "pods,services,deployments,replicasets")
+  addNamespaceDiagnostics(input.names.managementNamespace, "services,deployments,replicasets")
   addNamespaceDiagnostics(
     input.names.sandboxNamespace,
-    "pods,services,jobs,cronjobs,resourcequotas,limitranges,networkpolicies,persistentvolumeclaims",
+    "services,jobs,cronjobs,resourcequotas,limitranges,networkpolicies,persistentvolumeclaims",
   )
 
   if (ownedNames.has(input.names.managementNamespace)) {
-    for (const role of input.attemptedReleases) {
+    for (const role of new Set(input.attemptedReleases)) {
       const release =
         role === "infrastructure" ? input.names.sandboxRelease : input.names.appRelease
       requests.push({
@@ -555,25 +600,54 @@ export async function collectKubernetesCompatibilityDiagnostics(
     }
   }
 
-  const settled = await Promise.allSettled(
-    requests.map(async (request): Promise<DiagnosticResult> => {
-      const commandResult = await input.execute(request.command, diagnosticCommandOptions())
-      return Object.freeze({
-        id: request.id,
+  const results = await settleDiagnosticRequests(requests, input.execute)
+  const podLists = await Promise.allSettled(
+    ownedNamespaces.map(async (namespace) => {
+      const commandResult = await input.execute(
+        kubectl.command(input.context, ["get", "pods", "--namespace", namespace, "--output=json"]),
+        diagnosticCommandOptions(),
+      )
+      return { namespace, commandResult, names: diagnosticPodNames(commandResult, namespace) }
+    }),
+  )
+  const logRequests: DiagnosticRequest[] = []
+  for (const [index, outcome] of podLists.entries()) {
+    const namespace = ownedNamespaces[index] as string
+    if (outcome.status === "rejected") {
+      results.push(
+        Object.freeze({
+          id: `${namespace}.pods`,
+          status: "failed",
+          error: errorDiagnostics(outcome.reason),
+        }),
+      )
+      continue
+    }
+    results.push(
+      Object.freeze({
+        id: `${namespace}.pods`,
         status: "passed",
-        output: diagnosticOutput(commandResult, request.format),
+        output: diagnosticOutput(outcome.value.commandResult, "json"),
+      }),
+    )
+    for (const podName of outcome.value.names) {
+      logRequests.push({
+        id: `${namespace}.pod-logs.${podName}`,
+        command: kubectl.command(input.context, [
+          "logs",
+          `pod/${podName}`,
+          "--namespace",
+          namespace,
+          "--all-containers=true",
+          "--prefix=true",
+          "--tail=200",
+        ]),
+        format: "text",
       })
-    }),
-  )
-  return Object.freeze(
-    settled.map((outcome, index): DiagnosticResult => {
-      const request = requests[index]
-      const id = request?.id ?? `diagnostic-${index}`
-      return outcome.status === "fulfilled"
-        ? outcome.value
-        : Object.freeze({ id, status: "failed", error: errorDiagnostics(outcome.reason) })
-    }),
-  )
+    }
+  }
+  results.push(...(await settleDiagnosticRequests(logRequests, input.execute)))
+  return Object.freeze(results)
 }
 
 function reportDiagnostics(
@@ -633,29 +707,91 @@ export async function runKubernetesCompatibility(
   const runId = expectNonEmpty(resolved.createRunId(), "Generated compatibility run ID")
   const derivedNames = deriveClusterNames(runId)
   const ownership: NamespaceOwnership[] = []
-  const installedReleases: InstalledReleaseRole[] = []
-  const attemptedReleases: InstalledReleaseRole[] = []
+  const releaseCleanupCandidates = new Set<InstalledReleaseRole>()
   const tokenDestroyers = new Set<() => Promise<void>>()
   const observedProbes: AccountedStep[] = []
+  const lifecycleAbort = new AbortController()
+  const inFlightLifecyclePhases = new Set<Promise<unknown>>()
   let networkLease: NetworkControlLease | undefined
   let signalRegistration: SignalCleanupRegistration | undefined
   let reportRecorder: CompatibilityReportRecorder | undefined
   let observedServer = "unavailable"
   let cleanupOperation: Promise<CleanupExecution> | undefined
-  let policy: CompatibilityPolicy | undefined
+  let shutdownRecoveryOperation: Promise<void> | undefined
+  let shutdownRequested = false
   let preflight: ClusterPreflightResult | undefined
+
+  const assertLifecycleActive = (operation: string): void => {
+    if (shutdownRequested || lifecycleAbort.signal.aborted) {
+      throw new Error(`Compatibility shutdown requested before ${operation}`)
+    }
+  }
+
+  const lifecycleExecute: CommandExecutor = (command, executionOptions = {}) => {
+    assertLifecycleActive(`starting ${command.file}`)
+    const signal =
+      executionOptions.signal === undefined
+        ? lifecycleAbort.signal
+        : AbortSignal.any([lifecycleAbort.signal, executionOptions.signal])
+    return resolved.execute(command, { ...executionOptions, signal })
+  }
+
+  const runTrackedLifecyclePhase = <T>(
+    name: string,
+    operation: (execute: ProbeCommandRunner) => Promise<T>,
+  ): Promise<T> => {
+    let phaseActive = true
+    const phaseExecute: ProbeCommandRunner = (command, executionOptions) =>
+      phaseActive
+        ? lifecycleExecute(command, executionOptions)
+        : resolved.execute(command, executionOptions)
+    const tracked = Promise.resolve().then(async () => {
+      assertLifecycleActive(`starting ${name}`)
+      try {
+        const value = await operation(phaseExecute)
+        assertLifecycleActive(`completing ${name}`)
+        return value
+      } finally {
+        phaseActive = false
+      }
+    })
+    inFlightLifecyclePhases.add(tracked)
+    void tracked.then(
+      () => inFlightLifecyclePhases.delete(tracked),
+      () => inFlightLifecyclePhases.delete(tracked),
+    )
+    return tracked
+  }
+
+  const waitForTrackedLifecyclePhases = async (): Promise<void> => {
+    while (inFlightLifecyclePhases.size > 0) {
+      await Promise.allSettled([...inFlightLifecyclePhases])
+    }
+  }
+
+  const registerReleaseCleanupCandidate = (role: InstalledReleaseRole): void => {
+    assertLifecycleActive(`registering ${role} Helm install`)
+    releaseCleanupCandidates.add(role)
+  }
 
   const cleanupCurrentState = (retainClusterResources: boolean): Promise<CleanupExecution> => {
     if (cleanupOperation !== undefined) return cleanupOperation
     cleanupOperation = (async () => {
       const hadWork =
         ownership.length > 0 ||
-        installedReleases.length > 0 ||
+        releaseCleanupCandidates.size > 0 ||
         networkLease !== undefined ||
         tokenDestroyers.size > 0
       if (!hadWork) return { result: Object.freeze({ status: "skipped" }) }
 
       const errors: Error[] = []
+      if (shutdownRecoveryOperation !== undefined) {
+        try {
+          await shutdownRecoveryOperation
+        } catch (error) {
+          errors.push(normalizeError(error, "Signal ownership recovery failed"))
+        }
+      }
       let ownershipVerified = ownership.length === 0
       if (ownership.length > 0) {
         try {
@@ -688,12 +824,16 @@ export async function runKubernetesCompatibility(
 
       const retained = retainClusterResources && ownershipVerified && ownership.length > 0
       if (ownershipVerified && !retained && ownership.length > 0) {
+        const hasBothNamespaceOwnership = [
+          derivedNames.managementNamespace,
+          derivedNames.sandboxNamespace,
+        ].every((namespace) => ownership.some(({ name }) => name === namespace))
         try {
           await resolved.cleanupCluster({
             context: options.context,
             runId,
             ownership: [...ownership],
-            installedReleases: [...installedReleases],
+            installedReleases: hasBothNamespaceOwnership ? [...releaseCleanupCandidates] : [],
             removeTokenFiles: async () => undefined,
           })
         } catch (error) {
@@ -718,6 +858,22 @@ export async function runKubernetesCompatibility(
   }
 
   const signalCleanup = async (): Promise<void> => {
+    if (shutdownRecoveryOperation === undefined) {
+      shutdownRequested = true
+      lifecycleAbort.abort()
+      shutdownRecoveryOperation = (async () => {
+        await waitForTrackedLifecyclePhases()
+        const recoveries = await Promise.allSettled([
+          recoverNamespaceOwnership(derivedNames.managementNamespace),
+          recoverNamespaceOwnership(derivedNames.sandboxNamespace),
+        ])
+        const recoveryError = aggregateErrors(
+          recoveries.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
+          "Signal ownership recovery failed",
+        )
+        if (recoveryError !== undefined) throw recoveryError
+      })()
+    }
     const cleanup = await cleanupCurrentState(false)
     if (cleanup.error !== undefined) throw cleanup.error
   }
@@ -807,56 +963,73 @@ export async function runKubernetesCompatibility(
   }
 
   const withTokenKubeconfig = async <T>(
-    operation: (secure: SecureTokenKubeconfig) => Promise<T>,
-  ): Promise<T> => {
-    if (preflight === undefined) throw new Error("Token phase requires completed cluster preflight")
-    const token = await resolved.requestToken({
-      context: options.context,
-      namespace: derivedNames.sandboxNamespace,
-      serviceAccount: ORCHESTRATOR_SERVICE_ACCOUNT,
-    })
-    const secure = await resolved.createTokenKubeconfig({
-      context: options.context,
-      access: preflight.access,
-      token,
-    })
-    let destroyInFlight: Promise<void> | undefined
-    const destroy = (): Promise<void> => {
-      destroyInFlight ??= secure.destroy().then(() => {
-        tokenDestroyers.delete(destroy)
+    operation: (secure: SecureTokenKubeconfig, execute: ProbeCommandRunner) => Promise<T>,
+  ): Promise<T> =>
+    runTrackedLifecyclePhase("token-scoped phase", async (execute) => {
+      if (preflight === undefined) {
+        throw new Error("Token phase requires completed cluster preflight")
+      }
+      const token = await resolved.requestToken(
+        {
+          context: options.context,
+          namespace: derivedNames.sandboxNamespace,
+          serviceAccount: ORCHESTRATOR_SERVICE_ACCOUNT,
+        },
+        execute,
+      )
+      assertLifecycleActive("creating token kubeconfig")
+      const secure = await resolved.createTokenKubeconfig({
+        context: options.context,
+        access: preflight.access,
+        token,
       })
-      return destroyInFlight.finally(() => {
-        destroyInFlight = undefined
-      })
-    }
-    tokenDestroyers.add(destroy)
+      let destroyInFlight: Promise<void> | undefined
+      const destroy = (): Promise<void> => {
+        destroyInFlight ??= Promise.resolve()
+          .then(() => secure.destroy())
+          .then(() => {
+            tokenDestroyers.delete(destroy)
+          })
+        return destroyInFlight.finally(() => {
+          destroyInFlight = undefined
+        })
+      }
+      tokenDestroyers.add(destroy)
 
-    const operationOutcome = await Promise.resolve()
-      .then(() => operation(secure))
-      .then(
-        (value) => ({ status: "fulfilled", value }) as const,
+      const operationOutcome = await Promise.resolve()
+        .then(() => {
+          assertLifecycleActive("starting token-scoped operation")
+          return operation(secure, execute)
+        })
+        .then(
+          (value) => ({ status: "fulfilled", value }) as const,
+          (reason: unknown) => ({ status: "rejected", reason }) as const,
+        )
+      const destroyOutcome = await destroy().then(
+        () => ({ status: "fulfilled" }) as const,
         (reason: unknown) => ({ status: "rejected", reason }) as const,
       )
-    const destroyOutcome = await destroy().then(
-      () => ({ status: "fulfilled" }) as const,
-      (reason: unknown) => ({ status: "rejected", reason }) as const,
-    )
-    const failures = [
-      ...(operationOutcome?.status === "rejected" ? [operationOutcome.reason] : []),
-      ...(destroyOutcome?.status === "rejected" ? [destroyOutcome.reason] : []),
-    ]
-    const failure = aggregateErrors(failures, "Token-scoped compatibility phase failed")
-    if (failure !== undefined) throw failure
-    if (operationOutcome?.status !== "fulfilled") {
-      throw new Error("Token-scoped compatibility phase did not produce a result")
-    }
-    return operationOutcome.value
-  }
+      const failures = [
+        ...(operationOutcome.status === "rejected" ? [operationOutcome.reason] : []),
+        ...(destroyOutcome.status === "rejected" ? [destroyOutcome.reason] : []),
+      ]
+      const failure = aggregateErrors(failures, "Token-scoped compatibility phase failed")
+      if (failure !== undefined) throw failure
+      if (operationOutcome.status !== "fulfilled") {
+        throw new Error("Token-scoped compatibility phase did not produce a result")
+      }
+      return operationOutcome.value
+    })
 
-  const recordProbe = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
+  const recordProbe = async <T>(
+    id: string,
+    operation: (execute: ProbeCommandRunner) => Promise<T>,
+  ): Promise<T> => {
     if (reportRecorder === undefined) throw new Error("Probe recording requires cluster preflight")
     try {
-      const value = await reportRecorder.runStep(id, operation)
+      const value = await reportRecorder.runStep(id, () =>
+        runTrackedLifecyclePhase(`probe ${id}`, operation),
+      )
       observedProbes.push({ id, status: "passed" })
       return value
     } catch (error) {
@@ -868,8 +1041,8 @@ export async function runKubernetesCompatibility(
   let primaryFailure: unknown
   let collectedDiagnostics: unknown
   try {
-    policy = await resolved.loadPolicy()
-    getTargetByMinor(policy, options.target)
+    const activePolicy = await resolved.loadPolicy()
+    getTargetByMinor(activePolicy, options.target)
     try {
       preflight = await resolved.preflight({
         context: options.context,
@@ -884,6 +1057,10 @@ export async function runKubernetesCompatibility(
       )
     }
     assertPreflightNames(preflight.names, derivedNames)
+    const selectedStorageClass = expectNonEmpty(
+      preflight.storageClass,
+      "Preflight-selected StorageClass",
+    )
     observedServer = preflight.observedServer
     reportRecorder = createCompatibilityReport({
       target: options.target,
@@ -901,13 +1078,11 @@ export async function runKubernetesCompatibility(
     })
     await createManagementNamespace()
 
-    attemptedReleases.push("infrastructure")
+    registerReleaseCleanupCandidate("infrastructure")
     try {
-      await resolved.probes.installInfrastructure({
-        context: options.context,
-        runId,
-        execute: resolved.execute as ProbeCommandRunner,
-      })
+      await runTrackedLifecyclePhase("infrastructure Helm install", (execute) =>
+        resolved.probes.installInfrastructure({ context: options.context, runId, execute }),
+      )
     } catch (error) {
       await failAfterRecovery(error, derivedNames.sandboxNamespace)
     }
@@ -919,27 +1094,26 @@ export async function runKubernetesCompatibility(
     } catch (error) {
       await failAfterRecovery(error, derivedNames.sandboxNamespace)
     }
-    installedReleases.push("infrastructure")
 
-    const administrativeProbe = {
-      context: options.context,
-      runId,
-      execute: resolved.execute as ProbeCommandRunner,
-    }
-    const policyProbe = { ...administrativeProbe, policy }
-    await recordProbe("namespace.sandbox-secrets-empty", () =>
-      resolved.probes.sandboxSecretsEmpty(administrativeProbe),
+    await recordProbe("namespace.sandbox-secrets-empty", (execute) =>
+      resolved.probes.sandboxSecretsEmpty({ context: options.context, runId, execute }),
     )
-    networkLease = await recordProbe("network.control-ready", () =>
-      resolved.probes.networkControl(policyProbe),
+    const networkControlLease = await recordProbe("network.control-ready", (execute) =>
+      resolved.probes.networkControl({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
     )
+    networkLease = networkControlLease
 
     const runProviderPhase = async (
       phase: "provider-before-upgrade" | "provider-after-upgrade",
     ): Promise<void> => {
-      await withTokenKubeconfig(async (secure) => {
+      await withTokenKubeconfig(async (secure, execute) => {
         const reportPath = join(secure.directory, `${phase}.json`)
-        await resolved.execute(
+        const providerResult = await execute(
           {
             file: "pnpm",
             args: [
@@ -960,66 +1134,121 @@ export async function runKubernetesCompatibility(
             timeoutMs: PROVIDER_TIMEOUT_MS,
             stdoutLimitBytes: PROVIDER_STDOUT_LIMIT_BYTES,
             stderrLimitBytes: PROVIDER_STDERR_LIMIT_BYTES,
+            acceptedExitCodes: [1],
             env: {
               ...process.env,
               DAWN_TEST_K8S: "1",
               DAWN_TEST_K8S_NS: derivedNames.sandboxNamespace,
-              DAWN_TEST_K8S_IMAGE: policy?.images.sandboxWorkload,
-              DAWN_TEST_K8S_EGRESS_CONTROL_URL: networkLease?.url,
+              DAWN_TEST_K8S_IMAGE: activePolicy.images.sandboxWorkload,
+              DAWN_TEST_K8S_STORAGE_CLASS: selectedStorageClass,
+              DAWN_TEST_K8S_EGRESS_CONTROL_URL: networkControlLease.url,
               KUBECONFIG: secure.path,
             },
           },
         )
         await providerAccounting.record({ reportPath, phase })
+        if (providerResult.exitCode !== 0) {
+          throw new Error(`${phase} provider command exited with code ${providerResult.exitCode}`)
+        }
       })
     }
 
     await runProviderPhase("provider-before-upgrade")
     await withTokenKubeconfig(async (secure) => {
-      const tokenProbe = { ...policyProbe, kubeconfig: secure.path }
-      await recordProbe("admission.resource-quota", () => resolved.probes.resourceQuota(tokenProbe))
-      await recordProbe("admission.limit-range", () => resolved.probes.limitRange(tokenProbe))
-      await recordProbe("admission.restricted.before-upgrade", () =>
-        resolved.probes.restrictedAdmission(tokenProbe),
+      const tokenProbe = (execute: ProbeCommandRunner) => ({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        kubeconfig: secure.path,
+        execute,
+      })
+      await recordProbe("admission.resource-quota", (execute) =>
+        resolved.probes.resourceQuota(tokenProbe(execute)),
       )
-      await recordProbe("rbac.secret-read-denied", () =>
-        resolved.probes.secretReadDenied(tokenProbe),
+      await recordProbe("admission.limit-range", (execute) =>
+        resolved.probes.limitRange(tokenProbe(execute)),
       )
-      await recordProbe("rbac.role-mutation-denied", () =>
-        resolved.probes.roleMutationDenied(tokenProbe),
+      await recordProbe("admission.restricted.before-upgrade", (execute) =>
+        resolved.probes.restrictedAdmission(tokenProbe(execute)),
       )
-      await recordProbe("rbac.outside-namespace-denied", () =>
-        resolved.probes.outsideNamespaceDenied(tokenProbe),
+      await recordProbe("rbac.secret-read-denied", (execute) =>
+        resolved.probes.secretReadDenied(tokenProbe(execute)),
+      )
+      await recordProbe("rbac.role-mutation-denied", (execute) =>
+        resolved.probes.roleMutationDenied(tokenProbe(execute)),
+      )
+      await recordProbe("rbac.outside-namespace-denied", (execute) =>
+        resolved.probes.outsideNamespaceDenied(tokenProbe(execute)),
       )
     })
 
-    await recordProbe("reaper.lifecycle.before-upgrade", () =>
-      resolved.probes.reaperLifecycle(policyProbe),
+    await recordProbe("reaper.lifecycle.before-upgrade", (execute) =>
+      resolved.probes.reaperLifecycle({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
     )
-    attemptedReleases.push("application")
-    await resolved.probes.installApplication(policyProbe)
-    installedReleases.push("application")
-    await recordProbe("app.service-ready.before-upgrade", () =>
-      resolved.probes.applicationServiceReady(policyProbe),
+    registerReleaseCleanupCandidate("application")
+    await runTrackedLifecyclePhase("application Helm install", (execute) =>
+      resolved.probes.installApplication({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
+    )
+    await recordProbe("app.service-ready.before-upgrade", (execute) =>
+      resolved.probes.applicationServiceReady({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
     )
 
-    await recordProbe("upgrade.infrastructure", () =>
-      resolved.probes.upgradeInfrastructure(administrativeProbe),
+    await recordProbe("upgrade.infrastructure", (execute) =>
+      resolved.probes.upgradeInfrastructure({ context: options.context, runId, execute }),
     )
     await runProviderPhase("provider-after-upgrade")
     await withTokenKubeconfig(async (secure) => {
-      await recordProbe("admission.restricted.after-infra-upgrade", () =>
-        resolved.probes.restrictedAdmission({ ...policyProbe, kubeconfig: secure.path }),
+      await recordProbe("admission.restricted.after-infra-upgrade", (execute) =>
+        resolved.probes.restrictedAdmission({
+          context: options.context,
+          runId,
+          policy: activePolicy,
+          kubeconfig: secure.path,
+          execute,
+        }),
       )
     })
-    await recordProbe("reaper.lifecycle.after-infra-upgrade", () =>
-      resolved.probes.reaperLifecycle(policyProbe),
+    await recordProbe("reaper.lifecycle.after-infra-upgrade", (execute) =>
+      resolved.probes.reaperLifecycle({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
     )
 
-    await recordProbe("upgrade.application", () => resolved.probes.upgradeApplication(policyProbe))
-    await recordProbe("app.service-ready.after-application-upgrade", () =>
-      resolved.probes.applicationServiceReady(policyProbe),
+    await recordProbe("upgrade.application", (execute) =>
+      resolved.probes.upgradeApplication({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
     )
+    await recordProbe("app.service-ready.after-application-upgrade", (execute) =>
+      resolved.probes.applicationServiceReady({
+        context: options.context,
+        runId,
+        policy: activePolicy,
+        execute,
+      }),
+    )
+    assertLifecycleActive("final provider and probe accounting")
     providerAccounting.finish()
     resolved.assertStepAccounting(KUBERNETES_COMPAT_PROBE_IDS, observedProbes)
   } catch (error) {
@@ -1042,7 +1271,7 @@ export async function runKubernetesCompatibility(
         runId,
         names: derivedNames,
         ownership: [...ownership],
-        attemptedReleases: [...attemptedReleases],
+        attemptedReleases: [...releaseCleanupCandidates],
         execute: resolved.execute,
       })
     } catch (diagnosticError) {
@@ -1056,13 +1285,8 @@ export async function runKubernetesCompatibility(
     ...(checkpointDiagnostics !== undefined ? { diagnostics: checkpointDiagnostics } : {}),
   })
   const reportFilename = safeReportFilename(options.target, derivedNames)
-  let reportPath: string | undefined
   try {
-    reportPath = await resolved.persistReport(
-      resolved.repositoryRoot,
-      reportFilename,
-      checkpointReport,
-    )
+    await resolved.persistReport(resolved.repositoryRoot, reportFilename, checkpointReport)
   } catch (persistenceError) {
     primaryFailure = aggregateErrors(
       [...(primaryFailure !== undefined ? [primaryFailure] : []), persistenceError],
@@ -1088,7 +1312,7 @@ export async function runKubernetesCompatibility(
         runId,
         names: derivedNames,
         ownership: [...ownership],
-        attemptedReleases: [...attemptedReleases],
+        attemptedReleases: [...releaseCleanupCandidates],
         execute: resolved.execute,
       })
     } catch (diagnosticError) {
@@ -1101,8 +1325,9 @@ export async function runKubernetesCompatibility(
     cleanup.result,
     reportDiagnostics(finalFailure, collectedDiagnostics),
   )
+  let finalReportPath: string | undefined
   try {
-    reportPath = await resolved.persistReport(resolved.repositoryRoot, reportFilename, report)
+    finalReportPath = await resolved.persistReport(resolved.repositoryRoot, reportFilename, report)
   } catch (persistenceError) {
     finalFailure = aggregateErrors(
       [...(finalFailure !== undefined ? [finalFailure] : []), persistenceError],
@@ -1113,12 +1338,12 @@ export async function runKubernetesCompatibility(
   }
 
   if (finalFailure !== undefined) {
-    throw new KubernetesCompatibilityRunError(finalFailure, reportPath)
+    throw new KubernetesCompatibilityRunError(finalFailure, finalReportPath)
   }
-  if (reportPath === undefined) {
+  if (finalReportPath === undefined) {
     throw new KubernetesCompatibilityRunError("Compatibility report path was not returned")
   }
-  return Object.freeze({ runId, reportPath, report })
+  return Object.freeze({ runId, reportPath: finalReportPath, report })
 }
 
 export async function runKubernetesCompatibilityMain(

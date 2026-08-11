@@ -381,6 +381,22 @@ describe("Vitest provider accounting", () => {
     )
   })
 
+  test("reports failed assertion IDs before the unsuccessful Vitest summary", async () => {
+    const fixture = await writeAccountingFixture({
+      ...vitestJsonReport(
+        providerTestNames.map((fullName, index) => ({
+          fullName,
+          status: index === 0 ? "failed" : "passed",
+        })),
+      ),
+      success: false,
+    })
+
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      /failed.*provider test zeta/i,
+    )
+  })
+
   test.each([
     ["missing", [{ fullName: providerTestNames[0], status: "passed" }], /missing.*alpha/i],
     [
