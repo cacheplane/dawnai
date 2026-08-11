@@ -59,9 +59,9 @@ Kind `v0.32.0`, temporary kubectl `v1.35.6`, and temporary Helm `v4.2.3`.
 - Every nonzero attempt captures bounded diagnostics before cleanup. Cleanup
   runs automatically on success, failure, SIGINT, and SIGTERM.
 - First attempts never retain resources. A retained rerun is allowed only after
-  first-pass evidence exists, only for a focused Kubernetes lane, and only with
-  the exact `*-retain1` cluster recorded in state. Docker resources are never
-  retained.
+  first-pass evidence exists, only for a chart-apply, focused, or Kubernetes
+  E2E lane, and only with the exact `*-retain1` cluster and justification
+  recorded in state. Docker resources are never retained.
 - Never delete by prefix. Prefix scans are read-only conflict/audit checks.
 - On a Dawn behavior failure, stop the lane, use
   `superpowers:systematic-debugging`, add the narrowest TDD reproduction,
@@ -114,6 +114,7 @@ interface CommandRecord {
   readonly finishedAt: string
   readonly exitCode: number
   readonly timedOut: boolean
+  readonly classification: FailureClass
 }
 
 interface AttemptRecord {
@@ -149,7 +150,7 @@ interface LaneResult {
   readonly cleanup: CleanupStatus
   readonly retry: "none" | "retry1"
   readonly postFixRuns: number
-  readonly verifiedCommit: string
+  readonly verifiedCommit: string | null
   readonly blockedBy?: string
   readonly hostedEquivalent?: string
   readonly attempts: readonly AttemptRecord[]
@@ -158,6 +159,7 @@ interface LaneResult {
 interface RetainedRecord {
   readonly lane: Exclude<LaneId, "docker-e2e">
   readonly resource: string
+  readonly reason: string
   readonly startedAt: string
   readonly finishedAt: string | null
   readonly status: "running" | "failed" | "cleaned"
@@ -166,11 +168,33 @@ interface RetainedRecord {
 }
 
 interface FixRecord {
+  readonly sourceLane: LaneId
   readonly commit: string
   readonly parentCommit: string
   readonly changedFiles: readonly string[]
   readonly affectedLanes: readonly LaneId[]
   readonly registeredAt: string
+}
+
+interface BootstrapAttemptRecord {
+  readonly id: "attempt0" | "retry1"
+  readonly startedAt: string
+  readonly finishedAt: string
+  readonly exitCode: number
+  readonly classification: FailureClass
+  readonly diagnostics: string | null
+  readonly diagnosticsSha256: string | null
+  readonly retryEligible: boolean
+  readonly retryReason: string | null
+  readonly gitCommit: string
+  readonly commands: readonly CommandRecord[]
+}
+
+interface BootstrapPhaseRecord {
+  readonly status: "pending" | "ready" | "failed"
+  readonly reason: string | null
+  readonly terminalClassification: FailureClass | null
+  readonly attempts: readonly BootstrapAttemptRecord[]
 }
 
 interface RunState {
@@ -190,18 +214,9 @@ interface RunState {
     readonly path: string
     readonly sha256: string | null
   }>>
-  readonly sharedBootstrap: {
-    readonly status: "pending" | "ready" | "failed"
-    readonly reason: string | null
-  }
-  readonly dockerBootstrap: {
-    readonly status: "pending" | "ready" | "failed"
-    readonly reason: string | null
-  }
-  readonly kubernetesBootstrap: {
-    readonly status: "pending" | "ready" | "failed"
-    readonly reason: string | null
-  }
+  readonly sharedBootstrap: BootstrapPhaseRecord
+  readonly dockerBootstrap: BootstrapPhaseRecord
+  readonly kubernetesBootstrap: BootstrapPhaseRecord
   readonly baseline: {
     readonly kindClusters: readonly string[] | null
     readonly fixedContainers: Readonly<Record<string, string>> | null
@@ -227,10 +242,14 @@ nonzero.
 
 Consistency rules:
 
-- `passed`: exit `0`, class `none`, cleanup `passed`, one or two attempts.
+- `passed`: exit `0`, class `none`, cleanup `passed`, one or more attempts. The
+  sequence starts at `attempt0`, optionally includes `retry1`, and then contains
+  zero or more monotonically numbered `fixN` attempts.
 - `failed`: nonzero exit or failed cleanup, non-`none` class, no blocked fields.
-- `blocked`: null exit, `bootstrap/environment`, cleanup `not-run`, no
-  attempts, and nonempty `blockedBy` plus `hostedEquivalent`.
+- `blocked`: null exit, cleanup `not-run`, no attempts, `verifiedCommit=null`,
+  and nonempty `blockedBy` plus `hostedEquivalent`. Classification equals the
+  failed prerequisite's persisted terminal class, either
+  `bootstrap/environment` or `dawn-behavior`.
 - `retry1`: the first two attempts are exactly `attempt0` and `retry1`; the
   first records `retryEligible=true` and a nonempty reason. Kubernetes's second
   resource uses the exact `-retry1` suffix. Docker remains `docker-daemon`
@@ -526,7 +545,7 @@ pnpm exec tsx infra-runner.ts run <LaneId>
 pnpm exec tsx infra-runner.ts status [LaneId]
 pnpm exec tsx infra-runner.ts validate
 pnpm exec tsx infra-runner.ts cleanup
-pnpm exec tsx infra-runner.ts rerun-retained <Kubernetes LaneId>
+pnpm exec tsx infra-runner.ts rerun-retained <Kubernetes LaneId> --reason <text>
 pnpm exec tsx infra-runner.ts cleanup-retained <Kubernetes LaneId>
 pnpm exec tsx infra-runner.ts register-fix <commit> <LaneId...>
 pnpm exec tsx infra-runner.ts rerun-after-fix <LaneId>
@@ -570,7 +589,8 @@ Required primitives:
 
 `rerun-retained` is legal only after the selected Kubernetes lane has a
 first-pass failed result and bounded diagnostics. It creates one new exact
-`*-retain1` cluster and stores a `RetainedRecord`. Focused lanes pass
+`*-retain1` cluster and stores the nonempty reason explaining why saved
+diagnostics are insufficient in a `RetainedRecord`. Focused lanes pass
 `--keep-on-failure`; chart-apply and Kubernetes E2E use the same body but skip
 automatic cluster deletion only after a failed retained attempt. It never
 changes the six first-pass result rows. `cleanup-retained` diagnoses and deletes
@@ -578,17 +598,25 @@ that exact cluster, proves absence with a successful Kind listing, and changes
 the record to `cleaned`. Final validation rejects `running` or uncleaned
 retained records. Docker is rejected by both commands.
 
+Before every bootstrap or lane attempt, require `git status --short` empty and
+capture `git rev-parse HEAD`. Recheck both before finalizing the attempt. An
+uncommitted or changed HEAD fails evidence collection and cannot produce a
+passing row. `attempt0` and `retry1` must have the identical Git SHA; source
+changes require a registered fix and `fixN` instead.
+
 `register-fix` requires a clean worktree, current HEAD equal to the supplied
 commit, that commit to be a direct descendant of the previous reviewed head,
 and `git diff-tree` to match the stored changed-file list. It records the
 minimal affected/downstream lane set justified by the TDD fix; the controller
-must include every already-run lane exercising a changed file. `rerun-after-fix`
-requires that fix record, a prior `dawn-behavior` attempt, a clean worktree,
-and current HEAD different from that attempt's `gitCommit`. It appends the next
-`fixN` attempt, runs from a clean resource, updates the lane result, and records
-the new SHA. It is not a transient retry and has no one-retry limit. The
-controller invokes it for the directly affected lane and every already-run
-downstream lane that exercises the changed behavior.
+must include every already-run lane exercising a changed file. The
+`sourceLane` must have the prior `dawn-behavior` attempt that justified the fix.
+`rerun-after-fix` accepts any lane listed in that `FixRecord`: the source lane
+may have failed, while an affected downstream lane may previously have passed
+or been blocked. It requires a clean worktree and current HEAD at the fix commit
+or a descendant. It appends the next `fixN` attempt when prior attempts exist;
+for a previously blocked lane with no attempt, it creates `attempt0` with
+`kind=post-fix`. It runs from a clean resource, updates the lane result, and
+records the new SHA. It is not a transient retry and has no one-retry limit.
 
 SIGINT/SIGTERM handlers terminate the active child process group and enter the same
 diagnostics/cleanup/result path. Every registry wait is capped at 180 seconds;
@@ -639,7 +667,11 @@ Every child gets `cwd=repoRoot`, the explicit Node/tool `PATH`, and the isolated
   `DAWN_TEST_K8S_CONTEXT=<context>` and `DAWN_K8S_TARGET=<minor>`;
 - Kubernetes E2E: `DAWN_TEST_SMOKE_E2E=1`, `KIND_CLUSTER=<cluster>`, and
   `DAWN_TEST_K8S_CONTEXT=<context>`; and
-- Docker E2E: `DAWN_TEST_SMOKE_E2E=1`.
+- Docker E2E: `DAWN_TEST_SMOKE_E2E=1`,
+  `APP_IMAGE=<derived-run-unique-app-tag>`,
+  `AIMOCK_IMAGE=<derived-run-unique-aimock-tag>`, and the plan-owned
+  `SMOKE_COMMAND_TIMEOUT_SECONDS` / `SMOKE_COMMAND_KILL_GRACE_SECONDS` values.
+  These values come from state/constants, never caller overrides.
 
 The runner reads every image/version from the parsed policy and checks the
 policy file's SHA-256 against `RunState.policySha256` before each lane. It does
@@ -674,6 +706,9 @@ The ignored tests use fake executables and temporary state to prove:
 
 - an existing global active-run lease prevents creation of a second run;
 - every Kubernetes child receives only the run-owned `KUBECONFIG`;
+- shared/Docker/Kubernetes bootstrap success, terminal failure, eligible retry,
+  and ineligible `dawn-behavior` failure produce internally consistent records
+  and dependent blocked rows;
 - a failed Kind listing cannot establish absence or ownership;
 - a partial create is cleaned only when exact post-create observation proves
   ownership;
@@ -725,6 +760,16 @@ lanes. A failed Docker phase blocks all six local lanes because Kind uses that
 daemon. A failed Kubernetes phase blocks only the five Kubernetes lanes;
 `docker-e2e` remains runnable and its evidence remains valid. Missing fields are
 never used to infer status.
+
+Each phase writes a `BootstrapAttemptRecord` before exposing `ready` or
+`failed`. Permit at most one `retry1` only for the same evidence-backed
+transient categories as lane retries: network download/5xx or a temporarily
+unreachable Docker daemon. The retry requires a clean worktree and unchanged
+Git SHA. Frozen-lockfile, workspace/package, checksum, pin, permission, and host
+compatibility failures never retry. A frozen-install manifest/lockfile failure
+uses terminal class `dawn-behavior`; dependent lane rows are blocked by that
+exact class/reason rather than rewritten as environment failures. Every failed
+bootstrap attempt has a bounded diagnostic file and hash.
 
 Then download into `TOOL_ROOT`, with HTTPS-only redirects and upstream
 checksums:
@@ -959,11 +1004,10 @@ kubectl --context "<context>" create namespace dawn-app
 helm --kube-context "<context>" install dawn-sandbox-infra \
   charts/dawn-sandbox-infra -n dawn-sandboxes --create-namespace \
   -f test/k8s-smoke/values-sandbox-infra.yaml --wait
-kubectl --context "<context>" set image \
-  -f test/k8s-smoke/aimock.k8s.yaml \
-  aimock="<run-unique-aimock-tag>" --local -o yaml
-# Pass the captured stdout from the previous argv as stdin to:
-kubectl --context "<context>" apply -f -
+kubectl --context "<context>" apply \
+  -f test/k8s-smoke/aimock.k8s.yaml
+kubectl --context "<context>" -n dawn-app set image \
+  deployment/aimock aimock="<run-unique-aimock-tag>"
 kubectl --context "<context>" -n dawn-app rollout status \
   deploy/aimock --timeout=120s
 helm --kube-context "<context>" install dawn-app charts/dawn-app \
@@ -1072,7 +1116,8 @@ pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
 - parseable ordered timestamps and nonempty tool versions/resources;
 - attempt count, IDs, retry eligibility, and retry resource naming;
 - every attempt's `gitCommit` exists, its command timestamps are contained by
-  the attempt, and `verifiedCommit` equals its latest attempt;
+  the attempt, and every non-blocked result's `verifiedCommit` equals its latest
+  attempt while blocked results keep it null;
 - every `FixRecord` matches Git parent/changed-file evidence and every listed
   affected lane that had already run has a later `post-fix` attempt at that
   commit or a descendant. No result may silently replace its pre-fix attempt;
@@ -1095,7 +1140,9 @@ pnpm exec tsx "$RUN_ROOT/infra-runner.ts" validate
 
 Also re-hash `.github/kubernetes-compatibility.json` and require it to equal
 `RunState.policySha256`. Always validate `sharedBootstrap`, `dockerBootstrap`,
-their exact Node/pnpm/Docker evidence, and the Docker baseline when Docker
+and `kubernetesBootstrap` attempt IDs, command ledgers, classifications,
+diagnostic paths/hashes, retry eligibility, Git SHA, and terminal
+status/reason consistency. Validate exact Node/pnpm/Docker evidence and the Docker baseline when Docker
 bootstrap reached `ready`. If shared or Docker bootstrap failed, require every
 dependent row to be blocked by that exact persisted reason and do not require
 the corresponding absent baseline fields. If `kubernetesBootstrap=ready`, require the recorded
