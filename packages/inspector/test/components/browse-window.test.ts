@@ -12,11 +12,11 @@ import {
 import { type LoadMoreState, loadMoreState } from "../../src/components/memory/browse-window"
 
 describe("loadMoreState", () => {
-  it("offers a load while a continuation exists and the cap is clear", () => {
+  it("offers a load while the server holds rows this client has not, and the cap is clear", () => {
     expect(loadMoreState({ phase: "idle", loaded: 200, hasMore: true })).toBe("available")
   })
 
-  it("reports exhaustion when the server issued no continuation", () => {
+  it("reports exhaustion once the loaded rows ARE the whole matching set", () => {
     expect(loadMoreState({ phase: "idle", loaded: 137, hasMore: false })).toBe("exhausted")
   })
 
@@ -70,8 +70,11 @@ describe("loadMoreState against the machine that answers the click", () => {
     return next
   }
 
-  const KEY_A = '["list",null,null,null,null]'
-  const KEY_B = '["list","route=/notes",null,null,null]'
+  // Shaped like `datasetKeyOf` actually emits — seven members since `filters` and
+  // `orderBy` joined the identity. The machine only ever compares these for equality,
+  // so the shape buys realism rather than coverage.
+  const KEY_A = '["list",null,null,null,null,null,null]'
+  const KEY_B = '["list","route=/notes",null,null,null,null,null]'
 
   function fulfilledWith(count: number, total: number): BrowseState {
     return apply(

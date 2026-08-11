@@ -222,9 +222,11 @@ function withinCap(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
   return records.length <= BROWSE_RESIDENT_CAP ? records : records.slice(0, BROWSE_RESIDENT_CAP)
 }
 
-/** The store issues a continuation exactly when a window fills its limit, and this
- *  event carries no continuation, so the span is re-derived against the request that
- *  produced it — `inFlight` is the only place that limit is held. Single flight keeps
+/** Whether the window came back FULL, which is what makes its span bounded. The route
+ *  states this itself by issuing a keyset cursor, but this client pages by offset and
+ *  `BrowsePageResponse` deliberately carries neither — so the fact is re-derived
+ *  against the limit of the request that produced the response, and `inFlight` is the
+ *  only place that limit is held. Single flight keeps
  *  it populated until the response is applied, so a null here is a broken caller, not a
  *  case with a defensible default: either guess decides rule 3, one by dropping a live
  *  tail and the other by pinning a stale one. */
@@ -379,7 +381,7 @@ export function browseReduce(state: BrowseState, event: BrowseEvent): BrowseTran
 
     case "response": {
       // THE stale-suppression mechanism: a response whose revision is no longer
-      // desired is discarded WHOLE — records, total and continuation together.
+      // desired is discarded WHOLE — records and total together.
       // Aborting is an optimization layered on top; correctness never depends on it.
       if (event.revision !== state.revision) return noStart(state)
       const base = state.fulfilled?.revision === state.revision ? state.fulfilled.records : []

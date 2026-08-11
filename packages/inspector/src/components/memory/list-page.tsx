@@ -73,6 +73,11 @@ export function ListPage() {
   const [filters, setFilters] = useState<Record<string, ColumnFilter>>({})
   const [sort, setSort] = useState<PretableSortEntry[]>([])
   const [sortCapped, setSortCapped] = useState(false)
+  /** Set when `toBrowseQuery` REFUSED the intent a control just produced, so that
+   *  intent was not committed. Distinct from `sortCapped`, which reports a change
+   *  that WAS committed after trimming — and so is retired by any later control,
+   *  while this stands until intent the mapping accepts replaces it. */
+  const [intentRefusal, setIntentRefusal] = useState<string>()
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
@@ -141,10 +146,46 @@ export function ListPage() {
    *  query retires it — left standing it would explain an action several steps in the
    *  past, about a column the user can no longer see declined. That is why these are
    *  wrappers and not the setters themselves. */
-  const handleFiltersChange = useCallback((next: Record<string, ColumnFilter>) => {
-    setSortCapped(false)
-    setFilters(next)
-  }, [])
+  /**
+   * The gate that keeps unmappable intent OUT OF STATE.
+   *
+   * `toBrowseQuery` throws rather than dropping a clause, and `browseQuery` maps
+   * during RENDER — where React has no boundary in this app, so a throw unmounts the
+   * whole Inspector rather than reaching a banner. Refusing at the setter is what
+   * makes the render-phase call total: `filters` and `sort` are written here and
+   * nowhere else, so state only ever holds intent the mapping already accepted.
+   *
+   * This is a live user path, not a coding slip. Pretable's number funnel is a
+   * free-text box whose completeness check is `!Number.isNaN(Number(s))`, so `1e999`
+   * and `Infinity` both reach the mapping as a non-finite number no `BrowseFilter`
+   * arm carries.
+   *
+   * Declining rather than applying-and-warning is the honest half: the funnel the
+   * user typed is not a question the server can be asked, so the rows keep answering
+   * the one it can, and the notice says which control was refused and why.
+   */
+  const commitIntent = useCallback(
+    (nextFilters: Record<string, ColumnFilter>, nextSort: readonly PretableSortEntry[]) => {
+      try {
+        toBrowseQuery(nextFilters, nextSort)
+      } catch (error) {
+        setIntentRefusal(error instanceof Error ? error.message : String(error))
+        return false
+      }
+      setIntentRefusal(undefined)
+      return true
+    },
+    [],
+  )
+
+  const handleFiltersChange = useCallback(
+    (next: Record<string, ColumnFilter>) => {
+      if (!commitIntent(next, sort)) return
+      setSortCapped(false)
+      setFilters(next)
+    },
+    [commitIntent, sort],
+  )
 
   const chooseNamespace = useCallback((next: string | undefined) => {
     setSortCapped(false)
@@ -155,14 +196,22 @@ export function ListPage() {
    *  fourth key is the one declined and the ordering the user already built
    *  survives. The notice is what keeps that honest: the control did something,
    *  and the page says what. */
-  const handleSortChange = useCallback((next: PretableSortEntry[]) => {
-    setSortCapped(next.length > MAX_BROWSE_SORT_ENTRIES)
-    // Copied, not aliased: `capSortEntries` hands back its ARGUMENT when the sort
-    // already fits, and that array is pretable's.
-    setSort([...capSortEntries(next)])
-  }, [])
+  const handleSortChange = useCallback(
+    (next: PretableSortEntry[]) => {
+      // Copied, not aliased: `capSortEntries` hands back its ARGUMENT when the sort
+      // already fits, and that array is pretable's.
+      const capped = [...capSortEntries(next)]
+      if (!commitIntent(filters, capped)) return
+      setSortCapped(next.length > MAX_BROWSE_SORT_ENTRIES)
+      setSort(capped)
+    },
+    [commitIntent, filters],
+  )
 
   const browseQuery = useMemo(() => {
+    // Total by construction, not by luck: `commitIntent` has already mapped this
+    // exact `filters`/`sort` pair without throwing, and they are written nowhere
+    // else. A new writer must go through that gate or this throws in render.
     const intent = toBrowseQuery(filters, sort)
     return canonicalBrowseQuery({
       view,
@@ -513,6 +562,18 @@ export function ListPage() {
                 {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
               </p>
             ) : null}
+            {intentRefusal === undefined ? null : (
+              // `alert`, not `status`: this reports that the control the user just
+              // used did NOT take effect, which has to interrupt rather than wait
+              // for the next pause in output.
+              <p
+                role="alert"
+                className="mb-2 text-xs text-red-700"
+                data-testid="filter-refusal-notice"
+              >
+                {`That filter was not applied — ${intentRefusal}`}
+              </p>
+            )}
             <MemoryGrid
               onGridReady={handleGridReady}
               records={browse.rows}

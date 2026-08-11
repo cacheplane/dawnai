@@ -106,10 +106,18 @@ export function canonicalBrowseQuery(input: {
   const kind = normalizeSet(input.kind)
   const filters = sortedByField(normalizeList(input.filters))
   // The shorthand and a predicate on the same field reach the server as an AND, so
-  // the timeline default has to stand down once the funnel claims `kind` — left on,
+  // the timeline default has to stand down once the funnel NARROWS `kind` — left on,
   // it would answer "episodic AND semantic", which is nothing, under a funnel that
   // reads as applied.
-  const kindClaimed = filters?.some((filter) => filter.field === "kind") === true
+  //
+  // `op: "in"` ONLY. An excluding predicate does not collapse the AND: "episodic AND
+  // NOT reflection" is a non-empty set of episodes, so standing down for it would
+  // widen the timeline to every kind the funnel did not exclude — while the rows
+  // still render as "Open episode:" and the empty state still says "No episodes in
+  // this window". `notIn ["episodic"]` does empty the result, and that is the honest
+  // answer to "episodes that are not episodes" rather than a narrowing to discard.
+  const kindClaimed =
+    filters?.some((filter) => filter.field === "kind" && filter.op === "in") === true
   return {
     view: input.view,
     // `||`, not `??`: `""` is not a namespace the server can express — `browse-params.ts`

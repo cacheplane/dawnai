@@ -154,6 +154,30 @@ describe("canonicalBrowseQuery", () => {
     const unclaimed = canonicalBrowseQuery({ view: "timeline", filters: [STATUS_IN_ACTIVE] })
     expect(unclaimed.kind).toEqual(["episodic"])
   })
+
+  it("keeps the timeline kind default beside an EXCLUDING kind predicate", () => {
+    // The stand-down is justified by the AND collapsing, and only `in` collapses:
+    // `episodic AND NOT reflection` is a non-empty set of EPISODES. Standing down
+    // for `notIn` instead widens the timeline to every kind the funnel did not
+    // exclude, while every row still renders as "Open episode:" and the empty state
+    // still says "No episodes in this window."
+    const excluded = canonicalBrowseQuery({
+      view: "timeline",
+      filters: [{ field: "kind", op: "notIn", values: ["reflection"] }],
+    })
+    expect(excluded.kind).toEqual(["episodic"])
+  })
+
+  it("lets an excluding predicate empty the timeline when it excludes episodes", () => {
+    // "Episodes that are not episodes" is empty, and saying so is the honest answer —
+    // the alternative is dropping one of the two narrowings the user can see applied.
+    const contradiction = canonicalBrowseQuery({
+      view: "timeline",
+      filters: [{ field: "kind", op: "notIn", values: ["episodic"] }],
+    })
+    expect(contradiction.kind).toEqual(["episodic"])
+    expect(contradiction.filters).toEqual([{ field: "kind", op: "notIn", values: ["episodic"] }])
+  })
 })
 
 describe("browseMatchesNothing", () => {

@@ -108,6 +108,17 @@ async function tickStatus(value: string) {
   fireEvent.click(box)
 }
 
+/** Type a raw string into a single-operand funnel, the way a user does. The number
+ *  funnel is a TEXT input (pretable renders `type="date"` alone as a real date
+ *  picker), so anything `Number()` accepts reaches the mapping — `1e999` included. */
+async function typeInto(column: string, text: string) {
+  if (!screen.queryByRole("dialog", { name: `Filter ${column}` })) {
+    fireEvent.click(await screen.findByRole("button", { name: `Filter ${column}` }))
+  }
+  const dialog = await screen.findByRole("dialog", { name: `Filter ${column}` })
+  fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: text } })
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -244,6 +255,84 @@ describe("column funnels drive the server query", () => {
       target: { value: "acme" },
     })
     expect(screen.queryByTestId("sort-cap-notice")).toBeNull()
+  })
+
+  it("maps the DATE funnel's own output onto the store's UTC day operators", async () => {
+    // `asDay` demands "YYYY-MM-DD" and pretable is what produces it — from a real
+    // `<input type="date">`, chosen by the column's `type: "date"`. Every other pin
+    // on this mapping hand-builds the `ColumnFilter`, so nothing until here checks
+    // that the library actually emits the shape the mapping insists on.
+    const mock = stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a1")
+
+    fireEvent.click(await screen.findByRole("button", { name: "Filter updated" }))
+    const dialog = await screen.findByRole("dialog", { name: "Filter updated" })
+    const day = dialog.querySelector('input[type="date"]')
+    if (!day) throw new Error("the updated funnel is not a real date input")
+    fireEvent.change(day, { target: { value: "2026-07-13" } })
+
+    await vi.waitFor(() => {
+      const sent = listUrls(mock)
+        .map((u) => u.searchParams.get("filters"))
+        .filter((v): v is string => v !== null)
+        .map((v) => JSON.parse(v))
+      expect(sent).toContainEqual([{ field: "updatedAt", op: "onDay", day: "2026-07-13" }])
+    })
+  })
+
+  it("maps the TEXT funnel's own output onto a content predicate", async () => {
+    const mock = stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a1")
+    await typeInto("content", "a1")
+    await vi.waitFor(() => {
+      const sent = listUrls(mock)
+        .map((u) => u.searchParams.get("filters"))
+        .filter((v): v is string => v !== null)
+        .map((v) => JSON.parse(v))
+      expect(sent).toContainEqual([{ field: "content", op: "contains", value: "a1" }])
+    })
+  })
+
+  it("declines an unmappable funnel value instead of taking the page down", async () => {
+    // `toBrowseQuery` THROWS on intent it cannot express, and the page maps inside
+    // render — so without a gate the throw unmounts the whole Inspector. This is a
+    // live user path, not a coding slip: pretable's `isComplete` accepts any string
+    // `Number()` parses, and `Number("1e999")` is `Infinity`, which no `BrowseFilter`
+    // arm carries. The refusal has to land in a notice with the rows still standing.
+    const mock = stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a1")
+    const before = listUrls(mock).length
+
+    await typeInto("confidence", "1e999")
+
+    expect(await screen.findByTestId("filter-refusal-notice")).toBeDefined()
+    expect(screen.getByText("content a1")).toBeDefined()
+    // Declined means NOT SENT: a request carrying the value would mean the page
+    // accepted it and only decorated the failure.
+    expect(listUrls(mock).length).toBe(before)
+  })
+
+  it("retires the refusal once a mappable value replaces it", async () => {
+    // The notice explains the funnel as it STANDS. Left up after a good value it
+    // would report a rejection the server has already answered past.
+    const mock = stubApi()
+    render(<ListPage />)
+    await screen.findByText("content a1")
+    await typeInto("confidence", "1e999")
+    expect(await screen.findByTestId("filter-refusal-notice")).toBeDefined()
+
+    await typeInto("confidence", "0.5")
+    await vi.waitFor(() => {
+      const sent = listUrls(mock)
+        .map((u) => u.searchParams.get("filters"))
+        .filter((v): v is string => v !== null)
+        .map((v) => JSON.parse(v))
+      expect(sent).toContainEqual([{ field: "confidence", op: "eq", value: 0.5 }])
+    })
+    expect(screen.queryByTestId("filter-refusal-notice")).toBeNull()
   })
 
   it("does not carry a header sort into the timeline, which offers no headers", async () => {

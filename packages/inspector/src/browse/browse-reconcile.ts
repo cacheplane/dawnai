@@ -62,9 +62,9 @@ export function dedupeById<T extends { readonly id: string }>(
  *    active for good. A caller that polls forever must truncate this result to its
  *    own cap; this function does not know one.
  *
- * `span.filled` is the response's OWN statement that it reached its limit — that is
- * what `BrowsePage.continuation !== null` means — not something to re-derive from a
- * limit the caller may no longer hold. A window that did not fill reached the end of
+ * `span.filled` is the caller's statement that the response reached its limit, taken
+ * against the request that produced it rather than re-derived here from a limit this
+ * function does not hold. A window that did not fill reached the end of
  * the matching set, so its span is unbounded and rule 3 has no members.
  *
  * Always allocates, unlike `dedupeById` — deliberately, for want of a sound no-op
