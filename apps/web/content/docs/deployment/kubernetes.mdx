@@ -6,6 +6,8 @@ Deploy Kubernetes applications by building the Node target image first, then ins
 
 Build and publish a Node image as described in [Node and Docker](/docs/deployment/node):
 
+Confirm that the app has the secret-safe `.dockerignore` from that guide before running `docker build`; keep `.dawn/build` in the context.
+
 ```bash
 dawn check
 dawn build
@@ -84,10 +86,28 @@ For the same-namespace sandbox path, install `dawn-sandbox-infra` first and inst
 
 For a separate application namespace, add the planned app ServiceAccount as a subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
 
+First export the release's effective values, including every existing RoleBinding subject:
+
+```bash
+helm get values dawn-sandbox-infra --all --output yaml \
+  > dawn-sandbox-infra-rbac-values.yaml
+```
+
+Edit `dawn-sandbox-infra-rbac-values.yaml` so `orchestrator.subjects` contains the **complete intended subject list**: preserve every existing entry and append the planned application ServiceAccount. For a release whose existing extra-subject list is empty, that section is:
+
+```yaml title="dawn-sandbox-infra-rbac-values.yaml"
+orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: my-app
+```
+
+Inspect the complete file, then apply it. Helm replaces arrays as values, so do not assign a guessed numeric subject index.
+
 ```bash
 helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-  --reuse-values \
-  --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"dawn-app","namespace":"my-app"}'
+  --values dawn-sandbox-infra-rbac-values.yaml
 
 helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace my-app --create-namespace \

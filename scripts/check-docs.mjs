@@ -827,8 +827,18 @@ const accuracyContracts = [
       "successful cancel",
       "does not prove route completion",
       "204 confirms only the sequential cleanup calls",
+      "app-dedicated database",
+      "default `public` schema",
+      "default `dawn` table prefix",
+      "no application namespace",
+      "unique `schema` or `tablePrefix`",
+      "hand-composed store wiring",
     ],
-    forbidden: ["thread deletion removes all", "performs best-effort checkpoint deletion"],
+    forbidden: [
+      "thread deletion removes all",
+      "performs best-effort checkpoint deletion",
+      "generated Hono apps can safely share one database",
+    ],
   },
   {
     file: "apps/web/content/docs/production-topology.mdx",
@@ -893,6 +903,12 @@ const accuracyContracts = [
       "await handler.close()",
       "await pool.end()",
       "await pool.end().catch(() => undefined)",
+      "advanced lifecycle/store skeleton",
+      "not a complete production edge/model host",
+      "seedModelImporter",
+      "seedRuntimeEnv",
+      "literal provider imports",
+      "generated `.dawn/build/app.mjs`",
     ],
     forbidden: [
       'from "@dawn-ai/cli/runtime"',
@@ -901,6 +917,7 @@ const accuracyContracts = [
       "const handler = await createRuntimeFetchHandler",
       'mode: "interactive"',
       'from "@dawn-ai/permissions"',
+      "copyable complete model host",
     ],
   },
   {
@@ -1126,6 +1143,12 @@ const accuracyContracts = [
       "root-owned",
       "EACCES",
       "COPY --chown",
+      "Create `.dockerignore` before",
+      ".env.*",
+      "**/node_modules",
+      "Keep `.dawn/build`",
+      "image layer",
+      "does not undo",
     ],
     forbidden: ["Node 22"],
   },
@@ -1139,8 +1162,11 @@ const accuracyContracts = [
       "shared durable stores",
       "thread-aware",
       "No orchestrator RoleBinding is needed",
+      "helm get values dawn-sandbox-infra --all",
+      "complete intended subject list",
+      "dawn-sandbox-infra-rbac-values.yaml",
     ],
-    forbidden: ["/healthz proves dependency readiness", "HPA makes"],
+    forbidden: ["/healthz proves dependency readiness", "HPA makes", "orchestrator.subjects[0]"],
   },
   {
     file: "apps/web/content/docs/sandbox.mdx",
@@ -1160,6 +1186,10 @@ const accuracyContracts = [
       "Provider retention can shorten this lifecycle",
       "sandbox-docker-e2e",
       "/docs/sandbox/kubernetes",
+      "collision-resistant, provider-safe canonical thread ID",
+      "lossy sanitizer",
+      "separate Docker daemon",
+      "Mutually untrusted tenants must not share",
     ],
     forbidden: [
       "provider: kubernetesSandbox({",
@@ -1167,6 +1197,7 @@ const accuracyContracts = [
       'from "@dawn-ai/workspace"',
       'import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/sandbox"',
       "workspace can survive idle reap, process restart, or compute replacement",
+      "gives each Agent Protocol thread an isolated filesystem",
     ],
   },
   {
@@ -1207,12 +1238,17 @@ const accuracyContracts = [
       "`timeout` when `resources.timeoutMs` is set",
       "UID/GID",
       "/docs/deployment/kubernetes",
+      "collision-resistant, provider-safe canonical thread ID",
+      "lossy sanitizer",
+      "separate Kubernetes namespace",
+      "Mutually untrusted tenants must not share",
     ],
     forbidden: [
       "helm install dawn-app",
       "helm upgrade --install dawn-app",
       "readOnlyRootFilesystem: false violates",
       "remains unreferenced longer than `reaper.ttlHours`",
+      "Each conversation thread receives one keeper Pod",
     ],
   },
   {
@@ -1272,8 +1308,52 @@ const accuracyContracts = [
       "arbitrary Node built-ins",
       "not guaranteed to be free of Node built-ins",
       '```js title="host.mjs"',
+      "app-dedicated database",
+      "default `public` schema",
+      "default `dawn` table prefix",
+      "no application namespace",
+      "unique `schema` or `tablePrefix`",
+      "hand-composed request stores",
     ],
-    forbidden: ["Nothing else is gated", '```ts title="host.ts"'],
+    forbidden: [
+      "Nothing else is gated",
+      '```ts title="host.ts"',
+      "generated Hono apps can safely share one database",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/recipes/auth-middleware.mdx",
+    required: [
+      "execution authentication",
+      "route-execution requests",
+      "Thread create/read/delete/state",
+      "cancellation",
+      "memory-candidate management",
+      "health checks",
+      "outer host or reverse proxy",
+      'href: "/docs/security-architecture", title: "Security Architecture"',
+    ],
+    forbidden: [
+      "reject unauthenticated requests and pass the verified user identity to every tool call",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/recipes/index.mdx",
+    required: [
+      "execution authentication",
+      "thread management/state, cancellation, memory-candidate, and health routes",
+      "outer host/proxy authentication",
+    ],
+    forbidden: ["short-circuit unauthorized requests"],
+  },
+  {
+    file: "charts/dawn-app/templates/NOTES.txt",
+    required: [
+      "helm get values dawn-sandbox-infra --all",
+      "complete intended subject list",
+      "dawn-sandbox-infra-rbac-values.yaml",
+    ],
+    forbidden: ["orchestrator.subjects[0]", "same command shown above"],
   },
   {
     file: "charts/dawn-app/README.md",
@@ -1284,6 +1364,13 @@ const accuracyContracts = [
       "returns zero with that warning",
       "helm template",
       "fails when `image.repository` is unset",
+      "Create or merge a secret-safe `.dockerignore` before",
+      ".env.*",
+      "**/node_modules",
+      ".dawn/*",
+      "!.dawn/build/**",
+      "COPY . .",
+      "image layer",
     ],
     forbidden: [
       "backend that does not exist yet",
@@ -1292,6 +1379,7 @@ const accuracyContracts = [
       "langgraphjs-built image",
       "image built the alternate way",
       "containerize the `langsmith` target",
+      "generated Dockerfile copies only the files needed at runtime",
     ],
   },
   {
@@ -1934,6 +2022,16 @@ for (const { file, expectedCount, requiredInEveryCommand = [] } of helmInstallEx
 
 const chartReadmeSource = readFileSync(resolve(repoRoot, "charts/dawn-app/README.md"), "utf8")
 for (const required of [
+  "Create or merge a secret-safe `.dockerignore` before",
+  ".env.*",
+  ".git",
+  "**/node_modules",
+  "coverage",
+  ".next",
+  ".dawn/*",
+  "!.dawn/build/**",
+  "COPY . .",
+  "image layer",
   "dawn check",
   "dawn build",
   "docker build -t ghcr.io/you/your-app:2026-08-10 .",
@@ -1945,6 +2043,17 @@ for (const required of [
       `charts/dawn-app/README.md copy-complete install prerequisite missing: ${required}`,
     )
   }
+}
+const chartReadmeDockerignore = chartReadmeSource.indexOf(
+  "Create or merge a secret-safe `.dockerignore` before",
+)
+const chartReadmeDockerBuild = chartReadmeSource.indexOf(
+  "docker build -t ghcr.io/you/your-app:2026-08-10 .",
+)
+if (chartReadmeDockerignore === -1 || chartReadmeDockerignore > chartReadmeDockerBuild) {
+  failures.push(
+    "charts/dawn-app/README.md must require its secret-safe .dockerignore before docker build",
+  )
 }
 if (chartReadmeSource.includes("--set image.tag=latest")) {
   failures.push("charts/dawn-app/README.md install examples must not use mutable image.tag=latest")

@@ -1,6 +1,6 @@
 # Execution Sandbox
 
-The execution sandbox gives each Agent Protocol thread an isolated filesystem, shell, and network boundary instead of letting workspace tools operate in the app's local `workspace/` directory. Add a `sandbox` key to `dawn.config.ts`, and Dawn routes `readFile`, `writeFile`, `listDir`, and `runBash` through a `SandboxProvider`. Dawn includes a Docker reference implementation; the same portable contract also supports other providers.
+The execution sandbox gives a provider-keyed Agent Protocol thread an isolated filesystem, shell, and network boundary instead of letting workspace tools operate in the app's local `workspace/` directory. That boundary depends on thread IDs remaining distinct after provider resource naming; the built-in providers do not add an application or tenant namespace. Add a `sandbox` key to `dawn.config.ts`, and Dawn routes `readFile`, `writeFile`, `listDir`, and `runBash` through a `SandboxProvider`. Dawn includes a Docker reference implementation; the same portable contract also supports other providers.
 
 This is one of three independent controls: [tool scoping](/docs/tools) decides which tools the model can call, [permissions](/docs/permissions) decide whether a call may run, and the sandbox constrains what an allowed call can touch. Use all three where your threat model calls for them.
 
@@ -39,14 +39,20 @@ No `sandbox` key means no behavior change: workspace tools still use the app's l
 
 ## Lifecycle
 
-Dawn acquires one sandbox per conversation thread and reuses it across turns.
+Dawn passes the conversation thread ID to the provider and reuses the resulting sandbox across turns.
 
 - `acquire()` creates or reattaches the thread's live compute and workspace.
 - Idle reap and `release()` discard warm compute but retain the workspace volume.
 - A later turn reattaches that retained volume.
 - Thread deletion calls `destroy()`, removing both compute and workspace data.
 
-Storage is named from the thread ID so a provider can reattach it after compute is released. Provider retention can shorten this lifecycle: an operator-owned cleanup policy may delete released storage before the thread is deleted. See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for that provider's reaper boundary. Subagents share their parent's thread and therefore share its sandbox.
+Storage is named from a provider-specific transformation of the thread ID so a provider can reattach it after compute is released. Provider retention can shorten this lifecycle: an operator-owned cleanup policy may delete released storage before the thread is deleted. See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for that provider's reaper boundary. Subagents share their parent's thread and therefore share its sandbox.
+
+<Callout type="warn" title="Canonicalize IDs and separate provider scopes">
+  Docker substitutes unsupported name characters, while Kubernetes lowercases, substitutes, trims, and conditionally truncates its resource-name input. This is a lossy sanitizer boundary: distinct short IDs that differ only by case or substituted punctuation can name the same container, volume, Pod, PVC, or NetworkPolicy. The current runtime does not add an app or tenant discriminator and does not hash every sanitized ID.
+
+  Before a caller can select `thread_id`, map application ownership to a collision-resistant, provider-safe canonical thread ID that is globally unique within that provider scope; opaque lowercase UUID/ULID-style IDs are safer than meaningful caller strings. Run each application or trust boundary against a separate Docker daemon or equivalent isolated Docker context. Mutually untrusted tenants must not share a provider scope in which their names can alias. Changing built-in resource naming to hash every ID would affect reattachment to existing volumes, so treat that runtime change as a compatibility-sensitive follow-up rather than assuming it here.
+</Callout>
 
 ## Security hardening
 
@@ -194,7 +200,7 @@ Only a Dawn runtime entry (`dawn dev`, `dawn start`, or the Node build target) c
 
 ## What it is — and isn't
 
-**It is:** a per-thread filesystem and process boundary; explicit environment injection; CPU and memory controls; provider-specific network policy; a workspace lifecycle that outlives warm compute; and hardened Docker defaults including a non-root user, dropped capabilities, no privilege escalation, a read-only root filesystem, and a process-count limit.
+**It is:** a filesystem and process boundary keyed by the provider's derived thread resource name; explicit environment injection; CPU and memory controls; provider-specific network policy; a workspace lifecycle that outlives warm compute; and hardened Docker defaults including a non-root user, dropped capabilities, no privilege escalation, a read-only root filesystem, and a process-count limit.
 
 **It is not:** authorization, tool selection, or a guarantee against container-escape vulnerabilities. Tool scoping and permissions remain separate controls. Docker's allow-mode denylist is best-effort, and container isolation is not a microVM boundary. For hostile multi-tenant workloads, implement a stronger provider behind the same `SandboxProvider` seam and validate its controls against your threat model.
 

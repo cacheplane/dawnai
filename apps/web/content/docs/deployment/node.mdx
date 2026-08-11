@@ -58,7 +58,21 @@ dawn start --host 127.0.0.1 --port 3000
 
 ## Use the generated Dockerfile
 
-Build only after the host has emitted a fresh `.dawn/build` directory:
+Create `.dockerignore` before the first `docker build`, or merge these exclusions into the existing file. Keep `.dawn/build` in the context because the generated image runs its `server.mjs`:
+
+```text title=".dockerignore"
+.env
+.env.*
+.git
+.github
+node_modules
+**/node_modules
+coverage
+*.log
+.DS_Store
+```
+
+Build only after the host has emitted a fresh `.dawn/build` directory and the ignore file is in place:
 
 ```bash
 dawn check
@@ -68,6 +82,8 @@ docker run --rm -p 127.0.0.1:8000:8000 --env-file .env my-dawn-app
 ```
 
 The loopback-only publish, `127.0.0.1:8000:8000`, is an appropriate local smoke boundary. Production exposure belongs behind the deployment's authenticated proxy or network policy.
+
+The generated Dockerfile uses `COPY . .`. Every unignored file in the build context can therefore enter an image layer, including a secret that a later Dockerfile instruction deletes. `docker run --env-file .env` injects runtime values; it does not undo a secret already baked into an image layer. Review the final context and image history in CI, and pass production secrets through the runtime or orchestrator rather than the build context.
 
 The generated image runs `npm ci --omit=dev || npm install --omit=dev`. It does not invoke pnpm or Yarn, even though its copy step tolerates an optional pnpm lockfile in the build context. Use a hand-authored Dockerfile if your production install must use another package manager or stricter lockfile behavior.
 
@@ -104,7 +120,7 @@ The generated `.dawn/build/server.mjs` does not currently install signal handler
 ## Production checklist
 
 1. Use Node 24+ and keep `@dawn-ai/cli` in `dependencies`.
-2. Run `dawn check`, `dawn build`, and `dawn verify` before image construction.
+2. Create or audit `.dockerignore`, then run `dawn check`, `dawn build`, and `dawn verify` before image construction.
 3. Test the built image on loopback, including Agent Protocol and AG-UI streaming.
 4. Inject secrets at runtime and authenticate/restrict the whole service.
 5. Configure durable stores and backup/retention policy for every state domain you rely on.

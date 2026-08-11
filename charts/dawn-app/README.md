@@ -19,8 +19,36 @@ for the complete image, chart, ServiceAccount, probe, and scaling path.
 
 ## Install
 
-Build and publish the Node-target image from the Dawn application root. Keep
-the immutable tag identical through build, push, and chart values:
+Build and publish the Node-target image from the Dawn application root.
+Create or merge a secret-safe `.dockerignore` before the first build:
+
+```text
+.env
+.env.*
+.git
+.github
+node_modules
+**/node_modules
+coverage
+.next
+*.log
+.dawn/*
+!.dawn/build
+!.dawn/build/**
+```
+
+The `.dawn/*` rule excludes local Dawn runtime state while the two negations
+explicitly preserve the generated `.dawn/build` artifacts required by the
+image. Add any application-specific build output or credential files to the
+exclusions as well.
+
+The generated Dockerfile uses `COPY . .`, so every unignored file in the build
+context can be baked into an image layer. Deleting a file in a later Dockerfile
+instruction or injecting runtime secrets later does not remove it from that
+earlier layer. Inspect the context before building and keep credentials outside
+it.
+
+Keep the immutable tag identical through build, push, and chart values:
 
 ```sh
 dawn check

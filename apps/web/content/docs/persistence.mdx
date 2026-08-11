@@ -29,6 +29,12 @@ Local SQLite and file stores keep setup small and make sense for development or 
 
 `@dawn-ai/postgres-storage` implements those three stores over Postgres. Typed long-term memory remains a separate [`memory.store`](/docs/configuration#memory) with its own schema, retrieval behavior, and retention needs; `@dawn-ai/memory-pgvector` is one shared option.
 
+### Generated Hono database boundary
+
+The generated Hono request stores select the default `public` schema and default `dawn` table prefix for checkpoints, threads, and permissions. Their `public.dawn_*` tables contain no application namespace, so each generated Hono app requires an app-dedicated database. A tenant field in application input does not partition those tables.
+
+Several applications may share one database only through hand-composed store wiring that passes a unique `schema` or `tablePrefix` consistently to all three Postgres stores. Preserve the generated edge lifecycle and bundling constraints when doing so: per-request pools and disposal, migration coordination, original-`Request` environment binding, static provider imports, serialized config, and explicit permission policy/hydration. The generated `stores.mjs` is replaced on rebuild and does not expose an app naming option; see [Edge and Hono](/docs/deployment/edge#why-the-stores-are-per-request).
+
 A running process caches loaded permission decisions because `PermissionsStore.match()` is synchronous. On the configuration-resolved Node path, `serveRuntime` resolves and loads its configured permissions store once at Node boot. The Postgres implementation hydrates its in-memory map with `load()`, but that cache does not auto-refresh across replicas. A shared permissions table therefore does not automatically provide instant invalidation: the application owns the refresh or reload strategy when externally added grants or revocations must propagate, whether that means an explicit reload schedule, rebuilding the handler, or another application-controlled mechanism.
 
 ## Tenant ownership

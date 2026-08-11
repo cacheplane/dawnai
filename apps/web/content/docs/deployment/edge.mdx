@@ -121,6 +121,10 @@ The generated factory runs `ready()` for the checkpointer, thread store, and per
 
 The emitted factory supplies no long-term memory store. Reaching an otherwise omitted required store fails with `DAWN_E5301` rather than opening local SQLite.
 
+The generated Hono stores use the default `public` schema and default `dawn` table prefix, producing `public.dawn_*` tables with no application namespace. A generated Hono app therefore requires an app-dedicated database. Do not point generated artifacts from separate applications or trust boundaries at the same database.
+
+Sharing a database is supported only with hand-composed request stores that pass a unique `schema` or `tablePrefix` consistently to `postgresCheckpointer`, `createPostgresThreadsStore`, and `createPostgresPermissionsStore`. That composition must still preserve the generated path's workerd constraints: per-request pools and disposal, migration coordination, original-`Request` environment binding, static model-provider imports, serialized runtime config, and permission hydration/policy decisions. Do not edit generated `stores.mjs`; rebuilds replace it.
+
 ## What the edge cannot serve
 
 `dawn check` and the Hono build report all current Dawn-known target violations together as `DAWN_E1005`. The request-time fetch guard rejects the corresponding unsupported configured runtime instead of silently dropping it. This gate does not prove that authored code or transitive dependencies avoid Node-only APIs.

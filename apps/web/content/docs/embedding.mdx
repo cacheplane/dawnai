@@ -37,6 +37,8 @@ console.log(`Dawn listening on ${runtime.url}`)
 
 The edge-safe entry is `@dawn-ai/cli/fetch`. It performs no route discovery and has no filesystem or SQLite fallback, so supply the generated edge manifest, serializable config, and every store your exposed endpoints require.
 
+The example below is an **advanced lifecycle/store skeleton**, not a complete production edge/model host. It intentionally omits generated-equivalent `seedModelImporter` wiring, literal provider imports, `seedRuntimeEnv` binding seeding, and the complete serialized configuration. A model route can bundle incorrectly or read the wrong environment if those responsibilities are absent. For production edge deployment, use the generated `.dawn/build/app.mjs`; if a host must replace it, inspect that artifact and reproduce all of its generated responsibilities in addition to this lifecycle pattern.
+
 ```ts title="runtime.ts"
 import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
 import modules from "./.dawn/build/modules.edge.mjs"

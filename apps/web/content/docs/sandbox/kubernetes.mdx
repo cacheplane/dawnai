@@ -38,6 +38,8 @@ export default config({
 
 `storageClass` and `startupTimeoutMs` are optional provider settings. `resources.diskGb` becomes the PVC storage request; confirm the selected StorageClass can provision that request.
 
+The namespace is also the provider resource-name scope. Give each application or trust boundary a separate Kubernetes namespace. Before a caller can choose `thread_id`, map ownership to a collision-resistant, provider-safe canonical thread ID that is globally unique inside that namespace. The provider lowercases the ID, replaces unsupported characters, trims dashes, and only adds a hash when the cleaned form is overlength. That lossy sanitizer means distinct short IDs that differ by case or substituted punctuation can still address the same Pod, PVC, and NetworkPolicy. Mutually untrusted tenants must not share a provider namespace in which their resource names can alias. Hashing every ID in the runtime would break reattachment to existing PVC names and is therefore a compatibility-sensitive follow-up, not a current guarantee.
+
 The provider replaces the image entrypoint with `sleep infinity` and runs shell and filesystem operations through `sh -c`. The image must provide a POSIX `sh`, a `sleep` implementation that accepts `infinity`, and the core utilities used by the filesystem backend (`cat`, `mkdir`, `dirname`, `ls`, `realpath`, `stat`, `rm`, and `touch`). It also needs `timeout` when `resources.timeoutMs` is set. The hardened default runs as numeric UID/GID `1000:1000`; an `/etc/passwd` entry is not required, but the image's executables and filesystem permissions must work for that identity. Set an explicit compatible UID/GID through `security.runAsNonRoot` when they do not.
 
 ## Wire application RBAC
@@ -54,7 +56,7 @@ Changing `sandboxNamespace` alone does not move workloads or change RBAC.
 
 ## Pod and workspace lifecycle
 
-Each conversation thread receives one keeper Pod and one `ReadWriteOnce` PVC mounted at `/workspace`.
+Each distinct provider resource key receives one keeper Pod and one `ReadWriteOnce` PVC mounted at `/workspace`.
 
 - `acquire()` creates the PVC and Pod or reattaches the live pair.
 - `release()` deletes the Pod and retains the PVC for the next turn.
