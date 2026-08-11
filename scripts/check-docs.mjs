@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { basename, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
+import { tsImport } from "tsx/esm/api"
 import { NodeFlags, SyntaxKind } from "typescript/unstable/ast"
 import {
   isAssertionExpression,
@@ -414,6 +415,289 @@ function canonicalOwnerGuardViolations(source, contracts) {
   })
 }
 
+const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
+  ["@dawn-ai/sdk", "/docs/api/sdk", "@dawn-ai/sdk", ["@dawn-ai/sdk"], "API Reference", "/docs/api"],
+  ["@dawn-ai/cli", "/docs/api/cli", "@dawn-ai/cli", ["@dawn-ai/cli"], "API Reference", "/docs/api"],
+  [
+    "@dawn-ai/core",
+    "/docs/api/core",
+    "@dawn-ai/core",
+    ["@dawn-ai/core"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/ag-ui",
+    "/docs/api/ag-ui",
+    "@dawn-ai/ag-ui",
+    ["@dawn-ai/ag-ui"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/memory",
+    "/docs/api/memory",
+    "@dawn-ai/memory",
+    ["@dawn-ai/memory"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/memory-pgvector",
+    "/docs/api/memory-pgvector",
+    "@dawn-ai/memory-pgvector",
+    ["@dawn-ai/memory-pgvector"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/postgres-storage",
+    "/docs/api/postgres-storage",
+    "@dawn-ai/postgres-storage",
+    ["@dawn-ai/postgres-storage"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/testing",
+    "/docs/api/testing",
+    "@dawn-ai/testing",
+    ["@dawn-ai/testing"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/evals",
+    "/docs/api/evals",
+    "@dawn-ai/evals",
+    ["@dawn-ai/evals"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "dawn:routes",
+    "/docs/api/generated-routes",
+    "dawn:routes",
+    ["@dawn-ai/cli", "@dawn-ai/core"],
+    "API Reference",
+    "/docs/api",
+  ],
+]
+
+const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
+  ["import:@dawn-ai/sdk:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sdk:./pure", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sdk:./testing", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./fetch", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./runtime", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./testing", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:./internal/compiler", "internal", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/ag-ui:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/ag-ui:./sse", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./browse", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./namespace", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./reconcile", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory-pgvector:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/postgres-storage:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/postgres-storage:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/testing:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/evals:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:./testing", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  [
+    "import:@dawn-ai/langgraph:./define-entry",
+    "deferred-to-pr2",
+    "surfaceKind",
+    "typescript-runtime",
+  ],
+  [
+    "import:@dawn-ai/langgraph:./route-module",
+    "deferred-to-pr2",
+    "surfaceKind",
+    "typescript-runtime",
+  ],
+  ["import:@dawn-ai/langchain:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langchain:./package.json", "deferred-to-pr2", "surfaceKind", "metadata"],
+  ["import:@dawn-ai/sqlite-storage:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/config-biome:.", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-biome:./biome", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:.", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./base", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./library", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./node", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./nextjs", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/devkit:.", "internal", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/vite-plugin:.", "internal", "surfaceKind", "typescript-runtime"],
+  ["operated:@dawn-ai/cli:bin.dawn", "detailed", "operatedKind", "executable"],
+  [
+    "operated:create-dawn-ai-app:bin.create-dawn-ai-app",
+    "catalog-only",
+    "operatedKind",
+    "executable",
+  ],
+  [
+    "operated:@dawn-ai/inspector:dawnInspector.server",
+    "catalog-only",
+    "operatedKind",
+    "operated-application",
+  ],
+]
+
+function apiArtifactAddress(artifact) {
+  return artifact.kind === "import"
+    ? `import:${artifact.packageName}:${artifact.subpath}`
+    : `operated:${artifact.packageName}:${artifact.selector}`
+}
+
+function tupleMismatchFields(actual, expected, fields) {
+  return fields.filter(
+    (_, index) => JSON.stringify(actual?.[index]) !== JSON.stringify(expected?.[index]),
+  )
+}
+
+function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
+  const analysisFailures = []
+  const pageTuples = pages.map(({ label, href, surfaceName, ownerPackageNames, parent }) => [
+    label,
+    href,
+    surfaceName,
+    ownerPackageNames,
+    parent?.label,
+    parent?.href,
+  ])
+  const pageFields = [
+    "label",
+    "href",
+    "surfaceName",
+    "ownerPackageNames",
+    "parent.label",
+    "parent.href",
+  ]
+  for (
+    let index = 0;
+    index < Math.max(pageTuples.length, EXPECTED_API_REFERENCE_PAGE_TUPLES.length);
+    index++
+  ) {
+    const actual = pageTuples[index]
+    const expected = EXPECTED_API_REFERENCE_PAGE_TUPLES[index]
+    const mismatches = tupleMismatchFields(actual, expected, pageFields)
+    if (mismatches.length > 0) {
+      analysisFailures.push(
+        `API reference page tuple ${index + 1} (${expected?.[0] ?? actual?.[0] ?? "missing"}) mismatches ${mismatches.join(", ")}: expected ${JSON.stringify(expected ?? null)}, received ${JSON.stringify(actual ?? null)}`,
+      )
+    }
+  }
+
+  const labels = pages.map(({ label }) => label)
+  const duplicateLabels = [...new Set(labels)].filter(
+    (label) => labels.filter((candidate) => candidate === label).length > 1,
+  )
+  if (duplicateLabels.length > 0) {
+    analysisFailures.push(`duplicate API reference page labels: ${duplicateLabels.join(", ")}`)
+  }
+
+  const artifactPolicyTuples = artifacts.map((artifact) =>
+    artifact.kind === "import"
+      ? [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind]
+      : [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind],
+  )
+  const artifactFields = ["address", "coverage", "kind field", "surfaceKind/operatedKind"]
+  for (
+    let index = 0;
+    index < Math.max(artifactPolicyTuples.length, EXPECTED_API_ARTIFACT_POLICY_TUPLES.length);
+    index++
+  ) {
+    const actual = artifactPolicyTuples[index]
+    const expected = EXPECTED_API_ARTIFACT_POLICY_TUPLES[index]
+    const mismatches = tupleMismatchFields(actual, expected, artifactFields)
+    if (mismatches.length > 0) {
+      analysisFailures.push(
+        `API artifact policy tuple ${index + 1} (${expected?.[0] ?? actual?.[0] ?? "missing"}) mismatches ${mismatches.join(", ")}: expected ${JSON.stringify(expected ?? null)}, received ${JSON.stringify(actual ?? null)}`,
+      )
+    }
+  }
+
+  return { failures: analysisFailures }
+}
+
+function manifestExportSubpaths(exportsField) {
+  if (exportsField === undefined || exportsField === null) return []
+  if (typeof exportsField !== "object") return ["."]
+  const keys = Object.keys(exportsField)
+  const subpaths = keys.filter((key) => key === "." || key.startsWith("./"))
+  return subpaths.length > 0 ? subpaths : ["."]
+}
+
+function manifestArtifactEntries(manifests) {
+  return manifests.flatMap((manifest) => {
+    const entries = manifestExportSubpaths(manifest.exports).map((subpath) => ({
+      address: `import:${manifest.name}:${subpath}`,
+    }))
+
+    if (typeof manifest.bin === "string") {
+      const binName = manifest.name.replace(/^@[^/]+\//, "")
+      entries.push({
+        address: `operated:${manifest.name}:bin.${binName}`,
+        manifestTarget: manifest.bin,
+      })
+    } else {
+      for (const [binName, manifestTarget] of Object.entries(manifest.bin ?? {})) {
+        entries.push({
+          address: `operated:${manifest.name}:bin.${binName}`,
+          manifestTarget,
+        })
+      }
+    }
+
+    if (typeof manifest.dawnInspector?.server === "string") {
+      entries.push({
+        address: `operated:${manifest.name}:dawnInspector.server`,
+        manifestTarget: manifest.dawnInspector.server,
+      })
+    }
+    return entries
+  })
+}
+
+function analyzeApiReferenceManifests({ manifests = [], artifacts = [] }) {
+  const analysisFailures = []
+  const manifestEntries = manifestArtifactEntries(manifests)
+  const manifestByAddress = new Map(manifestEntries.map((entry) => [entry.address, entry]))
+  const registryByAddress = new Map(
+    artifacts.map((artifact) => [apiArtifactAddress(artifact), artifact]),
+  )
+
+  for (const entry of manifestEntries) {
+    const artifact = registryByAddress.get(entry.address)
+    if (!artifact) {
+      analysisFailures.push(`manifest address ${entry.address} is missing from ARTIFACT_REGISTRY`)
+      continue
+    }
+    if (artifact.kind === "operated" && entry.manifestTarget !== artifact.manifestTarget) {
+      analysisFailures.push(
+        `manifest target for ${entry.address} is ${JSON.stringify(entry.manifestTarget)}; ARTIFACT_REGISTRY expects ${JSON.stringify(artifact.manifestTarget)}`,
+      )
+    }
+  }
+
+  for (const [address] of registryByAddress) {
+    if (!manifestByAddress.has(address)) {
+      analysisFailures.push(`manifest is missing ARTIFACT_REGISTRY address ${address}`)
+    }
+  }
+
+  return { failures: analysisFailures }
+}
+
 if (process.argv[2] === "--analyze-doc-link-guards") {
   const fixture = JSON.parse(process.argv[3] ?? "{}")
   process.stdout.write(
@@ -444,6 +728,18 @@ if (process.argv[2] === "--analyze-doc-titles") {
     ? analyzeDocTitlesBatch(fixture)
     : analyzeDocTitles(fixture)
   process.stdout.write(`${JSON.stringify(analysis)}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-api-reference-registry") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify(analyzeApiReferenceRegistry(fixture))}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-api-reference-manifests") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify(analyzeApiReferenceManifests(fixture))}\n`)
   process.exit(0)
 }
 
@@ -2728,6 +3024,22 @@ for (const filePath of normativeScenarioFiles) {
 // same route set. Link targets and fragments are validated by the web MDX tests.
 const docsNavPath = resolve(repoRoot, "apps/web/app/components/docs/nav.ts")
 const docsNav = readFileSync(docsNavPath, "utf8")
+const apiReferenceRegistryPath = resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")
+const apiReferencePagesPath = resolve(
+  repoRoot,
+  "apps/web/app/components/docs/api-reference-pages.ts",
+)
+const apiReferenceRegistry = await Promise.all([
+  tsImport(pathToFileURL(apiReferenceRegistryPath).href, import.meta.url),
+  tsImport(pathToFileURL(apiReferencePagesPath).href, import.meta.url),
+])
+  .then(([registry, pages]) => ({ ...registry, ...pages }))
+  .catch((error) => {
+    failures.push(
+      `API reference registries could not be loaded from apps/web/app/components/docs (${error.message})`,
+    )
+    return null
+  })
 const navDocEntries = [
   ...docsNav.matchAll(/^\s*\{\s*label:\s*"([^"]+)",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
 ].map((match) => ({ label: match[1], href: match[2] }))
@@ -2801,6 +3113,16 @@ if (/\bhref:\s*"\/docs"/.test(docsNav)) {
 if (!/export const DOCS_PAGES[^=]*=\s*DOCS_NAV\.flatMap\(/s.test(docsNav)) {
   failures.push("DOCS_PAGES must derive its reading order directly from DOCS_NAV")
 }
+if (!/export const ALL_DOCS_PAGES[^=]*=\s*DOCS_PAGES\.flatMap\(/s.test(docsNav)) {
+  failures.push("ALL_DOCS_PAGES must derive from DOCS_PAGES and insert hidden reference leaves")
+}
+if (
+  !/page\.href\s*===\s*"\/docs\/api"\s*\?\s*\[page,\s*\.\.\.API_REFERENCE_PAGES\]\s*:\s*\[page\]/s.test(
+    docsNav,
+  )
+) {
+  failures.push("ALL_DOCS_PAGES must insert API_REFERENCE_PAGES immediately after /docs/api")
+}
 
 if (navDocEntries.length !== expectedNavDocEntries.length) {
   failures.push(
@@ -2821,6 +3143,130 @@ if (firstNavRegistryMismatch !== undefined) {
   failures.push(
     `DOCS_NAV registry row ${firstNavRegistryMismatch + 1} mismatch: expected ${JSON.stringify(expectedNavDocEntries[firstNavRegistryMismatch] ?? null)}, received ${JSON.stringify(navDocEntries[firstNavRegistryMismatch] ?? null)}`,
   )
+}
+
+if (apiReferenceRegistry) {
+  const { API_REFERENCE_PAGES, ARTIFACT_REGISTRY, PACKAGE_CATALOG } = apiReferenceRegistry
+  failures.push(
+    ...analyzeApiReferenceRegistry({
+      pages: API_REFERENCE_PAGES,
+      artifacts: ARTIFACT_REGISTRY,
+    }).failures,
+  )
+
+  const apiHubIndex = navDocEntries.findIndex(({ href }) => href === "/docs/api")
+  const expectedAllDocsPages = [
+    ...navDocEntries.slice(0, apiHubIndex + 1),
+    ...API_REFERENCE_PAGES,
+    ...navDocEntries.slice(apiHubIndex + 1),
+  ]
+  if (navDocEntries.length !== 58 || expectedAllDocsPages.length !== 68) {
+    failures.push(
+      `Docs page registries must retain 58 journey pages and 68 total pages; received ${navDocEntries.length} and ${expectedAllDocsPages.length}`,
+    )
+  }
+
+  const artifactAddresses = ARTIFACT_REGISTRY.map(apiReferenceRegistry.artifactAddressFor)
+  if (ARTIFACT_REGISTRY.length !== 45 || new Set(artifactAddresses).size !== 45) {
+    failures.push("ARTIFACT_REGISTRY must contain exactly 45 unique artifact addresses")
+  }
+  const importCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import").length
+  const operatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated").length
+  if (importCount !== 42 || operatedCount !== 3) {
+    failures.push(
+      `ARTIFACT_REGISTRY must contain 42 imports and 3 operated artifacts; received ${importCount} and ${operatedCount}`,
+    )
+  }
+  const expectedDeferredImports = [
+    ["@dawn-ai/permissions", "."],
+    ["@dawn-ai/permissions", "./node"],
+    ["@dawn-ai/workspace", "."],
+    ["@dawn-ai/workspace", "./node"],
+    ["@dawn-ai/sandbox", "."],
+    ["@dawn-ai/sandbox", "./testing"],
+    ["@dawn-ai/langgraph", "."],
+    ["@dawn-ai/langgraph", "./define-entry"],
+    ["@dawn-ai/langgraph", "./route-module"],
+    ["@dawn-ai/langchain", "."],
+    ["@dawn-ai/langchain", "./package.json"],
+    ["@dawn-ai/sqlite-storage", "."],
+  ]
+  const deferredImports = ARTIFACT_REGISTRY.filter(
+    (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
+  ).map(({ packageName, subpath }) => [packageName, subpath])
+  if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
+    failures.push("ARTIFACT_REGISTRY does not match the exact 12-import deferred-to-pr2 allowlist")
+  }
+
+  const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(
+    ({ coverage, audience }) =>
+      (coverage === "catalog-only" || coverage === "internal") && audience === "application",
+  )
+  if (invalidApplicationRecommendations.length > 0) {
+    failures.push("Catalog-only and internal artifacts cannot recommend an application audience")
+  }
+
+  try {
+    apiReferenceRegistry.validateApiReferenceRegistries({
+      pages: API_REFERENCE_PAGES,
+      artifacts: ARTIFACT_REGISTRY,
+      packages: PACKAGE_CATALOG,
+    })
+  } catch (error) {
+    failures.push(`API reference registries violate their closed schemas (${error.message})`)
+  }
+
+  const { readPublicPackages } = await import("./lib/published-artifacts.mjs")
+  const publicPackages = await readPublicPackages(repoRoot)
+  failures.push(
+    ...analyzeApiReferenceManifests({
+      manifests: publicPackages.map(({ packageJson }) => packageJson),
+      artifacts: ARTIFACT_REGISTRY,
+    }).failures,
+  )
+  const publicPackageNames = publicPackages.map(({ packageJson }) => packageJson.name)
+  const catalogPackageNames = PACKAGE_CATALOG.map(({ packageName }) => packageName)
+  if (
+    catalogPackageNames.length !== 21 ||
+    JSON.stringify([...catalogPackageNames].sort()) !==
+      JSON.stringify([...publicPackageNames].sort())
+  ) {
+    failures.push("PACKAGE_CATALOG must match readPublicPackages() bidirectionally with 21 records")
+  }
+
+  const artifactAddressesByPackage = new Map()
+  for (const artifact of ARTIFACT_REGISTRY) {
+    const addresses = artifactAddressesByPackage.get(artifact.packageName) ?? []
+    addresses.push(apiReferenceRegistry.artifactAddressFor(artifact))
+    artifactAddressesByPackage.set(artifact.packageName, addresses)
+  }
+  for (const entry of PACKAGE_CATALOG) {
+    const expectedAddresses = artifactAddressesByPackage.get(entry.packageName) ?? []
+    if (
+      JSON.stringify([...entry.artifactAddresses].sort()) !==
+      JSON.stringify([...expectedAddresses].sort())
+    ) {
+      failures.push(`${entry.packageName} has incomplete or foreign artifactAddresses`)
+    }
+  }
+
+  const referenceDestinationByPackage = new Map(
+    API_REFERENCE_PAGES.flatMap((page) =>
+      page.surfaceName === "dawn:routes"
+        ? []
+        : page.ownerPackageNames.map((packageName) => [packageName, page.href]),
+    ),
+  )
+  for (const entry of PACKAGE_CATALOG) {
+    const expectedDestination =
+      referenceDestinationByPackage.get(entry.packageName) ??
+      `/docs/api#${entry.packageName.replace(/^@/, "").replaceAll("/", "-")}`
+    if (entry.canonicalReferenceDestination !== expectedDestination) {
+      failures.push(
+        `${entry.packageName} canonical reference destination must be ${expectedDestination}`,
+      )
+    }
+  }
 }
 const navDocHrefs = navDocEntries.map(({ href }) => href)
 const uniqueNavDocHrefs = [...new Set(navDocHrefs)].sort()
@@ -3659,7 +4105,10 @@ for (const root of userFacingRoots) {
   }
 }
 
-const knownDocHrefs = new Set(uniqueNavDocHrefs)
+const knownDocHrefs = new Set([
+  ...uniqueNavDocHrefs,
+  ...(apiReferenceRegistry?.API_REFERENCE_PAGES.map(({ href }) => href) ?? []),
+])
 for (const filePath of userFacingFiles) {
   const source = readFileSync(filePath, "utf8")
   const links = source.matchAll(/(?:href:\s*|]\()["']?(\/docs\/[^"',)\s#}]+)/g)

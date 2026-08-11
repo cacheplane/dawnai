@@ -3,7 +3,15 @@ import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { breadcrumbsFor, DOCS_NAV, DOCS_PAGES, siblingsFor } from "./nav"
+import { API_REFERENCE_PAGES } from "./api-reference-pages"
+import {
+  ALL_DOCS_PAGES,
+  breadcrumbsFor,
+  DOCS_NAV,
+  DOCS_PAGES,
+  type DocsNavSection,
+  siblingsFor,
+} from "./nav"
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..")
 const CONTENT_ROOT = join(WEB_ROOT, "content/docs")
@@ -253,10 +261,22 @@ describe("documentation registry invariants", () => {
   })
 
   it("pins the exact 58-page reading order", () => {
-    const expectedPages = FOUNDATION_DOCS_NAV.flatMap((section) => section.items)
+    const expectedPages = (FOUNDATION_DOCS_NAV as readonly DocsNavSection[]).flatMap(
+      (section) => section.items,
+    )
 
     expect(expectedPages).toHaveLength(58)
     expect(DOCS_PAGES).toEqual(expectedPages)
+  })
+
+  it("adds ten hidden API leaves immediately after the hub", () => {
+    expect(DOCS_NAV.reduce((count, section) => count + section.items.length, 0)).toBe(58)
+    expect(DOCS_PAGES).toHaveLength(58)
+    expect(ALL_DOCS_PAGES).toHaveLength(68)
+
+    const hubIndex = ALL_DOCS_PAGES.findIndex(({ href }) => href === "/docs/api")
+    expect(ALL_DOCS_PAGES.slice(hubIndex + 1, hubIndex + 11)).toEqual(API_REFERENCE_PAGES)
+    expect(ALL_DOCS_PAGES[hubIndex + 11]?.href).toBe("/docs/errors")
   })
 
   it("uses unique section labels, page labels, and hrefs", () => {
@@ -279,6 +299,18 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
     expect(siblingsFor("/docs/faq").next).toBeNull()
+  })
+
+  it("gives hidden API leaves a four-part breadcrumb and no journey siblings", () => {
+    for (const leaf of API_REFERENCE_PAGES) {
+      expect(breadcrumbsFor(leaf.href)).toEqual([
+        { label: "Docs", href: "/docs/getting-started" },
+        { label: "Reference" },
+        { label: "API Reference", href: "/docs/api" },
+        { label: leaf.label },
+      ])
+      expect(siblingsFor(leaf.href)).toEqual({ prev: null, next: null })
+    }
   })
 
   it("keeps every nav item on one line with label before href", () => {
