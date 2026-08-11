@@ -1,0 +1,505 @@
+import type { MemoryRecord } from "@dawn-ai/memory/browse"
+import { describe, expect, it } from "vitest"
+import {
+  BROWSE_PAGE_SIZE,
+  BROWSE_RESIDENT_CAP,
+  type BrowseEvent,
+  type BrowseState,
+  browseCanLoadMore,
+  browseDataState,
+  browsePhase,
+  browseReduce,
+  INITIAL_BROWSE_STATE,
+} from "../../src/browse/browse-machine"
+
+function record(id: string, updatedAt = "2026-08-01T00:00:00.000Z"): MemoryRecord {
+  return {
+    id,
+    kind: "semantic",
+    namespace: "route=/notes",
+    content: `content ${id}`,
+    data: {},
+    source: { type: "tool", id: "remember" },
+    confidence: 0.5,
+    tags: [],
+    status: "active",
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt,
+  }
+}
+
+/** Apply a list of events, returning the final state. Mirrors what the hook does:
+ *  it feeds the reducer's `state` back in and ignores `start`/`abort`. */
+function apply(state: BrowseState, ...events: BrowseEvent[]): BrowseState {
+  let next = state
+  for (const event of events) next = browseReduce(next, event).state
+  return next
+}
+
+const KEY_A = '["list",null,null,null,null]'
+const KEY_B = '["list","route=/notes",null,null,null]'
+
+describe("browse machine — flow 1: initial load", () => {
+  it("mount bumps the revision to 1 and asks for the first window", () => {
+    const transition = browseReduce(INITIAL_BROWSE_STATE, {
+      type: "query-changed",
+      datasetKey: KEY_A,
+    })
+    expect(transition.state.revision).toBe(1)
+    expect(transition.state.datasetKey).toBe(KEY_A)
+    expect(transition.abort).toBe(false)
+    expect(transition.start).toEqual({
+      revision: 1,
+      kind: "initial",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+    })
+    expect(browsePhase(transition.state)).toBe("loading")
+  })
+
+  it("the response stores records, total and key together, tagged with the revision", () => {
+    const state = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      {
+        type: "response",
+        revision: 1,
+        kind: "initial",
+        page: { records: [record("a")], total: 5432 },
+        at: 1000,
+      },
+    )
+    expect(state.fulfilled).toEqual({
+      revision: 1,
+      datasetKey: KEY_A,
+      records: [record("a")],
+      total: 5432,
+      at: 1000,
+    })
+    expect(browsePhase(state)).toBe("idle")
+    expect(browseDataState(state)).toEqual({ phase: "idle" })
+  })
+})
+
+describe("browse machine — flows 2 and 4: a new desired query over a fulfilled one", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a")], total: 5432 },
+      at: 1000,
+    },
+  )
+
+  it("keeps the old rows visible and marks them stale", () => {
+    const transition = browseReduce(loaded, { type: "query-changed", datasetKey: KEY_B })
+    expect(transition.state.revision).toBe(2)
+    expect(transition.state.fulfilled?.revision).toBe(1)
+    expect(browsePhase(transition.state)).toBe("stale")
+    expect(transition.start?.kind).toBe("initial")
+  })
+
+  it("aborts what was in flight, and drops the queued load-more and every error slot", () => {
+    const busy: BrowseState = {
+      ...loaded,
+      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+      queuedLoadMore: true,
+      kindErrors: { refresh: "boom" },
+    }
+    const transition = browseReduce(busy, { type: "query-changed", datasetKey: KEY_B })
+    expect(transition.abort).toBe(true)
+    expect(transition.state.queuedLoadMore).toBe(false)
+    expect(transition.state.kindErrors).toEqual({})
+  })
+
+  it("fulfilling the new revision replaces the records and re-tags the key", () => {
+    const state = apply(
+      loaded,
+      { type: "query-changed", datasetKey: KEY_B },
+      {
+        type: "response",
+        revision: 2,
+        kind: "initial",
+        page: { records: [record("z")], total: 7 },
+        at: 2000,
+      },
+    )
+    expect(state.fulfilled).toEqual({
+      revision: 2,
+      datasetKey: KEY_B,
+      records: [record("z")],
+      total: 7,
+      at: 2000,
+    })
+    expect(browsePhase(state)).toBe("idle")
+  })
+})
+
+describe("browse machine — flow 6: a stale response completing after a query change", () => {
+  it("discards the response WHOLE — records, total and the flight slot", () => {
+    const stale = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      {
+        type: "query-changed",
+        datasetKey: KEY_B,
+      },
+    )
+    const transition = browseReduce(stale, {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a")], total: 999 },
+      at: 3000,
+    })
+    expect(transition.state).toBe(stale)
+    expect(transition.start).toBeNull()
+    expect(browsePhase(transition.state)).toBe("loading")
+  })
+
+  it("discards a stale FAILURE too, so it cannot hold the new revision in error", () => {
+    const stale = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      {
+        type: "query-changed",
+        datasetKey: KEY_B,
+      },
+    )
+    const transition = browseReduce(stale, {
+      type: "failure",
+      revision: 1,
+      kind: "initial",
+      message: "gone",
+    })
+    expect(transition.state).toBe(stale)
+    expect(browsePhase(transition.state)).toBe("loading")
+  })
+})
+
+describe("browse machine — the phase table", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a")], total: 5432 },
+      at: 1000,
+    },
+  )
+
+  it("names the in-flight kind while the desired revision is fulfilled", () => {
+    expect(
+      browsePhase({
+        ...loaded,
+        inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+      }),
+    ).toBe("refreshing")
+    expect(
+      browsePhase({
+        ...loaded,
+        inFlight: { revision: 1, kind: "load-more", window: { limit: 200, offset: 1 } },
+      }),
+    ).toBe("loading-more")
+  })
+
+  it("error means nothing is fulfilled for the DESIRED revision, with or without rows", () => {
+    const failedCold = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      {
+        type: "failure",
+        revision: 1,
+        kind: "initial",
+        message: "no memory store configured",
+      },
+    )
+    expect(browsePhase(failedCold)).toBe("error")
+    expect(browseDataState(failedCold)).toEqual({
+      phase: "error",
+      message: "no memory store configured",
+    })
+
+    const failedWarm = apply(
+      loaded,
+      { type: "query-changed", datasetKey: KEY_B },
+      {
+        type: "failure",
+        revision: 2,
+        kind: "initial",
+        message: "boom",
+      },
+    )
+    expect(browsePhase(failedWarm)).toBe("error")
+    expect(failedWarm.fulfilled?.records).toHaveLength(1)
+  })
+
+  it("a retry in flight is a fresh attempt, not the held failure", () => {
+    const failed = apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      {
+        type: "failure",
+        revision: 1,
+        kind: "initial",
+        message: "boom",
+      },
+    )
+    const retried = browseReduce(failed, { type: "retry" })
+    expect(retried.start).toEqual({
+      revision: 1,
+      kind: "initial",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+    })
+    expect(browsePhase(retried.state)).toBe("loading")
+  })
+})
+
+describe("browse machine — single-flight arbitration", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a"), record("b")], total: 5432 },
+      at: 1000,
+    },
+  )
+  const fulfilled = loaded.fulfilled
+  if (fulfilled === null) throw new Error("unreachable")
+
+  it("a poll tick asks for offset 0 with limit = resident count, floored at one page", () => {
+    expect(browseReduce(loaded, { type: "poll-tick" }).start).toEqual({
+      revision: 1,
+      kind: "refresh",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+    })
+    const big: BrowseState = {
+      ...loaded,
+      fulfilled: { ...fulfilled, records: Array.from({ length: 600 }, (_, i) => record(`r${i}`)) },
+    }
+    expect(browseReduce(big, { type: "poll-tick" }).start?.window).toEqual({
+      limit: 600,
+      offset: 0,
+    })
+  })
+
+  it("a poll tick due while ANYTHING is in flight is skipped", () => {
+    for (const kind of ["initial", "refresh", "load-more"] as const) {
+      const busy: BrowseState = {
+        ...loaded,
+        inFlight: { revision: 1, kind, window: { limit: 200, offset: 0 } },
+      }
+      const transition = browseReduce(busy, { type: "poll-tick" })
+      expect(transition.start).toBeNull()
+      expect(transition.state).toBe(busy)
+    }
+  })
+
+  it("a load-more asked for during a poll tick is QUEUED and runs when the tick settles", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const queued = browseReduce(refreshing, { type: "load-more-requested" })
+    expect(queued.start).toBeNull()
+    expect(queued.state.queuedLoadMore).toBe(true)
+
+    const settled = browseReduce(queued.state, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: { records: [record("a"), record("b")], total: 5432 },
+      at: 2000,
+    })
+    expect(settled.state.queuedLoadMore).toBe(false)
+    expect(settled.start).toEqual({
+      revision: 1,
+      kind: "load-more",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 2 },
+    })
+  })
+
+  it("a queued load-more also runs when the tick it waited on FAILS", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const queued = browseReduce(refreshing, { type: "load-more-requested" }).state
+    const settled = browseReduce(queued, {
+      type: "failure",
+      revision: 1,
+      kind: "refresh",
+      message: "boom",
+    })
+    expect(settled.start?.kind).toBe("load-more")
+  })
+
+  it("load-more during load-more is a no-op, and stops at the resident cap", () => {
+    const loading: BrowseState = {
+      ...loaded,
+      inFlight: { revision: 1, kind: "load-more", window: { limit: 200, offset: 2 } },
+    }
+    expect(browseReduce(loading, { type: "load-more-requested" }).start).toBeNull()
+    expect(browseReduce(loading, { type: "load-more-requested" }).state.queuedLoadMore).toBe(false)
+
+    const atCap: BrowseState = {
+      ...loaded,
+      fulfilled: {
+        ...fulfilled,
+        records: Array.from({ length: BROWSE_RESIDENT_CAP }, (_, i) => record(`r${i}`)),
+        total: 5432,
+      },
+    }
+    expect(browseCanLoadMore(atCap)).toBe(false)
+    expect(browseReduce(atCap, { type: "load-more-requested" }).start).toBeNull()
+  })
+
+  it("load-more is unavailable once everything matching is loaded", () => {
+    const complete: BrowseState = { ...loaded, fulfilled: { ...fulfilled, total: 2 } }
+    expect(browseCanLoadMore(complete)).toBe(false)
+  })
+})
+
+describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: {
+        records: [record("a", "2026-08-03T00:00:00.000Z"), record("b", "2026-08-02T00:00:00.000Z")],
+        total: 5432,
+      },
+      at: 1000,
+    },
+  )
+
+  it("a refresh response is reconciled against the residents, not concatenated", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    // A partial window (2 of a 200 limit) ends the span: `b` is gone.
+    const settled = browseReduce(refreshing, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: {
+        records: [record("c", "2026-08-09T00:00:00.000Z"), record("a", "2026-08-03T00:00:00.000Z")],
+        total: 5431,
+      },
+      at: 2000,
+    })
+    expect(settled.state.fulfilled?.records.map((r) => r.id)).toEqual(["c", "a"])
+    expect(settled.state.fulfilled?.total).toBe(5431)
+  })
+
+  it("a load-more response is appended with ids deduped", () => {
+    const loading = browseReduce(loaded, { type: "load-more-requested" }).state
+    const settled = browseReduce(loading, {
+      type: "response",
+      revision: 1,
+      kind: "load-more",
+      page: {
+        records: [record("b", "2026-08-02T00:00:00.000Z"), record("c", "2026-08-01T00:00:00.000Z")],
+        total: 5432,
+      },
+      at: 2000,
+    })
+    expect(settled.state.fulfilled?.records.map((r) => r.id)).toEqual(["a", "b", "c"])
+  })
+})
+
+describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
+  const loaded = apply(
+    INITIAL_BROWSE_STATE,
+    { type: "query-changed", datasetKey: KEY_A },
+    {
+      type: "response",
+      revision: 1,
+      kind: "initial",
+      page: { records: [record("a")], total: 5432 },
+      at: 1000,
+    },
+  )
+
+  it("a refresh failure keeps the rows and the idle phase, and fills only its own slot", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const failed = browseReduce(refreshing, {
+      type: "failure",
+      revision: 1,
+      kind: "refresh",
+      message: "network down",
+    }).state
+    expect(browsePhase(failed)).toBe("idle")
+    expect(failed.fulfilled?.records).toHaveLength(1)
+    expect(failed.kindErrors).toEqual({ refresh: "network down" })
+  })
+
+  it("one kind's success cannot clear another kind's failure", () => {
+    const withBoth: BrowseState = { ...loaded, kindErrors: { refresh: "r", "load-more": "l" } }
+    const refreshing = browseReduce(withBoth, { type: "poll-tick" }).state
+    const ok = browseReduce(refreshing, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: { records: [record("a")], total: 5432 },
+      at: 2000,
+    }).state
+    expect(ok.kindErrors).toEqual({ "load-more": "l" })
+  })
+
+  it("a repeated identical failure keeps the SAME slots object, so a 2 s cadence cannot re-render", () => {
+    const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
+    const once = browseReduce(refreshing, {
+      type: "failure",
+      revision: 1,
+      kind: "refresh",
+      message: "network down",
+    }).state
+    const again = browseReduce(browseReduce(once, { type: "poll-tick" }).state, {
+      type: "failure",
+      revision: 1,
+      kind: "refresh",
+      message: "network down",
+    }).state
+    expect(again.kindErrors).toBe(once.kindErrors)
+  })
+
+  it("retry re-attempts the failed KIND, preferring load-more over refresh", () => {
+    const loadMoreFailed: BrowseState = { ...loaded, kindErrors: { "load-more": "boom" } }
+    expect(browseReduce(loadMoreFailed, { type: "retry" }).start).toEqual({
+      revision: 1,
+      kind: "load-more",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 1 },
+    })
+    const refreshFailed: BrowseState = { ...loaded, kindErrors: { refresh: "boom" } }
+    expect(browseReduce(refreshFailed, { type: "retry" }).start?.kind).toBe("refresh")
+  })
+
+  it("retry after the query moved on is simply the new query's initial fetch", () => {
+    const moved = apply(
+      loaded,
+      { type: "query-changed", datasetKey: KEY_B },
+      {
+        type: "failure",
+        revision: 2,
+        kind: "initial",
+        message: "boom",
+      },
+    )
+    expect(browseReduce(moved, { type: "retry" }).start).toEqual({
+      revision: 2,
+      kind: "initial",
+      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+    })
+  })
+
+  it("retry while something is in flight is a no-op", () => {
+    const busy: BrowseState = {
+      ...loaded,
+      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+    }
+    expect(browseReduce(busy, { type: "retry" }).start).toBeNull()
+  })
+})
