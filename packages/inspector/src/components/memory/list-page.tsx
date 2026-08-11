@@ -242,8 +242,12 @@ export function ListPage() {
   const handleGridReady = useCallback((grid: PretableGrid<GridRow>) => {
     gridRef.current = grid
   }, [])
+  // An empty selection, not `clearSelection()`: that one COLLAPSES the selection onto
+  // the focused cell whenever focus sits on a data cell — which a row click always
+  // leaves it doing — so the row keeps a one-column span and paints an indeterminate
+  // box, and the bar that owned the clear is already gone by then.
   const clearTicked = useCallback(() => {
-    gridRef.current?.clearSelection()
+    gridRef.current?.setSelection({ ranges: [], anchor: null })
     setTicked([])
   }, [])
   const handleBulkDone = useCallback(
@@ -436,7 +440,10 @@ export function ListPage() {
           )}
         </main>
       </div>
-      {ticked.length > 0 ? (
+      {/* Acting on rows a newly-desired query is about to replace is exactly the
+          ambiguity this design bans, so the bar is withheld while the visible
+          rows answer the previous query. */}
+      {ticked.length > 0 && browsePhase !== "stale" ? (
         <BulkBar
           ticked={ticked}
           records={browse.rows}

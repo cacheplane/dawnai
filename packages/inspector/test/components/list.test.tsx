@@ -313,11 +313,14 @@ describe("ListPage", () => {
     const { container } = render(<ListPage />)
     await screen.findByText("acme threshold is 750")
 
-    // Live off: the post-mutation refresh is the only thing that will ever ask again.
+    // Live off: a mutation's own refresh is the only thing that will ever ask again —
+    // which is what makes the FIRST one the request in flight that the second has to
+    // survive. A query change would put a request in flight too, but the bulk bar is
+    // withheld for the whole of `stale`, so that route is not a gesture a user has.
     fireEvent.click(screen.getByLabelText("live"))
     hold = true
-    const rail = screen.getByRole("navigation")
-    fireEvent.click(within(rail).getByRole("button", { name: /route=\/notes/ }))
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
     await vi.waitFor(() => {
       expect(release).toBeDefined()
     })
@@ -325,7 +328,7 @@ describe("ListPage", () => {
     fireEvent.click(rowCheckbox(container, "cand1"))
     fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
     await vi.waitFor(() => {
-      expect(postCount(mock)).toBe(1)
+      expect(postCount(mock)).toBe(2)
     })
 
     hold = false

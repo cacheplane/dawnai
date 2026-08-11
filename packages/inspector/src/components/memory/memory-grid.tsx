@@ -291,9 +291,11 @@ export function MemoryGrid({
    *  body-state slot rather than a second banner, so exactly one retry control is
    *  ever on screen. */
   onRetry?: () => void
-  /** Receives the engine instance once. The page uses it to clear the checkbox
-   *  selection after a bulk run — the only selection change that is neither a
-   *  user gesture nor a dataset pivot. */
+  /** Receives the engine instance — once per ENGINE, not once per mount: pretable
+   *  rebuilds the engine around create-time config, and every caller holding the
+   *  previous instance would be holding a dead one if it did not re-fire. The page
+   *  uses it to clear the checkbox selection after a bulk run — the only selection
+   *  change that is neither a user gesture nor a dataset pivot. */
   onGridReady?: (grid: PretableGrid<GridRow>) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])

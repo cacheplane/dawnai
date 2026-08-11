@@ -51,7 +51,10 @@ function stubApi(onPost?: (url: string) => Response) {
     const u = String(url)
     if (init?.method === "POST") return onPost?.(u) ?? jsonResponse({ ok: true })
     if (u.includes("/api/memory/stats")) return jsonResponse(stats)
-    if (u.includes("/api/memory/list")) return jsonResponse({ records, total: records.length })
+    if (u.includes("/api/memory/list"))
+      return jsonResponse({ records, total: records.length, continuation: null })
+    const one = records.find((r) => u.endsWith(`/api/memory/${r.id}`))
+    if (one) return jsonResponse(one)
     return jsonResponse({ groups: [] })
   })
   vi.stubGlobal("fetch", mock)
@@ -76,10 +79,26 @@ function gridElement(container: HTMLElement): Element {
   return grid
 }
 
+function selectAllCheckbox(container: HTMLElement): HTMLElement {
+  const box = container.querySelector("[data-pretable-row-select-all]")
+  if (!box) throw new Error("no select-all checkbox")
+  return box as HTMLElement
+}
+
 function postedUrls(mock: ReturnType<typeof stubApi>): string[] {
   return mock.mock.calls
     .filter((call) => (call[1] as RequestInit | undefined)?.method === "POST")
     .map((call) => String(call[0]))
+}
+
+/** The `filters` predicate of every browse window asked for, in order. Funnels reach
+ *  the server through this one param, so a bare "fetch was called" says nothing about
+ *  whether the funnel click became a question — the mount already called fetch. */
+function requestedFilters(mock: ReturnType<typeof stubApi>): string[] {
+  return mock.mock.calls
+    .map((call) => String(call[0]))
+    .filter((u) => u.includes("/api/memory/list"))
+    .map((u) => new URL(u, "http://localhost").searchParams.get("filters") ?? "")
 }
 
 afterEach(() => {
@@ -201,7 +220,7 @@ describe("bulk actions", () => {
 
     await vi.waitFor(() => expect(screen.queryByTestId("bulk-bar")).toBeNull())
     expect(gridElement(container)).toBe(grid)
-    expect(mock).toHaveBeenCalled()
+    expect(requestedFilters(mock).some((f) => f.includes("candidate"))).toBe(true)
   })
 
   it("clearing the selection from the bulk bar keeps the same grid instance", async () => {
@@ -217,5 +236,76 @@ describe("bulk actions", () => {
     // Without the remount, dropping the page's `ticked` alone would hide the bar
     // and leave the box ticked — so the box is what proves the ENGINE cleared.
     expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false")
+  })
+
+  it("withholds the bar while the rows on screen answer the previous query", async () => {
+    // Between the question changing and the answer landing the OLD rows are still
+    // on screen and still ticked. Acting on them is the ambiguity the design bans,
+    // so the bar goes when the question changes, not when the answer arrives.
+    let release: (() => void) | undefined
+    let hold = false
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url)
+        if (init?.method === "POST") return jsonResponse({ ok: true })
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          if (hold) {
+            await new Promise<void>((resolve) => {
+              release = resolve
+            })
+          }
+          return jsonResponse({ records, total: records.length, continuation: null })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    const { container } = render(<ListPage />)
+    await screen.findByText("first candidate")
+    fireEvent.click(checkboxFor(container, "c1"))
+    expect(await screen.findByTestId("bulk-bar")).toBeDefined()
+
+    hold = true
+    fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
+    const dialog = await screen.findByRole("dialog", { name: "Filter status" })
+    const box = within(dialog)
+      .getAllByRole("checkbox")
+      .find((cb) => cb.closest("label")?.textContent?.includes("candidate"))
+    if (!box) throw new Error("no candidate option")
+    fireEvent.click(box)
+
+    await vi.waitFor(() => expect(release).toBeDefined())
+    // The rows the selection was formed over are still the ones rendered.
+    expect(screen.getByText("first candidate")).toBeDefined()
+    expect(screen.queryByTestId("bulk-bar")).toBeNull()
+
+    hold = false
+    release?.()
+    // And the answer landing does not bring it back: the pivot dropped the selection.
+    await vi.waitFor(() => expect(checkboxFor(container, "c1")).toBeDefined())
+    expect(screen.queryByTestId("bulk-bar")).toBeNull()
+  })
+
+  it("clears whole rows even when a cell was clicked first", async () => {
+    // Opening a row's detail sheet is the page's primary gesture, and it parks the
+    // engine's focus on the clicked cell. A clear that only COLLAPSES the selection
+    // leaves that row spanning one column — an indeterminate row box and an
+    // indeterminate select-all, with the bar that owned the clear already gone.
+    stubApi()
+    const { container } = render(<ListPage />)
+    await screen.findByText("first candidate")
+
+    fireEvent.click(screen.getByText("an active one"))
+    fireEvent.click(await screen.findByLabelText("Close detail"))
+
+    fireEvent.click(checkboxFor(container, "c1"))
+    const bar = await screen.findByTestId("bulk-bar")
+    fireEvent.click(within(bar).getByRole("button", { name: /clear/i }))
+    await vi.waitFor(() => expect(screen.queryByTestId("bulk-bar")).toBeNull())
+
+    expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false")
+    expect(checkboxFor(container, "a1").getAttribute("aria-checked")).toBe("false")
+    expect(selectAllCheckbox(container).getAttribute("aria-checked")).toBe("false")
   })
 })
