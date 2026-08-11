@@ -1,5 +1,28 @@
-import { approveWithReconcile, type MemoryRecord, type MemoryStore } from "@dawn-ai/memory"
+import {
+  approveWithReconcile,
+  BrowseQueryError,
+  type MemoryRecord,
+  type MemoryStore,
+} from "@dawn-ai/memory"
 import { expect, test } from "vitest"
+
+/** Asserted on `.code`, not on the message: the route branches on the code. */
+async function expectContinuationInvalid(run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run()
+  } catch (error) {
+    expect(error).toBeInstanceOf(BrowseQueryError)
+    expect((error as BrowseQueryError).code).toBe("continuation-invalid")
+    return
+  }
+  expect.unreachable("should have rejected")
+}
+
+// A store whose keyset does not ADVANCE hands back the same full window forever.
+// Unbounded, every walk below would spin to the suite timeout with no diagnosis; the
+// bound plus the post-loop null assertion makes that a named failure instead. Third
+// parties run this suite against their own stores, so only they can hit it.
+const MAX_WALK_PAGES = 20
 
 function rec(
   over: Partial<MemoryRecord> & Pick<MemoryRecord, "id" | "namespace" | "content">,
@@ -77,6 +100,20 @@ export function runMemoryStoreConformance(opts: {
           rec({ id: "new", namespace: "ns", content: "y", updatedAt: "2026-07-04T00:00:00.000Z" }),
         )
         expect((await s.search({ namespace: "ns" })).map((r) => r.id)).toEqual(["new", "old"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("query-less search equal updated_at rows order by codepoint id (C collation)", async () => {
+      const s = await makeStore()
+      try {
+        // Same updatedAt on every row: id ASC is the sole tiebreak, and both backends
+        // must agree byte-for-byte. Mixed case separates codepoint order ("B10" < "a9")
+        // from a locale collation, which folds case and puts "a9" first.
+        for (const id of ["b2", "B10", "a9"]) {
+          await s.put(rec({ id, namespace: "ns", content: id, updatedAt: D(2) }))
+        }
+        expect((await s.search({ namespace: "ns" })).map((r) => r.id)).toEqual(["B10", "a9", "b2"])
       } finally {
         await close?.(s)
       }
@@ -347,7 +384,7 @@ export function runMemoryStoreConformance(opts: {
     test("browse returns an empty page on an empty store", async () => {
       const s = await makeStore()
       try {
-        expect(await s.browse()).toEqual({ records: [], total: 0 })
+        expect(await s.browse()).toEqual({ records: [], total: 0, continuation: null })
       } finally {
         await close?.(s)
       }
@@ -392,8 +429,320 @@ export function runMemoryStoreConformance(opts: {
       const s = await makeStore()
       try {
         await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
-        expect(await s.browse({ namespacePrefix: "Route=/X" })).toEqual({ records: [], total: 0 })
+        expect(await s.browse({ namespacePrefix: "Route=/X" })).toEqual({
+          records: [],
+          total: 0,
+          continuation: null,
+        })
         expect((await s.stats({ namespacePrefix: "Route=/X" })).total).toBe(0)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse rejects an invalid query instead of silently matching zero rows", async () => {
+      const s = await makeStore()
+      try {
+        // A store that quietly returns [] for a malformed filter teaches the caller
+        // that its query was fine and the data was empty. Both are lies.
+        // Identity, not wording: the HTTP boundary maps a rejection to 400 by `name`, so
+        // a store that caught and rethrew a plain Error satisfies every regex below and
+        // still 500s. Asserted by name rather than `instanceof`, which is false across the
+        // two module copies a bundled route and a node_modules store resolve to.
+        await expect(s.browse({ status: "bogus" as never })).rejects.toMatchObject({
+          name: "BrowseQueryError",
+          code: "invalid-query",
+        })
+        await expect(s.browse({ status: "bogus" as never })).rejects.toThrow(/invalid status/)
+        await expect(
+          s.browse({ filters: [{ field: "tags", op: "in", values: ["x"] }] as never }),
+        ).rejects.toThrow(/unknown filter field/)
+        await expect(
+          s.browse({ filters: [{ field: "status", op: "in", values: [] }] }),
+        ).rejects.toThrow(/must not be empty/)
+        await expect(
+          s.browse({ orderBy: [{ field: "content" as never, dir: "asc" }] }),
+        ).rejects.toThrow(/unknown sort field/)
+        await expect(s.browse({ limit: 0 })).rejects.toThrow(/limit must be an integer >= 1/)
+        await expect(s.browse({ since: "2026-08-09" })).rejects.toThrow(/full ISO-8601/)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse does NOT impose the HTTP limit ceiling on in-process callers", async () => {
+      const s = await makeStore()
+      try {
+        // The CLI's consolidation scan browses with limit 10_000, so no store may pass
+        // `maxLimit` into the validator. Only that rejection is visible here: with one row
+        // seeded, a store that also clamped 10_000 down to the ceiling reads identically.
+        await s.put(rec({ id: "a", namespace: "ns", content: "a" }))
+        const page = await s.browse({ limit: 10_000 })
+        expect(page.total).toBe(1)
+        expect(page.records.map((r) => r.id)).toEqual(["a"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse filters[] narrows by status/kind set, ANDed with everything else", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
+        await s.put(rec({ id: "b", namespace: "route=/x", content: "b", status: "candidate" }))
+        await s.put(rec({ id: "e", namespace: "route=/y", content: "e", kind: "episodic" }))
+        const inSet = await s.browse({
+          filters: [{ field: "status", op: "in", values: ["candidate", "superseded"] }],
+        })
+        expect(inSet.records.map((r) => r.id)).toEqual(["b"])
+        expect(inSet.total).toBe(1)
+        const notIn = await s.browse({
+          filters: [{ field: "kind", op: "notIn", values: ["episodic"] }],
+        })
+        expect(notIn.records.map((r) => r.id).sort()).toEqual(["a", "b"])
+        expect(notIn.total).toBe(2)
+        const anded = await s.browse({
+          namespacePrefix: "route=/x",
+          filters: [{ field: "status", op: "in", values: ["candidate"] }],
+        })
+        expect(anded.records.map((r) => r.id)).toEqual(["b"])
+        expect(anded.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse content filters are case-insensitive substring matches, not LIKE patterns", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "ns", content: "Acme threshold is 500" }))
+        await s.put(rec({ id: "b", namespace: "ns", content: "zed color is blue" }))
+        await s.put(rec({ id: "pct", namespace: "ns", content: "50% off today" }))
+        await s.put(rec({ id: "und", namespace: "ns", content: "50Xoff today" }))
+        const contains = await s.browse({
+          filters: [{ field: "content", op: "contains", value: "ACME" }],
+        })
+        expect(contains.records.map((r) => r.id)).toEqual(["a"])
+        expect(contains.total).toBe(1)
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "notContains", value: "acme" }] })
+          ).records
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(["b", "pct", "und"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "startsWith", value: "acme " }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["a"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "endsWith", value: "IS BLUE" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["b"])
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "content", op: "equals", value: "zed color is blue" }],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["b"])
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "content", op: "notEquals", value: "zed color is blue" }],
+            })
+          ).total,
+        ).toBe(3)
+        // "%" and "_" are literal characters, not wildcards: this is why the stores
+        // use instr/position instead of LIKE. Both needles SEPARATE the two readings —
+        // under LIKE, "%" is "anything" and "_" is "any one character", so both would
+        // additionally admit "500" and "50Xoff". A needle either reading accepts (say
+        // "50% o") asserts nothing here.
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "contains", value: "50%" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["pct"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "content", op: "contains", value: "50_" }] })
+          ).records.map((r) => r.id),
+        ).toEqual([])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse namespace is EXACT while namespacePrefix stays a prefix", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "exact", namespace: "route=/a", content: "exact" }))
+        await s.put(rec({ id: "child", namespace: "route=/ab", content: "child" }))
+        const byPrefix = await s.browse({ namespacePrefix: "route=/a" })
+        expect(byPrefix.records.map((r) => r.id).sort()).toEqual(["child", "exact"])
+        expect(byPrefix.total).toBe(2)
+        // The exact field is what kills the Inspector's client-side narrowing, where
+        // the server counted the prefix and the client displayed the equality.
+        const byExact = await s.browse({ namespace: "route=/a" })
+        expect(byExact.records.map((r) => r.id)).toEqual(["exact"])
+        expect(byExact.total).toBe(1)
+        const byFilter = await s.browse({
+          filters: [{ field: "namespace", op: "equals", value: "route=/ab" }],
+        })
+        expect(byFilter.records.map((r) => r.id)).toEqual(["child"])
+        expect(byFilter.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse namespace startsWith keeps byte-exact, case-sensitive, metachar-literal semantics", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "u", namespace: "route=/foo_bar", content: "u" }))
+        await s.put(rec({ id: "x", namespace: "route=/fooXbar", content: "x" }))
+        await s.put(rec({ id: "unicode", namespace: "route=/日本語", content: "unicode" }))
+        const underscore = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "route=/foo_" }],
+        })
+        expect(underscore.records.map((r) => r.id)).toEqual(["u"])
+        expect(underscore.total).toBe(1)
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "namespace", op: "startsWith", value: "ROUTE=/foo" }],
+            })
+          ).total,
+        ).toBe(0)
+        // Multi-byte prefixes must not fall outside the computed range.
+        const unicode = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "route=/日" }],
+        })
+        expect(unicode.records.map((r) => r.id)).toEqual(["unicode"])
+        expect(unicode.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse ANDs namespace with namespacePrefix instead of letting one win", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "exact", namespace: "route=/a", content: "exact" }))
+        await s.put(rec({ id: "child", namespace: "route=/ab", content: "child" }))
+        // The only query that binds both clauses at once, so it is the only one where
+        // a parameter pushed out of step with its clause shows up as a wrong answer
+        // rather than a bind error.
+        const both = await s.browse({ namespace: "route=/ab", namespacePrefix: "route=/a" })
+        expect(both.records.map((r) => r.id)).toEqual(["child"])
+        expect(both.total).toBe(1)
+        const disjoint = await s.browse({ namespace: "route=/a", namespacePrefix: "route=/ab" })
+        expect(disjoint.records).toEqual([])
+        expect(disjoint.total).toBe(0)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse namespacePrefix above the last code point keeps only a lower bound", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "below", namespace: "route=/a", content: "below" }))
+        await s.put(rec({ id: "top", namespace: "\u{10FFFF}top", content: "top" }))
+        // Nothing sorts above U+10FFFF, so the prefix has no successor and the upper
+        // bound must be OMITTED — binding an absent one matches nothing at all.
+        const top = await s.browse({ namespacePrefix: "\u{10FFFF}" })
+        expect(top.records.map((r) => r.id)).toEqual(["top"])
+        expect(top.total).toBe(1)
+        const viaFilter = await s.browse({
+          filters: [{ field: "namespace", op: "startsWith", value: "\u{10FFFF}" }],
+        })
+        expect(viaFilter.records.map((r) => r.id)).toEqual(["top"])
+        expect(viaFilter.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse filters by confidence, with between inclusive on both ends", async () => {
+      const s = await makeStore()
+      try {
+        // 0.9 is chosen deliberately: it is not representable in float4, so `eq`
+        // is asserted against the value READ BACK, which is the only one a backend
+        // that narrows on write can still match.
+        await s.put(rec({ id: "low", namespace: "ns", content: "low", confidence: 0.2 }))
+        await s.put(rec({ id: "mid", namespace: "ns", content: "mid", confidence: 0.5 }))
+        await s.put(rec({ id: "high", namespace: "ns", content: "high", confidence: 0.9 }))
+        const stored = (await s.get("high"))?.confidence as number
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "eq", value: stored }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["high"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "gt", value: 0.5 }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["high"])
+        // Ids, not counts: at this spread `gte 0.5` and `lte 0.5` both match two rows,
+        // so a count-only assertion passes with the two operators transposed.
+        const gte = await s.browse({ filters: [{ field: "confidence", op: "gte", value: 0.5 }] })
+        expect(gte.records.map((r) => r.id).sort()).toEqual(["high", "mid"])
+        expect(gte.total).toBe(2)
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "lt", value: 0.5 }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["low"])
+        const lte = await s.browse({ filters: [{ field: "confidence", op: "lte", value: 0.5 }] })
+        expect(lte.records.map((r) => r.id).sort()).toEqual(["low", "mid"])
+        expect(lte.total).toBe(2)
+        const neq = await s.browse({ filters: [{ field: "confidence", op: "neq", value: 0.5 }] })
+        expect(neq.records.map((r) => r.id).sort()).toEqual(["high", "low"])
+        expect(neq.total).toBe(2)
+        const between = await s.browse({
+          filters: [{ field: "confidence", op: "between", min: 0.2, max: 0.5 }],
+        })
+        expect(between.records.map((r) => r.id).sort()).toEqual(["low", "mid"])
+        expect(between.total).toBe(2)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse filters updatedAt by UTC day buckets", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(
+          rec({ id: "d1", namespace: "ns", content: "d1", updatedAt: "2026-08-01T23:59:59.999Z" }),
+        )
+        await s.put(
+          rec({ id: "d2", namespace: "ns", content: "d2", updatedAt: "2026-08-02T00:00:00.000Z" }),
+        )
+        await s.put(
+          rec({ id: "d3", namespace: "ns", content: "d3", updatedAt: "2026-08-03T12:00:00.000Z" }),
+        )
+        const onDay = await s.browse({
+          filters: [{ field: "updatedAt", op: "onDay", day: "2026-08-02" }],
+        })
+        expect(onDay.records.map((r) => r.id)).toEqual(["d2"])
+        expect(onDay.total).toBe(1)
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "updatedAt", op: "beforeDay", day: "2026-08-02" }],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["d1"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "updatedAt", op: "afterDay", day: "2026-08-02" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["d3"])
+        const span = await s.browse({
+          filters: [
+            {
+              field: "updatedAt",
+              op: "betweenDays",
+              fromDay: "2026-08-01",
+              untilDay: "2026-08-02",
+            },
+          ],
+        })
+        expect(span.records.map((r) => r.id).sort()).toEqual(["d1", "d2"])
+        expect(span.total).toBe(2)
       } finally {
         await close?.(s)
       }
@@ -740,6 +1089,287 @@ export function runMemoryStoreConformance(opts: {
         expect(
           (await s.browse({ status: "active", kind: "episodic" })).records.map((r) => r.id),
         ).toEqual(["sum"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse applies orderBy in order and always terminates with the id tie-break", async () => {
+      const s = await makeStore()
+      try {
+        // Deliberately tied on the leading key so the tie-break is the ONLY thing
+        // deciding the order — and mixed-case ids so a locale collation would
+        // disagree with byte order if the tie-break were not pinned.
+        await s.put(
+          rec({ id: "B", namespace: "ns", content: "B", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "a", namespace: "ns", content: "a", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "C", namespace: "ns", content: "C", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "z", namespace: "ns", content: "z", confidence: 0.9, updatedAt: D(2) }),
+        )
+        expect(
+          (await s.browse({ orderBy: [{ field: "confidence", dir: "desc" }] })).records.map(
+            (r) => r.id,
+          ),
+        ).toEqual(["z", "B", "C", "a"])
+        expect(
+          (await s.browse({ orderBy: [{ field: "confidence", dir: "asc" }] })).records.map(
+            (r) => r.id,
+          ),
+        ).toEqual(["B", "C", "a", "z"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse honors a multi-key orderBy with mixed directions", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "1", namespace: "ns=b", content: "1", confidence: 0.1 }))
+        await s.put(rec({ id: "2", namespace: "ns=a", content: "2", confidence: 0.9 }))
+        // "4" and "3" tie on BOTH keys, so the appended tie-break is the only thing
+        // separating them — and they go in reverse id order so insertion order alone
+        // cannot produce the expected sequence.
+        await s.put(rec({ id: "4", namespace: "ns=a", content: "4", confidence: 0.1 }))
+        await s.put(rec({ id: "3", namespace: "ns=a", content: "3", confidence: 0.1 }))
+        expect(
+          (
+            await s.browse({
+              orderBy: [
+                { field: "namespace", dir: "asc" },
+                { field: "confidence", dir: "desc" },
+              ],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["2", "3", "4", "1"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse orders by the enum columns kind and status, uncollated on both backends", async () => {
+      const s = await makeStore()
+      try {
+        // kind/status are the only sort columns Postgres resolves WITHOUT COLLATE "C",
+        // safe only because both are closed lowercase-ASCII enums. Ids are deliberately
+        // NOT in enum order, so a store that ignored the key and fell through to the
+        // default `updated_at DESC, id ASC` would return "1","2","3","4" and fail.
+        const ids = async (field: "kind" | "status", dir: "asc" | "desc") =>
+          (await s.browse({ orderBy: [{ field, dir }] })).records.map((r) => r.id)
+        await s.put(
+          rec({ id: "1", namespace: "ns", content: "1", kind: "semantic", status: "candidate" }),
+        )
+        await s.put(
+          rec({ id: "2", namespace: "ns", content: "2", kind: "episodic", status: "superseded" }),
+        )
+        await s.put(
+          rec({ id: "3", namespace: "ns", content: "3", kind: "reflection", status: "active" }),
+        )
+        await s.put(
+          rec({ id: "4", namespace: "ns", content: "4", kind: "procedural", status: "active" }),
+        )
+        expect(await ids("kind", "asc")).toEqual(["2", "4", "3", "1"])
+        expect(await ids("kind", "desc")).toEqual(["1", "3", "4", "2"])
+        expect(await ids("status", "asc")).toEqual(["3", "4", "1", "2"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse with an empty orderBy is the documented default order", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "old", namespace: "ns", content: "old", updatedAt: D(1) }))
+        await s.put(rec({ id: "new", namespace: "ns", content: "new", updatedAt: D(2) }))
+        expect((await s.browse({ orderBy: [] })).records.map((r) => r.id)).toEqual(["new", "old"])
+        expect((await s.browse()).records.map((r) => r.id)).toEqual(["new", "old"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse walks the whole dataset through continuations under a fixed now", async () => {
+      const s = await makeStore()
+      try {
+        // Odd days, so the expired row below can land BETWEEN two live ones.
+        for (let i = 0; i < 7; i += 1) {
+          await s.put(
+            rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(2 * i + 1) }),
+          )
+        }
+        // Sorts between r4 and r3, i.e. inside the SECOND window: a store that applies
+        // the expiry clause to the first page and drops it on continuations leaks it here.
+        await s.put(
+          rec({ id: "dead", namespace: "ns", content: "dead", updatedAt: D(8), expiresAt: D(2) }),
+        )
+        // Holding one `now` across the walk is the POSITIVE half of the cursor's `now`
+        // contract; rejection of a re-stamped one is pinned separately. Without this,
+        // a store that rejected every cursor carrying a `now` would still pass.
+        const query = { limit: 3, now: D(20) } as const
+        const seen: string[] = []
+        let page = await s.browse(query)
+        expect(page.total).toBe(7)
+        expect(page.continuation).not.toBeNull()
+        seen.push(...page.records.map((r) => r.id))
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
+          page = await s.browse({ ...query, cursor: page.continuation })
+          // total is the WHOLE matching set on every window, never what remains.
+          expect(page.total).toBe(7)
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(page.continuation).toBeNull()
+        expect(seen).toEqual(["r6", "r5", "r4", "r3", "r2", "r1", "r0"])
+        expect(new Set(seen).size).toBe(7)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse returns a null continuation when the window did not fill", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "ns", content: "a" }))
+        expect((await s.browse({ limit: 10 })).continuation).toBeNull()
+        expect((await s.browse()).continuation).toBeNull()
+        // A page that fills EXACTLY still issues one; following it is a legal
+        // zero-row window, not an error.
+        const full = await s.browse({ limit: 1 })
+        expect(full.continuation).not.toBeNull()
+        const after = await s.browse({ limit: 1, cursor: full.continuation as string })
+        expect(after.records).toEqual([])
+        expect(after.total).toBe(1)
+        expect(after.continuation).toBeNull()
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations survive tied sort keys by falling through to id", async () => {
+      const s = await makeStore()
+      try {
+        for (const id of ["a", "B", "c", "D"]) {
+          await s.put(rec({ id, namespace: "ns", content: id, updatedAt: D(1) }))
+        }
+        const seen: string[] = []
+        let page = await s.browse({ limit: 2 })
+        seen.push(...page.records.map((r) => r.id))
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
+          page = await s.browse({ limit: 2, cursor: page.continuation })
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(page.continuation).toBeNull()
+        expect(seen).toEqual(["B", "D", "a", "c"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations round-trip a float confidence key exactly", async () => {
+      const s = await makeStore()
+      try {
+        // Postgres stores confidence as float4; a cursor key that is not cast back to
+        // ::real compares false against the row it came from and the walk stalls or
+        // repeats. These values are all inexact in float4.
+        for (const [id, confidence] of [
+          ["a", 0.1],
+          ["b", 0.2],
+          ["c", 0.3],
+        ] as const) {
+          await s.put(rec({ id, namespace: "ns", content: id, confidence }))
+        }
+        const seen: string[] = []
+        let page = await s.browse({ limit: 1, orderBy: [{ field: "confidence", dir: "desc" }] })
+        seen.push(...page.records.map((r) => r.id))
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
+          page = await s.browse({
+            limit: 1,
+            orderBy: [{ field: "confidence", dir: "desc" }],
+            cursor: page.continuation,
+          })
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(page.continuation).toBeNull()
+        expect(seen).toEqual(["c", "b", "a"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse rejects a continuation issued for a different query", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 3; i += 1) {
+          await s.put(rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(i + 1) }))
+        }
+        const page = await s.browse({ limit: 1 })
+        const cursor = page.continuation as string
+        // A cursor carries its query's fingerprint, so it can never be replayed
+        // against a different filter/sort and silently answer the wrong question.
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor, status: "active" }))
+        await expectContinuationInvalid(() =>
+          s.browse({ limit: 1, cursor, orderBy: [{ field: "confidence", dir: "asc" }] }),
+        )
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor: "not-a-cursor" }))
+        // `now` decides which rows are expired, so it is dataset identity too. A caller
+        // that re-stamps it per request — the natural shape of an HTTP boundary — kills
+        // its own walk at page two; it must hold `now` fixed for the whole walk.
+        await expectContinuationInvalid(() => s.browse({ limit: 1, cursor, now: D(9) }))
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse continuations compose with filters, and total stays the filtered set", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await s.put(
+            rec({
+              id: `c${i}`,
+              namespace: "ns",
+              content: `c${i}`,
+              status: "candidate",
+              updatedAt: D(i + 1),
+            }),
+          )
+        }
+        await s.put(rec({ id: "keep", namespace: "ns", content: "keep", updatedAt: D(9) }))
+        const query = {
+          limit: 2,
+          filters: [{ field: "status", op: "in", values: ["candidate"] }],
+        } as const
+        const seen: string[] = []
+        let page = await s.browse(query)
+        expect(page.total).toBe(5)
+        seen.push(...page.records.map((r) => r.id))
+        for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
+          page = await s.browse({ ...query, cursor: page.continuation })
+          expect(page.total).toBe(5)
+          seen.push(...page.records.map((r) => r.id))
+        }
+        expect(page.continuation).toBeNull()
+        expect(seen).toEqual(["c4", "c3", "c2", "c1", "c0"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse reads records and total from ONE snapshot, even under concurrent writes", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 60; i += 1) {
+          await s.put(
+            rec({ id: `r${String(i).padStart(2, "0")}`, namespace: "ns", content: `r${i}` }),
+          )
+        }
+        // Two non-transactional statements can count 30 and return 60 (or the
+        // reverse) when a delete lands between them, and the UI then renders
+        // "60 loaded of 30 matching". Inside one snapshot that is unrepresentable.
+        const [page] = await Promise.all([
+          s.browse({ limit: 1000 }),
+          (async () => {
+            for (let i = 0; i < 30; i += 1) await s.delete(`r${String(i).padStart(2, "0")}`)
+          })(),
+        ])
+        expect(page.records.length).toBe(page.total)
+        // And the model converges on the next read.
+        const after = await s.browse({ limit: 1000 })
+        expect(after.total).toBe(30)
+        expect(after.records.length).toBe(30)
       } finally {
         await close?.(s)
       }

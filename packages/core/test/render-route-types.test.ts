@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "vitest"
 
 import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types"
+import { renderScenarioTypes, SCENARIO_TYPES_FILE } from "../src/typegen/render-scenario-types.ts"
 import type { RouteStateFields } from "../src/typegen/render-state-types"
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types"
 
@@ -67,8 +68,13 @@ describe("renderDawnTypes", () => {
       },
     ]
 
-    expect(renderDawnTypes(manifest, toolTypes)).toMatchInlineSnapshot(`
-      "declare module "dawn:routes" {
+    const output = renderDawnTypes(manifest, toolTypes)
+
+    expect(output.startsWith(`/// <reference path="./${SCENARIO_TYPES_FILE}" />\n\n`)).toBe(true)
+    expect(output).toMatchInlineSnapshot(`
+      "/// <reference path="./scenarios.generated.d.ts" />
+
+      declare module "dawn:routes" {
         export type DawnRoutePath = "/hello/[tenant]";
 
         export interface DawnRouteParams {
@@ -96,7 +102,9 @@ describe("renderDawnTypes", () => {
     const toolTypes: RouteToolTypes[] = []
 
     expect(renderDawnTypes(manifest, toolTypes)).toMatchInlineSnapshot(`
-      "declare module "dawn:routes" {
+      "/// <reference path="./scenarios.generated.d.ts" />
+
+      declare module "dawn:routes" {
         export type DawnRoutePath = never;
 
         export interface DawnRouteParams {}
@@ -168,6 +176,98 @@ describe("renderDawnTypes", () => {
 
     const output = renderDawnTypes(manifest, toolTypes)
     expect(output).not.toContain("DawnRouteState")
+  })
+})
+
+describe("renderScenarioTypes", () => {
+  test("renders an external testing module augmentation with route-aware tool types", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello/[tenant].tsx",
+          routeDir: "/tmp/example-app/hello/[tenant]",
+          segments: [
+            { kind: "static", value: "hello" },
+            { kind: "dynamic", name: "tenant" },
+          ],
+        },
+      ],
+    }
+    const toolTypes: RouteToolTypes[] = [
+      {
+        pathname: "/hello/[tenant]",
+        tools: [
+          {
+            name: "greet",
+            description: "Greet a tenant",
+            inputType: "{ readonly tenant: string }",
+            outputType: "{ name: string }",
+          },
+        ],
+      },
+    ]
+
+    expect(renderScenarioTypes(manifest, toolTypes)).toMatchInlineSnapshot(`
+      "import "@dawn-ai/sdk/testing"
+
+      declare module "@dawn-ai/sdk/testing" {
+        interface RouteScenarioMap {
+          "/hello/[tenant]": {
+            readonly tools: {
+              readonly "greet": (input: { readonly tenant: string }) => Promise<{ name: string }>
+            }
+          }
+        }
+      }
+      "
+    `)
+  })
+
+  test("renders empty tool maps and void-input tool signatures", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/without-tools",
+          pathname: "/without-tools",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/without-tools.tsx",
+          routeDir: "/tmp/example-app/without-tools",
+          segments: [{ kind: "static", value: "without-tools" }],
+        },
+        {
+          id: "/ping",
+          pathname: "/ping",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/ping.tsx",
+          routeDir: "/tmp/example-app/ping",
+          segments: [{ kind: "static", value: "ping" }],
+        },
+      ],
+    }
+    const toolTypes: RouteToolTypes[] = [
+      {
+        pathname: "/ping",
+        tools: [
+          {
+            name: "ping",
+            description: "Ping the route",
+            inputType: "void",
+            outputType: "string",
+          },
+        ],
+      },
+    ]
+
+    const output = renderScenarioTypes(manifest, toolTypes)
+    expect(output).toContain(`"/without-tools": {
+      readonly tools: Record<never, never>
+    }`)
+    expect(output).toContain('readonly "ping": () => Promise<string>')
   })
 })
 

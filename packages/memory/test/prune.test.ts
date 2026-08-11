@@ -118,7 +118,7 @@ describe("prune", () => {
   it("is idempotent — a second identical prune deletes nothing", async () => {
     const s = makeStore()
     for (let i = 1; i <= 4; i++)
-      await s.put(rec({ id: `e${i}`, effectiveAt: D(i), expiresAt: i === 1 ? D(2) : undefined }))
+      await s.put(rec({ id: `e${i}`, effectiveAt: D(i), ...(i === 1 ? { expiresAt: D(2) } : {}) }))
     await s.prune({ now: D(5), cap: 2 })
     const second = await s.prune({ now: D(5), cap: 2 })
     expect(second).toEqual({ deletedExpired: 0, deletedOverCap: 0 })

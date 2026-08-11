@@ -73,6 +73,9 @@ describe("generated app helper", () => {
       })
 
       const packageJson = await readFile(resolve(generatedApp.appRoot, "package.json"), "utf8")
+      const packageManifest = JSON.parse(packageJson) as {
+        scripts: Record<string, string>
+      }
       const pnpmWorkspace = await readFile(
         resolve(generatedApp.appRoot, "pnpm-workspace.yaml"),
         "utf8",
@@ -99,11 +102,24 @@ describe("generated app helper", () => {
         resolve(generatedApp.appRoot, "test/sandbox-docker.test.ts"),
         "utf8",
       )
+      const envExample = await readFile(resolve(generatedApp.appRoot, ".env.example"), "utf8")
+      const gitignore = await readFile(resolve(generatedApp.appRoot, ".gitignore"), "utf8")
 
       expect(packageJson).toContain('"@dawn-ai/sandbox": "workspace:*"')
-      expect(packageJson).toContain('"memory:list": "dawn memory list"')
-      expect(packageJson).toContain('"memory:approve": "dawn memory approve"')
-      expect(packageJson).toContain('"test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1')
+      expect(packageManifest.scripts).toEqual({
+        dev: "dawn dev --port 3000",
+        verify: "dawn verify",
+        typegen: "dawn typegen",
+        check: "dawn check",
+        typecheck: "tsc --noEmit",
+        test: "vitest run",
+        eval: "dawn eval",
+        build: "dawn build",
+        start: "node --env-file-if-exists=.env .dawn/build/server.mjs",
+        "test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1 vitest run test/sandbox-docker.test.ts",
+        "memory:list": "dawn memory list",
+        "memory:approve": "dawn memory approve",
+      })
       expect(packageJson).not.toContain('"pnpm"')
       expect(pnpmWorkspace).toContain("allowBuilds:")
       expect(pnpmWorkspace).toContain("esbuild: true")
@@ -111,6 +127,9 @@ describe("generated app helper", () => {
       expect(searchCorpus).toContain("ctx.fs.listDir")
       expect(prompt).toContain("recall({ query:")
       expect(prompt).toContain("remember({")
+      expect(prompt).toContain("recursionLimit: 100")
+      expect(envExample).toContain("OPENAI_API_KEY=")
+      expect(gitignore).toContain(".env\n.env.*\n!.env.example\n")
       expect(generatedTypes).toContain("readonly task:")
       expect(generatedTypes).toContain("readonly recall:")
       expect(generatedTypes).toContain("readonly remember:")
@@ -129,6 +148,7 @@ describe("generated app helper", () => {
       await expect(
         access(resolve(generatedApp.appRoot, "src/app/research/tools/readDoc.ts"), constants.F_OK),
       ).rejects.toThrow()
+      await expect(access(resolve(generatedApp.appRoot, ".env"), constants.F_OK)).rejects.toThrow()
     } finally {
       await rm(baseDir, { force: true, recursive: true })
     }

@@ -2,12 +2,12 @@
 
 Build a typed AI agent in 60 seconds. Dawn is file-system routing for agents — no registry, no hand-written tool schemas, no glue.
 
-By the end of this guide you'll have a working deep-research assistant at `/research` that plans sub-questions, searches a local corpus, and writes cited reports — running offline out of the box, live against a real model when you opt in.
+By the end of this guide you'll have a working deep-research assistant at `/research` that plans sub-questions, searches a local corpus, and writes cited reports. Live runs use a real model and API key; the included tests and evals use deterministic fixtures and run offline.
 
 <CopyPromptButton
   variant="docs"
   label="Copy agent prompt"
-  prompt={`Scaffold a new Dawn app and help me build an agent. Dawn is the TypeScript meta-framework for LangGraph — agents and workflows are file-system routes with route-local tools, generated types, and durable threads. Run \`pnpm create dawn-ai-app\` to scaffold, then read https://dawnai.org/AGENTS.md and https://dawnai.org/llms-full.txt for the full framework reference before writing any routes.`}
+  prompt={`Scaffold a new Dawn app and help me build an agent. Dawn is the TypeScript meta-framework for LangGraph — agents and workflows are file-system routes with route-local tools, generated types, and durable threads. Run \`npm create dawn-ai-app@latest my-agent\` to scaffold, then read https://dawnai.org/AGENTS.md and https://dawnai.org/llms-full.txt for the full framework reference before writing any routes.`}
 />
 
 Prefer to build with a coding agent? Copy the prompt above and paste it into Claude Code, Cursor, or your agent of choice.
@@ -20,7 +20,7 @@ cd my-agent
 npm install
 ```
 
-Requires Node.js 24 (the active LTS) or later.
+Requires Node.js 24 or later and npm 11.
 
 For a minimal greeter scaffold instead, pass `--template basic`:
 
@@ -30,34 +30,41 @@ npm create dawn-ai-app@latest my-app -- --template basic
 
 ## 2. What you got
 
-The scaffold is a complete deep-research assistant. The folder structure is the agent — no registration step.
+The scaffold is a complete deep-research assistant. These are its important files — no registration step is required.
 
 ```
-src/app/research/
-  index.ts                          # research coordinator agent
-  state.ts                          # route state shape
-  plan.md                           # seeds the thread's planning todos
+src/
+  app/research/
+    index.ts                        # research coordinator agent
+    state.ts                        # route state shape
+    plan.md                         # seeds the thread's planning todos
+    memory.md                       # route-specific persistent prompt guidance
+    memory.ts                       # typed cross-session research memory
+    subagents/
+      researcher/index.ts           # specialist dispatched per sub-question
+    skills/
+      cite-sources/SKILL.md         # loaded on demand: citation rules
+      synthesize-findings/SKILL.md  # loaded on demand: report structure
+    evals/
+      research-quality.eval.ts      # quality eval with scorers and a gate
   tools/
-    searchCorpus.ts                 # keyword search over the bundled corpus
-    readDoc.ts                      # reads a corpus document in full
-  subagents/
-    researcher/index.ts             # specialist dispatched per sub-question
-  skills/
-    cite-sources/SKILL.md           # loaded on demand: citation rules
-    synthesize-findings/SKILL.md    # loaded on demand: report structure
-  evals/
-    research-quality.eval.ts        # quality eval with scorers and a gate
+    searchCorpus.ts                 # shared keyword search over the corpus
+    readDoc.ts                      # shared full-document reader
 test/
-  research.test.ts                  # harness tests (offline, no API key)
+  research.test.ts                  # main offline harness suite
+  sandbox-docker.test.ts            # optional gated Docker sandbox smoke test
 workspace/
-  AGENTS.md                         # house style injected every turn
+  AGENTS.md                         # persistent prompt guidance injected every turn
   corpus/                           # bundled documents the agent searches
   scripts/
     fetch-source.mjs                # network fetch script called via runBash
+AGENTS.md                            # contributor guidance for coding agents
 dawn.config.ts                      # app config: permissions, tool-output offloading
+.env.example                        # provider environment template
+package.json                        # tested npm lifecycle scripts
 ```
 
-The route entry (`index.ts`) is a research coordinator. It plans sub-questions, dispatches the `researcher` subagent for each one, and synthesizes a cited report. Tools under `tools/` are bound to both agents at build time — `dawn check` infers their types from function signatures.
+The route entry (`index.ts`) is a research coordinator. It recalls durable context, plans sub-questions, dispatches the `researcher` subagent for each one, and synthesizes a cited report. Shared tools under `src/tools/` are available to both agents. `dawn typegen` writes their generated types from the function signatures; `dawn check` validates the app without writing files.
 
 <CodeGroup>
 ```ts title="src/app/research/index.ts"
@@ -65,15 +72,18 @@ import { agent } from "@dawn-ai/sdk"
 
 export default agent({
   model: "gpt-5-mini",
+  recursionLimit: 100,
   description:
     "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
   systemPrompt: `You are a deep-research coordinator. Given a question:
 
-1. Plan the sub-questions to investigate and record them in your todos.
-2. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
-3. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
-4. When the corpus lacks coverage, you may run \`runBash({ command: "node scripts/fetch-source.mjs <topic>" })\` — the human must approve it.
-5. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+1. Start by checking durable context with \`recall({ query: "<the user's topic and preferences>" })\`.
+2. Plan the sub-questions to investigate and record them in your todos.
+3. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
+4. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
+5. When the corpus lacks coverage, you may run \`runBash({ command: "node scripts/fetch-source.mjs <topic>" })\` — the human must approve it.
+6. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+7. When the user gives a durable preference or you verify a reusable finding, call \`remember({ data, content })\` so it can be reviewed and recalled later.
 
 Cite every claim with its source path in square brackets, e.g. [corpus/agent-architectures.md]. Keep the final answer concise.`,
 })
@@ -104,21 +114,29 @@ export default {
     offloadThresholdChars: 1500,
     previewLines: 10,
   },
+  memory: {
+    writes: "candidate",
+  },
   // Persistence (SQLite checkpointer + threads store) is on by default.
   // Threads survive a restart.
 }
 ```
 </CodeGroup>
 
-The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` is injected into the agent's system prompt every turn as durable memory. Skills under `skills/` are loaded on demand by name.
+The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` and route-local `memory.md` provide persistent prompt guidance; `memory.ts` defines typed cross-session records exposed through `recall` and `remember`. Skills under `skills/` are loaded on demand by name.
 
 ## 3. Verify and test
 
 ```bash
+npm run typegen
 npm run check
+npm run typecheck
 ```
 
-Generates route and tool types. Output:
+`typegen` writes `.dawn/dawn.generated.d.ts`; `check` then validates route
+discovery, tool definitions, and configuration without writing generated files;
+`typecheck` validates the scaffold's TypeScript sources.
+The validation output looks like:
 
 ```
 Dawn app is valid: 2 routes discovered.
@@ -130,34 +148,40 @@ Dawn app is valid: 2 routes discovered.
 npm test
 ```
 
-Runs the harness tests in `test/research.test.ts`. The test script drives the agent using recorded fixture responses, covering corpus search, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate. No API key is needed.
+Runs the harness suite in `test/research.test.ts`. It replays fixture responses while exercising corpus search and citation, durable-memory recall and candidate approval, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate. No API key is needed. The separate `test:sandbox:docker` script enables the optional Docker sandbox smoke test.
 
 ```bash
 npm run eval
 ```
 
-Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. The agent run replays fixtures, then two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). The generated fixtures also cover the judge requests from `llmJudge`, so the scaffolded eval runs without an API key.
+Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. Its dataset exercises research questions against the corpus; the scorers require corpus search, source citations, and a passing model-graded quality verdict. The inline fixtures cover both agent and judge requests, so the scaffolded eval runs without an API key.
 
-Before running the app live, run `dawn verify` as your preflight — it checks app integrity plus environment readiness (Node version, the provider API key your routes need, and the Docker daemon when a sandbox is configured) so `dawn dev` and `dawn start` boot cleanly. See [`dawn verify`](/docs/cli).
+These fixture-backed tests and evals provide deterministic offline confidence;
+they are not a keyless product demo.
 
 ## 4. Run it live
 
-Set your API key and start the dev server:
+Copy the environment example, add a real API key, run the preflight, and start
+the generated dev script:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-npx dawn dev --port 2024
+cp .env.example .env
+# Add a real OPENAI_API_KEY to .env
+npm run verify
+npm run dev
 ```
 
-The dev server exposes the Agent Protocol. In another terminal, create a thread,
+The `verify` preflight covers app integrity, type declarations, dependencies,
+Node, the selected provider environment, and configured infrastructure. The generated dev script
+serves `http://127.0.0.1:3000` and exposes Agent Protocol and AG-UI. In another terminal, create a thread,
 capture its id, then run the research agent on that thread:
 
 ```bash
-THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads \
+THREAD_ID=$(curl -s -X POST http://127.0.0.1:3000/threads \
   -H "Content-Type: application/json" \
   -d '{}' | jq -r .thread_id)
 
-curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \
+curl -s -X POST http://127.0.0.1:3000/threads/$THREAD_ID/runs/wait \
   -H "Content-Type: application/json" \
   -d '{
     "route": "/research#agent",
@@ -172,20 +196,27 @@ The `#agent` suffix is required — it selects the agent entry on the route. The
 ## 5. Ship it
 
 ```bash
-dawn build
+npm run build
+npm start
 ```
 
-Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes deployment artifacts for the default `build.targets`: a `node` target (`.dawn/build/server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`.dawn/build/langgraph.json` plus per-route entry files). The generated `assistant_id`s match the local ids, such as `/research#agent`. An opt-in `hono` target emits an edge entry point for Cloudflare Workers — see [Deployment](/docs/deployment#edge-runtimes).
+Run the commands in that order. `build` discovers routes from the app directory
+(`appDir`, defaulting to `src/app`), runs typegen, and writes deployment
+artifacts for the configured `build.targets`: by default, a `node` target
+(`.dawn/build/server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target
+(`.dawn/build/langgraph.json` plus per-route entry files). The generated
+`assistant_id`s match the local ids, such as `/research#agent`. An opt-in `hono`
+target emits an edge entry point for Cloudflare Workers — see
+[Deployment](/docs/deployment#edge-runtimes).
 
 ### Serve it in production
 
-The `node` target is a runnable server, not just a platform artifact. Serve it locally with `dawn start`:
-
-```bash
-npx dawn start
-```
-
-You should now see the agent listening on `0.0.0.0:8000`, serving Agent Protocol and AG-UI and engaging the [execution sandbox](/docs/sandbox) if configured. To ship it as a container instead:
+The generated `start` script loads `.env` when present and serves the emitted
+`.dawn/build/server.mjs`; it does not build first. You should now see the agent
+listening on `0.0.0.0:8000`, serving Agent Protocol and AG-UI and engaging the
+[execution sandbox](/docs/sandbox) if configured. The `.env` loading comes from
+the scaffold's `npm start` package script; bare `dawn start` does not load the
+file named by `config.env`. To ship it as a container instead:
 
 ```bash
 docker build -t my-agent .

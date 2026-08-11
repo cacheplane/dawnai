@@ -2,9 +2,10 @@
 
 A [CopilotKit](https://docs.copilotkit.ai) v2 app (`@copilotkit/react-core/v2` +
 `@copilotkit/runtime`) whose runtime route (`app/api/copilotkit/route.ts`) registers an
-`HttpAgent` pointed at Dawn's `POST /agui/research` endpoint (see `@dawn-ai/ag-ui`). It
-mirrors `examples/chat/web` (the canonical AG-UI wiring reference) and adds
-memory-candidate approval for the research workflow.
+`HttpAgent` pointed at Dawn's encoded `/research#agent` AG-UI endpoint (see
+`@dawn-ai/ag-ui`). It mirrors `examples/chat/web` (the canonical AG-UI wiring
+reference) and adds research suggestions, generic tool cards, standard permission
+handling, and memory-candidate approval.
 
 This app runs **live** against a real model — there is no aimock/demo mode here. The
 deterministic, no-key proof that the research route and its AG-UI wire protocol work is
@@ -15,7 +16,7 @@ the server's own offline test/eval suite (`examples/research/server`).
 ```
 browser
   → CopilotKit runtime (app/api/copilotkit/route.ts, this app, no API key)
-    → HttpAgent → POST /agui/research          (Dawn dev server, holds OPENAI_API_KEY)
+    → HttpAgent → POST /agui/%2Fresearch%23agent  (Dawn dev server, holds OPENAI_API_KEY)
       → live /research agent
         → AG-UI event stream back to the browser
 ```
@@ -24,7 +25,9 @@ browser
   served via `copilotRuntimeNextJSAppRouterEndpoint`. No LLM credentials live here; the
   Dawn server holds `OPENAI_API_KEY`.
 - `app/page.tsx` — `CopilotKit` (`runtimeUrl="/api/copilotkit"`) wrapping a
-  `CopilotSidebar` (chat transcript + cited report), plus the memory-review panel.
+  `CopilotSidebar` (streaming chat transcript + cited report), plus suggestion
+  prompts, generic tool cards, standard permission handling, and the memory-review
+  panel.
 - `app/components/MemoryCandidates.tsx` — after a research run proposes durable memory
   via `remember()`, the candidate (`status:"candidate"`) shows up in this panel with
   **Approve**/**Reject** buttons, backed by the dev server's
@@ -43,10 +46,15 @@ them.
 
 ## Running
 
+Prepare the workspace from the repository root, then start both apps from
+`examples/research`:
+
 ```bash
-cp server/.env.example server/.env   # add OPENAI_API_KEY — the server needs it, not this app
 pnpm install
-pnpm dev                             # server on :3001, web on :3010
+pnpm build                           # build Dawn packages used through dist
+cd examples/research
+cp server/.env.example server/.env   # add OPENAI_API_KEY — the server needs it, not this app
+pnpm dev                             # server on :3002, web on :3010
 # open http://localhost:3010
 ```
 
@@ -57,11 +65,13 @@ because this client intentionally has no demo/mock mode.
 
 ## Live smoke checklist (run manually, with a real `OPENAI_API_KEY`)
 
-1. `cp server/.env.example server/.env` and set `OPENAI_API_KEY`.
-2. `pnpm dev` (server :3001, web :3010).
-3. Open http://localhost:3010. Send a research question — expect a streamed, cited
+1. From the repository root, run `pnpm install` and `pnpm build`.
+2. In `examples/research`, copy `server/.env.example` to `server/.env` and set
+   `OPENAI_API_KEY`.
+3. Run `pnpm dev` there (server :3002, web :3010).
+4. Open http://localhost:3010. Send a research question — expect a streamed, cited
    report in the sidebar.
-4. If the run calls `remember()`, expect the **Memory candidates** panel to populate
+5. If the run calls `remember()`, expect the **Memory candidates** panel to populate
    once the run finishes. Click **Approve** on one — expect it to disappear from the
    panel (now `status:"active"` in `.dawn/memory.sqlite`); **Reject** deletes it.
 

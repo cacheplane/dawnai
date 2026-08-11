@@ -237,7 +237,7 @@ describe("browse ceiling", () => {
       browse: async (q: BrowseQuery = {}) => {
         queries.push(q)
         const page = await real.browse(q)
-        return { records: page.records, total: 10_002 }
+        return { records: page.records, total: 10_002, continuation: page.continuation }
       },
     }
     const errors: string[] = []

@@ -7,10 +7,15 @@ import { analyzeToolFiles } from "./typescript-backend.js"
 export interface AnalyzeRouteToolsOptions {
   readonly routeDir: string
   readonly sharedToolsDir: string | undefined
+  /** Declaration location used as the base for emitted type references. */
+  readonly typeReferenceFileName?: string
 }
 
 export function createAnalyzeRouteTools(
-  analyzeEffectiveToolFiles: (toolFiles: ReadonlyMap<string, string>) => readonly AnalyzedTool[],
+  analyzeEffectiveToolFiles: (
+    toolFiles: ReadonlyMap<string, string>,
+    typeReferenceFileName?: string,
+  ) => readonly AnalyzedTool[],
 ): (options: AnalyzeRouteToolsOptions) => readonly AnalyzedTool[] {
   return (options) => {
     const routeToolFiles = discoverToolFiles(join(options.routeDir, "tools"))
@@ -26,7 +31,7 @@ export function createAnalyzeRouteTools(
     const sortedToolFiles = new Map(
       [...effectiveToolFiles].sort(([left], [right]) => left.localeCompare(right)),
     )
-    return analyzeEffectiveToolFiles(sortedToolFiles)
+    return analyzeEffectiveToolFiles(sortedToolFiles, options.typeReferenceFileName)
   }
 }
 

@@ -156,7 +156,7 @@ export function MobileMenu() {
               ))}
             </ul>
             <div className="mt-5 px-3">
-              <CopyCommand command="pnpm create dawn-ai-app" />
+              <CopyCommand command="npm create dawn-ai-app@latest my-agent" />
             </div>
           </div>
 

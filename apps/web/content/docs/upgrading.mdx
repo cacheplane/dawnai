@@ -4,7 +4,7 @@ Dawn is pre-1.0. The API surface is still moving, and the safest posture is to p
 
 ## Fixed-group versioning
 
-Every `@dawn-ai/*` package — `cli`, `core`, `sdk`, `ag-ui`, `sandbox`, `memory`, `memory-pgvector`, `permissions`, `workspace`, `sqlite-storage`, `langchain`, `langgraph`, `testing`, `evals`, `devkit`, `vite-plugin`, `create-dawn-app`, and the rest — is released together under one version number via [Changesets](https://github.com/changesets/changesets)' fixed-group mode. If `@dawn-ai/cli` is at `0.8.12`, so is every other `@dawn-ai/*` package in that release. There's no independent versioning between packages to reason about, and no compatibility matrix to check — install matching versions and you're done.
+Every publishable Dawn package — `@dawn-ai/cli`, `@dawn-ai/core`, `@dawn-ai/sdk`, the other `@dawn-ai/*` packages, and `create-dawn-ai-app` — is released together under one version number via [Changesets](https://github.com/changesets/changesets)' fixed-group mode. If `@dawn-ai/cli` is at `0.8.12`, so is every other package in that release. There's no independent versioning between packages to reason about, and no compatibility matrix to check — install matching versions and you're done.
 
 The two Helm charts (`dawn-sandbox-infra`, `dawn-app`) track the same package train through their `appVersion` field, but they're published separately as OCI artifacts, not npm packages — see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes) for how to pull a specific chart version.
 
@@ -42,9 +42,23 @@ Each release is built from the changeset entries merged since the previous one �
     dawn test
     ```
 
-    `dawn verify` catches app-contract, route-discovery, typegen, and missing-dependency drift in one call; `dawn test` re-runs your scenario coverage against the new version. See [CLI](/docs/cli) and [Testing](/docs/testing).
+    `dawn verify` runs five phases: app discovery and config validation; route discovery; tool type extraction and typegen rendering; advisory checks for missing dependencies and provider environment variables; and runtime readiness for Node plus any configured sandbox provider. `dawn test` re-runs your scenario coverage against the new version. See [CLI](/docs/cli) and [Testing](/docs/testing).
   </Step>
 </Steps>
+
+## Node 24 is the minimum
+
+Current Dawn packages declare `node >=24.0.0`, and `create-dawn-ai-app` refuses to scaffold on older releases. Before upgrading dependencies, move local version-manager files, CI runners, and custom container bases to Node 24 or later, reinstall with that runtime, and run `dawn verify`. Node 24 also supplies the npm and unflagged `node:sqlite` versions the scaffold expects.
+
+## Node-only imports moved to `/node`
+
+If application tooling imports filesystem or process-backed helpers, update the import specifier while keeping the symbol unchanged:
+
+- From `@dawn-ai/core/node`: `discoverRoutes`, `findDawnApp`, `assertDawnRoutesDir`, `extractToolSchemasForRoute`, `extractToolTypesForRoute`, and `registerTsxLoader`.
+- From `@dawn-ai/permissions/node`: `createPermissionsStore`.
+- From `@dawn-ai/workspace/node`: `localFilesystem` and `localExec`.
+
+For example, change `import { discoverRoutes } from "@dawn-ai/core"` to `import { discoverRoutes } from "@dawn-ai/core/node"`. Runtime-agnostic contracts and helpers remain on each package's main entry; use `/node` only for the explicit Node surface.
 
 ## Pinning
 

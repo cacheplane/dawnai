@@ -52,6 +52,20 @@ export async function initSchema(
   await client.query(
     `CREATE INDEX IF NOT EXISTS ${prefix}_ns_kind_effective ON ${t} (namespace, kind, effective_at DESC)`,
   )
+  // The global browse order + keyset seek. `id COLLATE "C"` matches SQLite's BINARY
+  // tie-break; `updated_at` is deliberately UNCOLLATED so the store's ORDER BY (also
+  // uncollated) keeps matching it. That rests on every stored updated_at being the
+  // same fixed-width ISO form — MemoryRecord types it as a bare string and nothing
+  // enforces it, and mixed widths make glibc collation and byte order disagree,
+  // silently splitting the two backends' order.
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS ${prefix}_updated_id ON ${t} (updated_at DESC, id COLLATE "C" ASC)`,
+  )
+  // browse()'s namespace clauses are C-collated on both sides — `= $1` and the
+  // half-open `>= $1 AND < $2` — and the default-collation composite above cannot
+  // serve either. stats() and prune() still match with `left(namespace, n) = $1` and
+  // get nothing from this index.
+  await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_ns_c ON ${t} (namespace COLLATE "C")`)
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok ON ${tk} (token)`)
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok_mem ON ${tk} (memory_id)`)
   await client.query(

@@ -79,6 +79,316 @@ for (const check of checks) {
   }
 }
 
+const accuracyContracts = [
+  {
+    file: "apps/web/content/docs/recipes/typed-state.mdx",
+    required: [
+      "tenant: z.string()",
+      "input: unknown",
+      "workflow imports and parses",
+      "agent-state discovery",
+    ],
+    forbidden: ["input: HelloInput", "[tenant] is injected from the pathname"],
+  },
+  {
+    file: "apps/web/content/docs/recipes/stream-output.mdx",
+    required: ['input: { messages: [{ role: "user"', 'typeof payload === "string"'],
+    forbidden: ["payload.content"],
+  },
+  {
+    file: "apps/web/content/docs/state.mdx",
+    required: [
+      'tenant: z.string().default("")',
+      'import state from "./state.js"',
+      "input: unknown",
+      "state.parse(input)",
+      "Plain workflows must parse",
+      "validating `{}`",
+      "rejects `{}`",
+      "is skipped",
+    ],
+    forbidden: ["tenant: z.string(),", 'Zod-parsed default `""` is applied when caller omits it'],
+  },
+  {
+    file: "apps/web/content/docs/testing-agents.mdx",
+    required: ['title="test/agent.test.ts"', 'new URL("..", import.meta.url)'],
+    forbidden: ['title="src/app/chat/agent.test.ts"', 'new URL("../..", import.meta.url)'],
+  },
+  {
+    file: "apps/web/content/docs/tools.mdx",
+    required: [
+      "src/tools/",
+      "capability tools",
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+      'import state from "./state.js"',
+      "export async function workflow(\n  input: unknown,",
+      "const parsed = state.parse(input)",
+      "tenant: parsed.tenant",
+      "return { ...parsed, greeting:",
+    ],
+    forbidden: [
+      "only its own route-local `tools/*.ts`",
+      "inside `workflow`/`graph` route entries",
+      "Inside a `workflow` or `graph` route",
+      "imports its own tools instead",
+      'import type state from "./state.js"',
+      "state: HelloState",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    required: [
+      "node:24-slim",
+      'node_version: "22"',
+      "not blanket server authentication",
+      "/threads/:thread_id/cancel",
+      "/memory/candidates",
+      "spans namespaces",
+      "entire service",
+      "docker run -p 127.0.0.1:8000:8000",
+    ],
+    forbidden: ["Nothing else is gated"],
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    required: [
+      "not blanket server authentication",
+      "/threads/:thread_id/cancel",
+      "/memory/candidates",
+      "spans namespaces",
+      "entire service",
+      "parent watcher/session keeps the same URL",
+      "child owns the HTTP listener",
+      "default SQLite",
+    ],
+    forbidden: [
+      "parent owns the HTTP server",
+      "parent HTTP server is unaffected",
+      "parent process keeps the HTTP server alive",
+    ],
+  },
+  {
+    file: "apps/web/content/prompts/index.ts",
+    required: [
+      "dawn start",
+      'targets: ["node"]',
+      "scenarios(",
+      ".server(",
+      'topic: z.string().default("")',
+      'import state from "./state.js"',
+      "input: unknown",
+      "state.parse(input)",
+      "callable \\`graph\\` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+      "return { ...parsed, result: parsed.topic }",
+    ],
+    forbidden: [
+      "Dawn itself is not a production runtime",
+      "For a \\`workflow\\` or \\`graph\\` route",
+      "ctx.tools.<toolName>",
+      "topic: z.string(),",
+    ],
+  },
+  {
+    file: "apps/web/app/llms.txt/route.ts",
+    required: [
+      "dawn start",
+      "dawn inspect",
+      "/threads/:thread_id/cancel",
+      "fetch and print an integration blueprint",
+      "`dawn add` — list the blueprint catalog",
+      "five phases",
+      "runtime readiness",
+      "middleware-bypassing management routes",
+      "entire service",
+    ],
+    forbidden: ["Production runs on LangSmith or another runtime"],
+  },
+  {
+    file: "apps/web/content/blueprints/retrieval/pgvector.md",
+    required: [
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+    ],
+    forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
+  },
+  {
+    file: "apps/web/content/blueprints/retrieval/pinecone.md",
+    required: [
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "owns or imports",
+    ],
+    forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
+  },
+  {
+    file: "apps/web/content/docs/migrating-from-langgraph.mdx",
+    required: [
+      "configurable.thread_id",
+      "does not translate",
+      "wrapper or configuration adaptation",
+      "validate that target boundary",
+    ],
+    forbidden: [
+      "the checkpointer, LangSmith — none of it changes",
+      "LangSmith, the checkpointer, model providers, every LangChain package — unchanged",
+      "Whatever you pass to `.compile({ checkpointer })` keeps working",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/KeepTheRuntime.tsx",
+    required: [
+      "Node and Hono targets are Dawn HTTP runtimes",
+      "LangSmith target emits graph",
+      "Agent routes materialize LangGraph graphs",
+      "raw graph and chain exports remain portable",
+    ],
+    forbidden: [
+      "Dawn is not a runtime",
+      "Dawn compiles to LangGraph constructs",
+      "Routes become nodes",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/WhyDawn.tsx",
+    required: [
+      "Node and Hono HTTP runtimes",
+      "raw graph and chain exports stay portable",
+      "durable stores",
+    ],
+    forbidden: [
+      "Dawn is not a runtime",
+      "persisted state available across child-runtime restarts.",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/FeatureRouting.tsx",
+    required: ["Agent routes materialize as LangGraph graphs", "keep their authored entry form"],
+    forbidden: ["Dawn wires it into the graph", "routes compile to plain LangGraph"],
+  },
+  {
+    file: "apps/web/app/components/landing/FeatureDevLoop.tsx",
+    required: [
+      "restarts the child runtime",
+      "parent watcher/session",
+      "child-owned HTTP listener restarts",
+      "default SQLite",
+    ],
+    forbidden: [
+      "parent listener stays up",
+      "Stable parent listener",
+      "persisted thread/checkpoint state remains available",
+      "only schema-incompatible",
+      "First compile in ~400ms",
+      "incremental in tens of ms",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/DevLoopAnimation.tsx",
+    required: [
+      "Parent watcher/session keeps the same URL",
+      "Restarting child HTTP runtime",
+      "Child HTTP listener ready",
+      "Default SQLite thread/checkpoint state",
+    ],
+    forbidden: [
+      "Compiled in 412ms",
+      "Graph state preserved across reload",
+      "Updated route /support in 87ms",
+      "updated in 31ms",
+      "compiled in 22ms",
+    ],
+  },
+  {
+    file: "apps/web/content/blueprints/deploy/docker.md",
+    required: [".dawn/build/server.mjs", "node:24-slim"],
+    forbidden: ["Dawn has no standalone server", "Dawn's default deploy target"],
+  },
+  {
+    file: "apps/web/app/llms-full.txt/route.ts",
+    required: ["historical", "non-normative"],
+    forbidden: [],
+  },
+]
+
+for (const contract of accuracyContracts) {
+  const source = readFileSync(resolve(repoRoot, contract.file), "utf8")
+
+  for (const required of contract.required) {
+    if (!source.includes(required)) {
+      failures.push(`${contract.file} is missing required accuracy text: ${required}`)
+    }
+  }
+
+  for (const forbidden of contract.forbidden) {
+    if (source.includes(forbidden)) {
+      failures.push(`${contract.file} retains forbidden accuracy text: ${forbidden}`)
+    }
+  }
+}
+
+// Current scaffold CTAs must include both the package tag and a target directory.
+// Keep this scoped to active website surfaces so historical snapshots remain intact.
+const targetBearingCtaFiles = [
+  "apps/web/app/components/HeaderInner.tsx",
+  "apps/web/app/components/MobileMenu.tsx",
+  "apps/web/app/components/landing/Hero.tsx",
+  "apps/web/app/components/landing/FinalCta.tsx",
+  "apps/web/app/components/landing/Quickstart.tsx",
+  "apps/web/app/opengraph-image.tsx",
+]
+const canonicalScaffoldCommand = "npm create dawn-ai-app@latest my-agent"
+const targetlessScaffoldCommand = /\b(?:npm|pnpm) create dawn-ai-app(?!@latest my-agent)\b/
+
+for (const file of targetBearingCtaFiles) {
+  const source = readFileSync(resolve(repoRoot, file), "utf8")
+  if (!source.includes(canonicalScaffoldCommand)) {
+    failures.push(`${file} is missing the canonical target-bearing scaffold command`)
+  }
+  if (targetlessScaffoldCommand.test(source)) {
+    failures.push(`${file} retains a targetless scaffold command`)
+  }
+}
+
+// Scenario examples in current docs must use the typed builder API. Historical
+// blog posts are intentionally outside this contract and remain non-normative.
+const normativeScenarioFiles = [
+  ...walkFiles(resolve(repoRoot, "apps/web/content/docs"), (file) => file.endsWith(".mdx")),
+  resolve(repoRoot, "apps/web/content/prompts/index.ts"),
+]
+const legacyScenarioPatterns = [
+  { pattern: /\brun\.url\b/, message: "uses legacy per-scenario run.url configuration" },
+  {
+    pattern: /\brun:\s*\{\s*url\b/,
+    message: "uses a legacy raw scenario run.url object",
+  },
+  {
+    pattern: /export\s+default\s+\[/,
+    message: "default-exports a raw scenario array instead of scenarios(...) builder chains",
+  },
+  {
+    pattern: /per-scenario tool mocking is not supported/i,
+    message: "claims per-scenario tool mocking is unsupported",
+  },
+]
+
+for (const filePath of normativeScenarioFiles) {
+  const source = readFileSync(filePath, "utf8")
+  for (const { pattern, message } of legacyScenarioPatterns) {
+    if (pattern.test(source)) {
+      failures.push(`${relativeToRoot(filePath)} ${message}`)
+    }
+  }
+}
+
 // Docs topology check — every docs page in nav must have a content file and
 // a matching app wrapper, and every internal docs link must point to a known
 // docs page. This catches stale links when docs pages are split or moved.
@@ -261,16 +571,16 @@ for (const manifestPath of packageManifests()) {
 }
 
 // Dev-server endpoint coverage check. Keep explicit endpoint docs in step with
-// runtime-server route additions that expose new client-facing protocols.
-const runtimeServerSource = readFileSync(
-  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-server.ts"),
+// runtime-fetch-core route additions that expose new client-facing protocols.
+const runtimeFetchCoreSource = readFileSync(
+  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-fetch-core.ts"),
   "utf8",
 )
 const devServerDocs = readFileSync(
   resolve(repoRoot, "apps/web/content/docs/dev-server.mdx"),
   "utf8",
 )
-if (runtimeServerSource.includes("/agui/:routeId")) {
+if (runtimeFetchCoreSource.includes("/agui/:routeId")) {
   for (const required of [
     "POST /agui/{routeId}",
     "%2Fchat%23agent",
@@ -282,6 +592,17 @@ if (runtimeServerSource.includes("/agui/:routeId")) {
         `apps/web/content/docs/dev-server.mdx is missing AG-UI endpoint text: ${required}`,
       )
     }
+  }
+}
+
+for (const endpoint of [
+  "POST /threads/:thread_id/cancel",
+  "GET /memory/candidates",
+  "POST /memory/candidates/:id/approve",
+  "POST /memory/candidates/:id/reject",
+]) {
+  if (runtimeFetchCoreSource.includes(endpoint) && !devServerDocs.includes(endpoint)) {
+    failures.push(`apps/web/content/docs/dev-server.mdx is missing endpoint text: ${endpoint}`)
   }
 }
 

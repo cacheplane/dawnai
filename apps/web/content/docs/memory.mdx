@@ -1,10 +1,10 @@
 # Memory
 
-Dawn has three coexisting memory mechanisms; pick by scope and shape. Two are flat profile text a human edits (`workspace/AGENTS.md` and a route-local `memory.md`); the third is a typed, discrete collection the *agent* writes to and recalls across sessions (`memory.ts`). All three are opt-in by presence — no registration call in your route — and all three compose into the same system prompt.
+Dawn agent routes have three coexisting memory mechanisms; pick by scope and shape. Two are flat profile text a human edits (`workspace/AGENTS.md` and a route-local `memory.md`); the third is a typed, discrete collection the *agent* writes to and recalls across sessions (`memory.ts`). All three are opt-in by presence — no registration call in your route — and all three compose into the agent's system prompt.
 
 | | `workspace/AGENTS.md` (L1) | `memory.md` (L2) | `memory.ts` (L3) |
 |---|---|---|---|
-| **Scope** | Whole app (every route) | One route | Namespaced per declared scope |
+| **Scope** | Whole app (every consuming agent route) | One agent route | Namespaced per declared scope |
 | **Format** | Free-form Markdown | Free-form Markdown | Typed records (Zod schema) |
 | **Who writes** | The agent (via `writeFile`) or you | You (human) | The agent (via `remember`) |
 | **Persistence** | A file, re-read every turn | A file, re-read every turn | SQLite store, queried per turn |
@@ -29,11 +29,17 @@ You do not import anything to enable this — the presence of the file is the op
 - The file is re-read when the fragment renders, so a later turn sees an edited file without rebuilding the route.
 - Empty files and unreadable files are skipped. Files larger than **64 KiB** are not loaded; the prompt notes the file exceeded the limit.
 
-Because `AGENTS.md` is workspace-level, it is shared by every agent route in the same running app — it is not route-local.
+Because `AGENTS.md` is workspace-level, it is shared by every consuming agent route and subagent in the same app root — it is not route-local. Raw graph, workflow, and chain routes do not consume this prompt file.
 
 ### Updating it
 
-When a `workspace/` directory exists, the [workspace tools](/docs/workspace) capability provides a path-jailed `writeFile` tool. Dawn's injected instruction already tells the agent to update its memory by calling `writeFile({ path: "AGENTS.md", content: "..." })` — no extra tooling required. Because the update affects every route in the app, keep write access intentional and the content concise.
+When a `workspace/` directory exists, the [workspace tools](/docs/workspace) capability provides a path-jailed `writeFile` tool. Dawn's injected instruction already tells the agent to update its memory by calling `writeFile({ path: "AGENTS.md", content: "..." })` — no extra tooling required. Because the update affects every consuming agent in the app root, keep write access intentional and the content concise.
+
+<Callout type="warn" title="Treat AGENTS.md as shared prompt input">
+  With the default local app-root filesystem, `writeFile({ path: "AGENTS.md", ... })` modifies the host `workspace/AGENTS.md` that Dawn re-reads for later turns of consuming agent routes and subagents. A sandbox or custom filesystem backend may send `writeFile` elsewhere and does not automatically change that host prompt file; a per-thread sandbox alone does not isolate the host prompt source.
+
+  Separate app roots or prompt-memory trust domains for different tenants. Constrain or deny writes from untrusted agents, review seeded content, and never copy raw untrusted text into `workspace/AGENTS.md`.
+</Callout>
 
 ## Route memory (`memory.md`)
 
@@ -77,13 +83,13 @@ export default defineMemory({
 
 `defineMemory({ kind, scope, schema, identity? })`:
 
-- **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. `"semantic"` and [`"episodic"`](#episodic-memory) are wired end-to-end today; the other two are typed but deferred.
+- **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. `"semantic"`, [`"episodic"`](#episodic-memory), and [`"reflection"`](#reflection) are wired today; `"procedural"` remains typed but deferred.
 - **`scope`** — a subset of `["workspace", "route", "tenant", "user", "agent"]`. The dimensions a memory is partitioned by; `["workspace", "route"]` namespaces records to the app *and* the specific route, so two routes never read each other's memories.
 - **`schema`** — a Zod schema describing your fact shape.
 - **`identity?`** — the keys used for write reconciliation (in `auto` and `ask` modes). Defaults to `["subject", "predicate"]`.
 
-<Callout type="info" title="Deterministic recall">
-  By default recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock). Opting into [semantic recall](#semantic-recall-opt-in) adds one network embed at recall time; it stays deterministic under a fixed embedder (and under aimock replay).
+<Callout type="info" title="Network-free default and reproducible scoring">
+  Default SQLite keyword recall blends IDF-weighted matching with recency and confidence without FTS5, an embedding model, or a network call. Final scoring is reproducible when the candidates (or store snapshot), evaluation timestamp, and tuning are fixed; because recency uses the request's evaluation time, rankings can change as memories age. Opting into [semantic recall](#semantic-recall-opt-in) adds embedding calls, so reproducibility also requires fixed embeddings (as with a fixed embedder or aimock replay).
 </Callout>
 
 ### Generated tools
@@ -99,7 +105,7 @@ Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.
 
 **`recall({ query?, kind?, tags?, limit?, since?, until? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty. `since`/`until` narrow to a [time window](#time-windowed-recall) — most useful with [episodic memory](#episodic-memory).
 
-**`remember({ data, content?, tags?, confidence? })`** validates `data` against the schema, then writes a record. The id is **data-derived** — `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))` — so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. `content` defaults to `JSON.stringify(data)`, `confidence` to `1`, `tags` to `[]`.
+**`remember({ data, content, tags?, confidence? })`** requires a human-readable `content` string in the model-facing schema, validates `data` against the route schema, then writes a record. Semantic IDs are data-derived: `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))`, so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. Append-only episodic and reflection IDs hash the same basis **plus the write timestamp** sampled when `remember` executes. Repeated appends normally receive distinct IDs, but identical namespace/data writes in the same millisecond can share an ID and collide through the store's ID-keyed upsert. `confidence` defaults to `1` and `tags` to `[]`.
 
 ### How recall ranks
 
@@ -165,7 +171,7 @@ For tests, `@dawn-ai/testing` exports `fakeEmbedder()` — a deterministic, netw
 
 **Embeddings are model-tagged, so switching embedders is safe.** Each stored vector records the embedder `id` that produced it; recall only vector-compares rows whose tag matches the active embedder. Change the embedder or model and the old vectors simply stop participating — recall degrades gracefully to keyword-only for those rows until they're re-embedded, rather than comparing across incompatible vector spaces.
 
-Vector recall is a second stage on top of keyword recall; leaving `vector` unset keeps the default keyword-only path exactly as before. When enabled, the only change is one opt-in network embed of the query at recall time (and of the content at write time). Under a fixed embedder — or aimock replay — recall stays deterministic.
+Vector recall is a second stage on top of keyword recall; leaving `vector` unset keeps the default keyword-only path exactly as before. When enabled, the only change is one opt-in network embed of the query at recall time (and of the content at write time). SQLite scans eligible vectors exactly; final scoring is reproducible when candidate lists, the evaluation timestamp, tuning, and embeddings are fixed, including an aimock replay that pins those inputs.
 
 Tuning lives alongside the embedder in `memory.vector` (all optional and defaulted):
 
@@ -213,8 +219,8 @@ docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 pgvector/pgvector:pg1
 
 Retrieval runs **in Postgres**: an [HNSW](https://github.com/pgvector/pgvector#hnsw) index over the embedding column with **cosine** distance (`vector_cosine_ops`) for the vector list, plus a token index for the keyword list. The `dimensions` you pass selects the column type — dimensions ≤ 2000 use pgvector's `vector` type, and larger dimensions (e.g. `text-embedding-3-large`'s 3072) use `halfvec`, up to a 4000 ceiling.
 
-<Callout type="info" title="Recall ranking is identical to SQLite">
-  Both backends retrieve their own candidates (SQL here, in-process there) and then rank through the **same pure hybrid core** — the RRF fusion plus the recency/confidence second stage from [semantic recall](#semantic-recall-opt-in). Recall ordering is the same across backends; switching stores changes where the data lives and how it is retrieved, not how results are ranked. A [shared conformance kit](/docs/testing-agents) runs the same contract against both.
+<Callout type="info" title="Shared scoring, different retrieval guarantees">
+  Both backends apply Dawn's fusion and final-scoring semantics — the RRF fusion plus the recency/confidence second stage from [semantic recall](#semantic-recall-opt-in) — to the candidates they retrieve. SQLite scans eligible vectors exactly. Postgres uses approximate pgvector HNSW retrieval, so it may supply different vector candidates and therefore different rows or ordering. Final scoring is deterministic when its candidates, timestamps, tuning, and embeddings are fixed; the shared [conformance kit](/docs/testing-agents) checks the store contract, not byte-for-byte cross-backend results.
 </Callout>
 
 SQLite stays the local-first default — reach for pgvector when you need a shared production store, multiple app instances, or indexed vector retrieval over a larger corpus. If you only need single-process local persistence, SQLite is simpler and keeps the no-service path. See the runnable `examples/memory` app, which switches to pgvector automatically when `DATABASE_URL` is set and falls back to SQLite otherwise.
@@ -315,7 +321,7 @@ export default defineMemory({
 })
 ```
 
-The generated `remember` tool then appends one event per call — identical data on different runs stays two distinct events (ids are salted with the request time), and nothing is ever superseded. `effectiveAt` is stamped with the request time; agent-authored episodes have no automatic TTL (retention is `dawn memory prune`'s business).
+The generated `remember` tool normally appends one event per call: its ID includes the write timestamp sampled when the tool executes, and nothing is ever superseded. Identical namespace/data writes in the same millisecond can produce the same ID, however, so the store's ID-keyed put upserts one row rather than preserving both. `effectiveAt` is stamped with that write timestamp; agent-authored episodes have no automatic TTL (retention is `dawn memory prune`'s business).
 
 <Callout type="info" title="Episodes are not embedded">
   Auto-recorded episodes are recalled by keyword and time window only — they are not embedded, even when [semantic recall](#semantic-recall-opt-in) is configured, and `episodes.embed: true` is not yet supported (it resolves to `false` with a warning). Time plus keywords is the natural query shape for "what happened"; semantic search over episodes is a follow-up.

@@ -63,6 +63,7 @@ import {
   type RuntimeExecutionResult,
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity-node.js"
+import type { ScenarioToolCallJournal, ScenarioToolOverride } from "./scenario-tool-overrides.js"
 import { discoverStateDefinition } from "./state-discovery.js"
 import type { StreamChunk } from "./stream-types.js"
 import {
@@ -97,6 +98,8 @@ export interface ExecuteRouteOptions {
   readonly input: unknown
   readonly routeFile: string
   readonly signal?: AbortSignal
+  readonly toolCallJournal?: ScenarioToolCallJournal
+  readonly toolOverrides?: readonly ScenarioToolOverride[]
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +506,14 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     ...(options.signal ? { signal: options.signal } : {}),
     startedAt,
   }
-  return await executeRouteAtResolvedPath(withNodeFallbacks(resolved))
+  const scenarioInvocation =
+    options.toolOverrides && options.toolOverrides.length > 0
+      ? {
+          journal: options.toolCallJournal ?? [],
+          overrides: options.toolOverrides,
+        }
+      : undefined
+  return await executeRouteAtResolvedPath(withNodeFallbacks(resolved), scenarioInvocation)
 }
 
 function resolveRouteFile(options: {

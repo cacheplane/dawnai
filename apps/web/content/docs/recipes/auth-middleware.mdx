@@ -67,15 +67,16 @@ export async function workflow(
 ## Notes
 
 - **Tool name equals the file basename.** The tool file is `tools/loadProfile.ts`, so it is called as `ctx.tools.loadProfile(...)`. A file named `tools/load-profile.ts` would instead be `ctx.tools["load-profile"](...)`. Use camelCase filenames to get camelCase `ctx.tools` keys.
-- **One global middleware.** `src/middleware.ts` runs once per request before any route. Branch by `req.routeId` if you need per-route policy — there is no array of layered middlewares.
+- **One global middleware.** `src/middleware.ts` runs once per route-execution request before the route. Branch by `req.routeId` if you need per-route policy — there is no array of layered middlewares.
 - **`reject` short-circuits.** The route never executes; the body of `reject(status, body?)` is the HTTP response.
 - **`allow(context)` flows to tools.** Whatever you pass becomes `ctx.middleware` on every tool call for that request. It is `undefined` if you call `allow()` with no arguments.
 - **Throwing equals 500.** Any uncaught error becomes HTTP 500. Prefer explicit `reject(401, ...)` with a real body so callers see a useful response.
+- **Deployment scope matters.** This middleware runs under `dawn dev`, the Node Dawn HTTP runtime (`dawn start` or generated `server.mjs`), and Hono builds. Generated LangSmith graph entries do not include Dawn HTTP middleware, so enforce authentication at that platform boundary separately.
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/middleware", title: "Middleware", subtitle: "the full middleware contract and MiddlewareRequest shape" },
   { href: "/docs/tools", title: "Tools", subtitle: "how ctx.middleware reaches tool implementations" },
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "middleware runs in the local Dawn runtime" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "where middleware runs across Dawn HTTP targets" },
 ]} />

@@ -24,12 +24,12 @@ export async function FeatureRouting() {
     <FeatureBlock
       eyebrow="Routing"
       heading="Routes for agents, not just pages."
-      paragraph="Every agent in your app is a directory. Drop in an index.ts, a state.ts, and a couple of tool files — Dawn wires it into the graph at build time. No registry, no boilerplate orchestration code, no central switch statement that grows every time you add a capability."
+      paragraph="Every agent in your app is a directory. Drop in an index.ts, a state.ts, and a couple of tool files. Agent routes materialize as LangGraph graphs; workflow, raw graph, and chain routes keep their authored entry form. No registry or central switch statement grows with every capability."
       bullets={[
         "File-system routing the way Next.js does it for pages",
         "Route groups for organizing public vs. internal agents",
         "Nested routes for multi-step workflows",
-        "Cold-start safe — routes compile to plain LangGraph at build time",
+        "Agent descriptors materialize with their eligible tools",
       ]}
       link={{ href: "/docs/routes", label: "See routing docs" }}
       visual={

@@ -344,6 +344,89 @@ jobs:
             console.log("workerd lane ran: " + passed + " passed, 0 skipped.")
           ' "${{ runner.temp }}/workerd-lane-report.json"
 
+  vercel-native:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: vercel-preview
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Prepare native Vercel artifact directory
+        run: install -d -m 0700 -- "${{ runner.temp }}/vercel-native"
+
+      - name: Run native Vercel previews
+        id: native-vercel
+        env:
+          DAWN_TEST_VERCEL: "1"
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: >-
+          pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts
+          --reporter=json
+          --outputFile.json="${{ runner.temp }}/vercel-native/vitest.json"
+
+      - name: Reconcile and remove native Vercel resources
+        id: native-vercel-cleanup
+        if: always()
+        env:
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --cleanup
+
+      - name: Assert closed native Vercel receipt
+        env:
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --assert-receipt
+
+      - name: Prepare native Vercel diagnostics
+        id: native_vercel_diagnostics
+        if: always()
+        env:
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --prepare-artifacts
+
+      - name: Upload native Vercel diagnostics
+        if: failure() && steps.native_vercel_diagnostics.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vercel-native-diagnostics
+          path: ${{ runner.temp }}/vercel-native/upload/
+          if-no-files-found: error
+          retention-days: 3
+
   inspector-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20

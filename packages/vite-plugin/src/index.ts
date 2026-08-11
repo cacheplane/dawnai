@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import type { RouteToolTypes } from "@dawn-ai/core"
-import { renderDawnTypes } from "@dawn-ai/core"
+import { renderDawnTypes, renderScenarioTypes, SCENARIO_TYPES_FILE } from "@dawn-ai/core"
 import { analyzeToolSource } from "@dawn-ai/core/internal/compiler"
 import { discoverRoutes, extractToolTypesForRoute, findDawnApp } from "@dawn-ai/core/node"
 
@@ -93,15 +93,21 @@ async function runTypegen(appRoot?: string): Promise<void> {
       const tools = await extractToolTypesForRoute({
         routeDir: route.routeDir,
         sharedToolsDir,
+        typeReferenceFileName: join(app.dawnDir, SCENARIO_TYPES_FILE),
       })
       toolTypesPerRoute.push({ pathname: route.pathname, tools })
     }
 
     const content = renderDawnTypes(manifest, toolTypesPerRoute)
+    const scenarioContent = renderScenarioTypes(manifest, toolTypesPerRoute)
     const outputPath = join(app.dawnDir, OUTPUT_FILE)
+    const scenarioOutputPath = join(app.dawnDir, SCENARIO_TYPES_FILE)
 
-    await mkdir(dirname(outputPath), { recursive: true })
-    await writeFile(outputPath, content, "utf-8")
+    await mkdir(app.dawnDir, { recursive: true })
+    await Promise.all([
+      writeFile(outputPath, content, "utf-8"),
+      writeFile(scenarioOutputPath, scenarioContent, "utf-8"),
+    ])
   } catch {
     // Silently catch errors — typegen during dev should not crash the server
   }

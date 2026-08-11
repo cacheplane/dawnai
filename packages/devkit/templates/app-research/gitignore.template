@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .dawn/
+.vercel/
+.env
+.env.*
+!.env.example
 
 # Runtime workspace outputs (the agent writes these at run time).
 workspace/reports/

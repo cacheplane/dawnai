@@ -13,13 +13,14 @@ export function DevLoopAnimation() {
           <span className="text-ink-dim">$</span> pnpm dev
         </p>
         <p className="text-ink-dim mt-2">▲ Dawn dev server</p>
-        <p className="text-ink-dim">- Local: http://localhost:3000</p>
+        <p className="text-ink-dim">- URL: http://localhost:3000</p>
 
         <p className="mt-3">
-          <span className="text-accent-saas">✓</span> Compiled in 412ms
+          <span className="text-accent-saas">✓</span> Parent watcher/session keeps the same URL
         </p>
         <p>
-          <span className="text-accent-saas">✓</span> Graph state preserved across reload
+          <span className="text-accent-saas">✓</span> Default SQLite thread/checkpoint state
+          available
         </p>
         <p className="text-ink-dim mt-2">‒ Watching for changes…</p>
 
@@ -27,19 +28,19 @@ export function DevLoopAnimation() {
           className="mt-3 devloop-line"
           style={{ animation: "devloop 7s ease-in-out infinite", animationDelay: "0s" }}
         >
-          <span className="text-accent-saas">✓</span> Updated route /support in 87ms
+          <span className="text-accent-saas">↻</span> Route change: src/app/support/index.ts
         </p>
         <p
           className="devloop-line"
           style={{ animation: "devloop 7s ease-in-out infinite", animationDelay: "2s" }}
         >
-          <span className="text-accent-saas">✓</span> Tool tools/lookup-order updated in 31ms
+          <span className="text-accent-saas">↻</span> Restarting child HTTP runtime
         </p>
         <p
           className="devloop-line"
           style={{ animation: "devloop 7s ease-in-out infinite", animationDelay: "4s" }}
         >
-          <span className="text-accent-saas">✓</span> Schema state.ts compiled in 22ms
+          <span className="text-accent-saas">✓</span> Child HTTP listener ready at the same URL
         </p>
 
         <style>{`

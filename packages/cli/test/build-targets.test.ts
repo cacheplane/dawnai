@@ -1,13 +1,15 @@
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { runBuildCommand } from "../src/commands/build.js"
 import { runCheckCommand } from "../src/commands/check.js"
 
 const tempDirs: string[] = []
+const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
@@ -18,8 +20,16 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
   tempDirs.push(appRoot)
 
   const appFiles = {
-    // @dawn-ai/cli in dependencies → node target emits no runtime-dep warning.
-    "package.json": '{ "dependencies": { "@dawn-ai/cli": "workspace:*" } }\n',
+    // Every generated runtime import is declared, so selected targets emit no
+    // runtime-dependency warning.
+    "package.json": `${JSON.stringify({
+      dependencies: {
+        "@dawn-ai/cli": "workspace:*",
+        "@dawn-ai/postgres-storage": "workspace:*",
+        "@neondatabase/serverless": "^1.1.0",
+        hono: "^4.12.28",
+      },
+    })}\n`,
     "dawn.config.ts": "export default {};\n",
     "src/app/(public)/hello/[tenant]/index.ts": `import { agent } from "@dawn-ai/sdk"
 
@@ -39,7 +49,26 @@ export default agent({
     }),
   )
 
+  await linkVercelFixtureDependencies(appRoot)
+
   return appRoot
+}
+
+async function linkVercelFixtureDependencies(appRoot: string): Promise<void> {
+  const dependencies = {
+    "@dawn-ai/cli": cliPackageRoot,
+    "@dawn-ai/postgres-storage": join(cliPackageRoot, "..", "postgres-storage"),
+    "@neondatabase/serverless": join(cliPackageRoot, "node_modules", "@neondatabase", "serverless"),
+    hono: join(cliPackageRoot, "node_modules", "hono"),
+  } as const
+
+  await Promise.all(
+    Object.entries(dependencies).map(async ([specifier, target]) => {
+      const dependencyPath = join(appRoot, "node_modules", specifier)
+      await mkdir(dirname(dependencyPath), { recursive: true })
+      await symlink(target, dependencyPath, "junction")
+    }),
+  )
 }
 
 function runBuild(appRoot: string) {
@@ -84,6 +113,41 @@ describe("dawn build — targets", () => {
       readonly graphs: Record<string, string>
     }
     expect(langgraph.graphs["/hello/[tenant]#agent"]).toBe("./.dawn/build/hello-tenant.ts:graph")
+
+    // Vercel output is opt-in, not an implicit third default deployment target.
+    expect(existsSync(join(appRoot, ".vercel/output"))).toBe(false)
+  })
+
+  test("vercel target is opt-in and leaves the default targets unchanged", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["vercel"] } };\n',
+      "src/app/(public)/hello/[tenant]/index.ts":
+        "export async function workflow() { return { ok: true } }\n",
+    })
+
+    const { stderr } = await runBuild(appRoot)
+
+    expect(stderr.join("")).toBe("")
+    expect(existsSync(join(appRoot, ".vercel/output/config.json"))).toBe(true)
+    expect(existsSync(join(appRoot, ".vercel/output/functions/index.func/index.mjs"))).toBe(true)
+    expect(existsSync(join(appRoot, ".dawn/build/server.mjs"))).toBe(false)
+    expect(existsSync(join(appRoot, ".dawn/build/langgraph.json"))).toBe(false)
+  })
+
+  test("vercel target combines with independently emitted node and LangSmith artifacts", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["node", "langsmith", "vercel"] } };\n',
+      "src/app/(public)/hello/[tenant]/index.ts":
+        "export async function workflow() { return { ok: true } }\n",
+    })
+
+    const { stderr } = await runBuild(appRoot)
+
+    expect(stderr.join("")).toBe("")
+    expect(existsSync(join(appRoot, ".dawn/build/server.mjs"))).toBe(true)
+    expect(existsSync(join(appRoot, ".dawn/build/langgraph.json"))).toBe(true)
+    expect(existsSync(join(appRoot, ".vercel/output/config.json"))).toBe(true)
+    expect(existsSync(join(appRoot, ".vercel/output/functions/index.func/index.mjs"))).toBe(true)
   })
 
   test("langsmith-only target emits no node artifacts", async () => {
@@ -231,7 +295,8 @@ describe("dawn check — build targets", () => {
 
   test("known build targets pass validation", async () => {
     const appRoot = await createFixtureApp({
-      "dawn.config.ts": 'export default { build: { targets: ["node", "langsmith"] } };\n',
+      "dawn.config.ts":
+        'export default { build: { targets: ["node", "langsmith", "hono", "vercel"] } };\n',
     })
 
     const stdout: string[] = []
@@ -241,5 +306,42 @@ describe("dawn check — build targets", () => {
         { stderr: () => {}, stdout: (message) => stdout.push(message) },
       ),
     ).resolves.toBeUndefined()
+  })
+
+  test("vercel dependency notice names the vercel target", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["vercel"] } };\n',
+      "package.json": '{ "dependencies": { "@dawn-ai/cli": "workspace:*" } }\n',
+    })
+
+    const stdout: string[] = []
+    await expect(
+      runCheckCommand(
+        { cwd: appRoot },
+        { stderr: () => {}, stdout: (message) => stdout.push(message) },
+      ),
+    ).resolves.toBeUndefined()
+
+    const notice = stdout.join("")
+    expect(notice).toContain('The "vercel" target')
+    expect(notice).not.toContain('The "hono" target')
+  })
+
+  test("vercel target mirrors edge capability validation", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["vercel"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+    })
+
+    const error = await runCheckCommand(
+      { cwd: appRoot },
+      { stderr: () => {}, stdout: () => {} },
+    ).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: "DAWN_E1005" })
+    expect(String(error)).toMatch(/"vercel".*sandbox.*`sandbox`/is)
   })
 })

@@ -27,6 +27,13 @@
     },
     "./package.json": "./package.json"
   },
+  "imports": {
+    "#default-model-importer": {
+      "types": "./dist/default-model-importer.d.ts",
+      "dawn-static-provider-imports": "./dist/static-model-importer.js",
+      "default": "./dist/default-model-importer.js"
+    }
+  },
   "publishConfig": {
     "access": "public"
   },

@@ -3,18 +3,27 @@ import type { MemoryKind, MemoryRecord, MemoryStatus } from "@dawn-ai/memory"
 import {
   type ColumnFilter,
   type PretableColumn,
+  type PretableDataState,
+  type PretableGrid,
+  type PretableProcessingOptions,
+  type PretableResultMeta,
+  type PretableSortEntry,
   PretableSurface,
+  type PretableSurfaceMessages,
+  type PretableSurfaceProps,
   type PretableTelemetry,
 } from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
 import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
+import { Button } from "../ui/button"
+import { KINDS, STATUSES } from "./memory-domain"
 
 /** Row projection handed to pretable — a plain bag so it satisfies `PretableRow`
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
  *  column's `value` feeds both the rendered cell and the sort comparator, so
  *  `updated` carries the raw ISO string and formats for display. */
-interface GridRow extends Record<string, unknown> {
+export interface GridRow extends Record<string, unknown> {
   id: string
   status: MemoryStatus
   content: string
@@ -24,11 +33,6 @@ interface GridRow extends Record<string, unknown> {
   updatedAt: string
 }
 
-/** The closed sets the funnels offer, and what `isNoneOf` is complemented
- *  against. Kept here beside the columns that use them. */
-export const STATUSES: readonly MemoryStatus[] = ["candidate", "active", "superseded"]
-export const KINDS: readonly MemoryKind[] = ["semantic", "episodic", "procedural", "reflection"]
-
 /** Tallest the grid grows before it scrolls internally; below this it shrinks to
  *  fit so a two-hit search group doesn't reserve a screenful of empty rows. */
 const MAX_VIEWPORT_PX = 560
@@ -36,14 +40,31 @@ const MAX_VIEWPORT_PX = 560
 /** Everything but `content` is sized to what it holds — a status badge, a
  *  namespace, a timestamp — and `content` takes whatever is left over, so the
  *  row ends on the container's edge at any window width. It carries the slack
- *  because it's the only column with unbounded text. */
-const COLUMNS: PretableColumn<GridRow>[] = [
+ *  because it's the only column with unbounded text.
+ *
+ *  Every column declares `type`, and every FILTERABLE column declares
+ *  `filterOperators` matching the `BrowseFilter` grammar exactly. That list is
+ *  load-bearing, not cosmetic: Pretable appends `isEmpty`/`isNotEmpty` to every
+ *  type's menu by default and no `BrowseFilter` arm expresses them (correctly —
+ *  every browse field is NOT NULL), so an unpruned menu would offer two
+ *  operators the server ignores. `operatorsForType` INTERSECTS this list with
+ *  the per-type set, so a name that is not valid for the declared `type` is
+ *  dropped — and a list that intersects to nothing dev-warns and falls back to
+ *  the full menu. Change `type` and you must re-check this list.
+ *
+ *  Browse renders this list DIRECTLY, so every affordance declared here is one the
+ *  store answers — `SEARCH_COLUMNS` below is the only masked view, because search
+ *  results carry no server authority to mask against. Exported so a test can pin
+ *  every declared operator AND every sortable column against `toBrowseQuery`'s
+ *  arms — either one with no arm throws on the user's click. */
+export const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "status",
     header: "status",
     widthPx: 104,
     type: "enum",
     filterable: true,
+    filterOperators: ["isAnyOf", "isNoneOf"],
     options: STATUSES.map((value) => ({ value })),
     value: (row) => row.status,
     render: ({ row }) => <Badge variant={row.status}>{row.status}</Badge>,
@@ -51,11 +72,14 @@ const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "content",
     header: "content",
-    // Only status and kind are translated into the server query, and this list
-    // is one page of a larger store — a funnel here would filter the rows that
-    // happen to be loaded and quietly answer a different question. Search does
-    // content, across everything.
-    filterable: false,
+    type: "text",
+    filterable: true,
+    filterOperators: ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith"],
+    // Design §14 Q2: the sort whitelist has no `content` field, so a sortable
+    // header here would emit an orderBy the store rejects — and byte-order text
+    // sorting over memory bodies is rarely what anyone wanted anyway. Search is
+    // the ranked path.
+    sortable: false,
     flex: 1,
     minWidthPx: 240,
     value: (row) => row.content,
@@ -68,8 +92,12 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "namespace",
     header: "namespace",
     widthPx: 190,
-    // The facet rail already scopes namespace server-side, with real counts.
-    filterable: false,
+    type: "text",
+    filterable: true,
+    // Machine identifiers: byte-exact and case-sensitive on both backends, and
+    // `startsWith` is served sargably as a range. `contains` is deliberately
+    // absent — the store has no substring index for namespaces.
+    filterOperators: ["equals", "startsWith"],
     value: (row) => row.namespace,
   },
   {
@@ -78,6 +106,7 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     widthPx: 100,
     type: "enum",
     filterable: true,
+    filterOperators: ["isAnyOf", "isNoneOf"],
     options: KINDS.map((value) => ({ value })),
     value: (row) => row.kind,
   },
@@ -85,7 +114,9 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "confidence",
     header: "confidence",
     widthPx: 100,
-    filterable: false,
+    type: "number",
+    filterable: true,
+    filterOperators: ["equals", "notEquals", "gt", "gte", "lt", "lte", "between"],
     value: (row) => row.confidence,
     format: ({ value }) => Number(value).toFixed(2),
   },
@@ -93,7 +124,11 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "updated",
     header: "updated",
     widthPx: 180,
-    filterable: false,
+    // `date` gives the funnel a real date input, whose value is the
+    // "YYYY-MM-DD" day `toBrowseQuery` maps onto the store's UTC day buckets.
+    type: "date",
+    filterable: true,
+    filterOperators: ["on", "before", "after", "dateBetween"],
     value: (row) => row.updatedAt,
     format: ({ value }) => new Date(String(value)).toLocaleString(),
   },
@@ -104,6 +139,70 @@ const CELL_CLASS: Partial<Record<string, string>> = {
   content: "overflow-hidden",
   namespace: "font-mono text-xs",
   confidence: "tabular-nums",
+}
+
+/**
+ * Browse sends status/kind to the server, so the engine must DISPLAY the funnel
+ * state without re-applying it — and `resultMeta.total` is silently ignored (with a
+ * dev warning) under engine filter authority, so external authority is what makes
+ * the honest total reachable at all.
+ *
+ * Sort is external for the same reason: ordering a server-selected window locally
+ * answers with the wrong SAMPLE — the top of a recency-biased window, re-ranked —
+ * under a truthful-looking `aria-sort`. So a header click emits INTENT that the
+ * page turns into the query's `orderBy`, and the rows keep answering the previous
+ * order until the response lands.
+ */
+const SERVER_PROCESSING: PretableProcessingOptions = { filter: "external", sort: "external" }
+
+/** The search results are a ranked per-namespace top-N the STORE chose, and they
+ *  arrive with no server authority behind them — so a funnel here would be applied
+ *  by the engine to the rows that happen to be loaded, narrowing the sample rather
+ *  than the store, under a header that looks exactly like the browse grid's. The
+ *  `content` funnel is the one that tempts most and is exactly what search already
+ *  answers, ranked, across everything.
+ *
+ *  Sorting is left alone: a group IS its whole result set, so ordering it locally
+ *  answers the question the header asks. */
+const SEARCH_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
+  ...column,
+  filterable: false,
+}))
+
+/** Room the body-state block itself needs to stay legible when there are no rows
+ *  to give the viewport its height. The block is an overlay inset below the sticky
+ *  header, so the header's height is not part of it. */
+const MIN_BODY_STATE_PX = 160
+
+/** Announcement copy only. The visible loading/empty/error blocks come from
+ *  `renderBodyState`, which pretable prefers over `loadingStateMessage` and
+ *  `emptyStateMessage` whenever it is supplied — and it always is here. */
+const BROWSE_MESSAGES: PretableSurfaceMessages = {
+  dataErrorAnnouncement: ({ message }) =>
+    message === undefined ? "Could not load memories." : `Could not load memories: ${message}`,
+  staleAnnouncement: () => "Updating results…",
+  focusedRowRemovedAnnouncement: () => "The focused memory was removed.",
+  resultsAnnouncement: ({ loaded, total, added, scope }) => {
+    // `scope: "all"` means the loaded records ARE the population and `total`
+    // restates them — say one number. Every other case keeps the qualifier the
+    // total carries, so "of about" never hardens into a count nobody promised.
+    const population =
+      scope === "all"
+        ? ""
+        : total.kind === "exact"
+          ? ` of ${total.count.toLocaleString()} matching`
+          : total.kind === "estimate"
+            ? ` of about ${total.count.toLocaleString()} matching`
+            : total.atLeast === undefined
+              ? ""
+              : ` of more than ${total.atLeast.toLocaleString()} matching`
+    const head = `${loaded.toLocaleString()} loaded${population}.`
+    return added === undefined ? head : `Loaded ${added.toLocaleString()} more. ${head}`
+  },
+  moreRowsBoundaryAnnouncement: ({ loadedCount, total }) =>
+    total === undefined
+      ? `End of the ${loadedCount.toLocaleString()} loaded memories.`
+      : `End of the ${loadedCount.toLocaleString()} loaded memories, of ${total.toLocaleString()} matching.`,
 }
 
 function statusClass(status: MemoryStatus): string {
@@ -142,6 +241,13 @@ export function MemoryGrid({
   groupByNamespace = false,
   filters,
   onFiltersChange,
+  sort,
+  onSortChange,
+  dataState,
+  resultMeta,
+  emptyMessage,
+  onRetry,
+  onGridReady,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
@@ -153,10 +259,44 @@ export function MemoryGrid({
    *  looking at every namespace at once — scoped to one, every row would sit
    *  under a single group. */
   groupByNamespace?: boolean
-  /** Funnel state to display, and where changes go. Omit both to render without
-   *  column filtering — the grouped search results filter nothing. */
+  /** Funnel state to display, and where changes go. WHETHER funnels are offered
+   *  is decided by `dataState` (see `SEARCH_COLUMNS`), not by these — omitting
+   *  them in browse mode leaves the funnels uncontrolled, which under external
+   *  filter authority means a tick that displays and reaches nothing. */
   filters?: Record<string, ColumnFilter>
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
+  /** Ordered sort intent to display, and where changes go. Under server
+   *  authority this is display state only — the model order is the order the
+   *  server returned. Omitting them does NOT remove the sort control: the engine
+   *  keeps its own sort state and reorders the loaded rows, which is what the
+   *  search results want. */
+  sort?: PretableSortEntry[]
+  onSortChange?: (next: PretableSortEntry[]) => void
+  /** Supply to turn lifecycle presentation ON: body blocks, the phase attribute,
+   *  phase announcements, and external processing authority. Omit it — as the
+   *  search results do — and the grid behaves exactly as it did before.
+   *
+   *  WHETHER it is supplied must be stable for the mount, though its value may
+   *  change freely: presence selects `columns` and `processing`, which pretable
+   *  treats as create-time config and rebuilds the grid around, discarding
+   *  selection, focus, measured heights and column layout. */
+  dataState?: PretableDataState
+  /** The matching population and the dataset identity, always for the FULFILLED
+   *  revision. */
+  resultMeta?: PretableResultMeta
+  /** Body copy for the empty block. "Nothing stored" and "nothing matches what you
+   *  asked for" are different answers; only the caller knows which applies. */
+  emptyMessage?: string
+  /** Retry affordance for the error blocks. The design routes it through the
+   *  body-state slot rather than a second banner, so exactly one retry control is
+   *  ever on screen. */
+  onRetry?: () => void
+  /** Receives the engine instance — once per ENGINE, not once per mount: pretable
+   *  rebuilds the engine around create-time config, and every caller holding the
+   *  previous instance would be holding a dead one if it did not re-fire. The page
+   *  uses it to clear the checkbox selection after a bulk run — the only selection
+   *  change that is neither a user gesture nor a dataset pivot. */
+  onGridReady?: (grid: PretableGrid<GridRow>) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -164,8 +304,9 @@ export function MemoryGrid({
     () => ({
       rowGroups: groupByNamespace ? GROUP_BY_NAMESPACE : FLAT_ROWS,
       ...(filters ? { filters } : {}),
+      ...(sort ? { sort } : {}),
     }),
-    [groupByNamespace, filters],
+    [groupByNamespace, filters, sort],
   )
 
   // The engine reports the exact height of all rows; until the first layout
@@ -176,21 +317,90 @@ export function MemoryGrid({
     setContentHeight(telemetry.totalHeight)
   }, [])
   const density = getDensityHeights()
-  const viewportHeight = Math.min(
-    (contentHeight ?? rows.length * density.rowHeight) + density.headerHeight,
-    MAX_VIEWPORT_PX,
+  const viewportHeight = Math.max(
+    Math.min(
+      (contentHeight ?? rows.length * density.rowHeight) + density.headerHeight,
+      MAX_VIEWPORT_PX,
+    ),
+    dataState !== undefined && rows.length === 0 ? MIN_BODY_STATE_PX + density.headerHeight : 0,
   )
+
+  // Typed against the prop rather than inline in the JSX spread below: a spread
+  // gets no contextual type, so an inline callback's parameter would have to be
+  // hand-declared, and a hand-declared one silently accepts a shape the library
+  // has since renamed.
+  const renderBodyState: NonNullable<PretableSurfaceProps<GridRow>["renderBodyState"]> = ({
+    kind,
+    errorMessage,
+  }) => {
+    if (kind === "loading") {
+      return (
+        <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+          Loading memories…
+        </p>
+      )
+    }
+    if (kind === "empty") {
+      return (
+        <p data-testid="browse-empty" className="p-4 text-sm text-zinc-400">
+          {emptyMessage ?? "No memories."}
+        </p>
+      )
+    }
+    const message = errorMessage ?? "Could not load memories."
+    const retry = onRetry ? (
+      <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
+        Retry
+      </Button>
+    ) : null
+    // `error-strip` means rows survived the failure and are still on screen
+    // answering the previous question, so the block sits ABOVE them as a band
+    // rather than covering the body — same failure, a different claim about what
+    // is underneath.
+    return kind === "error-strip" ? (
+      <div
+        data-testid="browse-error-strip"
+        className="mb-2 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-700"
+      >
+        <span>{message}</span>
+        {retry}
+      </div>
+    ) : (
+      <div
+        data-testid="browse-error"
+        className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+      >
+        <span>{message}</span>
+        {retry}
+      </div>
+    )
+  }
 
   return (
     <PretableSurface<GridRow>
       ariaLabel="Memories"
-      columns={COLUMNS}
+      // Browse renders the declaration UNMASKED — every affordance `COLUMNS`
+      // declares is one the store answers, `content`'s `sortable: false` included.
+      // Search is the mode that has to mask.
+      columns={dataState === undefined ? SEARCH_COLUMNS : COLUMNS}
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}
       // One controlled `state`: a second `state` prop would clobber the first,
       // silently ungrouping the moment a filter was applied.
       state={surfaceState}
+      // All four together or none: `renderBodyState` is what makes the lifecycle
+      // copy in `BROWSE_MESSAGES` reachable, and `SERVER_PROCESSING` is what makes
+      // `resultMeta.total` reachable. Splitting them would leave a half-wired mode.
+      {...(dataState === undefined
+        ? {}
+        : {
+            dataState,
+            processing: SERVER_PROCESSING,
+            messages: BROWSE_MESSAGES,
+            renderBodyState,
+          })}
+      {...(resultMeta === undefined ? {} : { resultMeta })}
       {...(onTickedChange
         ? {
             rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
@@ -198,6 +408,8 @@ export function MemoryGrid({
           }
         : {})}
       {...(onFiltersChange ? { onFiltersChange } : {})}
+      {...(onSortChange ? { onSortChange } : {})}
+      {...(onGridReady ? { onGridReady } : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
       tabBehavior="exit"

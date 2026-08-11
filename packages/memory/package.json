@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./browse": {
+      "types": "./dist/browse.d.ts",
+      "default": "./dist/browse.js"
+    },
     "./namespace": {
       "types": "./dist/namespace.d.ts",
       "default": "./dist/namespace.js"
@@ -39,9 +43,9 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json bench src test tsconfig.json tsconfig.test.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@dawn-ai/sqlite-storage": "workspace:*"

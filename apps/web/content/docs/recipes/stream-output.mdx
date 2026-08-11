@@ -19,7 +19,7 @@ const res = await fetch(`http://127.0.0.1:3001/threads/${thread_id}/runs/stream`
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
     route: "/research#agent",
-    input: { query: "latest LLM benchmarks" },
+    input: { messages: [{ role: "user", content: "latest LLM benchmarks" }] },
   }),
 })
 
@@ -38,8 +38,9 @@ while (true) {
   const frames = buffer.split("\n\n")
   buffer = frames.pop() ?? ""
   for (const frame of frames) {
-    const lines = frame.split("\n")
-    // Every SSE frame has an "event:" line and a "data:" line.
+    // Ignore SSE comments (for example, the `: ping` heartbeat) first.
+    const lines = frame.split("\n").filter((line) => !line.startsWith(":"))
+    // Event frames have an "event:" line and a "data:" line.
     const eventLine = lines.find((l) => l.startsWith("event: "))
     const dataLine = lines.find((l) => l.startsWith("data: "))
     if (!eventLine || !dataLine) continue
@@ -49,7 +50,7 @@ while (true) {
     switch (eventType) {
       case "chunk":
         // Streamed text fragment — append to display.
-        process.stdout.write(payload.content ?? "")
+        if (typeof payload === "string") process.stdout.write(payload)
         break
       case "tool_call":
         console.log(`\n[tool_call] ${payload.name}`, payload.input)
@@ -77,11 +78,11 @@ while (true) {
 
 ## SSE event types
 
-Every frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to route frames correctly — do not treat all frames as the same type.
+Every event frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to route frames correctly — do not treat all frames as the same type.
 
 | Event type | Payload shape | Notes |
 |---|---|---|
-| `chunk` | `{ content: string }` | Streamed text fragment from the LLM. |
+| `chunk` | `string` | Streamed text fragment from the LLM. |
 | `tool_call` | `{ name: string, input: unknown }` | LLM is calling a tool. |
 | `tool_result` | `{ name: string, output: unknown }` | Tool returned a result. |
 | `plan_update` | plan object | Emitted after a [Planning](/docs/planning) `writeTodos` result updates the route's todo state. (Does not write back to `plan.md`.) |
@@ -97,8 +98,9 @@ Every frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to rou
 
 - **AP URL shape.** The endpoint is `/threads/:id/runs/stream`; the body is `{ route, input }`. Create or retrieve a thread id via `POST /threads` first.
 - **`text/event-stream`, not JSON.** The response is raw SSE. Parse `event:` and `data:` lines per frame, or use a client like `eventsource-parser`.
+- **Heartbeats are comments.** A `: ping` heartbeat contains no `event:` or `data:` payload, so clients ignore it.
 - **Use `/threads/:id/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `runs/stream` when partial output is meaningful — long agent reasoning, token-by-token text, intermediate workflow states, [planning](/docs/planning) updates, or [subagent](/docs/subagents) activity.
-- **Retry has limits during streams.** Once a token has been emitted, the response is committed and cannot be retried. See [Retry](/docs/retry) for the streaming caveat.
+- **Retry has limits during streams.** Retry is available only before the first stream event; any emitted token or event commits the response. See [Retry](/docs/retry) for the streaming caveat.
 
 ## Related
 

@@ -13,10 +13,10 @@ Dawn writes those conventions once. You write the agent.
 
 - A *route* is a folder. Its path is the agent endpoint.
 - A route's `index.ts` exports one of: `agent`, `workflow`, `graph`, `chain`.
-- *Tools* live next to routes. Their parameter types are inferred at build time.
+- *Tools* live in shared `src/tools/` or next to a route in its `tools/` directory. Their parameter types are inferred at build time.
 - *State* is the JSON payload passed through the route runtime.
 - Agent routes can opt into built-in behavior such as memory, planning, skills, subagents, and reasoning effort.
-- *Middleware* is an optional app-level request gate for the local Dawn runtime.
+- *Middleware* is an optional app-level request gate for Dawn's dev server and built HTTP runtimes.
 - LangGraph runs the graph. Dawn does everything else.
 
 ## The pieces
@@ -27,13 +27,13 @@ A *route entry* is the route's default behavior. Each route has exactly one `ind
 
 **Two ways to drive the model.** Export an `agent` when the model should decide what to do — it picks tools at runtime and can pause for a human. Export a `workflow` when you own the order of operations — a deterministic, typed async function. Same routing, same types, same dev loop; you choose who's in charge. Drop to `graph` or `chain` for raw LangGraph anytime. See [Agents](/docs/agents) and [Routes](/docs/routes) for each shape.
 
-*Tools* are TypeScript files in a route's `tools/` directory. Each tool is a default-exported async function. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Agents call tools by name; the model picks when.
+*Tools* are default-exported async functions in shared `src/tools/` or a route's local `tools/` directory. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Shared tools are available across routes; a route-local tool can specialize or shadow one for that route. Agents call tools by name; the model picks when.
 
 *State* is an optional typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — are preserved in the route id and generated route metadata; callers pass the corresponding values in the JSON input they send to the runtime.
 
-Agent route features are discovered from files and descriptors. `workspace/AGENTS.md` provides memory, `plan.md` provides planning, `skills/<name>/SKILL.md` provides route-local skills, `subagents/` provides child specialists, and `reasoning` tunes OpenAI-backed agent routes.
+Agent route features are discovered from files and descriptors. `workspace/AGENTS.md` supplies persistent prompt guidance on every turn; route-local `memory.ts` defines typed cross-session memory; episodic records retain run history for later recall and distillation. `plan.md` provides planning, `skills/<name>/SKILL.md` provides route-local skills, `subagents/` provides child specialists, and `reasoning` tunes OpenAI-backed agent routes.
 
-*Middleware* runs before route execution in the local Dawn runtime. It lives at `src/middleware.ts` (or root `middleware.ts`) and can reject a request or attach request-scoped context for tools.
+*Middleware* runs before route execution in `dawn dev` and the built Node and Hono HTTP runtimes. It lives at `src/middleware.ts` (or root `middleware.ts`) and can reject a request or attach request-scoped context for tools.
 
 ### Access control: three layers
 
@@ -75,7 +75,7 @@ Each arrow is real code:
 2. **Route id match.** Dawn resolves the route id against the discovered file tree. Route groups (`(public)/`) drop from the path; the `#agent` suffix selects the agent entry on the route.
 3. **Input state.** The JSON input is passed to the route. Agent routes may apply defaults from `state.ts`; workflow, graph, and chain routes receive the runtime input for their adapter.
 4. **Middleware.** The app-level middleware runs when present. It can short-circuit the request or pass through with request-scoped context for tools.
-5. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with the route's discovered tools.
+5. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Agent routes receive materialized tools, and `workflow(state, ctx)` receives the typed `RuntimeContext`; raw graph and chain routes keep their native invocation and imported dependencies.
 6. **Tool calls.** Tools called by name are typechecked against the schemas Dawn generated at build time. The `searchCorpus` tool searches the bundled corpus; `readDoc` reads a document in full; the model picks when to call each.
 7. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`runs/wait` vs `runs/stream` on the thread).
 
@@ -95,20 +95,19 @@ Dawn does most of its work at *build time*.
 
 `dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `.dawn/dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.searchCorpus` and complain when a tool's signature drifts from its caller.
 
-At *runtime*, `dawn run` and `dawn dev` execute. There is no manual `tools: [...]` array and no per-route registration. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
+At *runtime*, `dawn run`, `dawn dev`, and built Dawn HTTP entries execute routes. There is no manual `tools: [...]` array and no per-route registration for agent and workflow routes. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
 
 ## Where Dawn ends and LangGraph begins
 
-The boundary is sharp. Dawn does not replace LangGraph. It surrounds it.
+The boundary is sharp. Dawn does not replace LangGraph; it packages LangGraph applications for several hosts.
 
-| Dawn owns                             | LangGraph owns              |
-|---------------------------------------|-----------------------------|
-| File-system routing                   | The graph runtime           |
-| Type inference for tools and state    | StateGraph, channels        |
-| Dev server with HMR                   | Checkpoint interface        |
-| The CLI (`dawn dev`, `dawn run`)      | LangSmith (deploy + observe)|
-| Generated `.dawn/dawn.generated.d.ts` | LangSmith integration       |
-| SQLite checkpointer + threads store   |                             |
+| Component | Role |
+|-----------|------|
+| Dawn | File-system routing, tool and state typegen, the HMR dev server, CLI commands, generated entries, and the default SQLite stores. |
+| LangGraph | `StateGraph`, channels, graph execution, and the checkpoint interface. |
+| Node target | Dawn's full Agent Protocol and AG-UI HTTP server, including Node filesystem-backed capabilities. |
+| Hono target | Dawn's fetch-based HTTP runtime for edge hosts; Node-only filesystem features are gated. |
+| LangSmith target | Generated graph entries and `langgraph.json` for LangSmith to deploy; LangSmith provides hosting and observability. |
 
 On persistence: LangGraph defines the checkpoint interface; Dawn ships the default implementation — `@dawn-ai/sqlite-storage` — which backs both the checkpointer (`.dawn/checkpoints.sqlite`) and the threads store (`.dawn/threads.sqlite`). You can swap it for your own implementation if needed.
 
