@@ -2,6 +2,7 @@ import type { MemoryRecord } from "@dawn-ai/memory"
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
+import { TEST_IDS } from "../../src/components/memory/test-ids"
 
 function record(over: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
   return {
@@ -100,7 +101,7 @@ function browseGrid(): Element | null {
 }
 
 function scopeNote(): string {
-  return screen.getByTestId("browse-scope-note").textContent ?? ""
+  return screen.getByTestId(TEST_IDS.searchScopeNote).textContent ?? ""
 }
 
 /** Open the status funnel WITHOUT a pointerdown anywhere else first. Pretable's own

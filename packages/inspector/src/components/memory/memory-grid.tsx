@@ -18,6 +18,7 @@ import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
 import { KINDS, STATUSES } from "./memory-domain"
+import { TEST_IDS } from "./test-ids"
 
 /** Row projection handed to pretable — a plain bag so it satisfies `PretableRow`
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
@@ -348,8 +349,15 @@ export function MemoryGrid({
       )
     }
     const message = errorMessage ?? "Could not load memories."
+    // One node, reused by both blocks below — they are mutually exclusive kinds, so
+    // the id is never ambiguous in a rendered tree.
     const retry = onRetry ? (
-      <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
+      <Button
+        variant="outline"
+        className="h-7 px-2"
+        data-testid={TEST_IDS.retryInitial}
+        onClick={onRetry}
+      >
         Retry
       </Button>
     ) : null

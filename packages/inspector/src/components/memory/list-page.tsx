@@ -15,6 +15,7 @@ import { FacetRail } from "./facet-rail"
 import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
 import { type GridRow, MemoryGrid } from "./memory-grid"
+import { TEST_IDS } from "./test-ids"
 import { TimelineView } from "./timeline-view"
 import {
   capSortEntries,
@@ -519,7 +520,12 @@ export function ListPage() {
             className="w-64"
           />
           <label className="flex items-center gap-1.5 text-sm text-zinc-600">
-            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+            <input
+              type="checkbox"
+              data-testid={TEST_IDS.liveToggle}
+              checked={live}
+              onChange={(e) => setLive(e.target.checked)}
+            />
             live
           </label>
         </div>
@@ -556,7 +562,7 @@ export function ListPage() {
             id="browse-scope-note"
             hidden={!searching}
             className="mb-2 text-xs text-zinc-500"
-            data-testid="browse-scope-note"
+            data-testid={TEST_IDS.searchScopeNote}
           >
             Search ranks active memories, and the namespace facet applies to it. Column filters, the
             view toggle
@@ -613,7 +619,11 @@ export function ListPage() {
               construction. Invisible and outside the a11y tree, but NOT outside a
               document-wide text query: anything asserting on row text has to scope
               itself to the surface it means, or the hidden copy will answer. */}
-          <div data-testid="browse-region" hidden={browseSurfaceHidden} ref={browseRegionRef}>
+          <div
+            data-testid={TEST_IDS.browseRegion}
+            hidden={browseSurfaceHidden}
+            ref={browseRegionRef}
+          >
             {sortCapped ? (
               <p role="status" className="mb-2 text-xs text-zinc-500" data-testid="sort-cap-notice">
                 {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}

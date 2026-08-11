@@ -1,6 +1,7 @@
 "use client"
 import type { PretableDataState } from "@pretable/react"
 import { Button } from "../ui/button"
+import { TEST_IDS } from "./test-ids"
 
 export interface BrowseErrorEntry {
   /** The slot this failure belongs to. Independent per source, so one source's
@@ -77,12 +78,25 @@ export function BrowseStatusBar({
       className="mb-2 flex items-center gap-3 text-xs text-zinc-500"
     >
       <span>
-        {total === null
-          ? `${loaded.toLocaleString()} loaded`
-          : `${loaded.toLocaleString()} loaded of ${total.toLocaleString()} matching`}
+        {total === null ? (
+          `${loaded.toLocaleString()} loaded`
+        ) : (
+          // The total gets its own node so a reader can take the number without
+          // parsing the sentence around it — and without a locale-dependent regex,
+          // since the separators come from `toLocaleString`. Split with no JSX
+          // whitespace between the pieces, so this element's `textContent` is
+          // character-for-character what the single string used to be.
+          <>
+            {`${loaded.toLocaleString()} loaded of `}
+            <span data-testid={TEST_IDS.total}>{total.toLocaleString()}</span>
+            {" matching"}
+          </>
+        )}
       </span>
       {phase === "stale" ? <span>Updating results…</span> : null}
-      {asOf === null ? null : <span>{`Updated ${new Date(asOf).toLocaleTimeString()}`}</span>}
+      {asOf === null ? null : (
+        <span data-testid={TEST_IDS.asOf}>{`Updated ${new Date(asOf).toLocaleTimeString()}`}</span>
+      )}
     </p>
   )
 }
