@@ -2,7 +2,7 @@ import type { MemoryRecord } from "@dawn-ai/memory"
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
-import { TEST_IDS } from "../../src/components/memory/test-ids"
+import { errorBannerId, TEST_IDS } from "../../src/components/memory/test-ids"
 
 function record(over: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
   return {
@@ -86,7 +86,7 @@ async function typeSearch(value: string) {
 async function startSearch() {
   await typeSearch("acme")
   await vi.waitFor(() =>
-    expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(true),
+    expect(screen.getByTestId(TEST_IDS.browseRegion).hasAttribute("hidden")).toBe(true),
   )
 }
 
@@ -97,7 +97,7 @@ function facet(): HTMLElement {
 /** Both roles: the surface is a `treegrid` while grouped and a `grid` when flat,
  *  and the namespace grouping this page asks for makes that depend on the facet. */
 function browseGrid(): Element | null {
-  return screen.getByTestId("browse-region").querySelector('[role="grid"],[role="treegrid"]')
+  return screen.getByTestId(TEST_IDS.browseRegion).querySelector('[role="grid"],[role="treegrid"]')
 }
 
 function scopeNote(): string {
@@ -146,7 +146,7 @@ describe("view scope", () => {
     expect(grid).not.toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "timeline" }))
     await screen.findByTestId("timeline-region")
-    expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(true)
+    expect(screen.getByTestId(TEST_IDS.browseRegion).hasAttribute("hidden")).toBe(true)
     expect(browseGrid()).toBe(grid)
   })
 
@@ -197,7 +197,7 @@ describe("view scope", () => {
     await startSearch()
     await typeSearch("")
     await vi.waitFor(() =>
-      expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(false),
+      expect(screen.getByTestId(TEST_IDS.browseRegion).hasAttribute("hidden")).toBe(false),
     )
     expect(popovers()).toHaveLength(0)
   })
@@ -212,7 +212,7 @@ describe("view scope", () => {
     render(<ListPage />)
     await screen.findByText("content a")
     const viewport = screen
-      .getByTestId("browse-region")
+      .getByTestId(TEST_IDS.browseRegion)
       .querySelector<HTMLElement>("[data-pretable-scroll-viewport]")
     if (!viewport) throw new Error("no scroll viewport")
     viewport.scrollTop = 20
@@ -221,7 +221,7 @@ describe("view scope", () => {
     viewport.scrollTop = 0
     await typeSearch("")
     await vi.waitFor(() =>
-      expect(screen.getByTestId("browse-region").hasAttribute("hidden")).toBe(false),
+      expect(screen.getByTestId(TEST_IDS.browseRegion).hasAttribute("hidden")).toBe(false),
     )
     expect(viewport.scrollTop).toBe(20)
   })
@@ -407,12 +407,12 @@ describe("view scope", () => {
     )
     render(<ListPage />)
     await screen.findByTestId("browse-error")
-    expect(screen.queryByTestId("error-browse")).toBeNull()
+    expect(screen.queryByTestId(errorBannerId("browse"))).toBeNull()
     await startSearch()
-    const entry = await screen.findByTestId("error-browse")
+    const entry = await screen.findByTestId(errorBannerId("browse"))
     expect(entry.textContent).toContain("no memory store configured")
     fail = false
     fireEvent.click(screen.getByRole("button", { name: "Retry" }))
-    await vi.waitFor(() => expect(screen.queryByTestId("error-browse")).toBeNull())
+    await vi.waitFor(() => expect(screen.queryByTestId(errorBannerId("browse"))).toBeNull())
   })
 })

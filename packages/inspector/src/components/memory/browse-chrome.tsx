@@ -1,7 +1,7 @@
 "use client"
 import type { PretableDataState } from "@pretable/react"
 import { Button } from "../ui/button"
-import { TEST_IDS } from "./test-ids"
+import { errorBannerId, TEST_IDS } from "./test-ids"
 
 export interface BrowseErrorEntry {
   /** The slot this failure belongs to. Independent per source, so one source's
@@ -38,13 +38,18 @@ export function BrowseErrorBanners({
     <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       <div role="alert" className="space-y-1">
         {errors.map((entry) => (
-          <div key={entry.source} data-testid={`error-${entry.source}`}>
+          <div key={entry.source} data-testid={errorBannerId(entry.source)}>
             {entry.message}
           </div>
         ))}
       </div>
       {onRetry ? (
-        <Button variant="outline" className="mt-1 h-7 px-2" onClick={onRetry}>
+        <Button
+          variant="outline"
+          className="mt-1 h-7 px-2"
+          data-testid={TEST_IDS.bannerRetry}
+          onClick={onRetry}
+        >
           Retry
         </Button>
       ) : null}
@@ -73,7 +78,7 @@ export function BrowseStatusBar({
 }) {
   return (
     <p
-      data-testid="browse-status"
+      data-testid={TEST_IDS.status}
       data-phase={phase}
       className="mb-2 flex items-center gap-3 text-xs text-zinc-500"
     >
