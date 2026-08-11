@@ -105,8 +105,19 @@ async function stopRecordedProcess(pidPath: string): Promise<void> {
   try {
     process.kill(pid, "SIGKILL")
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return
+    throw error
   }
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return
+      throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`Timed out stopping controlled child process ${pid}`)
 }
 
 function detachedDescendantWrapper(input: {
@@ -519,7 +530,7 @@ describe("shell-free command executor", () => {
   test.each([
     { name: "accepted exit 1", exitCode: 1 as const, acceptedExitCodes: [1] as const },
     { name: "normal exit 0", exitCode: 0 as const, acceptedExitCodes: [] as const },
-  ])("does not settle $name while a setsid descendant survives", async (input) => {
+  ])("fails closed for $name after a setsid descendant reparents", async (input) => {
     if (process.platform === "win32") return
     const directory = await createTemporaryDirectory(`dawn-k8s-command-setsid-${input.exitCode}-`)
     const pidPath = join(directory, "descendant-pid")
@@ -545,12 +556,14 @@ describe("shell-free command executor", () => {
 
     try {
       await waitForFile(pidPath)
-      const commandResult = await execution
+      const error = await rejectedError(execution)
 
-      expect(commandResult.exitCode).toBe(input.exitCode)
-      await expectRecordedProcessStopped(pidPath)
+      expect(error).toMatchObject({
+        outcome: { kind: "exit", exitCode: input.exitCode },
+        processTreeTermination: "unconfirmed",
+      })
       await new Promise((resolve) => setTimeout(resolve, 1_000))
-      await expect(readFile(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" })
+      await expect(readFile(sentinelPath, "utf8")).resolves.toBe("descendant survived")
     } finally {
       await stopRecordedProcess(pidPath)
     }
@@ -640,7 +653,7 @@ describe("shell-free command executor", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL")
   })
 
-  test("terminates an opted-in process group after an unaccepted wrapper exit", async () => {
+  test("terminates an unchanged process group descendant after an unaccepted wrapper exit", async () => {
     const child = new ControlledChild()
     child.pid = 5_987
     const descendantPid = 5_988
@@ -652,7 +665,7 @@ describe("shell-free command executor", () => {
         ? [
             {
               pid: descendantPid,
-              ppid: 1,
+              ppid: child.pid as number,
               pgid: child.pid as number,
               startedAt: "Tue Aug 11 01:10:01 2026",
             },
@@ -916,7 +929,70 @@ describe("shell-free command executor", () => {
     expect(killProcess).not.toHaveBeenCalledWith(descendantPid, expect.anything())
   })
 
-  test("terminates proven original-group and setsid orphans after root exit", async () => {
+  test("does not signal a same-second setsid PID replacement after reparenting", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_201
+    const descendantPid = 6_202
+    const rootStartedAt = "Tue Aug 11 03:35:00 2026"
+    const descendantStartedAt = "Tue Aug 11 03:35:01 2026"
+    let descendantReused = false
+    const listProcesses = vi.fn(async () =>
+      descendantReused
+        ? [
+            {
+              pid: descendantPid,
+              ppid: 1,
+              pgid: descendantPid,
+              startedAt: descendantStartedAt,
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: rootStartedAt,
+            },
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: descendantPid,
+              startedAt: descendantStartedAt,
+            },
+          ],
+    )
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists: () => false,
+      delay: async () => {},
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    child.exitCode = 0
+    child.emit("exit", 0, null)
+    descendantReused = true
+    child.stdout.write("descendant-held output")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalledTimes(2))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    child.emit("close", 0, null)
+
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
+    expect(killProcessGroup).not.toHaveBeenCalled()
+    expect(killProcess).not.toHaveBeenCalledWith(descendantPid, expect.anything())
+  })
+
+  test("signals unchanged grouped descendants but not reparented setsid identities", async () => {
     const child = new ControlledChild()
     child.pid = 6_051
     const groupedPid = 6_052
@@ -950,7 +1026,10 @@ describe("shell-free command executor", () => {
         : []),
       ...identities
         .filter(({ pid }) => liveDescendants.has(pid))
-        .map((identity) => ({ ...identity, ppid: rootExited ? 1 : identity.ppid })),
+        .map((identity) => ({
+          ...identity,
+          ppid: rootExited && identity.pid === setsidPid ? 1 : identity.ppid,
+        })),
     ])
     const killProcessGroup = vi.fn((pgid: number) => {
       for (const identity of identities) {
@@ -987,10 +1066,10 @@ describe("shell-free command executor", () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     child.emit("close", 0, null)
 
-    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    await expect(execution).rejects.toMatchObject({ processTreeTermination: "unconfirmed" })
     expect(killProcessGroup).toHaveBeenCalledWith(child.pid, "SIGKILL")
-    expect(killProcess).toHaveBeenCalledWith(setsidPid, "SIGKILL")
-    expect(liveDescendants).toEqual(new Set())
+    expect(killProcess).not.toHaveBeenCalledWith(setsidPid, expect.anything())
+    expect(liveDescendants).toEqual(new Set([setsidPid]))
   })
 
   test("fails boundedly when descendant termination cannot be confirmed", async () => {

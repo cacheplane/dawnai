@@ -523,30 +523,6 @@ function matchesProcessIdentity(
   )
 }
 
-function isProvenOrphanReparenting(
-  tracker: ProcessTreeTracker,
-  processEntry: ProcessTableEntry,
-  identity: ProcessIdentity,
-  byPid: ReadonlyMap<number, ProcessTableEntry>,
-): boolean {
-  if (
-    !tracker.rootExited ||
-    processEntry.startedAt !== identity.startedAt ||
-    processEntry.pgid !== identity.pgid ||
-    processEntry.ppid !== 1 ||
-    identity.ppid === 1
-  ) {
-    return false
-  }
-
-  const parentIdentity = tracker.knownIdentities.get(identity.ppid)
-  const currentParent = byPid.get(identity.ppid)
-  return (
-    parentIdentity !== undefined &&
-    (currentParent === undefined || !matchesProcessIdentity(currentParent, parentIdentity))
-  )
-}
-
 function rejectProcessIdentity(tracker: ProcessTreeTracker, pid: number): void {
   tracker.untrustedPids.add(pid)
   tracker.identityProofFailed = true
@@ -566,11 +542,7 @@ function updateTrackedProcesses(
       }
       continue
     }
-    if (
-      current !== undefined &&
-      (matchesProcessIdentity(current, identity) ||
-        isProvenOrphanReparenting(tracker, current, identity, byPid))
-    ) {
+    if (current !== undefined && matchesProcessIdentity(current, identity)) {
       retained.set(pid, identity)
     } else if (current !== undefined) {
       rejectProcessIdentity(tracker, pid)
@@ -598,11 +570,7 @@ function updateTrackedProcesses(
         isSafeProcessId(candidate.pid)
       ) {
         const knownIdentity = tracker.knownIdentities.get(candidate.pid)
-        if (
-          knownIdentity !== undefined &&
-          !matchesProcessIdentity(candidate, knownIdentity) &&
-          !isProvenOrphanReparenting(tracker, candidate, knownIdentity, byPid)
-        ) {
+        if (knownIdentity !== undefined && !matchesProcessIdentity(candidate, knownIdentity)) {
           rejectProcessIdentity(tracker, candidate.pid)
           continue
         }
