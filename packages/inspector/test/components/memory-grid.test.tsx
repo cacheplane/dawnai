@@ -1,7 +1,22 @@
 import type { MemoryRecord } from "@dawn-ai/memory"
+import type { ColumnFilter, FilterOperator } from "@pretable/react"
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { MemoryGrid } from "../../src/components/memory/memory-grid"
+import { COLUMNS, MemoryGrid } from "../../src/components/memory/memory-grid"
+import { toBrowseQuery } from "../../src/components/memory/to-browse-query"
+
+/** Operator NAMES in declared order, not the menu's English: what these tests
+ *  protect is that every offered operator has a `toBrowseQuery` arm, and those
+ *  tables are keyed by name. Asserting pretable's label copy would redden this
+ *  file on an upstream wording change that breaks nothing. */
+const OFFERED_OPERATORS = {
+  status: ["isAnyOf", "isNoneOf"],
+  content: ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith"],
+  namespace: ["equals", "startsWith"],
+  kind: ["isAnyOf", "isNoneOf"],
+  confidence: ["equals", "notEquals", "gt", "gte", "lt", "lte", "between"],
+  updated: ["on", "before", "after", "dateBetween"],
+} as const satisfies Record<string, readonly FilterOperator[]>
 
 function record(over: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
   return {
@@ -182,44 +197,72 @@ describe("MemoryGrid", () => {
     expect(cellClasses("c").some((cls) => cls.includes("line-through"))).toBe(false)
   })
 
-  it("offers only the operators the store can honor, on every column", () => {
-    // Pretable appends isEmpty/isNotEmpty to every type by default and no
-    // BrowseFilter arm expresses them, so an unpruned menu would show two
-    // controls the server ignores.
-    const expected: Record<string, string[]> = {
-      status: ["is any of", "is none of"],
-      kind: ["is any of", "is none of"],
-      namespace: ["equals", "starts with"],
-      content: [
-        "contains",
-        "does not contain",
-        "equals",
-        "does not equal",
-        "starts with",
-        "ends with",
-      ],
-      confidence: [
-        "equals",
-        "does not equal",
-        "greater than",
-        "greater than or equal",
-        "less than",
-        "less than or equal",
-        "is between",
-      ],
-      updated: ["on", "before", "after", "is between"],
-    }
-    for (const [columnId, options] of Object.entries(expected)) {
-      cleanup()
-      render(<MemoryGrid records={[record({ id: "a" })]} onSelect={vi.fn()} />)
+  it.each(Object.entries(OFFERED_OPERATORS))(
+    "offers only the operators the store can honor, on %s",
+    (columnId, operators) => {
+      // Pretable appends isEmpty/isNotEmpty to every type by default and no
+      // BrowseFilter arm expresses them, so an unpruned menu would show two
+      // controls the server ignores.
+      render(
+        <MemoryGrid
+          records={[record({ id: "a" })]}
+          onSelect={vi.fn()}
+          dataState={{ phase: "idle" }}
+        />,
+      )
       fireEvent.click(screen.getByRole("button", { name: `Filter ${columnId}` }))
       const dialog = screen.getByRole("dialog", { name: `Filter ${columnId}` })
       const select = within(dialog).getByRole("combobox")
-      expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(options)
+      expect([...select.querySelectorAll("option")].map((o) => o.getAttribute("value"))).toEqual([
+        ...operators,
+      ])
+    },
+  )
+
+  it("declares no funnel operator the browse query cannot map", () => {
+    // `filterOperators` and `to-browse-query.ts`'s operator tables are two hand-kept
+    // lists of the same set, and an operator with no arm THROWS on the user's click
+    // — a runtime failure no menu assertion would reach. Values here are only
+    // well-formed enough to get past the shape guards to the operator itself.
+    const single: Record<string, ColumnFilter["value"]> = {
+      status: ["active"],
+      kind: ["semantic"],
+      namespace: "route=/notes",
+      content: "acme",
+      confidence: 0.5,
+      updated: "2026-07-13",
+    }
+    const range: Record<string, ColumnFilter["value"]> = {
+      confidence: [0, 1],
+      updated: ["2026-07-01", "2026-07-31"],
+    }
+    const filterable = COLUMNS.filter((column) => column.filterable)
+    expect(filterable.map((column) => column.id)).toEqual(Object.keys(OFFERED_OPERATORS))
+    for (const column of filterable) {
+      // An OMITTED list is pretable's full menu for the type, isEmpty included.
+      const operators = column.filterOperators ?? []
+      expect(operators.length).toBeGreaterThan(0)
+      for (const operator of operators) {
+        const value =
+          operator === "between" || operator === "dateBetween"
+            ? range[column.id]
+            : single[column.id]
+        // A missing sample would make this column's sweep vacuous, not lenient.
+        if (value === undefined) throw new Error(`no sample value for ${column.id}/${operator}`)
+        expect(() => toBrowseQuery({ [column.id]: { operator, value } }, [])).not.toThrow()
+      }
     }
   })
 
-  it("gives content no sort affordance — the store has no content sort field", () => {
+  it("offers no funnel at all when the rows are a search sample", () => {
+    // Search hands down a ranked per-namespace top-N with no server authority
+    // behind it, so an engine-applied funnel would narrow the loaded sample and
+    // present that as the answer. Browse is the filtering surface.
+    render(<MemoryGrid records={[record({ id: "a" }), record({ id: "b" })]} onSelect={vi.fn()} />)
+    expect(screen.queryAllByRole("button", { name: /^Filter / })).toEqual([])
+  })
+
+  it("never emits sort intent for content — the store has no content sort field", () => {
     const onSortChange = vi.fn()
     const { container } = render(
       <MemoryGrid
@@ -229,12 +272,15 @@ describe("MemoryGrid", () => {
       />,
     )
     fireEvent.click(headerFor(container, "content"))
-    // `onSortChange` never firing is the real discriminator. `aria-sort` is NOT:
-    // @pretable/react 0.3.0 emits it unconditionally ("none" when unsorted), so
-    // asserting null here would contradict both the shipped behavior and this
-    // file's own sibling test "browse headers do not sort — the rows are a
-    // server-selected sample". Pinning "none" documents what actually ships.
+    // The contract: silence. A sortable column fires on the identical click —
+    // `confidence` does, in this file's own header-sort tests.
     expect(onSortChange).not.toHaveBeenCalled()
+    // KNOWN DEFECT, pinned so it stays visible rather than endorsed. @pretable/react
+    // 0.3.0 renders EVERY header as `<button aria-label="Sort …" aria-sort="none">`
+    // and only declines inside its own click handler, so a screen-reader user is
+    // offered "Sort content, button", activates it, and gets nothing. It is not part
+    // of what this test protects — delete the line once pretable stops labelling a
+    // non-sortable header as a sort control.
     expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("none")
   })
 })

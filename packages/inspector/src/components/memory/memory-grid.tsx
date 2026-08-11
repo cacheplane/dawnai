@@ -49,8 +49,13 @@ const MAX_VIEWPORT_PX = 560
  *  operators the server ignores. `operatorsForType` INTERSECTS this list with
  *  the per-type set, so a name that is not valid for the declared `type` is
  *  dropped — and a list that intersects to nothing dev-warns and falls back to
- *  the full menu. Change `type` and you must re-check this list. */
-const COLUMNS: PretableColumn<GridRow>[] = [
+ *  the full menu. Change `type` and you must re-check this list.
+ *
+ *  This is the DECLARATION, and neither grid renders it directly: `BROWSE_COLUMNS`
+ *  and `SEARCH_COLUMNS` below each mask the affordances their mode cannot honor.
+ *  Exported so a test can pin every declared operator against `toBrowseQuery`'s
+ *  arms — an operator with no arm throws on the user's click. */
+export const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "status",
     header: "status",
@@ -153,6 +158,20 @@ const BROWSE_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
   sortable: false,
 }))
 
+/** The search results are a ranked per-namespace top-N the STORE chose, and they
+ *  arrive with no server authority behind them — so a funnel here would be applied
+ *  by the engine to the rows that happen to be loaded, narrowing the sample rather
+ *  than the store, under a header that looks exactly like the browse grid's. The
+ *  `content` funnel is the one that tempts most and is exactly what search already
+ *  answers, ranked, across everything.
+ *
+ *  Sorting is left alone: a group IS its whole result set, so ordering it locally
+ *  answers the question the header asks. */
+const SEARCH_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
+  ...column,
+  filterable: false,
+}))
+
 /** Room the body-state block itself needs to stay legible when there are no rows
  *  to give the viewport its height. The block is an overlay inset below the sticky
  *  header, so the header's height is not part of it. */
@@ -242,13 +261,17 @@ export function MemoryGrid({
    *  looking at every namespace at once — scoped to one, every row would sit
    *  under a single group. */
   groupByNamespace?: boolean
-  /** Funnel state to display, and where changes go. Omit both to render without
-   *  column filtering — the grouped search results filter nothing. */
+  /** Funnel state to display, and where changes go. WHETHER funnels are offered
+   *  is decided by `dataState` (see `SEARCH_COLUMNS`), not by these — omitting
+   *  them in browse mode leaves the funnels uncontrolled, which under external
+   *  filter authority means a tick that displays and reaches nothing. */
   filters?: Record<string, ColumnFilter>
   onFiltersChange?: (next: Record<string, ColumnFilter>) => void
   /** Ordered sort intent to display, and where changes go. Under server
    *  authority this is display state only — the model order is the order the
-   *  server returned. Omit both to render without sort control. */
+   *  server returned. Omitting them does NOT remove the sort control: the engine
+   *  keeps its own sort state and reorders the loaded rows, which is what the
+   *  search results want. */
   sort?: PretableSortEntry[]
   onSortChange?: (next: PretableSortEntry[]) => void
   /** Supply to turn lifecycle presentation ON: body blocks, the phase attribute,
@@ -352,7 +375,7 @@ export function MemoryGrid({
   return (
     <PretableSurface<GridRow>
       ariaLabel="Memories"
-      columns={dataState === undefined ? COLUMNS : BROWSE_COLUMNS}
+      columns={dataState === undefined ? SEARCH_COLUMNS : BROWSE_COLUMNS}
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}

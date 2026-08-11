@@ -2,6 +2,7 @@ import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
+import { STATUSES } from "../../src/components/memory/memory-domain"
 
 /**
  * The grid's funnels replaced the header's status/kind selects. Filtering has
@@ -133,7 +134,7 @@ describe("column filters drive the server query", () => {
 
     // An emptied checklist is an INACTIVE filter to the grid, not a filter that
     // matches nothing — so the query drops the param rather than narrowing to
-    // zero. (`isEmpty` below is the operator that really means "nothing".)
+    // zero. ("none of every status", below, is what really means "nothing".)
     await tickStatus("candidate")
 
     await waitFor(() => {
@@ -150,16 +151,23 @@ describe("column filters drive the server query", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
     const dialog = await screen.findByRole("dialog", { name: "Filter status" })
     const operator = dialog.querySelector("select") as HTMLSelectElement
-    // status is never blank, so "is empty" matches no row at all.
-    fireEvent.change(operator, { target: { value: "isEmpty" } })
+    // "none of every status" is the only match-nothing shape the funnel still
+    // offers: `isEmpty` left the menu once the columns declared exactly the
+    // operators the store honors, and every browse field is NOT NULL anyway.
+    // Operator FIRST — a complement over an empty tick list is the full set,
+    // which reads as unfiltered and would take the funnel back to `isAnyOf`.
+    fireEvent.change(operator, { target: { value: "isNoneOf" } })
+    for (const value of STATUSES) await tickStatus(value)
 
     const before = listUrls(mock).length
     await waitFor(() => {
       expect(screen.getByTestId("browse-empty")).toBeDefined()
     })
     // Over HTTP a param that appears zero times is *absent*, so re-asking the
-    // server would come back unfiltered — the page must answer it here.
+    // server would come back unfiltered — the page must answer it here, and it
+    // must not have taken an unfiltered detour on the way.
     expect(listUrls(mock).length).toBe(before)
+    expect(listUrls(mock).at(-1)?.searchParams.has("status")).toBe(true)
     expect(screen.getByTestId("browse-empty").textContent).toContain("match these filters")
   })
 })
