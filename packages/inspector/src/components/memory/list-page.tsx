@@ -8,9 +8,11 @@ import { Badge } from "../ui/badge"
 import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BrowseErrorBanners, type BrowseErrorEntry, BrowseStatusBar } from "./browse-chrome"
+import { loadMoreState } from "./browse-window"
 import { BulkBar } from "./bulk-bar"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
+import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
 import { MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
@@ -170,6 +172,13 @@ export function ListPage() {
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
+  const loadedTotal =
+    browse.resultMeta.total?.kind === "exact" ? browse.resultMeta.total.count : undefined
+  const footerState = loadMoreState({
+    phase: browse.dataState.phase,
+    loaded: browse.rows.length,
+    hasMore: browse.hasMore,
+  })
 
   // `refreshBrowse` is the same poll tick the interval sends, so single flight DROPS it
   // whenever a request is already running — and with `live` off there is no next tick
@@ -408,6 +417,13 @@ export function ListPage() {
                 resultMeta={browse.resultMeta}
                 emptyMessage={emptyMessage}
                 onRetry={retryBrowse}
+              />
+              <LoadMoreFooter
+                state={footerState}
+                loaded={browse.rows.length}
+                total={loadedTotal}
+                onLoadMore={browse.loadMore}
+                browseOnlyReason={undefined}
               />
             </>
           )}
