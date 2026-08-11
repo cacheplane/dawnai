@@ -39,6 +39,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/web/content/docs/**",
+        "$TURBO_ROOT$/apps/web/app/components/docs/nav.ts",
         "$TURBO_ROOT$/packages/ag-ui/README.md",
         "$TURBO_ROOT$/examples/chat/**",
         "$TURBO_ROOT$/examples/research/**",

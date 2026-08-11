@@ -143,4 +143,27 @@ SA="$(tmpl --set serviceAccount.create=true --set serviceAccount.name=dawn-app-s
 printf '%s\n' "$SA" | assert "serviceaccount kind" 'kind: ServiceAccount'
 printf '%s\n' "$SA" | assert "serviceaccount name" 'name: dawn-app-smoke'
 
+# The README's advertised same-namespace sandbox mode reuses the orchestrator
+# ServiceAccount created first by dawn-sandbox-infra.
+README_SANDBOX="$(tmpl --namespace dawn-sandboxes --set image.tag=2026-08-10)"
+printf '%s\n' "$README_SANDBOX" | assert "README sandbox image tag" 'image: example/app:2026-08-10'
+printf '%s\n' "$README_SANDBOX" | assert "README sandbox orchestrator SA" 'serviceAccountName: dawn-orchestrator'
+printf '%s\n' "$README_SANDBOX" | assert "README sandbox token mounted" 'automountServiceAccountToken: true'
+
+# Separate app namespace with kubernetesSandbox: immutable image selection,
+# app-owned ServiceAccount, and API token available for the sandbox provider.
+SEPARATE_SANDBOX="$(tmpl --namespace my-app --set image.tag=2026-08-10 --set serviceAccount.create=true --set serviceAccount.name=dawn-app)"
+printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace image tag" 'image: example/app:2026-08-10'
+printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace app SA" 'serviceAccountName: dawn-app'
+printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace token mounted" 'automountServiceAccountToken: true'
+printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace SA rendered" 'kind: ServiceAccount'
+
+# No kubernetesSandbox: the app still selects a real ServiceAccount instead of
+# the absent default dawn-orchestrator, but does not mount a Kubernetes API token.
+NO_SANDBOX="$(tmpl --namespace my-app --set image.tag=2026-08-10 --set serviceAccount.create=true --set serviceAccount.name=dawn-app --set automountServiceAccountToken=false)"
+printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox image tag" 'image: example/app:2026-08-10'
+printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox app SA" 'serviceAccountName: dawn-app'
+printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox token disabled" 'automountServiceAccountToken: false'
+printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox SA rendered" 'kind: ServiceAccount'
+
 echo "render checks passed"

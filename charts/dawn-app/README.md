@@ -9,35 +9,86 @@ This chart does **not** build your image or bake `dawn.config.ts` — it wraps
 a **user-built image** and owns only the *Kubernetes deployment* concerns.
 
 **Recommended image source:** `dawn build`'s `node` target (the default —
-see [docs/deployment.mdx](../../apps/web/content/docs/deployment.mdx)) emits
-a `server.mjs` that boots the real Dawn runtime, plus a hardened
-`Dockerfile`. Build that image and point this chart at it. Use the `node`
-target whenever `dawn.config.ts` configures `kubernetesSandbox` — only the
-Dawn runtime process creates and manages sandbox Pods, so an image built the
-alternate way (the `langsmith` target's `langgraph.json`, containerized with
-`@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the
-sandbox provider even if the config is present.
+see [Node and Docker](../../apps/web/content/docs/deployment/node.mdx)) emits
+a `.dawn/build/server.mjs` that boots the Dawn HTTP runtime, plus a generated
+`Dockerfile`. Build that image and point this chart at it. The chart's Service
+and HTTP probes require this Node-target server contract. LangSmith graph
+artifacts are platform deployment artifacts, not compatible chart images. See the
+[Kubernetes app guide](../../apps/web/content/docs/deployment/kubernetes.mdx)
+for the complete image, chart, ServiceAccount, probe, and scaling path.
 
 ## Install
 
-```sh
-# Build the image via dawn build's node target (default), then:
-docker build -t ghcr.io/you/your-app:latest .
+Build and publish the Node-target image from the Dawn application root.
+Create or merge a secret-safe `.dockerignore` before the first build:
 
-helm install dawn-app charts/dawn-app --set image.repository=ghcr.io/you/your-app --set image.tag=latest
+```text
+.env
+.env.*
+.git
+.github
+node_modules
+**/node_modules
+coverage
+.next
+*.log
+.dawn/*
+!.dawn/build
+!.dawn/build/**
+```
+
+The `.dawn/*` rule excludes local Dawn runtime state while the two negations
+explicitly preserve the generated `.dawn/build` artifacts required by the
+image. Add any application-specific build output or credential files to the
+exclusions as well.
+
+The generated Dockerfile uses `COPY . .`, so every unignored file in the build
+context can be baked into an image layer. Deleting a file in a later Dockerfile
+instruction or injecting runtime secrets later does not remove it from that
+earlier layer. Inspect the context before building and keep credentials outside
+it.
+
+Keep the immutable tag identical through build, push, and chart values:
+
+```sh
+dawn check
+dawn build
+docker build -t ghcr.io/you/your-app:2026-08-10 .
+docker push ghcr.io/you/your-app:2026-08-10
+```
+
+For an app that configures `kubernetesSandbox`, install the sandbox
+infrastructure first. Its defaults create the `dawn-sandboxes` namespace and
+the `dawn-orchestrator` ServiceAccount:
+
+```sh
+helm upgrade --install dawn-sandbox-infra charts/dawn-sandbox-infra
+```
+
+Then install the local application chart into that same namespace. This
+selects the complete default ServiceAccount mode: `create=false`, existing
+name `dawn-orchestrator`, and token automount enabled for the sandbox provider.
+
+```sh
+helm upgrade --install dawn-app charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --set image.repository=ghcr.io/you/your-app \
+  --set image.tag=2026-08-10
 ```
 
 Or, once published, from GHCR:
 
 ```sh
-helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app --set image.repository=ghcr.io/you/your-app
+helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
+  --namespace dawn-sandboxes \
+  --set image.repository=ghcr.io/you/your-app \
+  --set image.tag=2026-08-10
 ```
 
 `image.repository` is required — `helm install`/`helm upgrade` will fail
-fast with a clear error if it is unset (enforced by a template-level
-`required` guard in `templates/deployment.yaml`, not the JSON Schema, so
-that `helm lint`/`helm template` still pass without `--set` for CI/dev
-convenience).
+fast with a clear error if it is unset. The guard is template-level rather
+than in the JSON Schema: bare `helm lint --strict` prints the missing-value
+warning but returns zero with that warning, while `helm template` fails when `image.repository` is unset. Pass an image repository to every real render or install.
 
 ## Sandbox ServiceAccount wiring (read this)
 
@@ -62,7 +113,7 @@ app's `dawn.config.ts`:
 
 ```ts
 sandbox: {
-  provider: kubernetesSandbox({ namespace: "dawn-sandboxes" });
+  provider: kubernetesSandbox({ namespace: "dawn-sandboxes" })
 }
 ```
 
@@ -75,9 +126,9 @@ sandbox: {
 | `image.digest` | `""` | If set, pins `repository@sha256:...` instead of `tag`. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
-| `replicaCount` | `1` | Ignored (omitted) when `autoscaling.enabled=true`. **Keep at 1** — see "Single replica only" below. |
+| `replicaCount` | `1` | Ignored (omitted) when `autoscaling.enabled=true`. Keep the conservative default until the "Scaling requirements" below are satisfied. |
 | `containerPort` | `8000` | The port your image's HTTP server listens on inside the container — matches `dawn build`'s node-target Dockerfile (`EXPOSE 8000`) by default; verify against your built image if it differs. |
-| `healthPath` | `/healthz` | HTTP path used for liveness/readiness/startup probes; matches the node target's `/healthz` by default. |
+| `healthPath` | `/healthz` | Common HTTP path used for liveness/readiness/startup probes; Dawn's default response is a process liveness check, not dependency readiness. |
 | `probes.*` | see `values.yaml` | Per-probe timing (initialDelaySeconds/periodSeconds/timeoutSeconds/failureThreshold). |
 | `service.type` | `ClusterIP` | |
 | `service.port` | `80` | Maps to the named `http` container port. |
@@ -89,7 +140,7 @@ sandbox: {
 | `podDisruptionBudget.minAvailable` | `1` | |
 | `serviceAccount.create` | `false` | See "Sandbox ServiceAccount wiring" above. |
 | `serviceAccount.name` | `dawn-orchestrator` | |
-| `automountServiceAccountToken` | `true` | The app needs the token to call the Kubernetes API. |
+| `automountServiceAccountToken` | `true` | Required when the app calls the Kubernetes API for `kubernetesSandbox`; disable it for apps without that provider where the setup allows. |
 | `sandboxNamespace` | `dawn-sandboxes` | Informational; must match `dawn-sandbox-infra`'s `namespace.name` and the app's `kubernetesSandbox({ namespace })`. |
 | `env` / `envFrom` | `[]` | Standard container env / envFrom. |
 | `secretName` | `""` | Convenience `envFrom.secretRef` (e.g. `OPENAI_API_KEY`, `DATABASE_URL`). The chart does **not** template Secrets — supply them out-of-band. |
@@ -97,31 +148,36 @@ sandbox: {
 | `securityContext.readOnlyRootFilesystem` | `false` | The app runtime likely writes temp state; a writable `/tmp` emptyDir is always mounted regardless. Set `true` if your image tolerates it. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | |
 
-### Single replica only
+### Scaling requirements
 
-Dawn's Agent Protocol surface keeps per-thread state on the pod's local
-filesystem — the threads database and LangGraph checkpoints both live under
-`<appRoot>/.dawn/` — and in-flight run tracking (the one-run-per-thread gate
-and `POST /threads/:id/cancel`) is in-memory and process-local.
+Postgres can share Dawn checkpoints, thread metadata, and permission decisions
+between replicas. Long-term memory is configured separately, and local
+workspace or sandbox-volume durability remains a separate concern.
 
-With more than one replica: threads diverge across pods, the concurrency gate
-only sees runs on its own pod, and a cancel request reaches the pod actually
-running the thread only by chance. `replicaCount > 1` and
-`autoscaling.maxReplicas > 1` are therefore unsupported until a shared threads
-and checkpoint backend ships. The chart does not enforce this — the HPA
-defaults ship with `maxReplicas: 5` — so it is on the operator to keep the
-deployment at one replica.
+Shared stores are necessary but insufficient for horizontal scaling. The
+active one-run-per-thread gate and `POST /threads/:id/cancel` registry remain
+in-memory and process-local. Multiple replicas need guaranteed thread-aware
+routing to one owning process, or distributed per-thread serialization plus
+cancel routing. An HPA changes replica count and a PodDisruptionBudget limits
+disruption; neither supplies that Dawn coordination.
+
+`/healthz` is a process probe, not dependency readiness. It does not query the
+configured Postgres database, model provider, or sandbox provider.
+
+The chart keeps a conservative `replicaCount: 1` default and does not enforce
+the coordination requirements. Autoscaling values can render more replicas,
+so the operator must leave autoscaling disabled until routing, serialization,
+cancel ownership, and every required shared store are in place.
 
 ## Honest scope
 
-- **Single replica only** — see above. Horizontal scaling needs a shared
-  threads/checkpoint backend that does not exist yet.
+- **One replica by default** — see "Scaling requirements" above. The chart
+  exposes replica and autoscaling controls but cannot validate Dawn's routing
+  or distributed coordination.
 - This chart runs a **user-built** image; it does not build the image or
-  bake `dawn.config.ts`. The app image is the runtime contract — build it
-  with `dawn build`'s `node` target (recommended, especially with
-  `kubernetesSandbox` configured) or containerize the `langsmith` target's
-  `langgraph.json` with `langgraphjs dockerfile` if you don't need the
-  sandbox.
+  bake `dawn.config.ts`. The image contract is the Node target's Dawn HTTP
+  server at `.dawn/build/server.mjs`; the chart's Service and probes do not
+  turn graph-only platform artifacts into an HTTP application.
 - It cannot validate a *real* Dawn app end-to-end in CI (that needs an app
   image + model credentials) — CI validates the chart's manifests with a
   placeholder image; real-app validation is the operator's responsibility.

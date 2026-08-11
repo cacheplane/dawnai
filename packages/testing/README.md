@@ -7,8 +7,8 @@
 Testing utilities for Dawn apps — helpers for exercising routes, tools, and agent behavior in unit and scenario tests.
 
 This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai).
-Conceptual docs: [Testing your Dawn agent](https://dawnai.org/docs/testing-agents),
-[Memory](https://dawnai.org/docs/memory#testing), and
+Conceptual docs: [Agent Test Harness](https://dawnai.org/docs/testing-agents),
+[Fixtures and Recording](https://dawnai.org/docs/testing-agents/fixtures), and
 [Evals](https://dawnai.org/docs/evals).
 
 ## Install

@@ -48,7 +48,7 @@ export default {
 | `gcThrottleMs` | `number` | `10000` | Minimum milliseconds between GC scans. Default is 10 seconds. |
 | `noOffloadTools` | `string[]` | `[]` | Additional tool names whose output is never offloaded. Merged with the built-in exempt set (`readFile`, `listDir`). |
 
-Offloading needs a filesystem to spill to, so `toolOutput` is [gated off the `hono` edge target](/docs/deployment#what-the-edge-cannot-serve) at build time, and a runtime with no filesystem raises `DAWN_E1005` per request rather than reading the settings and ignoring them. Summarization below has no such dependency and runs on every target.
+Offloading needs a filesystem to spill to, so `toolOutput` is [gated off the `hono` edge target](/docs/deployment/edge#what-the-edge-cannot-serve) at build time, and a runtime with no filesystem raises `DAWN_E1005` per request rather than reading the settings and ignoring them. Summarization below has no such dependency and runs on every target.
 
 ### Exemptions
 
@@ -111,6 +111,6 @@ export default {
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/configuration", title: "Configuration", subtitle: "complete dawn.config.ts reference for toolOutput and summarization" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "complete dawn.config.ts reference for toolOutput and summarization" },
   { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "workspace/tool-outputs/ and the readFile tool" },
 ]} />

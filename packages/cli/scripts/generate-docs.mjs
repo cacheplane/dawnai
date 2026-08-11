@@ -9,8 +9,8 @@ import {
   buildReadme,
   extractSummary,
   extractTitle,
+  loadNav,
   mdxToMarkdown,
-  parseNav,
 } from "../dist/lib/docs-bundle.js"
 
 const here = dirname(fileURLToPath(import.meta.url)) // packages/cli/scripts
@@ -59,7 +59,7 @@ for (const abs of mdxFiles) {
   })
 }
 
-const nav = parseNav(readFileSync(navFile, "utf8"))
+const nav = await loadNav(navFile)
 const labelOf = new Map(nav.map((entry) => [entry.slug, entry.label]))
 const finalize = (info) => ({
   slug: info.slug,

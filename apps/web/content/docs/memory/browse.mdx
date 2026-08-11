@@ -1,0 +1,184 @@
+# Browse and Manage Memory
+
+`MemoryStore.browse` is the administrative listing contract: it filters, sorts, counts, and paginates records across namespaces and statuses. `MemoryStore.search` is the agent-recall contract: it searches one exact namespace and may rank by keyword or vectors. Browse has no semantic ranking.
+
+Dawn does not expose a public memory browse HTTP endpoint. The Inspector is a local/internal development surface, and the candidate management endpoints cover only review. A production admin UI must be an application-owned, authenticated, authorized route.
+
+## Keep the boundary server-owned
+
+Authenticate outside Dawn's model/tool boundary. Derive the tenant namespace prefix from the verified principal, then AND any narrower query with that server-owned prefix. Never accept the prefix, tenant, or user identifier as authority from request JSON.
+
+```ts title="src/admin/memory.ts"
+import {
+  BROWSE_MAX_LIMIT,
+  BrowseQueryError,
+  validateBrowseQuery,
+  type BrowsePage,
+  type BrowseQuery,
+} from "@dawn-ai/memory/browse"
+import { serializeNamespace } from "@dawn-ai/memory/namespace"
+
+type BrowseStore = {
+  browse(query: BrowseQuery): Promise<BrowsePage>
+}
+
+type Principal = { tenantId: string; roles: readonly string[] }
+
+function badRequest(message: string): Response {
+  return new Response(message, { status: 400 })
+}
+
+export function createMemoryAdminHandler(
+  store: BrowseStore,
+  authenticate: (request: Request) => Promise<Principal>,
+) {
+  return async (request: Request): Promise<Response> => {
+    const principal = await authenticate(request)
+    if (!principal.roles.includes("memory-admin")) return new Response("Forbidden", { status: 403 })
+
+    let raw: unknown
+    try {
+      raw = await request.json()
+    } catch {
+      return badRequest("Invalid JSON")
+    }
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return badRequest("Expected a JSON object")
+    }
+
+    const input = raw as Record<string, unknown>
+    const tenantPrefix = `${serializeNamespace({ tenant: principal.tenantId })}|`
+    if (typeof input.namespace === "string" && !input.namespace.startsWith(tenantPrefix)) {
+      return new Response("Forbidden", { status: 403 })
+    }
+
+    const query = {
+      ...input,
+      namespacePrefix: tenantPrefix,
+      limit: input.limit ?? 50,
+    } as BrowseQuery
+    try {
+      validateBrowseQuery(query, { maxLimit: BROWSE_MAX_LIMIT })
+      return Response.json(await store.browse(query))
+    } catch (error) {
+      if (error instanceof BrowseQueryError) return badRequest(error.message)
+      throw error
+    }
+  }
+}
+```
+
+The `@dawn-ai/memory/browse` entry is pure contract code—types, validation, ordering, cursor codec, and range helpers—and does not import `node:sqlite`. Keep the store itself on the server and do not send database credentials or unrestricted browse queries to client code.
+
+Outer authentication is only the first check. Authorize the admin role, audit queries and mutations, rate-limit expensive listings, redact content where necessary, and bind every request to the server-derived tenant prefix.
+
+This handler assumes the administered collections declare a tenant-first scope with at least one following dimension (for example, `scope: ["tenant", "user"]`), making `tenant=<encoded>|` a delimiter-bounded prefix. If a route includes `workspace` or `route`, Dawn's canonical dimension order places those first; define and test a different server-owned prefix strategy instead of searching for `tenant=` in the middle of a namespace string.
+
+## Filters
+
+Top-level fields cover common cases:
+
+| Field | Meaning |
+|---|---|
+| `namespacePrefix` | Server-owned prefix restriction |
+| `namespace` | Exact, case-sensitive namespace, ANDed with the prefix |
+| `status` | `candidate`, `active`, or `superseded`; one value or a set |
+| `kind` | `semantic`, `episodic`, `procedural`, or `reflection`; one value or a set |
+| `sourceType` | `run`, `user`, `tool`, `eval`, or `human` |
+| `since`, `until` | Inclusive lower and exclusive upper event-time instants |
+| `now` | Excludes rows at or past `expiresAt` |
+| `limit`, `offset`, `cursor` | Page controls |
+
+Normalized `filters` are AND-combined and permit at most one predicate per field:
+
+- `status` and `kind`: `in`, `notIn`;
+- `content`: `contains`, `notContains`, `equals`, `notEquals`, `startsWith`, `endsWith`;
+- `namespace`: `equals`, `startsWith`;
+- `confidence`: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `between`;
+- `updatedAt`: `onDay`, `beforeDay`, `afterDay`, `betweenDays`, using UTC calendar days.
+
+Content filters are case-insensitive in both in-repo stores. SQLite's built-in `lower()` folds ASCII only, so non-ASCII content matching can differ from Postgres. For example, case variants containing `É` may match under the Postgres database's case-folding rules but not under stock SQLite. Namespace filters remain case-sensitive and byte-exact.
+
+Call `validateBrowseQuery` at the untrusted boundary even though the in-repo stores validate defensively. The detailed limits, constants, and error codes belong in the [API Reference](/docs/api); map a `BrowseQueryError` to a client error rather than retrying it as a store outage.
+
+Top-level `status: []` and `kind: []` are valid and match nothing: “any of no values” is false. In the normalized `filters` array, empty `in` or `notIn` filter values are invalid because a present filter with no choices is treated as a UI/query-construction error. Validate arbitrary JSON and map `BrowseQueryError` to HTTP 400 as the handler does; unexpected store or infrastructure failures remain server errors.
+
+## Sorting
+
+`orderBy` is an ordered list of `{ field, dir }`. Sort fields come from a closed whitelist: `updatedAt`, `createdAt`, `confidence`, `namespace`, `kind`, and `status`; direction is only `asc` or `desc`. Store code resolves those names to known SQL columns and appends `id ASC`, so untrusted text never becomes a SQL identifier.
+
+The default is `updatedAt DESC, id ASC`. Do not add arbitrary column names by casting request JSON. If a UI needs a new sort, add it to the shared type, validator, resolution table, both stores, and conformance tests together.
+
+## Pagination and a fixed clock
+
+Prefer `cursor` for a stable forward walk. A continuation is opaque and carries a query fingerprint plus the last ordered key; it is not a bearer token, authorization proof, or supported client-parsed format. Changing filters, sort order, namespace restrictions, or `now` causes rejection.
+
+Choose one fixed `now` before the first page and reuse it across the entire walk. Replacing it with `new Date().toISOString()` on every request changes the query fingerprint and can also change expiry membership.
+
+```ts
+const now = new Date().toISOString()
+let cursor: string | undefined
+
+do {
+  const page = await store.browse({
+    namespacePrefix: tenantPrefix,
+    status: ["active", "candidate"],
+    orderBy: [{ field: "updatedAt", dir: "desc" }],
+    limit: 100,
+    now,
+    ...(cursor ? { cursor } : {}),
+  })
+  await exportRecords(page.records)
+  cursor = page.continuation ?? undefined
+} while (cursor)
+```
+
+The stores issue a continuation whenever a page is full rather than fetching one extra row. If the result count is an exact multiple of the limit, the final full page can have a continuation and the walk ends with one empty page. Treat that as normal completion.
+
+Offset remains useful for bounded, human-driven jumps, but inserts above the seam can displace records between requests. A cursor uses keyset continuation so inserts above the seam do not shift the next window.
+
+## Count and snapshot semantics
+
+`BrowsePage.total` is the exact count of the entire matching set, not the current window and not the remaining rows after a cursor. Both in-repo stores read the page records and total in the same transaction snapshot. Without that boundary, concurrent writes could produce a records/total pair that never described one database state.
+
+The snapshot applies to one `browse` call, not a whole multi-request export. Use database-native snapshot/locking or an application export job if every page must represent one immutable point in time.
+
+## Backend parity
+
+SQLite and pgvector intentionally share namespace, filter, order, and cursor behavior through conformance tests. That parity has explicit representation limits:
+
+- `kind` and `status` are closed ASCII lowercase enums, so their collation order agrees;
+- namespace and ID ties use byte/C ordering;
+- Postgres stores confidence as `float4`, so values that differ below float4 precision may tie there but remain distinct in SQLite;
+- timestamps use normalized ISO UTC strings.
+
+Within those constraints, the same query should continue safely across pages on either backend. Do not claim identical serialized rows or universal ordering for data outside the contract.
+
+## Mutations and candidate review
+
+Browse returns records; it does not authorize changes. Build separate mutation handlers with record-level tenant checks before calling `update`, `delete`, approval, or rejection. Candidate review is already available through `GET /memory/candidates`, `POST /memory/candidates/:id/approve`, and `POST /memory/candidates/:id/reject`, but those management routes still require outer authentication and tenant authorization in a deployed service.
+
+Approval can reconcile semantic identities and delete a duplicate candidate. Refresh the current record after a mutation instead of assuming the row you displayed still exists unchanged.
+
+## Test the admin surface
+
+Use the shared memory-store conformance tests for store implementations, then add application tests that prove:
+
+1. an unauthenticated or unauthorized caller receives no records;
+2. request JSON cannot override the server-derived tenant namespace prefix;
+3. exact namespace, enums, source, time, confidence, content, and sort filters map correctly;
+4. an invalid sort or reused cursor returns a client error;
+5. one fixed `now` completes a cursor walk, including an exact-multiple empty final page;
+6. concurrent writes cannot skew `records` from `total` inside one response;
+7. cross-tenant mutation IDs are rejected after lookup.
+
+The contract authority is the exported types and pure browse modules plus the SQLite/pgvector implementations and their conformance suites. Do not infer production behavior from stale comments in another package.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory/retrieval", title: "Recall and Retrieval", subtitle: "agent-facing ranked search" },
+  { href: "/docs/memory/long-term", title: "Long-term Memory", subtitle: "candidate approval and lifecycle" },
+  { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "outer authentication and tenant authorization" },
+  { href: "/docs/dev-server/agent-protocol", title: "Agent Protocol", subtitle: "candidate management routes" },
+]} />

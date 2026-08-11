@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useId, useRef, useState } from "react"
+import { pageUrl, sourceSlug } from "./page-actions"
 
 interface PageActionsProps {
   readonly slug: string
@@ -8,14 +9,9 @@ interface PageActionsProps {
   readonly promptBody?: string
 }
 
-const CANONICAL_BASE = "https://dawnai.dev"
 const GITHUB_EDIT_BASE = "https://github.com/cacheplane/dawnai/edit/main/apps/web/content/docs"
 
 type Feedback = "idle" | "copying" | "copied" | "error"
-
-function pageUrl(slug: string): string {
-  return `${CANONICAL_BASE}/docs/${slug}`
-}
 
 function aiPrompt(slug: string): string {
   return `Read this Dawn AI docs page and help me apply it to my project: ${pageUrl(slug)}`
@@ -164,7 +160,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
 
   const handleCopyMarkdown = useCallback(async () => {
     try {
-      const res = await fetch(`/api/markdown/${slug}`)
+      const res = await fetch(`/api/markdown/${sourceSlug(slug)}`)
       if (!res.ok) throw new Error(String(res.status))
       const text = await res.text()
       await copyText(text)
@@ -186,7 +182,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
   }, [slug])
 
   const openGitHub = useCallback(() => {
-    window.open(`${GITHUB_EDIT_BASE}/${slug}.mdx`, "_blank", "noopener,noreferrer")
+    window.open(`${GITHUB_EDIT_BASE}/${sourceSlug(slug)}.mdx`, "_blank", "noopener,noreferrer")
   }, [slug])
 
   // Build the menu items. On mobile, "Copy prompt" appears at the top of the menu when a prompt exists.
