@@ -2,6 +2,10 @@
 
 Dawn has four independent decision planes. They compose — none substitutes for another, and an app may use the planes relevant to each route.
 
+<Callout type="warn" title="Start outside the agent boundary">
+  These planes do not authenticate the whole HTTP service or establish tenant ownership. Protect health, thread management, state, cancellation, AG-UI, execution, and memory-candidate routes at the service edge; see [Security Architecture](/docs/security-architecture). Dawn middleware is a narrower execution hook.
+</Callout>
+
 | Layer | Question it answers | Docs |
 |---|---|---|
 | Tool scoping | *Which* tools can the model call? | [Tools](/docs/tools#scoping-a-routes-tools) |
@@ -78,5 +82,6 @@ export default agent({
   { href: "/docs/permissions", title: "Permissions", subtitle: "human-in-the-loop approval for paths, commands, tools, and memory writes" },
   { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "per-thread filesystem, shell, and network isolation" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "guarded delegation before a child receives input" },
+  { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "outer authentication and tenant authorization" },
   { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including permissions and sandbox" },
 ]} />

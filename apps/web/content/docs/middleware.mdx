@@ -108,6 +108,10 @@ Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served 
 
 The `langsmith` build target is different: its generated graph entries do not include Dawn HTTP middleware. Put equivalent authentication at the LangSmith/platform boundary when you deploy those entries.
 
+<Callout type="warn" title="Middleware is execution-only">
+  Do not use this hook as blanket service authentication. Create/read/delete, state, cancellation, health, and memory-candidate routes bypass it. Put an outer boundary around the complete runtime surface as described in [Security Architecture](/docs/security-architecture).
+</Callout>
+
 ## Errors thrown from middleware
 
 If the middleware function throws, the request is rejected with HTTP `500`. Prefer explicit `reject(status, body?)` over throwing — it gives users a meaningful response.
@@ -119,4 +123,5 @@ If the middleware function throws, the request is rejected with HTTP `500`. Pref
   { href: "/docs/tools", title: "Tools", subtitle: "full tool authoring contract, including the ctx shape" },
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "request envelope and assistant-id format" },
   { href: "/docs/recipes/auth-middleware", title: "Auth middleware", subtitle: "recipe verifying a bearer token and flowing identity to tools" },
+  { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "outer authentication and tenant authorization" },
 ]} />

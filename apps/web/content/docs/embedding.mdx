@@ -1,0 +1,221 @@
+# Embed the Runtime
+
+Dawn can own a standalone Node listener or provide a web-standard fetch handler inside a host you already operate. Choose the highest-level stable export that gives the host the lifecycle control it needs.
+
+## Choose standalone or embedded
+
+Use `dawn start` or the generated Node server when Dawn can own the listener. Use `serveRuntime` when application code should construct and close that listener. Use `createRuntimeFetchHandler` when an existing server, worker, test harness, or Hono application owns transport and dependency lifetimes.
+
+Embedding does not change the rooted Dawn endpoint paths or widen middleware coverage. The host still owns blanket authentication, tenant authorization, proxy behavior, readiness, and process shutdown.
+
+## Own a Node server with serveRuntime
+
+`serveRuntime` and `loadStaticModules` are stable exports from the package root:
+
+```ts title="server.ts"
+import { loadStaticModules, serveRuntime } from "@dawn-ai/cli"
+
+const modules = await loadStaticModules(
+  new URL("./.dawn/build/modules.mjs", import.meta.url),
+)
+
+const runtime = await serveRuntime({
+  appRoot: process.cwd(),
+  modules,
+  host: "0.0.0.0",
+  port: 8000,
+  // Set this only when the host delegates SIGINT/SIGTERM handling to Dawn.
+  installSignalHandlers: true,
+})
+
+console.log(`Dawn listening on ${runtime.url}`)
+```
+
+`serveRuntime` defaults `installSignalHandlers` to `false`. A larger host that already coordinates several servers should keep signal ownership at that layer and call `await runtime.close()` in its own ordered shutdown path. `dawn start` opts in; the currently generated Node `server.mjs` does not.
+
+## Compose the fetch runtime
+
+The edge-safe entry is `@dawn-ai/cli/fetch`. It performs no route discovery and has no filesystem or SQLite fallback, so supply the generated edge manifest, serializable config, and every store your exposed endpoints require.
+
+```ts title="runtime.ts"
+import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
+import modules from "./.dawn/build/modules.edge.mjs"
+import {
+  createApplicationRequestStores,
+  permissionPolicy,
+} from "./request-stores.js"
+
+type Env = { readonly DATABASE_URL?: string }
+
+const APP_ROOT = "/my-app"
+const envByRequest = new WeakMap<Request, Env>()
+let handlerPromise: ReturnType<typeof createRuntimeFetchHandler> | undefined
+
+const requestStores = (request: Request) => {
+  const env = envByRequest.get(request)
+  if (!env) throw new Error("No environment is bound to this request")
+  return createApplicationRequestStores(env, permissionPolicy)
+}
+
+export default {
+  async fetch(request: Request, env: Env) {
+    // Bind this invocation before Dawn calls requestStores during dispatch.
+    envByRequest.set(request, env)
+    handlerPromise ??= createRuntimeFetchHandler({
+      appRoot: APP_ROOT,
+      modules,
+      config: { build: { targets: ["hono"] } },
+      requestStores,
+    }).catch((error) => {
+      // Do not cache a failed construction for the isolate's lifetime.
+      handlerPromise = undefined
+      throw error
+    })
+    const handler = await handlerPromise
+    return handler.fetch(request)
+  },
+}
+```
+
+Construct the handler lazily inside the first request. Handler construction creates an `AbortController`; workerd does not permit that I/O-associated object to be created in module/global scope. Keep only the promise and plain binding map at module scope. Binding environment by the incoming `Request` also prevents later requests from accidentally reusing the first request's database environment. Reset the memoized promise when construction rejects so a later invocation can retry.
+
+`"/my-app"` is a readable placeholder, not an arbitrary namespace choice. `APP_ROOT` must exactly match the rooted namespace baked into `modules.edge.mjs`, currently `/<app-directory-basename>`. A mismatch splits the manifest's route/cache identity from the handler identity.
+
+`requestStores` may return a checkpointer, threads store, permissions store, memory store, and `dispose`. A matching boot-supplied instance is the alternative when that resource can safely live for the handler's lifetime. A store supplied by `requestStores` is used as-is; Dawn does not call `load()` on it and does not reapply sibling `permissions.mode`, `permissions.allow`, or `permissions.deny` from `dawn.config.ts`. Reaching an omitted required store fails loudly rather than opening local SQLite.
+
+## Compose with Hono
+
+The `hono` build target emits `.dawn/build/app.mjs`, a Hono app with rooted Dawn routes and request-scoped store wiring. Compose it with Hono's router so the original `Request` object and its environment binding are preserved:
+
+```ts title="host.ts"
+import { Hono } from "hono"
+import dawnApp from "./.dawn/build/app.mjs"
+
+const app = new Hono()
+
+app.use("*", authenticateAndAuthorize)
+app.route("/", dawnApp)
+
+export default app
+```
+
+The generated app has no Dawn base-path option. Do not place it under a `/dawn` prefix or use Hono's request-rebuilding mount helper: Dawn's routes are rooted, and the emitted per-request environment lookup is keyed by the original request. Keep `app.route("/", dawnApp)` exact.
+
+## Lower-level tooling surface
+
+`@dawn-ai/cli/runtime` is a lower-level tooling surface used by Dawn's testing and internal runtime integrations. It exposes dynamic Node-oriented machinery and is not the application embedding entry point. Application hosts should import `serveRuntime` and `loadStaticModules` from the package root or import `createRuntimeFetchHandler` from `@dawn-ai/cli/fetch`.
+
+## Dependency precedence
+
+For the Node assembly, explicitly supplied modules, middleware, and store instances win. When a store is absent, the Node fallback reads the corresponding `dawn.config.ts` field, then uses the local SQLite/file default where the contract has one. A `requestStores` result overrides matching boot instances for that request.
+
+The edge fetch entry has no filesystem fallback: it cannot discover routes, load config, read permission files, or open default SQLite. Supply those dependencies explicitly. Some optional features remain absent when not configured; a configured feature the edge cannot serve fails with a capability error instead of silently degrading.
+
+## Endpoint paths
+
+Embedding changes who owns the listener, not the API layout. The handler dispatches rooted paths:
+
+- `/healthz` for liveness;
+- `/threads` and `/threads/:thread_id/...` for Agent Protocol management and execution;
+- `/agui/:routeId` for AG-UI;
+- `/memory/candidates...` for memory candidate management.
+
+Route keys and thread ids still need URL encoding where the protocol requires it. If a product needs a public prefix, rewrite it at an outer proxy and test every request/response path; do not treat the prefix as runtime configuration.
+
+## Resource ownership and shutdown
+
+The handler tracks response lifetime and run lifetime separately. For server-sent events, keep the response body connected to the host rather than buffering it. An Agent Protocol run may continue after its viewer disconnects, while AG-UI aborts on disconnect.
+
+Await `close()` before ending application-owned pools. It stops acceptance, aborts shutdown-aware work, drains boundedly, waits for request-store disposal, and releases sandboxes. It does not close injected boot stores or pools.
+
+A request-store factory owns partial allocation if it throws before returning:
+
+```ts title="request-stores.ts"
+import { Pool } from "@neondatabase/serverless"
+import type { PermissionMode, PermissionsFile } from "@dawn-ai/permissions"
+import {
+  createPostgresPermissionsStore,
+  createPostgresThreadsStore,
+  postgresCheckpointer,
+} from "@dawn-ai/postgres-storage"
+
+type Env = { readonly DATABASE_URL?: string }
+type PermissionPolicy = {
+  readonly mode: PermissionMode
+  readonly config: PermissionsFile
+}
+
+// These are the application's effective production values. Keep policy
+// resolution in application code; requestStores does not inherit Dawn config.
+export const permissionPolicy = {
+  mode: "non-interactive",
+  config: {
+    version: 1,
+    allow: { bash: ["ls", "cat"] },
+    deny: { bash: ["rm -rf", "sudo"] },
+  },
+} satisfies PermissionPolicy
+
+export async function createApplicationRequestStores(
+  env: Env,
+  policy: PermissionPolicy,
+) {
+  if (!env.DATABASE_URL) throw new Error("DATABASE_URL is required")
+  const pool = new Pool({ connectionString: env.DATABASE_URL })
+  pool.on("error", (error) => {
+    console.warn("Postgres pool client error:", error)
+  })
+  try {
+    const checkpointer = postgresCheckpointer({ pool })
+    const threadsStore = createPostgresThreadsStore({ pool })
+    const permissionsStore = createPostgresPermissionsStore({
+      pool,
+      mode: policy.mode,
+      config: policy.config,
+    })
+    await Promise.all([checkpointer.ready(), threadsStore.ready()])
+    await permissionsStore.load()
+
+    return {
+      checkpointer,
+      threadsStore,
+      permissionsStore,
+      dispose: () => pool.end(),
+    }
+  } catch (error) {
+    await pool.end().catch(() => undefined)
+    throw error
+  }
+}
+```
+
+The explicit `await permissionsStore.load()` fulfills the store's load contract before it is returned. In `interactive` mode that call hydrates persisted runtime grants into the synchronous match cache; other modes intentionally skip those grants. Dawn invokes neither `ready()` nor `load()` for a `requestStores` override, and it does not layer the sibling Dawn permission config or `DAWN_PERMISSIONS_MODE` override onto a custom store. The application owns the effective mode, static allow/deny policy, hydration, refresh, and disposal. `dispose` is called only after a returned store set's response and any run it started have settled. If construction or hydration throws, the runtime received nothing to dispose, so the catch must close the partially allocated pool itself.
+
+The currently generated Hono `stores.mjs` creates a request-scoped Postgres permissions store that is made ready and migrated, but it is not hydrated with `load()`. It also omits the resolved mode and config-seeded allow/deny. Do not assume static policy, effective-mode, or persisted interactive grants have parity on that generated path. When any of those permission controls matter, compose app-owned request-store wiring that supplies and loads the complete policy as above, and define the refresh behavior your replicas require.
+
+For a caller-owned boot pool, preserve shutdown ordering:
+
+```ts
+await handler.close()
+await pool.end()
+```
+
+Close the handler before the pool so active runs and response bodies cannot keep writing through an ended resource.
+
+## Authentication
+
+Place blanket authentication and tenant authorization in the owning server or proxy. Dawn middleware runs for Agent Protocol execution/resume and AG-UI, but health, thread management, state, cancellation, and memory candidate routes bypass it. See [Security Architecture](/docs/security-architecture) before exposing an embedded handler.
+
+## Test the embedded host
+
+Test the assembled host, not only the bare handler:
+
+1. Verify unauthenticated requests fail for `/healthz`, `/threads`, `/agui`, and `/memory` surfaces according to your outer policy.
+2. Create a thread, run a route, read state, and confirm cross-tenant access is rejected.
+3. Exercise an Agent Protocol viewer disconnect and explicit cancellation through the real proxy.
+4. Exercise AG-UI disconnect behavior and unbuffered SSE delivery.
+5. Make request-store construction fail after opening a resource and verify the factory closes it.
+6. Invoke shutdown with an active run, await `close()`, then close caller-owned pools.
+7. For Hono, drive the composed `app.route("/", dawnApp)` path with the deployment's real environment binding.
+
+See [Deployment Options](/docs/deployment) for the current generated artifacts and target constraints.

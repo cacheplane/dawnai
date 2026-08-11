@@ -42,6 +42,7 @@ const FOUNDATION_DOCS_NAV = [
       { label: "Dev Server", href: "/docs/dev-server" },
       { label: "Middleware", href: "/docs/middleware" },
       { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
+      { label: "Embed the Runtime", href: "/docs/embedding" },
       { label: "Blueprints", href: "/docs/blueprints" },
     ],
   },
@@ -56,6 +57,9 @@ const FOUNDATION_DOCS_NAV = [
   {
     label: "Operate",
     items: [
+      { label: "Persistence and Tenancy", href: "/docs/persistence" },
+      { label: "Production Topology", href: "/docs/production-topology" },
+      { label: "Security Architecture", href: "/docs/security-architecture" },
       { label: "Access Control", href: "/docs/access-control" },
       { label: "Permissions", href: "/docs/permissions" },
       { label: "Retry", href: "/docs/retry" },
@@ -213,7 +217,8 @@ describe("documentation registry invariants", () => {
       { label: "AG-UI and Web Clients" },
     ])
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
-    expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/blueprints")
+    expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
+    expect(DOCS_PAGES).toHaveLength(46)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 

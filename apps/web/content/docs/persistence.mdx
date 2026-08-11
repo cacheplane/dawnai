@@ -1,0 +1,88 @@
+# Persistence and Tenancy
+
+Dawn's Node runtime uses local SQLite stores by default. That is a good one-process default, but it is not a tenancy model: production tenant ownership is an application boundary and is never inferred from a thread id.
+
+## What Dawn persists
+
+The runtime writes several independent kinds of state. They do not share one lifecycle merely because they belong to the same application.
+
+| Data | Default location | Shared option | Namespace or tenant key | Deletion behavior | Owner |
+|---|---|---|---|---|---|
+| LangGraph checkpoints and pending writes | `.dawn/checkpoints.sqlite` | `postgresCheckpointer` through [`checkpointer`](/docs/configuration#checkpointer) | `thread_id`, checkpoint namespace, and checkpoint id; no authenticated tenant key is added | After metadata deletion, the runtime awaits `deleteThread` when the saver supports it; a failure leaves metadata gone | The app selects the saver; the runtime writes route state |
+| Agent Protocol thread metadata | `.dawn/threads.sqlite` | `createPostgresThreadsStore` through [`threadsStore`](/docs/configuration#threadsstore) | `thread_id`; metadata can record application fields, but the id itself proves no owner | The thread row is removed first | The app owns thread authorization; the runtime maintains status and route metadata |
+| Runtime permission decisions | `.dawn/permissions.json` | `createPostgresPermissionsStore` through [`permissions.store`](/docs/configuration#permissionsstore) | Tool/gate key and pattern within the configured store; not thread-scoped or tenant-scoped by default | Thread deletion does not remove permission decisions | The application owns policy and store boundaries |
+| Typed long-term memory | `.dawn/memory.sqlite` | A separate `MemoryStore`, such as `pgvectorMemoryStore`, through [`memory.store`](/docs/configuration#memory) | The route-declared memory scope: `workspace`, `route`, and any application-supplied `tenant`, `user`, or `agent` dimensions | Managed by memory APIs and retention policy, not by thread deletion | The application owns namespace derivation and lifecycle |
+| Local workspace files | `<appRoot>/workspace/` through the local filesystem backend | An application-supplied [`backends.filesystem`](/docs/configuration#backends) | App/workspace path; there is no automatic thread or tenant partition | Thread deletion does not remove arbitrary workspace files | The application and its tools |
+| Per-thread sandbox volumes | None until [`sandbox`](/docs/configuration#sandbox) is configured; location is provider-specific | A durable provider volume, such as a Docker named volume or Kubernetes PVC | `threadId` is the provider lookup key | Sandbox destruction on thread deletion removes the thread volume; idle reap and shutdown release compute but keep it | The configured sandbox provider |
+
+<Callout type="warn" title="A shared database is not tenant authorization">
+  A caller can supply a route value, thread id, or memory scope value. Persisting that value does not verify that the caller owns it. Authenticate at the service edge and authorize every read, write, run, cancellation, and deletion against application-owned tenant data.
+</Callout>
+
+## Choose local or shared stores
+
+Local SQLite and file stores keep setup small and make sense for development or one long-lived Node process with durable local disk. Move the three durable runtime stores independently when compute becomes ephemeral or several processes must see the same records:
+
+- [`checkpointer`](/docs/configuration#checkpointer) for checkpoints;
+- [`threadsStore`](/docs/configuration#threadsstore) for thread metadata;
+- [`permissions.store`](/docs/configuration#permissionsstore) for runtime permission grants.
+
+`@dawn-ai/postgres-storage` implements those three stores over Postgres. Typed long-term memory remains a separate [`memory.store`](/docs/configuration#memory) with its own schema, retrieval behavior, and retention needs; `@dawn-ai/memory-pgvector` is one shared option.
+
+A running process caches loaded permission decisions because `PermissionsStore.match()` is synchronous. On the configuration-resolved Node path, `serveRuntime` resolves and loads its configured permissions store once at Node boot. The Postgres implementation hydrates its in-memory map with `load()`, but that cache does not auto-refresh across replicas. A shared permissions table therefore does not automatically provide instant invalidation: the application owns the refresh or reload strategy when externally added grants or revocations must propagate, whether that means an explicit reload schedule, rebuilding the handler, or another application-controlled mechanism.
+
+## Tenant ownership
+
+Derive tenant and user scope from identity that your service has already verified. Keep a server-side ownership record that relates that identity to each thread and other namespace-bearing resource, then check it before accepting a caller-supplied id.
+
+Do not treat route parameters, request bodies, thread ids, or memory scope strings as authentication. They are addressing inputs. A useful design keeps the verified principal, tenant ownership record, storage namespace, and authorization decision distinct.
+
+`memory.resolveScope` receives only `{ routePath, appRoot }`. It does not receive a verified request identity or middleware context automatically. If a memory namespace needs per-request identity, provide application-owned wiring that genuinely has access to that identity and test the isolation boundary; do not assume Dawn inferred it.
+
+## What deleting a thread removes
+
+`DELETE /threads/:thread_id` is ordered and not transactional across stores:
+
+1. The runtime deletes thread metadata first.
+2. If the configured checkpoint saver exposes `deleteThread`, the runtime awaits that call.
+3. Only after the checkpoint step succeeds—or is unsupported—does it destroy the thread's sandbox state and volume when a sandbox manager is configured.
+
+Optional checkpoint deletion support is the limited best-effort boundary: a saver without `deleteThread` is skipped. Once a supported saver is called, its errors are not swallowed. A saver error propagates after metadata is already gone and can prevent sandbox cleanup. An HTTP `204` means every step that was attempted completed; it does not mean a cross-store transaction committed.
+
+That operation does **not** remove global permission decisions, typed long-term memory, arbitrary workspace files, application database rows, or data held by another service. Account deletion therefore requires an application-level inventory and workflow across every relevant store.
+
+Operators need reconciliation for partial deletions, an idempotent retry path for checkpoint and sandbox cleanup, and audit records that distinguish a missing metadata row from fully completed cleanup.
+
+<Callout type="warn" title="Quiesce before delete">
+  You must quiesce the thread before deletion: `DELETE /threads/:thread_id` does not cancel an active run and does not wait for it. A live route can produce later checkpoint writes after cleanup, and sandbox destruction can race tools that are still executing. At the application boundary, use owning-process thread-aware routing or distributed coordination to stop new work, route `/threads/:thread_id/cancel` to the owning process, and confirm the run is settled before sending `DELETE`. A successful cancel response or delivered abort signal does not prove route completion: route work may ignore cancellation or still be unwinding. A 204 confirms only the sequential cleanup calls completed; it does not prove there were no concurrent or later writes. See [Production Topology](/docs/production-topology#add-replicas-safely).
+</Callout>
+
+## Backup, restore, encryption, and retention
+
+Choose backup and restore procedures for each backend, and rehearse restoring a consistent set of thread metadata and checkpoints. A restored thread row without its corresponding checkpoint history may still exist but cannot reproduce the prior route state. Workspace files, sandbox volumes, and long-term memory need their own backup decisions.
+
+Dawn does not add application-level encryption to stored values and does not provide an account-erasure transaction across these stores. Postgres rows are plaintext application data unless the application or infrastructure adds encryption. Protect database credentials, storage volumes, backup copies, and access logs accordingly.
+
+Define retention by data class: checkpoint history, thread records, permission grants, long-term memory, workspace output, sandbox volumes, and backups rarely need identical windows. Record which component performs expiry or deletion and how failed cleanup is retried and audited.
+
+## Migration checklist
+
+1. Inventory every row in the matrix, including local workspace and sandbox data.
+2. Establish tenant ownership and namespace rules before copying data.
+3. Provision the destination stores and exercise their native schema initialization and backup path.
+4. Quiesce or otherwise account for writes while copying local data with backend-native tooling or an application-specific migration. Dawn does not ship a local-to-Postgres data migration command.
+5. Configure [`checkpointer`](/docs/configuration#checkpointer), [`threadsStore`](/docs/configuration#threadsstore), [`permissions.store`](/docs/configuration#permissionsstore), and [`memory.store`](/docs/configuration#memory) explicitly, then verify representative reads and writes.
+6. Decide how workspace files and sandbox volumes survive replacement compute.
+7. Rehearse rollback and restoration before removing the local copies.
+8. Add routing and coordination separately: shared durable stores do not distribute the active-run gate or cancellation registry.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/state", title: "State", subtitle: "route state and checkpoint behavior" },
+  { href: "/docs/memory", title: "Memory", subtitle: "typed long-term memory and namespaces" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "runtime decisions and stores" },
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "local and custom filesystem backends" },
+  { href: "/docs/production-topology", title: "Production Topology", subtitle: "replicas, routing, health, and shutdown" },
+  { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "authentication and tenant authorization" },
+]} />
