@@ -9,10 +9,12 @@ import {
 } from "../../scripts/kubernetes-compat/policy.ts"
 import {
   classifyKubernetesCompatibilityScope,
+  GIT_COMMAND_DEFAULTS,
   type GitCommandRunner,
   isKubernetesCompatibilityPath,
   KUBERNETES_COMPATIBILITY_PATHS,
   parseNulDelimitedGitPaths,
+  runGitCommand,
 } from "../../scripts/kubernetes-compat/scope.ts"
 import {
   aggregateCompatibility,
@@ -23,6 +25,11 @@ import {
 const REPO_ROOT = resolve(__dirname, "../..")
 const BASE_SHA = "a".repeat(40)
 const HEAD_SHA = "b".repeat(40)
+const CONTROLLED_COMMAND_OPTIONS = {
+  timeoutMs: 2_000,
+  stdoutLimitBytes: 1_024,
+  stderrLimitBytes: 1_024,
+}
 
 const expectedOwnership = {
   exact: [
@@ -61,6 +68,46 @@ afterEach(async () => {
 
 function commandResult(stdout: Buffer = Buffer.alloc(0)): { readonly stdout: Buffer } {
   return { stdout }
+}
+
+async function createTemporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix))
+  temporaryDirectories.push(directory)
+  return directory
+}
+
+async function rejectedError(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw new Error("Expected command rejection to be an Error", { cause: error })
+  }
+  throw new Error("Expected command to reject")
+}
+
+async function expectRecordedProcessStopped(pidPath: string): Promise<void> {
+  const pid = Number(await readFile(pidPath, "utf8"))
+  expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+
+  try {
+    process.kill(pid, 0)
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ESRCH")
+    return
+  }
+  throw new Error(`Controlled child process ${pid} is still running`)
+}
+
+function persistentChildScript(pidPath: string, operation: string): string {
+  return [
+    'const { writeFileSync } = require("node:fs")',
+    `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid))`,
+    operation,
+    "setInterval(() => {}, 1_000)",
+  ].join(";")
 }
 
 function targetByRole(
@@ -142,6 +189,124 @@ describe("NUL-delimited Git path parsing", () => {
     Buffer.from([0xff, 0x00]),
   ])("rejects malformed nonempty output %#", (output) => {
     expect(() => parseNulDelimitedGitPaths(output)).toThrow(/malformed|UTF-8/i)
+  })
+})
+
+describe("default Git command runner", () => {
+  test("publishes production timeout and independent byte bounds", () => {
+    expect(GIT_COMMAND_DEFAULTS).toEqual({
+      timeoutMs: 30_000,
+      stdoutLimitBytes: 32 * 1_024 * 1_024,
+      stderrLimitBytes: 64 * 1_024,
+    })
+    expect(Object.isFrozen(GIT_COMMAND_DEFAULTS)).toBe(true)
+  })
+
+  test("runs shell-free and preserves binary stdout as a Buffer", async () => {
+    const literalArgument = "literal;$(not-a-command)\n"
+    const binarySuffix = Buffer.from([0x00, 0x7f, 0x80, 0xff])
+    const script = [
+      "const prefix = Buffer.from(process.argv[1])",
+      `const suffix = Buffer.from([${[...binarySuffix].join(",")}])`,
+      "process.stdout.write(Buffer.concat([prefix, suffix]))",
+    ].join(";")
+
+    const result = await runGitCommand(
+      process.execPath,
+      ["-e", script, literalArgument],
+      CONTROLLED_COMMAND_OPTIONS,
+    )
+
+    expect(Buffer.isBuffer(result.stdout)).toBe(true)
+    expect(result.stdout).toEqual(Buffer.concat([Buffer.from(literalArgument), binarySuffix]))
+  })
+
+  test("rejects spawn errors", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-command-spawn-")
+    const missingExecutable = join(directory, "missing-command")
+
+    await expect(runGitCommand(missingExecutable, [], CONTROLLED_COMMAND_OPTIONS)).rejects.toThrow(
+      /Failed to start command.*ENOENT/s,
+    )
+  })
+
+  test("reports a bounded stderr diagnostic for nonzero exits", async () => {
+    const error = await rejectedError(
+      runGitCommand(
+        process.execPath,
+        ["-e", 'process.stderr.write("controlled stderr"); process.exit(7)'],
+        CONTROLLED_COMMAND_OPTIONS,
+      ),
+    )
+
+    expect(error.message).toMatch(/exit code 7/)
+    expect(error.message).toContain("controlled stderr")
+  })
+
+  test.skipIf(process.platform === "win32")("reports signal termination", async () => {
+    await expect(
+      runGitCommand(
+        process.execPath,
+        ["-e", 'process.kill(process.pid, "SIGTERM")'],
+        CONTROLLED_COMMAND_OPTIONS,
+      ),
+    ).rejects.toThrow(/signal SIGTERM/)
+  })
+
+  test("times out and terminates the child before rejecting", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-command-timeout-")
+    const pidPath = join(directory, "pid")
+    const startedAt = Date.now()
+
+    await expect(
+      runGitCommand(process.execPath, ["-e", persistentChildScript(pidPath, "")], {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        timeoutMs: 250,
+      }),
+    ).rejects.toThrow(/timed out after 250 ms/)
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000)
+    await expectRecordedProcessStopped(pidPath)
+  })
+
+  test("terminates the child when stdout exceeds its independent byte limit", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-command-stdout-")
+    const pidPath = join(directory, "pid")
+
+    await expect(
+      runGitCommand(
+        process.execPath,
+        ["-e", persistentChildScript(pidPath, "process.stdout.write(Buffer.alloc(17, 0x61))")],
+        {
+          ...CONTROLLED_COMMAND_OPTIONS,
+          stdoutLimitBytes: 16,
+        },
+      ),
+    ).rejects.toThrow(/stdout exceeded 16 bytes/)
+
+    await expectRecordedProcessStopped(pidPath)
+  })
+
+  test("bounds stderr and terminates the child when stderr overflows", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-command-stderr-")
+    const pidPath = join(directory, "pid")
+    const hiddenSuffix = "MUST_NOT_APPEAR_IN_DIAGNOSTICS"
+    const error = await rejectedError(
+      runGitCommand(
+        process.execPath,
+        ["-e", persistentChildScript(pidPath, `process.stderr.write("12345678${hiddenSuffix}")`)],
+        {
+          ...CONTROLLED_COMMAND_OPTIONS,
+          stderrLimitBytes: 8,
+        },
+      ),
+    )
+
+    expect(error.message).toMatch(/stderr exceeded 8 bytes/)
+    expect(error.message).toContain("12345678")
+    expect(error.message).not.toContain(hiddenSuffix)
+    expect(Buffer.byteLength(error.message)).toBeLessThan(512)
+    await expectRecordedProcessStopped(pidPath)
   })
 })
 
