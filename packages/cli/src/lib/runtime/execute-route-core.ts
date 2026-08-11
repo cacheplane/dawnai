@@ -1357,7 +1357,7 @@ async function recordRunEpisode(args: {
   // the completing resume turn records instead. Two detections, because the
   // signal differs by path: callers that drive the adapter pass `parked` from
   // the interrupt chunk they saw, while a subagent graph invoked directly
-  // (see withEpisodeRecording) gets `__interrupt__` on its returned state.
+  // (see withEpisodeRecording) can get `__interrupt__` on its returned state.
   if (args.outcome === "ok" && (args.parked === true || hasPendingInterrupt(args.output))) return
   try {
     await recordEpisode(

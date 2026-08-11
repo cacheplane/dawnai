@@ -193,9 +193,10 @@ export function extractToolNames(output: unknown): string[] {
 /**
  * True when a final LangGraph output represents a PARKED (interrupted) turn
  * rather than a completed run: a graph driven through LangGraph's own
- * `invoke()` surfaces pending HITL interrupts as a non-empty `__interrupt__`
- * array on the final state. In Dawn that is ONLY the directly-invoked subagent
- * graph (`withEpisodeRecording` in execute-route-core).
+ * `invoke()` can surface pending HITL interrupts as a non-empty `__interrupt__`
+ * array on the final state. The only such caller in Dawn is the directly
+ * invoked subagent graph (`withEpisodeRecording` in execute-route-core), where
+ * this complements the `GraphInterrupt` throw that path also handles.
  *
  * It is NOT a park detector for a Dawn route. Both route paths — streaming and
  * non-streaming — go through the agent-adapter, which drives `streamEvents`;
