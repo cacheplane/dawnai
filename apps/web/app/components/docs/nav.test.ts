@@ -252,6 +252,13 @@ describe("documentation registry invariants", () => {
     expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
   })
 
+  it("pins the exact 58-page reading order", () => {
+    const expectedPages = FOUNDATION_DOCS_NAV.flatMap((section) => section.items)
+
+    expect(expectedPages).toHaveLength(58)
+    expect(DOCS_PAGES).toEqual(expectedPages)
+  })
+
   it("uses unique section labels, page labels, and hrefs", () => {
     const sectionLabels = DOCS_NAV.map((section) => section.label)
     const pageLabels = DOCS_PAGES.map((page) => page.label)
@@ -271,7 +278,6 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/dev-server/agent-protocol").next?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(58)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 

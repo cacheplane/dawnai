@@ -364,12 +364,13 @@ const pages = new Map<string, PageAnchors>(
   await Promise.all(files.map(async (file) => [file, await analyze(file)] as const)),
 )
 
-// Public fragment compatibility for the unsplit API reference. This is the
-// complete 98-id inventory emitted before the application-runtime sections
-// were added; additions are allowed, but renaming or reordering retained
-// duplicate headings is not.
-const LEGACY_API_HEADING_IDS = [
+// Public fragment compatibility for the unsplit API reference. This exact
+// ordered inventory freezes every id before the reference is split into
+// package pages; additions, removals, renames, and reorders are breaking.
+const FROZEN_API_HEADING_IDS = [
   "api-reference",
+  "package-and-surface-index",
+  "reference-conventions",
   "dawn-aisdk",
   "agent",
   "agentconfig",
@@ -420,6 +421,12 @@ const LEGACY_API_HEADING_IDS = [
   "backendadapter",
   "utilities",
   "prettifyt",
+  "dawn-aicli",
+  "serveruntimeoptions",
+  "loadstaticmodulesmanifesturl",
+  "dawnstaticmodules-and-staticroutemodule",
+  "dawn-aiclifetch",
+  "dawn-aicliruntime",
   "dawn-aicore",
   "capability-exports",
   "createcapabilityregistrymarkers-and-applycapabilities",
@@ -435,6 +442,12 @@ const LEGACY_API_HEADING_IDS = [
   "toaguieventschunks-context",
   "fromrunagentinputinput",
   "sse-subpath-encodeaguisseevent-accept",
+  "dawn-aimemory",
+  "memorystore",
+  "memoryrecord",
+  "memoryquery",
+  "browsequery-browsepage-and-memorystats",
+  "dawn-aimemorybrowse",
   "dawn-aimemory-pgvector",
   "pgvectormemorystoreoptions",
   "pgvectormemorystore",
@@ -641,15 +654,15 @@ describe("docs links and in-page anchors", () => {
     expect(withoutIds).toEqual([])
 
     const api = pages.get("api.mdx")
-    expect(LEGACY_API_HEADING_IDS).toHaveLength(98)
-    expect(new Set(LEGACY_API_HEADING_IDS).size).toBe(98)
+    expect(FROZEN_API_HEADING_IDS).toHaveLength(112)
+    expect(new Set(FROZEN_API_HEADING_IDS).size).toBe(112)
     expect(api?.orderedIds).toHaveLength(api?.ids.size ?? -1)
     expect(new Set(api?.orderedIds).size).toBe(api?.orderedIds.length)
-    expect(isOrderedSubsequence(LEGACY_API_HEADING_IDS, api?.orderedIds ?? [])).toBe(true)
+    expect(api?.orderedIds).toEqual(FROZEN_API_HEADING_IDS)
     // Mutation probe: a membership-only assertion would miss this reorder.
     expect(
       isOrderedSubsequence(
-        [LEGACY_API_HEADING_IDS[1], LEGACY_API_HEADING_IDS[0]],
+        [FROZEN_API_HEADING_IDS[1], FROZEN_API_HEADING_IDS[0]],
         api?.orderedIds ?? [],
       ),
     ).toBe(false)
