@@ -37,6 +37,7 @@ export const DOCS_NAV = [
     label: "Integrate",
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "Agent Protocol", href: "/docs/dev-server/agent-protocol" },
       { label: "Middleware", href: "/docs/middleware" },
       { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
       { label: "Embed the Runtime", href: "/docs/embedding" },

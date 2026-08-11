@@ -40,6 +40,7 @@ const FOUNDATION_DOCS_NAV = [
     label: "Integrate",
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "Agent Protocol", href: "/docs/dev-server/agent-protocol" },
       { label: "Middleware", href: "/docs/middleware" },
       { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
       { label: "Embed the Runtime", href: "/docs/embedding" },
@@ -221,9 +222,11 @@ describe("documentation registry invariants", () => {
       { label: "Integrate" },
       { label: "AG-UI and Web Clients" },
     ])
+    expect(siblingsFor("/docs/dev-server/agent-protocol").prev?.href).toBe("/docs/dev-server")
+    expect(siblingsFor("/docs/dev-server/agent-protocol").next?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(51)
+    expect(DOCS_PAGES).toHaveLength(52)
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 

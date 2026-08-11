@@ -263,6 +263,19 @@ describe("docs links and in-page anchors", () => {
     expect(edge?.ids).toContain("what-the-edge-cannot-serve")
     expect(edge?.ids).toContain("why-the-stores-are-per-request")
     expect(edge?.ids).toContain("what-is-proven-and-what-is-not")
+
+    const agentProtocolAnchors = [
+      "agent-protocol-endpoints",
+      "thread-lifecycle-with-curl",
+      "one-run-at-a-time-per-thread",
+      "client-disconnect",
+    ]
+    const devServer = pages.get("dev-server.mdx")
+    const agentProtocol = pages.get("dev-server/agent-protocol.mdx")
+    for (const anchor of agentProtocolAnchors) {
+      expect(devServer?.ids).toContain(anchor)
+      expect(agentProtocol?.ids).toContain(anchor)
+    }
   })
 
   it("resolves every repository-owned docs link and supplied fragment", () => {

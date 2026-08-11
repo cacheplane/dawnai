@@ -761,20 +761,84 @@ const accuracyContracts = [
   {
     file: "apps/web/content/docs/dev-server.mdx",
     required: [
-      "not blanket server authentication",
-      "/threads/:thread_id/cancel",
-      "/memory/candidates",
-      "spans namespaces",
-      "entire service",
-      "parent watcher/session keeps the same URL",
       "child owns the HTTP listener",
       "default SQLite",
+      "parent owns the app root, watcher, session, selected port, and stable URL across restarts",
+      "replacement child reloads the app and `dawn.config.ts`",
+      "Configuration edits take effect on that restart",
+      "durable stores preserve data",
+      "/docs/dev-server/agent-protocol",
+      "/docs/ag-ui",
+      "/docs/observability",
+      "/docs/middleware",
+      "/docs/security-architecture",
     ],
     forbidden: [
       "parent owns the HTTP server",
       "parent HTTP server is unaffected",
       "parent process keeps the HTTP server alive",
+      "persisted-state configuration",
     ],
+  },
+  {
+    file: "apps/web/content/docs/dev-server/agent-protocol.mdx",
+    required: [
+      "# Agent Protocol",
+      "POST /threads",
+      "GET /threads/:thread_id",
+      "DELETE /threads/:thread_id",
+      "GET /threads/:thread_id/state",
+      "POST /threads/:thread_id/runs/wait",
+      "POST /threads/:thread_id/runs/stream",
+      "POST /threads/:thread_id/resume",
+      "POST /threads/:thread_id/cancel",
+      "GET /memory/candidates",
+      "POST /memory/candidates/:id/approve",
+      "POST /memory/candidates/:id/reject",
+      ": ping",
+      "not blanket server authentication",
+      "`runs/wait`, `runs/stream`, and `resume`",
+      "AG-UI route execution",
+      "health routes bypass it",
+      "every 15 seconds",
+      "run_cancelled",
+      "no_run_in_flight",
+      'data: {"output":{"cancelled":true}}',
+      "route failure",
+      "process-local",
+      "ordinary run-slot collision",
+      "resume_in_progress",
+      "resume claim is acquired before the run registry",
+      "in-process",
+      "thread-route map first",
+      "persisted thread metadata",
+      "last fallback",
+      "does not redirect",
+      "spans namespaces",
+      "destructive",
+      "tenant authorization",
+      "outer authentication",
+    ],
+    forbidden: ["or `resume` request returns"],
+    forbiddenRegexes: [/\b\d+\s+(?:HTTP\s+)?endpoints\b/i],
+  },
+  {
+    file: "apps/web/content/docs/ag-ui.mdx",
+    required: [
+      "POST /agui/{routeId}",
+      "%2Fchat%23agent",
+      "@dawn-ai/ag-ui",
+      "RunAgentInput.resume",
+      "/docs/middleware",
+      "/docs/security-architecture",
+      "process-local",
+      "run_in_flight",
+      "ordinary run-slot collision",
+      "resume_in_progress",
+      "Agent Protocol viewer disconnects continue",
+      "AG-UI viewer disconnects abort",
+    ],
+    forbidden: ["/docs/dev-server#ag-ui-endpoint", "the competing request"],
   },
   {
     file: "apps/web/content/prompts/index.ts",
@@ -1135,6 +1199,41 @@ const compatibilityStubContracts = [
     canonicalHref: "/docs/sandbox/kubernetes",
   },
   {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "Agent Protocol endpoints",
+    canonicalHref: "/docs/dev-server/agent-protocol",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "Thread lifecycle with curl",
+    canonicalHref: "/docs/dev-server/agent-protocol",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "One run at a time per thread",
+    canonicalHref: "/docs/dev-server/agent-protocol",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "Client disconnect",
+    canonicalHref: "/docs/dev-server/agent-protocol",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "AG-UI endpoint",
+    canonicalHref: "/docs/ag-ui",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "Tracing",
+    canonicalHref: "/docs/observability",
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    retainedHeading: "Middleware",
+    canonicalHref: "/docs/middleware",
+  },
+  {
     file: "apps/web/content/docs/sandbox.mdx",
     retainedHeading: "Security hardening on Kubernetes",
     canonicalHref: "/docs/sandbox/kubernetes",
@@ -1274,6 +1373,7 @@ const expectedNavDocEntries = [
   { label: "Context Management", href: "/docs/context-management" },
   { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
   { label: "Dev Server", href: "/docs/dev-server" },
+  { label: "Agent Protocol", href: "/docs/dev-server/agent-protocol" },
   { label: "Middleware", href: "/docs/middleware" },
   { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
   { label: "Embed the Runtime", href: "/docs/embedding" },
@@ -1565,28 +1665,26 @@ for (const manifestPath of packageManifests()) {
   }
 }
 
-// Dev-server endpoint coverage check. Keep explicit endpoint docs in step with
-// runtime-fetch-core route additions that expose new client-facing protocols.
-const runtimeFetchCoreSource = readFileSync(
-  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-fetch-core.ts"),
-  "utf8",
+// Current protocol-ownership contract. This is deliberately a static list, not
+// runtime route discovery: route matching is implemented with regex literals,
+// and additions require an explicit product-doc decision about which page owns
+// their public contract.
+const agentProtocolDocsPath = resolve(
+  repoRoot,
+  "apps/web/content/docs/dev-server/agent-protocol.mdx",
 )
-const devServerDocs = readFileSync(
-  resolve(repoRoot, "apps/web/content/docs/dev-server.mdx"),
-  "utf8",
-)
-if (runtimeFetchCoreSource.includes("/agui/:routeId")) {
-  for (const required of [
-    "POST /agui/{routeId}",
-    "%2Fchat%23agent",
-    "@dawn-ai/ag-ui",
-    "RunAgentInput.resume",
-  ]) {
-    if (!devServerDocs.includes(required)) {
-      failures.push(
-        `apps/web/content/docs/dev-server.mdx is missing AG-UI endpoint text: ${required}`,
-      )
-    }
+const agentProtocolDocs = existsSync(agentProtocolDocsPath)
+  ? readFileSync(agentProtocolDocsPath, "utf8")
+  : ""
+const agUiDocs = readFileSync(resolve(repoRoot, "apps/web/content/docs/ag-ui.mdx"), "utf8")
+for (const required of [
+  "POST /agui/{routeId}",
+  "%2Fchat%23agent",
+  "@dawn-ai/ag-ui",
+  "RunAgentInput.resume",
+]) {
+  if (!agUiDocs.includes(required)) {
+    failures.push(`apps/web/content/docs/ag-ui.mdx is missing AG-UI endpoint text: ${required}`)
   }
 }
 
@@ -1596,8 +1694,10 @@ for (const endpoint of [
   "POST /memory/candidates/:id/approve",
   "POST /memory/candidates/:id/reject",
 ]) {
-  if (runtimeFetchCoreSource.includes(endpoint) && !devServerDocs.includes(endpoint)) {
-    failures.push(`apps/web/content/docs/dev-server.mdx is missing endpoint text: ${endpoint}`)
+  if (!agentProtocolDocs.includes(endpoint)) {
+    failures.push(
+      `apps/web/content/docs/dev-server/agent-protocol.mdx is missing endpoint text: ${endpoint}`,
+    )
   }
 }
 

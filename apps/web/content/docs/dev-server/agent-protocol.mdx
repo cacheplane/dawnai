@@ -1,0 +1,222 @@
+# Agent Protocol
+
+Agent Protocol is Dawn's durable HTTP surface for threads, checkpointed runs,
+streaming, human-in-the-loop resume, cancellation, and memory-candidate review.
+Both `dawn dev` and a Node runtime started with `dawn start` expose it.
+
+## Local quickstart
+
+Start a server on a known local port:
+
+```bash
+dawn dev --port 3001
+```
+
+Requests identify authored routes with the generated `<routeId>#<kind>` key,
+such as `/research#agent`.
+
+<Callout type="warn" title="Authenticate the entire production service">
+  Dawn execution middleware is not blanket server authentication. It covers
+  Agent Protocol `runs/wait`, `runs/stream`, and `resume`. AG-UI route execution
+  passes through the same middleware. Thread management, state, cancellation,
+  memory-candidate management, and health routes bypass it. Put outer authentication and network
+  restrictions around the entire service for any non-local exposure; exempt
+  only the health probe you intend to expose.
+</Callout>
+
+## Agent Protocol endpoints
+
+| Method and path | Request | Success |
+|---|---|---|
+| `POST /threads` | Optional `{ "metadata": { ... } }` body | `200` thread object |
+| `GET /threads/:thread_id` | — | `200` thread object; `404` when absent |
+| `DELETE /threads/:thread_id` | — | `204`; deletes thread metadata, supported checkpoints, and its sandbox sequentially |
+| `GET /threads/:thread_id/state` | — | `200 { config, created_at, metadata, next, parent_config, values }`; `404` without a checkpoint |
+| `POST /threads/:thread_id/runs/wait` | `{ "route": "<routeId>#<kind>", "input": { ... } }` | `200` final state JSON |
+| `POST /threads/:thread_id/runs/stream` | Same run body | `200 text/event-stream` |
+| `POST /threads/:thread_id/resume` | Exact `{ "resume": [...], "route": "<routeId>#<kind>" }` body | `200 text/event-stream` continuation |
+| `POST /threads/:thread_id/cancel` | No body | `200 { "thread_id", "status": "interrupted" }`; `404` unknown thread; `409` no active run |
+| `GET /memory/candidates` | — | `200 { "candidates": [...] }` |
+| `POST /memory/candidates/:id/approve` | No body | `200 { "record", "action", "superseded" }` |
+| `POST /memory/candidates/:id/reject` | No body | `200 { "ok": true }` |
+
+A run body requires `route`; `input` is optional and defaults to `{}`. A bare
+route id without `#<kind>` is not a registered assistant id and returns `404`.
+The `{ route, input }` envelope is shared by Dawn's dev, Node, and Hono HTTP
+runtimes. It is not the LangSmith request envelope, which uses `assistant_id`.
+
+## Thread lifecycle with curl
+
+This copyable sequence creates a thread, waits for a route, then reads its latest
+checkpoint. It uses `jq` only to extract the returned thread id.
+
+```bash
+BASE_URL=http://127.0.0.1:3001
+
+THREAD_ID=$(curl -sS -X POST "$BASE_URL/threads" \
+  -H 'content-type: application/json' \
+  -d '{}' | jq -r '.thread_id')
+
+curl -sS -X POST "$BASE_URL/threads/$THREAD_ID/runs/wait" \
+  -H 'content-type: application/json' \
+  -d '{
+    "route": "/research#agent",
+    "input": {
+      "messages": [{ "role": "user", "content": "Explain checkpoints briefly." }]
+    }
+  }'
+
+curl -sS "$BASE_URL/threads/$THREAD_ID/state"
+```
+
+Runs create the named thread if it does not exist, but creating it explicitly is
+useful when you need metadata or want to distinguish setup from execution.
+
+## Streaming over SSE
+
+`runs/stream` and `resume` return Server-Sent Events. The `event:` line is the
+runtime chunk type. The `data:` line is the chunk payload serialized directly as
+JSON—not a wrapper containing the full chunk.
+
+```text
+event: chunk
+data: "partial text"
+
+event: tool_call
+data: {"id":"call-1","name":"search","input":{"query":"Dawn"}}
+
+event: done
+data: {"output":{"messages":[]}}
+```
+
+While a stream is quiet, Dawn sends the SSE comment below every 15 seconds by
+default. SSE clients ignore comment frames; intermediaries see activity.
+
+```text
+: ping
+```
+
+## Interrupt and resume
+
+A permission pause arrives as an `interrupt` event whose raw JSON data includes
+the public `interruptId` and permission details:
+
+```text
+event: interrupt
+data: {"interruptId":"perm-abc123","type":"permission-request","kind":"command","detail":{"command":"ls","suggestedPattern":"ls"}}
+```
+
+Resume every pending interrupt on the root thread in one request:
+
+```bash
+curl -N -X POST "$BASE_URL/threads/$THREAD_ID/resume" \
+  -H 'content-type: application/json' \
+  -d '{
+    "resume": [
+      { "interruptId": "perm-abc123", "status": "resolved", "payload": "once" },
+      { "interruptId": "perm-def456", "status": "cancelled" }
+    ],
+    "route": "/research#agent"
+  }'
+```
+
+The body accepts exactly `resume` and `route`. A resolved entry accepts exactly
+`interruptId`, `status`, and a `payload` of `"once"`, `"always"`, or `"deny"`.
+A cancelled entry accepts only `interruptId` and `status` and maps to denial.
+The array must contain every pending public interrupt id exactly once: stale,
+partial, duplicate, or extra sets return `409`. Nested subagent interrupts are
+still addressed through the root thread. The removed scalar
+`{ interrupt_id, decision }` form returns `400`.
+
+Only one Agent Protocol or AG-UI resume can consume a thread's pending snapshot
+at a time. The resume claim is acquired before the run registry, so a concurrent
+resume returns `409` with `error.details.code` set to `resume_in_progress`.
+Other attempts to start work while the thread's run slot is occupied return
+`run_in_flight` instead.
+
+Although `route` is required in the request body, it does not normally select a
+new route for a parked thread. Dawn resolves the route from the in-process
+thread-route map first, then persisted thread metadata. The body route is the
+last fallback. Changing it does not redirect a parked thread while either
+recorded route exists.
+
+## One run at a time per thread
+
+Dawn admits one active run per thread. An ordinary run-slot collision—such as a
+competing `runs/wait` or `runs/stream`, or a resume colliding with a non-resume
+run—returns `409` with `error.details.code` set to `run_in_flight`. A second
+concurrent resume is stopped by the earlier resume claim and returns
+`resume_in_progress`. The run registry is in-memory and process-local;
+persisted thread status does not provide distributed serialization.
+
+Cancel the active run explicitly:
+
+```bash
+curl -sS -X POST "$BASE_URL/threads/$THREAD_ID/cancel"
+# {"status":"interrupted","thread_id":"..."}
+```
+
+The cancel endpoint returns `404` with `thread_not_found` for an unknown thread
+and `409` with `no_run_in_flight` when the thread exists on this process but no
+run is active. Cancellation keeps checkpointed state; it does not roll back.
+
+Cancellation is reported differently after execution has begun. A cancelled
+SSE run or resume ends in band with:
+
+```text
+event: done
+data: {"output":{"cancelled":true}}
+```
+
+A cancelled blocking `runs/wait` has not committed a response, so it returns
+`409` with `error.details.code` set to `run_cancelled`. A route failure instead
+ends a stream with a `done` payload containing `output.error`.
+
+## Client disconnect
+
+Disconnecting an Agent Protocol `runs/stream`, `runs/wait`, or `resume` client
+only detaches that viewer; the checkpointed run continues. To stop the intent,
+call `POST /threads/:thread_id/cancel`. Server shutdown also aborts active work.
+
+Because run admission and cancel routing are process-local, a multi-replica
+service needs guaranteed thread-keyed routing to one process or distributed
+per-thread serialization and cancel routing. Shared Postgres stores add
+durability, not that coordination.
+
+## Review memory candidates
+
+`GET /memory/candidates` lists candidates across every memory namespace. Approval
+uses identity-aware reconciliation and reports an `action` of `activated`,
+`superseded`, or `deduped`; it returns `404` for a missing record and `409` when
+the record is not a candidate. Rejection deletes the record.
+
+Candidate listing spans namespaces, while approve and reject are destructive
+mutations. All three management routes bypass Dawn execution middleware. Apply
+outer authentication, tenant authorization, and audit controls before exposing
+them beyond a trusted local environment.
+
+## Production topology
+
+The Node runtime exposes the same Dawn request envelope, but production needs
+more than replacing `dawn dev` with `dawn start`: configure durable stores,
+outer authentication, network policy, health behavior, and replica coordination.
+See [Production Topology](/docs/production-topology),
+[Persistence and Tenancy](/docs/persistence), and
+[Security Architecture](/docs/security-architecture).
+
+## AG-UI is a different client surface
+
+AG-UI uses `POST /agui/{routeId}` with an encoded assistant id and an AG-UI
+`RunAgentInput`, then translates Dawn chunks into AG-UI events. It also has the
+opposite disconnect policy: the ephemeral run aborts when its viewer disconnects
+and there is no event replay. See [AG-UI and Web Clients](/docs/ag-ui) for that
+endpoint and lifecycle.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "start, restart, and inspect the local runtime" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "gate route execution and pass request context to tools" },
+  { href: "/docs/recipes/stream-output", title: "Stream Output", subtitle: "consume Agent Protocol SSE in an application" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "configure the decisions carried by resume entries" },
+]} />
