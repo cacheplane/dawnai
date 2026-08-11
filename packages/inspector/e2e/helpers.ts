@@ -1,10 +1,11 @@
+import type { MemoryRecord } from "@dawn-ai/memory"
 import type { Locator, Page } from "@playwright/test"
 import { expect } from "@playwright/test"
 import { TEST_IDS } from "../src/components/memory/test-ids"
 // Types only from `@dawn-ai/memory`, so nothing here pulls `node:sqlite` into the
 // Playwright process — `seed.ts` is pure data and computation, and `seed-store.ts` is
 // the half that writes it.
-import { browseSeedRecords } from "../test/seed"
+import { BROWSE_PAGE_SIZE, browseSeedRecords, seedIdsInDefaultOrder } from "../test/seed"
 
 /** The browse endpoint, mirrored from `use-memory-browse`'s fetch rather than imported:
  *  that module is `"use client"` and pulls React, so it cannot load in the runner. A
@@ -22,11 +23,15 @@ export function browseRegion(page: Page): Locator {
   return page.getByTestId(TEST_IDS.browseRegion)
 }
 
-/** The grid inside `scope`. Pretable puts role + aria-label + the phase attribute on the
- *  scroll viewport itself, so this one locator is also the ARIA subject. Take the search
- *  results' own section as `scope` to assert on those instead. */
+/** Pretable puts role + aria-label + the phase attribute on the scroll viewport itself,
+ *  so this one selector is also the ARIA subject. Shared with `rowIdsAndTotal`, which
+ *  runs it inside the page rather than through a locator. */
+const GRID_SELECTOR = '[data-pretable-scroll-viewport][aria-label="Memories"]'
+
+/** The grid inside `scope`. Take the search results' own section as `scope` to assert on
+ *  those instead. */
 export function gridIn(scope: Locator): Locator {
-  return scope.locator('[data-pretable-scroll-viewport][aria-label="Memories"]')
+  return scope.locator(GRID_SELECTOR)
 }
 
 /** The browse grid — the surface every helper and spec below means. */
@@ -102,6 +107,54 @@ export function status(page: Page): Locator {
  *  parsing the sentence around it. Still locale-formatted — the runner pins `en-US`. */
 export function total(page: Page): Locator {
   return page.getByTestId(TEST_IDS.total)
+}
+
+/** The page renders every count through `toLocaleString`, and `playwright.config` pins
+ *  the runner to `en-US` for exactly that reason. Expectations go through the same
+ *  formatter rather than through `String(n)`, which would look right and never match a
+ *  four-digit count. */
+export function n(value: number): string {
+  return value.toLocaleString("en-US")
+}
+
+/** `BrowseStatusBar`'s whole sentence. Asserted whole rather than by substring so that
+ *  BOTH numbers are pinned at once: a loaded count that moved while the population
+ *  silently followed it satisfies either half on its own. */
+export function statusText(loaded: number, matching: number): string {
+  return `${n(loaded)} loaded of ${n(matching)} matching`
+}
+
+/**
+ * The drawn row ids and the matching total, sampled in ONE page evaluation.
+ *
+ * For the claim that the two come from a single transaction snapshot, and only for that:
+ * reading them through two locators is two driver round trips with a poll commit's worth
+ * of room between them, so a tick landing in the gap yields rows from one revision beside
+ * a count from the next — a torn pair the HARNESS produced, reported as the page's. One
+ * evaluation removes the gap; it cannot straddle a commit, because the page is
+ * single-threaded and no paint runs inside it.
+ *
+ * The status bar is a SIBLING of the browse region rather than a descendant, so the two
+ * halves are located from the document and from the region respectively.
+ */
+export async function rowIdsAndTotal(page: Page): Promise<{ ids: string[]; total: string }> {
+  return page.evaluate(
+    ({ regionId, totalId, gridSelector }) => {
+      const region = document.querySelector(`[data-testid="${regionId}"]`)
+      if (region === null) throw new Error("the browse region is not in the document")
+      const viewport = region.querySelector(gridSelector)
+      if (viewport === null) throw new Error("the browse grid is not in the document")
+      const ids = Array.from(viewport.querySelectorAll("[data-pretable-row-id]")).map((node) => {
+        const id = (node as HTMLElement).dataset.pretableRowId
+        if (id === undefined) throw new Error("pretable rendered a row without a row id")
+        return id
+      })
+      const totalNode = document.querySelector(`[data-testid="${totalId}"]`)
+      if (totalNode === null) throw new Error("the matching total is not on screen")
+      return { ids, total: (totalNode as HTMLElement).innerText }
+    },
+    { regionId: TEST_IDS.browseRegion, totalId: TEST_IDS.total, gridSelector: GRID_SELECTOR },
+  )
 }
 
 const GROUP_ROW_ID_PREFIX = "__group__:"
@@ -181,7 +234,7 @@ export function recordCells(page: Page, columnId: string): Locator {
  *  regression that collapsed the grid to a single row would satisfy any prefix. Set well
  *  under whatever the capped viewport currently fits, because that count is a rendering
  *  detail and this is a floor, not a pin. */
-const MIN_RENDERED_ROWS = 15
+export const MIN_RENDERED_ROWS = 15
 
 /**
  * The browse grid draws exactly the head of `expected`.
@@ -267,6 +320,34 @@ export async function expectDrawnRunAround(
     expect(offset).toBeLessThan(index)
     expect(offset + ids.length).toBeGreaterThan(index + 1)
   }).toPass({ timeout: 15_000 })
+}
+
+/**
+ * The already-sampled `drawn` rows are a contiguous run of `expected`; returns where the
+ * run starts.
+ *
+ * The unanchored complement of `expectDrawnRunAround`: takes a read the caller has
+ * already settled instead of driving one, so several claims can be made about that ONE
+ * sample rather than about several successive samples of a moving page.
+ *
+ * The grid virtualizes — at most ~25 of a 203-row projection are ever in the document —
+ * so every claim about WHICH rows are drawn is a claim about a window into the model, and
+ * the window's position is not known ahead of the read.
+ */
+export function expectDrawnRun(
+  expected: readonly string[],
+  drawn: readonly string[],
+  label: string,
+): number {
+  expect(drawn.length, `${label}: rows drawn`).toBeGreaterThanOrEqual(MIN_RENDERED_ROWS)
+  const head = drawn[0] as string
+  const offset = expected.indexOf(head)
+  expect(
+    offset,
+    `${label}: drawn row "${head}" is not in the expected projection`,
+  ).toBeGreaterThanOrEqual(0)
+  expect(drawn, label).toEqual(expected.slice(offset, offset + drawn.length))
+  return offset
 }
 
 /** Open a column's funnel. Pretable labels both the funnel button and the popover
@@ -386,3 +467,123 @@ export async function waitOnePollPeriod(page: Page): Promise<void> {
   if (response === null) throw new Error(`browse poll ${request.url()} produced no response`)
   await response.finished()
 }
+
+/** The drawn projection of the first server window over the PRISTINE seed — what the
+ *  unscoped browse shows at rest, up to and including scenario 8. Scenario 9 writes to
+ *  the shared store, and everything below says what it leaves behind. */
+export const DRAWN_FIRST_WINDOW: readonly string[] = asDrawn(
+  seedIdsInDefaultOrder().slice(0, BROWSE_PAGE_SIZE),
+)
+
+// SCENARIO 9'S PERMANENT MUTATION OF THE SHARED FIXTURE.
+//
+// `playwright.config` runs one worker over one seeded store and re-seeds only in
+// `serve.ts`, so the two writes `09-concurrent-write.spec.ts` performs are visible to
+// every spec that runs after it. They are DERIVED here, beside `asDrawn` — which is what
+// chooses them — rather than left as module-local constants of that spec, so a later spec
+// computes its expectation from the store it will actually meet instead of transcribing a
+// correction out of a comment. `seed.ts` states that discipline for the whole lane; this
+// is the one piece of it the seed module cannot own, because both ids are chosen by where
+// the GRID draws them.
+//
+// What a spec that runs after scenario 9 is looking at:
+//   - the matching population is `browseSeedRecordsAfterScenario9().length` — one fewer
+//     than `BROWSE_SEED_COUNT`;
+//   - `route=/notes-archive` holds 249 records, not 250, and BOTH writes land in it;
+//   - one record moved `candidate` → `active`, so those two facet counts moved with it;
+//   - the FLAT default order now begins with `SCENARIO_9_APPROVED_ID`. Only the DRAWN
+//     order is unchanged at the head, and only because the approved record's namespace
+//     group sorts last — a view that drops grouping, or scopes to that namespace, sees it
+//     first.
+
+/**
+ * The record scenario 9 forgets: the LAST row the first window DRAWS.
+ *
+ * Chosen for where its removal is INVISIBLE, not for where it is convenient. The unscoped
+ * browse groups by namespace, so the drawn projection is `route=/chat`, then
+ * `route=/notes`, then `route=/notes-archive` — and the last drawn row is the tail of the
+ * last group. `SCENARIO_9_STABLE_DRAWN_PREFIX` turns that into a checked fact.
+ *
+ * NOT the tail of the whole 1,250 (which the plan asked for): a record ranked ~1,249th is
+ * never inside the requested window at all, so no viewport can draw it and "the row went
+ * away" would be vacuously true of a row that was never there.
+ */
+export const SCENARIO_9_FORGOTTEN_ID = DRAWN_FIRST_WINDOW[DRAWN_FIRST_WINDOW.length - 1] as string
+
+const windowAfterForget = seedIdsInDefaultOrder()
+  .filter((id) => id !== SCENARIO_9_FORGOTTEN_ID)
+  .slice(0, BROWSE_PAGE_SIZE)
+
+/** The drawn projection between scenario 9's two writes. */
+export const DRAWN_FIRST_WINDOW_AFTER_FORGET: readonly string[] = asDrawn(windowAfterForget)
+
+/**
+ * The record scenario 9 approves, which HOISTS it: `approve` stamps `updatedAt = now`,
+ * and the default order is `updatedAt DESC`, so it lands at position 0 of the whole set.
+ *
+ * EPISODIC AND A CANDIDATE, and both halves are load-bearing rather than descriptive.
+ * `approveWithReconcile` takes an append-kind candidate (episodic, reflection) straight to
+ * a plain activation with no identity scan. A SEMANTIC candidate instead reaches
+ * `classifyWrite`, where this fixture's uniformly empty `data` makes every active record
+ * of the same namespace and kind an identity match with identical data — classified
+ * `update`, which DELETES the candidate and returns 200. A procedural one throws inside
+ * `writePolicyFor` and returns 409. Picking the row off the screen, as the eye would,
+ * therefore has a one-in-four chance of silently deleting a record instead of hoisting one
+ * and a one-in-four chance of mutating nothing at all — and the spec would pass either
+ * way, having tested neither.
+ *
+ * The LAST such record in the projection, so that hoisting it moves a row from the bottom
+ * of the drawn model to the top of its group: a change strictly ABOVE a viewport parked at
+ * the bottom, which is what the scenario is about.
+ */
+export const SCENARIO_9_APPROVED_ID = (() => {
+  const byId = new Map(browseSeedRecords().map((record) => [record.id, record]))
+  const eligible = DRAWN_FIRST_WINDOW_AFTER_FORGET.filter((id) => {
+    const record = byId.get(id)
+    return record?.kind === "episodic" && record.status === "candidate"
+  })
+  const last = eligible[eligible.length - 1]
+  if (last === undefined) throw new Error("the fixture has no episodic candidate to hoist")
+  return last
+})()
+
+/**
+ * The fixture as scenario 9 leaves it, as data — the post-mutation counterpart of
+ * `browseSeedRecords()`, and the input every later spec's `seedIdsInDefaultOrder` /
+ * `seedRecordsMatching` call should take.
+ *
+ * `updatedAt` is a SENTINEL, not a prediction: the server stamps its own `Date.now()` and
+ * this only has to sort first, which any timestamp past the seed's 2026-01-01 band does.
+ * So the ORDER this view produces is real and the approved record's rendered `updated`
+ * cell is not — nothing may assert that one cell against this.
+ */
+export function browseSeedRecordsAfterScenario9(): readonly MemoryRecord[] {
+  return browseSeedRecords()
+    .filter((record) => record.id !== SCENARIO_9_FORGOTTEN_ID)
+    .map((record) =>
+      record.id === SCENARIO_9_APPROVED_ID
+        ? { ...record, status: "active" as const, updatedAt: "9999-01-01T00:00:00.000Z" }
+        : record,
+    )
+}
+
+/** The drawn projection once BOTH of scenario 9's writes have landed. */
+export const DRAWN_FIRST_WINDOW_AFTER_SCENARIO_9: readonly string[] = asDrawn(
+  seedIdsInDefaultOrder(browseSeedRecordsAfterScenario9()).slice(0, BROWSE_PAGE_SIZE),
+)
+
+/** How many leading drawn rows all three projections agree on — derived from them rather
+ *  than asserted about them. A viewport at rest draws ~25 rows, so everything a spec that
+ *  only looks at the head of the unscoped browse can see lives inside this prefix, which
+ *  is what makes the shared fixture survive scenario 9. */
+export const SCENARIO_9_STABLE_DRAWN_PREFIX = (() => {
+  let index = 0
+  while (
+    index < DRAWN_FIRST_WINDOW.length &&
+    DRAWN_FIRST_WINDOW[index] === DRAWN_FIRST_WINDOW_AFTER_FORGET[index] &&
+    DRAWN_FIRST_WINDOW[index] === DRAWN_FIRST_WINDOW_AFTER_SCENARIO_9[index]
+  ) {
+    index += 1
+  }
+  return index
+})()

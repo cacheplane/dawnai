@@ -5,7 +5,7 @@ import {
   seedRecordsMatching,
 } from "../test/seed"
 import { expect, test } from "./fixtures"
-import { expectDrawnRows, grid, openBrowse, rowIds, status } from "./helpers"
+import { expectDrawnRows, grid, openBrowse, rowIds, status, statusText } from "./helpers"
 
 /** The facet under test and the prefix sibling it must not sweep in. The seed exists to
  *  bait exactly this trap (`seed.ts`'s `namespaceFor`). */
@@ -60,7 +60,7 @@ test.describe("scenario 4 — exact namespace", () => {
     // D1-COUNT-01: the total belongs to the same query as the rows. Both numbers, so a
     // total quoted for the unfiltered store — or for a prefix match — reddens here.
     await expect(status(page)).toHaveText(
-      `${Math.min(BROWSE_PAGE_SIZE, matching.length).toLocaleString("en-US")} loaded of ${matching.length.toLocaleString("en-US")} matching`,
+      statusText(Math.min(BROWSE_PAGE_SIZE, matching.length), matching.length),
     )
     expect(matching.length).toBeLessThan(browseSeedRecords().length)
 

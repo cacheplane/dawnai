@@ -13,25 +13,13 @@ import {
   grid,
   liveRegionText,
   loadMore,
+  n,
   openBrowse,
   scrollGridTo,
   scrollTop,
   status,
+  statusText,
 } from "./helpers"
-
-/** The page formats every count through `toLocaleString`/`Intl.NumberFormat`, and
- *  `playwright.config` pins the runner to `en-US` for exactly this reason. Expectations
- *  go through the same formatter rather than through `String(n)`, which would look right
- *  and never match a four-digit count. */
-function n(value: number): string {
-  return value.toLocaleString("en-US")
-}
-
-/** `BrowseStatusBar`'s whole sentence — the two numbers this scenario is about, in the
- *  one place a sighted user reads them. */
-function statusText(loaded: number, matching: number): string {
-  return `${n(loaded)} loaded of ${n(matching)} matching`
-}
 
 // D1-GRID-06, D1-DATA-07, D1-COUNT-01. The UI distinguishes LOADED records from
 // MATCHING records and can retrieve another window without losing what it holds.

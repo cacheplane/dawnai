@@ -4,6 +4,7 @@ import { expect, test } from "./fixtures"
 import {
   asDrawn,
   browseRegion,
+  DRAWN_FIRST_WINDOW,
   expectDrawnRows,
   expectPhase,
   grid,
@@ -11,27 +12,23 @@ import {
   openBrowse,
   rowIds,
   status,
+  statusText,
   waitOnePollPeriod,
 } from "./helpers"
 
-/** The page formats every count through `toLocaleString`, and `playwright.config` pins
- *  the runner to `en-US` for exactly that reason. `String(n)` would look right and never
- *  match a four-digit count. */
-function n(value: number): string {
-  return value.toLocaleString("en-US")
+/**
+ * What the browser logs for a browse response the page asked for and the server refused.
+ * Every test below injects one deliberately, so this line is the SUBJECT here rather than
+ * the defect the `consoleErrors` fixture exists to catch.
+ *
+ * The ENDPOINT is half the test, not decoration: Chromium's message text names only the
+ * status, so a shape-only match would drain an unrelated 500 from any other route as
+ * readily as the injected one. The `consoleErrors` fixture appends the location URL for
+ * exactly this.
+ */
+function isSeededBrowseFailure(line: string): boolean {
+  return /Failed to load resource: .*status of 500/.test(line) && line.includes("/api/memory/list")
 }
-
-/** `BrowseStatusBar`'s whole sentence — asserted whole rather than by substring, so an
- *  append is pinned on BOTH numbers at once and a loaded count that moved while the
- *  population silently followed it cannot pass. */
-function statusText(loaded: number, matching: number): string {
-  return `${n(loaded)} loaded of ${n(matching)} matching`
-}
-
-/** What Chromium logs for a response the page asked for and the server refused. Every
- *  test below injects one deliberately, so this line is the SUBJECT here rather than the
- *  defect the `consoleErrors` fixture exists to catch. */
-const SEEDED_500 = /Failed to load resource.*500/
 
 /**
  * Account for the console errors this spec CAUSED, and leave everything else for the
@@ -47,8 +44,8 @@ const SEEDED_500 = /Failed to load resource.*500/
  * that pass while proving nothing about the failure path it claims to exercise.
  */
 function drainSeededFetchErrors(consoleErrors: string[], expected: number): void {
-  const seeded = consoleErrors.filter((line) => SEEDED_500.test(line))
-  const unexpected = consoleErrors.filter((line) => !SEEDED_500.test(line))
+  const seeded = consoleErrors.filter(isSeededBrowseFailure)
+  const unexpected = consoleErrors.filter((line) => !isSeededBrowseFailure(line))
   consoleErrors.length = 0
   expect(unexpected, "console errors this spec did not inject").toEqual([])
   expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
@@ -67,12 +64,16 @@ test.describe("scenario 8 — refresh/append failure and retry", () => {
     consoleErrors,
   }) => {
     await openBrowse(page)
+    // Settled BEFORE the sample is taken, not after: `rowIds` deliberately does not
+    // retry, and the rendered set can still change a frame after the phase reads `idle`,
+    // so a `before` captured first is a `before` of a page mid-paint — and it is compared
+    // for EXACT equality below.
+    await expectDrawnRows(page, DRAWN_FIRST_WINDOW)
     const before = await rowIds(page)
-    await expectDrawnRows(page, asDrawn(seedIdsInDefaultOrder().slice(0, BROWSE_PAGE_SIZE)))
 
     // The refresh tick is the cursorless request that follows a fulfilled load: the
     // initial one already landed inside `openBrowse`, above this route.
-    let failuresLeft = 1
+    let failing = true
     let cursorlessRequests = 0
     await page.route("**/api/memory/list*", async (route) => {
       const params = new URL(route.request().url()).searchParams
@@ -81,8 +82,7 @@ test.describe("scenario 8 — refresh/append failure and retry", () => {
         return
       }
       cursorlessRequests += 1
-      if (failuresLeft > 0) {
-        failuresLeft -= 1
+      if (failing) {
         await route.fulfill({
           status: 500,
           contentType: "application/json",
@@ -114,10 +114,17 @@ test.describe("scenario 8 — refresh/append failure and retry", () => {
     await expectPhase(page, "idle")
     await expect(browseRegion(page).locator("[data-pretable-body-state]")).toHaveCount(0)
 
+    // The fault is HELD until here rather than lifted after one tick, so every assertion
+    // above ran with no deadline on it. Lifted after the first failure they would instead
+    // share a single 2 s poll period, and an overrun would clear the banner before
+    // `atFailure` was read — reporting as `expect(2).toBeGreaterThan(2)`, which names
+    // neither the banner nor the timing that actually caused it.
+    const atFailure = cursorlessRequests
+    failing = false
+
     // A succeeding tick clears the refresh slot by itself — no user gesture. The
     // requests counter is what makes that "by itself": the banner going away without a
     // further tick would be the reducer forgetting rather than a success clearing.
-    const atFailure = cursorlessRequests
     await expect(page.getByTestId(TEST_IDS.bannerRefresh)).toHaveCount(0, { timeout: 15_000 })
     expect(cursorlessRequests).toBeGreaterThan(atFailure)
     await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, BROWSE_SEED_COUNT))
@@ -131,6 +138,9 @@ test.describe("scenario 8 — refresh/append failure and retry", () => {
   }) => {
     await openBrowse(page)
     const order = seedIdsInDefaultOrder()
+    // Settled before sampled, for the same reason as the test above: `before` is compared
+    // for exact equality once the append has failed.
+    await expectDrawnRows(page, DRAWN_FIRST_WINDOW)
     const before = await rowIds(page)
     await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, BROWSE_SEED_COUNT))
 
@@ -231,7 +241,7 @@ test.describe("scenario 8 — refresh/append failure and retry", () => {
     failing = false
     await page.getByTestId(TEST_IDS.retryInitial).click()
     await expectPhase(page, "idle")
-    await expectDrawnRows(page, asDrawn(seedIdsInDefaultOrder().slice(0, BROWSE_PAGE_SIZE)))
+    await expectDrawnRows(page, DRAWN_FIRST_WINDOW)
     await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, BROWSE_SEED_COUNT))
     // Polling RESUMES: a further request arrives with no second click.
     const afterRetry = requests

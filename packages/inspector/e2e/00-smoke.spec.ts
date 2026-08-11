@@ -6,7 +6,7 @@ import {
   seedIdsInDefaultOrder,
 } from "../test/seed"
 import { expect, test } from "./fixtures"
-import { grid, openBrowse, rowIds, status } from "./helpers"
+import { grid, openBrowse, rowIds, status, statusText } from "./helpers"
 
 /** Pretable's group row id, mirrored: `__group__:<columnId>=s:<value>` with `%`, `/`
  *  and `=` percent-escaped (grid-core `makeGroupId`/`escapeGroupKey`). */
@@ -71,9 +71,7 @@ test("the standalone server serves the seeded browse dataset", async ({ page, co
   // server actually returned and `total` the count it matched over the whole store. The
   // only claim here that does not depend on how much of the window the grid draws — the
   // row assertion below sees 18 records of the 200.
-  await expect(status(page)).toHaveText(
-    `${BROWSE_PAGE_SIZE.toLocaleString("en-US")} loaded of ${BROWSE_SEED_COUNT.toLocaleString("en-US")} matching`,
-  )
+  await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, BROWSE_SEED_COUNT))
 
   // Re-read inside the retry rather than once before it: the rendered set can still
   // change a frame after the phase reads `idle` (see `rowIds`), and a floor over a single
