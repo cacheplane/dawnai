@@ -145,18 +145,13 @@ const CELL_CLASS: Partial<Record<string, string>> = {
  * dev warning) under engine filter authority, so external authority is what makes
  * the honest total reachable at all.
  *
- * Sort is external AND the browse columns are non-sortable: leaving sort on
- * "engine" would sort a server-selected window locally, which presents the wrong
- * SAMPLE under a truthful-looking `aria-sort`, while external sort without an
- * `orderBy` in the request would paint a header arrow that does nothing. Sorting
- * comes back with server ordering.
+ * Sort is external for the same reason: ordering a server-selected window locally
+ * answers with the wrong SAMPLE — the top of a recency-biased window, re-ranked —
+ * under a truthful-looking `aria-sort`. So a header click emits INTENT that the
+ * page turns into the query's `orderBy`, and the rows keep answering the previous
+ * order until the response lands.
  */
 const SERVER_PROCESSING: PretableProcessingOptions = { filter: "external", sort: "external" }
-
-const BROWSE_COLUMNS: PretableColumn<GridRow>[] = COLUMNS.map((column) => ({
-  ...column,
-  sortable: false,
-}))
 
 /** The search results are a ranked per-namespace top-N the STORE chose, and they
  *  arrive with no server authority behind them — so a funnel here would be applied
@@ -375,7 +370,10 @@ export function MemoryGrid({
   return (
     <PretableSurface<GridRow>
       ariaLabel="Memories"
-      columns={dataState === undefined ? SEARCH_COLUMNS : BROWSE_COLUMNS}
+      // Browse renders the declaration UNMASKED — every affordance `COLUMNS`
+      // declares is one the store answers, `content`'s `sortable: false` included.
+      // Search is the mode that has to mask.
+      columns={dataState === undefined ? SEARCH_COLUMNS : COLUMNS}
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}

@@ -262,6 +262,40 @@ describe("MemoryGrid", () => {
     expect(screen.queryAllByRole("button", { name: /^Filter / })).toEqual([])
   })
 
+  it("a funnel selection is displayed but never applied to the loaded rows", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a" }), record({ id: "c", status: "candidate" })]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        filters={{ status: { operator: "isAnyOf", value: ["candidate"] } }}
+        onFiltersChange={vi.fn()}
+      />,
+    )
+    // Both rows stay: the server decides membership, and re-applying the filter
+    // locally would drop rows between a filter tick and its response.
+    expect(columnText(container, "content")).toHaveLength(2)
+  })
+
+  it("declares no sortable column the browse query cannot order by", () => {
+    // `sortable` here and `SORT_FIELD_BY_COLUMN` in `to-browse-query.ts` are two
+    // hand-kept lists of the same set, and a sortable column with no sort field
+    // THROWS on the user's header click — a runtime failure no rendering
+    // assertion reaches. Browse renders `COLUMNS` unmasked, so this sweep covers
+    // exactly the headers browse offers.
+    expect(COLUMNS.filter((column) => column.sortable === false).map((c) => c.id)).toEqual([
+      "content",
+    ])
+    for (const column of COLUMNS) {
+      const intent = [{ columnId: column.id, direction: "asc" } as const]
+      if (column.sortable === false) {
+        expect(() => toBrowseQuery({}, intent)).toThrow()
+      } else {
+        expect(toBrowseQuery({}, intent).orderBy).toHaveLength(1)
+      }
+    }
+  })
+
   it("never emits sort intent for content — the store has no content sort field", () => {
     const onSortChange = vi.fn()
     const { container } = render(
@@ -421,23 +455,46 @@ describe("MemoryGrid lifecycle", () => {
     expect(grid(withoutMeta.container).getAttribute("aria-rowcount")).toBe("-1")
   })
 
-  it("browse headers do not sort — the rows are a server-selected sample", () => {
+  it("a header click emits sort INTENT and leaves the loaded order alone", () => {
+    // The rows are a server-selected window. Re-sorting them locally would show
+    // "the top of a recency-biased sample, ordered by confidence" underneath a
+    // truthful-looking aria-sort — the wrong SAMPLE, not just the wrong order.
+    const onSortChange = vi.fn()
     const { container } = render(
       <MemoryGrid
         records={[
-          record({ id: "a", content: "banana" }),
-          record({ id: "b", content: "apple" }),
-          record({ id: "c", content: "cherry" }),
+          // Confidences that a local desc sort WOULD reverse, so "untouched"
+          // below is an assertion and not an accident of equal keys.
+          record({ id: "b", content: "beta", confidence: 0.1 }),
+          record({ id: "a", content: "alpha", confidence: 0.9 }),
         ]}
         onSelect={vi.fn()}
         dataState={{ phase: "idle" }}
-        resultMeta={{ total: { kind: "exact", count: 4322 } }}
+        sort={[]}
+        onSortChange={onSortChange}
       />,
     )
-    const header = headerFor(container, "content")
-    fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["banana", "apple", "cherry"])
-    expect(header.getAttribute("aria-sort")).toBe("none")
+    fireEvent.click(headerFor(container, "confidence"))
+    expect(onSortChange.mock.calls).toEqual([[[{ columnId: "confidence", direction: "desc" }]]])
+    // Supplied order, untouched.
+    expect(columnText(container, "content")).toEqual(["beta", "alpha"])
+  })
+
+  it("shows the desired sort on the header while the rows still answer the old one", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[
+          record({ id: "b", content: "beta", updatedAt: "2026-11-30T00:00:00.000Z" }),
+          record({ id: "a", content: "alpha", updatedAt: "2026-01-02T00:00:00.000Z" }),
+        ]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        sort={[{ columnId: "updated", direction: "asc" }]}
+        onSortChange={vi.fn()}
+      />,
+    )
+    expect(headerFor(container, "updated").getAttribute("aria-sort")).toBe("ascending")
+    expect(columnText(container, "content")).toEqual(["beta", "alpha"])
   })
 
   it("announces the settled result in the app's own words", () => {
