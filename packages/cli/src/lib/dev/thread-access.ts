@@ -65,6 +65,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/**
+ * OWN properties only. A hook's return value is data, and an inherited
+ * `decision: "allow"` — from a class prototype, or an `Object.create(...)` —
+ * is not a decision this policy made. Reading through the chain would let the
+ * shape of an unrelated base object decide an authorization outcome.
+ */
+function own(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined
+}
+
 function renderValue(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value)
@@ -97,16 +107,30 @@ export function normalizeThreadAccessResult(
   threadId?: string,
 ): ThreadAccessResult {
   if (isPlainRecord(value)) {
-    if (value.decision === "allow") {
-      const stamp = value.stamp
-      return isPlainRecord(stamp) ? { decision: "allow", stamp } : { decision: "allow" }
+    const decision = own(value, "decision")
+    if (decision === "allow") {
+      const stamp = own(value, "stamp")
+      if (isPlainRecord(stamp)) return { decision: "allow", stamp }
+      if (stamp !== undefined) {
+        // Reported, not swallowed: the stamp is the ONE field every later
+        // request authorizes against, so dropping it silently turns a policy
+        // bug into "this thread was created before the policy existed".
+        console.warn(
+          `Dawn thread access: the policy for ${operation} on ${threadId ?? "(no thread id)"} returned ` +
+            `an allow whose \`stamp\` is not a JSON object, so it was dropped and this thread will carry ` +
+            `no access stamp. Received: ${renderValue(stamp)}`,
+        )
+      }
+      return { decision: "allow" }
     }
-    if (value.decision === "deny") {
-      const status = value.status === 403 || value.status === 404 ? value.status : undefined
+    if (decision === "deny") {
+      const rawStatus = own(value, "status")
+      const status = rawStatus === 403 || rawStatus === 404 ? rawStatus : undefined
+      const body = own(value, "body")
       return {
         decision: "deny",
         ...(status !== undefined ? { status } : {}),
-        ...(value.body !== undefined ? { body: value.body } : {}),
+        ...(body !== undefined ? { body } : {}),
       }
     }
   }

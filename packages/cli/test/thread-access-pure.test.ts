@@ -90,21 +90,58 @@ describe("normalizeThreadAccessResult", () => {
     })
   })
 
-  it("keeps a record stamp and drops a non-record one", () => {
-    expect(
-      normalizeThreadAccessResult(
-        { decision: "allow", stamp: { ownerId: "u-1" } },
-        "thread.create",
-      ),
-    ).toEqual({ decision: "allow", stamp: { ownerId: "u-1" } })
-    expect(normalizeThreadAccessResult({ decision: "allow", stamp: [1] }, "thread.create")).toEqual(
-      {
-        decision: "allow",
-      },
-    )
-    expect(normalizeThreadAccessResult({ decision: "allow", stamp: 7 }, "thread.create")).toEqual({
-      decision: "allow",
-    })
+  it("keeps a record stamp, and drops a non-record one WITH a warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      expect(
+        normalizeThreadAccessResult(
+          { decision: "allow", stamp: { ownerId: "u-1" } },
+          "thread.create",
+        ),
+      ).toEqual({ decision: "allow", stamp: { ownerId: "u-1" } })
+      expect(warn).not.toHaveBeenCalled()
+
+      // A dropped stamp is silent data loss on the ONE field a later request
+      // authorizes against, so it is reported like every other malformed field
+      // rather than swallowed.
+      expect(
+        normalizeThreadAccessResult({ decision: "allow", stamp: [1] }, "thread.create"),
+      ).toEqual({ decision: "allow" })
+      expect(normalizeThreadAccessResult({ decision: "allow", stamp: 7 }, "thread.create")).toEqual(
+        {
+          decision: "allow",
+        },
+      )
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(warn.mock.calls[0]?.[0]).toContain("stamp")
+      expect(warn.mock.calls[0]?.[0]).toContain("thread.create")
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("reads only own properties, so an inherited field cannot forge a result", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      // An allow inherited from a prototype is not an allow.
+      expect(
+        normalizeThreadAccessResult(Object.create({ decision: "allow" }), "thread.get"),
+      ).toEqual({ decision: "deny" })
+
+      // …and an inherited status/body cannot dress up a genuine deny.
+      const denyWithInherited = Object.assign(
+        Object.create({ status: 403, body: { error: "x" } }),
+        {
+          decision: "deny",
+        },
+      )
+      const normalized = normalizeThreadAccessResult(denyWithInherited, "thread.get")
+      expect(normalized).toEqual({ decision: "deny" })
+      expect("status" in normalized).toBe(false)
+      expect("body" in normalized).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("keeps a deny's 403 or 404 and drops any other status", () => {
