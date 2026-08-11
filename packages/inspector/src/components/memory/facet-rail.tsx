@@ -12,10 +12,18 @@ export function FacetRail({
 }) {
   const namespaces = Object.entries(stats?.byNamespace ?? {})
   return (
-    <nav className="w-48 shrink-0 border-r border-zinc-200 bg-zinc-50 p-3 text-sm">
-      <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
-        Namespace
-      </div>
+    <nav
+      aria-describedby="facet-count-scope"
+      className="w-48 shrink-0 border-r border-zinc-200 bg-zinc-50 p-3 text-sm"
+    >
+      <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Namespace</div>
+      {/* The counts come from the always-global stats endpoint, not from the
+          current query — so they are LABELLED global rather than quietly
+          presented as if they described the filtered result. Query-aware facet
+          counts are a separate, deferred piece of work. */}
+      <p id="facet-count-scope" className="mb-1 text-[10px] leading-tight text-zinc-400">
+        Counts are across all memories, not the current filters.
+      </p>
       <button
         type="button"
         aria-pressed={selected === undefined}

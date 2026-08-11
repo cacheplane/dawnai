@@ -42,7 +42,8 @@ function stubApi() {
   const mock = vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url)
     if (u.includes("/api/memory/stats")) return jsonResponse(stats)
-    if (u.includes("/api/memory/list")) return jsonResponse({ records: [candidate], total: 1 })
+    if (u.includes("/api/memory/list"))
+      return jsonResponse({ records: [candidate], total: 1, continuation: null })
     if (u.includes("/api/memory/search")) {
       return jsonResponse({
         groups: [{ namespace: "route=/notes", records: [candidate] }],
@@ -95,7 +96,7 @@ describe("ListPage", () => {
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
   })
 
-  it("clicking a namespace facet scopes the next list fetch", async () => {
+  it("a namespace facet sends the EXACT namespace, never a prefix", async () => {
     const mock = stubApi()
     render(<ListPage />)
     const rail = await screen.findByRole("navigation")
@@ -107,55 +108,55 @@ describe("ListPage", () => {
       )
       expect(scoped.length).toBeGreaterThan(0)
     })
+    expect(
+      callsTo(mock, "/api/memory/list").every(
+        (u) => u.searchParams.get("namespacePrefix") === null,
+      ),
+    ).toBe(true)
   })
 
-  it("a selected facet asks the server for the exact namespace", async () => {
+  it("renders every row the server returned for a facet — no client narrowing", async () => {
+    // The old code fetched by PREFIX and then narrowed to equality on the
+    // client, so the rows on screen and the `total` beside them answered
+    // different questions. The server answers the exact question now, and the
+    // page must not second-guess it.
     const sibling: MemoryRecord = {
       ...candidate,
       id: "cand2",
       namespace: "route=/notes2",
       content: "sibling prefix record",
     }
-    const mock = vi.fn(async (url: RequestInfo | URL) => {
-      const u = String(url)
-      if (u.includes("/api/memory/stats")) {
-        return jsonResponse({
-          ...stats,
-          total: 2,
-          byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
-        })
-      }
-      if (u.includes("/api/memory/list")) {
-        // The request now carries the EXACT namespace, so the server answers with
-        // exactly that namespace's rows — no client-side narrowing left to do.
-        const exact = new URL(u, "http://localhost").searchParams.get("namespace")
-        return jsonResponse(
-          exact === "route=/notes"
-            ? { records: [candidate], total: 1 }
-            : { records: [candidate, sibling], total: 2 },
-        )
-      }
-      return jsonResponse({ groups: [] })
-    })
-    vi.stubGlobal("fetch", mock)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) {
+          return jsonResponse({
+            ...stats,
+            total: 2,
+            byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
+          })
+        }
+        if (u.includes("/api/memory/list"))
+          return jsonResponse({ records: [candidate, sibling], total: 2, continuation: null })
+        return jsonResponse({ groups: [] })
+      }),
+    )
     render(<ListPage />)
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
-    expect(await screen.findByText("sibling prefix record")).toBeDefined()
-
-    // Exact-text lookup scoped to the facet rail: "route=/notes" must not
-    // match the "route=/notes2" facet (or the grid's namespace cells).
     const facetLabel = within(screen.getByRole("navigation")).getByText("route=/notes")
     const facetButton = facetLabel.closest("button")
     if (!facetButton) throw new Error("facet button not found")
     fireEvent.click(facetButton)
-    await vi.waitFor(() => {
-      expect(screen.queryByText("sibling prefix record")).toBeNull()
-    })
-    expect(screen.getByText("acme threshold is 750")).toBeDefined()
-    const exact = callsTo(mock, "/api/memory/list").filter(
-      (u) => u.searchParams.get("namespace") === "route=/notes",
-    )
-    expect(exact.length).toBeGreaterThan(0)
+    // Whatever the (stubbed) server hands back is what shows. Nothing is hidden.
+    expect(await screen.findByText("sibling prefix record")).toBeDefined()
+  })
+
+  it("labels the facet counts as global", async () => {
+    render(<ListPage />)
+    const rail = await screen.findByRole("navigation")
+    expect(within(rail).getByText(/across all memories/i)).toBeDefined()
+    expect(rail.getAttribute("aria-describedby")).toBe("facet-count-scope")
   })
 
   it("typing a query fires a debounced search and renders grouped results", async () => {
