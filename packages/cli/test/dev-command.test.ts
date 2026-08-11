@@ -235,6 +235,28 @@ describe("dawn dev lifecycle", () => {
     expect(isProcessAlive(pid)).toBe(false)
   })
 
+  test("forwards the dev child's stdout to the parent", { timeout: 30_000 }, async () => {
+    // `dawn dev` runs the runtime in a spawned child with a piped stdout. If
+    // nobody reads that pipe, everything the runtime prints is invisible to the
+    // operator — and the thread-access boot line, the only signal that a policy
+    // stopped binding, is printed by the child and nowhere else. Asserted
+    // through that line because it is the guarantee with a docs promise behind
+    // it; any child stdout would do.
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/thread-access.ts": `export default { fallback: () => ({ decision: "allow" }) };\n`,
+    })
+
+    const dev = await startDevProcess({ cwd: appRoot })
+    devProcesses.push(dev)
+
+    await dev.waitForLog(/thread access policy bound from src\/thread-access\.ts/)
+    // Strictly the parent's STDOUT — `waitForLog` also matches stderr.
+    expect(dev.stdout).toContain("Dawn: thread access policy bound from src/thread-access.ts")
+  })
+
   test("discovers the app from cwd and prints the listening URL", {
     timeout: 30_000,
   }, async () => {
