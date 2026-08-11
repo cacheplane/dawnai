@@ -1,6 +1,7 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { loadThreadAccess } from "../src/lib/dev/thread-access-node.js"
@@ -118,6 +119,31 @@ export default { fallback: () => ({ decision: "allow" }), tag: "default" }
     const appRoot = await fixtureApp({ "thread-access.ts": VALID_POLICY })
     const policy = await loadThreadAccess(appRoot)
     expect(typeof policy?.fallback).toBe("function")
+  })
+
+  it("imports through a file URL, so a path is never parsed as a specifier", async () => {
+    // A filesystem path is not a module specifier. On Windows the candidate is
+    // `C:\app/src/thread-access.ts` and Node rejects it outright
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME: "Received protocol 'c:'"), which lands
+    // in the loader's catch and fails the boot on a policy that is perfectly
+    // fine — the one direction a fail-closed loader must not get wrong.
+    //
+    // Asserted on the SPECIFIER rather than the outcome: on POSIX a raw path
+    // happens to import fine, so nothing observable distinguishes the two.
+    const appRoot = await fixtureApp({ "src/thread-access.ts": VALID_POLICY })
+    const specifiers: string[] = []
+    const policy = await loadThreadAccess(appRoot, {
+      importModule: async (href) => {
+        specifiers.push(href)
+        return { default: { fallback: () => ({ decision: "allow" }) } }
+      },
+    })
+
+    expect(typeof policy?.fallback).toBe("function")
+    expect(specifiers).toEqual([pathToFileURL(join(appRoot, "src", "thread-access.ts")).href])
+    expect(specifiers[0]).toMatch(/^file:\/\//)
+    // A Windows drive letter arriving as a bare protocol is the exact failure.
+    expect(specifiers[0]).not.toMatch(/^[a-zA-Z]:/)
   })
 })
 

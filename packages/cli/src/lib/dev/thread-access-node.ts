@@ -1,4 +1,5 @@
 import { lstatSync } from "node:fs"
+import { pathToFileURL } from "node:url"
 import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
 
 import { diagnose } from "../diagnostics.js"
@@ -19,6 +20,13 @@ export interface LoadThreadAccessOptions {
    * be covered portably by a real filesystem.
    */
   readonly statPath?: StatPath
+  /**
+   * Override the dynamic import. Test seam only, so a test can assert WHAT
+   * specifier the loader builds: the Windows defect this guards against is a
+   * raw path reaching `import()`, and no POSIX test can observe that from the
+   * outcome alone.
+   */
+  readonly importModule?: (href: string) => Promise<unknown>
 }
 
 function errnoOf(error: unknown): string | undefined {
@@ -97,7 +105,15 @@ export async function loadThreadAccess(
 
   let mod: unknown
   try {
-    mod = await import(path)
+    // `pathToFileURL`, never the raw path — a filesystem path is not a module
+    // specifier. On Windows the candidate is `C:\app/src/thread-access.ts` and
+    // Node refuses it with ERR_UNSUPPORTED_ESM_URL_SCHEME ("Received protocol
+    // 'c:'"), which would land in the catch below and fail the boot on a policy
+    // that is perfectly fine. Every other dynamic import in this package
+    // already does this; `loadMiddleware` is the lone exception and hides the
+    // same bug inside its `catch {}`.
+    const href = pathToFileURL(path).href
+    mod = options?.importModule ? await options.importModule(href) : await import(href)
   } catch (error) {
     const diag = diagnose(error, { appRoot })
     const detail = diag ? `${diag.summary}\n\n${diag.hint}` : String(error)
