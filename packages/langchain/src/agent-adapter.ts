@@ -739,14 +739,43 @@ export interface AgentOptions {
   readonly sandboxed?: boolean
 }
 
-export async function executeAgent(options: AgentOptions): Promise<unknown> {
-  let result: unknown
+/** The settled shape of one non-streaming agent turn. */
+export interface AgentTurnResult {
+  /** Payload of the turn's `done` chunk — the graph's final state. */
+  readonly output: unknown
+  /**
+   * True when the turn PARKED on a HITL interrupt instead of completing. A
+   * parked turn ran no further model work: the human's decision arrives on a
+   * later resume invocation, which settles the run.
+   */
+  readonly parked: boolean
+}
+
+/**
+ * Run an agent turn to settlement and report BOTH its final output and whether
+ * it parked.
+ *
+ * `streamAgent` yields `done` unconditionally at the end of its event stream —
+ * including for a parked turn — so `done` alone is not completion. On this
+ * path a pending interrupt surfaces ONLY as an `interrupt` chunk: LangGraph's
+ * `streamEvents` final output carries no `__interrupt__` key (that key appears
+ * only on the `invoke`/`stream` return value), so a caller that keeps just the
+ * `done` payload cannot tell a parked turn from a finished one. Callers that
+ * must distinguish them — the episode recorder, thread status — use this
+ * instead of `executeAgent`.
+ */
+export async function executeAgentTurn(options: AgentOptions): Promise<AgentTurnResult> {
+  let output: unknown
+  let parked = false
   for await (const chunk of streamAgent(options)) {
-    if (chunk.type === "done") {
-      result = chunk.data
-    }
+    if (chunk.type === "done") output = chunk.data
+    else if (chunk.type === "interrupt") parked = true
   }
-  return result
+  return { output, parked }
+}
+
+export async function executeAgent(options: AgentOptions): Promise<unknown> {
+  return (await executeAgentTurn(options)).output
 }
 
 export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentStreamChunk> {

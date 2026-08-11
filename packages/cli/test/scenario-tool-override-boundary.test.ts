@@ -5,7 +5,7 @@ import type { ScenarioToolCallRecord, ScenarioToolMockDescriptor } from "@dawn-a
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const langchainMocks = vi.hoisted(() => ({
-  executeAgent: vi.fn(),
+  executeAgentTurn: vi.fn(),
   materializeAgentGraph: vi.fn(),
 }))
 
@@ -13,7 +13,7 @@ vi.mock("@dawn-ai/langchain", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@dawn-ai/langchain")>()
   return {
     ...actual,
-    executeAgent: langchainMocks.executeAgent,
+    executeAgentTurn: langchainMocks.executeAgentTurn,
     materializeAgentGraph: langchainMocks.materializeAgentGraph,
   }
 })
@@ -29,7 +29,7 @@ import {
 const fixtureRoots: string[] = []
 
 beforeEach(() => {
-  langchainMocks.executeAgent.mockImplementation(async (value: unknown) => {
+  langchainMocks.executeAgentTurn.mockImplementation(async (value: unknown) => {
     const options = value as {
       readonly input: unknown
       readonly signal: AbortSignal
@@ -40,13 +40,13 @@ beforeEach(() => {
     }
     const search = options.tools.find((tool) => tool.name === "search")
     if (!search) throw new Error("Expected agent search tool")
-    return await search.run(options.input, { signal: options.signal })
+    return { output: await search.run(options.input, { signal: options.signal }), parked: false }
   })
   langchainMocks.materializeAgentGraph.mockResolvedValue({ invoke: vi.fn() })
 })
 
 afterEach(async () => {
-  langchainMocks.executeAgent.mockReset()
+  langchainMocks.executeAgentTurn.mockReset()
   langchainMocks.materializeAgentGraph.mockReset()
   for (const appRoot of fixtureRoots.splice(0).reverse()) {
     await rm(appRoot, { force: true, recursive: true })
@@ -86,8 +86,8 @@ describe("scenario tool override runtime boundary", () => {
     expect(overridden.output).toBe("mock:overridden")
     expect(ordinaryAgain.output).toBe("real:ordinary-after")
     expect(journal).toEqual([{ args: { query: "overridden" }, name: "search", sequence: 0 }])
-    expect(langchainMocks.executeAgent).toHaveBeenCalledTimes(3)
-    const agentOptions = langchainMocks.executeAgent.mock.calls.map(
+    expect(langchainMocks.executeAgentTurn).toHaveBeenCalledTimes(3)
+    const agentOptions = langchainMocks.executeAgentTurn.mock.calls.map(
       ([options]) => options as { readonly bypassCache?: boolean; readonly sandboxed?: boolean },
     )
     expect(agentOptions.map((options) => options.bypassCache)).toEqual([undefined, true, undefined])

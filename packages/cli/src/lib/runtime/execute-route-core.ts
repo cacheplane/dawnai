@@ -52,7 +52,7 @@ import {
   Command,
   defaultSummarize,
   defaultTokenCounter,
-  executeAgent,
+  executeAgentTurn,
   materializeAgentGraph,
   type OffloadFn,
   OffloadStore,
@@ -498,7 +498,7 @@ export async function* streamResolvedRoute(
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
-    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
+    const { output } = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
     yield { type: "done", output }
     return
   }
@@ -623,14 +623,16 @@ export async function* streamResolvedRoute(
     // assigned BEFORE yielding the done chunk, so they are already set when
     // the close lands on the yield). `recordedError` prevents a double record
     // when the catch above already recorded the failure; abandoned (closed
-    // before done) and parked (interrupt seen) turns record nothing.
-    // recordRunEpisode never throws, so this is finally-safe.
-    if (!recordedError && sawDone && !sawInterrupt) {
+    // before done) turns record nothing, and a parked turn is filtered by the
+    // recorder itself via `parked`. recordRunEpisode never throws, so this is
+    // finally-safe.
+    if (!recordedError && sawDone) {
       await recordRunEpisode({
         memoryContext: prepared.memoryContext,
         episodes: prepared.episodes,
         outcome: "ok",
         output: finalOutput,
+        parked: sawInterrupt,
         input: options.input,
         startedAt,
         ...(options.threadId ? { threadId: options.threadId } : {}),
@@ -1337,6 +1339,12 @@ async function recordRunEpisode(args: {
   readonly episodes: ResolvedEpisodesConfig | undefined
   readonly outcome: "ok" | "error"
   readonly output?: unknown
+  /**
+   * Set by callers that drive the agent-adapter themselves (the stream and
+   * invoke paths) and therefore SAW the turn park: on both of those the
+   * interrupt surfaces only as a stream chunk, never on the final state.
+   */
+  readonly parked?: boolean
   readonly input: unknown
   readonly startedAt: number
   readonly threadId?: string
@@ -1345,11 +1353,12 @@ async function recordRunEpisode(args: {
   if (!episodes?.enabled || !memoryContext) return
   if (memoryContext.writes === "off") return
   if (args.outcome === "error" && !episodes.includeFailedRuns) return
-  // A parked (HITL-interrupted) turn is not a completed run: the invoke()
-  // path surfaces pending interrupts as `__interrupt__` on the final state.
-  // Record nothing — the completing resume turn records instead. (The stream
-  // path tracks interrupt chunks separately; see streamResolvedRoute.)
-  if (args.outcome === "ok" && hasPendingInterrupt(args.output)) return
+  // A parked (HITL-interrupted) turn is not a completed run — record nothing;
+  // the completing resume turn records instead. Two detections, because the
+  // signal differs by path: callers that drive the adapter pass `parked` from
+  // the interrupt chunk they saw, while a subagent graph invoked directly
+  // (see withEpisodeRecording) gets `__interrupt__` on its returned state.
+  if (args.outcome === "ok" && (args.parked === true || hasPendingInterrupt(args.output))) return
   try {
     await recordEpisode(
       memoryContext.store,
@@ -1457,30 +1466,38 @@ export async function executeRouteAtResolvedPath(
       ...(options.signal ? { signal: options.signal } : {}),
     })
 
-    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
-      ...(checkpointer ? { checkpointer } : {}),
-      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
-      routeId: options.routeId,
-      ...(stateFields ? { stateFields } : {}),
-      tools,
-      ...(offload ? { offload } : {}),
-      ...(summarization ? { summarization } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
-      ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
-      ...(subagentResolver ? { subagentResolver } : {}),
-      ...(threadId ? { threadId } : {}),
-      ...(bypassCache ? { bypassCache: true } : {}),
-      ...(sandboxed ? { sandboxed: true } : {}),
-    })
+    const { output, parked } = await invokeEntry(
+      normalized.kind,
+      normalized.entry,
+      options.input,
+      context,
+      {
+        ...(checkpointer ? { checkpointer } : {}),
+        ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+        routeId: options.routeId,
+        ...(stateFields ? { stateFields } : {}),
+        tools,
+        ...(offload ? { offload } : {}),
+        ...(summarization ? { summarization } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
+        ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
+        ...(subagentResolver ? { subagentResolver } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(bypassCache ? { bypassCache: true } : {}),
+        ...(sandboxed ? { sandboxed: true } : {}),
+      },
+    )
 
     // Record the episode BEFORE returning so the write is durable when the
-    // caller observes the result; the result object itself is unchanged.
+    // caller observes the result; the result object itself is unchanged. A
+    // PARKED turn records nothing — the completing resume turn records instead.
     await recordRunEpisode({
       memoryContext: epMemoryContext,
       episodes: epConfig,
       outcome: "ok",
       output,
+      parked,
       input: options.input,
       startedAt: options.startedAt,
       ...(threadId ? { threadId } : {}),
@@ -1521,6 +1538,13 @@ export async function executeRouteAtResolvedPath(
   }
 }
 
+/** Settled result of one non-streaming route invocation. `parked` is only ever
+ *  true for an agent route: no other entry kind can park on a HITL interrupt. */
+interface InvokeEntryResult {
+  readonly output: unknown
+  readonly parked: boolean
+}
+
 async function invokeEntry(
   kind: "agent" | "chain" | "graph" | "workflow",
   entry: unknown,
@@ -1555,7 +1579,7 @@ async function invokeEntry(
     readonly threadId?: string
     readonly sandboxed?: boolean
   },
-): Promise<unknown> {
+): Promise<InvokeEntryResult> {
   if (kind === "agent") {
     if (!agentContext?.checkpointer) {
       throw new Error(
@@ -1563,7 +1587,10 @@ async function invokeEntry(
       )
     }
     const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
-    return await executeAgent({
+    // executeAgentTurn, not executeAgent: the adapter emits `done` for a
+    // PARKED turn too, so the final state alone cannot tell a park from a
+    // completion — the interrupt surfaces only as a chunk on this path.
+    return await executeAgentTurn({
       checkpointer: agentContext.checkpointer,
       entry,
       input,
@@ -1595,7 +1622,7 @@ async function invokeEntry(
     if (typeof entry !== "function") {
       throw new Error("Workflow entry must be a function")
     }
-    return await entry(input, context)
+    return { output: await entry(input, context), parked: false }
   }
 
   if (kind === "chain") {
@@ -1605,13 +1632,14 @@ async function invokeEntry(
       "invoke" in entry &&
       typeof (entry as { invoke?: unknown }).invoke === "function"
     ) {
-      return await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
+      const output = await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
+      return { output, parked: false }
     }
     throw new Error("Chain entry must expose invoke(input)")
   }
 
   if (typeof entry === "function") {
-    return await entry(input, context)
+    return { output: await entry(input, context), parked: false }
   }
 
   if (
@@ -1620,10 +1648,10 @@ async function invokeEntry(
     "invoke" in entry &&
     typeof (entry as { invoke?: unknown }).invoke === "function"
   ) {
-    return await (entry as { invoke: (input: unknown, context: unknown) => unknown }).invoke(
-      input,
-      context,
-    )
+    const output = await (
+      entry as { invoke: (input: unknown, context: unknown) => unknown }
+    ).invoke(input, context)
+    return { output, parked: false }
   }
 
   throw new Error("Graph entry must be a function or expose invoke(input)")
