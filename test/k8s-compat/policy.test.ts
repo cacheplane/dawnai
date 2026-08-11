@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+import { describe, expect, it, vi } from "vitest"
 
 import {
   getTargetByMinor,
@@ -95,9 +99,71 @@ function imageTagVersion(image: string): string {
   return match[1]
 }
 
+async function rejectedError(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw new Error("Expected rejection to contain an Error")
+  }
+  throw new Error("Expected promise to reject")
+}
+
 describe("Kubernetes compatibility policy", () => {
   it("loads the exact approved checked-in policy", async () => {
     await expect(loadCompatibilityPolicy()).resolves.toEqual(approvedPolicy)
+  })
+
+  it("loads the default policy relative to the repository from an alternate working directory", async () => {
+    const originalCwd = process.cwd()
+    const alternateCwd = await mkdtemp(join(tmpdir(), "dawn-k8s-policy-cwd-"))
+
+    try {
+      vi.resetModules()
+      process.chdir(alternateCwd)
+      const { loadCompatibilityPolicy: loadFromAlternateCwd } = await import(
+        "../../scripts/kubernetes-compat/policy.ts"
+      )
+
+      await expect(loadFromAlternateCwd()).resolves.toEqual(approvedPolicy)
+    } finally {
+      process.chdir(originalCwd)
+      vi.resetModules()
+      await rm(alternateCwd, { recursive: true })
+    }
+  })
+
+  it("wraps missing policy file errors with the explicit path and cause", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dawn-k8s-policy-missing-"))
+    const policyPath = join(directory, "missing.json")
+
+    try {
+      const error = await rejectedError(loadCompatibilityPolicy(policyPath))
+
+      expect(error.message).toBe(`Failed to read Kubernetes compatibility policy at ${policyPath}`)
+      expect(error.cause).toBeInstanceOf(Error)
+    } finally {
+      await rm(directory, { recursive: true })
+    }
+  })
+
+  it("wraps invalid JSON errors with the explicit path and cause", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dawn-k8s-policy-json-"))
+    const policyPath = join(directory, "invalid.json")
+
+    try {
+      await writeFile(policyPath, "{ invalid json", "utf8")
+      const error = await rejectedError(loadCompatibilityPolicy(policyPath))
+
+      expect(error.message).toBe(
+        `Failed to parse Kubernetes compatibility policy JSON at ${policyPath}`,
+      )
+      expect(error.cause).toBeInstanceOf(SyntaxError)
+    } finally {
+      await rm(directory, { recursive: true })
+    }
   })
 
   it("keeps target roles in exact lower, canonical, upper order", () => {
@@ -165,6 +231,38 @@ describe("Kubernetes compatibility policy", () => {
     expect(policy).not.toHaveProperty("unexpected")
   })
 
+  it("freezes the reconstructed policy object graph", () => {
+    const policy = validateCompatibilityPolicy(approvedPolicy)
+
+    expect(Object.isFrozen(policy)).toBe(true)
+    expect(Object.isFrozen(policy.toolchain)).toBe(true)
+    expect(Object.isFrozen(policy.targets)).toBe(true)
+    expect(policy.targets.every((target) => Object.isFrozen(target))).toBe(true)
+    expect(Object.isFrozen(policy.calico)).toBe(true)
+    expect(Object.isFrozen(policy.calico.images)).toBe(true)
+    expect(policy.calico.images.every((image) => Object.isFrozen(image))).toBe(true)
+    expect(Object.isFrozen(policy.images)).toBe(true)
+  })
+
+  it("rejects runtime mutation of policy objects, arrays, and entries", () => {
+    const policy = validateCompatibilityPolicy(approvedPolicy)
+    const target = policy.targets[0]
+    const calicoImage = policy.calico.images[0]
+    if (target === undefined || calicoImage === undefined) {
+      throw new Error("Approved policy must contain target and Calico entries")
+    }
+
+    expect(Reflect.set(policy.toolchain, "node", "0.0.0")).toBe(false)
+    expect(Reflect.set(policy.images, "reaper", "replacement")).toBe(false)
+    expect(Reflect.set(target, "version", "0.0.0")).toBe(false)
+    expect(Reflect.set(policy.targets, "0", { ...target, version: "0.0.0" })).toBe(false)
+    expect(Reflect.set(policy.calico, "sha256", "0".repeat(64))).toBe(false)
+    expect(Reflect.set(calicoImage, "occurrences", 99)).toBe(false)
+    expect(Reflect.set(policy.calico.images, "0", { ...calicoImage, occurrences: 99 })).toBe(false)
+
+    expect(policy).toEqual(approvedPolicy)
+  })
+
   const malformedPolicies: ReadonlyArray<readonly [string, unknown, string]> = [
     ["root", null, "$"],
     ["schema version", { ...approvedPolicy, schemaVersion: 2 }, "schemaVersion"],
@@ -172,6 +270,19 @@ describe("Kubernetes compatibility policy", () => {
     [
       "toolchain version",
       { ...approvedPolicy, toolchain: { ...approvedPolicy.toolchain, node: "v24.17.0" } },
+      "toolchain.node",
+    ],
+    [
+      "toolchain version leading zero",
+      { ...approvedPolicy, toolchain: { ...approvedPolicy.toolchain, node: "24.017.0" } },
+      "toolchain.node",
+    ],
+    [
+      "toolchain unsafe version component",
+      {
+        ...approvedPolicy,
+        toolchain: { ...approvedPolicy.toolchain, node: "9007199254740992.17.0" },
+      },
       "toolchain.node",
     ],
     ["targets array", { ...approvedPolicy, targets: {} }, "targets"],
@@ -209,6 +320,18 @@ describe("Kubernetes compatibility policy", () => {
       "targets[0].minor",
     ],
     [
+      "target minor leading zero",
+      {
+        ...approvedPolicy,
+        targets: [
+          { ...approvedPolicy.targets[0], minor: "1.034" },
+          approvedPolicy.targets[1],
+          approvedPolicy.targets[2],
+        ],
+      },
+      "targets[0].minor",
+    ],
+    [
       "target version",
       {
         ...approvedPolicy,
@@ -233,11 +356,60 @@ describe("Kubernetes compatibility policy", () => {
       "targets[0].version",
     ],
     [
+      "target version leading zero",
+      {
+        ...approvedPolicy,
+        targets: [
+          {
+            ...approvedPolicy.targets[0],
+            version: "1.34.08",
+            nodeImage:
+              "kindest/node:v1.34.08@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256",
+          },
+          approvedPolicy.targets[1],
+          approvedPolicy.targets[2],
+        ],
+      },
+      "targets[0].version",
+    ],
+    [
+      "target unsafe version component",
+      {
+        ...approvedPolicy,
+        targets: [
+          {
+            ...approvedPolicy.targets[0],
+            version: "1.34.9007199254740992",
+            nodeImage:
+              "kindest/node:v1.34.9007199254740992@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256",
+          },
+          approvedPolicy.targets[1],
+          approvedPolicy.targets[2],
+        ],
+      },
+      "targets[0].version",
+    ],
+    [
       "node image digest",
       {
         ...approvedPolicy,
         targets: [
           { ...approvedPolicy.targets[0], nodeImage: "kindest/node:v1.34.8@sha256:ABC" },
+          approvedPolicy.targets[1],
+          approvedPolicy.targets[2],
+        ],
+      },
+      "targets[0].nodeImage",
+    ],
+    [
+      "node image prefix confusion",
+      {
+        ...approvedPolicy,
+        targets: [
+          {
+            ...approvedPolicy.targets[0],
+            nodeImage: `${approvedPolicy.targets[0].nodeImage}@sha256:${"a".repeat(64)}`,
+          },
           approvedPolicy.targets[1],
           approvedPolicy.targets[2],
         ],
@@ -334,12 +506,54 @@ describe("Kubernetes compatibility policy", () => {
       },
       "calico.images[0].target",
     ],
+    [
+      "Calico source prefix confusion",
+      {
+        ...approvedPolicy,
+        calico: {
+          ...approvedPolicy.calico,
+          images: [
+            {
+              ...approvedPolicy.calico.images[0],
+              target: `${approvedPolicy.calico.images[0].target}@sha256:${"a".repeat(64)}`,
+            },
+            approvedPolicy.calico.images[1],
+            approvedPolicy.calico.images[2],
+          ],
+        },
+      },
+      "calico.images[0].target",
+    ],
     ["images object", { ...approvedPolicy, images: [] }, "images"],
     [
       "workload image digest",
       {
         ...approvedPolicy,
         images: { ...approvedPolicy.images, sandboxWorkload: "docker.io/library/node:22-slim" },
+      },
+      "images.sandboxWorkload",
+    ],
+    [
+      "multiple image digests",
+      {
+        ...approvedPolicy,
+        images: {
+          ...approvedPolicy.images,
+          sandboxWorkload: `docker.io/library/node:22-slim@sha256:${"a".repeat(
+            64,
+          )}@sha256:${"b".repeat(64)}`,
+        },
+      },
+      "images.sandboxWorkload",
+    ],
+    [
+      "whitespace in an image name",
+      {
+        ...approvedPolicy,
+        images: {
+          ...approvedPolicy.images,
+          sandboxWorkload: `docker.io/library/node:22 slim@sha256:${"a".repeat(64)}`,
+        },
       },
       "images.sandboxWorkload",
     ],
@@ -359,6 +573,30 @@ describe("Kubernetes compatibility policy", () => {
           ...approvedPolicy.images,
           reaper:
             "docker.io/alpine/k8s:1.40.0@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807",
+        },
+      },
+      "images.reaper",
+    ],
+    [
+      "reaper tag leading zero",
+      {
+        ...approvedPolicy,
+        images: {
+          ...approvedPolicy.images,
+          reaper:
+            "docker.io/alpine/k8s:1.035.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807",
+        },
+      },
+      "images.reaper",
+    ],
+    [
+      "reaper unsafe tag component",
+      {
+        ...approvedPolicy,
+        images: {
+          ...approvedPolicy.images,
+          reaper:
+            "docker.io/alpine/k8s:1.35.9007199254740992@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807",
         },
       },
       "images.reaper",

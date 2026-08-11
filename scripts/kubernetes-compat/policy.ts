@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 export interface CompatibilityPolicy {
   readonly schemaVersion: 1
@@ -42,10 +42,20 @@ interface VersionCoordinates {
   readonly minor: number
 }
 
-const DEFAULT_POLICY_PATH = resolve(process.cwd(), ".github/kubernetes-compatibility.json")
+interface DigestPinnedImage {
+  readonly name: string
+  readonly value: string
+}
+
+const DEFAULT_POLICY_PATH = fileURLToPath(
+  new URL("../../.github/kubernetes-compatibility.json", import.meta.url),
+)
 const TARGET_ROLES = ["lower", "canonical", "upper"] as const
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
-const DIGEST_PINNED_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/
+const DIGEST_PINNED_IMAGE_PATTERN = /^([^\s@]+)@sha256:[0-9a-f]{64}$/
+const SEMANTIC_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const V_PREFIXED_SEMANTIC_VERSION_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const MINOR_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
 function fail(path: string, message: string): never {
   throw new Error(`Invalid Kubernetes compatibility policy at ${path}: ${message}`)
@@ -77,47 +87,67 @@ function expectPattern(value: unknown, path: string, pattern: RegExp, descriptio
   return text
 }
 
+function parseSafeInteger(component: string, path: string): number {
+  const parsed = Number(component)
+  if (!Number.isSafeInteger(parsed)) {
+    fail(path, "numeric components must be safe integers")
+  }
+  return parsed
+}
+
 function parseVersion(
   value: unknown,
   path: string,
   requiresVPrefix: boolean,
 ): { readonly value: string } & VersionCoordinates {
   const version = expectNonEmptyString(value, path)
-  const pattern = requiresVPrefix ? /^v(\d+)\.(\d+)\.\d+$/ : /^(\d+)\.(\d+)\.\d+$/
+  const pattern = requiresVPrefix ? V_PREFIXED_SEMANTIC_VERSION_PATTERN : SEMANTIC_VERSION_PATTERN
   const match = pattern.exec(version)
-  if (match?.[1] === undefined || match[2] === undefined) {
+  if (match?.[1] === undefined || match[2] === undefined || match[3] === undefined) {
     fail(
       path,
-      requiresVPrefix ? "must be a v-prefixed semantic version" : "must be a semantic version",
+      requiresVPrefix
+        ? "must be a canonical v-prefixed semantic version"
+        : "must be a canonical semantic version",
     )
   }
+  const major = parseSafeInteger(match[1], path)
+  const minor = parseSafeInteger(match[2], path)
+  parseSafeInteger(match[3], path)
   return {
     value: version,
-    major: Number(match[1]),
-    minor: Number(match[2]),
+    major,
+    minor,
   }
 }
 
 function parseMinor(value: unknown, path: string): { readonly value: string } & VersionCoordinates {
   const minor = expectNonEmptyString(value, path)
-  const match = /^(\d+)\.(\d+)$/.exec(minor)
+  const match = MINOR_VERSION_PATTERN.exec(minor)
   if (match?.[1] === undefined || match[2] === undefined) {
-    fail(path, "must use major.minor format")
+    fail(path, "must use canonical major.minor format")
   }
   return {
     value: minor,
-    major: Number(match[1]),
-    minor: Number(match[2]),
+    major: parseSafeInteger(match[1], path),
+    minor: parseSafeInteger(match[2], path),
   }
 }
 
+function parseDigestPinnedImage(value: unknown, path: string): DigestPinnedImage {
+  const image = expectNonEmptyString(value, path)
+  const match = DIGEST_PINNED_IMAGE_PATTERN.exec(image)
+  if (match?.[1] === undefined) {
+    fail(
+      path,
+      "must contain one non-whitespace image name and one @sha256: followed by exactly 64 lowercase hexadecimal characters",
+    )
+  }
+  return { name: match[1], value: image }
+}
+
 function expectDigestPinnedImage(value: unknown, path: string): string {
-  return expectPattern(
-    value,
-    path,
-    DIGEST_PINNED_IMAGE_PATTERN,
-    "must end with @sha256: followed by exactly 64 lowercase hexadecimal characters",
-  )
+  return parseDigestPinnedImage(value, path).value
 }
 
 function validateToolchain(value: unknown): CompatibilityPolicy["toolchain"] {
@@ -149,8 +179,8 @@ function validateTarget(
     fail(`${path}.version`, `must belong to target minor ${minor.value}`)
   }
 
-  const nodeImage = expectDigestPinnedImage(target.nodeImage, `${path}.nodeImage`)
-  if (!nodeImage.startsWith(`kindest/node:v${version.value}@sha256:`)) {
+  const nodeImage = parseDigestPinnedImage(target.nodeImage, `${path}.nodeImage`)
+  if (nodeImage.name !== `kindest/node:v${version.value}`) {
     fail(`${path}.nodeImage`, `must pin kindest/node:v${version.value}`)
   }
 
@@ -158,7 +188,7 @@ function validateTarget(
     role: expectedRole,
     minor: minor.value,
     version: version.value,
-    nodeImage,
+    nodeImage: nodeImage.value,
   }
 }
 
@@ -219,11 +249,11 @@ function validateCalico(value: unknown): CompatibilityPolicy["calico"] {
     if (!Number.isInteger(occurrences) || typeof occurrences !== "number" || occurrences <= 0) {
       fail(`${path}.occurrences`, "must be a positive integer")
     }
-    const target = expectDigestPinnedImage(image.target, `${path}.target`)
-    if (!target.startsWith(`${source}@sha256:`)) {
+    const target = parseDigestPinnedImage(image.target, `${path}.target`)
+    if (target.name !== source) {
       fail(`${path}.target`, "must pin the corresponding source image")
     }
-    return { source, occurrences, target }
+    return { source, occurrences, target: target.value }
   })
 
   return { manifestUrl, sha256, images }
@@ -245,11 +275,12 @@ function validateImages(value: unknown): CompatibilityPolicy["images"] {
 }
 
 function parseReaperVersion(image: string): VersionCoordinates {
-  const match = /:(\d+)\.(\d+)\.\d+@sha256:[0-9a-f]{64}$/.exec(image)
-  if (match?.[1] === undefined || match[2] === undefined) {
+  const imageName = parseDigestPinnedImage(image, "images.reaper").name
+  const tagSeparator = imageName.lastIndexOf(":")
+  if (tagSeparator === -1) {
     fail("images.reaper", "must use a semantic kubectl image tag")
   }
-  return { major: Number(match[1]), minor: Number(match[2]) }
+  return parseVersion(imageName.slice(tagSeparator + 1), "images.reaper", false)
 }
 
 function assertWithinOneMinor(
@@ -263,6 +294,21 @@ function assertWithinOneMinor(
       fail(path, `must be within one minor of target ${target.minor}`)
     }
   }
+}
+
+function freezeCompatibilityPolicy(policy: CompatibilityPolicy): CompatibilityPolicy {
+  Object.freeze(policy.toolchain)
+  for (const target of policy.targets) {
+    Object.freeze(target)
+  }
+  Object.freeze(policy.targets)
+  for (const image of policy.calico.images) {
+    Object.freeze(image)
+  }
+  Object.freeze(policy.calico.images)
+  Object.freeze(policy.calico)
+  Object.freeze(policy.images)
+  return Object.freeze(policy)
 }
 
 export function validateCompatibilityPolicy(raw: unknown): CompatibilityPolicy {
@@ -283,19 +329,27 @@ export function validateCompatibilityPolicy(raw: unknown): CompatibilityPolicy {
   )
   assertWithinOneMinor(parseReaperVersion(images.reaper), targets, "images.reaper")
 
-  return {
-    schemaVersion: 1,
-    toolchain,
-    targets,
-    calico,
-    images,
-  }
+  return freezeCompatibilityPolicy({ schemaVersion: 1, toolchain, targets, calico, images })
 }
 
 export async function loadCompatibilityPolicy(
   policyPath: string = DEFAULT_POLICY_PATH,
 ): Promise<CompatibilityPolicy> {
-  const raw: unknown = JSON.parse(await readFile(policyPath, "utf8"))
+  let contents: string
+  try {
+    contents = await readFile(policyPath, "utf8")
+  } catch (cause) {
+    throw new Error(`Failed to read Kubernetes compatibility policy at ${policyPath}`, { cause })
+  }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(contents)
+  } catch (cause) {
+    throw new Error(`Failed to parse Kubernetes compatibility policy JSON at ${policyPath}`, {
+      cause,
+    })
+  }
   return validateCompatibilityPolicy(raw)
 }
 
