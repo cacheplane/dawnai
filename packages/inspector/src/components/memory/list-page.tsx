@@ -1,6 +1,6 @@
 "use client"
-import type { MemoryKind, MemoryRecord, MemoryStats, MemoryStatus } from "@dawn-ai/memory"
-import type { ColumnFilter } from "@pretable/react"
+import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
+import type { ColumnFilter, PretableGrid, PretableSortEntry } from "@pretable/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { canonicalBrowseQuery } from "../../browse/canonical-query"
 import { useMemoryBrowse } from "../../browse/use-memory-browse"
@@ -8,12 +8,20 @@ import { Badge } from "../ui/badge"
 import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BrowseErrorBanners, type BrowseErrorEntry, BrowseStatusBar } from "./browse-chrome"
+import { loadMoreState } from "./browse-window"
 import { BulkBar } from "./bulk-bar"
-import { resolveFilter, toFilter, type ValueSet } from "./column-filters"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
-import { KINDS, MemoryGrid, STATUSES } from "./memory-grid"
+import { LoadMoreFooter } from "./load-more-footer"
+import { STATUSES } from "./memory-domain"
+import { type GridRow, MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
+import {
+  capSortEntries,
+  intentRefusalMessage,
+  MAX_BROWSE_SORT_ENTRIES,
+  toBrowseQuery,
+} from "./to-browse-query"
 
 interface SearchResponse {
   readonly groups: readonly {
@@ -37,18 +45,67 @@ const WINDOWS = {
 } as const
 type TimelineWindow = keyof typeof WINDOWS | "all"
 
-const selectClass =
-  "h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
+/** The window's lower bound, read from the clock ONCE per pin. Callers must hold the
+ *  result in state: `since` is part of the dataset identity, and a `Date.now()`
+ *  re-read on a later render would mint a new identity and refetch forever. */
+function sinceFor(window: TimelineWindow): string | undefined {
+  return window === "all" ? undefined : new Date(Date.now() - WINDOWS[window]).toISOString()
+}
+
+/** Inactive states are keyed on `aria-disabled`, never on a `searching` branch:
+ *  these controls are deliberately never natively `disabled` (that removes them
+ *  from the tab order and hides the reason with them), so without a rule keyed on
+ *  the marker they render identically to the active ones and still answer hover. */
+const INACTIVE_CLASS = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+
+const selectClass = `h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300 ${INACTIVE_CLASS}`
+
+/** The sentence the load-more footer renders beside itself and points its OWN
+ *  `aria-describedby` at — it owns a reason element because it sits far down the
+ *  page from the note below. The header controls point at `#browse-scope-note`
+ *  instead, which additionally names WHICH controls are inert. Two elements, and
+ *  both must carry "not applied to search": `aria-describedby` is the only channel
+ *  a keyboard or AT user has for the reason, since `aria-disabled` is what keeps
+ *  these controls reachable in the first place. */
+const BROWSE_ONLY_REASON = "Not applied to search"
 
 export function ListPage() {
   const [namespace, setNamespace] = useState<string>()
-  // undefined = unfiltered, [] = matches nothing — the same distinction the
-  // store's BrowseQuery draws, so an emptied funnel cannot read as "show all".
-  const [status, setStatus] = useState<ValueSet<MemoryStatus>>(undefined)
-  const [kind, setKind] = useState<ValueSet<MemoryKind>>(undefined)
+  // The grid's own vocabulary, held verbatim. The ValueSet round-trip this
+  // replaced existed only because the store could not express operators; it can
+  // now, so there is exactly ONE translation (`toBrowseQuery`) and it happens
+  // where the request is built.
+  const [filters, setFilters] = useState<Record<string, ColumnFilter>>({})
+  const [sort, setSort] = useState<PretableSortEntry[]>([])
+  const [sortCapped, setSortCapped] = useState(false)
+  /** The USER-facing sentence for intent `toBrowseQuery` REFUSED, so that intent was
+   *  not committed. Distinct from `sortCapped`, which reports a change that WAS
+   *  committed after trimming — and so is retired by any later control, while this
+   *  stands until intent the mapping accepts replaces it. Never the error's
+   *  `message`: that half names this repo's internals and quotes the offending value
+   *  through `JSON.stringify`, which prints `Infinity` as `null`. */
+  const [intentRefusal, setIntentRefusal] = useState<string>()
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
+  const [timelineSince, setTimelineSince] = useState<string>()
+  const chooseTimelineWindow = useCallback((next: TimelineWindow) => {
+    setTimelineWindow(next)
+    setTimelineSince(sinceFor(next))
+  }, [])
+  /** Re-pin on ENTRY as well as on the select. The label names a window ending NOW,
+   *  and the instant behind it was taken whenever the select last moved — leave and
+   *  return and "24h" would describe a window that closed hours ago, kept warm by
+   *  live polling. Entry only, so re-clicking the button you are already on is not a
+   *  refetch. */
+  const chooseView = useCallback(
+    (next: "list" | "timeline") => {
+      if (next === "timeline" && view !== "timeline") setTimelineSince(sinceFor(timelineWindow))
+      setSortCapped(false)
+      setView(next)
+    },
+    [view, timelineWindow],
+  )
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [ticked, setTicked] = useState<readonly string[]>([])
@@ -92,47 +149,124 @@ export function ListPage() {
     [fetchJson],
   )
 
-  const filters = useMemo(() => {
-    const next: Record<string, ColumnFilter> = {}
-    const statusFilter = toFilter(status, STATUSES)
-    if (statusFilter) next.status = statusFilter
-    const kindFilter = toFilter(kind, KINDS)
-    if (kindFilter) next.kind = kindFilter
-    return next
-  }, [status, kind])
+  /** The cap notice explains ONE sort click, so every OTHER control that moves the
+   *  query retires it — left standing it would explain an action several steps in the
+   *  past, about a column the user can no longer see declined. That is why these are
+   *  wrappers and not the setters themselves. */
+  /**
+   * The gate that keeps unmappable intent OUT OF STATE.
+   *
+   * `toBrowseQuery` throws rather than dropping a clause, and `browseQuery` maps
+   * during RENDER — where React has no boundary in this app, so a throw unmounts the
+   * whole Inspector rather than reaching a banner. Refusing at the setter is what
+   * makes the render-phase call total: `filters` and `sort` are written here and
+   * nowhere else, so state only ever holds intent the mapping already accepted.
+   *
+   * This is a live user path, not a coding slip. Pretable's number funnel is a
+   * free-text box whose completeness check is `!Number.isNaN(Number(s))`, so `1e999`
+   * and `Infinity` both reach the mapping as a non-finite number no `BrowseFilter`
+   * arm carries.
+   *
+   * Declining rather than applying-and-warning is the honest half: the funnel the
+   * user typed is not a question the server can be asked, so the rows keep answering
+   * the one it can, and the notice says which control was refused and why.
+   *
+   * Every caller hands one ALREADY-ACCEPTED half and one new one — `filters` and
+   * `sort` only ever hold intent that came back through here — so the refusal always
+   * describes the control the user just used, which is what lets the mapping pick
+   * "the filter was not applied" or "the sort was not applied" at the point it
+   * refuses. A caller that changed both halves at once would break that.
+   */
+  const commitIntent = useCallback(
+    (nextFilters: Record<string, ColumnFilter>, nextSort: readonly PretableSortEntry[]) => {
+      try {
+        toBrowseQuery(nextFilters, nextSort)
+      } catch (error) {
+        // The console gets the developer half: it is the only place the failing
+        // column, operator and raw value are named, and the notice deliberately
+        // carries none of them.
+        console.warn("[inspector] declined grid intent", error)
+        setIntentRefusal(
+          intentRefusalMessage(error) ??
+            // Anything that is not one of the mapping's own refusals — a coding slip
+            // rather than a value the user chose. Claims only what is certain.
+            "That change was not applied.",
+        )
+        return false
+      }
+      setIntentRefusal(undefined)
+      return true
+    },
+    [],
+  )
 
-  const handleFiltersChange = useCallback((next: Record<string, ColumnFilter>) => {
-    setStatus(resolveFilter(next.status, STATUSES))
-    setKind(resolveFilter(next.kind, KINDS))
+  const handleFiltersChange = useCallback(
+    (next: Record<string, ColumnFilter>) => {
+      if (!commitIntent(next, sort)) return
+      setSortCapped(false)
+      setFilters(next)
+    },
+    [commitIntent, sort],
+  )
+
+  const chooseNamespace = useCallback((next: string | undefined) => {
+    setSortCapped(false)
+    setNamespace(next)
   }, [])
 
-  // PINNED at the moment the window changes, not recomputed per render: `since` is
-  // part of the dataset identity, so a fresh `Date.now()` on every render would bump
-  // the desired revision on every render and refetch forever.
-  const since = useMemo(
-    () =>
-      view === "timeline" && timelineWindow !== "all"
-        ? new Date(Date.now() - WINDOWS[timelineWindow]).toISOString()
-        : undefined,
-    [view, timelineWindow],
+  /** Pretable's shift-click appends the new key at the LOWEST priority, so a
+   *  fourth key is the one declined and the ordering the user already built
+   *  survives. The notice is what keeps that honest: the control did something,
+   *  and the page says what. */
+  const handleSortChange = useCallback(
+    (next: PretableSortEntry[]) => {
+      // Copied, not aliased: `capSortEntries` hands back its ARGUMENT when the sort
+      // already fits, and that array is pretable's.
+      const capped = [...capSortEntries(next)]
+      if (!commitIntent(filters, capped)) return
+      setSortCapped(next.length > MAX_BROWSE_SORT_ENTRIES)
+      setSort(capped)
+    },
+    [commitIntent, filters],
   )
 
-  const browseQuery = useMemo(
-    () =>
-      canonicalBrowseQuery({
-        view,
-        ...(namespace === undefined ? {} : { namespace }),
-        ...(status === undefined ? {} : { status }),
-        ...(kind === undefined ? {} : { kind }),
-        ...(since === undefined ? {} : { since }),
-      }),
-    [view, namespace, status, kind, since],
-  )
+  const browseQuery = useMemo(() => {
+    // Total by construction, not by luck: `commitIntent` has already mapped this
+    // exact `filters`/`sort` pair without throwing, and they are written nowhere
+    // else. A new writer must go through that gate or this throws in render.
+    const intent = toBrowseQuery(filters, sort)
+    return canonicalBrowseQuery({
+      view,
+      // EXACT namespace, not a prefix: the rail selects one namespace and the
+      // server answers that question itself, so the rows and `total` describe the
+      // same set with no client-side narrowing after the fact.
+      ...(namespace === undefined ? {} : { namespace }),
+      // Funnels travel between the views — they narrow the same question either one
+      // asks, and the rail that sets `namespace` is on screen in both. The header
+      // sort does NOT: `orderBy` decides which rows the window holds, not just their
+      // order, and `TimelineView` re-sorts what arrives by event time. Carried over,
+      // it would swap the sample under an unchanged window label, for a control that
+      // view does not show.
+      ...(intent.filters === undefined ? {} : { filters: intent.filters }),
+      ...(view === "list" && intent.orderBy !== undefined ? { orderBy: intent.orderBy } : {}),
+      ...(view === "timeline" && timelineSince !== undefined ? { since: timelineSince } : {}),
+    })
+  }, [filters, sort, namespace, view, timelineSince])
 
   // Search replaces the browse view entirely, so browse stops polling behind it.
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
+  // The hook's own `total`, not a second derivation out of `resultMeta` — both gate
+  // on the same fulfillment, and this component already reads `browse.total` for the
+  // status bar and the grouping gate. Two derivations of one number is how two
+  // surfaces end up quoting different populations for the same answer.
+  const loadedTotal = browse.total ?? undefined
+  const footerState = loadMoreState({
+    phase: browse.dataState.phase,
+    loaded: browse.rows.length,
+    hasMore: browse.hasMore,
+  })
 
   // `refreshBrowse` is the same poll tick the interval sends, so single flight DROPS it
   // whenever a request is already running — and with `live` off there is no next tick
@@ -186,12 +320,21 @@ export function ListPage() {
     setSelectedId(undefined)
     requestRefresh()
   }, [requestRefresh])
-  // The grid keeps its own checkbox state, so clearing here would leave the
-  // boxes ticked. Remounting it (see `key` below) is what actually resets both.
-  const [gridEpoch, setGridEpoch] = useState(0)
+  // The engine owns selection; clearing it here is one call, and every other
+  // clear happens on its own: a query change pivots `datasetKey`, and the engine
+  // drops selection, focus and group expansion as part of that single emit.
+  const gridRef = useRef<PretableGrid<GridRow> | null>(null)
+  const browseRegionRef = useRef<HTMLDivElement>(null)
+  const handleGridReady = useCallback((grid: PretableGrid<GridRow>) => {
+    gridRef.current = grid
+  }, [])
+  // An empty selection, not `clearSelection()`: that one COLLAPSES the selection onto
+  // the focused cell whenever focus sits on a data cell — which a row click always
+  // leaves it doing — so the row keeps a one-column span and paints an indeterminate
+  // box, and the bar that owned the clear is already gone by then.
   const clearTicked = useCallback(() => {
+    gridRef.current?.setSelection({ ranges: [], anchor: null })
     setTicked([])
-    setGridEpoch((n) => n + 1)
   }, [])
   const handleBulkDone = useCallback(
     ({ failed }: { failed: number }) => {
@@ -204,15 +347,7 @@ export function ListPage() {
   )
 
   const byStatus = stats?.byStatus ?? {}
-  // Filtering here would make "N loaded of M matching" a lie the moment a facet was
-  // clicked: the request carries the EXACT namespace, so the rows and `total` already
-  // describe the same set.
-  const pageRecords = browse.records
-  // Group headers count the rows the grid HOLDS. On a truncated window that count is
-  // an artifact of where the cap fell, so group only when the window is the whole
-  // answer; the facet rail stays the honest navigator for anything larger.
-  const pageIsComplete = browse.total !== null && pageRecords.length >= browse.total
-  const filtersActive = status !== undefined || kind !== undefined || namespace !== undefined
+  const filtersActive = Object.keys(filters).length > 0 || namespace !== undefined
   // "Nothing stored" and "nothing matches what you asked for" are different answers;
   // telling a filtered view to go run its agent sends you looking for a bug that
   // isn't there.
@@ -221,20 +356,88 @@ export function ListPage() {
     : "No memories yet — run your agent and watch them appear."
   const searching = query.length > 0
   const dataState = browse.dataState
-  // The grid's body-state block owns the error PHASE, and the timeline has no such
-  // block — this entry is the only channel a timeline failure has. Exactly one of the
-  // two surfaces is mounted, so one failure still gets one retry control.
-  const timelineFailure =
-    !searching && view === "timeline" && dataState.phase === "error"
+  // The browse grid is MOUNTED in every view (Flow 10) and VISIBLE in only one of
+  // them. Everything keyed on this reads "the grid is in the document, and nobody
+  // can see it or reach it".
+  const browseSurfaceHidden = searching || view === "timeline"
+  // The grid's body-state block owns the error PHASE only while the grid is
+  // VISIBLE; hidden, that block is in the document and unreadable, and this entry
+  // is the failure's only channel. A retry offered for THIS entry can never sit
+  // beside the grid's own, because the condition that produces it is the one that
+  // hides the block.
+  const hiddenSurfaceFailure =
+    browseSurfaceHidden && dataState.phase === "error"
       ? (dataState.message ?? "Could not load memories.")
       : undefined
+  // Pretable's live region is portaled to <body> — OUTSIDE the hidden region — and
+  // its announcement effect fires on every phase transition with no visibility
+  // gate. The facet stays active during a search, so the hidden grid really does
+  // refetch, and an unfrozen phase would read a count for a population nobody can
+  // see at the exact moment `BrowseStatusBar` is withholding the same number from
+  // sighted users. Rows are NOT frozen: they announce nothing, and the grid has to
+  // be current the instant it is revealed.
+  const lastVisibleDataState = useRef(dataState)
+  useEffect(() => {
+    if (!browseSurfaceHidden) lastVisibleDataState.current = dataState
+  })
+  const gridDataState = browseSurfaceHidden ? lastVisibleDataState.current : dataState
+
+  // The funnel's popover is PORTALED to `<body>`, so it is the one part of the grid
+  // `hidden` on the region below does not reach. Left open it floats over the search
+  // results or the timeline: undimmed, with no `aria-disabled` and no
+  // `aria-describedby`, and fully interactive — while every other control this page
+  // renders inert is marked and explained. Ticking a value in it would move the
+  // browse query from a panel whose own surface nobody can see.
+  //
+  // The funnel is the ONLY header popover this grid has: pretable's other one, the
+  // column menu, needs `groupPanel.enabled`, which `MemoryGrid` does not pass. A
+  // selector arm for a trigger that is never rendered would be a dead branch no test
+  // could reach, so this names the one that exists.
+  //
+  // 0.3.0 exposes no imperative close — the open state lives inside `PretableSurface`
+  // — so the dismissal is the toggle a second user click on the trigger would take,
+  // and `aria-expanded` is how the trigger reports it is the open one. At most one
+  // popover is ever open (pretable holds a single open-state), hence the singular
+  // query. `.click()` moves no focus, so a user already typing in the search box
+  // keeps their caret.
+  //
+  // Mouse users rarely reach this: pretable closes on a `pointerdown` outside the
+  // panel, which travelling to the search box or the view toggle produces. Reaching
+  // either by keyboard fires no pointer event at all, so for them the popover simply
+  // survives — and the timeline boundary is newly reachable at all, because it used
+  // to unmount the grid.
+  useEffect(() => {
+    if (!browseSurfaceHidden) return
+    browseRegionRef.current
+      ?.querySelector<HTMLElement>("[data-pretable-filter-funnel][aria-expanded='true']")
+      ?.click()
+  }, [browseSurfaceHidden])
+
+  // `hidden` is `display: none`, which destroys the scroll box: the element comes
+  // back at 0 while the engine's snapshot still holds the offset it had, so the
+  // virtualizer paints the rows for that offset over a viewport at the top — a
+  // blank body until some later scroll event resyncs the two. The engine is the
+  // authority on where the browse is, so re-assert it on the way back in. Writing
+  // `scrollTop` fires a scroll event, which is how the engine learns it agreed.
+  useEffect(() => {
+    if (browseSurfaceHidden) return
+    const viewport = browseRegionRef.current?.querySelector<HTMLElement>(
+      "[data-pretable-scroll-viewport]",
+    )
+    const scrollTop = gridRef.current?.getSnapshot().viewport.scrollTop
+    if (!viewport || scrollTop === undefined) return
+    viewport.scrollTop = scrollTop
+  }, [browseSurfaceHidden])
+
   const browseRequestFailed =
     browse.errors.refresh !== undefined || browse.errors["load-more"] !== undefined
   const errorEntries: BrowseErrorEntry[] = [
     ...Object.entries(errors).flatMap(([source, message]) =>
       message ? [{ source, message }] : [],
     ),
-    ...(timelineFailure === undefined ? [] : [{ source: "browse", message: timelineFailure }]),
+    ...(hiddenSurfaceFailure === undefined
+      ? []
+      : [{ source: "browse", message: hiddenSurfaceFailure }]),
     ...(browse.errors.refresh === undefined
       ? []
       : [{ source: "refresh", message: `Refresh failed: ${browse.errors.refresh}` }]),
@@ -266,9 +469,16 @@ export function ListPage() {
                 key={v}
                 type="button"
                 aria-pressed={view === v}
-                onClick={() => setView(v)}
-                className={`h-9 px-3 text-sm ${
-                  view === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50"
+                aria-disabled={searching ? "true" : undefined}
+                {...(searching ? { "aria-describedby": "browse-scope-note" } : {})}
+                onClick={() => {
+                  if (searching) return
+                  chooseView(v)
+                }}
+                className={`h-9 px-3 text-sm ${INACTIVE_CLASS} ${
+                  view === v
+                    ? "bg-zinc-900 text-white"
+                    : `bg-white text-zinc-600 ${searching ? "" : "hover:bg-zinc-50"}`
                 }`}
               >
                 {v}
@@ -279,7 +489,12 @@ export function ListPage() {
             <select
               aria-label="Window"
               value={timelineWindow}
-              onChange={(e) => setTimelineWindow(e.target.value as TimelineWindow)}
+              aria-disabled={searching ? "true" : undefined}
+              {...(searching ? { "aria-describedby": "browse-scope-note" } : {})}
+              onChange={(e) => {
+                if (searching) return
+                chooseTimelineWindow(e.target.value as TimelineWindow)
+              }}
               className={selectClass}
             >
               {(["24h", "7d", "30d", "all"] as const).map((w) => (
@@ -294,7 +509,13 @@ export function ListPage() {
             aria-label="Search memories"
             placeholder="Search memories…"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              // Search replaces the surface the notice describes, and the notice
+              // explains ONE header click — left standing it comes back when the
+              // search clears, explaining an action several steps in the past.
+              setSortCapped(false)
+              setQuery(e.target.value)
+            }}
             className="w-64"
           />
           <label className="flex items-center gap-1.5 text-sm text-zinc-600">
@@ -304,22 +525,44 @@ export function ListPage() {
         </div>
       </header>
       <div className="flex min-h-0 flex-1">
-        <FacetRail stats={stats} selected={namespace} onSelect={setNamespace} />
+        <FacetRail stats={stats} selected={namespace} onSelect={chooseNamespace} />
         <main className="min-w-0 flex-1 overflow-y-auto p-4">
           <BrowseErrorBanners
             errors={errorEntries}
-            {...(browseRequestFailed || timelineFailure !== undefined
+            {...(browseRequestFailed || hiddenSurfaceFailure !== undefined
               ? { onRetry: retryBrowse }
               : {})}
           />
           {searching ? null : (
             <BrowseStatusBar
-              loaded={pageRecords.length}
+              loaded={browse.rows.length}
               total={browse.total}
               phase={browsePhase}
               asOf={browse.paused ? browse.updatedAt : null}
             />
           )}
+          {/* Named one at a time, and only the ones THIS view shows — a note listing
+              a control the user cannot see reads as one more thing that broke.
+              §8.2 asks for the browse funnels themselves to be `aria-disabled` +
+              focusable + described here; they live inside the grid, and the grid is
+              inside the hidden region below, so they are unreachable rather than
+              reachable-and-marked — the popover one of them portals to `<body>`
+              included, which the effect above closes because `hidden` does not reach
+              it. That meets the requirement's purpose (nothing
+              looks active while it is ignored) but not its letter, and this note is
+              what carries the reason in their place — which is why it has to name
+              the column filters the search request drops. */}
+          <p
+            id="browse-scope-note"
+            hidden={!searching}
+            className="mb-2 text-xs text-zinc-500"
+            data-testid="browse-scope-note"
+          >
+            Search ranks active memories, and the namespace facet applies to it. Column filters, the
+            view toggle
+            {view === "timeline" ? ", the timeline window" : ""} and the load-more control are not
+            applied to search.
+          </p>
           {searching ? (
             search && search.groups.length > 0 ? (
               <div className="space-y-4">
@@ -328,6 +571,10 @@ export function ListPage() {
                     <h2 className="mb-1.5 font-mono text-xs font-medium text-zinc-500">
                       {group.namespace}
                     </h2>
+                    {/* No dataState, so the grid picks SEARCH_COLUMNS: sorting a
+                        group locally is honest (a group IS its whole result set)
+                        but filtering it is not — these rows are the store's
+                        ranked top-8, not everything that matches. */}
                     <MemoryGrid records={group.records} onSelect={setSelectedId} />
                   </section>
                 ))}
@@ -335,41 +582,106 @@ export function ListPage() {
             ) : (
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
-          ) : view === "timeline" ? (
-            // TimelineView owns its empty state ("No episodes in this window.") — but
-            // that copy is an ANSWER, so it must not stand in for one that has not
-            // arrived, or for one that failed.
-            browsePhase === "loading" ? (
-              <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
-                Loading memories…
+          ) : null}
+          {/* Wrapped so a test can scope to this surface: the timeline draws the SAME
+              rows as the hidden grid beside it, and its lifecycle block carries the
+              same test id, so both are in the document at once. */}
+          {searching || view === "list" ? null : (
+            <div data-testid="timeline-region">
+              {/* TimelineView owns its empty state ("No episodes in this window.") —
+                  but that copy is an ANSWER, so it must not stand in for one that has
+                  not arrived, or for one that failed. */}
+              {browsePhase === "loading" ? (
+                <p data-testid="browse-loading" className="p-4 text-sm text-zinc-400">
+                  Loading memories…
+                </p>
+              ) : hiddenSurfaceFailure !== undefined && browse.rows.length === 0 ? null : (
+                <TimelineView records={browse.rows} onSelect={setSelectedId} />
+              )}
+            </div>
+          )}
+          {/* The browse surface stays MOUNTED across EVERY view switch (Flow 10).
+              Hiding rather than unmounting keeps the engine-owned selection, focus,
+              scroll offset and id-keyed measured row heights alive, and `hidden`
+              takes the subtree that is actually IN here out of the tab order — so
+              nothing rendered below can be a control that looks active while it is
+              being ignored. An open funnel popover is portaled OUT of this subtree
+              and so escapes that, which is why the effect above closes it by hand.
+
+              The price is that these rows are in the document alongside whichever
+              surface replaced them, and the search results overlap them by
+              construction. Invisible and outside the a11y tree, but NOT outside a
+              document-wide text query: anything asserting on row text has to scope
+              itself to the surface it means, or the hidden copy will answer. */}
+          <div data-testid="browse-region" hidden={browseSurfaceHidden} ref={browseRegionRef}>
+            {sortCapped ? (
+              <p role="status" className="mb-2 text-xs text-zinc-500" data-testid="sort-cap-notice">
+                {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
               </p>
-            ) : timelineFailure !== undefined && pageRecords.length === 0 ? null : (
-              <TimelineView records={pageRecords} onSelect={setSelectedId} />
-            )
-          ) : (
+            ) : null}
+            {intentRefusal === undefined ? null : (
+              // `alert`, not `status`: this reports that the control the user just
+              // used did NOT take effect, which has to interrupt rather than wait
+              // for the next pause in output.
+              //
+              // Rendered whole, with nothing prepended: the sentence already says
+              // WHICH control did nothing, and it is the mapping that knows whether
+              // that was a funnel or a sort header. A fixed lead-in here would say
+              // "filter" over a declined sort.
+              <p
+                role="alert"
+                className="mb-2 text-xs text-red-700"
+                data-testid="filter-refusal-notice"
+              >
+                {intentRefusal}
+              </p>
+            )}
             <MemoryGrid
-              key={gridEpoch}
-              records={pageRecords}
+              onGridReady={handleGridReady}
+              records={browse.rows}
               onSelect={setSelectedId}
               onTickedChange={setTicked}
               // Only while looking at everything: scoped to one namespace by the
-              // rail, every row would sit under a single group header.
-              groupByNamespace={namespace === undefined && pageIsComplete}
-              // Filtering is server-side: the funnels only decide the query.
+              // rail, every row would sit under a single group header. A partial
+              // window no longer withholds the structure — the counts say
+              // "loaded" and claim nothing about the population.
+              groupByNamespace={namespace === undefined}
+              // Both are server-side: the funnels and the headers only decide the
+              // query, and these props are what the grid DISPLAYS while it waits.
               filters={filters}
               onFiltersChange={handleFiltersChange}
-              dataState={dataState}
+              sort={sort}
+              onSortChange={handleSortChange}
+              dataState={gridDataState}
               resultMeta={browse.resultMeta}
               emptyMessage={emptyMessage}
               onRetry={retryBrowse}
             />
-          )}
+          </div>
+          {/* Browse-only chrome that stays MOUNTED and VISIBLE in every view, because
+              unmounting it drops keyboard focus to <body>. It pages `browse.rows`,
+              which is exactly what the timeline draws, so it stays LIVE there and
+              says it does not apply only during a search. */}
+          <LoadMoreFooter
+            state={footerState}
+            loaded={browse.rows.length}
+            total={loadedTotal}
+            onLoadMore={browse.loadMore}
+            browseOnlyReason={searching ? BROWSE_ONLY_REASON : undefined}
+          />
         </main>
       </div>
-      {ticked.length > 0 ? (
+      {/* Acting on rows a newly-desired query is about to replace is exactly the
+          ambiguity this design bans, so the bar is withheld while the visible
+          rows answer the previous query. Gated on the ROWS, never on the phase
+          name: a query change whose fetch FAILS leaves `stale` for `error` with
+          those same rows still on screen (the grid bands them with the error
+          strip), and a phase test would hand the bar back at exactly the moment
+          the user has least reason to trust what they are looking at. */}
+      {ticked.length > 0 && !browse.rowsAreStale ? (
         <BulkBar
           ticked={ticked}
-          records={pageRecords}
+          records={browse.rows}
           onDone={handleBulkDone}
           onClear={clearTicked}
         />

@@ -1,7 +1,22 @@
 import type { MemoryRecord } from "@dawn-ai/memory"
+import type { ColumnFilter, FilterOperator } from "@pretable/react"
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { MemoryGrid } from "../../src/components/memory/memory-grid"
+import { COLUMNS, MemoryGrid } from "../../src/components/memory/memory-grid"
+import { toBrowseQuery } from "../../src/components/memory/to-browse-query"
+
+/** Operator NAMES in declared order, not the menu's English: what these tests
+ *  protect is that every offered operator has a `toBrowseQuery` arm, and those
+ *  tables are keyed by name. Asserting pretable's label copy would redden this
+ *  file on an upstream wording change that breaks nothing. */
+const OFFERED_OPERATORS = {
+  status: ["isAnyOf", "isNoneOf"],
+  content: ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith"],
+  namespace: ["equals", "startsWith"],
+  kind: ["isAnyOf", "isNoneOf"],
+  confidence: ["equals", "notEquals", "gt", "gte", "lt", "lte", "between"],
+  updated: ["on", "before", "after", "dateBetween"],
+} as const satisfies Record<string, readonly FilterOperator[]>
 
 function record(over: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
   return {
@@ -95,43 +110,47 @@ describe("MemoryGrid", () => {
     expect(onSelect.mock.calls).toEqual([["b"]])
   })
 
+  // These two drive sorting through `confidence` rather than `content` because
+  // `content` is deliberately unsortable — `BrowseSortField` has no content
+  // field. Which column carries the click is incidental to both; the row order
+  // is still read off the content cells.
   it("clicking a column header sorts the rows by that column", () => {
     const { container } = render(
       <MemoryGrid
         records={[
-          record({ id: "a", content: "banana" }),
-          record({ id: "b", content: "apple" }),
-          record({ id: "c", content: "cherry" }),
+          record({ id: "a", content: "middle", confidence: 0.5 }),
+          record({ id: "b", content: "lowest", confidence: 0.1 }),
+          record({ id: "c", content: "highest", confidence: 0.9 }),
         ]}
         onSelect={vi.fn()}
       />,
     )
-    expect(columnText(container, "content")).toEqual(["banana", "apple", "cherry"])
+    expect(columnText(container, "content")).toEqual(["middle", "lowest", "highest"])
 
-    const header = headerFor(container, "content")
+    const header = headerFor(container, "confidence")
     fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
     expect(header.getAttribute("aria-sort")).toBe("descending")
 
     fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["apple", "banana", "cherry"])
+    expect(columnText(container, "content")).toEqual(["lowest", "middle", "highest"])
     expect(header.getAttribute("aria-sort")).toBe("ascending")
   })
 
   it("keeps the sort when a poll hands down a fresh records array", () => {
     const records = [
-      record({ id: "a", content: "banana" }),
-      record({ id: "b", content: "apple" }),
-      record({ id: "c", content: "cherry" }),
+      record({ id: "a", content: "middle", confidence: 0.5 }),
+      record({ id: "b", content: "lowest", confidence: 0.1 }),
+      record({ id: "c", content: "highest", confidence: 0.9 }),
     ]
     const { container, rerender } = render(<MemoryGrid records={records} onSelect={vi.fn()} />)
-    fireEvent.click(headerFor(container, "content"))
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
+    fireEvent.click(headerFor(container, "confidence"))
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
 
     // Live mode refetches every 2s; each response is a new array of equal records.
     rerender(<MemoryGrid records={records.map((rec) => ({ ...rec }))} onSelect={vi.fn()} />)
-    expect(columnText(container, "content")).toEqual(["cherry", "banana", "apple"])
-    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("descending")
+    expect(columnText(container, "content")).toEqual(["highest", "middle", "lowest"])
+    expect(headerFor(container, "confidence").getAttribute("aria-sort")).toBe("descending")
   })
 
   it("sorts the updated column chronologically, not by its displayed text", () => {
@@ -177,6 +196,131 @@ describe("MemoryGrid", () => {
     expect(cellClasses("b").every((cls) => cls.includes("line-through"))).toBe(true)
     expect(cellClasses("c").some((cls) => cls.includes("line-through"))).toBe(false)
   })
+
+  it.each(Object.entries(OFFERED_OPERATORS))(
+    "offers only the operators the store can honor, on %s",
+    (columnId, operators) => {
+      // Pretable appends isEmpty/isNotEmpty to every type by default and no
+      // BrowseFilter arm expresses them, so an unpruned menu would show two
+      // controls the server ignores.
+      render(
+        <MemoryGrid
+          records={[record({ id: "a" })]}
+          onSelect={vi.fn()}
+          dataState={{ phase: "idle" }}
+        />,
+      )
+      fireEvent.click(screen.getByRole("button", { name: `Filter ${columnId}` }))
+      const dialog = screen.getByRole("dialog", { name: `Filter ${columnId}` })
+      const select = within(dialog).getByRole("combobox")
+      expect([...select.querySelectorAll("option")].map((o) => o.getAttribute("value"))).toEqual([
+        ...operators,
+      ])
+    },
+  )
+
+  it("declares no funnel operator the browse query cannot map", () => {
+    // `filterOperators` and `to-browse-query.ts`'s operator tables are two hand-kept
+    // lists of the same set, and an operator with no arm THROWS on the user's click
+    // — a runtime failure no menu assertion would reach. Values here are only
+    // well-formed enough to get past the shape guards to the operator itself.
+    const single: Record<string, ColumnFilter["value"]> = {
+      status: ["active"],
+      kind: ["semantic"],
+      namespace: "route=/notes",
+      content: "acme",
+      confidence: 0.5,
+      updated: "2026-07-13",
+    }
+    const range: Record<string, ColumnFilter["value"]> = {
+      confidence: [0, 1],
+      updated: ["2026-07-01", "2026-07-31"],
+    }
+    const filterable = COLUMNS.filter((column) => column.filterable)
+    expect(filterable.map((column) => column.id)).toEqual(Object.keys(OFFERED_OPERATORS))
+    for (const column of filterable) {
+      // An OMITTED list is pretable's full menu for the type, isEmpty included.
+      const operators = column.filterOperators ?? []
+      expect(operators.length).toBeGreaterThan(0)
+      for (const operator of operators) {
+        const value =
+          operator === "between" || operator === "dateBetween"
+            ? range[column.id]
+            : single[column.id]
+        // A missing sample would make this column's sweep vacuous, not lenient.
+        if (value === undefined) throw new Error(`no sample value for ${column.id}/${operator}`)
+        expect(() => toBrowseQuery({ [column.id]: { operator, value } }, [])).not.toThrow()
+      }
+    }
+  })
+
+  it("offers no funnel at all when the rows are a search sample", () => {
+    // Search hands down a ranked per-namespace top-N with no server authority
+    // behind it, so an engine-applied funnel would narrow the loaded sample and
+    // present that as the answer. Browse is the filtering surface.
+    render(<MemoryGrid records={[record({ id: "a" }), record({ id: "b" })]} onSelect={vi.fn()} />)
+    expect(screen.queryAllByRole("button", { name: /^Filter / })).toEqual([])
+  })
+
+  it("a funnel selection is displayed but never applied to the loaded rows", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a" }), record({ id: "c", status: "candidate" })]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        filters={{ status: { operator: "isAnyOf", value: ["candidate"] } }}
+        onFiltersChange={vi.fn()}
+      />,
+    )
+    // Both rows stay: the server decides membership, and re-applying the filter
+    // locally would drop rows between a filter tick and its response.
+    expect(columnText(container, "content")).toHaveLength(2)
+  })
+
+  it("declares no sortable column the browse query cannot order by", () => {
+    // `sortable` here and `SORT_FIELD_BY_COLUMN` in `to-browse-query.ts` are two
+    // hand-kept lists of the same set, and a sortable column with no sort field
+    // THROWS on the user's header click — a runtime failure no rendering
+    // assertion reaches. Browse renders `COLUMNS` unmasked, so this sweep covers
+    // exactly the headers browse offers.
+    expect(COLUMNS.filter((column) => column.sortable === false).map((c) => c.id)).toEqual([
+      "content",
+    ])
+    for (const column of COLUMNS) {
+      const intent = [{ columnId: column.id, direction: "asc" } as const]
+      if (column.sortable === false) {
+        expect(() => toBrowseQuery({}, intent)).toThrow()
+      } else {
+        expect(toBrowseQuery({}, intent).orderBy).toHaveLength(1)
+      }
+    }
+  })
+
+  it("never emits sort intent for content — the store has no content sort field", () => {
+    const onSortChange = vi.fn()
+    const { container } = render(
+      <MemoryGrid
+        records={[record({ id: "a" }), record({ id: "b" })]}
+        onSelect={vi.fn()}
+        // BROWSE. The constraint named above is the store's, and browse is the only
+        // mode that reaches it — search sorts in the engine, so a click there proves
+        // nothing about `SORT_FIELD_BY_COLUMN`.
+        dataState={{ phase: "idle" }}
+        onSortChange={onSortChange}
+      />,
+    )
+    fireEvent.click(headerFor(container, "content"))
+    // The contract: silence. A sortable column fires on the identical click —
+    // `confidence` does, in this file's own browse header-sort test.
+    expect(onSortChange).not.toHaveBeenCalled()
+    // KNOWN DEFECT, pinned so it stays visible rather than endorsed. @pretable/react
+    // 0.3.0 renders EVERY header as `<button aria-label="Sort …" aria-sort="none">`
+    // and only declines inside its own click handler, so a screen-reader user is
+    // offered "Sort content, button", activates it, and gets nothing. It is not part
+    // of what this test protects — delete the line once pretable stops labelling a
+    // non-sortable header as a sort control.
+    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("none")
+  })
 })
 
 function grid(container: HTMLElement): HTMLElement {
@@ -201,7 +345,10 @@ describe("MemoryGrid lifecycle", () => {
   it("is untouched when dataState is omitted", () => {
     const { container } = render(
       <MemoryGrid
-        records={[record({ id: "a", content: "apple" }), record({ id: "b", content: "banana" })]}
+        records={[
+          record({ id: "a", content: "apple", confidence: 0.2 }),
+          record({ id: "b", content: "banana", confidence: 0.8 }),
+        ]}
         onSelect={vi.fn()}
       />,
     )
@@ -209,9 +356,11 @@ describe("MemoryGrid lifecycle", () => {
     expect(container.querySelector("[data-pretable-body-state]")).toBeNull()
     // Loaded rows plus the header row — the grid speaks only for what it holds.
     expect(grid(container).getAttribute("aria-rowcount")).toBe("3")
-    fireEvent.click(headerFor(container, "content"))
+    // Through `confidence`: engine sort authority is the point, not the column,
+    // and `content` is unsortable by design.
+    fireEvent.click(headerFor(container, "confidence"))
     expect(columnText(container, "content")).toEqual(["banana", "apple"])
-    expect(headerFor(container, "content").getAttribute("aria-sort")).toBe("descending")
+    expect(headerFor(container, "confidence").getAttribute("aria-sort")).toBe("descending")
   })
 
   it("shows a loading block before the first answer", () => {
@@ -310,23 +459,46 @@ describe("MemoryGrid lifecycle", () => {
     expect(grid(withoutMeta.container).getAttribute("aria-rowcount")).toBe("-1")
   })
 
-  it("browse headers do not sort — the rows are a server-selected sample", () => {
+  it("a header click emits sort INTENT and leaves the loaded order alone", () => {
+    // The rows are a server-selected window. Re-sorting them locally would show
+    // "the top of a recency-biased sample, ordered by confidence" underneath a
+    // truthful-looking aria-sort — the wrong SAMPLE, not just the wrong order.
+    const onSortChange = vi.fn()
     const { container } = render(
       <MemoryGrid
         records={[
-          record({ id: "a", content: "banana" }),
-          record({ id: "b", content: "apple" }),
-          record({ id: "c", content: "cherry" }),
+          // Confidences that a local desc sort WOULD reverse, so "untouched"
+          // below is an assertion and not an accident of equal keys.
+          record({ id: "b", content: "beta", confidence: 0.1 }),
+          record({ id: "a", content: "alpha", confidence: 0.9 }),
         ]}
         onSelect={vi.fn()}
         dataState={{ phase: "idle" }}
-        resultMeta={{ total: { kind: "exact", count: 4322 } }}
+        sort={[]}
+        onSortChange={onSortChange}
       />,
     )
-    const header = headerFor(container, "content")
-    fireEvent.click(header)
-    expect(columnText(container, "content")).toEqual(["banana", "apple", "cherry"])
-    expect(header.getAttribute("aria-sort")).toBe("none")
+    fireEvent.click(headerFor(container, "confidence"))
+    expect(onSortChange.mock.calls).toEqual([[[{ columnId: "confidence", direction: "desc" }]]])
+    // Supplied order, untouched.
+    expect(columnText(container, "content")).toEqual(["beta", "alpha"])
+  })
+
+  it("shows the desired sort on the header while the rows still answer the old one", () => {
+    const { container } = render(
+      <MemoryGrid
+        records={[
+          record({ id: "b", content: "beta", updatedAt: "2026-11-30T00:00:00.000Z" }),
+          record({ id: "a", content: "alpha", updatedAt: "2026-01-02T00:00:00.000Z" }),
+        ]}
+        onSelect={vi.fn()}
+        dataState={{ phase: "idle" }}
+        sort={[{ columnId: "updated", direction: "asc" }]}
+        onSortChange={vi.fn()}
+      />,
+    )
+    expect(headerFor(container, "updated").getAttribute("aria-sort")).toBe("ascending")
+    expect(columnText(container, "content")).toEqual(["beta", "alpha"])
   })
 
   it("announces the settled result in the app's own words", () => {

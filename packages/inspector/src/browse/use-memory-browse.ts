@@ -8,10 +8,11 @@ import {
   type BrowsePageResponse,
   type BrowseRequest,
   type BrowseState,
-  browseCanLoadMore,
   browseDataState,
+  browseHasMore,
   browsePhase,
   browseReduce,
+  browseRowsAreStale,
   INITIAL_BROWSE_STATE,
 } from "./browse-machine"
 import {
@@ -24,7 +25,9 @@ import {
 export const BROWSE_POLL_INTERVAL_MS = 2000
 
 const NO_RECORDS: readonly MemoryRecord[] = []
-const EMPTY_PAGE: BrowsePageResponse = { records: NO_RECORDS, total: 0 }
+/** `continuation: null` because there is nothing to walk: this page is the ANSWER to a
+ *  matches-nothing query, not a window that stopped short of one. */
+const EMPTY_PAGE: BrowsePageResponse = { records: NO_RECORDS, total: 0, continuation: null }
 const UNKNOWN_TOTAL_META: PretableResultMeta = { total: { kind: "unknown" } }
 
 export type BrowseFetcher = (
@@ -38,8 +41,15 @@ export type BrowseFetcher = (
  *  the boundary, the same body becomes an ordinary request failure with a banner. */
 function isBrowsePage(body: unknown): body is BrowsePageResponse {
   if (body === null || typeof body !== "object") return false
-  const page = body as { records?: unknown; total?: unknown }
-  return Array.isArray(page.records) && typeof page.total === "number"
+  const page = body as { records?: unknown; total?: unknown; continuation?: unknown }
+  return (
+    Array.isArray(page.records) &&
+    typeof page.total === "number" &&
+    // Required, never defaulted. `undefined` folded to `null` would report the walk
+    // complete on a response that never said so, and the rest of the set would be
+    // unreachable with nothing on screen to say why.
+    (page.continuation === null || typeof page.continuation === "string")
+  )
 }
 
 /** GET one browse window, surfacing the API's `{error}` body as the thrown message. */
@@ -60,7 +70,7 @@ export async function fetchBrowsePage(
   return body
 }
 
-export interface UseMemoryBrowseOptions {
+export interface UseMemoryBrowseInput {
   /** MEMOIZE the canonical query. A fresh object per render is harmless (the dataset
    *  key decides), but a `since` recomputed from `Date.now()` on every render would
    *  bump the desired revision on every render and refetch forever. */
@@ -72,7 +82,11 @@ export interface UseMemoryBrowseOptions {
 }
 
 export interface UseMemoryBrowseResult {
-  readonly records: readonly MemoryRecord[]
+  readonly rows: readonly MemoryRecord[]
+  /** `rows` answer a revision other than the desired one. Gate anything that ACTS on
+   *  what is displayed on this, not on `dataState.phase`: `stale` and `error`-with-rows
+   *  are the same picture, and only this one covers both. */
+  readonly rowsAreStale: boolean
   readonly dataState: PretableDataState
   readonly resultMeta: PretableResultMeta
   /** Matching population for the FULFILLED revision, or null when nothing is
@@ -83,34 +97,47 @@ export interface UseMemoryBrowseResult {
   readonly updatedAt: number | null
   /** Polling is suspended: live off, tab hidden, or a held error. */
   readonly paused: boolean
-  readonly canLoadMore: boolean
+  /** The forward walk can be continued — the newest response issued a continuation.
+   *  NOT a promise that `loadMore` will fetch anything: past the resident cap this
+   *  stays true while the machine refuses the request, so a consumer that offers a
+   *  control must gate it on the loaded count as well — and say which of the two it is
+   *  refusing on. Nor is it `loaded < total`; see `browseHasMore` for why those two
+   *  legitimately disagree by up to one poll period. */
+  readonly hasMore: boolean
   loadMore(): void
   refresh(): void
   retry(): void
 }
 
-export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrowseResult {
-  const { query, live } = options
-  const pollIntervalMs = options.pollIntervalMs ?? BROWSE_POLL_INTERVAL_MS
+export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseResult {
+  const { query, live } = input
+  const pollIntervalMs = input.pollIntervalMs ?? BROWSE_POLL_INTERVAL_MS
   const datasetKey = useMemo(() => datasetKeyOf(query), [query])
 
   const [state, setState] = useState<BrowseState>(INITIAL_BROWSE_STATE)
 
-  // Mirrors of the options the async paths read, seeded from the mounting render and
+  // Mirrors of the input the async paths read, seeded from the mounting render and
   // written on COMMIT thereafter — NEVER during render. A render React throws away (a
   // transition that suspends), or a dispatch that lands between a commit and its
   // effect flush, would otherwise build params from a query no state ever matched
   // while tagging them with the revision the state still holds — and `browseReduce`
   // ACCEPTS that response, merging one question's rows and total under the other's
   // dataset key. Lagging a render behind within one key is harmless: the key is the
-  // JSON of exactly the fields `browseSearchParams` reads.
+  // JSON of exactly the narrowings `browseSearchParams` reads off the query.
+  //
+  // The window's `cursor` comes from the machine, not from here, and cannot be paired
+  // with the wrong query: the reducer only builds a load-more while the FULFILLED
+  // revision is the desired one, and a query change bumps that revision and issues an
+  // `initial` (cursor-less) request instead. The route would reject a mismatch anyway
+  // — the token carries its own query's fingerprint — but that is the backstop, not
+  // the mechanism.
   const queryRef = useRef(query)
-  const fetchRef = useRef<BrowseFetcher>(options.fetchPage ?? fetchBrowsePage)
-  const nowRef = useRef<() => number>(options.now ?? Date.now)
+  const fetchRef = useRef<BrowseFetcher>(input.fetchPage ?? fetchBrowsePage)
+  const nowRef = useRef<() => number>(input.now ?? Date.now)
   useEffect(() => {
     queryRef.current = query
-    fetchRef.current = options.fetchPage ?? fetchBrowsePage
-    nowRef.current = options.now ?? Date.now
+    fetchRef.current = input.fetchPage ?? fetchBrowsePage
+    nowRef.current = input.now ?? Date.now
   })
 
   // The machine's state lives in a ref as well as in `useState`: dispatches arrive
@@ -275,14 +302,15 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
   const dataState = browseDataState(state)
 
   return {
-    records: fulfilled?.records ?? NO_RECORDS,
+    rows: fulfilled?.records ?? NO_RECORDS,
+    rowsAreStale: browseRowsAreStale(state),
     dataState,
     resultMeta,
     total: fulfilled?.total ?? null,
     errors: state.kindErrors,
     updatedAt: fulfilled?.at ?? null,
     paused,
-    canLoadMore: browseCanLoadMore(state),
+    hasMore: browseHasMore(state),
     loadMore,
     refresh,
     retry,

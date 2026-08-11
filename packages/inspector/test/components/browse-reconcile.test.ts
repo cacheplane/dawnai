@@ -59,13 +59,14 @@ describe("compareDefaultBrowseOrder", () => {
 })
 
 describe("dedupeById", () => {
-  it("appends only ids the resident set does not hold", () => {
+  it("appends only ids the resident set does not hold, and the RESIDENT copy wins", () => {
+    // Payloads, not just ids: a next-page copy of a resident row must not replace the
+    // row under the user. Only `reconcileRefreshedWindow` updates a resident payload,
+    // and only from a head-anchored window it can place.
     const prev = [row("a", "t"), row("b", "t")]
-    expect(dedupeById(prev, [row("b", "t"), row("c", "t")]).map((r) => r.id)).toEqual([
-      "a",
-      "b",
-      "c",
-    ])
+    const next = dedupeById(prev, [row("b", "t", "next page"), row("c", "t", "next page")])
+    expect(next.map((r) => r.id)).toEqual(["a", "b", "c"])
+    expect(next.map((r) => r.payload)).toEqual(["old", "old", "next page"])
   })
 
   it("returns the SAME array when nothing was added", () => {
@@ -73,9 +74,11 @@ describe("dedupeById", () => {
     expect(dedupeById(prev, [row("a", "t")])).toBe(prev)
   })
 
-  it("drops a duplicate WITHIN next, not only one against prev", () => {
-    const next = [row("b", "t"), row("b", "t", "again"), row("c", "t")]
-    expect(dedupeById([row("a", "t")], next).map((r) => r.id)).toEqual(["a", "b", "c"])
+  it("drops a duplicate WITHIN next, not only one against prev — the FIRST copy wins", () => {
+    const next = [row("b", "t", "first"), row("b", "t", "second"), row("c", "t")]
+    const merged = dedupeById([row("a", "t")], next)
+    expect(merged.map((r) => r.id)).toEqual(["a", "b", "c"])
+    expect(merged.map((r) => r.payload)).toEqual(["old", "first", "old"])
   })
 })
 

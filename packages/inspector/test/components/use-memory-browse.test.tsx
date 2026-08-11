@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { Suspense, startTransition, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { BROWSE_RESIDENT_CAP } from "../../src/browse/browse-machine"
 import { type CanonicalBrowseQuery, canonicalBrowseQuery } from "../../src/browse/canonical-query"
 import {
   fetchBrowsePage,
@@ -26,7 +27,13 @@ function record(id: string): MemoryRecord {
   }
 }
 
-type BrowsePage = { records: readonly MemoryRecord[]; total: number }
+type BrowsePage = {
+  records: readonly MemoryRecord[]
+  total: number
+  /** The keyset token, or null for "this window reached the end". Required, so a
+   *  fixture cannot quietly leave the walk in a state the server never described. */
+  continuation: string | null
+}
 
 interface DeferredCall {
   params: URLSearchParams
@@ -71,16 +78,19 @@ describe("useMemoryBrowse", () => {
     expect(result.current.dataState).toEqual({ phase: "loading" })
     await waitFor(() => expect(calls).toHaveLength(1))
     expect(callAt(calls, 0).params.get("limit")).toBe("200")
-    expect(callAt(calls, 0).params.get("offset")).toBe("0")
+    // The head: no cursor, and never an offset.
+    expect(callAt(calls, 0).params.get("cursor")).toBeNull()
 
     await act(async () => {
-      callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
+      callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
     })
     expect(result.current.dataState).toEqual({ phase: "idle" })
-    expect(result.current.records.map((r) => r.id)).toEqual(["a"])
+    expect(result.current.rows.map((r) => r.id)).toEqual(["a"])
     expect(result.current.total).toBe(5432)
     expect(result.current.resultMeta.total).toEqual({ kind: "exact", count: 5432 })
-    expect(result.current.resultMeta.datasetKey).toBe('["list",null,null,null,null]')
+    // Spelled out rather than computed: the point is that the grid receives the
+    // canonical JSON itself, which `datasetKeyOf(query)` here would assume.
+    expect(result.current.resultMeta.datasetKey).toBe('["list",null,null,null,null,null,null]')
   })
 
   it("publishes the FULFILLED dataset key, so the grid pivots when the answer lands", async () => {
@@ -96,7 +106,7 @@ describe("useMemoryBrowse", () => {
     )
     await waitFor(() => expect(calls).toHaveLength(1))
     await act(async () => {
-      callAt(calls, 0).resolve({ records: [record("a")], total: 2 })
+      callAt(calls, 0).resolve({ records: [record("a")], total: 2, continuation: "cur-1" })
     })
     const firstKey = result.current.resultMeta.datasetKey
 
@@ -108,10 +118,10 @@ describe("useMemoryBrowse", () => {
 
     await waitFor(() => expect(calls).toHaveLength(2))
     await act(async () => {
-      callAt(calls, 1).resolve({ records: [record("z")], total: 1 })
+      callAt(calls, 1).resolve({ records: [record("z")], total: 1, continuation: "cur-1" })
     })
     expect(result.current.resultMeta.datasetKey).not.toBe(firstKey)
-    expect(result.current.records.map((r) => r.id)).toEqual(["z"])
+    expect(result.current.rows.map((r) => r.id)).toEqual(["z"])
   })
 
   it("aborts the superseded request and discards it even if abort loses the race", async () => {
@@ -131,9 +141,9 @@ describe("useMemoryBrowse", () => {
 
     // Abort lost the race: the superseded response resolves anyway.
     await act(async () => {
-      callAt(calls, 0).resolve({ records: [record("stale")], total: 999 })
+      callAt(calls, 0).resolve({ records: [record("stale")], total: 999, continuation: "cur-1" })
     })
-    expect(result.current.records).toHaveLength(0)
+    expect(result.current.rows).toHaveLength(0)
     expect(result.current.total).toBeNull()
     expect(result.current.dataState).toEqual({ phase: "loading" })
   })
@@ -156,7 +166,7 @@ describe("useMemoryBrowse", () => {
         useMemoryBrowse({ query, live: true, fetchPage, pollIntervalMs: 2000 }),
       )
       await act(async () => {
-        callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
+        callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
       })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000)
@@ -185,7 +195,7 @@ describe("useMemoryBrowse", () => {
         useMemoryBrowse({ query, live: true, fetchPage, pollIntervalMs: 2000 }),
       )
       await act(async () => {
-        callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
+        callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
       })
       const meta = result.current.resultMeta
       const dataState = result.current.dataState
@@ -194,7 +204,7 @@ describe("useMemoryBrowse", () => {
         await vi.advanceTimersByTimeAsync(2000)
       })
       await act(async () => {
-        callAt(calls, 1).resolve({ records: [record("a")], total: 5432 })
+        callAt(calls, 1).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
       })
       // The grid holds both of these as dependencies and the cadence walks
       // idle → refreshing → idle every 2 s: a fresh object on the way back reports a
@@ -206,6 +216,42 @@ describe("useMemoryBrowse", () => {
     }
   })
 
+  it("reports hasMore from the server's token, not from the resident cap", async () => {
+    const { calls, fetchPage } = deferredFetcher()
+    const query = canonicalBrowseQuery({ view: "list" })
+    const { result } = renderHook(() => useMemoryBrowse({ query, live: false, fetchPage }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    await act(async () => {
+      callAt(calls, 0).resolve({
+        records: Array.from({ length: BROWSE_RESIDENT_CAP }, (_, i) => record(`r${i}`)),
+        total: 5432,
+        continuation: "cur-1",
+      })
+    })
+    // The cap closes the load-more REQUEST, and the machine is what refuses it. It does
+    // not withdraw the token the server issued, and this field is what a footer quotes
+    // the loaded count against — so it must not read as exhaustion.
+    expect(result.current.rows).toHaveLength(BROWSE_RESIDENT_CAP)
+    expect(result.current.hasMore).toBe(true)
+  })
+
+  it("reports hasMore false once the server withholds the token", async () => {
+    const { calls, fetchPage } = deferredFetcher()
+    const query = canonicalBrowseQuery({ view: "list" })
+    const { result } = renderHook(() => useMemoryBrowse({ query, live: false, fetchPage }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    await act(async () => {
+      callAt(calls, 0).resolve({
+        records: [record("a"), record("b")],
+        total: 2,
+        continuation: null,
+      })
+    })
+    expect(result.current.hasMore).toBe(false)
+  })
+
   it("queues a load-more asked for behind a refresh and drains it onto the tail", async () => {
     vi.useFakeTimers()
     try {
@@ -215,15 +261,19 @@ describe("useMemoryBrowse", () => {
         useMemoryBrowse({ query, live: true, fetchPage, pollIntervalMs: 2000 }),
       )
       await act(async () => {
-        callAt(calls, 0).resolve({ records: [record("a"), record("b")], total: 5 })
+        callAt(calls, 0).resolve({
+          records: [record("a"), record("b")],
+          total: 5,
+          continuation: "cur-1",
+        })
       })
-      expect(result.current.canLoadMore).toBe(true)
+      expect(result.current.hasMore).toBe(true)
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000)
       })
       expect(calls).toHaveLength(2)
-      expect(callAt(calls, 1).params.get("offset")).toBe("0")
+      expect(callAt(calls, 1).params.get("cursor")).toBeNull()
 
       // Asked for while the tick holds the single flight: intent is queued, never
       // dropped, and no second request goes out yet.
@@ -236,19 +286,24 @@ describe("useMemoryBrowse", () => {
       // request re-enters `startRequest` while that handler is still on the stack —
       // and must not abort or orphan the controller it is unwinding from.
       await act(async () => {
-        callAt(calls, 1).resolve({ records: [record("a"), record("b")], total: 5 })
+        callAt(calls, 1).resolve({
+          records: [record("a"), record("b")],
+          total: 5,
+          continuation: "cur-refreshed",
+        })
       })
       expect(calls).toHaveLength(3)
-      expect(callAt(calls, 2).params.get("offset")).toBe("2")
+      // The token the refresh it queued behind just issued.
+      expect(callAt(calls, 2).params.get("cursor")).toBe("cur-refreshed")
       expect(callAt(calls, 2).signal.aborted).toBe(false)
       expect(result.current.dataState).toEqual({ phase: "loading-more" })
 
       await act(async () => {
-        callAt(calls, 2).resolve({ records: [record("c")], total: 5 })
+        callAt(calls, 2).resolve({ records: [record("c")], total: 5, continuation: "cur-1" })
       })
-      expect(result.current.records.map((r) => r.id)).toEqual(["a", "b", "c"])
+      expect(result.current.rows.map((r) => r.id)).toEqual(["a", "b", "c"])
       expect(result.current.dataState).toEqual({ phase: "idle" })
-      expect(result.current.canLoadMore).toBe(true)
+      expect(result.current.hasMore).toBe(true)
     } finally {
       vi.useRealTimers()
     }
@@ -265,7 +320,7 @@ describe("useMemoryBrowse", () => {
         { initialProps: { live: true } },
       )
       await act(async () => {
-        callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
+        callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
       })
 
       rerender({ live: false })
@@ -313,7 +368,7 @@ describe("useMemoryBrowse", () => {
       })
       expect(calls).toHaveLength(2)
       await act(async () => {
-        callAt(calls, 1).resolve({ records: [record("a")], total: 1 })
+        callAt(calls, 1).resolve({ records: [record("a")], total: 1, continuation: "cur-1" })
       })
       expect(result.current.dataState).toEqual({ phase: "idle" })
       expect(result.current.paused).toBe(false)
@@ -332,7 +387,7 @@ describe("useMemoryBrowse", () => {
     expect(callAt(calls, 0).signal.aborted).toBe(true)
 
     await act(async () => {
-      callAt(calls, 0).resolve({ records: [record("a")], total: 1 })
+      callAt(calls, 0).resolve({ records: [record("a")], total: 1, continuation: "cur-1" })
     })
     // Stamping the as-of instant is the FIRST thing applying a response does, so an
     // unread clock is the observable proof the handler bailed on the aborted signal.
@@ -373,7 +428,7 @@ describe("useMemoryBrowse", () => {
         root.render(<App />)
       })
       await act(async () => {
-        callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
+        callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
       })
 
       // A transition keeps the committed tree — and everything it can still dispatch
@@ -434,10 +489,11 @@ describe("fetchBrowsePage", () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it("returns a well-formed page", async () => {
-    stubFetch(() => Response.json({ records: [record("a")], total: 1 }))
+    stubFetch(() => Response.json({ records: [record("a")], total: 1, continuation: "cur-1" }))
     const page = await fetchBrowsePage(new URLSearchParams(), new AbortController().signal)
     expect(page.total).toBe(1)
     expect(page.records.map((r) => r.id)).toEqual(["a"])
+    expect(page.continuation).toBe("cur-1")
   })
 
   it("rejects a 200 that is not a page, rather than handing it to the reducer", async () => {
@@ -457,5 +513,51 @@ describe("fetchBrowsePage", () => {
     await expect(
       fetchBrowsePage(new URLSearchParams(), new AbortController().signal),
     ).rejects.toThrow("no memory store configured")
+  })
+})
+
+describe("useMemoryBrowse — keyset paging over the wire", () => {
+  it("continues the walk from the newest fulfilled continuation", async () => {
+    const { calls, fetchPage } = deferredFetcher()
+    const query = canonicalBrowseQuery({ view: "list" })
+    const { result } = renderHook(() => useMemoryBrowse({ query, live: false, fetchPage }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(callAt(calls, 0).params.get("cursor")).toBeNull()
+    expect(callAt(calls, 0).params.get("offset")).toBeNull()
+
+    await act(async () => {
+      callAt(calls, 0).resolve({ records: [record("a")], total: 5432, continuation: "cur-1" })
+    })
+    expect(result.current.hasMore).toBe(true)
+
+    act(() => {
+      result.current.loadMore()
+    })
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(callAt(calls, 1).params.get("cursor")).toBe("cur-1")
+    expect(callAt(calls, 1).params.get("offset")).toBeNull()
+
+    await act(async () => {
+      callAt(calls, 1).resolve({ records: [record("b")], total: 5432, continuation: null })
+    })
+    expect(result.current.rows.map((r) => r.id)).toEqual(["a", "b"])
+    // The token the last response withheld is the whole of the answer here.
+    expect(result.current.hasMore).toBe(false)
+  })
+
+  it("rejects a page with no continuation field rather than reading it as the end", async () => {
+    // A body missing the token is not a page this client can walk. Defaulting it to
+    // null would report the walk complete on a response that never said so.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ records: [record("a")], total: 1 })),
+    )
+    try {
+      await expect(
+        fetchBrowsePage(new URLSearchParams(), new AbortController().signal),
+      ).rejects.toThrow(/not a browse page/)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

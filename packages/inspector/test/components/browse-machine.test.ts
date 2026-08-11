@@ -7,8 +7,10 @@ import {
   type BrowseState,
   browseCanLoadMore,
   browseDataState,
+  browseHasMore,
   browsePhase,
   browseReduce,
+  browseRowsAreStale,
   INITIAL_BROWSE_STATE,
 } from "../../src/browse/browse-machine"
 
@@ -67,12 +69,12 @@ describe("browse machine — flow 1: initial load", () => {
     expect(transition.start).toEqual({
       revision: 1,
       kind: "initial",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+      window: { limit: BROWSE_PAGE_SIZE, cursor: null },
     })
     expect(browsePhase(transition.state)).toBe("loading")
   })
 
-  it("the response stores records, total and key together, tagged with the revision", () => {
+  it("the response stores records, total, continuation and key together, revision-tagged", () => {
     const state = apply(
       INITIAL_BROWSE_STATE,
       { type: "query-changed", datasetKey: KEY_A },
@@ -80,7 +82,7 @@ describe("browse machine — flow 1: initial load", () => {
         type: "response",
         revision: 1,
         kind: "initial",
-        page: { records: [record("a")], total: 5432 },
+        page: { records: [record("a")], total: 5432, continuation: "cur-1" },
         at: 1000,
       },
     )
@@ -89,6 +91,7 @@ describe("browse machine — flow 1: initial load", () => {
       datasetKey: KEY_A,
       records: [record("a")],
       total: 5432,
+      continuation: "cur-1",
       at: 1000,
     })
     expect(browsePhase(state)).toBe("idle")
@@ -104,7 +107,7 @@ describe("browse machine — flows 2 and 4: a new desired query over a fulfilled
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 1000,
     },
   )
@@ -120,7 +123,7 @@ describe("browse machine — flows 2 and 4: a new desired query over a fulfilled
   it("aborts what was in flight, and drops the queued load-more and every error slot", () => {
     const busy: BrowseState = {
       ...loaded,
-      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, cursor: null } },
       queuedLoadMore: true,
       kindErrors: { refresh: "boom" },
     }
@@ -138,7 +141,7 @@ describe("browse machine — flows 2 and 4: a new desired query over a fulfilled
         type: "response",
         revision: 2,
         kind: "initial",
-        page: { records: [record("z")], total: 7 },
+        page: { records: [record("z")], total: 7, continuation: null },
         at: 2000,
       },
     )
@@ -147,6 +150,8 @@ describe("browse machine — flows 2 and 4: a new desired query over a fulfilled
       datasetKey: KEY_B,
       records: [record("z")],
       total: 7,
+      // The new dataset's own answer, replacing the token the old one issued.
+      continuation: null,
       at: 2000,
     })
     expect(browsePhase(state)).toBe("idle")
@@ -167,7 +172,7 @@ describe("browse machine — flow 6: a stale response completing after a query c
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a")], total: 999 },
+      page: { records: [record("a")], total: 999, continuation: "cur-x" },
       at: 3000,
     })
     expect(transition.state).toBe(stale)
@@ -203,7 +208,7 @@ describe("browse machine — the phase table", () => {
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 1000,
     },
   )
@@ -212,13 +217,13 @@ describe("browse machine — the phase table", () => {
     expect(
       browsePhase({
         ...loaded,
-        inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+        inFlight: { revision: 1, kind: "refresh", window: { limit: 200, cursor: null } },
       }),
     ).toBe("refreshing")
     expect(
       browsePhase({
         ...loaded,
-        inFlight: { revision: 1, kind: "load-more", window: { limit: 200, offset: 1 } },
+        inFlight: { revision: 1, kind: "load-more", window: { limit: 200, cursor: "cur-1" } },
       }),
     ).toBe("loading-more")
   })
@@ -254,6 +259,38 @@ describe("browse machine — the phase table", () => {
     expect(failedWarm.fulfilled?.records).toHaveLength(1)
   })
 
+  it("reports rows as stale across BOTH phases the previous revision survives into", () => {
+    const pending = apply(loaded, { type: "query-changed", datasetKey: KEY_B })
+    expect(browsePhase(pending)).toBe("stale")
+    expect(browseRowsAreStale(pending)).toBe(true)
+
+    // The same rows, one failure later. The phase moved and the picture did not,
+    // which is the whole reason a consumer gating on what is DISPLAYED cannot read
+    // the phase name.
+    const failedWarm = apply(pending, {
+      type: "failure",
+      revision: 2,
+      kind: "initial",
+      message: "boom",
+    })
+    expect(browsePhase(failedWarm)).toBe("error")
+    expect(failedWarm.fulfilled?.records).toBe(pending.fulfilled?.records)
+    expect(browseRowsAreStale(failedWarm)).toBe(true)
+
+    // False everywhere the rows do answer the desired revision — including the
+    // `error` that has no rows at all, so the flag never stands in for "failed".
+    expect(browseRowsAreStale(loaded)).toBe(false)
+    expect(
+      browseRowsAreStale(
+        apply(
+          INITIAL_BROWSE_STATE,
+          { type: "query-changed", datasetKey: KEY_A },
+          { type: "failure", revision: 1, kind: "initial", message: "boom" },
+        ),
+      ),
+    ).toBe(false)
+  })
+
   it("a retry in flight is a fresh attempt, not the held failure", () => {
     const failed = apply(
       INITIAL_BROWSE_STATE,
@@ -269,7 +306,7 @@ describe("browse machine — the phase table", () => {
     expect(retried.start).toEqual({
       revision: 1,
       kind: "initial",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+      window: { limit: BROWSE_PAGE_SIZE, cursor: null },
     })
     expect(browsePhase(retried.state)).toBe("loading")
   })
@@ -283,18 +320,18 @@ describe("browse machine — single-flight arbitration", () => {
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a"), record("b")], total: 5432 },
+      page: { records: [record("a"), record("b")], total: 5432, continuation: "cur-1" },
       at: 1000,
     },
   )
   const fulfilled = loaded.fulfilled
   if (fulfilled === null) throw new Error("unreachable")
 
-  it("a poll tick asks for offset 0 with limit = resident count, floored at one page", () => {
+  it("a poll tick asks for the HEAD with limit = resident count, floored at one page", () => {
     expect(browseReduce(loaded, { type: "poll-tick" }).start).toEqual({
       revision: 1,
       kind: "refresh",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+      window: { limit: BROWSE_PAGE_SIZE, cursor: null },
     })
     const big: BrowseState = {
       ...loaded,
@@ -302,7 +339,7 @@ describe("browse machine — single-flight arbitration", () => {
     }
     expect(browseReduce(big, { type: "poll-tick" }).start?.window).toEqual({
       limit: 600,
-      offset: 0,
+      cursor: null,
     })
   })
 
@@ -310,7 +347,7 @@ describe("browse machine — single-flight arbitration", () => {
     for (const kind of ["initial", "refresh", "load-more"] as const) {
       const busy: BrowseState = {
         ...loaded,
-        inFlight: { revision: 1, kind, window: { limit: 200, offset: 0 } },
+        inFlight: { revision: 1, kind, window: { limit: 200, cursor: null } },
       }
       const transition = browseReduce(busy, { type: "poll-tick" })
       expect(transition.start).toBeNull()
@@ -328,14 +365,16 @@ describe("browse machine — single-flight arbitration", () => {
       type: "response",
       revision: 1,
       kind: "refresh",
-      page: { records: [record("a"), record("b")], total: 5432 },
+      page: { records: [record("a"), record("b")], total: 5432, continuation: "cur-refreshed" },
       at: 2000,
     })
     expect(settled.state.queuedLoadMore).toBe(false)
     expect(settled.start).toEqual({
       revision: 1,
       kind: "load-more",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 2 },
+      // The token the tick it waited on just issued, not the one the state held when
+      // the click landed: the refresh has already re-derived and moved past that span.
+      window: { limit: BROWSE_PAGE_SIZE, cursor: "cur-refreshed" },
     })
   })
 
@@ -354,7 +393,7 @@ describe("browse machine — single-flight arbitration", () => {
   it("load-more during load-more is a no-op, and stops at the resident cap", () => {
     const loading: BrowseState = {
       ...loaded,
-      inFlight: { revision: 1, kind: "load-more", window: { limit: 200, offset: 2 } },
+      inFlight: { revision: 1, kind: "load-more", window: { limit: 200, cursor: "cur-1" } },
     }
     expect(browseReduce(loading, { type: "load-more-requested" }).start).toBeNull()
     expect(browseReduce(loading, { type: "load-more-requested" }).state.queuedLoadMore).toBe(false)
@@ -371,9 +410,30 @@ describe("browse machine — single-flight arbitration", () => {
     expect(browseReduce(atCap, { type: "load-more-requested" }).start).toBeNull()
   })
 
-  it("load-more is unavailable once everything matching is loaded", () => {
-    const complete: BrowseState = { ...loaded, fulfilled: { ...fulfilled, total: 2 } }
+  it("separates the server's remaining population from the client's resident cap", () => {
+    // Two different questions. `browseCanLoadMore` answers "may this client issue
+    // another request", which the cap closes; `browseHasMore` answers "did the server
+    // leave a token to walk from", which the cap cannot change. Folding the cap into
+    // the second is what would let a footer render "all loaded" over a set 4432 rows
+    // short of the total it is quoting.
+    const atCap: BrowseState = {
+      ...loaded,
+      fulfilled: {
+        ...fulfilled,
+        records: Array.from({ length: BROWSE_RESIDENT_CAP }, (_, i) => record(`r${i}`)),
+        total: 5432,
+      },
+    }
+    expect(browseHasMore(atCap)).toBe(true)
+    expect(browseCanLoadMore(atCap)).toBe(false)
+  })
+
+  it("load-more is unavailable once the walk has reached the end", () => {
+    // The server withheld a token, which is the only thing that ends a walk. The counts
+    // do not: see `browseHasMore` for the two directions in which they disagree.
+    const complete: BrowseState = { ...loaded, fulfilled: { ...fulfilled, continuation: null } }
     expect(browseCanLoadMore(complete)).toBe(false)
+    expect(browseHasMore(complete)).toBe(false)
   })
 })
 
@@ -385,7 +445,7 @@ describe("browse machine — immutability and identity", () => {
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 1000,
     },
   )
@@ -418,7 +478,7 @@ describe("browse machine — immutability and identity", () => {
       type: "response",
       revision: 1,
       kind: "refresh",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 2000,
     }).state
     expect(browseDataState(refreshing)).not.toBe(browseDataState(loaded))
@@ -437,11 +497,21 @@ describe("browse machine — immutability and identity", () => {
 })
 
 describe("browse machine — the resident cap", () => {
-  function loadedWith(records: readonly MemoryRecord[], total = 5432): BrowseState {
+  function loadedWith(
+    records: readonly MemoryRecord[],
+    total = 5432,
+    continuation: string | null = "cur-0",
+  ): BrowseState {
     return apply(
       INITIAL_BROWSE_STATE,
       { type: "query-changed", datasetKey: KEY_A },
-      { type: "response", revision: 1, kind: "initial", page: { records, total }, at: 1000 },
+      {
+        type: "response",
+        revision: 1,
+        kind: "initial",
+        page: { records, total, continuation },
+        at: 1000,
+      },
     )
   }
 
@@ -452,17 +522,28 @@ describe("browse machine — the resident cap", () => {
   it("holds the resident set at the cap however the pages land", () => {
     // A resident count off the 200 boundary is ordinary, not exotic: `dedupeById` drops
     // a paging duplicate whenever an insert shifts the offsets under a load-more.
-    let state = loadedWith(rows(197))
+    // The token names the position the NEXT window starts from, so it tracks the
+    // resident count all the way up — which is what makes the cursor assertion below a
+    // statement about continuing the walk rather than about a constant.
+    let state = loadedWith(rows(197), 5432, "cur-197")
     for (let guard = 0; browseCanLoadMore(state) && guard < 20; guard += 1) {
+      const resident = state.fulfilled?.records.length ?? 0
       const transition = browseReduce(state, { type: "load-more-requested" })
       const request = transition.start
       if (request === null) throw new Error("unreachable")
-      expect(request.window.offset + request.window.limit).toBeLessThanOrEqual(BROWSE_RESIDENT_CAP)
+      // The limit is what the cap constrains now that the position is a token: asking
+      // for more than the cap can hold would fetch rows `withinCap` immediately drops.
+      expect(resident + request.window.limit).toBeLessThanOrEqual(BROWSE_RESIDENT_CAP)
+      expect(request.window.cursor).toBe(`cur-${resident}`)
       state = browseReduce(transition.state, {
         type: "response",
         revision: 1,
         kind: "load-more",
-        page: { records: rows(request.window.limit, request.window.offset), total: 5432 },
+        page: {
+          records: rows(request.window.limit, resident),
+          total: 5432,
+          continuation: `cur-${resident + request.window.limit}`,
+        },
         at: 2000,
       }).state
     }
@@ -473,12 +554,14 @@ describe("browse machine — the resident cap", () => {
   it("truncates a reconciled refresh, so rule 3's tail stays inside a later window", () => {
     const state = loadedWith(rows(900))
     const refreshing = browseReduce(state, { type: "poll-tick" })
-    expect(refreshing.start?.window).toEqual({ limit: 900, offset: 0 })
+    expect(refreshing.start?.window).toEqual({ limit: 900, cursor: null })
     const settled = browseReduce(refreshing.state, {
       type: "response",
       revision: 1,
       kind: "refresh",
-      page: { records: inserted(900), total: 6000 },
+      // A token, so the window filled and its span is bounded — which is what leaves a
+      // beyond for rule 3 to retain 900 residents into.
+      page: { records: inserted(900), total: 6000, continuation: "cur-900" },
       at: 2000,
     }).state
     expect(settled.fulfilled?.records).toHaveLength(BROWSE_RESIDENT_CAP)
@@ -511,6 +594,7 @@ describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () 
       page: {
         records: [record("a", "2026-08-03T00:00:00.000Z"), record("b", "2026-08-02T00:00:00.000Z")],
         total: 5432,
+        continuation: "cur-1",
       },
       at: 1000,
     },
@@ -518,7 +602,8 @@ describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () 
 
   it("a refresh response is reconciled against the residents, not concatenated", () => {
     const refreshing = browseReduce(loaded, { type: "poll-tick" }).state
-    // A partial window (2 of a 200 limit) ends the span: `b` is gone.
+    // No token: the window reached the end of the matching set, so its span is
+    // unbounded and there is no beyond for `b` to be retained in — `b` is gone.
     const settled = browseReduce(refreshing, {
       type: "response",
       revision: 1,
@@ -526,28 +611,12 @@ describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () 
       page: {
         records: [record("c", "2026-08-09T00:00:00.000Z"), record("a", "2026-08-03T00:00:00.000Z")],
         total: 5431,
+        continuation: null,
       },
       at: 2000,
     })
     expect(settled.state.fulfilled?.records.map((r) => r.id)).toEqual(["c", "a"])
     expect(settled.state.fulfilled?.total).toBe(5431)
-  })
-
-  it("refuses a refresh response with nothing in flight instead of guessing its span", () => {
-    // The request's limit is the only record of how far this response reached, and
-    // either guess decides rule 3: too high drops a live tail, too low pins a stale one.
-    expect(() =>
-      browseReduce(
-        { ...loaded, inFlight: null },
-        {
-          type: "response",
-          revision: 1,
-          kind: "refresh",
-          page: { records: [record("a")], total: 5432 },
-          at: 2000,
-        },
-      ),
-    ).toThrow(/in flight/)
   })
 
   it("a load-more response is appended with ids deduped", () => {
@@ -559,6 +628,7 @@ describe("browse machine — flow 9: refresh reconciles, load-more dedupes", () 
       page: {
         records: [record("b", "2026-08-02T00:00:00.000Z"), record("c", "2026-08-01T00:00:00.000Z")],
         total: 5432,
+        continuation: "cur-2",
       },
       at: 2000,
     })
@@ -574,7 +644,7 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
       type: "response",
       revision: 1,
       kind: "initial",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 1000,
     },
   )
@@ -599,7 +669,7 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
       type: "response",
       revision: 1,
       kind: "refresh",
-      page: { records: [record("a")], total: 5432 },
+      page: { records: [record("a")], total: 5432, continuation: "cur-1" },
       at: 2000,
     }).state
     expect(ok.kindErrors).toEqual({ "load-more": "l" })
@@ -627,7 +697,9 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
     expect(browseReduce(loadMoreFailed, { type: "retry" }).start).toEqual({
       revision: 1,
       kind: "load-more",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 1 },
+      // The SAME token the failed attempt carried: a continuation is consumed on
+      // success only, so re-sending it asks for the window that never arrived.
+      window: { limit: BROWSE_PAGE_SIZE, cursor: "cur-1" },
     })
     // Both slots filled is the only arrangement that puts the preference to the test:
     // refresh is also the fallback for a state carrying no failure at all, so a
@@ -638,7 +710,7 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
     expect(browseReduce(refreshFailed, { type: "retry" }).start).toEqual({
       revision: 1,
       kind: "refresh",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+      window: { limit: BROWSE_PAGE_SIZE, cursor: null },
     })
   })
 
@@ -656,15 +728,161 @@ describe("browse machine — flows 7 and 8: failure, slots and retry", () => {
     expect(browseReduce(moved, { type: "retry" }).start).toEqual({
       revision: 2,
       kind: "initial",
-      window: { limit: BROWSE_PAGE_SIZE, offset: 0 },
+      window: { limit: BROWSE_PAGE_SIZE, cursor: null },
     })
   })
 
   it("retry while something is in flight is a no-op", () => {
     const busy: BrowseState = {
       ...loaded,
-      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, offset: 0 } },
+      inFlight: { revision: 1, kind: "refresh", window: { limit: 200, cursor: null } },
     }
     expect(browseReduce(busy, { type: "retry" }).start).toBeNull()
+  })
+})
+
+describe("browse machine — keyset continuation", () => {
+  function loadedWith(page: {
+    records: readonly MemoryRecord[]
+    total: number
+    continuation: string | null
+  }): BrowseState {
+    return apply(
+      INITIAL_BROWSE_STATE,
+      { type: "query-changed", datasetKey: KEY_A },
+      { type: "response", revision: 1, kind: "initial", page, at: 1000 },
+    )
+  }
+
+  it("asks for the head with no cursor, whatever the request kind", () => {
+    const initial = browseReduce(INITIAL_BROWSE_STATE, {
+      type: "query-changed",
+      datasetKey: KEY_A,
+    })
+    expect(initial.start?.window).toEqual({ limit: BROWSE_PAGE_SIZE, cursor: null })
+    const loaded = loadedWith({ records: rows(300), total: 5432, continuation: "cur-300" })
+    expect(browseReduce(loaded, { type: "poll-tick" }).start?.window).toEqual({
+      limit: 300,
+      cursor: null,
+    })
+  })
+
+  it("continues from the newest fulfilled continuation, never from a row offset", () => {
+    const loaded = loadedWith({ records: rows(200), total: 5432, continuation: "cur-200" })
+    expect(browseReduce(loaded, { type: "load-more-requested" }).start).toEqual({
+      revision: 1,
+      kind: "load-more",
+      window: { limit: BROWSE_PAGE_SIZE, cursor: "cur-200" },
+    })
+  })
+
+  it("takes the token from the NEWEST response, a refresh's included", () => {
+    // The refresh re-derives the head span and mints its own token from its own last
+    // row. Continuing from the token the load-more issued would resume a walk from a
+    // boundary that the refresh has already moved past.
+    const walked = apply(
+      loadedWith({ records: rows(200), total: 5432, continuation: "cur-200" }),
+      { type: "load-more-requested" },
+      {
+        type: "response",
+        revision: 1,
+        kind: "load-more",
+        page: { records: rows(200, 200), total: 5432, continuation: "cur-400" },
+        at: 2000,
+      },
+      { type: "poll-tick" },
+      {
+        type: "response",
+        revision: 1,
+        kind: "refresh",
+        page: { records: rows(400), total: 5432, continuation: "cur-refreshed" },
+        at: 3000,
+      },
+    )
+    expect(browseReduce(walked, { type: "load-more-requested" }).start?.window).toEqual({
+      limit: BROWSE_PAGE_SIZE,
+      cursor: "cur-refreshed",
+    })
+  })
+
+  it("reports more from the continuation, not from loaded-against-total", () => {
+    // A window that FILLED exactly at the end of the matching set: the server issues a
+    // token rather than over-fetching a row to prove there is none, so the walk is not
+    // yet known to be over even though every matching record is resident. One more
+    // request settles it; guessing from the counts is what offset paging did.
+    const filledExactly = loadedWith({ records: rows(200), total: 200, continuation: "cur-200" })
+    expect(browseHasMore(filledExactly)).toBe(true)
+    // The other direction, and the one that matters: the walk has ended while the total
+    // has grown past it, because approve HOISTS rows to the head — above everything a
+    // forward walk can still reach. Only the head refresh can bring those in, so
+    // offering load-more here is offering a button that cannot deliver them.
+    const walkEnded = loadedWith({ records: rows(137), total: 152, continuation: null })
+    expect(browseHasMore(walkEnded)).toBe(false)
+    expect(browseCanLoadMore(walkEnded)).toBe(false)
+    expect(browseReduce(walkEnded, { type: "load-more-requested" }).start).toBeNull()
+  })
+
+  it("drops the continuation with the dataset identity that minted it", () => {
+    // The token carries a fingerprint of its own query, so the route would reject it
+    // with a 400 — but it must never be sent: the rows it names belong to a set this
+    // client is no longer showing.
+    const pivoted = browseReduce(
+      loadedWith({ records: rows(200), total: 5432, continuation: "cur-a" }),
+      { type: "query-changed", datasetKey: KEY_B },
+    ).state
+    expect(browseCanLoadMore(pivoted)).toBe(false)
+    expect(browseReduce(pivoted, { type: "load-more-requested" }).start).toBeNull()
+    const answered = apply(pivoted, {
+      type: "response",
+      revision: 2,
+      kind: "initial",
+      page: { records: rows(200), total: 11, continuation: "cur-b" },
+      at: 4000,
+    })
+    expect(browseReduce(answered, { type: "load-more-requested" }).start?.window).toEqual({
+      limit: BROWSE_PAGE_SIZE,
+      cursor: "cur-b",
+    })
+  })
+
+  it("bounds the refreshed span by the response's own token, not the request's limit", () => {
+    // The two agree on a real store — it issues a token exactly when the window filled
+    // — so they are made to disagree here to show which one rule 3 reads. Deriving the
+    // span from the request instead would make the reconciler's answer depend on a
+    // number the response never confirmed.
+    const loaded = loadedWith({
+      records: [record("a", "2026-08-03T00:00:00.000Z"), record("b", "2026-08-02T00:00:00.000Z")],
+      total: 5432,
+      continuation: "cur-1",
+    })
+    const refreshing = browseReduce(loaded, { type: "poll-tick" })
+    expect(refreshing.start?.window.limit).toBe(BROWSE_PAGE_SIZE)
+    const bounded = browseReduce(refreshing.state, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: {
+        records: [record("c", "2026-08-09T00:00:00.000Z"), record("a", "2026-08-03T00:00:00.000Z")],
+        total: 5431,
+        continuation: "cur-2",
+      },
+      at: 2000,
+    })
+    // Span ends at `a`, so `b` sits beyond it and rule 3 retains it.
+    expect(bounded.state.fulfilled?.records.map((r) => r.id)).toEqual(["c", "a", "b"])
+    const unbounded = browseReduce(refreshing.state, {
+      type: "response",
+      revision: 1,
+      kind: "refresh",
+      page: {
+        records: [record("c", "2026-08-09T00:00:00.000Z"), record("a", "2026-08-03T00:00:00.000Z")],
+        total: 5431,
+        continuation: null,
+      },
+      at: 2000,
+    })
+    // No token: the window reached the end of the matching set, so there is no beyond
+    // for `b` to be retained in — it is gone.
+    expect(unbounded.state.fulfilled?.records.map((r) => r.id)).toEqual(["c", "a"])
   })
 })
