@@ -207,7 +207,7 @@ export function ListPage() {
   // Filtering here would make "N loaded of M matching" a lie the moment a facet was
   // clicked: the request carries the EXACT namespace, so the rows and `total` already
   // describe the same set.
-  const pageRecords = browse.records
+  const pageRecords = browse.rows
   // Group headers count the rows the grid HOLDS. On a truncated window that count is
   // an artifact of where the cap fell, so group only when the window is the whole
   // answer; the facet rail stays the honest navigator for anything larger.

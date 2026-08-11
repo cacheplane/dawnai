@@ -60,7 +60,7 @@ export async function fetchBrowsePage(
   return body
 }
 
-export interface UseMemoryBrowseOptions {
+export interface UseMemoryBrowseInput {
   /** MEMOIZE the canonical query. A fresh object per render is harmless (the dataset
    *  key decides), but a `since` recomputed from `Date.now()` on every render would
    *  bump the desired revision on every render and refetch forever. */
@@ -72,7 +72,7 @@ export interface UseMemoryBrowseOptions {
 }
 
 export interface UseMemoryBrowseResult {
-  readonly records: readonly MemoryRecord[]
+  readonly rows: readonly MemoryRecord[]
   readonly dataState: PretableDataState
   readonly resultMeta: PretableResultMeta
   /** Matching population for the FULFILLED revision, or null when nothing is
@@ -83,15 +83,15 @@ export interface UseMemoryBrowseResult {
   readonly updatedAt: number | null
   /** Polling is suspended: live off, tab hidden, or a held error. */
   readonly paused: boolean
-  readonly canLoadMore: boolean
+  readonly hasMore: boolean
   loadMore(): void
   refresh(): void
   retry(): void
 }
 
-export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrowseResult {
-  const { query, live } = options
-  const pollIntervalMs = options.pollIntervalMs ?? BROWSE_POLL_INTERVAL_MS
+export function useMemoryBrowse(input: UseMemoryBrowseInput): UseMemoryBrowseResult {
+  const { query, live } = input
+  const pollIntervalMs = input.pollIntervalMs ?? BROWSE_POLL_INTERVAL_MS
   const datasetKey = useMemo(() => datasetKeyOf(query), [query])
 
   const [state, setState] = useState<BrowseState>(INITIAL_BROWSE_STATE)
@@ -105,12 +105,12 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
   // dataset key. Lagging a render behind within one key is harmless: the key is the
   // JSON of exactly the fields `browseSearchParams` reads.
   const queryRef = useRef(query)
-  const fetchRef = useRef<BrowseFetcher>(options.fetchPage ?? fetchBrowsePage)
-  const nowRef = useRef<() => number>(options.now ?? Date.now)
+  const fetchRef = useRef<BrowseFetcher>(input.fetchPage ?? fetchBrowsePage)
+  const nowRef = useRef<() => number>(input.now ?? Date.now)
   useEffect(() => {
     queryRef.current = query
-    fetchRef.current = options.fetchPage ?? fetchBrowsePage
-    nowRef.current = options.now ?? Date.now
+    fetchRef.current = input.fetchPage ?? fetchBrowsePage
+    nowRef.current = input.now ?? Date.now
   })
 
   // The machine's state lives in a ref as well as in `useState`: dispatches arrive
@@ -275,14 +275,14 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
   const dataState = browseDataState(state)
 
   return {
-    records: fulfilled?.records ?? NO_RECORDS,
+    rows: fulfilled?.records ?? NO_RECORDS,
     dataState,
     resultMeta,
     total: fulfilled?.total ?? null,
     errors: state.kindErrors,
     updatedAt: fulfilled?.at ?? null,
     paused,
-    canLoadMore: browseCanLoadMore(state),
+    hasMore: browseCanLoadMore(state),
     loadMore,
     refresh,
     retry,

@@ -77,7 +77,7 @@ describe("useMemoryBrowse", () => {
       callAt(calls, 0).resolve({ records: [record("a")], total: 5432 })
     })
     expect(result.current.dataState).toEqual({ phase: "idle" })
-    expect(result.current.records.map((r) => r.id)).toEqual(["a"])
+    expect(result.current.rows.map((r) => r.id)).toEqual(["a"])
     expect(result.current.total).toBe(5432)
     expect(result.current.resultMeta.total).toEqual({ kind: "exact", count: 5432 })
     expect(result.current.resultMeta.datasetKey).toBe('["list",null,null,null,null]')
@@ -111,7 +111,7 @@ describe("useMemoryBrowse", () => {
       callAt(calls, 1).resolve({ records: [record("z")], total: 1 })
     })
     expect(result.current.resultMeta.datasetKey).not.toBe(firstKey)
-    expect(result.current.records.map((r) => r.id)).toEqual(["z"])
+    expect(result.current.rows.map((r) => r.id)).toEqual(["z"])
   })
 
   it("aborts the superseded request and discards it even if abort loses the race", async () => {
@@ -133,7 +133,7 @@ describe("useMemoryBrowse", () => {
     await act(async () => {
       callAt(calls, 0).resolve({ records: [record("stale")], total: 999 })
     })
-    expect(result.current.records).toHaveLength(0)
+    expect(result.current.rows).toHaveLength(0)
     expect(result.current.total).toBeNull()
     expect(result.current.dataState).toEqual({ phase: "loading" })
   })
@@ -217,7 +217,7 @@ describe("useMemoryBrowse", () => {
       await act(async () => {
         callAt(calls, 0).resolve({ records: [record("a"), record("b")], total: 5 })
       })
-      expect(result.current.canLoadMore).toBe(true)
+      expect(result.current.hasMore).toBe(true)
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000)
@@ -246,9 +246,9 @@ describe("useMemoryBrowse", () => {
       await act(async () => {
         callAt(calls, 2).resolve({ records: [record("c")], total: 5 })
       })
-      expect(result.current.records.map((r) => r.id)).toEqual(["a", "b", "c"])
+      expect(result.current.rows.map((r) => r.id)).toEqual(["a", "b", "c"])
       expect(result.current.dataState).toEqual({ phase: "idle" })
-      expect(result.current.canLoadMore).toBe(true)
+      expect(result.current.hasMore).toBe(true)
     } finally {
       vi.useRealTimers()
     }
