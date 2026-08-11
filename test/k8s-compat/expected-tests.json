@@ -1,0 +1,29 @@
+{
+  "providerPhases": {
+    "provider-before-upgrade": [
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox acquire is idempotent per thread and reattaches the workspace",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox threads are isolated",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox release keeps the volume, destroy clears it",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox exec returns a numeric exit code",
+      "kubernetesSandbox (real cluster) runs with the restricted object and kernel security contract",
+      "kubernetesSandbox (real cluster) network deny blocks egress while DNS remains available",
+      "kubernetesSandbox (real cluster) chart backstop blocks allow-mode sandbox egress without a per-thread policy",
+      "kubernetesSandbox (real cluster) workspace persists across release and reattach",
+      "kubernetesSandbox (real cluster) recreates an externally deleted keeper over the same PVC",
+      "kubernetesSandbox (real cluster) updates an existing owned NetworkPolicy on reacquire"
+    ],
+    "provider-after-upgrade": [
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox acquire is idempotent per thread and reattaches the workspace",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox threads are isolated",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox release keeps the volume, destroy clears it",
+      "kubernetesSandbox (real cluster) SandboxProvider conformance: kubernetesSandbox exec returns a numeric exit code",
+      "kubernetesSandbox (real cluster) runs with the restricted object and kernel security contract",
+      "kubernetesSandbox (real cluster) network deny blocks egress while DNS remains available",
+      "kubernetesSandbox (real cluster) chart backstop blocks allow-mode sandbox egress without a per-thread policy",
+      "kubernetesSandbox (real cluster) workspace persists across release and reattach",
+      "kubernetesSandbox (real cluster) recreates an externally deleted keeper over the same PVC",
+      "kubernetesSandbox (real cluster) updates an existing owned NetworkPolicy on reacquire"
+    ]
+  },
+  "probeIds": []
+}

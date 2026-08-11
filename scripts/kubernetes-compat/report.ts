@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 
 export const REPORT_SCHEMA_VERSION = 1 as const
@@ -76,6 +76,14 @@ export interface ProviderAccountingInput {
   }
 }
 
+export type ProviderPhase = "provider-before-upgrade" | "provider-after-upgrade"
+
+export interface VitestProviderAccountingOptions {
+  readonly reportPath: string
+  readonly manifestPath: string
+  readonly phase: ProviderPhase
+}
+
 export interface ReportPersistenceDependencies {
   readonly rename?: (oldPath: string, newPath: string) => Promise<void>
   readonly tempId?: () => string
@@ -102,6 +110,8 @@ const ACCOUNTED_STEP_STATUSES = new Set<AccountedStepStatus>([
   "pending",
   "todo",
 ])
+const PROVIDER_PHASES = ["provider-before-upgrade", "provider-after-upgrade"] as const
+const PROVIDER_PHASE_SET = new Set<string>(PROVIDER_PHASES)
 
 function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
@@ -379,6 +389,130 @@ export function assertProviderAccounting(input: ProviderAccountingInput): void {
     )
   }
   assertExactStepAccounting(input.expectedIds, input.observed)
+}
+
+function expectObject(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function expectStringArray(value: unknown, name: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${name} must be an array`)
+  }
+  return value.map((item, index) => expectNonEmptyString(item, `${name}[${index}]`))
+}
+
+function parseJson(text: string, name: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${name} must contain valid JSON`, { cause: error })
+  }
+}
+
+async function readJsonFile(path: string, name: string): Promise<unknown> {
+  let text: string
+  try {
+    text = await readFile(path, "utf8")
+  } catch (error) {
+    const missing =
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { readonly code?: unknown }).code === "ENOENT"
+    throw new Error(`${name} file is ${missing ? "missing" : "unreadable"}: ${path}`, {
+      cause: error,
+    })
+  }
+  return parseJson(text, name)
+}
+
+function parseExpectedProviderIds(value: unknown, phase: ProviderPhase): readonly string[] {
+  const manifest = expectObject(value, "Expected-test manifest")
+  const providerPhases = expectObject(
+    manifest.providerPhases,
+    "Expected-test manifest providerPhases",
+  )
+  for (const providerPhase of PROVIDER_PHASES) {
+    const ids = expectStringArray(
+      providerPhases[providerPhase],
+      `Expected-test manifest ${providerPhase}`,
+    )
+    assertNoDuplicateIds(ids, "expected")
+  }
+  expectStringArray(manifest.probeIds, "Expected-test manifest probeIds")
+  return expectStringArray(providerPhases[phase], `Expected-test manifest ${phase}`)
+}
+
+function parseVitestProviderReport(value: unknown): {
+  readonly observed: readonly AccountedStep[]
+  readonly suiteCounts: ProviderAccountingInput["suiteCounts"]
+} {
+  const report = expectObject(value, "Vitest output")
+  if (report.success !== true) {
+    throw new Error("Vitest output success must be true")
+  }
+  if (!Array.isArray(report.testResults)) {
+    throw new Error("Vitest output testResults must be an array")
+  }
+
+  const observed: AccountedStep[] = []
+  for (const [resultIndex, resultValue] of report.testResults.entries()) {
+    const result = expectObject(resultValue, `Vitest output testResults[${resultIndex}]`)
+    if (!Array.isArray(result.assertionResults)) {
+      throw new Error(`Vitest output testResults[${resultIndex}].assertionResults must be an array`)
+    }
+    for (const [assertionIndex, assertionValue] of result.assertionResults.entries()) {
+      const assertionName = `Vitest output testResults[${resultIndex}].assertionResults[${assertionIndex}]`
+      const assertion = expectObject(assertionValue, assertionName)
+      const id = expectNonEmptyString(assertion.fullName, `${assertionName}.fullName`)
+      const status = assertion.status
+      if (
+        typeof status !== "string" ||
+        !ACCOUNTED_STEP_STATUSES.has(status as AccountedStepStatus)
+      ) {
+        throw new Error(`${assertionName}.status is unsupported: ${String(status)}`)
+      }
+      observed.push({ id, status: status as AccountedStepStatus })
+    }
+  }
+  if (observed.length === 0) {
+    throw new Error("Vitest output assertionResults must not be empty")
+  }
+
+  return {
+    observed,
+    suiteCounts: {
+      skipped: expectNonNegativeInteger(
+        report.numPendingTestSuites as number,
+        "Vitest output numPendingTestSuites",
+      ),
+      pending: expectNonNegativeInteger(
+        report.numPendingTests as number,
+        "Vitest output numPendingTests",
+      ),
+      todo: expectNonNegativeInteger(report.numTodoTests as number, "Vitest output numTodoTests"),
+    },
+  }
+}
+
+export async function assertVitestProviderAccounting(
+  options: VitestProviderAccountingOptions,
+): Promise<void> {
+  if (!PROVIDER_PHASE_SET.has(options.phase)) {
+    throw new Error(`Unknown provider phase: ${String(options.phase)}`)
+  }
+  const phase = options.phase as ProviderPhase
+  const [report, manifest] = await Promise.all([
+    readJsonFile(options.reportPath, "Vitest output"),
+    readJsonFile(options.manifestPath, "Expected-test manifest"),
+  ])
+  const expectedIds = parseExpectedProviderIds(manifest, phase)
+  const parsedReport = parseVitestProviderReport(report)
+  assertProviderAccounting({ expectedIds, ...parsedReport })
 }
 
 function expectSafeFilename(filename: string): string {
