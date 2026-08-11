@@ -4,22 +4,15 @@ import { expect, test } from "./fixtures"
 import {
   browseRegion,
   expectPhase,
+  loadedText,
   loadMore,
   MIN_RENDERED_ROWS,
-  n,
   openBrowse,
   openFilterMenu,
   rowIds,
   status,
   waitOnePollPeriod,
 } from "./helpers"
-
-/** "400 loaded", not "400": the status bar states two numbers in one sentence and
- *  the second one is the population, which differs between a solo run of this file
- *  (a pristine 1,250) and a whole-suite run (scenario 9 has removed one by then). */
-function loadedText(count: number): string {
-  return `${n(count)} loaded`
-}
 
 // View-scope matrix (§8.2) and Flow 10. Browse controls never appear to constrain a
 // view that ignores them, and leaving browse does not destroy the browse dataset.
@@ -42,9 +35,9 @@ test.describe("scenario 12 — view isolation", () => {
     //   2. no funnel is reachable from it (hidden content is out of the tab
     //      order and out of the accessibility tree),
     //   3. the scope note still tells the user why.
-    // If a future slice reverts to in-place disabling, restore the
-    // aria-disabled + focusable + aria-describedby assertions below, which are
-    // the right shape for THAT structure:
+    // Guidance for a future revert, not a record of anything this file ever had:
+    // if a slice goes back to in-place disabling, the assertions below are the
+    // wrong shape for it and these are the right ones.
     //   await expect(funnel).toHaveAttribute("aria-disabled", "true")
     //   await funnel.focus(); await expect(funnel).toBeFocused()
 

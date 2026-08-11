@@ -1,5 +1,10 @@
 import { TEST_IDS } from "../src/components/memory/test-ids"
-import { BROWSE_PAGE_SIZE, seedRecordsMatching } from "../test/seed"
+import {
+  BROWSE_PAGE_SIZE,
+  seedIdsInDefaultOrder,
+  seedIdsSortedBy,
+  seedRecordsMatching,
+} from "../test/seed"
 import { expect, test } from "./fixtures"
 import {
   browseRegion,
@@ -7,9 +12,22 @@ import {
   grid,
   liveRegionText,
   loadMore,
+  n,
   openBrowse,
   sortByHeader,
 } from "./helpers"
+
+/** How long the sort's FIRST response is held open.
+ *
+ *  Sized like `06-desired-fulfilled-mismatch.spec.ts` and `10-selection-scope.spec.ts`
+ *  rather than guessed, and for their reason: everything claimed about `stale` is claimed
+ *  about the window between the gesture and the answer, each claim inside it costs a CDP
+ *  round trip, and on a machine running several suites at once a 1 s hold is a window the
+ *  assertions can fall out of — reported then as "the sort already landed" rather than as
+ *  anything about staleness. A sort is ONE dataset pivot, so `stale` happens exactly once
+ *  and every later poll is `refreshing`: a missed window is a hard failure that no
+ *  auto-retry can absorb, which is what makes the margin worth its seconds. */
+const HOLD_MS = 5_000
 
 /** What the browser logs for the browse response this spec makes the server refuse.
  *  Mirrors `08-refresh-append-failure.spec.ts`: the ENDPOINT is half the match,
@@ -30,18 +48,33 @@ function drainSeededFetchErrors(consoleErrors: string[], expected: number): void
   expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
 }
 
-/** Where DOM focus is, relative to the browse grid — read in ONE page evaluation so
- *  the tag and the containment answer for the same instant. */
+/**
+ * WHICH cell DOM focus is on, relative to the browse grid — read in ONE page evaluation
+ * so every field answers for the same instant.
+ *
+ * The address, not merely the shape. A report of tag + containment + "is a cell" is
+ * identical before and after a dataset pivot, so an expectation written against it cannot
+ * tell "focus moved to the first data cell of the NEW result" — which is what §4.2
+ * promises — from focus that was re-asserted at the same coordinates over different rows.
+ * The row id is what distinguishes them, and it is the seed that says which row that
+ * should be.
+ *
+ * `columnId` is read off the active element itself rather than off an ancestor, so a
+ * non-empty value already means the focused node IS the cell. It also excludes the
+ * row-select cell, which carries `data-pretable-cell` too and would otherwise satisfy a
+ * bare "on a data cell" claim.
+ */
 async function focusReport(
   page: import("@playwright/test").Page,
-): Promise<{ tag: string; inGrid: boolean; onDataCell: boolean }> {
+): Promise<{ tag: string; inGrid: boolean; rowId: string; columnId: string }> {
   return browseRegion(page).evaluate((region) => {
     const active = document.activeElement as HTMLElement | null
     const viewport = region.querySelector("[data-pretable-scroll-viewport]")
     return {
       tag: active?.tagName ?? "",
       inGrid: viewport?.contains(active ?? null) ?? false,
-      onDataCell: active?.matches("[data-pretable-cell]") ?? false,
+      rowId: active?.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
+      columnId: active?.getAttribute("data-pretable-column-id") ?? "",
     }
   })
 }
@@ -65,8 +98,14 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     // the two branches side by side are Task 10's.
     //
     // The PRISTINE seed is the right input for this count even in a whole-suite run:
-    // both of scenario 9's writes land in `route=/notes-archive`, so this namespace
-    // holds the same 667 records before and after it.
+    // both of scenario 9's writes land in `route=/notes-archive`, so this namespace holds
+    // the same records before and after it. WHY both land there, so the next reader does
+    // not re-derive it: the drawn projection groups ascending by namespace — `route=/chat`,
+    // `route=/notes`, `route=/notes-archive` — and scenario 9 picks the LAST drawn row to
+    // forget (archive, being the last group) and the LAST episodic candidate in that
+    // projection to approve (archive again, since that group has some). And if either ever
+    // moved, this fails loudly rather than silently: the facet button is located by this
+    // very number.
     const scoped = seedRecordsMatching({ namespace: "route=/notes" })
     await page.getByRole("button", { name: `route=/notes ${scoped.length}`, exact: true }).click()
     await expectPhase(page, "idle")
@@ -93,7 +132,14 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     // conditional — "if DOM focus was inside the grid at the change" — so a run that
     // reached the pivot with focus already elsewhere would satisfy the rule vacuously
     // and prove nothing.
-    expect(await focusReport(page)).toEqual({ tag: "DIV", inGrid: true, onDataCell: true })
+    //
+    // POLLED, and not for symmetry with the read after the pivot: the sheet restores focus
+    // to its opener from an unmount layout effect, and `toHaveCount(0)` above confirms only
+    // that the sheet is gone — a one-shot read landing in the same tick sees `<body>`.
+    const defaultHead = seedIdsInDefaultOrder(scoped)[0] as string
+    await expect
+      .poll(() => focusReport(page))
+      .toEqual({ tag: "DIV", inGrid: true, rowId: defaultHead, columnId: "status" })
 
     // The query change is a SORT HEADER, and the choice is load-bearing. §4.2's rule
     // only governs a pivot that starts with focus inside the grid, and a funnel does
@@ -107,9 +153,17 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     // `status` rather than `updated`: one click is DESC, and `updated` DESC is already
     // the default order, so that gesture would canonicalize to the query the page is
     // on and pivot no dataset at all.
+    //
+    // A LATCH on the first sorted request, not a predicate on the param. The browse
+    // re-polls every 2 s and every one of those ticks carries `orderBy` too, so holding
+    // all of them would leave the page mid-flight for the rest of the walkthrough — the
+    // error/retry half below would be read through a permanently delayed transport, and a
+    // handler would still be sleeping when `unrouteAll` fires.
+    let heldFirstSortedRequest = false
     await page.route("**/api/memory/list*", async (route) => {
-      if (new URL(route.request().url()).searchParams.has("orderBy")) {
-        await new Promise((resolve) => setTimeout(resolve, 1_500))
+      if (!heldFirstSortedRequest && new URL(route.request().url()).searchParams.has("orderBy")) {
+        heldFirstSortedRequest = true
+        await new Promise((resolve) => setTimeout(resolve, HOLD_MS))
       }
       await route.continue()
     })
@@ -119,16 +173,21 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     await expectPhase(page, "stale")
     await expect.poll(() => liveRegionText(page)).toContain("Updating")
     await expectPhase(page, "idle")
+    // The fault was actually injected. Without this the stale claims above are made about
+    // a page that was never held, and an `orderBy` this route stopped recognising would
+    // take them with it, silently.
+    expect(heldFirstSortedRequest).toBe(true)
 
     // §4.2, "deterministic, never `<body>`": the pivot cleared the old focus and the
-    // surface put it on the first data cell of the NEW result.
+    // surface put it on the first data cell of the NEW result — the head of the
+    // status-sorted order, which is a DIFFERENT record from the one focus was on. Without
+    // that inequality this read would be satisfied by focus that never moved, since the
+    // grid re-renders the same coordinates over new rows.
+    const sortedHead = seedIdsSortedBy([{ field: "status", dir: "desc" }], scoped)[0] as string
+    expect(sortedHead).not.toBe(defaultHead)
     await expect
       .poll(() => focusReport(page))
-      .toEqual({
-        tag: "DIV",
-        inGrid: true,
-        onDataCell: true,
-      })
+      .toEqual({ tag: "DIV", inGrid: true, rowId: sortedHead, columnId: "status" })
 
     // ERROR + RETRY: reachable by keyboard, announced through the polite region.
     await page.unrouteAll()
@@ -150,7 +209,7 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     await page.getByTestId(TEST_IDS.retryInitial).focus()
     await page.keyboard.press("Enter")
     await expectPhase(page, "idle")
-    await expect(loadMore(page)).toContainText(String(BROWSE_PAGE_SIZE))
+    await expect(loadMore(page)).toContainText(n(BROWSE_PAGE_SIZE))
 
     drainSeededFetchErrors(consoleErrors, 1)
   })

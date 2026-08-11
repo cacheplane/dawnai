@@ -124,6 +124,17 @@ export function statusText(loaded: number, matching: number): string {
   return `${n(loaded)} loaded of ${n(matching)} matching`
 }
 
+/** The LOADED half of that sentence alone, and weaker for it in exactly the way the note
+ *  above describes: a loaded count that moved while the population silently followed it
+ *  satisfies this. Available for the one case `statusText` cannot serve — a spec whose
+ *  claim is about the loaded window while the POPULATION differs between a solo run of it
+ *  (a pristine `BROWSE_SEED_COUNT`) and a whole-suite run (scenario 9 has removed one by
+ *  then). Anything that can name both numbers — by transcribing the population or, like
+ *  scenario 10, by reading it off the page — owes the whole sentence instead. */
+export function loadedText(loaded: number): string {
+  return `${n(loaded)} loaded`
+}
+
 /**
  * The drawn row ids and the matching total, sampled in ONE page evaluation.
  *

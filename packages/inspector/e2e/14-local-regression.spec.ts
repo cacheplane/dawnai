@@ -19,29 +19,51 @@ test.describe("scenario 14 — local regression", () => {
     // on for the life of a surface that was ever handed a `dataState`. A
     // document-wide query for the ABSENCE of that chrome would therefore answer about
     // the wrong grid and fail for a reason with nothing to do with the local one.
-    // `<section>` is the search results' own element and nothing else on this page
-    // renders one while a search is active (the timeline is not mounted then).
-    const searchSurface = page.locator("main section").first()
-    const searchGrid = gridIn(searchSurface)
-    await expect(searchGrid).toBeVisible()
+    //
+    // `list-page` renders one `<section>` per search GROUP, so this is N elements and
+    // every one of them holds a local grid. Asserted over ALL of them: `.first()` here
+    // would silently narrow the whole test to group one, and the groups are exactly what
+    // varies. `TimelineView` renders `<section>` per day too, but it is unmounted while a
+    // search is active — and the grid-per-section equality below is what holds that
+    // invariant, since a timeline section carries no grid.
+    const searchSections = page.locator("main section")
+    const searchGrids = gridIn(searchSections)
+    // Waited for BEFORE anything is counted: the search input is debounced, so every
+    // count taken ahead of the first result answers zero and each `toHaveCount(0)` below
+    // would then be a claim about an empty document.
+    await expect(searchGrids.first()).toBeVisible()
+    const groupCount = await searchSections.count()
+    expect(groupCount).toBeGreaterThan(0)
+    await expect(searchGrids).toHaveCount(groupCount)
 
-    // No dataState → no phase attribute, no body-state wrapper, no body-state block.
-    await expect(searchGrid).not.toHaveAttribute("data-pretable-data-phase", /.*/)
-    await expect(searchSurface.locator("[data-pretable-data-state-wrapper]")).toHaveCount(0)
-    await expect(searchSurface.locator("[data-pretable-body-state]")).toHaveCount(0)
+    // No dataState → no body-state wrapper and no body-state block, in ANY group.
+    await expect(searchSections.locator("[data-pretable-data-state-wrapper]")).toHaveCount(0)
+    await expect(searchSections.locator("[data-pretable-body-state]")).toHaveCount(0)
 
-    // The control, without which the three assertions above are just a claim about a
+    // The control, without which the two assertions above are just a claim about a
     // selector that matches nothing anywhere: the grid that DID opt in, in the same
     // document at the same moment, carries the wrapper.
     await expect(browseRegion(page).locator("[data-pretable-data-state-wrapper]")).toHaveCount(1)
 
-    // Local ARIA semantics: aria-rowcount is the VISIBLE row count plus the header,
-    // not any remote population. A search group is the store's ranked top-8, so every
-    // row of it is drawn and the DOM count is the model count — the equality this
-    // makes would not hold over a virtualized 200-row window.
-    const visible = await searchGrid.locator("[data-pretable-row-id]").count()
-    expect(visible).toBeGreaterThan(0)
-    await expect(searchGrid).toHaveAttribute("aria-rowcount", String(visible + 1))
-    await expect(searchGrid).not.toHaveAttribute("aria-busy", /.*/)
+    // The per-grid reads, in ONE page evaluation over every group: an absent phase, an
+    // absent aria-busy, and local ARIA counting — aria-rowcount is the VISIBLE row count
+    // plus the header, not any remote population. A search group is the store's ranked
+    // top-8, so every row of it is drawn and the DOM count is the model count; the
+    // equality this makes would not hold over a virtualized 200-row window.
+    const locals = await searchGrids.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        phase: node.getAttribute("data-pretable-data-phase"),
+        busy: node.getAttribute("aria-busy"),
+        rowCount: node.getAttribute("aria-rowcount"),
+        rows: node.querySelectorAll("[data-pretable-row-id]").length,
+      })),
+    )
+    expect(locals.length).toBe(groupCount)
+    for (const local of locals) {
+      expect(local.phase).toBeNull()
+      expect(local.busy).toBeNull()
+      expect(local.rows).toBeGreaterThan(0)
+      expect(local.rowCount).toBe(String(local.rows + 1))
+    }
   })
 })
