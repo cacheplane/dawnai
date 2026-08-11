@@ -223,7 +223,7 @@ const EXPECTED_DOCS_NAV = [
 - Modify: `turbo.json`
 - Test: `apps/web/app/components/docs/nav.test.ts`
 
-- [ ] **Step 1: Confirm the current documentation baseline is green**
+- [x] **Step 1: Confirm the current documentation baseline is green**
 
 Run:
 
@@ -236,7 +236,7 @@ pnpm --filter @dawn-ai/web exec vitest run
 Expected: all three commands pass before the new contract is added. The build is
 required because `check-docs.mjs` imports package `dist/` output.
 
-- [ ] **Step 2: Put existing web tests in the normal repository test lane**
+- [x] **Step 2: Put existing web tests in the normal repository test lane**
 
 Add this script to `apps/web/package.json` without changing dependencies:
 
@@ -252,7 +252,7 @@ pnpm --filter @dawn-ai/web test
 
 Expected: PASS on the pre-existing web tests.
 
-- [ ] **Step 3: Write green structural navigation coverage**
+- [x] **Step 3: Write green structural navigation coverage**
 
 Create `nav.test.ts`. Import `DOCS_NAV`, `DOCS_PAGES`, `breadcrumbsFor`, and
 `siblingsFor`. Add these characterization assertions without yet requiring the
@@ -293,7 +293,7 @@ before `href`. Recursively map current MDX and wrappers, using
 route sets to match. Title equality is deliberately introduced red-first in
 Task 2, where the titles are normalized in the same green commit.
 
-- [ ] **Step 4: Strengthen the CI topology check in both directions**
+- [x] **Step 4: Strengthen the CI topology check in both directions**
 
 In `scripts/check-docs.mjs`:
 
@@ -332,7 +332,7 @@ require the canonical link, and fail when the stub grows beyond the cap. Do not
 register rows yet; Tasks 4–9 add them with their moved headings so duplicated
 canonical prose cannot creep back into overview pages.
 
-- [ ] **Step 5: Characterize every registry-driven discovery surface**
+- [x] **Step 5: Characterize every registry-driven discovery surface**
 
 Add green tests for the current 42-page registry:
 
@@ -368,7 +368,7 @@ pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts \
 Expected: PASS against the current tree. `packages/cli/docs` is ignored output
 and must not be staged.
 
-- [ ] **Step 6: Record the accuracy-guard allocation without registering future files**
+- [x] **Step 6: Record the accuracy-guard allocation without registering future files**
 
 Do not add a contract for a page that does not exist yet. The table below is the
 allocation ledger for Tasks 3–10: each owning task first adds its rows red, then
@@ -421,7 +421,7 @@ requirements from `dev-server.mdx` to `ag-ui.mdx`. Split the old Dev Server
 contract so only watcher/restart facts remain on the overview; endpoint,
 cancellation, candidate-management, and auth facts belong to Agent Protocol.
 
-- [ ] **Step 7: Verify the reusable structural contract remains green**
+- [x] **Step 7: Verify the reusable structural contract remains green**
 
 Run:
 
@@ -435,7 +435,7 @@ Expected: PASS. This commit adds reusable topology checks only; it does not
 register unfinished pages, change the current order, or create an intentionally
 red normal test lane.
 
-- [ ] **Step 8: Commit the green structural contract**
+- [x] **Step 8: Commit the green structural contract**
 
 ```bash
 git add apps/web/package.json apps/web/app/components/docs/nav.test.ts \
@@ -472,7 +472,7 @@ git commit -m "test(docs): lock documentation topology"
 - Modify: matching wrappers for AG-UI, Configuration, Deployment, Scenario
   Testing, Agent Test Harness, Recipes Overview, and all seven recipe leaves
 
-- [ ] **Step 1: Write the failing eight-section foundation and title contract**
+- [x] **Step 1: Write the failing eight-section foundation and title contract**
 
 In `nav.test.ts`, add an exact `FOUNDATION_DOCS_NAV` assertion by copying the
 final contract from this plan and omitting these 16 not-yet-authored hrefs:
@@ -502,7 +502,7 @@ wrapper `metadata.title`. Extend `search-index.test.ts` so every search title
 equals its nav label. Run the two tests; expected red is the old five-section
 registry plus current title mismatches.
 
-- [ ] **Step 2: Write failing tests for mobile section presentation**
+- [x] **Step 2: Write failing tests for mobile section presentation**
 
 Create a test that renders `MobileDocsNav` with `renderToStaticMarkup` and
 `createElement` (the test file remains `.test.ts`, which the current Vitest
@@ -515,7 +515,7 @@ include pattern discovers). Assert:
 
 The component does not exist yet, so the first run must fail at import time.
 
-- [ ] **Step 3: Write failing tests for copy/edit source resolution**
+- [x] **Step 3: Write failing tests for copy/edit source resolution**
 
 In `page-actions.test.ts`, require:
 
@@ -537,7 +537,7 @@ and assert one call to `redirect("/docs/getting-started")`. In
 `overflow-wrap: anywhere`, while preserving a `pre .mdx-inline-code` override.
 Both files are missing or lack the rule, so these assertions begin red.
 
-- [ ] **Step 4: Run the focused tests to verify red**
+- [x] **Step 4: Run the focused tests to verify red**
 
 Run:
 
@@ -555,7 +555,7 @@ pnpm --filter @dawn-ai/web exec vitest run \
 Expected: FAIL for the old five-section order/title mismatches, missing
 component/helper/redirect, absent responsive rule, and recipes Markdown 404.
 
-- [ ] **Step 5: Install the foundation registry and normalize existing titles**
+- [x] **Step 5: Install the foundation registry and normalize existing titles**
 
 Replace `DOCS_NAV` with the exact 42-page foundation from Step 1. Keep every
 literal on one line with `label` before `href`. Change these H1s and matching
@@ -571,7 +571,7 @@ mismatch fails instead of quietly disappearing. Now that the existing titles
 are normalized, extend `scripts/check-docs.mjs` so every nav label, first MDX
 H1, and wrapper `metadata.title` must agree exactly.
 
-- [ ] **Step 6: Extract and render the mobile docs navigation**
+- [x] **Step 6: Extract and render the mobile docs navigation**
 
 Implement `MobileDocsNav` as a focused client component:
 
@@ -637,7 +637,7 @@ mobile docs loop in `MobileMenu` with:
 Native `details`/`summary` supplies Enter/Space keyboard behavior; do not add a
 parallel custom accordion state machine.
 
-- [ ] **Step 7: Fix canonical page actions and recipe-index source mapping**
+- [x] **Step 7: Fix canonical page actions and recipe-index source mapping**
 
 Move pure URL/source functions to `page-actions.ts`:
 
@@ -660,7 +660,7 @@ In the Markdown route, try `<slug>.mdx` first and then
 `<slug>/index.mdx`, applying the existing traversal/containment checks to both
 candidates. Return 404 only when neither exists.
 
-- [ ] **Step 8: Add the docs-root redirect and mobile inline-code wrapping**
+- [x] **Step 8: Add the docs-root redirect and mobile inline-code wrapping**
 
 Create `apps/web/app/docs/page.tsx`:
 
@@ -690,7 +690,7 @@ Add a narrow-screen override after `.mdx-inline-code` in `globals.css`:
 
 This changes inline chips only; block code and tables retain horizontal scroll.
 
-- [ ] **Step 9: Verify the green foundation slice**
+- [x] **Step 9: Verify the green foundation slice**
 
 Run:
 
@@ -718,7 +718,7 @@ Expected: the 42-page eight-section registry, title sync, all web/discovery
 tests, generated CLI bundle test, lint, typecheck, docs checker, and diff check
 pass. There are no nav entries for unfinished pages.
 
-- [ ] **Step 10: Commit the shell slice**
+- [x] **Step 10: Commit the shell slice**
 
 ```bash
 git add apps/web/app/components/MobileMenu.tsx \
@@ -764,7 +764,7 @@ git commit -m "feat(web): improve mobile documentation navigation"
 - Modify: `apps/web/app/components/docs/nav.test.ts`
 - Modify: `scripts/check-docs.mjs`
 
-- [ ] **Step 1: Register the four guides and capture the intended red**
+- [x] **Step 1: Register the four guides and capture the intended red**
 
 Add Embed the Runtime after AG-UI in Integrate. Add Persistence and Tenancy,
 Production Topology, and Security Architecture at the start of Operate. Extend
@@ -775,7 +775,7 @@ Run the nav test and docs checker. Expected: red only for the four missing
 content files/wrappers and their required fragments. Do not commit and do not
 register any later page.
 
-- [ ] **Step 2: Write Persistence and Tenancy from the data inventory**
+- [x] **Step 2: Write Persistence and Tenancy from the data inventory**
 
 Use this exact page shape:
 
@@ -805,7 +805,7 @@ Use this exact page shape:
 Do not invent a database migration tool. Link exact configuration fields to
 Configuration Reference.
 
-- [ ] **Step 3: Write Production Topology as the consumer of that inventory**
+- [x] **Step 3: Write Production Topology as the consumer of that inventory**
 
 Use these headings and contracts:
 
@@ -833,7 +833,7 @@ Use these headings and contracts:
 
 Use one state-placement table rather than repeating paragraphs from Persistence.
 
-- [ ] **Step 4: Write Security Architecture as the outer boundary**
+- [x] **Step 4: Write Security Architecture as the outer boundary**
 
 Use this outline:
 
@@ -861,7 +861,7 @@ Do not turn Access Control into an identity page. Add a short outer-boundary
 callout to `access-control.mdx`; add a matching “middleware is execution-only”
 link in `middleware.mdx`.
 
-- [ ] **Step 5: Write Embed the Runtime around stable exports only**
+- [x] **Step 5: Write Embed the Runtime around stable exports only**
 
 Use this outline:
 
@@ -889,7 +889,7 @@ The edge example uses the opaque rooted namespace `appRoot: "/my-app"` and
 source labels it a tooling surface. Link Deployment Options in this slice;
 Task 4 can repoint target-specific links after those pages exist.
 
-- [ ] **Step 6: Add wrappers with exact titles and paths**
+- [x] **Step 6: Add wrappers with exact titles and paths**
 
 Use the wrapper template from the file map with these pairs:
 
@@ -900,7 +900,7 @@ Use the wrapper template from the file map with these pairs:
 | `/docs/security-architecture` | `Security Architecture` |
 | `/docs/embedding` | `Embed the Runtime` |
 
-- [ ] **Step 7: Verify the operating-guide slice**
+- [x] **Step 7: Verify the operating-guide slice**
 
 Run:
 
@@ -917,14 +917,14 @@ git diff --check
 Expected: all web/discovery tests, generated CLI bundle coverage, typecheck,
 docs checker, and diff check pass with exactly 46 registered pages.
 
-- [ ] **Step 8: Request source-contract review**
+- [x] **Step 8: Request source-contract review**
 
 Ask the reviewer to compare the four pages with the ledger authorities,
 especially thread deletion, middleware coverage, generated signal handling,
 store ownership, `/healthz`, Hono request identity, and public export stability.
 Resolve Critical/Important findings before committing.
 
-- [ ] **Step 9: Commit the operating guides**
+- [x] **Step 9: Commit the operating guides**
 
 ```bash
 git add apps/web/content/docs/persistence.mdx \
@@ -960,7 +960,7 @@ git commit -m "docs: add production operating guides"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Register the four target guides and capture the intended red**
+- [x] **Step 1: Register the four target guides and capture the intended red**
 
 Insert Node and Docker, Kubernetes, LangSmith, and Edge and Hono immediately
 after Deployment Options in Deploy. Extend the exact nav test to 50 pages. Add
@@ -973,7 +973,7 @@ their accuracy fragments, and the known stale chart wording. Do not commit or
 register Kubernetes Sandbox. Repoint Embed the Runtime's temporary
 target-specific links to the new pages in this same slice.
 
-- [ ] **Step 2: Turn Deployment into the verdict-first chooser**
+- [x] **Step 2: Turn Deployment into the verdict-first chooser**
 
 Retitle it `# Deployment Options` and keep only:
 
@@ -1005,7 +1005,7 @@ linking to the canonical page. The required headings are:
 
 Do not copy the moved examples back into these stubs.
 
-- [ ] **Step 3: Write Node and Docker**
+- [x] **Step 3: Write Node and Docker**
 
 Use headings: recommendation/prerequisites, select the target, emitted files,
 run directly, build/run the generated Dockerfile, environment/secrets,
@@ -1021,7 +1021,7 @@ related. Preserve these exact contracts:
 - generated server currently does not install signal handlers;
 - external auth/network restriction covers the full service.
 
-- [ ] **Step 4: Write Kubernetes**
+- [x] **Step 4: Write Kubernetes**
 
 Own application-chart installation here, not in Sandbox. Include:
 
@@ -1049,7 +1049,7 @@ Do not imply the HPA or PDB supplies Dawn run coordination.
 Link the existing Execution Sandbox overview for Kubernetes sandbox setup in
 this slice; Task 5 repoints that link to Kubernetes Sandbox when it lands.
 
-- [ ] **Step 5: Write LangSmith**
+- [x] **Step 5: Write LangSmith**
 
 Cover emitted `langgraph.json`, route entries and `assistant_id`, environment
 file path, agent-route materialization versus raw workflow/graph/chain exports,
@@ -1060,7 +1060,7 @@ requirement. Explain merge precedence: user-defined extra keys survive, while
 generated `graphs`, `dependencies`, `env`, and `node_version` overwrite
 identically named user keys.
 
-- [ ] **Step 6: Write Edge and Hono**
+- [x] **Step 6: Write Edge and Hono**
 
 Move the current accurate edge material, then tighten it into this order:
 
@@ -1077,7 +1077,7 @@ Move the current accurate edge material, then tighten it into this order:
 Never show `app.mount()`, a relative app root, arbitrary Dawn base-path support,
 or a live Cloudflare deployment claim.
 
-- [ ] **Step 7: Correct the chart's stale scaling contract**
+- [x] **Step 7: Correct the chart's stale scaling contract**
 
 In `charts/dawn-app/README.md`, replace “shared backend does not exist yet” and
 the obsolete `Single replica only`/threads-diverge-only explanation with a
@@ -1097,7 +1097,7 @@ newly available deployment pages, keep the existing Execution Sandbox link
 until Task 5, and describe `/healthz` as the shared liveness/readiness path
 without implying it validates dependencies. Do not change chart defaults.
 
-- [ ] **Step 8: Add wrappers and canonical anchor assertions**
+- [x] **Step 8: Add wrappers and canonical anchor assertions**
 
 Use these exact titles: `Node and Docker`, `Kubernetes`, `LangSmith`, and
 `Edge and Hono`. Extend `docs-anchors.test.ts` so it requires the canonical
@@ -1105,7 +1105,7 @@ edge page to own `what-the-edge-cannot-serve`, `why-the-stores-are-per-request`,
 and `what-is-proven-and-what-is-not`, while the Deployment overview still owns
 the same compatibility anchors.
 
-- [ ] **Step 9: Verify and review the deployment slice**
+- [x] **Step 9: Verify and review the deployment slice**
 
 Run:
 
@@ -1126,7 +1126,7 @@ Expected: 50-page nav/discovery/CLI coverage, anchors, lint, typecheck, checker,
 chart render/lint, and diff check all pass. Request a source-contract review of
 all copied commands and target-boundary claims.
 
-- [ ] **Step 10: Commit the deployment split**
+- [x] **Step 10: Commit the deployment split**
 
 ```bash
 git add apps/web/content/docs/deployment.mdx apps/web/content/docs/deployment \
@@ -1150,7 +1150,7 @@ git commit -m "docs: split deployment guidance by target"
 - Modify: `apps/web/app/components/docs/nav.test.ts`
 - Modify: `scripts/check-docs.mjs`
 
-- [ ] **Step 1: Register Kubernetes Sandbox and capture the intended red**
+- [x] **Step 1: Register Kubernetes Sandbox and capture the intended red**
 
 Add Kubernetes Sandbox after Execution Sandbox, extend the exact registry test
 to 51 pages, add the focused Kubernetes sandbox row from Task 1, and replace
@@ -1160,14 +1160,14 @@ allocated fragments. Repoint the temporary Execution Sandbox link in
 Deployment/Kubernetes and the app-chart values comment to the new canonical page
 in this same slice. Do not commit or register later pages.
 
-- [ ] **Step 2: Narrow Execution Sandbox to the portable contract**
+- [x] **Step 2: Narrow Execution Sandbox to the portable contract**
 
 Keep Docker quickstart, what is isolated, lifecycle, security hardening,
 per-command timeout, Docker network behavior, subagents, custom provider
 interface (including `preflight().warnings`), testing, E2E verification, and
 “What it is — and isn't.” Replace Kubernetes and Helm detail with concise links.
 
-- [ ] **Step 3: Preserve moved Kubernetes anchors on the overview**
+- [x] **Step 3: Preserve moved Kubernetes anchors on the overview**
 
 Retain these headings as short compatibility sections:
 
@@ -1185,7 +1185,7 @@ Retain these headings as short compatibility sections:
 `## Quickstart` and `## What it is — and isn't` remain full canonical sections
 on the overview because error-code links depend on them.
 
-- [ ] **Step 4: Write Kubernetes Sandbox**
+- [x] **Step 4: Write Kubernetes Sandbox**
 
 Use this outline:
 
@@ -1212,7 +1212,7 @@ admission generally; do not claim a particular writable-root setting is rejected
 unless a chart test proves it. State that PID limits are a node/runtime concern,
 not something this chart supplies.
 
-- [ ] **Step 5: Add the wrapper and verify**
+- [x] **Step 5: Add the wrapper and verify**
 
 Use title `Kubernetes Sandbox`, then run:
 
@@ -1232,7 +1232,7 @@ Expected: all 51-page web/discovery/CLI coverage, anchor/typecheck, checker,
 chart tests, and diff check pass. Request review against both providers, chart
 defaults, DNS/CNI behavior, and namespace/service-account wiring.
 
-- [ ] **Step 6: Commit the sandbox split**
+- [x] **Step 6: Commit the sandbox split**
 
 ```bash
 git add apps/web/content/docs/sandbox.mdx \
@@ -1256,7 +1256,7 @@ git commit -m "docs: separate Kubernetes sandbox operations"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Register Agent Protocol and capture the intended red**
+- [x] **Step 1: Register Agent Protocol and capture the intended red**
 
 Add Agent Protocol immediately after Dev Server, extend the exact nav test to
 52 pages, add the Agent Protocol and concise Dev Server rows from Task 1, and
@@ -1268,7 +1268,7 @@ the fixed-count regex guard.
 Run nav/checker tests. Expected: red only for the new page/wrapper and its
 required route facts. Do not commit or register memory pages.
 
-- [ ] **Step 2: Turn Dev Server into the short local-development path**
+- [x] **Step 2: Turn Dev Server into the short local-development path**
 
 Keep the existing `# Dev Server` title and retain complete sections for starting
 the server, invoking a route, the parent watcher/session versus child-owned HTTP
@@ -1299,7 +1299,7 @@ links to `AG-UI and Web Clients`, Tracing links to Observability, and Middleware
 links to Middleware plus Security Architecture. Do not duplicate their canonical
 examples on the Dev Server overview.
 
-- [ ] **Step 3: Write the complete Agent Protocol page**
+- [x] **Step 3: Write the complete Agent Protocol page**
 
 Create `# Agent Protocol` with this order:
 
@@ -1325,14 +1325,14 @@ Do not state a fixed endpoint count. Keep request/response shapes synchronized
 with `runtime-fetch-core.ts` and its tests; do not infer a route from a comment
 alone.
 
-- [ ] **Step 4: Add the wrapper and compatibility-anchor assertions**
+- [x] **Step 4: Add the wrapper and compatibility-anchor assertions**
 
 Add the wrapper with title `Agent Protocol`. Extend `docs-anchors.test.ts` to
 assert that both `/docs/dev-server` and the canonical Agent Protocol page expose
 `agent-protocol-endpoints`, `thread-lifecycle-with-curl`,
 `one-run-at-a-time-per-thread`, and `client-disconnect`.
 
-- [ ] **Step 5: Verify and review the protocol slice**
+- [x] **Step 5: Verify and review the protocol slice**
 
 Run:
 
@@ -1351,7 +1351,7 @@ Expected: all 52-page web/discovery/CLI coverage, anchors, lint, typecheck,
 checker, and diff check pass. Request review against the route dispatcher,
 heartbeat and cancellation tests, middleware coverage, and run registry.
 
-- [ ] **Step 6: Commit the protocol split**
+- [x] **Step 6: Commit the protocol split**
 
 ```bash
 git add apps/web/content/docs/dev-server.mdx \
@@ -1379,7 +1379,7 @@ git commit -m "docs: extract Agent Protocol reference"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Register the five memory guides and capture the intended red**
+- [x] **Step 1: Register the five memory guides and capture the intended red**
 
 Insert Long-term Memory, Recall and Retrieval, Episodes, and Distillation after
 Memory in Build. Insert Browse and Manage Memory before Upgrading in Operate.
@@ -1389,7 +1389,7 @@ chooser row from Task 1 to `scripts/check-docs.mjs`.
 Run nav/checker tests. Expected: red only for the five new pages/wrappers and
 their allocated contracts. Do not commit or register Fixtures and Recording.
 
-- [ ] **Step 2: Make Memory a three-mechanism chooser**
+- [x] **Step 2: Make Memory a three-mechanism chooser**
 
 Keep `# Memory` and explain only these three built-in choices:
 
@@ -1441,7 +1441,7 @@ a chooser:
 ## What's deferred
 ```
 
-- [ ] **Step 3: Write Long-term Memory**
+- [x] **Step 3: Write Long-term Memory**
 
 Use these sections: define the schema, choose kind and scope, generated
 `recall_<name>`/`remember_<name>` tools, deterministic record identity and
@@ -1456,7 +1456,7 @@ than redefining candidate review. Explain that timestamp-salted append IDs
 normally separate repeated writes, but namespace, data, and the same millisecond
 timestamp can still collide and upsert.
 
-- [ ] **Step 4: Write Recall and Retrieval**
+- [x] **Step 4: Write Recall and Retrieval**
 
 Document `MemoryStore.search`, not `browse`, in this order:
 
@@ -1474,7 +1474,7 @@ Do not promise identical result order across backends. Use
 tests as authorities. End with a short explicit contrast and link: `search`
 serves agent recall, while `browse` serves administrative inventory.
 
-- [ ] **Step 5: Write Episodes**
+- [x] **Step 5: Write Episodes**
 
 Separate recorder-authored episodes from agent-authored episodic records. Cover
 enablement, recorded source/data, one run timestamp, TTL/cap pruning, time-window
@@ -1485,7 +1485,7 @@ schema/write controls and Recall and Retrieval for ranking. Explain settled,
 failed, and parked-interrupt behavior from the runtime tests; do not describe a
 parked run as a completed episode before it resumes.
 
-- [ ] **Step 6: Write Distillation**
+- [x] **Step 6: Write Distillation**
 
 Start with the verdict that nothing runs automatically. Document only the
 explicit `dawn memory consolidate` and `dawn memory reflect` flows, their flags,
@@ -1497,7 +1497,7 @@ and no-insight sentinel, the candidate default for reflected insights,
 Candidate review is governance, not distillation; link to Long-term Memory for
 it.
 
-- [ ] **Step 7: Write Browse and Manage Memory as an admin contract**
+- [x] **Step 7: Write Browse and Manage Memory as an admin contract**
 
 Use `packages/memory/src/{types,browse,browse-validate,browse-cursor,browse-order,browse-range}.ts`
 and `packages/testing/src/memory-conformance.ts` as the public authorities. Do
@@ -1525,7 +1525,7 @@ Cover:
   the distinct candidate management endpoints. Explicitly say browse does not
   use semantic ranking.
 
-- [ ] **Step 8: Add wrappers and compatibility-anchor tests**
+- [x] **Step 8: Add wrappers and compatibility-anchor tests**
 
 Use exact titles: `Long-term Memory`, `Recall and Retrieval`, `Episodes`,
 `Distillation`, and `Browse and Manage Memory`. Extend
@@ -1534,7 +1534,7 @@ canonical owners; include at least `how-recall-ranks`, `semantic-recall-opt-in`,
 `postgres-backend-pgvector`, `episodic-memory`, `distillation`,
 `write-governance`, `reviewing-candidates`, `configuration`, and `testing`.
 
-- [ ] **Step 9: Verify and review the memory slice**
+- [x] **Step 9: Verify and review the memory slice**
 
 Run:
 
@@ -1556,7 +1556,7 @@ lint, typecheck, checker, and diff check pass. Request review against built-in
 capability tests, both stores, browse conformance, episode tests, and
 distillation tests.
 
-- [ ] **Step 10: Commit the memory split**
+- [x] **Step 10: Commit the memory split**
 
 ```bash
 git add apps/web/content/docs/memory.mdx apps/web/content/docs/memory \
@@ -1579,7 +1579,7 @@ git commit -m "docs: split memory by developer task"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Register Fixtures and Recording and capture the intended red**
+- [x] **Step 1: Register Fixtures and Recording and capture the intended red**
 
 Add Fixtures and Recording immediately after Agent Test Harness, extend the
 exact registry test to the final 58 pages, and add the focused fixture row from
@@ -1587,7 +1587,7 @@ Task 1. Run nav/checker tests. Expected: red only for this page/wrapper and its
 record/replay/live contract. Do not commit until the full 58-page discovery
 lane is green.
 
-- [ ] **Step 2: Refocus the harness overview**
+- [x] **Step 2: Refocus the harness overview**
 
 Retitle the page and wrapper to `Agent Test Harness`. Keep installation, the
 first deterministic test, the fixture-script primer, matchers/assertions,
@@ -1611,7 +1611,7 @@ fixture-file/live detail with concise compatibility headings:
 
 Each compatibility section links to Fixtures and Recording.
 
-- [ ] **Step 3: Write Fixtures and Recording**
+- [x] **Step 3: Write Fixtures and Recording**
 
 Use this order:
 
@@ -1635,13 +1635,13 @@ Do not claim every test is offline: live and record modes are intentional,
 explicit opt-ins. Never call live mode “proxy-record mode,” and never recommend
 live model tests in CI.
 
-- [ ] **Step 4: Add the wrapper and anchor assertions**
+- [x] **Step 4: Add the wrapper and anchor assertions**
 
 Use title `Fixtures and Recording`. Extend `docs-anchors.test.ts` so the old
 Agent Test Harness fixture/live anchors and the new canonical counterparts all
 remain buildable.
 
-- [ ] **Step 5: Verify and review the testing slice**
+- [x] **Step 5: Verify and review the testing slice**
 
 Run:
 
@@ -1662,7 +1662,7 @@ lint, typecheck, checker, and diff check pass. Request review against harness
 and fixture-builder tests, especially `turnIndex`, reset, record/live mode,
 environment restoration, and async teardown.
 
-- [ ] **Step 6: Commit the fixture split**
+- [x] **Step 6: Commit the fixture split**
 
 ```bash
 git add apps/web/content/docs/testing-agents.mdx \
@@ -1683,20 +1683,20 @@ git commit -m "docs: extract agent fixture guidance"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Add the focused-reference guard and capture red**
+- [x] **Step 1: Add the focused-reference guard and capture red**
 
 Add the Configuration row allocated in Task 1. Run the checker. Expected: red
 for missing canonical operational links or stale `dawn start` environment
 wording only; the 58-page topology remains green.
 
-- [ ] **Step 2: Retitle without weakening the complete example**
+- [x] **Step 2: Retitle without weakening the complete example**
 
 Use `# Configuration Reference` and matching metadata. Keep the complete
 annotated `dawn.config.ts` example copyable and keep every public `DawnConfig`
 field represented. Before editing, inventory the current schema from
 `packages/core/src/config.ts` and turn the key list into a review checklist.
 
-- [ ] **Step 3: Tighten each key to contract, default, and canonical guide**
+- [x] **Step 3: Tighten each key to contract, default, and canonical guide**
 
 For `appDir`, backends, permissions, checkpointer, threads store, env,
 tool-output offloading, summarization, memory, build, and sandbox, keep:
@@ -1713,7 +1713,7 @@ reserved `tool`/`subagent` keys exact-match; resource paths, bash commands, and
 memory scopes prefix-match; config maps stay in memory and do not seed the
 runtime permissions store.
 
-- [ ] **Step 4: Reduce the Postgres section to a compatibility summary**
+- [x] **Step 4: Reduce the Postgres section to a compatibility summary**
 
 Keep `## Postgres backend` as an anchor-bearing summary with one minimal
 configuration example and links to Persistence and Production Topology. Retain
@@ -1726,7 +1726,7 @@ these source-accurate points:
   variable names;
 - shared persistence does not distribute active-run/cancel coordination.
 
-- [ ] **Step 5: Verify no schema field or anchor was lost**
+- [x] **Step 5: Verify no schema field or anchor was lost**
 
 Run:
 
@@ -1744,7 +1744,7 @@ Expected: core tests, anchors, lint, and typecheck pass. Request review against
 three store factories. The reviewer must compare every inventoried key, not
 only the prose that changed.
 
-- [ ] **Step 6: Commit the focused reference**
+- [x] **Step 6: Commit the focused reference**
 
 ```bash
 git add apps/web/content/docs/configuration.mdx \
@@ -1760,7 +1760,7 @@ git commit -m "docs: focus configuration reference"
 - Modify: `scripts/check-docs.mjs`
 - Test: `apps/web/app/components/docs/docs-anchors.test.ts`
 
-- [ ] **Step 1: Inventory the existing public-reference anchors**
+- [x] **Step 1: Inventory the existing public-reference anchors**
 
 Before editing, extract every heading slug from `api.mdx` and save the current
 exact 98 IDs in an API-specific assertion in `docs-anchors.test.ts`:
@@ -1793,13 +1793,13 @@ final IDs, including duplicate-slug results such as `agentconfig-1`,
 `assertidentifiername-value-1`, `example`, and `example-1`. Do not split this
 page into package leaves in this pull request.
 
-- [ ] **Step 2: Add the new public-surface guard and capture red**
+- [x] **Step 2: Add the new public-surface guard and capture red**
 
 Add the API row allocated in Task 1 and extend the existing package-heading
 guard for `@dawn-ai/cli` and `@dawn-ai/memory`. Run the checker and API anchor
 test. Expected: red for the missing sections while all 98 legacy IDs remain.
 
-- [ ] **Step 3: Add a package table of contents and reference conventions**
+- [x] **Step 3: Add a package table of contents and reference conventions**
 
 At the top, add an ordered package/surface index and one short conventions
 section explaining Node-only subpaths, edge-safe subpaths, generated types, and
@@ -1809,7 +1809,7 @@ SDK, CLI root/fetch, Testing, Evals, and `dawn:routes` as application-facing;
 Core, AG-UI, Memory, pgvector, and Postgres storage as lower-level
 store/integration surfaces; and `@dawn-ai/cli/runtime` as tooling.
 
-- [ ] **Step 4: Document stable application-runtime exports**
+- [x] **Step 4: Document stable application-runtime exports**
 
 Add an `## @dawn-ai/cli` section for the root exports `serveRuntime`,
 `ServeRuntimeHandle`, `ServeRuntimeOptions`, `loadStaticModules`, and
@@ -1822,7 +1822,7 @@ exports it, but label it a lower-level tooling surface and do not recommend it
 for application embedding. Mention deprecated `shutdownController` only to
 direct readers to await `close()`. Link Embed the Runtime for examples.
 
-- [ ] **Step 5: Document the core memory store and pure browse contract**
+- [x] **Step 5: Document the core memory store and pure browse contract**
 
 Add `## @dawn-ai/memory` with exact `MemoryStore`, `MemoryQuery`, `BrowseQuery`,
 `BrowsePage`, `MemoryRecord`, and stats/prune signatures. Add a pure
@@ -1840,7 +1840,7 @@ sort entries with one filter per field; cursor/offset compatibility; the exact
 query-fingerprint included and excluded fields; and the `invalid-query` versus
 `continuation-invalid` error identifiers.
 
-- [ ] **Step 6: Reconcile package coverage without broadening scope**
+- [x] **Step 6: Reconcile package coverage without broadening scope**
 
 Keep the existing `@dawn-ai/sdk`, core, AG-UI, pgvector, Postgres storage,
 testing, evals, and generated-route sections exact. Do not create new reference
@@ -1849,7 +1849,7 @@ required package-heading list only for the two newly documented public
 surfaces. Avoid introducing generic `### Example` headings before the existing
 testing/evals examples, because that would renumber their retained fragments.
 
-- [ ] **Step 7: Verify signatures, old anchors, and package tests**
+- [x] **Step 7: Verify signatures, old anchors, and package tests**
 
 Run:
 
@@ -1867,7 +1867,7 @@ Expected: CLI/memory tests, API anchor inventory, lint, typecheck, and all
 API-specific checker rows pass. Request a signature-by-signature review against
 package barrels, export maps, and public types before committing.
 
-- [ ] **Step 8: Commit the API reference tightening**
+- [x] **Step 8: Commit the API reference tightening**
 
 ```bash
 git add apps/web/content/docs/api.mdx \
@@ -1891,7 +1891,7 @@ git commit -m "docs: tighten application API reference"
 - Modify: headings, metadata, cards, and links in the reconciliation file set
   listed in the file map
 
-- [ ] **Step 1: Extend the existing discovery tests for focused pages**
+- [x] **Step 1: Extend the existing discovery tests for focused pages**
 
 Add these explicit final assertions on top of the generic tests from Task 1:
 
@@ -1923,7 +1923,7 @@ Run the focused tests. Expected: the registry-driven assertions are already
 green at 58 pages; the new compact-LLM, exhaustive internal-link, and explicit
 CLI command cases begin red until the reconciliation below.
 
-- [ ] **Step 2: Audit the already-installed final registry**
+- [x] **Step 2: Audit the already-installed final registry**
 
 Compare the current `DOCS_NAV` byte-for-byte in meaning with
 `EXPECTED_DOCS_NAV` from this plan. It must already contain 58 pages from Tasks
@@ -1932,7 +1932,7 @@ differs, correct the owning slice before continuing. Confirm `DOCS_PAGES` still
 derives from the registry and remains the sole reading order for breadcrumbs,
 previous/next, search, sitemap, LLM full text, and generated CLI docs.
 
-- [ ] **Step 3: Align every nav label, H1, and metadata title**
+- [x] **Step 3: Align every nav label, H1, and metadata title**
 
 Use exact final titles for all new pages and normalize these existing pages:
 
@@ -1961,7 +1961,7 @@ Audit the normalized titles from Task 2 and the exact titles on every new page.
 Update any remaining visible RelatedCards and the research UI's AG-UI label.
 Do not change URLs merely to match labels.
 
-- [ ] **Step 4: Refocus Getting Started and group the Recipes Overview**
+- [x] **Step 4: Refocus Getting Started and group the Recipes Overview**
 
 Keep Getting Started to install/scaffold, the accurate file tour, offline
 typegen/check/typecheck/tests/eval, and the first explicitly keyed live run.
@@ -1992,7 +1992,7 @@ and exactly three final decision-card titles, and must not contain
 `## Build`, `## Integrate`, `## Test`, and `## Deploy` with every final recipe
 label exactly once.
 
-- [ ] **Step 5: Repoint every internal deep link to its canonical owner**
+- [x] **Step 5: Repoint every internal deep link to its canonical owner**
 
 Scan the entire normative docs/source set for old split-page anchors. At
 minimum reconcile:
@@ -2012,7 +2012,7 @@ Keep the compatibility headings at the old URLs, but make new and maintained
 inbound links target the canonical page. Exclude historical blog posts from the
 rewrite.
 
-- [ ] **Step 6: Update compact machine discovery**
+- [x] **Step 6: Update compact machine discovery**
 
 Add a concise `## Documentation map` to `llms.txt` with the application path:
 Getting Started → build/integrate/test → Persistence/Topology/Security → target
@@ -2020,7 +2020,7 @@ deployment, plus direct links to the memory chooser, embedding, configuration,
 CLI, and API references. Preserve the already-correct runtime/auth/cancellation
 warnings; do not turn the compact file into a duplicate of `llms-full.txt`.
 
-- [ ] **Step 7: Make the topology and discovery contract green**
+- [x] **Step 7: Make the topology and discovery contract green**
 
 Run:
 
@@ -2042,13 +2042,13 @@ title sync, search, sitemap, LLM full output, generated CLI docs, anchor set,
 accuracy contracts, lint, typecheck, and build-cache check all pass. Generated
 `packages/cli/docs` output is ignored and must not be staged.
 
-- [ ] **Step 8: Request integrated navigation/discovery review**
+- [x] **Step 8: Request integrated navigation/discovery review**
 
 Ask one reviewer to trace each registry consumer and another to audit title and
 deep-link ownership. Resolve all Critical/Important findings, rerun Step 7, and
 then commit.
 
-- [ ] **Step 9: Commit the published journey**
+- [x] **Step 9: Commit the published journey**
 
 Stage the exact files reported by `git status --short`, inspect the staged file
 list, and commit:
@@ -2066,7 +2066,7 @@ Do not stage generated CLI docs or unrelated files.
 - Modify only files required to resolve verified review or QA findings
 - Update: this plan's checkboxes as each final gate completes
 
-- [ ] **Step 1: Dispatch three independent read-only reviews**
+- [x] **Step 1: Dispatch three independent read-only reviews**
 
 Give each reviewer the approved design, this plan, and the final diff, with
 non-overlapping ownership:
@@ -2081,7 +2081,7 @@ Each reviewer reports only Critical/Important findings with exact file/line,
 source authority, impact, and recommended correction. Resolve findings using
 `@superpowers:receiving-code-review`; request re-review of each corrected slice.
 
-- [ ] **Step 2: Run the complete Node 24 verification lane before browser QA**
+- [x] **Step 2: Run the complete Node 24 verification lane before browser QA**
 
 Start with a clean build because packages import generated `dist/` output:
 
@@ -2100,13 +2100,12 @@ git diff --check origin/main...HEAD
 ```
 
 Expected: Node prints `v24.19.0`, pnpm prints `10.33.0`, and every command
-passes. The changeset check
-should report that no changeset is required because this pull request changes
-the private docs app, docs/tests, Turbo inputs, and a chart README but no
-publishable package source. If it reports otherwise, investigate the actual
-diff rather than bypassing the check.
+passes. The final review added a publishable CLI typegen correction, so the
+changeset check must accept the checked-in `@dawn-ai/cli` patch changeset. If
+it reports otherwise, investigate the actual diff rather than bypassing the
+check.
 
-- [ ] **Step 3: Run desktop and mobile browser QA**
+- [x] **Step 3: Run desktop and mobile browser QA**
 
 Start the docs app in a persistent terminal session:
 
@@ -2139,7 +2138,7 @@ command, and one representative split page. Stop the dev server after QA. If
 the required in-app browser is unavailable, pause and ask the user before using
 another browser surface.
 
-- [ ] **Step 4: Run the repository's final all-in-one validation**
+- [x] **Step 4: Run the repository's final all-in-one validation**
 
 After all review and browser fixes, run from a clean working tree except for
 the intended final corrections:
@@ -2154,7 +2153,7 @@ Expected: `pnpm ci:validate` passes, the branch diff has no whitespace errors,
 and status contains only intended unstaged plan-checkbox or final-review edits.
 Do not claim completion from the focused checks alone.
 
-- [ ] **Step 5: Commit final verified corrections and record evidence**
+- [x] **Step 5: Commit final verified corrections and record evidence**
 
 If review/QA produced changes, stage only those files, inspect the staged diff,
 and commit them with a message describing the correction rather than a generic
@@ -2170,3 +2169,11 @@ git log --oneline --decorate origin/main..HEAD
 Expected: clean status, a readable commit series, and all design, plan, content,
 shell, review-fix, and completion-record commits present. Do not push or open a
 pull request until the user chooses that integration step.
+
+**Completion evidence (2026-08-11):** Node `v24.19.0`, pnpm `10.33.0`, the
+full 3,080-test source lane (2,871 passed, 209 skipped), docs contracts,
+changesets, release checks, pack checks, TypeScript tooling-pack verification,
+and all three framework/runtime/smoke harness lanes passed. In-app browser QA
+passed at 1440×1000 and 390×844 with four captured screenshots; a search-palette
+Escape regression found during QA was corrected and rechecked before the final
+validation.
