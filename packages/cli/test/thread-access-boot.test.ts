@@ -6,6 +6,8 @@ import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
+import { loadThreadAccess } from "../src/lib/dev/thread-access-node.js"
+import { nodeBootFallbacks } from "../src/lib/runtime/execute-route.js"
 import { loadStaticModules } from "../src/lib/runtime/static-modules.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
@@ -77,6 +79,39 @@ describe("thread-access boot resolution", () => {
     await expect(createRuntimeFetchHandler({ appRoot })).rejects.toMatchObject({
       code: "DAWN_E3003",
     })
+  })
+
+  it("fails the boot instead of reporting no policy when the file is unreachable", async () => {
+    // The blocker, at the layer an operator actually sees it: with `existsSync`
+    // deciding existence, an EACCES on the policy's directory booted every
+    // thread endpoint open AND printed the reassuring "no thread access policy"
+    // line. Only the syscall is stubbed — the real loader and the real boot
+    // resolution run — because a chmod on `src` would also hide `src/app` from
+    // route discovery, which fails earlier and would prove nothing.
+    const appRoot = await fixtureApp({ "src/thread-access.ts": VALID_POLICY_FILE })
+    const lines: string[] = []
+    const log = vi.spyOn(console, "log").mockImplementation((line: unknown) => {
+      lines.push(String(line))
+    })
+    try {
+      await expect(
+        createRuntimeFetchHandler({
+          appRoot,
+          bootFallbacks: {
+            ...nodeBootFallbacks,
+            loadThreadAccess: async (root) =>
+              await loadThreadAccess(root, {
+                statPath: (path) => {
+                  throw Object.assign(new Error(`EACCES: lstat '${path}'`), { code: "EACCES" })
+                },
+              }),
+          },
+        }),
+      ).rejects.toMatchObject({ code: "DAWN_E3003" })
+    } finally {
+      log.mockRestore()
+    }
+    expect(lines).not.toContain("Dawn: no thread access policy (all thread endpoints are open)")
   })
 })
 

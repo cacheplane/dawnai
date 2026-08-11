@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -26,6 +26,20 @@ const VALID_POLICY = `export default {
   fallback: () => ({ decision: "allow" }),
 }
 `
+
+/** A stat seam that fails the way the real syscall does, with an errno `code`. */
+function denyWith(errno: string): (path: string) => void {
+  return (path) => {
+    throw Object.assign(new Error(`${errno}: not permitted, lstat '${path}'`), { code: errno })
+  }
+}
+
+/**
+ * chmod is a no-op on Windows, and root ignores the mode bits entirely — the
+ * real-filesystem cases below are meaningless in both. They exist alongside the
+ * injected-seam cases as the proof that the seam models the real syscall.
+ */
+const canRevokePermissions = process.platform !== "win32" && process.getuid?.() !== 0
 
 describe("loadThreadAccess", () => {
   it("returns undefined when no candidate exists (today's behavior, unchanged)", async () => {
@@ -112,10 +126,13 @@ export default { fallback: () => ({ decision: "allow" }), tag: "default" }
  * separate regexes: a policy file that exists but cannot be bound NEVER
  * resolves, and each way it can fail says something different.
  */
-async function loadFailure(appRoot: string): Promise<{ code: unknown; message: string }> {
+async function loadFailure(
+  appRoot: string,
+  options?: Parameters<typeof loadThreadAccess>[1],
+): Promise<{ code: unknown; message: string }> {
   let policy: unknown
   try {
-    policy = await loadThreadAccess(appRoot)
+    policy = await loadThreadAccess(appRoot, options)
   } catch (error) {
     return {
       code: (error as { readonly code?: unknown }).code,
@@ -142,8 +159,40 @@ describe("loadThreadAccess fails closed", () => {
     expect(failure.message).toContain("ungated")
   })
 
-  it("names a distinct cause for the import failure and each of the four binding failures", async () => {
+  it("rejects rather than resolving when the probe cannot tell whether the file is there", async () => {
+    // `existsSync` answers `false` for EVERY error, not just ENOENT — an
+    // unreadable parent directory, an EACCES, an EPERM or an EIO would all read
+    // as "this app has no policy" and boot every thread endpoint wide open.
+    // Injected at the syscall seam so the classification under test is real and
+    // the case runs identically on every platform (Windows has no chmod).
+    const appRoot = await fixtureApp({ "src/thread-access.ts": VALID_POLICY })
+    const failure = await loadFailure(appRoot, { statPath: denyWith("EACCES") })
+    expect(failure.code).toBe("DAWN_E3003")
+    expect(failure.message).toContain("src/thread-access.ts")
+    expect(failure.message).toContain("EACCES")
+    expect(failure.message).toContain("ungated")
+  })
+
+  it("still reports no policy for the errnos that genuinely mean absent", async () => {
+    // The other half: this must NOT become "any probe error fails the boot", or
+    // an app that never had a policy stops booting. ENOENT is the ordinary
+    // no-file answer; ENOTDIR is `src` being a file rather than a directory.
+    const appRoot = await fixtureApp({ "package.json": '{"type":"module"}\n' })
+    for (const errno of ["ENOENT", "ENOTDIR"]) {
+      await expect(
+        loadThreadAccess(appRoot, { statPath: denyWith(errno) }),
+      ).resolves.toBeUndefined()
+    }
+  })
+
+  it("names a distinct cause for the probe, the import, and each of the four binding failures", async () => {
     const cases = [
+      {
+        name: "unreadable path",
+        options: { statPath: denyWith("EACCES") },
+        pattern: /could not be probed/,
+        source: VALID_POLICY,
+      },
       {
         name: "import failure",
         pattern: /failed to import/,
@@ -177,7 +226,10 @@ describe("loadThreadAccess fails closed", () => {
 
     const failures = await Promise.all(
       cases.map(async (testCase) =>
-        loadFailure(await fixtureApp({ "src/thread-access.ts": testCase.source })),
+        loadFailure(
+          await fixtureApp({ "src/thread-access.ts": testCase.source }),
+          "options" in testCase ? testCase.options : undefined,
+        ),
       ),
     )
 
@@ -197,5 +249,39 @@ describe("loadThreadAccess fails closed", () => {
 
     // …and belt-and-braces: no two messages are the same string.
     expect(new Set(failures.map((failure) => failure.message)).size).toBe(cases.length)
+  })
+})
+
+describe.runIf(canRevokePermissions)("loadThreadAccess against a real unreadable path", () => {
+  /** Restore the mode before `afterEach` tries to remove the tree. */
+  async function withMode(path: string, mode: number, body: () => Promise<void>): Promise<void> {
+    await chmod(path, mode)
+    try {
+      await body()
+    } finally {
+      await chmod(path, 0o700)
+    }
+  }
+
+  it("fails the boot when the policy file itself cannot be read", async () => {
+    // `lstat` succeeds on a mode-000 file (stat needs no read permission), so
+    // this lands on the IMPORT failure — still a hard DAWN_E3003, never silence.
+    const appRoot = await fixtureApp({ "src/thread-access.ts": VALID_POLICY })
+    await withMode(join(appRoot, "src", "thread-access.ts"), 0o000, async () => {
+      const failure = await loadFailure(appRoot)
+      expect(failure.code).toBe("DAWN_E3003")
+      expect(failure.message).toContain("thread-access.ts")
+    })
+  })
+
+  it("fails the boot when the policy's directory cannot be read", async () => {
+    // Here `lstat` itself is denied — the case `existsSync` reported as "no
+    // policy file", booting every thread endpoint open.
+    const appRoot = await fixtureApp({ "src/thread-access.ts": VALID_POLICY })
+    await withMode(join(appRoot, "src"), 0o000, async () => {
+      const failure = await loadFailure(appRoot)
+      expect(failure.code).toBe("DAWN_E3003")
+      expect(failure.message).toContain("EACCES")
+    })
   })
 })
