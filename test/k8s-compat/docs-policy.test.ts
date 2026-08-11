@@ -128,14 +128,31 @@ function isApprovedCniPreflightWarning(text: string): boolean {
 
 function hasPositiveCniClaimLanguage(text: string): boolean {
   const positiveClaim =
-    /\b(?:certif(?:y|ies|ied|ying)|compatible|validat(?:e|es|ed|ing)|support(?:s|ed|ing)?|prov(?:e|es|ed|en)|guarantee(?:s|d|ing)?|work(?:s|ed|ing)?\s+with)\b/gi
+    /\b(?:certif(?:y|ies|ied|ying|ications?)|compatib(?:le|ilit(?:y|ies))|validat(?:e|es|ed|ing|ions?)|support(?:s|ed|ing)?|prov(?:e|es|ed|en|ing)|proofs?|guarantee(?:s|d|ing)?|work(?:s|ed|ing)?\s+with)\b/gi
+  let negatedClaimEnd: number | undefined
   for (const match of text.matchAll(positiveClaim)) {
     const prefix = text.slice(Math.max(0, match.index - 32), match.index)
-    const isNegated =
-      /(?:\b(?:not|never|cannot|can't|doesn't|don't|isn't|aren't)\s+|\b(?:rather than|instead of)\s+|\bnon-)$/i.test(
+    const isDirectlyNegated =
+      /(?:\b(?:not|never|cannot|can't|doesn't|don't|isn't|aren't)\s+|\bno(?:\s+CNIs?(?:\s+(?:implementations?|plugins?))?)?\s+|\b(?:rather than|instead of)\s+|\bnon-)$/i.test(
         prefix,
       )
-    if (!isNegated) return true
+    if (isDirectlyNegated) {
+      negatedClaimEnd = match.index + match[0].length
+      continue
+    }
+    const followsNegatedClaim =
+      negatedClaimEnd !== undefined &&
+      /^(?:certifications?|compatibilit(?:y|ies)|validations?|support|proofs?|guarantees?)$/i.test(
+        match[0],
+      ) &&
+      /^\s+(?:CNIs?(?:\s+(?:implementations?|plugins?))?\s+)?$/i.test(
+        text.slice(negatedClaimEnd, match.index),
+      )
+    if (followsNegatedClaim) {
+      negatedClaimEnd = undefined
+      continue
+    }
+    return true
   }
   return false
 }
@@ -289,6 +306,8 @@ managed Kubernetes services.`,
     "Kind guarantees CNI compatibility.",
     "Kind works with CNI implementations.",
     "Kind does not guarantee CNI compatibility, but Kind validates CNI implementations.",
+    "Kind provides CNI certification.",
+    "The Kind suite is proving CNI compatibility.",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
     expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
@@ -302,6 +321,7 @@ other CNI implementations, or storage drivers.`,
     "A CNI that ignores NetworkPolicy does not provide egress isolation.",
     "Preflight warns when a policy-capable CNI cannot be confirmed; it does not guarantee enforcement.",
     "Kind does not guarantee CNI compatibility.",
+    "Kind provides no CNI certification.",
     "Dynamic ReadWriteOnce storage provisioning is required.",
     "The storage driver must support dynamic ReadWriteOnce provisioning.",
     "Managed Kubernetes services are outside Kind evidence.",
