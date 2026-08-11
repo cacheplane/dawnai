@@ -1,6 +1,6 @@
 "use client"
 import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
-import type { ColumnFilter, PretableSortEntry } from "@pretable/react"
+import type { ColumnFilter, PretableGrid, PretableSortEntry } from "@pretable/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { canonicalBrowseQuery } from "../../browse/canonical-query"
 import { useMemoryBrowse } from "../../browse/use-memory-browse"
@@ -14,7 +14,7 @@ import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
-import { MemoryGrid } from "./memory-grid"
+import { type GridRow, MemoryGrid } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
 import { capSortEntries, MAX_BROWSE_SORT_ENTRIES, toBrowseQuery } from "./to-browse-query"
 
@@ -235,12 +235,16 @@ export function ListPage() {
     setSelectedId(undefined)
     requestRefresh()
   }, [requestRefresh])
-  // The grid keeps its own checkbox state, so clearing here would leave the
-  // boxes ticked. Remounting it (see `key` below) is what actually resets both.
-  const [gridEpoch, setGridEpoch] = useState(0)
+  // The engine owns selection; clearing it here is one call, and every other
+  // clear happens on its own: a query change pivots `datasetKey`, and the engine
+  // drops selection, focus and group expansion as part of that single emit.
+  const gridRef = useRef<PretableGrid<GridRow> | null>(null)
+  const handleGridReady = useCallback((grid: PretableGrid<GridRow>) => {
+    gridRef.current = grid
+  }, [])
   const clearTicked = useCallback(() => {
+    gridRef.current?.clearSelection()
     setTicked([])
-    setGridEpoch((n) => n + 1)
   }, [])
   const handleBulkDone = useCallback(
     ({ failed }: { failed: number }) => {
@@ -403,7 +407,7 @@ export function ListPage() {
                 </p>
               ) : null}
               <MemoryGrid
-                key={gridEpoch}
+                onGridReady={handleGridReady}
                 records={browse.rows}
                 onSelect={setSelectedId}
                 onTickedChange={setTicked}

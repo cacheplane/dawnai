@@ -4,6 +4,7 @@ import {
   type ColumnFilter,
   type PretableColumn,
   type PretableDataState,
+  type PretableGrid,
   type PretableProcessingOptions,
   type PretableResultMeta,
   type PretableSortEntry,
@@ -22,7 +23,7 @@ import { KINDS, STATUSES } from "./memory-domain"
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
  *  column's `value` feeds both the rendered cell and the sort comparator, so
  *  `updated` carries the raw ISO string and formats for display. */
-interface GridRow extends Record<string, unknown> {
+export interface GridRow extends Record<string, unknown> {
   id: string
   status: MemoryStatus
   content: string
@@ -246,6 +247,7 @@ export function MemoryGrid({
   resultMeta,
   emptyMessage,
   onRetry,
+  onGridReady,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
@@ -289,6 +291,10 @@ export function MemoryGrid({
    *  body-state slot rather than a second banner, so exactly one retry control is
    *  ever on screen. */
   onRetry?: () => void
+  /** Receives the engine instance once. The page uses it to clear the checkbox
+   *  selection after a bulk run — the only selection change that is neither a
+   *  user gesture nor a dataset pivot. */
+  onGridReady?: (grid: PretableGrid<GridRow>) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -401,6 +407,7 @@ export function MemoryGrid({
         : {})}
       {...(onFiltersChange ? { onFiltersChange } : {})}
       {...(onSortChange ? { onSortChange } : {})}
+      {...(onGridReady ? { onGridReady } : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
       tabBehavior="exit"

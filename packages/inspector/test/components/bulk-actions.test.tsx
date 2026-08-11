@@ -1,5 +1,5 @@
 import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
 
@@ -64,6 +64,16 @@ function checkboxFor(container: HTMLElement, rowId: string): HTMLElement {
   )
   if (!box) throw new Error(`no checkbox for ${rowId}`)
   return box as HTMLElement
+}
+
+/** The grid's own element, identified by an attribute that survives the
+ *  grid/treegrid role flip grouping causes — a `[role="grid"]` query goes null
+ *  the moment the page groups, and an identity assertion against null passes
+ *  while pinning nothing. Throws so a missing grid fails loudly. */
+function gridElement(container: HTMLElement): Element {
+  const grid = container.querySelector("[data-pretable-scroll-viewport]")
+  if (!grid) throw new Error("no grid element")
+  return grid
 }
 
 function postedUrls(mock: ReturnType<typeof stubApi>): string[] {
@@ -168,5 +178,44 @@ describe("bulk actions", () => {
     await vi.waitFor(() => {
       expect(screen.queryByTestId("bulk-bar")).toBeNull()
     })
+  })
+
+  it("a query change clears the selection without remounting the grid", async () => {
+    // The old code bumped a `key` to throw the grid away, taking measured row
+    // heights, focus and scroll with it. A datasetKey pivot clears exactly the
+    // state that belonged to the old answer, and nothing else.
+    const mock = stubApi()
+    const { container } = render(<ListPage />)
+    await screen.findByText("first candidate")
+    const grid = gridElement(container)
+    fireEvent.click(checkboxFor(container, "c1"))
+    expect(await screen.findByTestId("bulk-bar")).toBeDefined()
+
+    fireEvent.click(await screen.findByRole("button", { name: "Filter status" }))
+    const dialog = await screen.findByRole("dialog", { name: "Filter status" })
+    const box = within(dialog)
+      .getAllByRole("checkbox")
+      .find((cb) => cb.closest("label")?.textContent?.includes("candidate"))
+    if (!box) throw new Error("no candidate option")
+    fireEvent.click(box)
+
+    await vi.waitFor(() => expect(screen.queryByTestId("bulk-bar")).toBeNull())
+    expect(gridElement(container)).toBe(grid)
+    expect(mock).toHaveBeenCalled()
+  })
+
+  it("clearing the selection from the bulk bar keeps the same grid instance", async () => {
+    stubApi()
+    const { container } = render(<ListPage />)
+    await screen.findByText("first candidate")
+    const grid = gridElement(container)
+    fireEvent.click(checkboxFor(container, "c1"))
+    const bar = await screen.findByTestId("bulk-bar")
+    fireEvent.click(within(bar).getByRole("button", { name: /clear/i }))
+    await vi.waitFor(() => expect(screen.queryByTestId("bulk-bar")).toBeNull())
+    expect(gridElement(container)).toBe(grid)
+    // Without the remount, dropping the page's `ticked` alone would hide the bar
+    // and leave the box ticked — so the box is what proves the ENGINE cleared.
+    expect(checkboxFor(container, "c1").getAttribute("aria-checked")).toBe("false")
   })
 })
