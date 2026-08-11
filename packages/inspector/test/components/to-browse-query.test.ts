@@ -1,3 +1,4 @@
+import { BROWSE_SORT_FIELDS, validateBrowseQuery } from "@dawn-ai/memory/browse"
 import type { ColumnFilter, PretableSortEntry } from "@pretable/react"
 import { describe, expect, it } from "vitest"
 import {
@@ -20,8 +21,9 @@ describe("toBrowseQuery — enum columns", () => {
   })
 
   it("maps isNoneOf to notIn without complementing the set", () => {
-    // The server expresses negation directly now, so the old client-side
-    // complement (which needed the full option list) is gone.
+    // The excluded value is carried through as-is. Complementing it against the
+    // full option list would answer a different question once a kind is added
+    // upstream: the unlisted one would silently join the permitted set.
     expect(filters({ kind: { operator: "isNoneOf", value: ["episodic"] } })).toEqual({
       filters: [{ field: "kind", op: "notIn", values: ["episodic"] }],
     })
@@ -229,11 +231,26 @@ describe("capSortEntries", () => {
       { columnId: "confidence", direction: "asc" },
     ]
     expect(capSortEntries(four)).toEqual(four.slice(0, 3))
-    expect(MAX_BROWSE_SORT_ENTRIES).toBe(3)
   })
 
-  it("returns the same array when nothing needs dropping", () => {
-    const two: PretableSortEntry[] = [{ columnId: "status", direction: "asc" }]
-    expect(capSortEntries(two)).toEqual(two)
+  it("caps at exactly the ceiling the store enforces", () => {
+    // MAX_BROWSE_SORT_ENTRIES restates browse-validate's MAX_ORDER_BY, which is not
+    // exported. Pinned against the validator rather than the literal 3: were the
+    // store's ceiling raised, a literal would leave capSortEntries dropping a key the
+    // store would have accepted, and nothing would be red to say so.
+    const entries = BROWSE_SORT_FIELDS.map((field) => ({ field, dir: "asc" }) as const)
+    expect(() =>
+      validateBrowseQuery({ orderBy: entries.slice(0, MAX_BROWSE_SORT_ENTRIES) }),
+    ).not.toThrow()
+    expect(() =>
+      validateBrowseQuery({ orderBy: entries.slice(0, MAX_BROWSE_SORT_ENTRIES + 1) }),
+    ).toThrow(/orderBy entries/)
+  })
+
+  it("hands back the very same array when nothing needs dropping", () => {
+    // Identity, not deep equality: the result feeds a memo/effect dep chain, and a
+    // fresh array on every render re-fires the query for a sort that never changed.
+    const under: PretableSortEntry[] = [{ columnId: "status", direction: "asc" }]
+    expect(capSortEntries(under)).toBe(under)
   })
 })

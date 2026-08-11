@@ -3,6 +3,8 @@ import {
   BrowseQueryError,
   type BrowseSortEntry,
   type BrowseSortField,
+  type MemoryKind,
+  type MemoryStatus,
 } from "@dawn-ai/memory/browse"
 import type { ColumnFilter, FilterOperator, PretableSortEntry } from "@pretable/react"
 import { isMemoryKind, isMemoryStatus } from "./memory-domain"
@@ -74,14 +76,20 @@ const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 /**
  * Every refusal in this module.
  *
- * It THROWS rather than dropping the clause. Once each column declares
- * `filterOperators`, an unmappable operator can only arrive from a column
- * declaration that drifted out of step with the store's grammar — a
- * programming error. Dropping it silently would leave a funnel that looks
- * applied and is not: the exact dishonesty this whole design exists to remove.
+ * It THROWS rather than dropping the clause: dropping it silently would leave a
+ * funnel that looks applied and is not, the exact dishonesty this whole design
+ * exists to remove.
+ *
+ * `filterOperators` makes an unmappable operator rare, NOT unreachable —
+ * pretable's `operatorsForType` warns once and falls back to the full set,
+ * `isEmpty`/`isNotEmpty` included, when the declared list prunes every operator
+ * the column type offers (operator names that do not match the `type` do that).
+ * The user then sees "is empty" on the menu and clicks it, so this backstop
+ * catches a live path and not only a coding slip.
+ *
  * `BrowseQueryError` is reused so the Inspector has ONE rejection family, and
- * `isBrowseQueryError` (src/store/browse-params.ts) already recognises it
- * across the two module copies Next's bundler produces.
+ * `isBrowseQueryError` (src/store/browse-params.ts) matches on `error.name`, so
+ * it recognises this across the two module copies Next's bundler produces.
  */
 function unmappable(detail: string): never {
   throw new BrowseQueryError(
@@ -95,8 +103,9 @@ function badOperator(columnId: string, operator: FilterOperator): never {
 }
 
 function asText(value: ColumnFilter["value"], label: string): string {
-  // Untrimmed on purpose: whitespace is significant in a content predicate, and
-  // the store compares the bytes it is given.
+  // Trimmed to DECIDE, returned untrimmed: an all-whitespace box is an empty one the
+  // user cannot see, while a leading or trailing space inside a real value is part of
+  // the predicate — the store compares the bytes it is given.
   if (typeof value !== "string" || value.trim() === "")
     unmappable(`${label} needs a non-empty text value, got ${JSON.stringify(value)}`)
   return value
@@ -151,17 +160,21 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
   switch (field) {
     case "status": {
       const op = setOp(columnId, operator)
-      const values = asValues(value, "status")
-      for (const entry of values)
+      const values: MemoryStatus[] = []
+      for (const entry of asValues(value, "status")) {
         if (!isMemoryStatus(entry)) unmappable(`"${entry}" is not a memory status`)
-      return { field: "status", op, values: values.filter(isMemoryStatus) }
+        values.push(entry)
+      }
+      return { field: "status", op, values }
     }
     case "kind": {
       const op = setOp(columnId, operator)
-      const values = asValues(value, "kind")
-      for (const entry of values)
+      const values: MemoryKind[] = []
+      for (const entry of asValues(value, "kind")) {
         if (!isMemoryKind(entry)) unmappable(`"${entry}" is not a memory kind`)
-      return { field: "kind", op, values: values.filter(isMemoryKind) }
+        values.push(entry)
+      }
+      return { field: "kind", op, values }
     }
     case "content": {
       const op = CONTENT_OP[operator]
@@ -186,7 +199,7 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
       if (op === undefined) return badOperator(columnId, operator)
       return { field: "confidence", op, value: asNumber(value, "confidence") }
     }
-    default: {
+    case "updatedAt": {
       if (operator === "dateBetween") {
         const [from, until] = asPair(value, "updated between")
         return {
@@ -206,8 +219,16 @@ function toBrowseFilter(columnId: string, filter: ColumnFilter): BrowseFilter {
 /**
  * Pretable filter/sort intent → the browse query's `filters` and `orderBy`.
  *
- * Pure and total for every intent the declared columns can produce; it throws
- * for everything else. Nothing Pretable-shaped crosses the store boundary.
+ * Pure. Total over the GRAMMAR — every column, operator and value SHAPE the
+ * declared columns can produce maps to an arm, and anything else throws — but not
+ * over value legality, which stays the store's to rule on. A reversed range
+ * (`min > max`, `fromDay > untilDay`) is well-formed here and rejected by
+ * `validateBrowseQuery`; pretable's `isComplete` only checks both operands are
+ * present, so a user can type one. It surfaces as the store's own message
+ * naming the mistake, which reads better than a mapping failure would, and the
+ * funnel is visibly unapplied either way. Over-long strings are the same class.
+ *
+ * Nothing Pretable-shaped crosses the store boundary.
  */
 export function toBrowseQuery(
   filters: Record<string, ColumnFilter>,
@@ -242,10 +263,24 @@ export function toBrowseQuery(
  * entries.
  *
  * Pretable's shift-click appends the new key at the lowest priority, so the
- * fourth key is the one dropped: the user's existing ordering survives intact,
- * and the caller shows a notice saying the extra key was declined. Dropping the
- * primary key instead would silently re-rank a sort the user built on purpose.
+ * fourth key is the one dropped: the user's existing ordering survives intact.
+ * Dropping the primary key instead would silently re-rank a sort the user built
+ * on purpose.
+ *
+ * Returns the ARGUMENT itself when it already fits, so a result held in a memo or
+ * dep chain keeps its identity across renders instead of re-firing the query for
+ * a sort that never changed. The result is therefore aliased to the caller's
+ * array and must not be mutated; `grid.replaceSort` wants a mutable array, so
+ * hand it a copy.
+ *
+ * The capped list must reach BOTH the query and the grid's own sort state. Cap
+ * only the query and the header keeps drawing the declined key as an active sort
+ * indicator the server never applied — this function cannot enforce that pairing,
+ * so the caller carries it, along with telling the user the key was declined.
  */
-export function capSortEntries(entries: readonly PretableSortEntry[]): PretableSortEntry[] {
+export function capSortEntries(
+  entries: readonly PretableSortEntry[],
+): readonly PretableSortEntry[] {
+  if (entries.length <= MAX_BROWSE_SORT_ENTRIES) return entries
   return entries.slice(0, MAX_BROWSE_SORT_ENTRIES)
 }
