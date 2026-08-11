@@ -33,6 +33,13 @@
     "admission.restricted.before-upgrade",
     "rbac.secret-read-denied",
     "rbac.role-mutation-denied",
-    "rbac.outside-namespace-denied"
+    "rbac.outside-namespace-denied",
+    "reaper.lifecycle.before-upgrade",
+    "app.service-ready.before-upgrade",
+    "upgrade.infrastructure",
+    "admission.restricted.after-infra-upgrade",
+    "reaper.lifecycle.after-infra-upgrade",
+    "upgrade.application",
+    "app.service-ready.after-application-upgrade"
   ]
 }
