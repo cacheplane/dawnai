@@ -93,6 +93,50 @@ async function expectRecordedProcessStopped(pidPath: string): Promise<void> {
   throw new Error(`Controlled child process ${pid} is still running`)
 }
 
+async function stopRecordedProcess(pidPath: string): Promise<void> {
+  let pid: number
+  try {
+    pid = Number(await readFile(pidPath, "utf8"))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+    throw error
+  }
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return
+  try {
+    process.kill(pid, "SIGKILL")
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+  }
+}
+
+function detachedDescendantWrapper(input: {
+  readonly pidPath: string
+  readonly sentinelPath: string
+  readonly exitCode?: 0 | 1
+}): string {
+  const descendantScript = [
+    'const { writeFileSync } = require("node:fs")',
+    `writeFileSync(${JSON.stringify(input.pidPath)}, String(process.pid))`,
+    'process.stdout.write("ready\\n")',
+    `setTimeout(() => writeFileSync(${JSON.stringify(input.sentinelPath)}, "descendant survived"), 900)`,
+    "setInterval(() => {}, 1_000)",
+  ].join(";")
+  const onReady = [
+    'process.stdout.write("detached-descendant-ready\\n")',
+    "descendant.stdout.destroy()",
+    "descendant.unref()",
+    ...(input.exitCode === undefined
+      ? []
+      : [`setTimeout(() => process.exit(${input.exitCode}), 350)`]),
+  ].join(";")
+  return [
+    'const { spawn } = require("node:child_process")',
+    `const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { detached: true, stdio: ["ignore", "pipe", "ignore"] })`,
+    `descendant.stdout.once("data", () => { ${onReady} })`,
+    "setInterval(() => {}, 1_000)",
+  ].join(";")
+}
+
 function persistentChildScript(pidPath: string, operation: string): string {
   return [
     'const { writeFileSync } = require("node:fs")',
@@ -435,6 +479,81 @@ describe("shell-free command executor", () => {
     await expect(readFile(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" })
   })
 
+  test.skipIf(process.platform === "win32")(
+    "does not settle an abort until a setsid descendant has stopped",
+    async () => {
+      const directory = await createTemporaryDirectory("dawn-k8s-command-setsid-abort-")
+      const pidPath = join(directory, "descendant-pid")
+      const sentinelPath = join(directory, "descendant-sentinel")
+      const controller = new AbortController()
+      const execution = executeCommand(
+        {
+          file: process.execPath,
+          args: ["-e", detachedDescendantWrapper({ pidPath, sentinelPath })],
+        },
+        {
+          ...CONTROLLED_COMMAND_OPTIONS,
+          signal: controller.signal,
+          terminateProcessTree: true,
+        },
+      )
+
+      try {
+        await waitForFile(pidPath)
+        controller.abort()
+
+        const error = await rejectedError(execution)
+        expect(error).toMatchObject({ outcome: { kind: "aborted" } })
+        await expectRecordedProcessStopped(pidPath)
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+        await expect(readFile(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" })
+      } finally {
+        controller.abort()
+        await stopRecordedProcess(pidPath)
+      }
+    },
+  )
+
+  test.each([
+    { name: "accepted exit 1", exitCode: 1 as const, acceptedExitCodes: [1] as const },
+    { name: "normal exit 0", exitCode: 0 as const, acceptedExitCodes: [] as const },
+  ])("does not settle $name while a setsid descendant survives", async (input) => {
+    if (process.platform === "win32") return
+    const directory = await createTemporaryDirectory(`dawn-k8s-command-setsid-${input.exitCode}-`)
+    const pidPath = join(directory, "descendant-pid")
+    const sentinelPath = join(directory, "descendant-sentinel")
+    const execution = executeCommand(
+      {
+        file: process.execPath,
+        args: [
+          "-e",
+          detachedDescendantWrapper({
+            pidPath,
+            sentinelPath,
+            exitCode: input.exitCode,
+          }),
+        ],
+      },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        acceptedExitCodes: input.acceptedExitCodes,
+        terminateProcessTree: true,
+      },
+    )
+
+    try {
+      await waitForFile(pidPath)
+      const commandResult = await execution
+
+      expect(commandResult.exitCode).toBe(input.exitCode)
+      await expectRecordedProcessStopped(pidPath)
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+      await expect(readFile(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await stopRecordedProcess(pidPath)
+    }
+  })
+
   test("opts into a detached POSIX process group and dispatches termination to its PID", async () => {
     const child = new ControlledChild()
     child.pid = 4_321
@@ -517,6 +636,68 @@ describe("shell-free command executor", () => {
     await expect(execution).rejects.toMatchObject({ outcome: { kind: "exit", exitCode: 2 } })
     expect(killProcessGroup).toHaveBeenCalledWith(5_987, "SIGKILL")
     expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  test("fails boundedly when descendant termination cannot be confirmed", async () => {
+    const child = new ControlledChild()
+    child.pid = 6_111
+    const descendantPid = 6_112
+    const controller = new AbortController()
+    const listProcesses = vi.fn(async () => [
+      {
+        pid: child.pid as number,
+        ppid: process.pid,
+        pgid: child.pid as number,
+        startedAt: "Tue Aug 11 02:00:00 2026",
+      },
+      {
+        pid: descendantPid,
+        ppid: child.pid as number,
+        pgid: descendantPid,
+        startedAt: "Tue Aug 11 02:00:01 2026",
+      },
+    ])
+    const killProcessGroup = vi.fn()
+    const killProcess = vi.fn()
+    const processGroupExists = vi.fn(() => true)
+    const delay = vi.fn(async () => undefined)
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess,
+      processGroupExists,
+      delay,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      {
+        ...CONTROLLED_COMMAND_OPTIONS,
+        signal: controller.signal,
+        terminateProcessTree: true,
+      },
+    )
+    child.emit("spawn")
+    await Promise.resolve()
+
+    controller.abort()
+    child.emit("close", null, "SIGKILL")
+
+    const error = await rejectedError(execution)
+    expect(error).toMatchObject({
+      outcome: { kind: "aborted" },
+      processTreeTermination: "unconfirmed",
+    })
+    expect(error.message).toMatch(/process tree termination could not be confirmed/i)
+    expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+      outcome: { kind: "aborted" },
+      processTreeTermination: "unconfirmed",
+    })
+    expect(killProcessGroup).toHaveBeenCalled()
+    expect(killProcess).toHaveBeenCalledWith(descendantPid, "SIGKILL")
+    expect(delay.mock.calls.length).toBeGreaterThan(0)
+    expect(delay.mock.calls.length).toBeLessThanOrEqual(25)
+    expect(listProcesses.mock.calls.length).toBeLessThanOrEqual(30)
   })
 
   test("falls back safely when an opted-in child has no PID", async () => {

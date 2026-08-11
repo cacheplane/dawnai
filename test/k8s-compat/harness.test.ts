@@ -13,8 +13,10 @@ import {
 } from "../../scripts/kubernetes-compat/cluster.ts"
 import {
   type Command,
+  CommandExecutionError,
   type CommandExecutionOptions,
   type CommandResult,
+  executeCommand,
   helm,
 } from "../../scripts/kubernetes-compat/command.ts"
 import {
@@ -153,6 +155,42 @@ function deferred(): {
 
 async function nextEventLoopTurn(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+async function waitForHarnessFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await readFile(path)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`Timed out waiting for harness process marker ${path}`)
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
+    throw error
+  }
+}
+
+async function stopHarnessProcess(pidPath: string): Promise<void> {
+  let pid: number
+  try {
+    pid = Number(await readFile(pidPath, "utf8"))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+    throw error
+  }
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid || !processIsRunning(pid))
+    return
+  process.kill(pid, "SIGKILL")
 }
 
 interface FixtureOptions {
@@ -1220,6 +1258,136 @@ describe("failure boundaries and cleanup", () => {
 })
 
 describe("signal cleanup", () => {
+  test.skipIf(process.platform === "win32")(
+    "waits for confirmed detached provider descendants before token and cluster cleanup",
+    async () => {
+      const fixture = createHarnessFixture()
+      const directory = await mkdtemp(join(tmpdir(), "dawn-harness-provider-tree-"))
+      const pidPath = join(directory, "descendant-pid")
+      const sentinelPath = join(directory, "descendant-sentinel")
+      const emitter = new EventEmitter()
+      const terminated = deferred()
+      const descendantScript = [
+        'const { writeFileSync } = require("node:fs")',
+        `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid))`,
+        'process.stdout.write("ready\\n")',
+        `setTimeout(() => writeFileSync(${JSON.stringify(sentinelPath)}, "provider descendant survived"), 5_000)`,
+        "setInterval(() => {}, 1_000)",
+      ].join(";")
+      const wrapperScript = [
+        'const { spawn } = require("node:child_process")',
+        `const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { detached: true, stdio: ["ignore", "pipe", "ignore"] })`,
+        'descendant.stdout.once("data", () => { process.stdout.write("provider-descendant-ready\\n"); descendant.stdout.destroy(); descendant.unref() })',
+        "setInterval(() => {}, 1_000)",
+      ].join(";")
+      const baseExecute = fixture.dependencies.execute as Runner
+      const execute = vi.fn<Runner>(async (command, options) => {
+        if (command.file !== "pnpm") return baseExecute(command, options)
+        fixture.commandCalls.push({ command, options })
+        fixture.events.push("provider.execute.provider-before-upgrade")
+        try {
+          return await executeCommand(
+            { file: process.execPath, args: ["-e", wrapperScript] },
+            options,
+          )
+        } finally {
+          const descendantPid = Number(await readFile(pidPath, "utf8"))
+          fixture.events.push(
+            processIsRunning(descendantPid) ? "provider.tree.alive" : "provider.tree.confirmed",
+          )
+        }
+      })
+      const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+        fixture.dependencies
+
+      try {
+        const run = runKubernetesCompatibility(OPTIONS, {
+          ...dependenciesWithoutFakeRegistration,
+          execute,
+          registerSignalCleanup: registerOwnedResourceSignalCleanup,
+          signalCleanupOptions: {
+            emitter,
+            terminate: (observedSignal) => {
+              fixture.events.push(`terminate.${observedSignal}`)
+              terminated.resolve()
+            },
+            timeoutMs: 5_000,
+          },
+        }).catch((error: unknown) => error)
+
+        await waitForHarnessFile(pidPath)
+        emitter.emit("SIGTERM")
+        await terminated.promise
+        const error = await run
+
+        expect(error).toBeInstanceOf(Error)
+        expect(fixture.events).toContain("provider.tree.confirmed")
+        expect(fixture.events).not.toContain("provider.tree.alive")
+        expect(fixture.events.indexOf("provider.tree.confirmed")).toBeLessThan(
+          fixture.events.indexOf("token.destroy.1"),
+        )
+        expect(fixture.events.indexOf("token.destroy.1")).toBeLessThan(
+          fixture.events.indexOf("cleanup.destroy"),
+        )
+      } finally {
+        await stopHarnessProcess(pidPath)
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test("does not begin token or cluster cleanup when provider tree termination is unconfirmed", async () => {
+    const fixture = createHarnessFixture()
+    const emitter = new EventEmitter()
+    const providerStarted = deferred()
+    const terminated = deferred()
+    const baseExecute = fixture.dependencies.execute as Runner
+    const execute = vi.fn<Runner>(async (command, options) => {
+      if (command.file !== "pnpm") return baseExecute(command, options)
+      fixture.commandCalls.push({ command, options })
+      fixture.events.push("provider.execute.provider-before-upgrade")
+      providerStarted.resolve()
+      await new Promise<void>((resolveAbort) => {
+        if (options?.signal?.aborted === true) resolveAbort()
+        else options?.signal?.addEventListener("abort", () => resolveAbort(), { once: true })
+      })
+      const error = new CommandExecutionError(
+        "Command was aborted; process-tree termination failed: process tree termination could not be confirmed",
+        command,
+        { kind: "aborted" },
+        { sensitiveOutput: true, processTreeTermination: "unconfirmed" },
+      )
+      throw error
+    })
+    const { registerSignalCleanup: _fakeRegistration, ...dependenciesWithoutFakeRegistration } =
+      fixture.dependencies
+
+    const run = runKubernetesCompatibility(OPTIONS, {
+      ...dependenciesWithoutFakeRegistration,
+      execute,
+      registerSignalCleanup: registerOwnedResourceSignalCleanup,
+      signalCleanupOptions: {
+        emitter,
+        terminate: (observedSignal) => {
+          fixture.events.push(`terminate.${observedSignal}`)
+          terminated.resolve()
+        },
+        timeoutMs: 5_000,
+      },
+    }).catch((error: unknown) => error)
+
+    await providerStarted.promise
+    emitter.emit("SIGINT")
+    await terminated.promise
+    const error = await run
+
+    expect(error).toBeInstanceOf(Error)
+    expect(fixture.events).not.toContain("token.destroy.1")
+    expect(fixture.events).not.toContain("cleanup.verify")
+    expect(fixture.events).not.toContain("cleanup.destroy")
+    expect(fixture.events).toContain("terminate.SIGINT")
+  })
+
   test.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
     "cleans partial network setup with the raw executor before failing cluster cleanup on %s",
     async (signal) => {
@@ -1919,10 +2087,13 @@ describe("failure reports and diagnostics", () => {
     },
   )
 
-  test("removes Pod and workload environment data before diagnostics are persisted", async () => {
-    const environmentValues = [
+  test("persists only allowlisted diagnostics when cluster text contains ordinary credentials", async () => {
+    const credentialValues = [
+      "PASSWORD=hunter2",
+      "OPENAI_API_KEY=plain-api-key-value",
+      "credential=opaque-value",
       "postgres://ordinary-user:ordinary-password@db.internal/dawn",
-      "plain-api-key-value",
+      "Bearer plain-bearer-secret",
       "ordinary-non-jwt-credential",
     ]
     const execute = vi.fn<Runner>(async (command) => {
@@ -1930,12 +2101,16 @@ describe("failure reports and diagnostics", () => {
       if (command.file === "helm") {
         return result(command, {
           name: "compatibility-release",
+          namespace: NAMES.managementNamespace,
+          version: 2,
           info: {
             status: "deployed",
-            notes: `OPENAI_API_KEY=${environmentValues[1]}`,
+            first_deployed: "2030-01-01T00:00:00-08:00",
+            last_deployed: "2030-01-01T00:01:00Z",
+            notes: credentialValues.join("\n"),
           },
-          manifest: ["env:", "- name: DATABASE_URL", `  value: ${environmentValues[0]}`].join("\n"),
-          config: { PLAIN_PASSWORD: environmentValues[2] },
+          manifest: ["env:", "- name: DATABASE_URL", `  value: ${credentialValues[3]}`].join("\n"),
+          config: { PLAIN_PASSWORD: credentialValues[5] },
         })
       }
       if (command.file === "kubectl" && args.includes("get") && args.includes("namespace")) {
@@ -1951,15 +2126,22 @@ describe("failure reports and diagnostics", () => {
           kind: "PodList",
           items: [
             {
-              metadata: { name: "provider-pod", namespace: namespaceName, uid: "pod-uid" },
+              metadata: {
+                name: "provider-pod",
+                namespace: namespaceName,
+                uid: "pod-uid",
+                annotations: { debugging: credentialValues.join(" ") },
+              },
               spec: {
                 containers: [
                   {
                     name: "provider",
+                    command: ["sh", "-c"],
+                    args: [credentialValues.join(" ")],
                     env: [
-                      { name: "DATABASE_URL", value: environmentValues[0] },
-                      { name: "OPENAI_API_KEY", value: environmentValues[1] },
-                      { name: "PLAIN_PASSWORD", value: environmentValues[2] },
+                      { name: "DATABASE_URL", value: credentialValues[3] },
+                      { name: "OPENAI_API_KEY", value: credentialValues[1] },
+                      { name: "PLAIN_PASSWORD", value: credentialValues[5] },
                     ],
                     envFrom: [{ secretRef: { name: "provider-secrets" } }],
                   },
@@ -1981,6 +2163,38 @@ describe("failure reports and diagnostics", () => {
           ],
         })
       }
+      if (command.file === "kubectl" && args.includes("events")) {
+        const namespaceName = args[args.indexOf("--namespace") + 1]
+        return result(command, {
+          apiVersion: "v1",
+          kind: "EventList",
+          items: [
+            {
+              metadata: {
+                name: "provider-failed.123",
+                namespace: namespaceName,
+                uid: "event-uid",
+                annotations: { debugging: credentialValues.join(" ") },
+              },
+              type: "Warning",
+              reason: "FailedScheduling",
+              reportingController: "kubernetes.io/scheduler",
+              count: 2,
+              firstTimestamp: "2030-01-01T00:00:00Z",
+              lastTimestamp: "2030-01-01T00:01:00Z",
+              involvedObject: {
+                apiVersion: "v1",
+                kind: "Pod",
+                namespace: namespaceName,
+                name: "provider-pod",
+                uid: "pod-uid",
+              },
+              message: credentialValues.join(" "),
+              note: credentialValues.join(" "),
+            },
+          ],
+        })
+      }
       if (
         command.file === "kubectl" &&
         args.includes("get") &&
@@ -1994,26 +2208,48 @@ describe("failure reports and diagnostics", () => {
             {
               apiVersion: "apps/v1",
               kind: "Deployment",
-              metadata: { name: "application", namespace: namespaceName },
+              metadata: {
+                name: "application",
+                namespace: namespaceName,
+                uid: "deployment-uid",
+                generation: 3,
+                annotations: { debugging: credentialValues.join(" ") },
+              },
               spec: {
                 template: {
                   spec: {
                     containers: [
                       {
                         name: "application",
-                        env: [{ name: "DATABASE_URL", value: environmentValues[0] }],
+                        command: ["sh", "-c"],
+                        args: [credentialValues.join(" ")],
+                        env: [{ name: "DATABASE_URL", value: credentialValues[3] }],
                         envFrom: [{ secretRef: { name: "application-secrets" } }],
                       },
                     ],
                   },
                 },
               },
+              status: {
+                observedGeneration: 3,
+                replicas: 2,
+                readyReplicas: 1,
+                unavailableReplicas: 1,
+                conditions: [
+                  {
+                    type: "Available",
+                    status: "False",
+                    reason: "MinimumReplicasUnavailable",
+                    message: credentialValues.join(" "),
+                  },
+                ],
+              },
             },
           ],
         })
       }
       if (command.file === "kubectl" && args.includes("logs")) {
-        return result(command, "bounded provider log\n")
+        return result(command, `${credentialValues.join("\n")}\n`)
       }
       return result(command, {})
     })
@@ -2051,13 +2287,28 @@ describe("failure reports and diagnostics", () => {
 
       expect(serialized).toContain("provider-pod")
       expect(serialized).toContain('"restartCount": 1')
+      expect(serialized).toContain("FailedScheduling")
+      expect(serialized).toContain("MinimumReplicasUnavailable")
+      expect(serialized).toContain('"readyReplicas": 1')
       expect(serialized).toContain('"status": "deployed"')
+      expect(serialized).toContain("2030-01-01T00:00:00-08:00")
+      expect(serialized).toContain('"captured": true')
+      expect(serialized).toMatch(/"sha256": "[a-f0-9]{64}"/)
       for (const forbidden of [
-        ...environmentValues,
+        ...credentialValues,
+        "hunter2",
+        "plain-api-key-value",
+        "opaque-value",
+        "plain-bearer-secret",
         "DATABASE_URL",
         "OPENAI_API_KEY",
         "PLAIN_PASSWORD",
+        "annotations",
+        '"command"',
+        '"args"',
         "envFrom",
+        '"message"',
+        '"note"',
       ]) {
         expect(serialized).not.toContain(forbidden)
       }

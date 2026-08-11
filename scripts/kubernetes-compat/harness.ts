@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -23,6 +23,7 @@ import {
   verifyNamespaceOwnership,
 } from "./cluster.js"
 import {
+  CommandExecutionError,
   type CommandExecutionOptions,
   type CommandExecutor,
   type CommandResult,
@@ -217,7 +218,7 @@ interface CleanupExecution {
 interface DiagnosticRequest {
   readonly id: string
   readonly command: ReturnType<typeof kubectl.command> | ReturnType<typeof helm.command>
-  readonly format: "json" | "helm-json" | "text"
+  readonly format: "event-list" | "helm-status" | "log-summary" | "object-list"
 }
 
 interface DiagnosticResult {
@@ -447,6 +448,40 @@ function errorDiagnostics(cause: unknown): unknown {
   return redactSensitive({ message: String(cause) })
 }
 
+function safeDiagnosticFailure(cause: unknown): unknown {
+  if (cause instanceof AggregateError) {
+    return {
+      name: "AggregateError",
+      errors: cause.errors.map(safeDiagnosticFailure),
+    }
+  }
+  if (cause instanceof CommandExecutionError) {
+    return { name: cause.name, outcome: cause.outcome }
+  }
+  return { name: cause instanceof Error ? cause.name : "DiagnosticError" }
+}
+
+function findUnconfirmedProcessTreeError(
+  cause: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): CommandExecutionError | undefined {
+  if (cause instanceof CommandExecutionError && cause.processTreeTermination === "unconfirmed") {
+    return cause
+  }
+  if (typeof cause !== "object" || cause === null || seen.has(cause)) return undefined
+  seen.add(cause)
+  if (cause instanceof AggregateError) {
+    for (const error of cause.errors) {
+      const unconfirmed = findUnconfirmedProcessTreeError(error, seen)
+      if (unconfirmed !== undefined) return unconfirmed
+    }
+  }
+  if (cause instanceof Error && cause.cause !== undefined) {
+    return findUnconfirmedProcessTreeError(cause.cause, seen)
+  }
+  return undefined
+}
+
 function namespaceCommandOptions(stdin?: string): CommandExecutionOptions {
   return {
     timeoutMs: NAMESPACE_COMMAND_TIMEOUT_MS,
@@ -464,37 +499,32 @@ function diagnosticCommandOptions(): CommandExecutionOptions {
   }
 }
 
-function diagnosticOutput(result: CommandResult, format: DiagnosticRequest["format"]): unknown {
-  const text = result.stdout.toString("utf8")
-  if (format === "text") return redactSensitive(text)
-  try {
-    return redactSensitive(sanitizeDiagnosticJson(JSON.parse(text), format === "helm-json"))
-  } catch (cause) {
-    throw new Error("Diagnostic command returned invalid JSON", { cause })
-  }
-}
-
-const DIAGNOSTIC_ENVIRONMENT_KEYS = new Set(["env", "envFrom"])
-const DIAGNOSTIC_HELM_PAYLOAD_KEYS = new Set(["config", "hooks", "manifest", "notes", "values"])
-
-function sanitizeDiagnosticJson(value: unknown, helmStatus: boolean): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeDiagnosticJson(item, helmStatus))
-  }
-  if (typeof value !== "object" || value === null) return value
-
-  const sanitized: Record<string, unknown> = {}
-  for (const [key, nested] of Object.entries(value)) {
-    if (DIAGNOSTIC_ENVIRONMENT_KEYS.has(key)) continue
-    if (helmStatus && DIAGNOSTIC_HELM_PAYLOAD_KEYS.has(key.toLowerCase())) continue
-    sanitized[key] = sanitizeDiagnosticJson(nested, helmStatus)
-  }
-  return sanitized
-}
-
 const DIAGNOSTIC_POD_NAME_PATTERN =
   /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/
-const DIAGNOSTIC_SAFE_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/+@-]*$/
+const DIAGNOSTIC_SAFE_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
+const DIAGNOSTIC_REASON_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/
+const DIAGNOSTIC_API_VERSION_PATTERN = /^[a-z0-9][a-z0-9.-]*(?:\/[a-z0-9][a-z0-9.-]*)?$/
+const DIAGNOSTIC_CONTROLLER_PATTERN =
+  /^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/
+const DIAGNOSTIC_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/
+const DIAGNOSTIC_HELM_STATUSES = new Set([
+  "deployed",
+  "failed",
+  "pending-install",
+  "pending-rollback",
+  "pending-upgrade",
+  "superseded",
+  "uninstalled",
+  "uninstalling",
+  "unknown",
+])
+
+function diagnosticRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
 
 function diagnosticSafeToken(value: unknown, maxLength = 253): string | undefined {
   return typeof value === "string" &&
@@ -504,8 +534,231 @@ function diagnosticSafeToken(value: unknown, maxLength = 253): string | undefine
     : undefined
 }
 
+function diagnosticSafeReason(value: unknown, maxLength = 128): string | undefined {
+  return typeof value === "string" &&
+    value.length <= maxLength &&
+    DIAGNOSTIC_REASON_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
+function diagnosticSafeApiVersion(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length <= 128 &&
+    DIAGNOSTIC_API_VERSION_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
+function diagnosticSafeController(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length <= 253 &&
+    DIAGNOSTIC_CONTROLLER_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
+function diagnosticSafeTimestamp(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 64 && DIAGNOSTIC_TIMESTAMP_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
 function diagnosticNonNegativeInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined
+}
+
+function diagnosticMetadata(value: unknown): unknown {
+  const metadata = diagnosticRecord(value)
+  if (metadata === undefined) return {}
+  const name = diagnosticSafeToken(metadata.name)
+  const namespace = diagnosticSafeToken(metadata.namespace)
+  const uid = diagnosticSafeToken(metadata.uid, 128)
+  const generation = diagnosticNonNegativeInteger(metadata.generation)
+  const creationTimestamp = diagnosticSafeTimestamp(metadata.creationTimestamp)
+  return {
+    ...(name !== undefined ? { name } : {}),
+    ...(namespace !== undefined ? { namespace } : {}),
+    ...(uid !== undefined ? { uid } : {}),
+    ...(generation !== undefined ? { generation } : {}),
+    ...(creationTimestamp !== undefined ? { creationTimestamp } : {}),
+  }
+}
+
+function diagnosticObjectReference(value: unknown): unknown | undefined {
+  const reference = diagnosticRecord(value)
+  if (reference === undefined) return undefined
+  const apiVersion = diagnosticSafeApiVersion(reference.apiVersion)
+  const kind = diagnosticSafeReason(reference.kind)
+  const namespace = diagnosticSafeToken(reference.namespace)
+  const name = diagnosticSafeToken(reference.name)
+  const uid = diagnosticSafeToken(reference.uid, 128)
+  const summary = {
+    ...(apiVersion !== undefined ? { apiVersion } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+    ...(namespace !== undefined ? { namespace } : {}),
+    ...(name !== undefined ? { name } : {}),
+    ...(uid !== undefined ? { uid } : {}),
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined
+}
+
+function diagnosticConditions(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((candidate) => {
+    const condition = diagnosticRecord(candidate)
+    if (condition === undefined) return []
+    const type = diagnosticSafeReason(condition.type)
+    const status = diagnosticSafeReason(condition.status, 32)
+    if (type === undefined || status === undefined) return []
+    const reason = diagnosticSafeReason(condition.reason)
+    const lastTransitionTime = diagnosticSafeTimestamp(condition.lastTransitionTime)
+    return [
+      {
+        type,
+        status,
+        ...(reason !== undefined ? { reason } : {}),
+        ...(lastTransitionTime !== undefined ? { lastTransitionTime } : {}),
+      },
+    ]
+  })
+}
+
+function diagnosticEventList(value: unknown): unknown {
+  const list = diagnosticRecord(value)
+  if (!Array.isArray(list?.items)) throw new Error("Diagnostic EventList must contain items")
+  const items = list.items.flatMap((candidate) => {
+    const event = diagnosticRecord(candidate)
+    if (event === undefined) return []
+    const type = event.type === "Normal" || event.type === "Warning" ? event.type : undefined
+    const reason = diagnosticSafeReason(event.reason)
+    const reportingController = diagnosticSafeController(event.reportingController)
+    const count = diagnosticNonNegativeInteger(event.count)
+    const firstTimestamp = diagnosticSafeTimestamp(event.firstTimestamp)
+    const lastTimestamp = diagnosticSafeTimestamp(event.lastTimestamp)
+    const eventTime = diagnosticSafeTimestamp(event.eventTime)
+    const regarding = diagnosticObjectReference(event.regarding ?? event.involvedObject)
+    return [
+      {
+        metadata: diagnosticMetadata(event.metadata),
+        ...(type !== undefined ? { type } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+        ...(reportingController !== undefined ? { reportingController } : {}),
+        ...(count !== undefined ? { count } : {}),
+        ...(firstTimestamp !== undefined ? { firstTimestamp } : {}),
+        ...(lastTimestamp !== undefined ? { lastTimestamp } : {}),
+        ...(eventTime !== undefined ? { eventTime } : {}),
+        ...(regarding !== undefined ? { regarding } : {}),
+      },
+    ]
+  })
+  return { apiVersion: "v1", kind: "EventDiagnosticSummaryList", items }
+}
+
+function diagnosticObjectStatus(value: unknown): unknown {
+  const status = diagnosticRecord(value)
+  if (status === undefined) return {}
+  const integerFields = [
+    "observedGeneration",
+    "replicas",
+    "currentReplicas",
+    "updatedReplicas",
+    "readyReplicas",
+    "availableReplicas",
+    "unavailableReplicas",
+    "active",
+    "succeeded",
+    "failed",
+    "ready",
+  ] as const
+  const summary: Record<string, unknown> = {}
+  for (const field of integerFields) {
+    const number = diagnosticNonNegativeInteger(status[field])
+    if (number !== undefined) summary[field] = number
+  }
+  const phase = diagnosticSafeReason(status.phase, 64)
+  if (phase !== undefined) summary.phase = phase
+  for (const field of [
+    "startTime",
+    "completionTime",
+    "lastScheduleTime",
+    "lastSuccessfulTime",
+  ] as const) {
+    const timestamp = diagnosticSafeTimestamp(status[field])
+    if (timestamp !== undefined) summary[field] = timestamp
+  }
+  const conditions = diagnosticConditions(status.conditions)
+  if (conditions.length > 0) summary.conditions = conditions
+  return summary
+}
+
+function diagnosticObjectList(value: unknown): unknown {
+  const list = diagnosticRecord(value)
+  if (!Array.isArray(list?.items)) throw new Error("Diagnostic object List must contain items")
+  const items = list.items.flatMap((candidate) => {
+    const item = diagnosticRecord(candidate)
+    if (item === undefined) return []
+    const apiVersion = diagnosticSafeApiVersion(item.apiVersion)
+    const kind = diagnosticSafeReason(item.kind)
+    if (apiVersion === undefined || kind === undefined) return []
+    return [
+      {
+        apiVersion,
+        kind,
+        metadata: diagnosticMetadata(item.metadata),
+        status: diagnosticObjectStatus(item.status),
+      },
+    ]
+  })
+  return { apiVersion: "v1", kind: "ObjectDiagnosticSummaryList", items }
+}
+
+function diagnosticHelmStatus(value: unknown): unknown {
+  const status = diagnosticRecord(value)
+  if (status === undefined) throw new Error("Diagnostic Helm status must be an object")
+  const info = diagnosticRecord(status.info)
+  const name = diagnosticSafeToken(status.name)
+  const namespace = diagnosticSafeToken(status.namespace)
+  const revision = diagnosticNonNegativeInteger(status.version ?? status.revision)
+  const releaseStatus =
+    typeof info?.status === "string" && DIAGNOSTIC_HELM_STATUSES.has(info.status)
+      ? info.status
+      : undefined
+  const firstDeployed = diagnosticSafeTimestamp(info?.first_deployed ?? info?.firstDeployed)
+  const lastDeployed = diagnosticSafeTimestamp(info?.last_deployed ?? info?.lastDeployed)
+  return {
+    ...(name !== undefined ? { name } : {}),
+    ...(namespace !== undefined ? { namespace } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+    info: {
+      ...(releaseStatus !== undefined ? { status: releaseStatus } : {}),
+      ...(firstDeployed !== undefined ? { firstDeployed } : {}),
+      ...(lastDeployed !== undefined ? { lastDeployed } : {}),
+    },
+  }
+}
+
+function diagnosticOutput(result: CommandResult, format: DiagnosticRequest["format"]): unknown {
+  if (format === "log-summary") {
+    return {
+      captured: true,
+      byteLength: result.stdout.byteLength,
+      sha256: createHash("sha256").update(result.stdout).digest("hex"),
+    }
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(result.stdout.toString("utf8"))
+  } catch (cause) {
+    throw new Error("Diagnostic command returned invalid JSON", { cause })
+  }
+  const projected =
+    format === "event-list"
+      ? diagnosticEventList(value)
+      : format === "helm-status"
+        ? diagnosticHelmStatus(value)
+        : diagnosticObjectList(value)
+  return redactSensitive(projected)
 }
 
 function diagnosticContainerState(value: unknown): unknown | undefined {
@@ -525,13 +778,13 @@ function diagnosticContainerState(value: unknown): unknown | undefined {
     !Array.isArray(state.terminated)
       ? (state.terminated as Record<string, unknown>)
       : undefined
-  const waitingReason = diagnosticSafeToken(waiting?.reason, 128)
-  const runningStartedAt = diagnosticSafeToken(running?.startedAt, 64)
+  const waitingReason = diagnosticSafeReason(waiting?.reason)
+  const runningStartedAt = diagnosticSafeTimestamp(running?.startedAt)
   const exitCode = diagnosticNonNegativeInteger(terminated?.exitCode)
   const terminationSignal = diagnosticNonNegativeInteger(terminated?.signal)
-  const terminationReason = diagnosticSafeToken(terminated?.reason, 128)
-  const terminationStartedAt = diagnosticSafeToken(terminated?.startedAt, 64)
-  const terminationFinishedAt = diagnosticSafeToken(terminated?.finishedAt, 64)
+  const terminationReason = diagnosticSafeReason(terminated?.reason)
+  const terminationStartedAt = diagnosticSafeTimestamp(terminated?.startedAt)
+  const terminationFinishedAt = diagnosticSafeTimestamp(terminated?.finishedAt)
   const summary = {
     ...(waiting !== undefined
       ? { waiting: { ...(waitingReason !== undefined ? { reason: waitingReason } : {}) } }
@@ -561,17 +814,17 @@ function diagnosticContainerState(value: unknown): unknown | undefined {
 function diagnosticPodStatus(value: unknown): unknown {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {}
   const status = value as Record<string, unknown>
-  const phase = diagnosticSafeToken(status.phase, 64)
+  const phase = diagnosticSafeReason(status.phase, 64)
   const conditions = Array.isArray(status.conditions)
     ? status.conditions.flatMap((candidate) => {
         if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
           return []
         }
         const condition = candidate as Record<string, unknown>
-        const type = diagnosticSafeToken(condition.type, 128)
-        const conditionStatus = diagnosticSafeToken(condition.status, 32)
-        const reason = diagnosticSafeToken(condition.reason, 128)
-        const lastTransitionTime = diagnosticSafeToken(condition.lastTransitionTime, 64)
+        const type = diagnosticSafeReason(condition.type)
+        const conditionStatus = diagnosticSafeReason(condition.status, 32)
+        const reason = diagnosticSafeReason(condition.reason)
+        const lastTransitionTime = diagnosticSafeTimestamp(condition.lastTransitionTime)
         if (type === undefined || conditionStatus === undefined) return []
         return [
           {
@@ -686,7 +939,7 @@ async function settleDiagnosticRequests(
     const id = request?.id ?? `diagnostic-${index}`
     return outcome.status === "fulfilled"
       ? outcome.value
-      : Object.freeze({ id, status: "failed", error: errorDiagnostics(outcome.reason) })
+      : Object.freeze({ id, status: "failed", error: safeDiagnosticFailure(outcome.reason) })
   })
 }
 
@@ -719,7 +972,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
       : Object.freeze({
           id: `${namespace}.ownership`,
           status: "failed",
-          error: errorDiagnostics(outcome.reason),
+          error: safeDiagnosticFailure(outcome.reason),
         })
   })
   const ownedNamespaces = liveOwnership.flatMap((outcome) =>
@@ -740,7 +993,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
           "--output=json",
           "--sort-by=.metadata.creationTimestamp",
         ]),
-        format: "json",
+        format: "event-list",
       },
       {
         id: `${namespace}.objects`,
@@ -751,7 +1004,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
           namespace,
           "--output=json",
         ]),
-        format: "json",
+        format: "object-list",
       },
     )
   }
@@ -775,7 +1028,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
           input.names.managementNamespace,
           "--output=json",
         ]),
-        format: "helm-json",
+        format: "helm-status",
       })
     }
   }
@@ -798,7 +1051,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
         Object.freeze({
           id: `${namespace}.pods`,
           status: "failed",
-          error: errorDiagnostics(outcome.reason),
+          error: safeDiagnosticFailure(outcome.reason),
         }),
       )
       continue
@@ -822,7 +1075,7 @@ export async function collectKubernetesCompatibilityDiagnostics(
           "--prefix=true",
           "--tail=200",
         ]),
-        format: "text",
+        format: "log-summary",
       })
     }
   }
@@ -898,6 +1151,7 @@ export async function runKubernetesCompatibility(
   let observedServer = "unavailable"
   let cleanupOperation: Promise<CleanupExecution> | undefined
   let shutdownRecoveryOperation: Promise<void> | undefined
+  let unconfirmedProcessTreeError: CommandExecutionError | undefined
   let shutdownRequested = false
   let preflight: ClusterPreflightResult | undefined
 
@@ -937,6 +1191,9 @@ export async function runKubernetesCompatibility(
         const value = await operation(phaseExecute)
         assertLifecycleActive(`completing ${name}`)
         return value
+      } catch (error) {
+        unconfirmedProcessTreeError ??= findUnconfirmedProcessTreeError(error)
+        throw error
       } finally {
         phaseActive = false
       }
@@ -976,6 +1233,19 @@ export async function runKubernetesCompatibility(
           await shutdownRecoveryOperation
         } catch (error) {
           errors.push(normalizeError(error, "Signal ownership recovery failed"))
+        }
+      }
+      if (unconfirmedProcessTreeError !== undefined) {
+        const cleanupError = new AggregateError(
+          [...errors, unconfirmedProcessTreeError],
+          "Kubernetes compatibility cleanup blocked by unconfirmed process-tree termination",
+        )
+        return {
+          result: Object.freeze({
+            status: "failed",
+            diagnostics: { blocked: true, errors: errorDiagnostics(cleanupError) },
+          }),
+          error: cleanupError,
         }
       }
       let ownershipVerified = ownership.length === 0
@@ -1191,6 +1461,13 @@ export async function runKubernetesCompatibility(
           (value) => ({ status: "fulfilled", value }) as const,
           (reason: unknown) => ({ status: "rejected", reason }) as const,
         )
+      if (operationOutcome.status === "rejected") {
+        const unconfirmed = findUnconfirmedProcessTreeError(operationOutcome.reason)
+        if (unconfirmed !== undefined) {
+          unconfirmedProcessTreeError ??= unconfirmed
+          throw operationOutcome.reason
+        }
+      }
       const destroyOutcome = await destroy().then(
         () => ({ status: "fulfilled" }) as const,
         (reason: unknown) => ({ status: "rejected", reason }) as const,
@@ -1463,7 +1740,7 @@ export async function runKubernetesCompatibility(
         execute: resolved.execute,
       })
     } catch (diagnosticError) {
-      collectedDiagnostics = { collectionError: errorDiagnostics(diagnosticError) }
+      collectedDiagnostics = { collectionError: safeDiagnosticFailure(diagnosticError) }
     }
   }
 
@@ -1504,7 +1781,7 @@ export async function runKubernetesCompatibility(
         execute: resolved.execute,
       })
     } catch (diagnosticError) {
-      collectedDiagnostics = { collectionError: errorDiagnostics(diagnosticError) }
+      collectedDiagnostics = { collectionError: safeDiagnosticFailure(diagnosticError) }
     }
   }
 

@@ -52,7 +52,19 @@ export type CommandSpawner = (
 export interface CommandTerminationDependencies {
   readonly platform: NodeJS.Platform
   readonly killProcessGroup: (pid: number, signal: NodeJS.Signals) => void
+  readonly killProcess: (pid: number, signal: NodeJS.Signals) => void
+  readonly listProcesses: () => Promise<readonly ProcessTableEntry[]>
+  readonly processExists: (pid: number) => boolean
+  readonly processGroupExists: (pid: number) => boolean
   readonly taskkillProcessTree: (pid: number, timeoutMs: number) => Promise<void>
+  readonly delay: (timeoutMs: number) => Promise<void>
+}
+
+export interface ProcessTableEntry {
+  readonly pid: number
+  readonly ppid: number
+  readonly pgid: number
+  readonly startedAt: string
 }
 
 export type CommandOutcome =
@@ -84,6 +96,7 @@ export interface SerializedCommandError {
   readonly message: string
   readonly command: Command
   readonly outcome: CommandOutcome
+  readonly processTreeTermination?: "unconfirmed"
 }
 
 interface BoundedBuffer {
@@ -104,6 +117,16 @@ const SENSITIVE_ARGUMENT_FLAG_PATTERN =
   /^--?(?:authorization|password|secret|token|kubeconfig)(?:=|$)/i
 const WRAPPER_OWNED_ARGUMENT_PATTERN = /^--(?:context|kube-context|kubeconfig)(?:=|$)/
 const WINDOWS_TREE_TERMINATION_TIMEOUT_MS = 5_000
+const PROCESS_LIST_TIMEOUT_MS = 500
+const PROCESS_LIST_LIMIT_BYTES = 4 * 1_024 * 1_024
+const PROCESS_TRACK_INTERVAL_MS = 2_000
+const PROCESS_TRACK_WARMUP_DELAYS_MS = [50, 250] as const
+const PROCESS_ACTIVITY_SCAN_INTERVAL_MS = 1_000
+const PROCESS_TREE_VERIFY_INTERVAL_MS = 50
+const PROCESS_TREE_VERIFY_ATTEMPTS = 20
+const MAX_PROCESS_ID = 2_147_483_647
+const PROCESS_START_TOKEN_PATTERN =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?:[1-9]|[12][0-9]|3[01]) [0-2][0-9]:[0-5][0-9]:[0-5][0-9] [0-9]{4}$/
 
 export const COMMAND_DEFAULTS = Object.freeze({
   timeoutMs: 30_000,
@@ -233,17 +256,24 @@ function errorCode(cause: unknown): string {
 export class CommandExecutionError extends Error {
   readonly command: Command
   readonly outcome: CommandOutcome
+  readonly processTreeTermination?: "unconfirmed"
 
   constructor(
     message: string,
     command: Command,
     outcome: CommandOutcome,
-    options: { readonly sensitiveOutput?: boolean } = {},
+    options: {
+      readonly processTreeTermination?: "unconfirmed"
+      readonly sensitiveOutput?: boolean
+    } = {},
   ) {
     super(message)
     this.name = "CommandExecutionError"
     this.command = safeCommand(command, options.sensitiveOutput === true)
     this.outcome = Object.freeze({ ...outcome })
+    if (options.processTreeTermination !== undefined) {
+      this.processTreeTermination = options.processTreeTermination
+    }
   }
 
   toJSON(): SerializedCommandError {
@@ -252,6 +282,9 @@ export class CommandExecutionError extends Error {
       message: this.message,
       command: this.command,
       outcome: this.outcome,
+      ...(this.processTreeTermination !== undefined
+        ? { processTreeTermination: this.processTreeTermination }
+        : {}),
     }
   }
 }
@@ -329,12 +362,122 @@ function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
   })
 }
 
+function isSafeProcessId(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1 && pid <= MAX_PROCESS_ID && pid !== process.pid
+}
+
+function isMissingProcessError(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause.code === "ESRCH" || cause.code === "ENOENT")
+  )
+}
+
+function processExists(pid: number): boolean {
+  if (!isSafeProcessId(pid)) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (cause) {
+    if (isMissingProcessError(cause)) return false
+    if ((cause as NodeJS.ErrnoException).code === "EPERM") return true
+    throw cause
+  }
+}
+
+function processGroupExists(pid: number): boolean {
+  if (!isSafeProcessId(pid)) return false
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (cause) {
+    if (isMissingProcessError(cause)) return false
+    if ((cause as NodeJS.ErrnoException).code === "EPERM") return true
+    throw cause
+  }
+}
+
+function listPosixProcesses(): Promise<readonly ProcessTableEntry[]> {
+  return new Promise((resolveProcesses, rejectProcesses) => {
+    execFile(
+      "ps",
+      ["-axo", "pid=,ppid=,pgid=,lstart="],
+      {
+        encoding: "utf8",
+        env: { ...process.env, LANG: "C", LC_ALL: "C" },
+        maxBuffer: PROCESS_LIST_LIMIT_BYTES,
+        timeout: PROCESS_LIST_TIMEOUT_MS,
+      },
+      (error, stdout) => {
+        if (error !== null) {
+          rejectProcesses(error)
+          return
+        }
+        try {
+          const entries = stdout
+            .split(/\r?\n/u)
+            .filter((line) => line.trim().length > 0)
+            .map((line): ProcessTableEntry => {
+              const tokens = line.trim().split(/\s+/u)
+              if (tokens.length !== 8) {
+                throw new Error("Process table contained an invalid row")
+              }
+              const [pidText, ppidText, pgidText, ...startedAtParts] = tokens
+              if (
+                pidText === undefined ||
+                ppidText === undefined ||
+                pgidText === undefined ||
+                !/^\d+$/u.test(pidText) ||
+                !/^\d+$/u.test(ppidText) ||
+                !/^\d+$/u.test(pgidText)
+              ) {
+                throw new Error("Process table contained an invalid process identifier")
+              }
+              const pid = Number(pidText)
+              const ppid = Number(ppidText)
+              const pgid = Number(pgidText)
+              const startedAt = startedAtParts.join(" ")
+              if (
+                !Number.isSafeInteger(pid) ||
+                pid <= 0 ||
+                pid > MAX_PROCESS_ID ||
+                !Number.isSafeInteger(ppid) ||
+                ppid < 0 ||
+                ppid > MAX_PROCESS_ID ||
+                !Number.isSafeInteger(pgid) ||
+                pgid <= 0 ||
+                pgid > MAX_PROCESS_ID ||
+                !PROCESS_START_TOKEN_PATTERN.test(startedAt)
+              ) {
+                throw new Error("Process table contained invalid process metadata")
+              }
+              return Object.freeze({ pid, ppid, pgid, startedAt })
+            })
+          resolveProcesses(Object.freeze(entries))
+        } catch (cause) {
+          rejectProcesses(cause)
+        }
+      },
+    )
+  })
+}
+
 const DEFAULT_TERMINATION_DEPENDENCIES: CommandTerminationDependencies = Object.freeze({
   platform: process.platform,
   killProcessGroup: (pid: number, signal: NodeJS.Signals): void => {
     process.kill(-pid, signal)
   },
+  killProcess: (pid: number, signal: NodeJS.Signals): void => {
+    process.kill(pid, signal)
+  },
+  listProcesses: listPosixProcesses,
+  processExists,
+  processGroupExists,
   taskkillProcessTree,
+  delay: (timeoutMs: number) =>
+    new Promise<void>((resolveDelay) => setTimeout(resolveDelay, timeoutMs)),
 })
 
 function killDirectChild(child: CommandChild, signal: NodeJS.Signals): boolean {
@@ -345,29 +488,239 @@ function killDirectChild(child: CommandChild, signal: NodeJS.Signals): boolean {
   }
 }
 
-async function dispatchProcessTreeTermination(
+interface ProcessTreeTracker {
+  readonly rootPid: number
+  readonly identities: Map<number, string>
+  scanFailed: boolean
+  lastActivityScanStartedAt: number
+  scanRequested: boolean
+  active: boolean
+  scan: Promise<void> | undefined
+  interval: NodeJS.Timeout | undefined
+  readonly warmupTimers: NodeJS.Timeout[]
+}
+
+function updateTrackedProcesses(
+  tracker: ProcessTreeTracker,
+  processes: readonly ProcessTableEntry[],
+): void {
+  const byPid = new Map(processes.map((entry) => [entry.pid, entry]))
+  const retained = new Map<number, string>()
+  for (const [pid, startedAt] of tracker.identities) {
+    if (byPid.get(pid)?.startedAt === startedAt) retained.set(pid, startedAt)
+  }
+
+  const root = byPid.get(tracker.rootPid)
+  if (root !== undefined) retained.set(root.pid, root.startedAt)
+  const discovered = new Set<number>([tracker.rootPid, ...retained.keys()])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const candidate of processes) {
+      if (
+        !discovered.has(candidate.pid) &&
+        discovered.has(candidate.ppid) &&
+        isSafeProcessId(candidate.pid)
+      ) {
+        discovered.add(candidate.pid)
+        retained.set(candidate.pid, candidate.startedAt)
+        changed = true
+      }
+    }
+  }
+
+  tracker.identities.clear()
+  for (const [pid, startedAt] of retained) tracker.identities.set(pid, startedAt)
+}
+
+function requestProcessTreeScan(
+  tracker: ProcessTreeTracker,
+  dependencies: CommandTerminationDependencies,
+  force = false,
+): Promise<void> {
+  if (!tracker.active && !force) return tracker.scan ?? Promise.resolve()
+  const now = Date.now()
+  if (!force) {
+    if (now - tracker.lastActivityScanStartedAt < PROCESS_ACTIVITY_SCAN_INTERVAL_MS) {
+      return tracker.scan ?? Promise.resolve()
+    }
+    tracker.lastActivityScanStartedAt = now
+  }
+  if (tracker.scan !== undefined) {
+    tracker.scanRequested = tracker.scanRequested || force
+    return tracker.scan
+  }
+
+  const run = async (): Promise<void> => {
+    try {
+      updateTrackedProcesses(tracker, await dependencies.listProcesses())
+    } catch {
+      tracker.scanFailed = true
+    }
+  }
+  tracker.scan = run().finally(() => {
+    tracker.scan = undefined
+    if (tracker.scanRequested) {
+      tracker.scanRequested = false
+      void requestProcessTreeScan(tracker, dependencies, true)
+    }
+  })
+  return tracker.scan
+}
+
+function createProcessTreeTracker(
+  rootPid: number,
+  dependencies: CommandTerminationDependencies,
+): ProcessTreeTracker {
+  const tracker: ProcessTreeTracker = {
+    rootPid,
+    identities: new Map(),
+    scanFailed: false,
+    lastActivityScanStartedAt: 0,
+    scanRequested: false,
+    active: true,
+    scan: undefined,
+    interval: undefined,
+    warmupTimers: [],
+  }
+  for (const timeoutMs of PROCESS_TRACK_WARMUP_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      void requestProcessTreeScan(tracker, dependencies, true)
+    }, timeoutMs)
+    timer.unref()
+    tracker.warmupTimers.push(timer)
+  }
+  tracker.interval = setInterval(() => {
+    void requestProcessTreeScan(tracker, dependencies, true)
+  }, PROCESS_TRACK_INTERVAL_MS)
+  tracker.interval.unref()
+  void requestProcessTreeScan(tracker, dependencies, true)
+  return tracker
+}
+
+async function stopProcessTreeTracker(
+  tracker: ProcessTreeTracker | undefined,
+  dependencies: CommandTerminationDependencies,
+): Promise<void> {
+  if (tracker === undefined) return
+  tracker.active = false
+  if (tracker.interval !== undefined) {
+    clearInterval(tracker.interval)
+    tracker.interval = undefined
+  }
+  for (const timer of tracker.warmupTimers.splice(0)) clearTimeout(timer)
+  await requestProcessTreeScan(tracker, dependencies, true)
+  while (tracker.scan !== undefined) await tracker.scan
+}
+
+function dispatchPosixKill(operation: () => void, dispatchFailures: unknown[]): void {
+  try {
+    operation()
+  } catch (cause) {
+    if (!isMissingProcessError(cause)) dispatchFailures.push(cause)
+  }
+}
+
+async function terminatePosixProcessTree(
+  child: CommandChild,
+  signal: NodeJS.Signals,
+  dependencies: CommandTerminationDependencies,
+  tracker: ProcessTreeTracker | undefined,
+): Promise<boolean> {
+  const pid = child.pid
+  if (pid === undefined || !isSafeProcessId(pid)) {
+    killDirectChild(child, signal)
+    return false
+  }
+
+  await stopProcessTreeTracker(tracker, dependencies)
+  const dispatchFailures: unknown[] = []
+  const dispatch = (): void => {
+    for (const descendantPid of tracker?.identities.keys() ?? []) {
+      if (descendantPid !== pid && isSafeProcessId(descendantPid)) {
+        dispatchPosixKill(() => dependencies.killProcess(descendantPid, signal), dispatchFailures)
+      }
+    }
+    dispatchPosixKill(() => dependencies.killProcessGroup(pid, signal), dispatchFailures)
+  }
+  dispatch()
+  if (dispatchFailures.length > 0) killDirectChild(child, signal)
+
+  for (let attempt = 0; attempt < PROCESS_TREE_VERIFY_ATTEMPTS; attempt += 1) {
+    let processes: readonly ProcessTableEntry[]
+    try {
+      processes = await dependencies.listProcesses()
+      if (tracker !== undefined) updateTrackedProcesses(tracker, processes)
+    } catch (cause) {
+      dispatchFailures.push(cause)
+      break
+    }
+    let groupAlive: boolean
+    try {
+      groupAlive = dependencies.processGroupExists(pid)
+    } catch (cause) {
+      dispatchFailures.push(cause)
+      break
+    }
+    if ((tracker?.identities.size ?? 0) === 0 && !groupAlive) {
+      return dispatchFailures.length === 0 && tracker?.scanFailed !== true
+    }
+    dispatch()
+    if (attempt + 1 < PROCESS_TREE_VERIFY_ATTEMPTS) {
+      await dependencies.delay(PROCESS_TREE_VERIFY_INTERVAL_MS)
+    }
+  }
+  return false
+}
+
+async function terminateWindowsProcessTree(
   child: CommandChild,
   signal: NodeJS.Signals,
   dependencies: CommandTerminationDependencies,
 ): Promise<boolean> {
   const pid = child.pid
-  if (pid === undefined) return killDirectChild(child, signal)
-
-  if (dependencies.platform === "win32") {
-    try {
-      await dependencies.taskkillProcessTree(pid, WINDOWS_TREE_TERMINATION_TIMEOUT_MS)
-      return true
-    } catch {
-      killDirectChild(child, signal)
-      return false
-    }
+  if (pid === undefined || !isSafeProcessId(pid)) {
+    killDirectChild(child, signal)
+    return false
   }
-
   try {
-    dependencies.killProcessGroup(pid, signal)
-    return true
+    await dependencies.taskkillProcessTree(pid, WINDOWS_TREE_TERMINATION_TIMEOUT_MS)
   } catch {
     killDirectChild(child, signal)
+    return false
+  }
+  for (let attempt = 0; attempt < PROCESS_TREE_VERIFY_ATTEMPTS; attempt += 1) {
+    try {
+      if (!dependencies.processExists(pid)) return true
+    } catch {
+      return false
+    }
+    if (attempt + 1 < PROCESS_TREE_VERIFY_ATTEMPTS) {
+      await dependencies.delay(PROCESS_TREE_VERIFY_INTERVAL_MS)
+    }
+  }
+  return false
+}
+
+async function terminateProcessTree(
+  child: CommandChild,
+  signal: NodeJS.Signals,
+  dependencies: CommandTerminationDependencies,
+  tracker: ProcessTreeTracker | undefined,
+): Promise<boolean> {
+  return dependencies.platform === "win32"
+    ? terminateWindowsProcessTree(child, signal, dependencies)
+    : terminatePosixProcessTree(child, signal, dependencies, tracker)
+}
+
+async function confirmProcessTreeTermination(
+  child: CommandChild,
+  dependencies: CommandTerminationDependencies,
+  tracker: ProcessTreeTracker | undefined,
+): Promise<boolean> {
+  try {
+    return await terminateProcessTree(child, "SIGKILL", dependencies, tracker)
+  } catch {
     return false
   }
 }
@@ -386,9 +739,21 @@ export function createCommandExecutor(
     killProcessGroup:
       injectedTerminationDependencies.killProcessGroup ??
       DEFAULT_TERMINATION_DEPENDENCIES.killProcessGroup,
+    killProcess:
+      injectedTerminationDependencies.killProcess ?? DEFAULT_TERMINATION_DEPENDENCIES.killProcess,
+    listProcesses:
+      injectedTerminationDependencies.listProcesses ??
+      DEFAULT_TERMINATION_DEPENDENCIES.listProcesses,
+    processExists:
+      injectedTerminationDependencies.processExists ??
+      DEFAULT_TERMINATION_DEPENDENCIES.processExists,
+    processGroupExists:
+      injectedTerminationDependencies.processGroupExists ??
+      DEFAULT_TERMINATION_DEPENDENCIES.processGroupExists,
     taskkillProcessTree:
       injectedTerminationDependencies.taskkillProcessTree ??
       DEFAULT_TERMINATION_DEPENDENCIES.taskkillProcessTree,
+    delay: injectedTerminationDependencies.delay ?? DEFAULT_TERMINATION_DEPENDENCIES.delay,
   }
   return (command, executionOptions = {}) => {
     let normalizedCommand: Command
@@ -403,6 +768,7 @@ export function createCommandExecutor(
     const createError = (
       failure: PendingFailure,
       stderr?: BoundedBuffer,
+      processTreeTermination?: "unconfirmed",
     ): CommandExecutionError => {
       const safe = safeCommand(normalizedCommand, options.sensitiveOutput)
       const message = `${failure.message} (${JSON.stringify(safe.file)})${
@@ -410,6 +776,7 @@ export function createCommandExecutor(
       }`
       return new CommandExecutionError(message, normalizedCommand, failure.outcome, {
         ...(options.sensitiveOutput ? { sensitiveOutput: true } : {}),
+        ...(processTreeTermination !== undefined ? { processTreeTermination } : {}),
       })
     }
 
@@ -453,9 +820,11 @@ export function createCommandExecutor(
       }
       let spawned = false
       let settled = false
+      let terminalStarted = false
       let pendingFailure: PendingFailure | undefined
       let closedAfterFailure = false
       let terminationDispatch: Promise<boolean> | undefined
+      let processTreeTracker: ProcessTreeTracker | undefined
       let timeout: NodeJS.Timeout | undefined
 
       const cleanup = (): void => {
@@ -470,6 +839,14 @@ export function createCommandExecutor(
         child.stdout.off("data", onStdout)
         child.stderr.off("data", onStderr)
         child.stdin.off("error", onStdinError)
+        if (processTreeTracker?.interval !== undefined) {
+          clearInterval(processTreeTracker.interval)
+          processTreeTracker.interval = undefined
+        }
+        if (processTreeTracker !== undefined) {
+          processTreeTracker.active = false
+          for (const timer of processTreeTracker.warmupTimers.splice(0)) clearTimeout(timer)
+        }
       }
 
       const settle = (error?: Error, exitCode = 0): void => {
@@ -494,13 +871,14 @@ export function createCommandExecutor(
       }
 
       const terminate = (failure: PendingFailure): void => {
-        if (settled || pendingFailure !== undefined) {
+        if (settled || terminalStarted) {
           return
         }
+        terminalStarted = true
         pendingFailure = failure
         terminationDispatch = Promise.resolve().then(() =>
           options.terminateProcessTree
-            ? dispatchProcessTreeTermination(child, "SIGKILL", terminationDependencies)
+            ? confirmProcessTreeTermination(child, terminationDependencies, processTreeTracker)
             : killDirectChild(child, "SIGKILL"),
         )
         void terminationDispatch.then((dispatched) => {
@@ -509,25 +887,44 @@ export function createCommandExecutor(
             settle(
               createError(
                 {
-                  message: `${failure.message}; ${options.terminateProcessTree ? "process-tree" : "child"} termination failed`,
+                  message: `${failure.message}; ${
+                    options.terminateProcessTree
+                      ? "process-tree termination failed: process tree termination could not be confirmed"
+                      : "child termination failed"
+                  }`,
                   outcome: failure.outcome,
                 },
                 stderr,
+                options.terminateProcessTree ? "unconfirmed" : undefined,
               ),
             )
             return
           }
-          if (closedAfterFailure) settle(createError(failure, stderr))
+          if (options.terminateProcessTree || closedAfterFailure) {
+            settle(createError(failure, stderr))
+          }
         })
       }
 
       function onSpawn(): void {
         spawned = true
+        const pid = child.pid
+        if (
+          options.terminateProcessTree &&
+          terminationDependencies.platform !== "win32" &&
+          pid !== undefined &&
+          isSafeProcessId(pid)
+        ) {
+          processTreeTracker = createProcessTreeTracker(pid, terminationDependencies)
+        }
       }
 
       function onStdout(value: Buffer | string): void {
         if (settled || pendingFailure !== undefined) {
           return
+        }
+        if (processTreeTracker !== undefined) {
+          void requestProcessTreeScan(processTreeTracker, terminationDependencies)
         }
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
         if (!appendBounded(stdout, chunk)) {
@@ -541,6 +938,9 @@ export function createCommandExecutor(
       function onStderr(value: Buffer | string): void {
         if (settled || pendingFailure !== undefined) {
           return
+        }
+        if (processTreeTracker !== undefined) {
+          void requestProcessTreeScan(processTreeTracker, terminationDependencies)
         }
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
         if (!appendBounded(stderr, chunk)) {
@@ -593,33 +993,54 @@ export function createCommandExecutor(
           }
           return
         }
-        if (code === 0 || (code !== null && options.acceptedExitCodes.has(code))) {
-          settle(undefined, code ?? 0)
+        if (terminalStarted) return
+        terminalStarted = true
+        const accepted = code === 0 || (code !== null && options.acceptedExitCodes.has(code))
+        const failure: PendingFailure | undefined = accepted
+          ? undefined
+          : signal !== null
+            ? {
+                message: `Command failed with signal ${signal}`,
+                outcome: { kind: "signal", signal },
+              }
+            : {
+                message: `Command failed with exit code ${String(code)}`,
+                outcome: { kind: "exit", exitCode: code ?? -1 },
+              }
+        if (!options.terminateProcessTree) {
+          if (failure !== undefined) settle(createError(failure, stderr))
+          else settle(undefined, code ?? 0)
           return
         }
-        if (signal !== null) {
-          const failure: PendingFailure = {
-            message: `Command failed with signal ${signal}`,
-            outcome: { kind: "signal", signal },
+
+        const terminalOutcome: PendingFailure = failure ?? {
+          message:
+            code === 0
+              ? "Command completed"
+              : `Command completed with accepted exit code ${String(code)}`,
+          outcome: { kind: "exit" as const, exitCode: code ?? 0 },
+        }
+        terminationDispatch = Promise.resolve().then(() =>
+          confirmProcessTreeTermination(child, terminationDependencies, processTreeTracker),
+        )
+        void terminationDispatch.then((terminated) => {
+          if (settled) return
+          if (!terminated) {
+            settle(
+              createError(
+                {
+                  message: `${terminalOutcome.message}; process-tree termination failed: process tree termination could not be confirmed`,
+                  outcome: terminalOutcome.outcome,
+                },
+                stderr,
+                "unconfirmed",
+              ),
+            )
+            return
           }
-          if (options.terminateProcessTree) {
-            terminate(failure)
-            closedAfterFailure = true
-          } else {
-            settle(createError(failure, stderr))
-          }
-          return
-        }
-        const failure: PendingFailure = {
-          message: `Command failed with exit code ${String(code)}`,
-          outcome: { kind: "exit", exitCode: code ?? -1 },
-        }
-        if (options.terminateProcessTree) {
-          terminate(failure)
-          closedAfterFailure = true
-        } else {
-          settle(createError(failure, stderr))
-        }
+          if (failure !== undefined) settle(createError(failure, stderr))
+          else settle(undefined, code ?? 0)
+        })
       }
 
       function onAbort(): void {
