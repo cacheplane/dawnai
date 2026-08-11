@@ -32,6 +32,16 @@ export type BrowseFetcher = (
   signal: AbortSignal,
 ) => Promise<BrowsePageResponse>
 
+/** A 200 is not a page. An unparseable body, an HTML error page from a proxy, a JSON
+ *  object shaped like something else — each reaches the reducer as a page it then
+ *  destructures, and the throw lands in a promise handler rather than here. Checked at
+ *  the boundary, the same body becomes an ordinary request failure with a banner. */
+function isBrowsePage(body: unknown): body is BrowsePageResponse {
+  if (body === null || typeof body !== "object") return false
+  const page = body as { records?: unknown; total?: unknown }
+  return Array.isArray(page.records) && typeof page.total === "number"
+}
+
 /** GET one browse window, surfacing the API's `{error}` body as the thrown message. */
 export async function fetchBrowsePage(
   params: URLSearchParams,
@@ -46,7 +56,8 @@ export async function fetchBrowsePage(
         : `request failed (${response.status})`
     throw new Error(message)
   }
-  return body as BrowsePageResponse
+  if (!isBrowsePage(body)) throw new Error(`not a browse page (${response.status})`)
+  return body
 }
 
 export interface UseMemoryBrowseOptions {
@@ -85,22 +96,32 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
 
   const [state, setState] = useState<BrowseState>(INITIAL_BROWSE_STATE)
 
-  // Render-time mirrors of values the async paths read. Each is a pure copy of
-  // something this render already holds, so a re-render can only re-copy the same
-  // thing — the pattern is safe precisely because nothing else writes them.
+  // Mirrors of the options the async paths read, seeded from the mounting render and
+  // written on COMMIT thereafter — NEVER during render. A render React throws away (a
+  // transition that suspends), or a dispatch that lands between a commit and its
+  // effect flush, would otherwise build params from a query no state ever matched
+  // while tagging them with the revision the state still holds — and `browseReduce`
+  // ACCEPTS that response, merging one question's rows and total under the other's
+  // dataset key. Lagging a render behind within one key is harmless: the key is the
+  // JSON of exactly the fields `browseSearchParams` reads.
   const queryRef = useRef(query)
-  queryRef.current = query
-  const fetchRef = useRef<BrowseFetcher>(fetchBrowsePage)
-  fetchRef.current = options.fetchPage ?? fetchBrowsePage
-  const nowRef = useRef<() => number>(Date.now)
-  nowRef.current = options.now ?? Date.now
+  const fetchRef = useRef<BrowseFetcher>(options.fetchPage ?? fetchBrowsePage)
+  const nowRef = useRef<() => number>(options.now ?? Date.now)
+  useEffect(() => {
+    queryRef.current = query
+    fetchRef.current = options.fetchPage ?? fetchBrowsePage
+    nowRef.current = options.now ?? Date.now
+  })
 
   // The machine's state lives in a ref as well as in `useState`: dispatches arrive
   // from timers and promise callbacks that must read the CURRENT state, not the one
   // their closure captured.
   const stateRef = useRef<BrowseState>(INITIAL_BROWSE_STATE)
   const controllerRef = useRef<AbortController | null>(null)
-  const mountedRef = useRef(false)
+  // `dispatch` calls `startRequest` and `startRequest` calls back into `dispatch`, so
+  // one of the two has to reach the other through a ref rather than a closure. This
+  // one keeps `startRequest` dependency-free, which is what makes `dispatch` stable
+  // for the hook's whole lifetime — the interval below depends on that.
   const dispatchRef = useRef<(event: BrowseEvent) => void>(() => {})
 
   const startRequest = useCallback((request: BrowseRequest) => {
@@ -116,13 +137,34 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
       })
       return
     }
+    const failureOf = (error: unknown): BrowseEvent => ({
+      type: "failure",
+      revision: request.revision,
+      kind: request.kind,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    // The reducer asserts its invariants by throwing, and it runs SYNCHRONOUSLY inside
+    // these handlers. An escaping throw resolves nothing and never reaches the
+    // assignment that clears `inFlight`, so single flight would then skip every later
+    // tick, retry and load-more: the hook stops forever, silently, as an unhandled
+    // rejection. The failure branch cannot throw, so one recovery is enough.
+    const settle = (event: BrowseEvent) => {
+      try {
+        dispatchRef.current(event)
+      } catch (error) {
+        dispatchRef.current(failureOf(error))
+      }
+    }
     const controller = new AbortController()
     controllerRef.current = controller
     void fetchRef.current(browseSearchParams(current, request.window), controller.signal).then(
       (page) => {
-        if (controller.signal.aborted || !mountedRef.current) return
+        // The reducer discards a superseded response WHOLE on its own revision check,
+        // so this is not what makes the answer right; it is what keeps an aborted
+        // request from costing anything more, the clock read included.
+        if (controller.signal.aborted) return
         if (controllerRef.current === controller) controllerRef.current = null
-        dispatchRef.current({
+        settle({
           type: "response",
           revision: request.revision,
           kind: request.kind,
@@ -131,14 +173,9 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
         })
       },
       (error: unknown) => {
-        if (controller.signal.aborted || !mountedRef.current) return
+        if (controller.signal.aborted) return
         if (controllerRef.current === controller) controllerRef.current = null
-        dispatchRef.current({
-          type: "failure",
-          revision: request.revision,
-          kind: request.kind,
-          message: error instanceof Error ? error.message : String(error),
-        })
+        settle(failureOf(error))
       },
     )
   }, [])
@@ -161,7 +198,6 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
   // Mount and every canonical-query change are the SAME transition: bump the desired
   // revision, abort what was in flight, fetch the first window.
   useEffect(() => {
-    mountedRef.current = true
     const current = stateRef.current
     if (current.datasetKey !== datasetKey) {
       dispatch({ type: "query-changed", datasetKey })
@@ -176,7 +212,6 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
       dispatch({ type: "retry" })
     }
     return () => {
-      mountedRef.current = false
       if (controllerRef.current !== null) {
         controllerRef.current.abort()
         controllerRef.current = null
@@ -200,38 +235,44 @@ export function useMemoryBrowse(options: UseMemoryBrowseOptions): UseMemoryBrows
   // presentation would flicker on a 2 s cadence.
   const paused = !live || !tabVisible || phase === "error"
 
-  const tickRef = useRef(() => {})
-  tickRef.current = () => dispatch({ type: "poll-tick" })
-
   useEffect(() => {
     if (paused) return
     // Resuming — live back on, tab visible again, a retry that succeeded — ticks NOW
     // rather than up to one interval later. On mount the initial request is already
     // in flight, so the machine skips this tick.
-    tickRef.current()
-    const id = setInterval(() => tickRef.current(), pollIntervalMs)
+    dispatch({ type: "poll-tick" })
+    const id = setInterval(() => dispatch({ type: "poll-tick" }), pollIntervalMs)
     return () => clearInterval(id)
-  }, [paused, pollIntervalMs])
+  }, [paused, pollIntervalMs, dispatch])
 
   const loadMore = useCallback(() => dispatch({ type: "load-more-requested" }), [dispatch])
+  // The same event the interval sends, so a press that lands while anything is in
+  // flight is SKIPPED by single flight rather than queued: nothing here distinguishes
+  // user intent from a timer, and the phase is already `refreshing`, so the press
+  // leaves no trace on screen either.
   const refresh = useCallback(() => dispatch({ type: "poll-tick" }), [dispatch])
   const retry = useCallback(() => dispatch({ type: "retry" }), [dispatch])
 
   const fulfilled = state.fulfilled
+  // Keyed on the two VALUES published rather than on the fulfillment that carries them:
+  // every response allocates a fresh one, so a 2 s cadence would hand the grid a new
+  // `resultMeta` — and with it a dataset pivot — for an answer that did not change.
+  const fulfilledKey = fulfilled === null ? null : fulfilled.datasetKey
+  const fulfilledTotal = fulfilled === null ? null : fulfilled.total
   const resultMeta = useMemo<PretableResultMeta>(
     () =>
-      fulfilled === null
+      fulfilledKey === null || fulfilledTotal === null
         ? UNKNOWN_TOTAL_META
         : {
             // The FULFILLED key, never the desired one: the grid must clear selection
             // and focus when the new answer LANDS, not when the question changes — a
             // selection over the old rows is still valid for the old rows.
-            datasetKey: fulfilled.datasetKey,
-            total: { kind: "exact", count: fulfilled.total },
+            datasetKey: fulfilledKey,
+            total: { kind: "exact", count: fulfilledTotal },
           },
-    [fulfilled],
+    [fulfilledKey, fulfilledTotal],
   )
-  const dataState = useMemo(() => browseDataState(state), [state])
+  const dataState = browseDataState(state)
 
   return {
     records: fulfilled?.records ?? NO_RECORDS,
