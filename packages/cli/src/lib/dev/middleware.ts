@@ -5,8 +5,9 @@ import type { DawnMiddleware, MiddlewareRequest, MiddlewareResult } from "@dawn-
  * Select the middleware function from a module namespace: the `default`
  * export when present (nullish falls through), else the named `middleware`
  * export; undefined when neither resolves to a function. The ONE selection
- * rule, shared by the dynamic probe below and the static manifest's
- * `normalizeMiddlewareModule` — built apps can never bind differently than dev.
+ * rule, shared by the dynamic probe (`loadMiddleware`, in `middleware-node.ts`)
+ * and the static manifest's `normalizeMiddlewareModule` — built apps can never
+ * bind differently than dev.
  */
 export function selectMiddlewareExport(mod: unknown): DawnMiddleware | undefined {
   if (!mod || typeof mod !== "object") return undefined
@@ -17,9 +18,9 @@ export function selectMiddlewareExport(mod: unknown): DawnMiddleware | undefined
 
 /**
  * The four middleware candidate paths, in probe precedence order — the ONE
- * list shared by the dynamic probe below and the node target's build probe
- * (`nodeTarget.emit`), so the static build can never bind a different file
- * than dev would.
+ * list shared by the dynamic probe (`loadMiddleware`, in `middleware-node.ts`)
+ * and the node target's build probe (`nodeTarget.emit`), so the static build
+ * can never bind a different file than dev would.
  */
 export function middlewareCandidatePaths(appRoot: string): readonly string[] {
   return [
@@ -28,23 +29,6 @@ export function middlewareCandidatePaths(appRoot: string): readonly string[] {
     `${appRoot}/middleware.ts`,
     `${appRoot}/middleware.js`,
   ]
-}
-
-/**
- * Load middleware from the app's middleware.ts file.
- * Convention: src/middleware.ts exports a default function (using defineMiddleware).
- */
-export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
-  for (const path of middlewareCandidatePaths(appRoot)) {
-    try {
-      const selected = selectMiddlewareExport(await import(path))
-      if (selected) return selected
-    } catch {
-      // File doesn't exist or can't be loaded — try next
-    }
-  }
-
-  return undefined
 }
 
 /**

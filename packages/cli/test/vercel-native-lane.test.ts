@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test, vi } from "vitest"
 
 import { runBuildCommand } from "../src/commands/build.js"
 import { validateVercelOutput } from "../src/lib/build/targets/vercel-output.js"
-import { loadMiddleware } from "../src/lib/dev/middleware.js"
+import { loadMiddleware } from "../src/lib/dev/middleware-node.js"
 
 import {
   type AtomicJsonFileOps,

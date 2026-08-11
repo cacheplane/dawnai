@@ -17,7 +17,11 @@ export default defineMiddleware(async (req) => {
 })
 ```
 
-If `src/middleware.ts` is absent, every request is allowed.
+If no middleware file is present, every request is allowed. Dawn probes four
+paths, in this order, and the first one that **exists** is the one it loads:
+`src/middleware.ts`, `src/middleware.js`, `middleware.ts`, `middleware.js`. A
+later candidate is never a fallback for an earlier one that fails to load — see
+[When middleware fails to load](#when-middleware-fails-to-load).
 
 ## API
 
@@ -106,11 +110,58 @@ This keeps the request lifecycle predictable and avoids ordering questions about
 
 Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served by `dawn start` or the generated `server.mjs`, and Hono builds. Agent Protocol `/threads/:id/runs/wait`, `/threads/:id/runs/stream`, and `/threads/:id/resume` requests invoke it before route execution, as does the AG-UI route. Health, thread-management, state, and memory-candidate endpoints bypass it.
 
+It also runs on Windows. Earlier versions handed the raw filesystem path to
+Node's ESM loader, which rejects a drive letter as an unknown URL protocol, and
+the resulting failure was swallowed — so middleware never ran there at all. If
+you develop on Windows, expect a middleware file that was previously inert to
+start gating requests.
+
 The `langsmith` build target is different: its generated graph entries do not include Dawn HTTP middleware. Put equivalent authentication at the LangSmith/platform boundary when you deploy those entries.
+
+## When middleware fails to load
+
+Middleware is an authorization gate, so Dawn refuses to start rather than start
+without one it was supposed to have. A middleware file that is present but
+cannot be loaded fails the boot with `DAWN_E3004`, naming the file and the
+underlying cause:
+
+```
+Middleware at /app/src/middleware.ts failed to import, so every endpoint it
+gates would run ungated. Fix the file, or delete it if this app has no
+middleware.
+
+    Error: JWT_SECRET is not set
+```
+
+This covers a middleware file that throws while it is being imported — a
+missing environment variable, an ESM/CJS interop break, a syntax error, an
+unresolved dependency — and a file Dawn cannot even probe, such as one inside a
+directory it lacks permission to read. Existence is decided before the import,
+so a permission error is never mistaken for "this app has no middleware".
+
+Three consequences worth knowing:
+
+- **An app with no middleware file is unaffected.** All four candidates are
+  definitively absent, so the boot proceeds with every request allowed, exactly
+  as before.
+- **The first existing candidate is the only candidate.** If `src/middleware.ts`
+  exists but fails to import, Dawn does not quietly fall back to a
+  `middleware.ts` at the app root.
+- **A file that exports no middleware function is not fatal.** It is ignored,
+  with a warning on stderr naming the file, because the built manifest binds the
+  same way and dev must not diverge from it.
+
+In `dawn dev` the failure is printed and the watcher restarts the child once you
+fix the file. In `dawn start`, a container, or a built `server.mjs`, the process
+exits non-zero — so the failure surfaces to your deploy's health check before
+traffic reaches an ungated server.
 
 ## Errors thrown from middleware
 
-If the middleware function throws, the request is rejected with HTTP `500`. Prefer explicit `reject(status, body?)` over throwing — it gives users a meaningful response.
+This is the separate case of a middleware function that loads fine and then
+throws *while handling a request*. That request is rejected with HTTP `500`;
+the server keeps running. Prefer explicit `reject(status, body?)` over throwing
+— it gives users a meaningful response.
 
 ## Related
 
