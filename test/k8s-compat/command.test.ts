@@ -395,6 +395,42 @@ describe("shell-free command executor", () => {
     expect(child.emit("close", 9, null)).toBe(false)
   })
 
+  test("rejects and cleans up when child termination returns false without closing", async () => {
+    vi.useFakeTimers()
+    const child = new ControlledChild()
+    child.kill.mockReturnValue(false)
+    const controller = new AbortController()
+    const initialAbortListeners = getEventListeners(controller.signal, "abort").length
+    const executor = createCommandExecutor(() => child as never)
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, signal: controller.signal },
+    )
+    const observed = execution.catch((error: unknown) => error)
+    child.emit("spawn")
+
+    controller.abort()
+
+    const outcome = await Promise.race([
+      observed,
+      Promise.resolve()
+        .then(() => Promise.resolve())
+        .then(() => "execution remained pending"),
+    ])
+    expect(outcome).toBeInstanceOf(CommandExecutionError)
+    expect(outcome).toMatchObject({ outcome: { kind: "aborted" } })
+    expect((outcome as Error).message).toMatch(/aborted.*termination failed/i)
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL")
+    expect(vi.getTimerCount()).toBe(0)
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialAbortListeners)
+    expect(child.listenerCount("spawn")).toBe(0)
+    expect(child.listenerCount("error")).toBe(0)
+    expect(child.listenerCount("close")).toBe(0)
+    expect(child.stdout.listenerCount("data")).toBe(0)
+    expect(child.stderr.listenerCount("data")).toBe(0)
+    expect(child.stdin.listenerCount("error")).toBe(0)
+  })
+
   test("returns sensitive output in memory but never serializes it", async () => {
     const secret = "sensitive-stdin-value"
     const script = [

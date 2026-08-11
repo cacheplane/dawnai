@@ -325,6 +325,44 @@ describe("report redaction", () => {
     expect(input.nested.apiToken).toBe("plain-value")
     expect((redacted as typeof input).nested.createdAt).toBeInstanceOf(Date)
   })
+
+  test("converts bigint and circular diagnostic graphs to deterministic JSON-safe data", () => {
+    const direct: Record<string, unknown> = {
+      label: "direct",
+      apiToken: "must-not-survive",
+    }
+    direct.self = direct
+    const indirect: Record<string, unknown> = { label: "outer" }
+    const nested: Record<string, unknown> = { label: "inner", parent: indirect }
+    indirect.nested = nested
+    const repeated = { count: 9n }
+
+    const redacted = redactSensitive({
+      large: 12_345_678_901_234_567_890n,
+      negative: -42n,
+      direct,
+      indirect,
+      repeated: [repeated, repeated],
+    })
+
+    expect(redacted).toEqual({
+      large: "12345678901234567890",
+      negative: "-42",
+      direct: {
+        label: "direct",
+        apiToken: "[REDACTED]",
+        self: "[Circular]",
+      },
+      indirect: {
+        label: "outer",
+        nested: { label: "inner", parent: "[Circular]" },
+      },
+      repeated: [{ count: "9" }, { count: "9" }],
+    })
+    const repeatedResult = (redacted as { repeated: unknown[] }).repeated
+    expect(repeatedResult[0]).not.toBe(repeatedResult[1])
+    expect(() => JSON.stringify(redacted)).not.toThrow()
+  })
 })
 
 describe("atomic report persistence", () => {
@@ -376,6 +414,46 @@ describe("atomic report persistence", () => {
     }
     expect((await stat(reportPath)).mode & 0o777).toBe(0o600)
     expect(await readdir(artifactRoot)).toEqual(["run-123.json"])
+  })
+
+  test("persists bigint diagnostics as decimal strings", async () => {
+    const repositoryRoot = await createTemporaryDirectory("dawn-k8s-report-bigint-")
+    const report: CompatibilityReport = {
+      ...sampleReport(),
+      diagnostics: { large: 12_345_678_901_234_567_890n, negative: -42n },
+    }
+
+    const reportPath = await persistCompatibilityReport(repositoryRoot, "bigint.json", report)
+    const persisted = JSON.parse(await readFile(reportPath, "utf8"))
+
+    expect(persisted.diagnostics).toEqual({
+      large: "12345678901234567890",
+      negative: "-42",
+    })
+  })
+
+  test("persists direct and indirect circular diagnostics with stable markers", async () => {
+    const repositoryRoot = await createTemporaryDirectory("dawn-k8s-report-circular-")
+    const direct: Record<string, unknown> = { label: "direct" }
+    direct.self = direct
+    const indirect: Record<string, unknown> = { label: "outer" }
+    const nested: Record<string, unknown> = { label: "inner", parent: indirect }
+    indirect.nested = nested
+    const report: CompatibilityReport = {
+      ...sampleReport(),
+      diagnostics: { direct, indirect },
+    }
+
+    const reportPath = await persistCompatibilityReport(repositoryRoot, "circular.json", report)
+    const persisted = JSON.parse(await readFile(reportPath, "utf8"))
+
+    expect(persisted.diagnostics).toEqual({
+      direct: { label: "direct", self: "[Circular]" },
+      indirect: {
+        label: "outer",
+        nested: { label: "inner", parent: "[Circular]" },
+      },
+    })
   })
 
   test.each([

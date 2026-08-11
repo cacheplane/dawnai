@@ -390,7 +390,14 @@ export function createCommandExecutor(
         }
         pendingFailure = failure
         try {
-          child.kill("SIGKILL")
+          if (!child.kill("SIGKILL")) {
+            settle(
+              createError({
+                message: `${failure.message}; child termination failed`,
+                outcome: failure.outcome,
+              }),
+            )
+          }
         } catch {
           settle(
             createError({

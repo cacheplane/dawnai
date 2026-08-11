@@ -82,6 +82,7 @@ export interface ReportPersistenceDependencies {
 }
 
 const REDACTED = "[REDACTED]"
+const CIRCULAR = "[Circular]"
 const SENSITIVE_KEY_PATTERN =
   /(?:token|authorization|secret|kubeconfig|^env$|environment|processenv)/i
 const SENSITIVE_STRING_PATTERN =
@@ -125,15 +126,17 @@ function durationMs(startedAt: Date, finishedAt: Date): number {
   return Math.max(0, finishedAt.getTime() - startedAt.getTime())
 }
 
-function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
+function redactValue(value: unknown, ancestors: WeakSet<object>): unknown {
   if (typeof value === "string") {
     return SENSITIVE_STRING_PATTERN.test(value) ? REDACTED : value
+  }
+  if (typeof value === "bigint") {
+    return value.toString(10)
   }
   if (
     value === null ||
     typeof value === "number" ||
     typeof value === "boolean" ||
-    typeof value === "bigint" ||
     typeof value === "undefined"
   ) {
     return value
@@ -148,29 +151,27 @@ function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     return String(value)
   }
 
-  const existing = seen.get(value)
-  if (existing !== undefined) {
-    return existing
+  if (ancestors.has(value)) {
+    return CIRCULAR
   }
-  if (Array.isArray(value)) {
-    const redacted: unknown[] = []
-    seen.set(value, redacted)
-    for (const item of value) {
-      redacted.push(redactValue(item, seen))
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => redactValue(item, ancestors))
+    }
+
+    const redacted: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      redacted[key] = SENSITIVE_KEY_PATTERN.test(key) ? REDACTED : redactValue(item, ancestors)
     }
     return redacted
+  } finally {
+    ancestors.delete(value)
   }
-
-  const redacted: Record<string, unknown> = {}
-  seen.set(value, redacted)
-  for (const [key, item] of Object.entries(value)) {
-    redacted[key] = SENSITIVE_KEY_PATTERN.test(key) ? REDACTED : redactValue(item, seen)
-  }
-  return redacted
 }
 
 export function redactSensitive(value: unknown): unknown {
-  return redactValue(value, new WeakMap())
+  return redactValue(value, new WeakSet())
 }
 
 function errorDiagnostics(error: unknown): unknown {
