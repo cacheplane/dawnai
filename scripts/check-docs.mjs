@@ -440,7 +440,7 @@ if (process.argv[2] === "--analyze-compatibility-stub") {
 }
 
 if (process.argv[2] === "--analyze-doc-titles") {
-  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  const fixture = JSON.parse(process.argv[3] ?? readFileSync(0, "utf8"))
   const analysis = Array.isArray(fixture)
     ? analyzeDocTitlesBatch(fixture)
     : analyzeDocTitles(fixture)

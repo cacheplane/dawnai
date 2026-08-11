@@ -180,14 +180,23 @@ function analyzeCompatibilityStub(
 
 function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly DocTitleAnalysis[] {
   docTitleAnalysisProcessCount++
-  const result = spawnSync(
-    process.execPath,
-    [CHECK_DOCS_PATH, "--analyze-doc-titles", JSON.stringify(fixtures)],
-    { encoding: "utf8" },
-  )
+  const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
+    encoding: "utf8",
+    input: JSON.stringify(fixtures),
+  })
+  const stderr = result.stderr ?? ""
 
-  expect(result.status).toBe(0)
-  expect(result.stderr).toBe("")
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `Documentation title analysis failed with status ${String(result.status)}`,
+        `signal: ${result.signal ?? "none"}`,
+        `error: ${result.error?.message ?? "none"}`,
+        `stderr: ${stderr.slice(0, 2_000) || "none"}`,
+      ].join("\n"),
+    )
+  }
+  expect(stderr).toBe("")
   expect(result.stdout).toMatch(/^\[/)
   return JSON.parse(result.stdout) as readonly DocTitleAnalysis[]
 }
@@ -397,6 +406,22 @@ describe("documentation title analysis", () => {
   const wrapper = `import type { Metadata } from "next"
 export const metadata: Metadata = { title: "Real Title" }
 `
+
+  it("accepts a small fixture through the legacy argv interface", () => {
+    const fixture = { mdxSource: "# Real Title\n", wrapperSource: wrapper }
+    const result = spawnSync(
+      process.execPath,
+      [CHECK_DOCS_PATH, "--analyze-doc-titles", JSON.stringify(fixture)],
+      { encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
+      firstH1: "Real Title",
+      metadataTitle: "Real Title",
+    })
+  })
 
   it("ignores fenced pseudo-H1s before the first rendered H1", () => {
     const analysis = analyzeDocTitles(
