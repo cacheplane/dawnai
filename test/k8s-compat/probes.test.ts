@@ -39,6 +39,7 @@ const kubeconfig = "/secure/token-kubeconfig"
 const runId = "run-a"
 const names = deriveClusterNames(runId)
 const REAPER_TEST_EPOCH_SECONDS = 2_000_000_000
+const REAPER_CRONJOB_UID = "11111111-1111-4111-8111-111111111111"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -210,12 +211,18 @@ function reaperCronJob(
   options: {
     readonly suspend?: boolean
     readonly active?: readonly JsonObject[]
+    readonly uid?: string | null
   } = {},
 ): JsonObject {
+  const uid = options.uid === undefined ? REAPER_CRONJOB_UID : options.uid
   return {
     apiVersion: "batch/v1",
     kind: "CronJob",
-    metadata: { name: "dawn-reaper", namespace: names.sandboxNamespace },
+    metadata: {
+      name: "dawn-reaper",
+      namespace: names.sandboxNamespace,
+      ...(uid !== null ? { uid } : {}),
+    },
     spec: {
       schedule,
       ...(options.suspend !== undefined ? { suspend: options.suspend } : {}),
@@ -237,6 +244,59 @@ function reaperCronJob(
       },
     },
     ...(options.active !== undefined ? { status: { active: options.active } } : {}),
+  }
+}
+
+function scheduledReaperJob(input: {
+  readonly name: string
+  readonly uid: string
+  readonly status?: "unfinished" | "complete" | "failed"
+  readonly ownerUid?: string | null
+}): JsonObject {
+  const ownerUid = input.ownerUid === undefined ? REAPER_CRONJOB_UID : input.ownerUid
+  const conditions =
+    input.status === "complete"
+      ? [{ type: "Complete", status: "True" }]
+      : input.status === "failed"
+        ? [{ type: "Failed", status: "True", reason: "BackoffLimitExceeded" }]
+        : []
+  return {
+    apiVersion: "batch/v1",
+    kind: "Job",
+    metadata: {
+      name: input.name,
+      namespace: names.sandboxNamespace,
+      uid: input.uid,
+      ...(ownerUid !== null
+        ? {
+            ownerReferences: [
+              {
+                apiVersion: "batch/v1",
+                kind: "CronJob",
+                name: "dawn-reaper",
+                uid: ownerUid,
+                controller: true,
+              },
+            ],
+          }
+        : {}),
+    },
+    status: { conditions },
+  }
+}
+
+function jobList(items: readonly JsonObject[]): JsonObject {
+  return { apiVersion: "batch/v1", kind: "JobList", items }
+}
+
+function activeJobReference(job: JsonObject): JsonObject {
+  const jobMetadata = metadata(job)
+  return {
+    apiVersion: job.apiVersion,
+    kind: job.kind,
+    name: jobMetadata.name,
+    namespace: jobMetadata.namespace,
+    uid: jobMetadata.uid,
   }
 }
 
@@ -292,6 +352,10 @@ interface ReaperRunnerOptions {
   readonly newMarker?: string
   readonly initialSuspend?: boolean
   readonly activeReferences?: readonly JsonObject[]
+  readonly cronJobUid?: string | null
+  readonly suspendedCronJobUid?: string | null
+  readonly jobSnapshots?: readonly (readonly JsonObject[])[]
+  readonly delay?: (milliseconds: number) => Promise<void>
   readonly activeWaitError?: Error
   readonly cleanupError?: Error
   readonly restoreError?: Error
@@ -300,19 +364,51 @@ interface ReaperRunnerOptions {
 function createReaperRunner(options: ReaperRunnerOptions = {}): {
   readonly execute: ReturnType<typeof vi.fn<ProbeCommandRunner>>
   readonly submitted: JsonObject[]
+  readonly delay: ReturnType<typeof vi.fn<(milliseconds: number) => Promise<void>>>
 } {
   vi.spyOn(Date, "now").mockReturnValue(REAPER_TEST_EPOCH_SECONDS * 1_000)
   const submitted: JsonObject[] = []
+  const completedScheduledJobUids = new Set<string>()
   let cleanupCalls = 0
   let patchCalls = 0
+  let jobListCalls = 0
   let suspendPresent = options.initialSuspend !== undefined
   let suspend = options.initialSuspend
   const activeReferences = options.activeReferences ?? []
+  const cronJobUid = options.cronJobUid === undefined ? REAPER_CRONJOB_UID : options.cronJobUid
+  const scheduledJobForActiveReference = (reference: JsonObject, index: number): JsonObject => {
+    const name =
+      typeof reference.name === "string" && reference.name.length > 0
+        ? reference.name
+        : `invalid-active-name-${index}`
+    const uid =
+      typeof reference.uid === "string" && reference.uid.length > 0
+        ? reference.uid
+        : `invalid-active-uid-${index}`
+    return scheduledReaperJob({
+      name,
+      uid,
+      ...(completedScheduledJobUids.has(uid) ? { status: "complete" as const } : {}),
+      ...(cronJobUid !== null ? { ownerUid: cronJobUid } : { ownerUid: null }),
+    })
+  }
+  const defaultScheduledJobs = (): readonly JsonObject[] =>
+    activeReferences.map(scheduledJobForActiveReference)
+  const explicitScheduledJobs = (options.jobSnapshots ?? []).flat()
+  const knownScheduledJob = (name: string): JsonObject | undefined =>
+    [...explicitScheduledJobs, ...defaultScheduledJobs()].find((job) => metadata(job).name === name)
   const currentCronJob = (): JsonObject =>
     reaperCronJob("17 * * * *", {
       ...(suspendPresent ? { suspend: suspend as boolean } : {}),
       ...(activeReferences.length > 0 ? { active: activeReferences } : {}),
+      uid:
+        suspend === true && options.suspendedCronJobUid !== undefined
+          ? options.suspendedCronJobUid
+          : cronJobUid,
     })
+  const delay = vi.fn(async (milliseconds: number) => {
+    await options.delay?.(milliseconds)
+  })
   const execute = fakeRunner((command, commandOptions) => {
     if (command.args.includes("delete") && command.args.includes("job,pod,persistentvolumeclaim")) {
       cleanupCalls += 1
@@ -340,21 +436,32 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
       return manifest
     }
     if (command.args.includes("cronjob/dawn-reaper")) return currentCronJob()
+    if (command.args.includes("get") && command.args.includes("jobs")) {
+      let jobs: readonly JsonObject[]
+      if (options.jobSnapshots === undefined) {
+        jobs = defaultScheduledJobs()
+      } else if (options.jobSnapshots.length === 0) {
+        jobs = []
+      } else {
+        jobs = options.jobSnapshots[Math.min(jobListCalls, options.jobSnapshots.length - 1)] ?? []
+      }
+      jobListCalls += 1
+      return jobList(jobs)
+    }
     if (command.args.some((argument) => argument.startsWith("job/"))) {
       const requestedName = (
         command.args.find((argument) => argument.startsWith("job/")) as string
       ).slice("job/".length)
-      if (
-        activeReferences.some((reference) => reference.name === requestedName) &&
-        options.activeWaitError !== undefined
-      ) {
+      const scheduledJob = knownScheduledJob(requestedName)
+      if (scheduledJob !== undefined && options.activeWaitError !== undefined) {
         return options.activeWaitError
       }
-      if (activeReferences.some((reference) => reference.name === requestedName)) {
+      if (scheduledJob !== undefined) {
+        const observed = structuredClone(scheduledJob)
+        const uid = metadata(observed).uid
+        if (typeof uid === "string") completedScheduledJobUids.add(uid)
         return {
-          apiVersion: "batch/v1",
-          kind: "Job",
-          metadata: { name: requestedName, namespace: names.sandboxNamespace },
+          ...observed,
           status: { conditions: [{ type: "Complete", status: "True" }] },
         }
       }
@@ -411,7 +518,7 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
     }
     return {}
   })
-  return { execute, submitted }
+  return { execute, submitted, delay }
 }
 
 describe("probe manifest", () => {
@@ -1026,11 +1133,11 @@ describe("reaper and application Service probes", () => {
     "restores an originally %s CronJob suspend field exactly after success",
     async (_case, initialSuspend, restoredSuspend) => {
       const policy = await loadCompatibilityPolicy()
-      const { execute } = createReaperRunner({
+      const { execute, delay } = createReaperRunner({
         ...(initialSuspend !== undefined ? { initialSuspend } : {}),
       })
 
-      await runReaperLifecycleProbe({ context, runId, policy, execute })
+      await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
 
       const patches = execute.mock.calls.filter(
         ([command]) =>
@@ -1066,6 +1173,251 @@ describe("reaper and application Service probes", () => {
     },
   )
 
+  test("requires a concrete UID on the live suspended CronJob before fixture creation", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const { execute, submitted, delay } = createReaperRunner({ suspendedCronJobUid: null })
+
+    await expect(
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+    ).rejects.toThrow(/Reaper CronJob.*metadata\.uid/i)
+
+    expect(submitted).toHaveLength(0)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) =>
+          command.args.includes("patch") && command.args.includes("cronjob/dawn-reaper"),
+      ),
+    ).toHaveLength(2)
+  })
+
+  test("drains a late owned Job found after an initially empty suspended snapshot", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const lateJob = scheduledReaperJob({
+      name: "dawn-reaper-late",
+      uid: "44444444-4444-4444-8444-444444444444",
+    })
+    let submitted: readonly JsonObject[] = []
+    const runner = createReaperRunner({
+      jobSnapshots: [[], [lateJob], [], []],
+      delay: async (milliseconds) => {
+        expect(milliseconds).toBeGreaterThan(0)
+        expect(milliseconds).toBeLessThanOrEqual(5_000)
+        expect(
+          submitted.some(
+            (manifest) => manifest.kind === "PersistentVolumeClaim" || manifest.kind === "Pod",
+          ),
+        ).toBe(false)
+      },
+    })
+    submitted = runner.submitted
+
+    await runReaperLifecycleProbe(
+      { context, runId, policy, execute: runner.execute },
+      { delay: runner.delay },
+    )
+
+    expect(runner.delay).toHaveBeenCalledTimes(2)
+    const jobLists = runner.execute.mock.calls.filter(
+      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+    )
+    expect(jobLists).toHaveLength(4)
+    for (const [command, options] of jobLists) {
+      expect(command.args).toEqual([
+        "--context",
+        context,
+        "get",
+        "jobs",
+        "--namespace",
+        names.sandboxNamespace,
+        "--output",
+        "json",
+      ])
+      expect(options?.timeoutMs).toBe(30_000)
+    }
+    const lateWaitIndex = runner.execute.mock.calls.findIndex(([command]) =>
+      command.args.includes("job/dawn-reaper-late"),
+    )
+    const lateWait = runner.execute.mock.calls[lateWaitIndex]
+    expect(lateWait?.[0].args).toContain("--timeout=120s")
+    expect(lateWait?.[1]?.timeoutMs).toBe(150_000)
+    const firstFixture = runner.execute.mock.calls.findIndex(([, options]) => {
+      if (options?.stdin === undefined) return false
+      const kind = stdinObject(options).kind
+      return kind === "PersistentVolumeClaim" || kind === "Pod"
+    })
+    expect(lateWaitIndex).toBeGreaterThan(-1)
+    expect(lateWaitIndex).toBeLessThan(firstFixture)
+  })
+
+  test.each([
+    [
+      "UID",
+      (job: JsonObject) => {
+        metadata(job).uid = "55555555-5555-4555-8555-555555555555"
+        return job
+      },
+    ],
+    [
+      "name",
+      (job: JsonObject) => {
+        metadata(job).name = "dawn-reaper-other"
+        return job
+      },
+    ],
+    [
+      "namespace",
+      (job: JsonObject) => {
+        metadata(job).namespace = names.managementNamespace
+        return job
+      },
+    ],
+    [
+      "apiVersion",
+      (job: JsonObject) => {
+        job.apiVersion = "v1"
+        return job
+      },
+    ],
+    [
+      "kind",
+      (job: JsonObject) => {
+        job.kind = "Pod"
+        return job
+      },
+    ],
+    [
+      "controller owner reference",
+      (job: JsonObject) => {
+        const ownerReferences = metadata(job).ownerReferences as JsonObject[]
+        const controller = ownerReferences[0] as JsonObject
+        controller.controller = false
+        return job
+      },
+    ],
+  ])(
+    "rejects an active reference whose %s does not exactly match its fetched owned Job",
+    async (_case, mutateJob) => {
+      const policy = await loadCompatibilityPolicy()
+      const matchingJob = scheduledReaperJob({
+        name: "dawn-reaper-active",
+        uid: "22222222-2222-4222-8222-222222222222",
+      })
+      const activeReference = activeJobReference(matchingJob)
+      const fetchedJob = mutateJob(structuredClone(matchingJob))
+      const { execute, submitted, delay } = createReaperRunner({
+        activeReferences: [activeReference],
+        jobSnapshots: [[fetchedJob]],
+      })
+
+      await expect(
+        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      ).rejects.toThrow(/active CronJob reference.*exactly match.*owned Job/i)
+
+      expect(submitted).toHaveLength(0)
+    },
+  )
+
+  test("ignores unfinished Jobs without the exact CronJob controller UID", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const differentOwner = scheduledReaperJob({
+      name: "unrelated-different-owner",
+      uid: "66666666-6666-4666-8666-666666666666",
+      ownerUid: "77777777-7777-4777-8777-777777777777",
+    })
+    const noOwner = scheduledReaperJob({
+      name: "unrelated-no-owner",
+      uid: "88888888-8888-4888-8888-888888888888",
+      ownerUid: null,
+    })
+    const { execute, submitted, delay } = createReaperRunner({
+      jobSnapshots: [
+        [differentOwner, noOwner],
+        [differentOwner, noOwner],
+      ],
+    })
+
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+
+    expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
+    expect(delay).toHaveBeenCalledTimes(1)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+      ),
+    ).toHaveLength(2)
+    for (const unrelatedName of ["unrelated-different-owner", "unrelated-no-owner"]) {
+      expect(
+        execute.mock.calls.some(([command]) => command.args.includes(`job/${unrelatedName}`)),
+      ).toBe(false)
+    }
+  })
+
+  test("treats completed owned Jobs as drained without waiting", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const completed = scheduledReaperJob({
+      name: "dawn-reaper-completed",
+      uid: "99999999-9999-4999-8999-999999999999",
+      status: "complete",
+    })
+    const { execute, submitted, delay } = createReaperRunner({
+      jobSnapshots: [[completed], [completed]],
+    })
+
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
+
+    expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
+    expect(delay).toHaveBeenCalledTimes(1)
+    expect(
+      execute.mock.calls.filter(
+        ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+      ),
+    ).toHaveLength(2)
+    expect(
+      execute.mock.calls.some(([command]) => command.args.includes("job/dawn-reaper-completed")),
+    ).toBe(false)
+  })
+
+  test("fails explicitly when an owned scheduled Job has failed", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const failed = scheduledReaperJob({
+      name: "dawn-reaper-failed",
+      uid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      status: "failed",
+    })
+    const { execute, submitted, delay } = createReaperRunner({ jobSnapshots: [[failed]] })
+
+    await expect(
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+    ).rejects.toThrow(/owned Reaper Job.*failed/i)
+
+    expect(submitted).toHaveLength(0)
+    expect(
+      execute.mock.calls.some(([command]) => command.args.includes("job/dawn-reaper-failed")),
+    ).toBe(false)
+  })
+
+  test("fails within a finite number of snapshots when scheduled Jobs never quiesce", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const unfinished = scheduledReaperJob({
+      name: "dawn-reaper-never-quiescent",
+      uid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    })
+    const { execute, submitted, delay } = createReaperRunner({
+      jobSnapshots: Array.from({ length: 12 }, () => [structuredClone(unfinished)]),
+    })
+
+    await expect(
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+    ).rejects.toThrow(/scheduled Reaper Jobs.*quiescent/i)
+
+    const listCalls = execute.mock.calls.filter(
+      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
+    )
+    expect(listCalls.length).toBeGreaterThan(1)
+    expect(listCalls.length).toBeLessThanOrEqual(10)
+    expect(submitted).toHaveLength(0)
+  })
+
   test("suspends the CronJob and drains live active Jobs before creating fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
     const activeReferences = [
@@ -1074,17 +1426,19 @@ describe("reaper and application Service probes", () => {
         kind: "Job",
         name: "dawn-reaper-existing-a",
         namespace: names.sandboxNamespace,
+        uid: "22222222-2222-4222-8222-222222222222",
       },
       {
         apiVersion: "batch/v1",
         kind: "Job",
         name: "dawn-reaper-existing-b",
         namespace: names.sandboxNamespace,
+        uid: "33333333-3333-4333-8333-333333333333",
       },
     ]
-    const { execute } = createReaperRunner({ activeReferences })
+    const { execute, delay } = createReaperRunner({ activeReferences })
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
 
     const calls = execute.mock.calls
     const cronReads = calls.flatMap(([command], index) =>
@@ -1135,6 +1489,7 @@ describe("reaper and application Service probes", () => {
         kind: "Job",
         name: "dawn-reaper-existing",
         namespace: names.sandboxNamespace,
+        uid: "22222222-2222-4222-8222-222222222222",
       },
     ],
     [
@@ -1144,6 +1499,7 @@ describe("reaper and application Service probes", () => {
         kind: "Pod",
         name: "dawn-reaper-existing",
         namespace: names.sandboxNamespace,
+        uid: "22222222-2222-4222-8222-222222222222",
       },
     ],
     [
@@ -1153,6 +1509,7 @@ describe("reaper and application Service probes", () => {
         kind: "Job",
         name: "dawn-reaper-existing",
         namespace: names.managementNamespace,
+        uid: "22222222-2222-4222-8222-222222222222",
       },
     ],
     [
@@ -1162,19 +1519,30 @@ describe("reaper and application Service probes", () => {
         kind: "Job",
         name: "",
         namespace: names.sandboxNamespace,
+        uid: "22222222-2222-4222-8222-222222222222",
+      },
+    ],
+    [
+      "uid",
+      {
+        apiVersion: "batch/v1",
+        kind: "Job",
+        name: "dawn-reaper-existing",
+        namespace: names.sandboxNamespace,
+        uid: "",
       },
     ],
   ])(
     "rejects an invalid active CronJob reference %s before fixture creation and restores suspension",
     async (_case, activeReference) => {
       const policy = await loadCompatibilityPolicy()
-      const { execute, submitted } = createReaperRunner({
+      const { execute, submitted, delay } = createReaperRunner({
         activeReferences: [activeReference],
       })
 
-      await expect(runReaperLifecycleProbe({ context, runId, policy, execute })).rejects.toThrow(
-        /active.*batch\/v1 Job/i,
-      )
+      await expect(
+        runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+      ).rejects.toThrow(/active.*batch\/v1 Job/i)
 
       expect(submitted).toHaveLength(0)
       expect(
@@ -1189,21 +1557,22 @@ describe("reaper and application Service probes", () => {
   test("attempts fixture cleanup and suspension restoration when active Job draining fails", async () => {
     const policy = await loadCompatibilityPolicy()
     const activeWaitError = new Error("active reaper Job did not finish")
-    const { execute, submitted } = createReaperRunner({
+    const { execute, submitted, delay } = createReaperRunner({
       activeReferences: [
         {
           apiVersion: "batch/v1",
           kind: "Job",
           name: "dawn-reaper-existing",
           namespace: names.sandboxNamespace,
+          uid: "22222222-2222-4222-8222-222222222222",
         },
       ],
       activeWaitError,
     })
 
-    await expect(runReaperLifecycleProbe({ context, runId, policy, execute })).rejects.toBe(
-      activeWaitError,
-    )
+    await expect(
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+    ).rejects.toBe(activeWaitError)
 
     expect(submitted).toHaveLength(0)
     expect(
@@ -1222,9 +1591,9 @@ describe("reaper and application Service probes", () => {
 
   test("proves stale deletion, fresh marking, and referenced retention with restricted fixtures", async () => {
     const policy = await loadCompatibilityPolicy()
-    const { execute, submitted } = createReaperRunner()
+    const { execute, submitted, delay } = createReaperRunner()
 
-    await runReaperLifecycleProbe({ context, runId, policy, execute })
+    await runReaperLifecycleProbe({ context, runId, policy, execute }, { delay })
 
     const claims = submitted.filter((manifest) => manifest.kind === "PersistentVolumeClaim")
     const referencePod = submitted.find((manifest) => manifest.kind === "Pod")
@@ -1324,22 +1693,23 @@ describe("reaper and application Service probes", () => {
     ],
   ])("rejects completed reaper Jobs when the %s", async (_case, options, expectedError) => {
     const policy = await loadCompatibilityPolicy()
-    const { execute } = createReaperRunner(options)
+    const { execute, delay } = createReaperRunner(options)
 
-    await expect(runReaperLifecycleProbe({ context, runId, policy, execute })).rejects.toThrow(
-      expectedError,
-    )
+    await expect(
+      runReaperLifecycleProbe({ context, runId, policy, execute }, { delay }),
+    ).rejects.toThrow(expectedError)
   })
 
   test("preserves the primary, fixture cleanup, and suspension restoration failures", async () => {
     const policy = await loadCompatibilityPolicy()
     const cleanupError = new Error("reaper cleanup failed")
     const restoreError = new Error("reaper suspension restore failed")
-    const { execute } = createReaperRunner({ markNew: false, cleanupError, restoreError })
+    const { execute, delay } = createReaperRunner({ markNew: false, cleanupError, restoreError })
 
-    const error = await runReaperLifecycleProbe({ context, runId, policy, execute }).catch(
-      (cause: unknown) => cause,
-    )
+    const error = await runReaperLifecycleProbe(
+      { context, runId, policy, execute },
+      { delay },
+    ).catch((cause: unknown) => cause)
 
     expect(error).toBeInstanceOf(AggregateError)
     const errors = (error as AggregateError).errors

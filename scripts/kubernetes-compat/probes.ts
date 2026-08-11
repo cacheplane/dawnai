@@ -50,6 +50,10 @@ export interface PolicyProbeInput extends AdministrativeProbeInput {
   readonly policy: CompatibilityPolicy
 }
 
+export interface ReaperLifecycleDependencies {
+  readonly delay: (milliseconds: number) => Promise<void>
+}
+
 export interface TokenKubeconfigProbeInput extends AdministrativeProbeInput {
   readonly kubeconfig: string
 }
@@ -82,8 +86,11 @@ const INITIAL_REAPER_SCHEDULE = "17 * * * *"
 const UPGRADED_REAPER_SCHEDULE = "23 * * * *"
 const REAPER_TTL_SECONDS = 168 * 60 * 60
 const REAPER_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+const REAPER_JOB_SETTLEMENT_DELAY_MS = 1_000
+const REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS = 8
 const HELM_TIMEOUT = "5m"
 const HELM_OUTER_TIMEOUT_MS = 6 * 60 * 1_000
+const KUBECTL_JSON_READ_OUTER_TIMEOUT_MS = 30_000
 const KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS = 150_000
 const KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS = 60_000
 const DEFAULT_LIMITS = Object.freeze({
@@ -93,6 +100,12 @@ const DEFAULT_LIMITS = Object.freeze({
 const REJECTION_EXIT_CODES = Object.freeze([1] as const)
 const DNS_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/
 const LABEL_VALUE_PATTERN = /^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]*[A-Za-z0-9])?)?$/
+const DEFAULT_REAPER_LIFECYCLE_DEPENDENCIES: ReaperLifecycleDependencies = Object.freeze({
+  delay: (milliseconds: number): Promise<void> =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, milliseconds)
+    }),
+})
 
 function expectNonEmpty(value: string, name: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -1097,7 +1110,32 @@ async function patchReaperSuspend(
   }
 }
 
-function activeReaperJobNames(cronJob: JsonObject, state: ResolvedProbeState): readonly string[] {
+interface ReaperJobIdentity {
+  readonly apiVersion: "batch/v1"
+  readonly kind: "Job"
+  readonly name: string
+  readonly namespace: string
+  readonly uid: string
+}
+
+function expectKubernetesUid(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${name} must be a non-empty string`)
+  }
+  return value
+}
+
+function reaperCronJobUid(cronJob: JsonObject): string {
+  return expectKubernetesUid(
+    objectMetadata(cronJob, "Reaper CronJob").uid,
+    "Reaper CronJob.metadata.uid",
+  )
+}
+
+function activeReaperJobReferences(
+  cronJob: JsonObject,
+  state: ResolvedProbeState,
+): readonly ReaperJobIdentity[] {
   if (cronJob.status === undefined) return []
   const status = expectObject(cronJob.status, "Reaper CronJob.status")
   if (status.active === undefined) return []
@@ -1105,9 +1143,12 @@ function activeReaperJobNames(cronJob: JsonObject, state: ResolvedProbeState): r
     throw new Error("Reaper CronJob.status.active must be an array")
   }
   const names = new Set<string>()
+  const uids = new Set<string>()
+  const references: ReaperJobIdentity[] = []
   for (const [index, value] of status.active.entries()) {
     const reference = expectObject(value, `Reaper CronJob.status.active[${index}]`)
     const name = reference.name
+    const uid = reference.uid
     if (
       reference.apiVersion !== "batch/v1" ||
       reference.kind !== "Job" ||
@@ -1115,15 +1156,26 @@ function activeReaperJobNames(cronJob: JsonObject, state: ResolvedProbeState): r
       typeof name !== "string" ||
       name.length > 63 ||
       !DNS_NAME_PATTERN.test(name) ||
-      names.has(name)
+      typeof uid !== "string" ||
+      uid.trim().length === 0 ||
+      names.has(name) ||
+      uids.has(uid)
     ) {
       throw new Error(
-        `Reaper CronJob active references must be unique batch/v1 Job references in ${state.namespace}`,
+        `Reaper CronJob active references must be unique UID-bearing batch/v1 Job references in ${state.namespace}`,
       )
     }
     names.add(name)
+    uids.add(uid)
+    references.push({
+      apiVersion: "batch/v1",
+      kind: "Job",
+      name,
+      namespace: state.namespace,
+      uid,
+    })
   }
-  return [...names]
+  return references
 }
 
 async function assertReaperSchedule(
@@ -1459,6 +1511,208 @@ async function waitForCompletedReaperJob(state: ResolvedProbeState, name: string
   assertCompletedJob(commandJson(result, `Reaper Job ${name}`), state, name)
 }
 
+function hasExactReaperControllerOwner(metadata: JsonObject, cronJobUid: string): boolean {
+  if (!Array.isArray(metadata.ownerReferences)) return false
+  let matches = 0
+  let controllers = 0
+  for (const value of metadata.ownerReferences) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue
+    const reference = value as JsonObject
+    if (reference.controller === true) controllers += 1
+    if (
+      reference.apiVersion === "batch/v1" &&
+      reference.kind === "CronJob" &&
+      reference.name === REAPER_CRONJOB &&
+      reference.uid === cronJobUid &&
+      reference.controller === true
+    ) {
+      matches += 1
+    }
+  }
+  return matches === 1 && controllers === 1
+}
+
+function jobMatchesIdentity(
+  job: JsonObject,
+  identity: ReaperJobIdentity,
+  cronJobUid: string,
+): boolean {
+  if (typeof job.metadata !== "object" || job.metadata === null || Array.isArray(job.metadata)) {
+    return false
+  }
+  const metadata = job.metadata as JsonObject
+  return (
+    job.apiVersion === identity.apiVersion &&
+    job.kind === identity.kind &&
+    metadata.name === identity.name &&
+    metadata.namespace === identity.namespace &&
+    metadata.uid === identity.uid &&
+    hasExactReaperControllerOwner(metadata, cronJobUid)
+  )
+}
+
+function reaperJobIdentity(
+  job: JsonObject,
+  state: ResolvedProbeState,
+  index: number,
+): ReaperJobIdentity {
+  const metadata = objectMetadata(job, `Scheduled Reaper Job list.items[${index}]`)
+  const name = expectString(
+    metadata.name,
+    `Scheduled Reaper Job list.items[${index}].metadata.name`,
+  )
+  const uid = expectKubernetesUid(
+    metadata.uid,
+    `Scheduled Reaper Job list.items[${index}].metadata.uid`,
+  )
+  if (
+    job.apiVersion !== "batch/v1" ||
+    job.kind !== "Job" ||
+    metadata.namespace !== state.namespace ||
+    name.length > 63 ||
+    !DNS_NAME_PATTERN.test(name)
+  ) {
+    throw new Error(`Scheduled Reaper Job list contained an invalid Job at index ${index}`)
+  }
+  return {
+    apiVersion: "batch/v1",
+    kind: "Job",
+    name,
+    namespace: state.namespace,
+    uid,
+  }
+}
+
+type ReaperJobPhase = "complete" | "failed" | "unfinished"
+
+function reaperJobPhase(job: JsonObject, name: string): ReaperJobPhase {
+  if (job.status === undefined) return "unfinished"
+  const status = expectObject(job.status, `Owned Reaper Job ${name}.status`)
+  if (status.conditions === undefined) return "unfinished"
+  if (!Array.isArray(status.conditions)) {
+    throw new Error(`Owned Reaper Job ${name}.status.conditions must be an array`)
+  }
+  let complete = false
+  for (const value of status.conditions) {
+    const condition = expectObject(value, `Owned Reaper Job ${name} condition`)
+    if (condition.type === "Failed" && condition.status === "True") return "failed"
+    if (condition.type === "Complete" && condition.status === "True") complete = true
+  }
+  return complete ? "complete" : "unfinished"
+}
+
+interface OwnedReaperJob {
+  readonly identity: ReaperJobIdentity
+  readonly phase: ReaperJobPhase
+}
+
+function ownedReaperJobs(
+  jobs: readonly JsonObject[],
+  state: ResolvedProbeState,
+  cronJobUid: string,
+): readonly OwnedReaperJob[] {
+  return jobs.flatMap((job, index) => {
+    const identity = reaperJobIdentity(job, state, index)
+    const metadata = objectMetadata(job, `Scheduled Reaper Job ${identity.name}`)
+    if (!hasExactReaperControllerOwner(metadata, cronJobUid)) return []
+    return [{ identity, phase: reaperJobPhase(job, identity.name) }]
+  })
+}
+
+function assertActiveReferencesMatchOwnedJobs(
+  references: readonly ReaperJobIdentity[],
+  jobs: readonly JsonObject[],
+  cronJobUid: string,
+): void {
+  for (const reference of references) {
+    if (!jobs.some((job) => jobMatchesIdentity(job, reference, cronJobUid))) {
+      throw new Error(
+        `Reaper active CronJob reference ${reference.namespace}/${reference.name} (${reference.uid}) must exactly match a fetched owned Job`,
+      )
+    }
+  }
+}
+
+async function readScheduledReaperJobs(state: ResolvedProbeState): Promise<readonly JsonObject[]> {
+  const result = await state.execute(
+    kubectl.command(state.context, [
+      "get",
+      "jobs",
+      "--namespace",
+      state.namespace,
+      "--output",
+      "json",
+    ]),
+    { timeoutMs: KUBECTL_JSON_READ_OUTER_TIMEOUT_MS },
+  )
+  return exactListItems(commandJson(result, "Scheduled Reaper Job list"), {
+    apiVersion: "batch/v1",
+    kind: "JobList",
+    name: "Scheduled Reaper Job list",
+  })
+}
+
+async function waitForOwnedReaperJob(
+  state: ResolvedProbeState,
+  job: OwnedReaperJob,
+  cronJobUid: string,
+): Promise<void> {
+  const result = await state.execute(
+    kubectl.command(state.context, [
+      "wait",
+      "--namespace",
+      state.namespace,
+      "--for=condition=Complete",
+      `job/${job.identity.name}`,
+      "--timeout=120s",
+      "--output",
+      "json",
+    ]),
+    { timeoutMs: KUBECTL_LONG_WAIT_OUTER_TIMEOUT_MS },
+  )
+  const observed = expectObject(
+    commandJson(result, `Owned Reaper Job ${job.identity.name}`),
+    `Owned Reaper Job ${job.identity.name}`,
+  )
+  if (!jobMatchesIdentity(observed, job.identity, cronJobUid)) {
+    throw new Error(`Owned Reaper Job ${job.identity.name} changed identity while being drained`)
+  }
+  const phase = reaperJobPhase(observed, job.identity.name)
+  if (phase === "failed") throw new Error(`Owned Reaper Job ${job.identity.name} failed`)
+  if (phase !== "complete") {
+    throw new Error(`Owned Reaper Job ${job.identity.name} did not reach Complete=True`)
+  }
+}
+
+async function drainScheduledReaperJobs(
+  state: ResolvedProbeState,
+  cronJob: JsonObject,
+  cronJobUid: string,
+  dependencies: ReaperLifecycleDependencies,
+): Promise<void> {
+  const activeReferences = activeReaperJobReferences(cronJob, state)
+  let consecutiveEmptySnapshots = 0
+  for (let attempt = 0; attempt < REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
+    const jobs = await readScheduledReaperJobs(state)
+    if (attempt === 0) assertActiveReferencesMatchOwnedJobs(activeReferences, jobs, cronJobUid)
+    const owned = ownedReaperJobs(jobs, state, cronJobUid)
+    const failed = owned.find((job) => job.phase === "failed")
+    if (failed !== undefined) throw new Error(`Owned Reaper Job ${failed.identity.name} failed`)
+    const unfinished = owned.filter((job) => job.phase === "unfinished")
+    if (unfinished.length > 0) {
+      consecutiveEmptySnapshots = 0
+      for (const job of unfinished) await waitForOwnedReaperJob(state, job, cronJobUid)
+      continue
+    }
+    consecutiveEmptySnapshots += 1
+    if (consecutiveEmptySnapshots === 2) return
+    await dependencies.delay(REAPER_JOB_SETTLEMENT_DELAY_MS)
+  }
+  throw new Error(
+    `Scheduled Reaper Jobs did not become quiescent after ${REAPER_JOB_SETTLEMENT_MAX_ATTEMPTS} snapshots`,
+  )
+}
+
 function currentEpochSeconds(name: string): number {
   const epoch = Math.floor(Date.now() / 1_000)
   if (!Number.isSafeInteger(epoch) || epoch <= 0) {
@@ -1537,7 +1791,10 @@ function assertReaperPvcOutcomes(
   }
 }
 
-export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<void> {
+export async function runReaperLifecycleProbe(
+  input: PolicyProbeInput,
+  dependencies: ReaperLifecycleDependencies = DEFAULT_REAPER_LIFECYCLE_DEPENDENCIES,
+): Promise<void> {
   const state = probeState(input)
   const staleName = resourceName(state.runId, "reaper-stale-pvc")
   const newName = resourceName(state.runId, "reaper-new-pvc")
@@ -1558,6 +1815,7 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
       component: REAPER_COMPONENT,
     })
   const originalCronJob = await readReaperCronJob(state)
+  const originalCronJobUid = reaperCronJobUid(originalCronJob)
   const originalSuspend = reaperSuspendState(originalCronJob)
   const restoreSuspend = (): Promise<void> => patchReaperSuspend(state, originalSuspend)
 
@@ -1567,9 +1825,11 @@ export async function runReaperLifecycleProbe(input: PolicyProbeInput): Promise<
     if (reaperSuspendState(suspendedCronJob) !== true) {
       throw new Error("Reaper CronJob must be live with spec.suspend=true before fixture creation")
     }
-    for (const activeJobName of activeReaperJobNames(suspendedCronJob, state)) {
-      await waitForCompletedReaperJob(state, activeJobName)
+    const suspendedCronJobUid = reaperCronJobUid(suspendedCronJob)
+    if (suspendedCronJobUid !== originalCronJobUid) {
+      throw new Error("Reaper CronJob.metadata.uid changed while suspension was established")
     }
+    await drainScheduledReaperJobs(state, suspendedCronJob, suspendedCronJobUid, dependencies)
 
     await cleanup()
     const fixtures = [
