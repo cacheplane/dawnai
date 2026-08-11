@@ -90,29 +90,34 @@ function portableCommand(policy: CompatibilityPolicy): string {
 
 function isManagedKubernetesBoundary(text: string): boolean {
   const requiresSeparateValidation =
-    /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:requires? separate validation|(?:must|should) be validated separately)\b/i.test(
+    /^(?:The )?managed[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:requires? separate validation|(?:must|should) be validated separately)[.!?]?$/i.test(
       text,
     )
   const outsideKindEvidence =
-    /\bmanaged[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:is|are|being) (?:outside (?:the )?Kind(?:\/Calico)? (?:coverage|evidence)|not covered by (?:the )?Kind(?:\/Calico)? (?:coverage|evidence))\b/i.test(
+    /^(?:The )?managed[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?) (?:is|are|being) (?:outside (?:the )?Kind(?:\/Calico)? (?:coverage|evidence)|not covered by (?:the )?Kind(?:\/Calico)? (?:coverage|evidence))[.!?]?$/i.test(
       text,
     )
   const kindEvidenceExcludesScope =
-    /\bKind(?:\/Calico)? (?:coverage|evidence) (?:does not|doesn't) cover managed[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)\b/i.test(
+    /^Kind(?:\/Calico)? (?:coverage|evidence) (?:does not|doesn't) cover managed[- ](?:Kubernetes(?: services?)?|cloud(?: services?)?|clusters?)[.!?]?$/i.test(
       text,
     )
   return requiresSeparateValidation || outsideKindEvidence || kindEvidenceExcludesScope
 }
 
 function isDynamicRwoStoragePrerequisite(text: string): boolean {
-  const namesDynamicRwo =
-    /\bdynamic(?:ally)?\b/i.test(text) && /\b(?:ReadWriteOnce|RWO)\b/i.test(text)
-  const namesProvisioning = /\bprovision(?:ed|er|ers|ing)?\b/i.test(text)
-  const statesRequirement =
-    /\bstorage[- ]driver(?:s|\s+support)?\s+(?:(?:must|needs? to)\b|(?:is|are)\s+(?:required|(?:an?\s+)?prerequisite)\b)/i.test(
+  const driverMustSupport =
+    /^(?:(?:The|A) )?storage[- ]drivers? (?:must|needs? to) support dynamic(?:ally)? (?:ReadWriteOnce|RWO) provisioning[.!?]?$/i.test(
       text,
-    ) || /\b(?:requires?|needs?)\s+(?:an?\s+)?storage[- ]drivers?\b/i.test(text)
-  return namesDynamicRwo && namesProvisioning && statesRequirement
+    )
+  const driverIsRequired =
+    /^(?:(?:The|A) )?storage[- ]driver(?:s| support)? (?:is|are) (?:required|(?:a )?prerequisite) for dynamic(?:ally)? (?:ReadWriteOnce|RWO) provisioning[.!?]?$/i.test(
+      text,
+    )
+  const provisioningRequiresDriver =
+    /^Dynamic(?:ally)? (?:ReadWriteOnce|RWO) provisioning (?:requires?|needs?) (?:a )?storage[- ]drivers?[.!?]?$/i.test(
+      text,
+    )
+  return driverMustSupport || driverIsRequired || provisioningRequiresDriver
 }
 
 function makesUnsupportedCompatibilityClaim(source: string): boolean {
@@ -121,8 +126,7 @@ function makesUnsupportedCompatibilityClaim(source: string): boolean {
   const namesStorageDriver = /\bstorage[- ]drivers?\b/i.test(text)
   if (namesStorageDriver && !isDynamicRwoStoragePrerequisite(text)) return true
 
-  const namesQuantifiedCni =
-    /\b(?:any|arbitrary|other|every|all)(?:\s+[\w-]+){0,2}\s+CNIs?\b/i.test(text)
+  const namesQuantifiedCni = /\b(?:any|arbitrary|other|every|all)\b[^.!?;:]*\bCNIs?\b/i.test(text)
   if (namesQuantifiedCni) return true
 
   const namesManagedKubernetes =
@@ -237,6 +241,10 @@ managed Kubernetes services.`,
     "Kind coverage proves storage driver compatibility",
     "Kind validates managed Kubernetes services that require separate validation.",
     "Kind validates storage drivers required for dynamic RWO provisioning.",
+    "Managed Kubernetes services require separate validation, but Kind validates them.",
+    "The storage driver must support dynamic ReadWriteOnce provisioning, and Kind validates all storage drivers.",
+    "Kind works with every policy-enforcing standards-compliant CNI.",
+    "Kind works with every broadly-used policy-enforcing standards-compliant CNI.",
   ])("rejects semantic compatibility overclaim: %s", (claim) => {
     expect(normalizedProseStatements(claim).some(makesUnsupportedCompatibilityClaim)).toBe(true)
   })
