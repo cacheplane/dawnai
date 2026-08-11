@@ -3,6 +3,9 @@
   "extends": "../config-typescript/nextjs.json",
   "compilerOptions": {
     "incremental": true,
+    // `test/seed-store.ts` is loaded by `e2e/serve.ts` under bare `node`, whose ESM
+    // resolver does no extension inference, so its relative import must carry `.ts`.
+    "allowImportingTsExtensions": true,
     "paths": { "@/*": ["./*"] }
   },
   "include": [
