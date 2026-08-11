@@ -23,11 +23,12 @@ export const KINDS = [
 ] as const satisfies readonly MemoryKind[]
 
 /** Proof that each list spells out its WHOLE union. `satisfies` above proves only the
- *  converse — that nothing listed is a typo — which leaves a member added upstream
- *  missing here and nothing red: `toFilter` compares lengths, so a funnel with every
- *  offered box ticked would read as unfiltered and return rows of a value the checklist
- *  never showed. The brackets suppress distribution, without which a union member
- *  missing from the list still yields `true`. */
+ *  converse — that nothing listed is a typo — which would leave a member added
+ *  upstream missing here and nothing red: the funnel would never offer the value, so
+ *  rows carrying it could not be narrowed to or excluded, and the guards below would
+ *  call it invalid — making `to-browse-query.ts` THROW on any predicate that names it.
+ *  The brackets suppress distribution, without which a union member missing from the
+ *  list still yields `true`. */
 type Exhaustive<Union, List extends readonly unknown[]> = [Union] extends [List[number]]
   ? true
   : never

@@ -235,9 +235,10 @@ export function toBrowseQuery(
   sort: readonly PretableSortEntry[],
 ): BrowseQueryIntent {
   const mapped: BrowseFilter[] = []
-  // Sorted so one intent always serializes one way: the fingerprint the SERVER
-  // computes is order-insensitive, but the datasetKey the CLIENT hashes is not,
-  // and a re-ordered map would otherwise read as a new dataset.
+  // Sorted so one intent maps one way whatever order the funnel map was built in.
+  // The dataset identity does NOT rest on this — `canonicalBrowseQuery` sorts
+  // predicates by field for every producer, not just this one — so a column id that
+  // stops matching its field order costs nothing.
   for (const columnId of Object.keys(filters).sort()) {
     const filter = filters[columnId]
     if (filter) mapped.push(toBrowseFilter(columnId, filter))

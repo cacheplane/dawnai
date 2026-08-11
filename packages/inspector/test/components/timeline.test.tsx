@@ -175,4 +175,30 @@ describe("ListPage timeline mode", () => {
       expect(Date.now() - Date.parse(since)).toBeGreaterThan(23 * 60 * 60 * 1000)
     })
   })
+
+  it("re-anchors the window each time the timeline is entered", async () => {
+    // `since` is pinned when the control moves, so entering the view a second time
+    // would otherwise keep an instant from whenever the select was last touched —
+    // a "24h" label over a window that ended some time ago, refreshed by live
+    // polling for as long as the page stays open.
+    const mock = stubApi()
+    render(<ListPage />)
+    const sinceValues = () =>
+      callsTo(mock, "/api/memory/list")
+        .map((u) => u.searchParams.get("since"))
+        .filter((v): v is string => v !== null)
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+    fireEvent.change(screen.getByLabelText("Window"), { target: { value: "24h" } })
+    await vi.waitFor(() => expect(sinceValues().length).toBeGreaterThan(0))
+    const pinned = sinceValues()[0]
+    fireEvent.click(screen.getByRole("button", { name: "list" }))
+    await vi.waitFor(() => expect(screen.queryByTestId("timeline-view")).toBeNull())
+    // Real elapsed time, so the re-anchored instant is a DIFFERENT millisecond —
+    // the assertion below cannot pass by accident on a fast machine.
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+    await vi.waitFor(() => {
+      expect(sinceValues().some((value) => value !== pinned)).toBe(true)
+    })
+  })
 })

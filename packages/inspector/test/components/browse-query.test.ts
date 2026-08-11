@@ -9,6 +9,7 @@ import {
 import { parseBrowseQuery } from "../../src/store/browse-params"
 
 const STATUS_IN_ACTIVE: BrowseFilter = { field: "status", op: "in", values: ["active"] }
+const KIND_IN_EPISODIC: BrowseFilter = { field: "kind", op: "in", values: ["episodic"] }
 const CONFIDENCE_DESC: BrowseSortEntry = { field: "confidence", dir: "desc" }
 
 describe("canonicalBrowseQuery", () => {
@@ -103,6 +104,23 @@ describe("canonicalBrowseQuery", () => {
       orderBy: [CONFIDENCE_DESC],
     })
     expect(datasetKeyOf(rebuilt)).toBe(datasetKeyOf(held))
+  })
+
+  it("orders predicates by field, so a second producer cannot fork the key", () => {
+    // The grid is not the only producer for long — a restored URL, a resumed cursor,
+    // a test helper — and each builds its predicate list in whatever order it walks.
+    // Canonicalizing here rather than trusting every caller is what stops one
+    // question minting two datasets and pivoting a selection nobody changed.
+    const kindFirst = canonicalBrowseQuery({
+      view: "list",
+      filters: [KIND_IN_EPISODIC, STATUS_IN_ACTIVE],
+    })
+    const statusFirst = canonicalBrowseQuery({
+      view: "list",
+      filters: [STATUS_IN_ACTIVE, KIND_IN_EPISODIC],
+    })
+    expect(statusFirst.filters).toEqual([KIND_IN_EPISODIC, STATUS_IN_ACTIVE])
+    expect(datasetKeyOf(statusFirst)).toBe(datasetKeyOf(kindFirst))
   })
 
   it("pivots on orderBy ORDER — sort priority decides the answer, unlike a value set", () => {
@@ -239,7 +257,9 @@ describe("browseSearchParams", () => {
       namespace: "route=/notes",
       kind: ["episodic"],
       since: "2026-08-01T00:00:00.000Z",
-      filters: [STATUS_IN_ACTIVE, { field: "confidence", op: "between", min: 0.1, max: 0.9 }],
+      // Field order, not argument order — the canonical form sorts predicates, and
+      // the parser hands back what it was sent.
+      filters: [{ field: "confidence", op: "between", min: 0.1, max: 0.9 }, STATUS_IN_ACTIVE],
       orderBy: [CONFIDENCE_DESC],
       limit: 200,
       offset: 400,

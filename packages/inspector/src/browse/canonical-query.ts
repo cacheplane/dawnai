@@ -65,13 +65,24 @@ function normalizeSet<T extends string>(values: readonly T[] | undefined): reado
  * reached, so clearing the last funnel returns to the key the page started on
  * instead of minting a third dataset.
  *
- * Order is the CALLER's: `toBrowseQuery` sorts predicates by column id so a
- * re-ordered funnel map cannot fork the key, and leaves `orderBy` alone because
- * its order is the sort priority.
+ * Order is left alone here. `orderBy` needs that — its order IS the sort priority —
+ * while `filters` is canonicalized by its own caller below.
  */
 function normalizeList<T>(values: readonly T[] | undefined): readonly T[] | null {
   if (values === undefined || values.length === 0) return null
   return Object.freeze([...values])
+}
+
+/** Predicates in one order, whoever built the list. A conjunction is a SET, so the
+ *  order carries no meaning to the server — but `datasetKeyOf` stringifies it, and
+ *  two spellings of one question would mint two datasets and pivot a selection
+ *  nobody changed. The store allows at most one predicate per field, so `field`
+ *  alone is a total order over any list it accepts. */
+function sortedByField(filters: readonly BrowseFilter[] | null): readonly BrowseFilter[] | null {
+  if (filters === null) return null
+  return Object.freeze(
+    [...filters].sort((a, b) => (a.field < b.field ? -1 : a.field > b.field ? 1 : 0)),
+  )
 }
 
 /**
@@ -93,7 +104,7 @@ export function canonicalBrowseQuery(input: {
   readonly orderBy?: readonly BrowseSortEntry[] | undefined
 }): CanonicalBrowseQuery {
   const kind = normalizeSet(input.kind)
-  const filters = normalizeList(input.filters)
+  const filters = sortedByField(normalizeList(input.filters))
   // The shorthand and a predicate on the same field reach the server as an AND, so
   // the timeline default has to stand down once the funnel claims `kind` — left on,
   // it would answer "episodic AND semantic", which is nothing, under a funnel that

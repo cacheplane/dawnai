@@ -38,6 +38,13 @@ const WINDOWS = {
 } as const
 type TimelineWindow = keyof typeof WINDOWS | "all"
 
+/** The window's lower bound, read from the clock ONCE per pin. Callers must hold the
+ *  result in state: `since` is part of the dataset identity, and a `Date.now()`
+ *  re-read on a later render would mint a new identity and refetch forever. */
+function sinceFor(window: TimelineWindow): string | undefined {
+  return window === "all" ? undefined : new Date(Date.now() - WINDOWS[window]).toISOString()
+}
+
 const selectClass =
   "h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
 
@@ -53,16 +60,24 @@ export function ListPage() {
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
-  // Pinned when the control moves, never recomputed per render: `since` is part of
-  // the dataset identity, and `useMemo` is a hint React may drop — a `Date.now()`
-  // re-read on a later render would mint a new identity and refetch forever.
   const [timelineSince, setTimelineSince] = useState<string>()
   const chooseTimelineWindow = useCallback((next: TimelineWindow) => {
     setTimelineWindow(next)
-    setTimelineSince(
-      next === "all" ? undefined : new Date(Date.now() - WINDOWS[next]).toISOString(),
-    )
+    setTimelineSince(sinceFor(next))
   }, [])
+  /** Re-pin on ENTRY as well as on the select. The label names a window ending NOW,
+   *  and the instant behind it was taken whenever the select last moved — leave and
+   *  return and "24h" would describe a window that closed hours ago, kept warm by
+   *  live polling. Entry only, so re-clicking the button you are already on is not a
+   *  refetch. */
+  const chooseView = useCallback(
+    (next: "list" | "timeline") => {
+      if (next === "timeline" && view !== "timeline") setTimelineSince(sinceFor(timelineWindow))
+      setSortCapped(false)
+      setView(next)
+    },
+    [view, timelineWindow],
+  )
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [ticked, setTicked] = useState<readonly string[]>([])
@@ -106,8 +121,18 @@ export function ListPage() {
     [fetchJson],
   )
 
+  /** The cap notice explains ONE sort click, so every OTHER control that moves the
+   *  query retires it — left standing it would explain an action several steps in the
+   *  past, about a column the user can no longer see declined. That is why these are
+   *  wrappers and not the setters themselves. */
   const handleFiltersChange = useCallback((next: Record<string, ColumnFilter>) => {
+    setSortCapped(false)
     setFilters(next)
+  }, [])
+
+  const chooseNamespace = useCallback((next: string | undefined) => {
+    setSortCapped(false)
+    setNamespace(next)
   }, [])
 
   /** Pretable's shift-click appends the new key at the LOWEST priority, so a
@@ -121,19 +146,25 @@ export function ListPage() {
     setSort([...capSortEntries(next)])
   }, [])
 
-  const browseQuery = useMemo(
-    () =>
-      canonicalBrowseQuery({
-        view,
-        // EXACT namespace, not a prefix: the rail selects one namespace and the
-        // server answers that question itself, so the rows and `total` describe the
-        // same set with no client-side narrowing after the fact.
-        ...(namespace === undefined ? {} : { namespace }),
-        ...toBrowseQuery(filters, sort),
-        ...(view === "timeline" && timelineSince !== undefined ? { since: timelineSince } : {}),
-      }),
-    [filters, sort, namespace, view, timelineSince],
-  )
+  const browseQuery = useMemo(() => {
+    const intent = toBrowseQuery(filters, sort)
+    return canonicalBrowseQuery({
+      view,
+      // EXACT namespace, not a prefix: the rail selects one namespace and the
+      // server answers that question itself, so the rows and `total` describe the
+      // same set with no client-side narrowing after the fact.
+      ...(namespace === undefined ? {} : { namespace }),
+      // Funnels travel between the views — they narrow the same question either one
+      // asks, and the rail that sets `namespace` is on screen in both. The header
+      // sort does NOT: `orderBy` decides which rows the window holds, not just their
+      // order, and `TimelineView` re-sorts what arrives by event time. Carried over,
+      // it would swap the sample under an unchanged window label, for a control that
+      // view does not show.
+      ...(intent.filters === undefined ? {} : { filters: intent.filters }),
+      ...(view === "list" && intent.orderBy !== undefined ? { orderBy: intent.orderBy } : {}),
+      ...(view === "timeline" && timelineSince !== undefined ? { since: timelineSince } : {}),
+    })
+  }, [filters, sort, namespace, view, timelineSince])
 
   // Search replaces the browse view entirely, so browse stops polling behind it.
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
@@ -268,7 +299,7 @@ export function ListPage() {
                 key={v}
                 type="button"
                 aria-pressed={view === v}
-                onClick={() => setView(v)}
+                onClick={() => chooseView(v)}
                 className={`h-9 px-3 text-sm ${
                   view === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50"
                 }`}
@@ -306,7 +337,7 @@ export function ListPage() {
         </div>
       </header>
       <div className="flex min-h-0 flex-1">
-        <FacetRail stats={stats} selected={namespace} onSelect={setNamespace} />
+        <FacetRail stats={stats} selected={namespace} onSelect={chooseNamespace} />
         <main className="min-w-0 flex-1 overflow-y-auto p-4">
           <BrowseErrorBanners
             errors={errorEntries}
