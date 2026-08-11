@@ -158,6 +158,10 @@ function forbidden(message: string, details: JsonObject = {}): JsonObject {
   }
 }
 
+function structuredResponseLog(value: unknown): string {
+  return `I0810 21:35:57.561354   55712 round_trippers.go:577] "Response Body" body=${JSON.stringify(JSON.stringify(value))}\n`
+}
+
 describe("probe manifest", () => {
   test("lists the exact stable probe IDs in plan order", () => {
     expect(ADMISSION_RBAC_NETWORK_PROBE_IDS).toEqual([
@@ -612,6 +616,112 @@ describe("probe command routing, evidence, and cleanup", () => {
     const [command, options] = execute.mock.calls[0] ?? []
     expect(command?.args).toContain("--v=8")
     expect(options?.sensitiveOutput).toBe(true)
+  })
+
+  test("routes v1.35 structured response bodies through quota, Pod Security, and RBAC validators", async () => {
+    const policy = await loadCompatibilityPolicy()
+    const quotaStatus = forbidden(
+      'pods "probe" is forbidden: exceeded quota: dawn-sandbox-quota, requested: requests.cpu=9',
+      { name: "probe", kind: "pods" },
+    )
+    const podSecurityStatus = forbidden(
+      'pods "probe" is forbidden: violates PodSecurity "restricted:latest": runAsNonRoot != true',
+      { name: "probe", kind: "pods" },
+    )
+    const secretStatus = forbidden(
+      `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
+      { kind: "secrets" },
+    )
+    const admissionRunner = (status: JsonObject) =>
+      fakeRunner((_command, options, index) =>
+        index === 0
+          ? stdinObject(options)
+          : index === 1
+            ? { exitCode: 1, body: "", stderr: structuredResponseLog(status) }
+            : {},
+      )
+
+    await runResourceQuotaProbe({
+      context,
+      kubeconfig,
+      runId,
+      policy,
+      execute: admissionRunner(quotaStatus),
+    })
+    await runRestrictedAdmissionProbe({
+      context,
+      kubeconfig,
+      runId,
+      policy,
+      execute: admissionRunner(podSecurityStatus),
+    })
+    await runSecretReadDeniedProbe({
+      context,
+      kubeconfig,
+      runId,
+      execute: fakeRunner(() => ({
+        exitCode: 1,
+        body: "",
+        stderr: structuredResponseLog(secretStatus),
+      })),
+    })
+  })
+
+  test("selects the final v1 Status from structured response body candidates", async () => {
+    const unrelated = forbidden(
+      'pods "probe" is forbidden: violates PodSecurity "restricted:latest": runAsNonRoot != true',
+      { kind: "pods" },
+    )
+    const expected = forbidden(
+      `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
+      { kind: "secrets" },
+    )
+
+    await expect(
+      runSecretReadDeniedProbe({
+        context,
+        kubeconfig,
+        runId,
+        execute: fakeRunner(() => ({
+          exitCode: 1,
+          body: "",
+          stderr: `${structuredResponseLog(unrelated)}${structuredResponseLog(expected)}${structuredResponseLog({ apiVersion: "v2", kind: "Status" })}`,
+        })),
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  test.each([
+    [
+      "unterminated body",
+      'I0810 round_trippers.go:577] "Response Body" body="{\\"kind\\":\\"Status\\"}\n',
+    ],
+    [
+      "unquoted body",
+      'I0810 round_trippers.go:577] "Response Body" body={"apiVersion":"v1","kind":"Status"}\n',
+    ],
+    [
+      "invalid decoded JSON",
+      `I0810 round_trippers.go:577] "Response Body" body=${JSON.stringify("{not-json")}\n`,
+    ],
+    [
+      "trailing fields",
+      `${structuredResponseLog(
+        forbidden(
+          `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
+          { kind: "secrets" },
+        ),
+      ).trimEnd()} extra="value"\n`,
+    ],
+  ])("rejects malformed structured klog %s", async (_name, stderr) => {
+    await expect(
+      runSecretReadDeniedProbe({
+        context,
+        kubeconfig,
+        runId,
+        execute: fakeRunner(() => ({ exitCode: 1, body: "", stderr })),
+      }),
+    ).rejects.toThrow(/valid Kubernetes Status JSON/i)
   })
 
   test("cleans a run-labeled RBAC object if mutation unexpectedly succeeds", async () => {

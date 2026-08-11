@@ -226,33 +226,62 @@ async function submitObject(
   })
 }
 
-function outputJson(result: CommandResult, name: string): unknown {
-  const stdout = result.stdout.toString("utf8")
-  try {
-    if (stdout.length > 0) return JSON.parse(stdout)
-  } catch {}
+function v1StatusCandidate(value: unknown): JsonObject | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    (value as JsonObject).apiVersion !== "v1" ||
+    (value as JsonObject).kind !== "Status"
+  ) {
+    return undefined
+  }
+  return value as JsonObject
+}
 
-  const responseBodies = result.stderr
-    .toString("utf8")
-    .split("\n")
-    .flatMap((line) => {
-      const marker = "Response Body: "
-      const index = line.indexOf(marker)
-      if (index === -1) return []
-      try {
-        return [JSON.parse(line.slice(index + marker.length))]
-      } catch {
-        return []
-      }
-    })
-    .filter(
-      (value): value is JsonObject =>
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        value.kind === "Status",
-    )
-  const status = responseBodies.at(-1)
+function parseJsonCandidate(value: string): JsonObject | undefined {
+  try {
+    return v1StatusCandidate(JSON.parse(value))
+  } catch {
+    return undefined
+  }
+}
+
+function structuredKlogStatus(line: string): JsonObject | undefined {
+  const marker = '] "Response Body" body='
+  const index = line.indexOf(marker)
+  if (index === -1) return undefined
+
+  const encodedBody = line.slice(index + marker.length)
+  let decodedBody: unknown
+  try {
+    decodedBody = JSON.parse(encodedBody)
+  } catch {
+    return undefined
+  }
+  if (typeof decodedBody !== "string") return undefined
+  return parseJsonCandidate(decodedBody)
+}
+
+function legacyKlogStatus(line: string): JsonObject | undefined {
+  const marker = "Response Body: "
+  const index = line.indexOf(marker)
+  return index === -1 ? undefined : parseJsonCandidate(line.slice(index + marker.length))
+}
+
+function outputJson(result: CommandResult, name: string): unknown {
+  const candidates: JsonObject[] = []
+  const stdout = result.stdout.toString("utf8")
+  if (stdout.length > 0) {
+    const candidate = parseJsonCandidate(stdout)
+    if (candidate !== undefined) candidates.push(candidate)
+  }
+
+  for (const line of result.stderr.toString("utf8").split("\n")) {
+    const candidate = structuredKlogStatus(line) ?? legacyKlogStatus(line)
+    if (candidate !== undefined) candidates.push(candidate)
+  }
+  const status = candidates.at(-1)
   if (status !== undefined) return status
   throw new Error(`${name} did not return valid Kubernetes Status JSON`)
 }
