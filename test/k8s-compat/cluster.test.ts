@@ -925,6 +925,49 @@ describe("namespace ownership and cleanup", () => {
     expect(terminate).toHaveBeenCalledExactlyOnceWith("SIGHUP")
   })
 
+  test.each([
+    { outcome: "passed", signal: "SIGINT" },
+    { outcome: "failed", signal: "SIGHUP" },
+    { outcome: "timed-out", signal: "SIGTERM" },
+  ] as const)(
+    "default termination re-sends $signal after $outcome cleanup",
+    async ({ outcome, signal }) => {
+      vi.useFakeTimers()
+      const processEvents = new EventEmitter()
+      const cleanupError = new Error("default-termination cleanup failed")
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true)
+      let registration: ReturnType<typeof registerOwnedResourceSignalCleanup> | undefined
+      try {
+        const cleanup =
+          outcome === "passed"
+            ? async (): Promise<void> => {}
+            : outcome === "failed"
+              ? async (): Promise<void> => Promise.reject(cleanupError)
+              : async (): Promise<void> => new Promise(() => undefined)
+        registration = registerOwnedResourceSignalCleanup([management], cleanup, {
+          emitter: processEvents,
+          timeoutMs: 25,
+        })
+
+        processEvents.emit(signal)
+        if (outcome === "timed-out") await vi.advanceTimersByTimeAsync(25)
+
+        await expect(registration.completion).resolves.toEqual(
+          outcome === "failed"
+            ? { signal, status: "failed", error: cleanupError }
+            : { signal, status: outcome },
+        )
+        expect(kill).toHaveBeenCalledExactlyOnceWith(process.pid, signal)
+        for (const registeredSignal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+          expect(processEvents.listenerCount(registeredSignal)).toBe(0)
+        }
+      } finally {
+        registration?.dispose()
+        kill.mockRestore()
+      }
+    },
+  )
+
   test("handles cleanup rejection after timeout without an unhandled rejection", async () => {
     vi.useFakeTimers()
     const processEvents = new EventEmitter()
