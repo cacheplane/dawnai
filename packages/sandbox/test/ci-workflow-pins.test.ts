@@ -183,6 +183,27 @@ const chartValues = readFileSync(
 const reaperImage = collectReaperImage(chartValues)
 
 describe("Kubernetes CI dependency pins", () => {
+  test("supplies the gated sandbox conformance inputs from the compatibility policy", () => {
+    const workflow = requireRecord(parse(ciWorkflow), "CI workflow")
+    const jobs = requireRecord(workflow.jobs, "CI workflow jobs")
+    const sandboxJob = requireRecord(jobs["sandbox-k8s"], "jobs.sandbox-k8s")
+    const step = requireNamedStep(
+      requireSteps(sandboxJob, "jobs.sandbox-k8s"),
+      "Real-cluster sandbox conformance + e2e",
+    )
+
+    expect(step.env).toEqual({
+      DAWN_TEST_K8S_EGRESS_CONTROL_URL: "http://dawn-egress-control:8080/",
+      DAWN_TEST_K8S_NS: "dawn-sandboxes",
+    })
+    expect(step.run).toContain(".github/kubernetes-compatibility.json")
+    expect(step.run).toContain("images?.sandboxWorkload")
+    expect(step.run).toContain("process.stdout.write(image)")
+    expect(normalizedExpression(step.run)).toContain(
+      "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration",
+    )
+  })
+
   test("uses the approved Node 24 Kind action in every active lane", () => {
     expect(ciPins.kindCommits).toEqual(
       Array.from({ length: 3 }, () => "ef37e7f390d99f746eb8b610417061a60e82a6cc"),

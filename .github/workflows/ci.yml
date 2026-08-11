@@ -720,7 +720,13 @@ jobs:
       - name: Real-cluster sandbox conformance + e2e
         env:
           DAWN_TEST_K8S_EGRESS_CONTROL_URL: http://dawn-egress-control:8080/
-        run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
+          DAWN_TEST_K8S_NS: dawn-sandboxes
+        run: |
+          DAWN_TEST_K8S_IMAGE="$(
+            node -e 'const { readFileSync } = require("node:fs"); const policy = JSON.parse(readFileSync(".github/kubernetes-compatibility.json", "utf8")); const image = policy?.images?.sandboxWorkload; if (typeof image !== "string" || image.length === 0) throw new Error("Missing images.sandboxWorkload"); process.stdout.write(image)'
+          )"
+          export DAWN_TEST_K8S_IMAGE
+          DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
 
       - name: Exercise PVC reaper
         run: sh test/k8s-smoke/assert-reaper.sh

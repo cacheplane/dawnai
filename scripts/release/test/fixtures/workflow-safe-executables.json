@@ -922,7 +922,7 @@
         "stepIndex": 12,
         "step": "Real-cluster sandbox conformance + e2e",
         "kind": "run",
-        "value": "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration"
+        "value": "DAWN_TEST_K8S_IMAGE=\"$(\n  node -e 'const { readFileSync } = require(\"node:fs\"); const policy = JSON.parse(readFileSync(\".github/kubernetes-compatibility.json\", \"utf8\")); const image = policy?.images?.sandboxWorkload; if (typeof image !== \"string\" || image.length === 0) throw new Error(\"Missing images.sandboxWorkload\"); process.stdout.write(image)'\n)\"\nexport DAWN_TEST_K8S_IMAGE\nDAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration\n"
       },
       {
         "classification": "safe",
