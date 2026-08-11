@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, relative, resolve } from "node:path"
 
@@ -7,9 +17,9 @@ import {
   ARTIFACT_DIRECTORY,
   assertExactStepAccounting,
   assertProviderAccounting,
-  assertVitestProviderAccounting,
   type CompatibilityReport,
   createCompatibilityReport,
+  createVitestProviderAccountingSession,
   getStepAccountingDiagnostics,
   persistCompatibilityReport,
   REPORT_SCHEMA_VERSION,
@@ -81,6 +91,16 @@ async function writeAccountingFixture(
     reportPath: await writeJson(directory, "vitest.json", report),
     manifestPath: await writeJson(directory, "expected-tests.json", manifest),
   }
+}
+
+async function recordAccountingFixture(
+  fixture: { readonly reportPath: string; readonly manifestPath: string },
+  phase: "provider-before-upgrade" | "provider-after-upgrade",
+): Promise<void> {
+  const session = await createVitestProviderAccountingSession({
+    manifestPath: fixture.manifestPath,
+  })
+  await session.record({ phase, reportPath: fixture.reportPath })
 }
 
 function sequenceClock(...timestamps: readonly string[]): () => Date {
@@ -338,28 +358,27 @@ describe("Vitest provider accounting", () => {
     const manifestPath = await writeJson(directory, "expected-tests.json", expectedTestsManifest())
 
     await expect(
-      assertVitestProviderAccounting({
-        reportPath: join(directory, "missing.json"),
-        manifestPath,
-        phase: "provider-before-upgrade",
-      }),
+      recordAccountingFixture(
+        { reportPath: join(directory, "missing.json"), manifestPath },
+        "provider-before-upgrade",
+      ),
     ).rejects.toThrow(/Vitest output.*missing/i)
   })
 
   test("rejects an empty assertion set", async () => {
     const fixture = await writeAccountingFixture(vitestJsonReport([]))
 
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
-    ).rejects.toThrow(/assertionResults.*empty/i)
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      /assertionResults.*empty/i,
+    )
   })
 
   test("rejects an unsuccessful Vitest run even when every assertion passed", async () => {
     const fixture = await writeAccountingFixture({ ...vitestJsonReport(), success: false })
 
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
-    ).rejects.toThrow(/Vitest output.*success.*true/i)
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      /Vitest output.*success.*true/i,
+    )
   })
 
   test.each([
@@ -415,9 +434,9 @@ describe("Vitest provider accounting", () => {
   ])("rejects %s assertion accounting", async (_case, assertions, expectedMessage) => {
     const fixture = await writeAccountingFixture(vitestJsonReport(assertions))
 
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
-    ).rejects.toThrow(expectedMessage)
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      expectedMessage,
+    )
   })
 
   test.each([
@@ -427,9 +446,9 @@ describe("Vitest provider accounting", () => {
   ])("rejects a nonzero %s suite counter", async (_case, counters) => {
     const fixture = await writeAccountingFixture(vitestJsonReport(undefined, counters))
 
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
-    ).rejects.toThrow(/suite counts must be zero/i)
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      /suite counts must be zero/i,
+    )
   })
 
   test("rejects duplicate observed assertion names deterministically", async () => {
@@ -441,9 +460,9 @@ describe("Vitest provider accounting", () => {
     ]
     const fixture = await writeAccountingFixture(vitestJsonReport(duplicateAssertions))
 
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
-    ).rejects.toThrow("Duplicate observed step IDs: provider test alpha, provider test zeta")
+    await expect(recordAccountingFixture(fixture, "provider-before-upgrade")).rejects.toThrow(
+      "Duplicate observed step IDs: provider test alpha, provider test zeta",
+    )
   })
 
   test.each([
@@ -510,11 +529,7 @@ describe("Vitest provider accounting", () => {
     )
 
     await expect(
-      assertVitestProviderAccounting({
-        reportPath,
-        manifestPath,
-        phase: "provider-before-upgrade",
-      }),
+      recordAccountingFixture({ reportPath, manifestPath }, "provider-before-upgrade"),
     ).rejects.toThrow(expectedMessage)
   })
 
@@ -523,8 +538,11 @@ describe("Vitest provider accounting", () => {
     async (phase) => {
       const fixture = await writeAccountingFixture(vitestJsonReport())
 
+      const session = await createVitestProviderAccountingSession({
+        manifestPath: fixture.manifestPath,
+      })
       await expect(
-        assertVitestProviderAccounting({ ...fixture, phase: phase as never }),
+        session.record({ reportPath: fixture.reportPath, phase: phase as never }),
       ).rejects.toThrow(/unknown provider phase/i)
     },
   )
@@ -532,7 +550,17 @@ describe("Vitest provider accounting", () => {
   test("selects one explicit phase and accepts only its exact all-passed set", async () => {
     const before = ["before alpha", "before zeta"]
     const after = ["after alpha", "after zeta"]
-    const fixture = await writeAccountingFixture(
+    const beforeFixture = await writeAccountingFixture(
+      vitestJsonReport(before.map((fullName) => ({ fullName, status: "passed" }))),
+      expectedTestsManifest({
+        providerPhases: {
+          "provider-before-upgrade": before,
+          "provider-after-upgrade": after,
+        },
+      }),
+    )
+
+    const afterFixture = await writeAccountingFixture(
       vitestJsonReport(before.map((fullName) => ({ fullName, status: "passed" }))),
       expectedTestsManifest({
         providerPhases: {
@@ -543,13 +571,180 @@ describe("Vitest provider accounting", () => {
     )
 
     await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-before-upgrade" }),
+      recordAccountingFixture(beforeFixture, "provider-before-upgrade"),
     ).resolves.toBeUndefined()
-    await expect(
-      assertVitestProviderAccounting({ ...fixture, phase: "provider-after-upgrade" }),
-    ).rejects.toThrow(
+    await expect(recordAccountingFixture(afterFixture, "provider-after-upgrade")).rejects.toThrow(
       /missing.*after alpha.*after zeta[\s\S]*unexpected.*before alpha.*before zeta/i,
     )
+  })
+})
+
+describe("Vitest provider accounting session", () => {
+  test("securely deletes a report only after successful validation", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    await session.record({
+      phase: "provider-before-upgrade",
+      reportPath: fixture.reportPath,
+    })
+
+    await expect(stat(fixture.reportPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("rejects duplicate phases even when they use distinct report paths", async () => {
+    const first = await writeAccountingFixture(vitestJsonReport())
+    const secondPath = await writeJson(
+      resolve(first.reportPath, ".."),
+      "second.json",
+      vitestJsonReport(),
+    )
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: first.manifestPath,
+    })
+
+    await session.record({ phase: "provider-before-upgrade", reportPath: first.reportPath })
+
+    await expect(
+      session.record({ phase: "provider-before-upgrade", reportPath: secondPath }),
+    ).rejects.toThrow(/duplicate.*provider-before-upgrade/i)
+  })
+
+  test("rejects reuse of one report path for the other phase", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    await session.record({
+      phase: "provider-before-upgrade",
+      reportPath: fixture.reportPath,
+    })
+
+    await expect(
+      session.record({ phase: "provider-after-upgrade", reportPath: fixture.reportPath }),
+    ).rejects.toThrow(/report path.*already|reuse/i)
+  })
+
+  test("rejects reuse of the same report identity through a hard link", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const aliasPath = resolve(fixture.reportPath, "../hard-link.json")
+    await link(fixture.reportPath, aliasPath)
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    await session.record({
+      phase: "provider-before-upgrade",
+      reportPath: fixture.reportPath,
+    })
+
+    await expect(
+      session.record({ phase: "provider-after-upgrade", reportPath: aliasPath }),
+    ).rejects.toThrow(/report identity.*already|reuse/i)
+  })
+
+  test("releases phase and path reservations after failed validation so retry can pass", async () => {
+    const fixture = await writeAccountingFixture({ ...vitestJsonReport(), success: false })
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    await expect(
+      session.record({ phase: "provider-before-upgrade", reportPath: fixture.reportPath }),
+    ).rejects.toThrow(/success must be true/i)
+    await writeFile(fixture.reportPath, JSON.stringify(vitestJsonReport()), "utf8")
+
+    await expect(
+      session.record({ phase: "provider-before-upgrade", reportPath: fixture.reportPath }),
+    ).resolves.toBeUndefined()
+    await expect(stat(fixture.reportPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("guards concurrent duplicate phase and path records", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const otherPath = await writeJson(
+      resolve(fixture.reportPath, ".."),
+      "other.json",
+      vitestJsonReport(),
+    )
+    const phaseSession = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    const duplicatePhase = await Promise.allSettled([
+      phaseSession.record({
+        phase: "provider-before-upgrade",
+        reportPath: fixture.reportPath,
+      }),
+      phaseSession.record({ phase: "provider-before-upgrade", reportPath: otherPath }),
+    ])
+    expect(duplicatePhase.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"])
+
+    const pathFixture = await writeAccountingFixture(vitestJsonReport())
+    const pathSession = await createVitestProviderAccountingSession({
+      manifestPath: pathFixture.manifestPath,
+    })
+    const duplicatePath = await Promise.allSettled([
+      pathSession.record({
+        phase: "provider-before-upgrade",
+        reportPath: pathFixture.reportPath,
+      }),
+      pathSession.record({
+        phase: "provider-after-upgrade",
+        reportPath: pathFixture.reportPath,
+      }),
+    ])
+    expect(duplicatePath.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"])
+  })
+
+  test("finish seals an incomplete session and lists missing phases deterministically", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    expect(() => session.finish()).toThrow(
+      "Missing provider phases: provider-after-upgrade, provider-before-upgrade",
+    )
+    await expect(
+      session.record({ phase: "provider-before-upgrade", reportPath: fixture.reportPath }),
+    ).rejects.toThrow(/finished/i)
+  })
+
+  test("finish seals against an in-flight record before validation or deletion completes", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+
+    const pendingRecord = session.record({
+      phase: "provider-before-upgrade",
+      reportPath: fixture.reportPath,
+    })
+
+    expect(() => session.finish()).toThrow(/recording.*provider-before-upgrade/i)
+    await expect(pendingRecord).rejects.toThrow(/finished/i)
+    await expect(stat(fixture.reportPath)).resolves.toBeDefined()
+  })
+
+  test("finish accepts both distinct phases and rejects later records", async () => {
+    const directory = await createTemporaryDirectory("dawn-k8s-accounting-complete-")
+    const manifestPath = await writeJson(directory, "expected-tests.json", expectedTestsManifest())
+    const beforePath = await writeJson(directory, "before.json", vitestJsonReport())
+    const afterPath = await writeJson(directory, "after.json", vitestJsonReport())
+    const laterPath = await writeJson(directory, "later.json", vitestJsonReport())
+    const session = await createVitestProviderAccountingSession({ manifestPath })
+
+    await session.record({ phase: "provider-before-upgrade", reportPath: beforePath })
+    await session.record({ phase: "provider-after-upgrade", reportPath: afterPath })
+
+    expect(() => session.finish()).not.toThrow()
+    await expect(
+      session.record({ phase: "provider-after-upgrade", reportPath: laterPath }),
+    ).rejects.toThrow(/finished/i)
   })
 })
 

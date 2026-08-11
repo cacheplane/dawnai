@@ -1,5 +1,16 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 
 export const REPORT_SCHEMA_VERSION = 1 as const
@@ -78,10 +89,18 @@ export interface ProviderAccountingInput {
 
 export type ProviderPhase = "provider-before-upgrade" | "provider-after-upgrade"
 
-export interface VitestProviderAccountingOptions {
-  readonly reportPath: string
+export interface VitestProviderAccountingSessionOptions {
   readonly manifestPath: string
+}
+
+export interface VitestProviderAccountingRecord {
+  readonly reportPath: string
   readonly phase: ProviderPhase
+}
+
+export interface VitestProviderAccountingSession {
+  record(options: VitestProviderAccountingRecord): Promise<void>
+  finish(): void
 }
 
 export interface ReportPersistenceDependencies {
@@ -430,21 +449,25 @@ async function readJsonFile(path: string, name: string): Promise<unknown> {
   return parseJson(text, name)
 }
 
-function parseExpectedProviderIds(value: unknown, phase: ProviderPhase): readonly string[] {
+function parseExpectedProviderManifest(
+  value: unknown,
+): Readonly<Record<ProviderPhase, readonly string[]>> {
   const manifest = expectObject(value, "Expected-test manifest")
   const providerPhases = expectObject(
     manifest.providerPhases,
     "Expected-test manifest providerPhases",
   )
+  const phases = {} as Record<ProviderPhase, readonly string[]>
   for (const providerPhase of PROVIDER_PHASES) {
     const ids = expectStringArray(
       providerPhases[providerPhase],
       `Expected-test manifest ${providerPhase}`,
     )
     assertNoDuplicateIds(ids, "expected")
+    phases[providerPhase] = Object.freeze([...ids])
   }
   expectStringArray(manifest.probeIds, "Expected-test manifest probeIds")
-  return expectStringArray(providerPhases[phase], `Expected-test manifest ${phase}`)
+  return Object.freeze(phases)
 }
 
 function parseVitestProviderReport(value: unknown): {
@@ -499,20 +522,140 @@ function parseVitestProviderReport(value: unknown): {
   }
 }
 
-export async function assertVitestProviderAccounting(
-  options: VitestProviderAccountingOptions,
-): Promise<void> {
-  if (!PROVIDER_PHASE_SET.has(options.phase)) {
-    throw new Error(`Unknown provider phase: ${String(options.phase)}`)
+function reportFileError(error: unknown, path: string): Error {
+  const missing =
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === "ENOENT"
+  return new Error(`Vitest output file is ${missing ? "missing" : "unreadable"}: ${path}`, {
+    cause: error,
+  })
+}
+
+function fileIdentity(status: {
+  readonly dev: number | bigint
+  readonly ino: number | bigint
+}): string {
+  return `${status.dev}:${status.ino}`
+}
+
+class DefaultVitestProviderAccountingSession implements VitestProviderAccountingSession {
+  readonly #expected: Readonly<Record<ProviderPhase, readonly string[]>>
+  readonly #recordedPhases = new Set<ProviderPhase>()
+  readonly #pendingPhases = new Set<ProviderPhase>()
+  readonly #usedPaths = new Set<string>()
+  readonly #pendingPaths = new Set<string>()
+  readonly #usedCanonicalPaths = new Set<string>()
+  readonly #pendingCanonicalPaths = new Set<string>()
+  readonly #usedIdentities = new Set<string>()
+  readonly #pendingIdentities = new Set<string>()
+  #finished = false
+
+  constructor(expected: Readonly<Record<ProviderPhase, readonly string[]>>) {
+    this.#expected = expected
   }
-  const phase = options.phase as ProviderPhase
-  const [report, manifest] = await Promise.all([
-    readJsonFile(options.reportPath, "Vitest output"),
-    readJsonFile(options.manifestPath, "Expected-test manifest"),
-  ])
-  const expectedIds = parseExpectedProviderIds(manifest, phase)
-  const parsedReport = parseVitestProviderReport(report)
-  assertProviderAccounting({ expectedIds, ...parsedReport })
+
+  async record(options: VitestProviderAccountingRecord): Promise<void> {
+    if (this.#finished) {
+      throw new Error("Vitest provider accounting session is finished")
+    }
+    if (!PROVIDER_PHASE_SET.has(options.phase)) {
+      throw new Error(`Unknown provider phase: ${String(options.phase)}`)
+    }
+    const phase = options.phase as ProviderPhase
+    if (this.#recordedPhases.has(phase) || this.#pendingPhases.has(phase)) {
+      throw new Error(`Duplicate provider phase: ${phase}`)
+    }
+    const reportPath = resolve(expectNonEmptyString(options.reportPath, "Vitest output path"))
+    if (this.#usedPaths.has(reportPath) || this.#pendingPaths.has(reportPath)) {
+      throw new Error(`Vitest report path is already reserved; reuse is forbidden: ${reportPath}`)
+    }
+
+    this.#pendingPhases.add(phase)
+    this.#pendingPaths.add(reportPath)
+    let canonicalPath: string | undefined
+    let identity: string | undefined
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      let initialStatus: Awaited<ReturnType<typeof lstat>>
+      try {
+        initialStatus = await lstat(reportPath)
+      } catch (error) {
+        throw reportFileError(error, reportPath)
+      }
+      if (!initialStatus.isFile() || initialStatus.isSymbolicLink()) {
+        throw new Error(`Vitest output must be a regular non-symlink file: ${reportPath}`)
+      }
+      canonicalPath = await realpath(reportPath)
+      if (
+        this.#usedCanonicalPaths.has(canonicalPath) ||
+        this.#pendingCanonicalPaths.has(canonicalPath)
+      ) {
+        throw new Error(`Vitest report canonical path is already reserved; reuse is forbidden`)
+      }
+      this.#pendingCanonicalPaths.add(canonicalPath)
+
+      handle = await open(reportPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+      const openedStatus = await handle.stat()
+      identity = fileIdentity(openedStatus)
+      if (fileIdentity(initialStatus) !== identity) {
+        throw new Error("Vitest report identity changed while opening")
+      }
+      if (this.#usedIdentities.has(identity) || this.#pendingIdentities.has(identity)) {
+        throw new Error("Vitest report identity is already reserved; reuse is forbidden")
+      }
+      this.#pendingIdentities.add(identity)
+
+      const report = parseJson(await handle.readFile("utf8"), "Vitest output")
+      const parsedReport = parseVitestProviderReport(report)
+      assertProviderAccounting({ expectedIds: this.#expected[phase], ...parsedReport })
+      if (this.#finished) {
+        throw new Error("Vitest provider accounting session finished before record completed")
+      }
+
+      const currentStatus = await lstat(reportPath)
+      if (!currentStatus.isFile() || fileIdentity(currentStatus) !== identity) {
+        throw new Error("Vitest report identity changed before secure deletion")
+      }
+      await unlink(reportPath)
+
+      this.#recordedPhases.add(phase)
+      this.#usedPaths.add(reportPath)
+      this.#usedCanonicalPaths.add(canonicalPath)
+      this.#usedIdentities.add(identity)
+    } finally {
+      await handle?.close().catch(() => undefined)
+      this.#pendingPhases.delete(phase)
+      this.#pendingPaths.delete(reportPath)
+      if (canonicalPath !== undefined) this.#pendingCanonicalPaths.delete(canonicalPath)
+      if (identity !== undefined) this.#pendingIdentities.delete(identity)
+    }
+  }
+
+  finish(): void {
+    if (this.#finished) {
+      throw new Error("Vitest provider accounting session is already finished")
+    }
+    this.#finished = true
+    const recording = [...this.#pendingPhases].sort(compareStrings)
+    if (recording.length > 0) {
+      throw new Error(`Cannot finish while recording provider phases: ${recording.join(", ")}`)
+    }
+    const missing = PROVIDER_PHASES.filter((phase) => !this.#recordedPhases.has(phase)).sort(
+      compareStrings,
+    )
+    if (missing.length > 0) {
+      throw new Error(`Missing provider phases: ${missing.join(", ")}`)
+    }
+  }
+}
+
+export async function createVitestProviderAccountingSession(
+  options: VitestProviderAccountingSessionOptions,
+): Promise<VitestProviderAccountingSession> {
+  const manifest = await readJsonFile(options.manifestPath, "Expected-test manifest")
+  return new DefaultVitestProviderAccountingSession(parseExpectedProviderManifest(manifest))
 }
 
 function expectSafeFilename(filename: string): string {

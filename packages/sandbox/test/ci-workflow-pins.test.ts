@@ -196,9 +196,12 @@ describe("Kubernetes CI dependency pins", () => {
       DAWN_TEST_K8S_EGRESS_CONTROL_URL: "http://dawn-egress-control:8080/",
       DAWN_TEST_K8S_NS: "dawn-sandboxes",
     })
-    expect(step.run).toContain(".github/kubernetes-compatibility.json")
-    expect(step.run).toContain("images?.sandboxWorkload")
-    expect(step.run).toContain("process.stdout.write(image)")
+    expect(step.run).toContain("pnpm exec tsx -e")
+    expect(step.run).toContain("loadCompatibilityPolicy")
+    expect(step.run).toContain("policy.images.sandboxWorkload")
+    expect(step.run).not.toContain("JSON.parse")
+    expect(step.run).not.toContain("readFileSync")
+    expect(step.run).not.toMatch(/sha256.*\{64\}/i)
     expect(normalizedExpression(step.run)).toContain(
       "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration",
     )

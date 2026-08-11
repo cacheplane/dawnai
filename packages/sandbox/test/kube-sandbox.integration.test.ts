@@ -9,6 +9,15 @@ import {
 import { describe, expect, test } from "vitest"
 import { kubernetesSandbox } from "../src/index.ts"
 import { runProviderConformance } from "../src/testing/index.ts"
+import {
+  assertDnsEvidence,
+  assertEgressEvidence,
+  assertRestrictedSecurityEvidence,
+  buildDnsProbeCommand,
+  buildEgressProbeCommand,
+  buildRestrictedSecurityProbeCommand,
+  parseEgressControlUrl,
+} from "./support/kube-conformance-evidence.ts"
 
 // Real-cluster lane. The compatibility harness supplies a short-lived token
 // kubeconfig and all live inputs; ordinary package tests skip this entire suite.
@@ -24,7 +33,9 @@ function requiredLiveEnvironment(name: string): string {
 
 const IMAGE = requiredLiveEnvironment("DAWN_TEST_K8S_IMAGE")
 const NS = requiredLiveEnvironment("DAWN_TEST_K8S_NS")
-const EGRESS_CONTROL_URL = requiredLiveEnvironment("DAWN_TEST_K8S_EGRESS_CONTROL_URL")
+const EGRESS_CONTROL_URL = enabled
+  ? parseEgressControlUrl(requiredLiveEnvironment("DAWN_TEST_K8S_EGRESS_CONTROL_URL"))
+  : ""
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
 const make = () => kubernetesSandbox({ image: IMAGE, namespace: NS, startupTimeoutMs: 120_000 })
 
@@ -35,20 +46,6 @@ function liveClients(): { readonly core: CoreV1Api; readonly networking: Network
     core: kubeconfig.makeApiClient(CoreV1Api),
     networking: kubeconfig.makeApiClient(NetworkingV1Api),
   }
-}
-
-function requireStatusField(output: string, field: string): string {
-  const match = new RegExp(`^${field}:\\s*(\\S+)\\s*$`, "m").exec(output)
-  expect(match, `/proc/self/status must contain ${field}`).not.toBeNull()
-  return match?.[1] ?? ""
-}
-
-function expectWriteResult(
-  output: string,
-  target: string,
-  expected: "writable" | "read-only",
-): void {
-  expect(output, `${target} must be ${expected}`).toContain(`DAWN_WRITE_${target}=${expected}`)
 }
 
 async function waitForPodDeletion(core: CoreV1Api, name: string): Promise<void> {
@@ -103,43 +100,18 @@ describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000
       expect(pvc.status?.phase).toBe("Bound")
 
       const probe = await sandbox.exec.runCommand(
-        {
-          command: [
-            "cat /proc/self/status",
-            "for target in etc workspace tmp run; do",
-            '  case "$target" in',
-            '    etc) path="/etc/dawn-compat-write" ;;',
-            '    *) path="/$target/dawn-compat-write" ;;',
-            "  esac",
-            '  if touch "$path" >/dev/null 2>&1; then',
-            '    echo "DAWN_WRITE_$target=writable"',
-            "  else",
-            '    echo "DAWN_WRITE_$target=read-only"',
-            "  fi",
-            "done",
-            'token_path="/var/run/secrets/kubernetes.io/serviceaccount/token"',
-            'if [ -e "$token_path" ]; then echo "DAWN_SERVICEACCOUNT_TOKEN=present"; else echo "DAWN_SERVICEACCOUNT_TOKEN=absent"; fi',
-          ].join("\n"),
-        },
+        { command: buildRestrictedSecurityProbeCommand() },
         ctx(sandbox.workspaceRoot),
       )
 
       expect(probe.exitCode, probe.stderr).toBe(0)
-      expect(requireStatusField(probe.stdout, "CapEff")).toMatch(/^0+$/)
-      expect(requireStatusField(probe.stdout, "NoNewPrivs")).toBe("1")
-      expect(requireStatusField(probe.stdout, "Seccomp")).toBe("2")
-      expectWriteResult(probe.stdout, "etc", "read-only")
-      expectWriteResult(probe.stdout, "workspace", "writable")
-      expectWriteResult(probe.stdout, "tmp", "writable")
-      expectWriteResult(probe.stdout, "run", "writable")
-      expect(probe.stdout).toContain("DAWN_SERVICEACCOUNT_TOKEN=absent")
+      assertRestrictedSecurityEvidence(probe.stdout)
     } finally {
       await provider.destroy(threadId)
     }
   })
 
   test("network deny blocks egress while DNS remains available", async () => {
-    const controlHostname = new URL(EGRESS_CONTROL_URL).hostname
     const provider = make()
     const threadId = `network-${randomUUID().slice(0, 8)}`
     try {
@@ -149,29 +121,24 @@ describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000
         signal: ctx("/").signal,
       })
       const dns = await sandbox.exec.runCommand(
-        {
-          command: `node -e 'require("node:dns").promises.lookup(${JSON.stringify(controlHostname)}).then(({ address }) => console.log(address)).catch((error) => { console.error(error); process.exit(1) })'`,
-        },
+        { command: buildDnsProbeCommand(EGRESS_CONTROL_URL) },
         ctx(sandbox.workspaceRoot),
       )
       expect(dns.exitCode, dns.stderr).toBe(0)
-      expect(dns.stdout.trim()).not.toBe("")
+      assertDnsEvidence(dns.stdout)
 
       const fetchResult = await sandbox.exec.runCommand(
-        {
-          command: `node -e 'fetch(${JSON.stringify(EGRESS_CONTROL_URL)}, { signal: AbortSignal.timeout(5000) }).then((response) => { console.log("REACHED " + response.status); process.exit(0) }).catch(() => { console.log("BLOCKED"); process.exit(7) })'`,
-        },
+        { command: buildEgressProbeCommand(EGRESS_CONTROL_URL) },
         ctx(sandbox.workspaceRoot),
       )
       expect(fetchResult.exitCode).toBe(7)
-      expect(fetchResult.stdout).toContain("BLOCKED")
+      assertEgressEvidence(fetchResult.stdout, "blocked")
     } finally {
       await provider.destroy(threadId)
     }
   })
 
   test("chart backstop blocks allow-mode sandbox egress without a per-thread policy", async () => {
-    const controlHostname = new URL(EGRESS_CONTROL_URL).hostname
     const provider = make()
     const threadId = `egress-${randomUUID().slice(0, 8)}`
     try {
@@ -190,22 +157,18 @@ describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000
       expect(perThreadPolicy).toBeUndefined()
 
       const dns = await sandbox.exec.runCommand(
-        {
-          command: `node -e 'require("node:dns").promises.lookup(${JSON.stringify(controlHostname)}).then(({ address }) => console.log(address)).catch((error) => { console.error(error); process.exit(1) })'`,
-        },
+        { command: buildDnsProbeCommand(EGRESS_CONTROL_URL) },
         ctx(sandbox.workspaceRoot),
       )
       expect(dns.exitCode, dns.stderr).toBe(0)
-      expect(dns.stdout.trim()).not.toBe("")
+      assertDnsEvidence(dns.stdout)
 
       const fetchResult = await sandbox.exec.runCommand(
-        {
-          command: `node -e 'fetch(${JSON.stringify(EGRESS_CONTROL_URL)}, { signal: AbortSignal.timeout(5000) }).then((response) => { console.log("REACHED " + response.status); process.exit(0) }).catch(() => { console.log("BLOCKED"); process.exit(7) })'`,
-        },
+        { command: buildEgressProbeCommand(EGRESS_CONTROL_URL) },
         ctx(sandbox.workspaceRoot),
       )
-      expect(fetchResult.exitCode).not.toBe(0)
-      expect(fetchResult.stdout).toContain("BLOCKED")
+      expect(fetchResult.exitCode).toBe(7)
+      assertEgressEvidence(fetchResult.stdout, "blocked")
     } finally {
       await provider.destroy(threadId)
     }
