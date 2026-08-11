@@ -25,5 +25,14 @@
       "kubernetesSandbox (real cluster) updates an existing owned NetworkPolicy on reacquire"
     ]
   },
-  "probeIds": []
+  "probeIds": [
+    "namespace.sandbox-secrets-empty",
+    "network.control-ready",
+    "admission.resource-quota",
+    "admission.limit-range",
+    "admission.restricted.before-upgrade",
+    "rbac.secret-read-denied",
+    "rbac.role-mutation-denied",
+    "rbac.outside-namespace-denied"
+  ]
 }

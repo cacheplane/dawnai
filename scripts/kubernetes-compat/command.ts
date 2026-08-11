@@ -19,6 +19,7 @@ export interface CommandExecutionOptions {
   readonly sensitiveOutput?: boolean
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
+  readonly acceptedExitCodes?: readonly number[]
 }
 
 interface ResolvedCommandExecutionOptions {
@@ -30,6 +31,7 @@ interface ResolvedCommandExecutionOptions {
   readonly sensitiveOutput: boolean
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
+  readonly acceptedExitCodes: ReadonlySet<number>
 }
 
 export type CommandSpawnOptions = SpawnOptionsWithStdioTuple<"pipe", "pipe", "pipe"> & {
@@ -56,14 +58,14 @@ export type CommandOutcome =
 
 export interface SerializedCommandResult {
   readonly command: Command
-  readonly outcome: { readonly kind: "exit"; readonly exitCode: 0 }
+  readonly outcome: { readonly kind: "exit"; readonly exitCode: number }
 }
 
 export interface CommandResult {
   readonly command: Command
   readonly stdout: Buffer
   readonly stderr: Buffer
-  readonly exitCode: 0
+  readonly exitCode: number
   readonly signal: null
   toJSON(): SerializedCommandResult
 }
@@ -136,6 +138,14 @@ function resolveOptions(options: CommandExecutionOptions): ResolvedCommandExecut
   ) {
     throw new Error("Command stdin must be a string or Uint8Array")
   }
+  const acceptedExitCodes = options.acceptedExitCodes ?? []
+  if (
+    !Array.isArray(acceptedExitCodes) ||
+    acceptedExitCodes.some((code) => !Number.isSafeInteger(code) || code <= 0 || code > 255) ||
+    new Set(acceptedExitCodes).size !== acceptedExitCodes.length
+  ) {
+    throw new Error("Command accepted exit codes must be unique integers between 1 and 255")
+  }
   return {
     timeoutMs: resolvePositiveInteger(
       options.timeoutMs,
@@ -153,6 +163,7 @@ function resolveOptions(options: CommandExecutionOptions): ResolvedCommandExecut
       "Command stderr limit",
     ),
     sensitiveOutput: options.sensitiveOutput === true,
+    acceptedExitCodes: new Set(acceptedExitCodes),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
@@ -232,14 +243,21 @@ class CompletedCommandResult implements CommandResult {
   readonly command: Command
   readonly stdout: Buffer
   readonly stderr: Buffer
-  readonly exitCode = 0 as const
+  readonly exitCode: number
   readonly signal = null
   readonly #sensitiveOutput: boolean
 
-  constructor(command: Command, stdout: Buffer, stderr: Buffer, sensitiveOutput: boolean) {
+  constructor(
+    command: Command,
+    stdout: Buffer,
+    stderr: Buffer,
+    exitCode: number,
+    sensitiveOutput: boolean,
+  ) {
     this.command = safeCommand(command, sensitiveOutput)
     this.stdout = stdout
     this.stderr = stderr
+    this.exitCode = exitCode
     this.#sensitiveOutput = sensitiveOutput
     Object.defineProperties(this, {
       stdout: { value: stdout, enumerable: false, writable: false, configurable: false },
@@ -250,7 +268,7 @@ class CompletedCommandResult implements CommandResult {
   toJSON(): SerializedCommandResult {
     return {
       command: safeCommand(this.command, this.#sensitiveOutput),
-      outcome: { kind: "exit", exitCode: 0 },
+      outcome: { kind: "exit", exitCode: this.exitCode },
     }
   }
 }
@@ -364,7 +382,7 @@ export function createCommandExecutor(
         child.stdin.off("error", onStdinError)
       }
 
-      const settle = (error?: Error): void => {
+      const settle = (error?: Error, exitCode = 0): void => {
         if (settled) {
           return
         }
@@ -379,6 +397,7 @@ export function createCommandExecutor(
             normalizedCommand,
             Buffer.concat(stdout.chunks, stdout.bytes),
             Buffer.concat(stderr.chunks, stderr.bytes),
+            exitCode,
             options.sensitiveOutput,
           ),
         )
@@ -472,8 +491,8 @@ export function createCommandExecutor(
           settle(createError(pendingFailure, stderr))
           return
         }
-        if (code === 0) {
-          settle()
+        if (code === 0 || (code !== null && options.acceptedExitCodes.has(code))) {
+          settle(undefined, code ?? 0)
           return
         }
         if (signal !== null) {

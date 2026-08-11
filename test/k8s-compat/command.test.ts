@@ -253,6 +253,44 @@ describe("shell-free command executor", () => {
     })
   })
 
+  test("returns bounded output for an explicitly accepted nonzero exit", async () => {
+    const command: Command = {
+      file: process.execPath,
+      args: [
+        "-e",
+        'process.stdout.write("structured status"); process.stderr.write("diagnostic"); process.exit(1)',
+      ],
+    }
+
+    const result = await executeCommand(command, {
+      ...CONTROLLED_COMMAND_OPTIONS,
+      acceptedExitCodes: [1],
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout.toString("utf8")).toBe("structured status")
+    expect(result.stderr.toString("utf8")).toBe("diagnostic")
+    expect(result.toJSON()).toEqual({
+      command,
+      outcome: { kind: "exit", exitCode: 1 },
+    })
+  })
+
+  test("rejects invalid or duplicate accepted exit codes before spawning", async () => {
+    const spawner = vi.fn<CommandSpawner>()
+    const executor = createCommandExecutor(spawner)
+
+    for (const acceptedExitCodes of [[0], [1, 1], [-1], [256], [1.5]]) {
+      await expect(
+        executor(
+          { file: "unused", args: [] },
+          { ...CONTROLLED_COMMAND_OPTIONS, acceptedExitCodes },
+        ),
+      ).rejects.toThrow(/accepted exit codes/i)
+    }
+    expect(spawner).not.toHaveBeenCalled()
+  })
+
   test.skipIf(process.platform === "win32")("reports signal termination", async () => {
     const error = await rejectedError(
       executeCommand(
