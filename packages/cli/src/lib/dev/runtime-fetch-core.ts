@@ -48,7 +48,7 @@ import {
   dawnErrorCodeOf,
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
-import { threadAccessBootLine } from "./thread-access.js"
+import { threadAccessBootLine, validateThreadAccessPolicy } from "./thread-access.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
@@ -105,6 +105,37 @@ class MissingStoreError extends Error {
 function requireStore<T>(store: T | undefined, what: string): T {
   if (store) return store
   throw new MissingStoreError(what)
+}
+
+/**
+ * A resolved thread-access policy that is not a policy. Raised at boot, from
+ * here rather than from the loader, because this is the ONE seam all three
+ * resolution layers pass through — the disk probe validates on its way out, but
+ * an injected `options.threadAccess` and a hand-built `modules.threadAccess`
+ * never touch it, and both cross a boundary where the type is erased.
+ *
+ * A local class, not `CliError`: `../output.js` is node-only and this module is
+ * in the `@dawn-ai/cli/fetch` graph. `dawnErrorCodeOf` reads the code back, the
+ * same way it does for `MissingStoreError`.
+ */
+class ThreadAccessPolicyError extends Error {
+  readonly code = "DAWN_E3003"
+  constructor(source: string, reason: string) {
+    super(
+      `Thread access policy from ${source} is not a valid policy: ${reason}. ` +
+        "Dawn will not boot with a policy it cannot apply, because every thread endpoint would be ungated.",
+    )
+    this.name = "ThreadAccessPolicyError"
+  }
+}
+
+function threadAccessSourceLabel(source: {
+  readonly fromManifest: boolean
+  readonly fromOptions: boolean
+}): string {
+  if (source.fromOptions) return "the runtime options"
+  if (source.fromManifest) return "the build manifest"
+  return "src/thread-access.ts"
 }
 
 /**
@@ -283,16 +314,25 @@ export async function createRuntimeFetchHandler(
     options.threadAccess ??
     options.modules?.threadAccess ??
     (await fallbacks?.loadThreadAccess?.(options.appRoot))
+  const threadAccessSource = {
+    fromManifest: options.modules?.threadAccess !== undefined,
+    fromOptions: options.threadAccess !== undefined,
+    resolved: threadAccess !== undefined,
+  }
+  // Validated HERE, not only in the loader, so no layer can bypass the check:
+  // the disk probe validates on its way out, but an injected policy and a
+  // hand-built manifest entry both arrive with their types erased. Re-running
+  // it on the disk value costs one shape check per boot and removes the
+  // "which layer validated this?" question entirely.
+  if (threadAccess !== undefined) {
+    const reason = validateThreadAccessPolicy(threadAccess)
+    if (reason)
+      throw new ThreadAccessPolicyError(threadAccessSourceLabel(threadAccessSource), reason)
+  }
   // One line per boot, and the only signal an operator has that a policy
-  // vanished. Emitted AFTER resolution, so a DAWN_E3003 throw pre-empts it: a
-  // boot that failed never claims to have bound anything.
-  console.log(
-    threadAccessBootLine({
-      fromManifest: options.modules?.threadAccess !== undefined,
-      fromOptions: options.threadAccess !== undefined,
-      resolved: threadAccess !== undefined,
-    }),
-  )
+  // vanished. Emitted AFTER resolution and validation, so any DAWN_E3003
+  // pre-empts it: a boot that failed never claims to have bound anything.
+  console.log(threadAccessBootLine(threadAccessSource))
   // `requestStores` makes the boot resolution below OPTIONAL, but only on a
   // runtime that has no filesystem to fall back to. Every node caller keeps
   // resolving exactly as before (it has `fallbacks`); an edge caller that

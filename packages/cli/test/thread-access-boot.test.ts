@@ -55,6 +55,29 @@ async function bootWithLog(
   }
 }
 
+/** Boot, expecting a rejection; fails loudly if the handler comes up instead. */
+async function bootFailure(
+  options: Parameters<typeof createRuntimeFetchHandler>[0],
+): Promise<{ code: unknown; message: string }> {
+  try {
+    const handler = await createRuntimeFetchHandler(options)
+    cleanup.push(() => handler.close())
+  } catch (error) {
+    return {
+      code: (error as { readonly code?: unknown }).code,
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+  throw new Error(
+    "the handler booted instead of rejecting — the app would run with a broken policy",
+  )
+}
+
+/** An app whose only policy is the given (malformed) source on disk. */
+async function diskPolicyApp(source: string): Promise<{ appRoot: string }> {
+  return { appRoot: await fixtureApp({ "src/thread-access.ts": source }) }
+}
+
 describe("thread-access boot resolution", () => {
   it("logs that there is no policy for an app with no policy file", async () => {
     const appRoot = await fixtureApp()
@@ -79,6 +102,57 @@ describe("thread-access boot resolution", () => {
     await expect(createRuntimeFetchHandler({ appRoot })).rejects.toMatchObject({
       code: "DAWN_E3003",
     })
+  })
+
+  it("rejects a malformed INJECTED policy exactly as it rejects a malformed disk one", async () => {
+    // Three layers resolve a policy; all three must be validated at the same
+    // seam or one of them is a way in. Types are erased at every boundary an
+    // embedder crosses, so `fallback` being required in `ThreadAccessPolicy` is
+    // documentation, not enforcement.
+    const appRoot = await fixtureApp()
+    const malformed = { read: () => ({ decision: "allow" }) } as unknown as ThreadAccessPolicy
+    const injected = await bootFailure({ appRoot, threadAccess: malformed })
+    const onDisk = await bootFailure({
+      ...(await diskPolicyApp("export default { read: () => ({ decision: 'allow' }) }\n")),
+    })
+
+    expect(injected.code).toBe("DAWN_E3003")
+    expect(onDisk.code).toBe("DAWN_E3003")
+    // Same cause named the same way, differing only in where it came from.
+    expect(injected.message).toContain("`fallback` is missing or is not a function")
+    expect(onDisk.message).toContain("`fallback` is missing or is not a function")
+    expect(injected.message).toContain("the runtime options")
+  })
+
+  it("rejects a malformed policy handed straight in through the build manifest", async () => {
+    // The manifest layer has its own guard in `loadStaticModules`, but an edge
+    // embed that constructs `DawnStaticModules` itself never goes through it.
+    const appRoot = await fixtureApp()
+    const modules = {
+      routes: [],
+      threadAccess: { fallback: "nope" } as unknown as ThreadAccessPolicy,
+    }
+    const failure = await bootFailure({ appRoot, modules })
+    expect(failure.code).toBe("DAWN_E3003")
+    expect(failure.message).toContain("the build manifest")
+  })
+
+  it("does not log a boot line for a policy it rejected", async () => {
+    // The line must never claim a binding that did not happen.
+    const appRoot = await fixtureApp()
+    const lines: string[] = []
+    const log = vi.spyOn(console, "log").mockImplementation((line: unknown) => {
+      lines.push(String(line))
+    })
+    try {
+      await bootFailure({
+        appRoot,
+        threadAccess: { read: () => ({ decision: "allow" }) } as unknown as ThreadAccessPolicy,
+      })
+    } finally {
+      log.mockRestore()
+    }
+    expect(lines.filter((line) => line.includes("thread access policy"))).toEqual([])
   })
 
   it("fails the boot instead of reporting no policy when the file is unreachable", async () => {
