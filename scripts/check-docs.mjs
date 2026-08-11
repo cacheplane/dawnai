@@ -733,6 +733,70 @@ const accuracyContracts = [
     ],
   },
   {
+    file: "apps/web/content/docs/api.mdx",
+    required: [
+      "## @dawn-ai/cli",
+      "### @dawn-ai/cli/fetch",
+      "## @dawn-ai/memory",
+      "### @dawn-ai/memory/browse",
+      "lower-level tooling",
+      "serveRuntime",
+      "ServeRuntimeHandle",
+      "ServeRuntimeOptions",
+      "loadStaticModules",
+      "DawnStaticModules",
+      "createRuntimeFetchHandler",
+      "RuntimeFetchHandler",
+      "buildStaticRouteModule",
+      "requestStores",
+      "partial allocation",
+      "does not own or close injected boot stores",
+      "requires `modules` during handler construction",
+      "boot `threadsStore` and `checkpointer` must be instances",
+      "boot `permissionsStore` may be an instance or an async factory",
+      "Only the boot `memoryStore` thunk is lazy",
+      "`requestStores` runs before route dispatch",
+      "may eagerly create its per-request memory store",
+      "falls through to the corresponding boot store",
+      "at least one query token",
+      "query-less branch runs first",
+      "BROWSE_DEFAULT_LIMIT = 50",
+      "BROWSE_MAX_LIMIT = 1000",
+      "1,024 UTF-8 bytes",
+      "4,096 characters",
+      "full millisecond UTC instants",
+      "at most eight filters and three sort entries",
+      "nonzero offset",
+      "excludes `limit`, `offset`, and `cursor`",
+      "readonly key: readonly BrowseCursorValue[]",
+      "readonly field: BrowseSortField",
+      "readonly column: string",
+      'readonly field: "status"',
+      'field: "updatedAt"',
+      'column: "updated_at"',
+      "inclusive UTC-day lower bound",
+      "exclusive upper bound",
+      "all-maximal prefix has no finite upper bound",
+      "empty prefix",
+      '"invalid-query"',
+      '"continuation-invalid"',
+    ],
+    forbidden: [
+      "@dawn-ai/cli/runtime is the application embedding",
+      "the handler closes injected boot stores",
+      "cursor and offset cannot be combined",
+      "browse is capped at 1000 rows",
+      "BROWSE_MAX_LIMIT is enforced automatically",
+      "@dawn-ai/memory/browse imports node:sqlite",
+      "subscribe to shutdownController",
+      "Supplying both `queryEmbedding` and `embedderId` selects hybrid",
+      "an omitted store fails only when an endpoint first uses that missing dependency",
+      "an omitted store fails on first use",
+      "memory store is always lazy",
+    ],
+    forbiddenRegexes: [/\bomitted store\b[^\r\n.]{0,120}\bfirst use\b/i],
+  },
+  {
     file: "apps/web/content/docs/recipes/typed-state.mdx",
     required: [
       "tenant: z.string()",
@@ -2355,6 +2419,333 @@ if (cliEntry?.createProgram) {
 // a sibling README, and packages with source exports must be findable from
 // either the API reference or their own README.
 const apiMdx = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+const requiredApiPackageHeadings = [
+  "@dawn-ai/sdk",
+  "@dawn-ai/cli",
+  "@dawn-ai/core",
+  "@dawn-ai/ag-ui",
+  "@dawn-ai/memory",
+  "@dawn-ai/memory-pgvector",
+  "@dawn-ai/postgres-storage",
+  "@dawn-ai/testing",
+  "@dawn-ai/evals",
+]
+for (const packageName of requiredApiPackageHeadings) {
+  if (!apiMdx.split(/\r?\n/).includes(`## ${packageName}`)) {
+    failures.push(`apps/web/content/docs/api.mdx is missing package heading: ${packageName}`)
+  }
+}
+
+function collectExportedBindings(source) {
+  const sourcePath = "/api-barrel.ts"
+  const virtualFiles = {
+    [sourcePath]: source,
+    "/tsconfig.json": JSON.stringify({ compilerOptions: { noLib: true }, files: [sourcePath] }),
+  }
+  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
+  let snapshot
+  try {
+    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
+    const project = snapshot.getDefaultProjectForFile(sourcePath)
+    const sourceFile = project?.program.getSourceFile(sourcePath)
+    const bindings = new Set()
+
+    for (const statement of sourceFile?.statements ?? []) {
+      if (statement.kind === SyntaxKind.ExportDeclaration) {
+        const clause = statement.exportClause
+        if (clause?.kind === SyntaxKind.NamedExports) {
+          for (const element of clause.elements) bindings.add(element.name.text)
+        } else if (clause?.kind === SyntaxKind.NamespaceExport) {
+          bindings.add(clause.name.text)
+        }
+        continue
+      }
+
+      if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword)) {
+        continue
+      }
+      if (isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (isIdentifier(declaration.name)) bindings.add(declaration.name.text)
+        }
+        continue
+      }
+      if (statement.name && isIdentifier(statement.name)) bindings.add(statement.name.text)
+    }
+    return bindings
+  } finally {
+    snapshot?.dispose()
+    api.close()
+  }
+}
+
+function typescriptCodeBlocks(markdown) {
+  return [...markdown.matchAll(/```(?:ts|tsx|typescript)\b[^\r\n]*\r?\n([\s\S]*?)```/g)]
+    .map((match) => match[1] ?? "")
+    .join("\n")
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function referenceSection(markdown, heading, stopBeforeHeading) {
+  const analysis = analyzeCompatibilityStub({
+    source: markdown,
+    retainedHeading: heading,
+    canonicalHref: "",
+    maxChars: Number.POSITIVE_INFINITY,
+  })
+  if (!analysis.found) return ""
+  if (!stopBeforeHeading) return analysis.stub
+
+  const masked = maskMarkdownCodeAndComments(analysis.stub)
+  const boundary = new RegExp(`^#{1,6}\\s+${escapeRegex(stopBeforeHeading)}[ \\t]*$`, "m").exec(
+    masked,
+  )
+  return boundary?.index === undefined ? analysis.stub : analysis.stub.slice(0, boundary.index)
+}
+
+function apiReferenceSection(heading, stopBeforeHeading) {
+  return referenceSection(apiMdx, heading, stopBeforeHeading)
+}
+
+function documentedSectionBindings(markdown, heading, stopBeforeHeading) {
+  return collectExportedBindings(
+    typescriptCodeBlocks(referenceSection(markdown, heading, stopBeforeHeading)),
+  )
+}
+
+// Mutation probes: comments, imports, and private declarations must not become
+// false exported bindings; a named re-export (including an alias) must.
+const exportBindingProbe = collectExportedBindings(`
+// export const commentOnly = true
+import { importOnly } from "./dependency.js"
+const privateOnly = true
+export const publicValue = true
+export { sourceValue as aliasedValue } from "./dependency.js"
+`)
+for (const nonExport of ["commentOnly", "importOnly", "privateOnly", "sourceValue"]) {
+  if (exportBindingProbe.has(nonExport)) {
+    failures.push(`API export AST mutation probe false-positive: ${nonExport}`)
+  }
+}
+for (const actualExport of ["publicValue", "aliasedValue"]) {
+  if (!exportBindingProbe.has(actualExport)) {
+    failures.push(`API export AST mutation probe missed export: ${actualExport}`)
+  }
+}
+
+const rootScopeFixtures = [
+  {
+    heading: "@dawn-ai/cli",
+    stopBeforeHeading: "@dawn-ai/cli/fetch",
+    symbol: "ServeRuntimeHandle",
+    rootDeclaration: "export interface ServeRuntimeHandle {}",
+    markdown: `
+## @dawn-ai/cli
+
+\`\`\`ts
+export interface ServeRuntimeHandle {}
+\`\`\`
+
+### @dawn-ai/cli/fetch
+
+\`\`\`ts
+export type { ServeRuntimeHandle } from "./nested.js"
+\`\`\`
+`,
+  },
+  {
+    heading: "@dawn-ai/memory",
+    stopBeforeHeading: "@dawn-ai/memory/browse",
+    symbol: "MemoryStore",
+    rootDeclaration: "export interface MemoryStore {}",
+    markdown: `
+## @dawn-ai/memory
+
+\`\`\`ts
+export interface MemoryStore {}
+\`\`\`
+
+### @dawn-ai/memory/browse
+
+\`\`\`ts
+export type { MemoryStore } from "./nested.js"
+\`\`\`
+`,
+  },
+]
+
+for (const fixture of rootScopeFixtures) {
+  const baseline = documentedSectionBindings(
+    fixture.markdown,
+    fixture.heading,
+    fixture.stopBeforeHeading,
+  )
+  if (!baseline.has(fixture.symbol)) {
+    failures.push(`API root-scope mutation probe baseline missed: ${fixture.symbol}`)
+  }
+  const rootDeleted = fixture.markdown.replace(fixture.rootDeclaration, "")
+  const mutated = documentedSectionBindings(rootDeleted, fixture.heading, fixture.stopBeforeHeading)
+  if (mutated.has(fixture.symbol)) {
+    failures.push(
+      `API root-scope mutation probe accepted nested-only declaration: ${fixture.symbol}`,
+    )
+  }
+}
+
+// Application-facing API reference ↔ public barrel authority. Each symbol must
+// be an actual exported binding in its barrel and an exported declaration or
+// re-export inside the owning API section's TypeScript blocks.
+const apiSurfaceAuthorities = [
+  {
+    file: "packages/cli/src/index.ts",
+    heading: "@dawn-ai/cli",
+    stopBeforeHeading: "@dawn-ai/cli/fetch",
+    symbols: [
+      "serveRuntime",
+      "ServeRuntimeHandle",
+      "ServeRuntimeOptions",
+      "loadStaticModules",
+      "DawnStaticModules",
+      "StaticRouteModule",
+    ],
+  },
+  {
+    file: "packages/cli/src/fetch-exports.ts",
+    heading: "@dawn-ai/cli/fetch",
+    symbols: [
+      "createRuntimeFetchHandler",
+      "RuntimeFetchHandler",
+      "buildStaticRouteModule",
+      "normalizeMiddlewareModule",
+      "DawnStaticModules",
+      "StaticRouteModule",
+      "StaticRouteModuleInput",
+      "StaticToolModuleInput",
+      "RequestStores",
+      "StartRuntimeServerOptions",
+      "RuntimeEnv",
+      "readRuntimeEnv",
+      "seedDawnConfig",
+      "seedRuntimeEnv",
+      "seedModelImporter",
+      "BootResolvedInstances",
+      "RuntimeBootFallbacks",
+      "StreamChunk",
+    ],
+  },
+  {
+    file: "packages/memory/src/index.ts",
+    heading: "@dawn-ai/memory",
+    stopBeforeHeading: "@dawn-ai/memory/browse",
+    symbols: [
+      "MemoryStore",
+      "MemoryQuery",
+      "MemoryRecord",
+      "BrowseQuery",
+      "BrowsePage",
+      "MemoryStats",
+    ],
+  },
+  {
+    file: "packages/memory/src/browse.ts",
+    heading: "@dawn-ai/memory/browse",
+    symbols: [
+      "BROWSE_CURSOR_VERSION",
+      "browseCursorKey",
+      "browseQueryFingerprint",
+      "decodeBrowseCursor",
+      "encodeBrowseCursor",
+      "normalizeSetFilter",
+      "DEFAULT_BROWSE_ORDER",
+      "resolveBrowseOrder",
+      "namespacePrefixUpperBound",
+      "utcDayAfter",
+      "utcDayStart",
+      "BROWSE_DEFAULT_LIMIT",
+      "BROWSE_MAX_LIMIT",
+      "BROWSE_SORT_FIELDS",
+      "BrowseQueryError",
+      "validateBrowseQuery",
+      "BrowseCursorPayload",
+      "BrowseCursorValue",
+      "ResolvedBrowseSort",
+      "BrowseFilter",
+      "BrowsePage",
+      "BrowseQuery",
+      "BrowseSortEntry",
+      "BrowseSortField",
+      "MemoryKind",
+      "MemoryRecord",
+      "MemorySource",
+      "MemoryStatus",
+    ],
+  },
+]
+
+for (const authority of apiSurfaceAuthorities) {
+  const source = readFileSync(resolve(repoRoot, authority.file), "utf8")
+  const exportedBindings = collectExportedBindings(source)
+  const section = apiReferenceSection(authority.heading, authority.stopBeforeHeading)
+  const documentedBindings = collectExportedBindings(typescriptCodeBlocks(section))
+  for (const symbol of authority.symbols) {
+    if (!exportedBindings.has(symbol)) {
+      failures.push(`${authority.file} no longer exports documented API symbol: ${symbol}`)
+    }
+    if (!documentedBindings.has(symbol)) {
+      failures.push(
+        `apps/web/content/docs/api.mdx section ${authority.heading} is missing an exported signature or definition for: ${symbol}`,
+      )
+    }
+  }
+}
+
+function hasExactSubpathExport(manifest, subpath, expected) {
+  const actual = manifest?.exports?.[subpath]
+  return actual?.types === expected.types && actual?.default === expected.default
+}
+
+const apiSubpathAuthorities = [
+  {
+    manifest: "packages/cli/package.json",
+    subpath: "./fetch",
+    expected: { types: "./dist/fetch-exports.d.ts", default: "./dist/fetch-exports.js" },
+  },
+  {
+    manifest: "packages/memory/package.json",
+    subpath: "./browse",
+    expected: { types: "./dist/browse.d.ts", default: "./dist/browse.js" },
+  },
+]
+
+for (const authority of apiSubpathAuthorities) {
+  const manifestPath = resolve(repoRoot, authority.manifest)
+  const packageDir = manifestPath.replace(/\/package\.json$/, "")
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+  if (!hasExactSubpathExport(manifest, authority.subpath, authority.expected)) {
+    failures.push(
+      `${authority.manifest} ${authority.subpath} must point to ${JSON.stringify(authority.expected)}`,
+    )
+  }
+  for (const target of Object.values(authority.expected)) {
+    if (!existsSync(resolve(packageDir, target))) {
+      failures.push(`${authority.manifest} ${authority.subpath} target is missing: ${target}`)
+    }
+  }
+
+  const removed = JSON.parse(JSON.stringify(manifest))
+  delete removed.exports[authority.subpath]
+  if (hasExactSubpathExport(removed, authority.subpath, authority.expected)) {
+    failures.push(`${authority.manifest} ${authority.subpath} removal mutation was not detected`)
+  }
+  const redirected = JSON.parse(JSON.stringify(manifest))
+  redirected.exports[authority.subpath] = { ...authority.expected, default: "./dist/wrong.js" }
+  if (hasExactSubpathExport(redirected, authority.subpath, authority.expected)) {
+    failures.push(`${authority.manifest} ${authority.subpath} redirect mutation was not detected`)
+  }
+}
 for (const manifestPath of packageManifests()) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
   const packageDir = manifestPath.replace(/\/package\.json$/, "")

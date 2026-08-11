@@ -37,6 +37,8 @@ interface HastNode {
 interface PageAnchors {
   /** Heading ids the built page will actually carry. */
   readonly ids: ReadonlySet<string>
+  /** Heading ids in emitted document order, including any accidental duplicate. */
+  readonly orderedIds: readonly string[]
   /** Links found in rendered anchors. */
   readonly links: readonly string[]
 }
@@ -169,6 +171,7 @@ async function resolvePlugins(specs: readonly (readonly [string, unknown])[]): P
  */
 async function analyze(file: string): Promise<PageAnchors> {
   const ids = new Set<string>()
+  const orderedIds: string[] = []
   const links = new Set<string>()
   const source = readFileSync(join(DOCS_DIR, file), "utf8")
 
@@ -181,7 +184,10 @@ async function analyze(file: string): Promise<PageAnchors> {
       if (node.type !== "element") return
       if (typeof node.tagName === "string" && /^h[1-6]$/.test(node.tagName)) {
         const id = node.properties?.id
-        if (typeof id === "string" && id !== "") ids.add(id)
+        if (typeof id === "string" && id !== "") {
+          ids.add(id)
+          orderedIds.push(id)
+        }
       }
       if (node.tagName === "a") {
         const href = node.properties?.href
@@ -201,13 +207,128 @@ async function analyze(file: string): Promise<PageAnchors> {
     ],
   })
 
-  return { ids, links: [...links] }
+  return { ids, orderedIds, links: [...links] }
 }
 
 const files = docFiles()
 const pages = new Map<string, PageAnchors>(
   await Promise.all(files.map(async (file) => [file, await analyze(file)] as const)),
 )
+
+// Public fragment compatibility for the unsplit API reference. This is the
+// complete 98-id inventory emitted before the application-runtime sections
+// were added; additions are allowed, but renaming or reordering retained
+// duplicate headings is not.
+const LEGACY_API_HEADING_IDS = [
+  "api-reference",
+  "dawn-aisdk",
+  "agent",
+  "agentconfig",
+  "agentconfig-1",
+  "reasoningconfig",
+  "retryconfig",
+  "dawnagent",
+  "subagent-delegation-types",
+  "isdawnagentvalue",
+  "middleware",
+  "definemiddlewarefn",
+  "allowcontext",
+  "rejectstatus-body",
+  "dawnmiddleware",
+  "middlewarerequest",
+  "middlewareresult",
+  "continueresult",
+  "rejectresult",
+  "memory",
+  "definememorydef",
+  "definedmemory",
+  "memoryscopedimension",
+  "route-configuration",
+  "routeconfig",
+  "routekind",
+  "route-types",
+  "routestatemap",
+  "routetoolmap",
+  "runtime",
+  "runtimecontexttools",
+  "runtimetool",
+  "toolregistry",
+  "dawntoolcontext",
+  "workspacefs",
+  "models",
+  "knownmodelid",
+  "modelproviderid",
+  "openaimodelid",
+  "googlemodelid",
+  "anthropicmodelid",
+  "xaimodelid",
+  "inferprovidermodel",
+  "supported_agent_providers",
+  "validatemodelidopts",
+  "modelidvalidation",
+  "model-id-constants",
+  "backend-adapter",
+  "backendadapter",
+  "utilities",
+  "prettifyt",
+  "dawn-aicore",
+  "capability-exports",
+  "createcapabilityregistrymarkers-and-applycapabilities",
+  "gatetoolop-and-wraptoolwithapproval",
+  "createworkspacefsoptions",
+  "loaddawnconfigoptions-and-configvalue",
+  "discoverroutesoptions-finddawnappoptions-and-route-segments",
+  "state-and-typegen-helpers",
+  "tool-scope",
+  "storage-type-re-export",
+  "dawn-aiag-ui",
+  "id-factories",
+  "toaguieventschunks-context",
+  "fromrunagentinputinput",
+  "sse-subpath-encodeaguisseevent-accept",
+  "dawn-aimemory-pgvector",
+  "pgvectormemorystoreoptions",
+  "pgvectormemorystore",
+  "vectorcolumndefdimensions",
+  "initschemaclient-options",
+  "assertidentifiername-value",
+  "dawn-aipostgres-storage",
+  "postgresstoreoptions",
+  "dawn-aipostgres-storagenode",
+  "postgrescheckpointeroptions",
+  "createpostgresthreadsstoreoptions",
+  "createpostgrespermissionsstoreoptions",
+  "assertidentifiername-value-1",
+  "default_schema--default_table_prefix",
+  "dawn-aitesting",
+  "harnesses",
+  "aimock-fixtures-and-recording",
+  "matchers",
+  "run-result-utilities",
+  "memory-protocol-and-subprocess-helpers",
+  "example",
+  "dawn-aievals",
+  "eval-definition-and-execution",
+  "scores-and-gates",
+  "built-in-scorers",
+  "memory-scorers",
+  "example-1",
+  "dawnroutes-generated",
+  "routetoolsp",
+  "routestatep",
+  "where-to-read-more",
+  "related",
+] as const
+
+function isOrderedSubsequence(expected: readonly string[], actual: readonly string[]): boolean {
+  let actualIndex = 0
+  for (const id of expected) {
+    actualIndex = actual.indexOf(id, actualIndex)
+    if (actualIndex === -1) return false
+    actualIndex++
+  }
+  return true
+}
 
 describe("docs links and in-page anchors", () => {
   it("collects real RelatedCards hrefs but ignores code and comments", () => {
@@ -253,6 +374,24 @@ describe("docs links and in-page anchors", () => {
     // build, not from the client-side TOC, which only ever walks `h2, h3`.
     const withoutIds = files.filter((file) => pages.get(file)?.ids.size === 0)
     expect(withoutIds).toEqual([])
+
+    const api = pages.get("api.mdx")
+    expect(LEGACY_API_HEADING_IDS).toHaveLength(98)
+    expect(new Set(LEGACY_API_HEADING_IDS).size).toBe(98)
+    expect(api?.orderedIds).toHaveLength(api?.ids.size ?? -1)
+    expect(new Set(api?.orderedIds).size).toBe(api?.orderedIds.length)
+    expect(isOrderedSubsequence(LEGACY_API_HEADING_IDS, api?.orderedIds ?? [])).toBe(true)
+    // Mutation probe: a membership-only assertion would miss this reorder.
+    expect(
+      isOrderedSubsequence(
+        [LEGACY_API_HEADING_IDS[1], LEGACY_API_HEADING_IDS[0]],
+        api?.orderedIds ?? [],
+      ),
+    ).toBe(false)
+    expect(api?.ids).toContain("dawn-aicli")
+    expect(api?.ids).toContain("dawn-aiclifetch")
+    expect(api?.ids).toContain("dawn-aimemory")
+    expect(api?.ids).toContain("dawn-aimemorybrowse")
 
     const deployment = pages.get("deployment.mdx")
     expect(deployment?.ids).toContain("what-the-edge-cannot-serve")
