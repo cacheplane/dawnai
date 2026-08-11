@@ -1,0 +1,187 @@
+name: Kubernetes Compatibility
+
+on:
+  pull_request:
+  schedule:
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kubernetes-compat-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      required: ${{ steps.policy.outputs.required }}
+      matrix: ${{ steps.policy.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Compute compatibility scope
+        id: policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          case "$EVENT_NAME" in
+            pull_request)
+              REQUIRED="$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event pull_request --base "$BASE_SHA" --head "$HEAD_SHA")"
+              ;;
+            schedule|workflow_dispatch)
+              REQUIRED="$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event "$EVENT_NAME")"
+              ;;
+            *)
+              echo "Unsupported workflow event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          case "$REQUIRED" in
+            true|false) ;;
+            *) echo "Malformed compatibility scope output" >&2; exit 1 ;;
+          esac
+          MATRIX="$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts matrix)"
+          [ -n "$MATRIX" ] || { echo "Empty compatibility matrix output" >&2; exit 1; }
+          [ "$(printf '%s' "$MATRIX" | wc -l | tr -d ' ')" -eq 0 ] \
+            || { echo "Compatibility matrix output must be compact" >&2; exit 1; }
+          printf 'required=%s\nmatrix=%s\n' "$REQUIRED" "$MATRIX" >> "$GITHUB_OUTPUT"
+
+  compat:
+    if: ${{ needs.scope.outputs.required == 'true' }}
+    needs: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
+    env:
+      DAWN_TEST_K8S_CONTEXT: kind-${{ matrix.clusterName }}
+      DAWN_K8S_TARGET: ${{ matrix.target }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Verify chart/provider permission parity
+        env:
+          DAWN_REQUIRE_HELM: "1"
+        run: pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.32.0
+          kubectl_version: v1.35.6
+          node_image: ${{ matrix.nodeImage }}
+          config: .github/kind/kind-calico.yaml
+          cluster_name: ${{ matrix.clusterName }}
+
+      - name: Prepare verified Calico manifest
+        env:
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
+        run: pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output "$CALICO_MANIFEST"
+
+      - name: Install verified Calico
+        env:
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
+        run: |
+          set -eu
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" apply --filename "$CALICO_MANIFEST"
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Run Kubernetes compatibility harness
+        run: pnpm verify:k8s:compat -- --target "$DAWN_K8S_TARGET" --context "$DAWN_TEST_K8S_CONTEXT"
+
+      - name: Upload Kubernetes compatibility artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kubernetes-compat-${{ matrix.target }}
+          path: artifacts/testing/kubernetes-compat/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  kubernetes-compat:
+    name: kubernetes-compat
+    if: always()
+    needs: [scope, compat]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Evaluate Kubernetes compatibility result
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          COMPAT_RESULT: ${{ needs.compat.result }}
+          REQUIRED: ${{ needs.scope.outputs.required }}
+        run: |
+          set -eu
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "Kubernetes compatibility scope did not succeed: $SCOPE_RESULT" >&2
+            exit 1
+          fi
+          case "$REQUIRED" in
+            false)
+              if [ "$COMPAT_RESULT" = "skipped" ]; then
+                exit 0
+              fi
+              echo "Unrequired Kubernetes compatibility work was not skipped: $COMPAT_RESULT" >&2
+              exit 1
+              ;;
+            true)
+              if [ "$COMPAT_RESULT" = "success" ]; then
+                exit 0
+              fi
+              echo "Required Kubernetes compatibility work did not succeed: $COMPAT_RESULT" >&2
+              exit 1
+              ;;
+            *)
+              echo "Malformed or missing Kubernetes compatibility scope output" >&2
+              exit 1
+              ;;
+          esac

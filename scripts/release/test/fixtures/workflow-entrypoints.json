@@ -7,7 +7,11 @@
         "name": "Auto Approve",
         "on": {
           "pull_request": {
-            "types": ["opened", "reopened", "ready_for_review"]
+            "types": [
+              "opened",
+              "reopened",
+              "ready_for_review"
+            ]
           }
         },
         "permissions": {
@@ -50,7 +54,9 @@
         "on": {
           "pull_request": null,
           "push": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           }
         },
         "permissions": {
@@ -95,6 +101,9 @@
           "classification": "safe",
           "id": "chart-apply-smoke",
           "descriptor": {
+            "env": {
+              "DAWN_TEST_K8S_CONTEXT": "kind-dawn-chart-apply"
+            },
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 15
           },
@@ -110,14 +119,17 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Helm",
-                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
+                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310",
+                "with": {
+                  "version": "v4.2.3"
+                }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
+                "run": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
               }
             },
             {
@@ -126,9 +138,10 @@
                 "name": "Create kind cluster",
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
-                  "kubectl_version": "v1.35.0",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
-                  "version": "v0.31.0"
+                  "cluster_name": "dawn-chart-apply",
+                  "kubectl_version": "v1.35.6",
+                  "node_image": "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95",
+                  "version": "v0.32.0"
                 }
               }
             },
@@ -136,7 +149,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Install dawn-app (placeholder image) and verify it serves",
-                "run": "helm install dawn-app charts/dawn-app \\\n  --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl rollout status deploy/dawn-app --timeout=120s\nkubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
+                "run": "set -eu\nPLACEHOLDER_IMAGE=\"$(jq -er '.images.placeholderApp' .github/kubernetes-compatibility.json)\"\nREACHABILITY_IMAGE=\"$(jq -er '.images.reachabilityProbe' .github/kubernetes-compatibility.json)\"\nPLACEHOLDER_WITH_TAG=\"${PLACEHOLDER_IMAGE%@sha256:*}\"\nPLACEHOLDER_REPOSITORY=\"${PLACEHOLDER_WITH_TAG%:*}\"\nPLACEHOLDER_DIGEST=\"sha256:${PLACEHOLDER_IMAGE##*@sha256:}\"\nprintf '%s\\n' \"$PLACEHOLDER_DIGEST\" | grep -Eq '^sha256:[0-9a-f]{64}$'\nprintf '%s\\n' \"$REACHABILITY_IMAGE\" | grep -Eq '@sha256:[0-9a-f]{64}$'\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-app charts/dawn-app \\\n  --set-string image.repository=\"$PLACEHOLDER_REPOSITORY\" \\\n  --set-string image.digest=\"$PLACEHOLDER_DIGEST\" \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" rollout status deploy/dawn-app --timeout=120s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" run curl --image=\"$REACHABILITY_IMAGE\" --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
               }
             }
           ]
@@ -700,8 +713,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Pull sandbox image",
-                "run": "docker pull node:22-slim"
+                "name": "Pull sandbox workload image",
+                "run": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\n"
               }
             },
             {
@@ -769,8 +782,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Preload sandbox workload image",
-                "run": "docker pull node:22-slim"
+                "name": "Pull sandbox workload image",
+                "run": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\n"
               }
             },
             {
@@ -801,8 +814,11 @@
           "classification": "safe",
           "id": "sandbox-k8s",
           "descriptor": {
+            "env": {
+              "DAWN_TEST_K8S_CONTEXT": "kind-dawn-k8s-canonical"
+            },
             "runs-on": "ubuntu-latest",
-            "timeout-minutes": 25
+            "timeout-minutes": 35
           },
           "steps": [
             {
@@ -843,81 +859,83 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Build sandbox package",
-                "run": "pnpm --filter @dawn-ai/sandbox... build"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
                 "name": "Setup Helm",
-                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Create kind cluster (no default CNI)",
-                "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
+                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310",
                 "with": {
-                  "config": ".github/kind/kind-calico.yaml",
-                  "kubectl_version": "v1.35.0",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
-                  "version": "v0.31.0"
+                  "version": "v4.2.3"
                 }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install Calico (enforces NetworkPolicy)",
-                "run": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
+                "env": {
+                  "DAWN_REQUIRE_HELM": "1"
+                },
+                "name": "Verify chart/provider permission parity",
+                "run": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install sandbox-infra chart",
-                "run": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait\nkubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount\n"
+                "name": "Prime kind tool cache",
+                "run": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Prepare chart NetworkPolicy control",
-                "run": "sh test/k8s-smoke/setup-network-policy-control.sh"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Assert orchestrator RBAC (least privilege)",
-                "run": "SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator\nkubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\n# WebSocket exec (@kubernetes/client-node) authorizes as `get pods/exec`\nkubectl auth can-i get pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no\n"
+                "name": "Create kind cluster",
+                "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
+                "with": {
+                  "cluster_name": "dawn-k8s-canonical",
+                  "config": ".github/kind/kind-calico.yaml",
+                  "kubectl_version": "v1.35.6",
+                  "node_image": "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95",
+                  "version": "v0.32.0"
+                }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "env": {
-                  "DAWN_TEST_K8S_EGRESS_CONTROL_URL": "http://dawn-egress-control:8080/",
-                  "DAWN_TEST_K8S_NS": "dawn-sandboxes"
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
                 },
-                "name": "Real-cluster sandbox conformance + e2e",
-                "run": "DAWN_TEST_K8S_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\nexport DAWN_TEST_K8S_IMAGE\nDAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration\n"
+                "name": "Prepare verified Calico manifest",
+                "run": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Exercise PVC reaper",
-                "run": "sh test/k8s-smoke/assert-reaper.sh"
+                "env": {
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
+                },
+                "name": "Install verified Calico",
+                "run": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Run Kubernetes 1.35 compatibility harness",
+                "run": "pnpm verify:k8s:compat -- --target 1.35 --context \"$DAWN_TEST_K8S_CONTEXT\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "failure()",
+                "name": "Upload Kubernetes compatibility artifacts",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "warn",
+                  "name": "kubernetes-compat-canonical",
+                  "path": "artifacts/testing/kubernetes-compat/**",
+                  "retention-days": 7
+                }
               }
             }
           ]
@@ -927,6 +945,7 @@
           "id": "sandbox-k8s-e2e",
           "descriptor": {
             "env": {
+              "DAWN_TEST_K8S_CONTEXT": "kind-dawn-smoke",
               "DAWN_TEST_SMOKE_E2E": "1",
               "KIND_CLUSTER": "dawn-smoke"
             },
@@ -980,42 +999,68 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Helm",
-                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Create kind cluster (no default CNI)",
-                "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
+                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310",
                 "with": {
-                  "cluster_name": "dawn-smoke",
-                  "config": ".github/kind/kind-calico.yaml",
-                  "kubectl_version": "v1.35.0",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
-                  "version": "v0.31.0"
+                  "version": "v4.2.3"
                 }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install Calico (enforces NetworkPolicy)",
-                "run": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
+                "env": {
+                  "DAWN_REQUIRE_HELM": "1"
+                },
+                "name": "Verify chart/provider permission parity",
+                "run": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Prime kind tool cache",
+                "run": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Create kind cluster",
+                "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
+                "with": {
+                  "cluster_name": "dawn-smoke",
+                  "config": ".github/kind/kind-calico.yaml",
+                  "kubectl_version": "v1.35.6",
+                  "node_image": "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95",
+                  "version": "v0.32.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
+                },
+                "name": "Prepare verified Calico manifest",
+                "run": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
+                },
+                "name": "Install verified Calico",
+                "run": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Preload sandbox workload image into kind",
-                "run": "docker pull node:22-slim\nkind load docker-image node:22-slim --name \"$KIND_CLUSTER\"\n"
+                "run": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\nkind load docker-image \"$SANDBOX_IMAGE\" --name \"$KIND_CLUSTER\"\n"
               }
             },
             {
@@ -1036,28 +1081,28 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Create app namespace",
-                "run": "kubectl create namespace dawn-app"
+                "run": "kubectl --context \"$DAWN_TEST_K8S_CONTEXT\" create namespace dawn-app"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Install sandbox-infra chart",
-                "run": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra \\\n  -n dawn-sandboxes --create-namespace \\\n  -f test/k8s-smoke/values-sandbox-infra.yaml --wait\n"
+                "run": "helm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-sandbox-infra charts/dawn-sandbox-infra \\\n  -n dawn-sandboxes --create-namespace \\\n  -f test/k8s-smoke/values-sandbox-infra.yaml --wait\n"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Deploy aimock",
-                "run": "kubectl apply -f test/k8s-smoke/aimock.k8s.yaml\nkubectl -n dawn-app rollout status deploy/aimock --timeout=120s\n"
+                "run": "kubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply -f test/k8s-smoke/aimock.k8s.yaml\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app rollout status deploy/aimock --timeout=120s\n"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Install dawn-app chart",
-                "run": "helm install dawn-app charts/dawn-app \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-dawn-app.yaml --wait\n"
+                "run": "helm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-app charts/dawn-app \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-dawn-app.yaml --wait\n"
               }
             },
             {
@@ -1072,7 +1117,7 @@
               "descriptor": {
                 "if": "always()",
                 "name": "Diagnostics + cleanup",
-                "run": "echo \"----- app -----\"\nkubectl -n dawn-app get pods,svc -o wide || true\nkubectl -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm uninstall dawn-app -n dawn-app || true\nhelm uninstall dawn-sandbox-infra -n dawn-sandboxes || true\nkubectl delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
+                "run": "echo \"----- app -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app get pods,svc -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-app -n dawn-app || true\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-sandbox-infra -n dawn-sandboxes || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
               }
             }
           ]
@@ -1446,7 +1491,12 @@
         "name": "Claude Review",
         "on": {
           "pull_request": {
-            "types": ["opened", "synchronize", "reopened", "ready_for_review"]
+            "types": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
           }
         },
         "permissions": {
@@ -1526,10 +1576,14 @@
         "name": "CodeQL",
         "on": {
           "pull_request": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           },
           "push": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           },
           "schedule": [
             {
@@ -1739,14 +1793,266 @@
         }
       ]
     },
+    "kubernetes-compat.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "concurrency": {
+          "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+          "group": "kubernetes-compat-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}"
+        },
+        "name": "Kubernetes Compatibility",
+        "on": {
+          "pull_request": null,
+          "schedule": [
+            {
+              "cron": "37 7 * * *"
+            }
+          ],
+          "workflow_dispatch": null
+        },
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "compat",
+          "descriptor": {
+            "env": {
+              "DAWN_K8S_TARGET": "${{ matrix.target }}",
+              "DAWN_TEST_K8S_CONTEXT": "kind-${{ matrix.clusterName }}"
+            },
+            "if": "${{ needs.scope.outputs.required == 'true' }}",
+            "needs": "scope",
+            "runs-on": "ubuntu-latest",
+            "strategy": {
+              "fail-fast": false,
+              "matrix": "${{ fromJSON(needs.scope.outputs.matrix) }}"
+            },
+            "timeout-minutes": 35
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Helm",
+                "uses": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310",
+                "with": {
+                  "version": "v4.2.3"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "DAWN_REQUIRE_HELM": "1"
+                },
+                "name": "Verify chart/provider permission parity",
+                "run": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Create kind cluster",
+                "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
+                "with": {
+                  "cluster_name": "${{ matrix.clusterName }}",
+                  "config": ".github/kind/kind-calico.yaml",
+                  "kubectl_version": "v1.35.6",
+                  "node_image": "${{ matrix.nodeImage }}",
+                  "version": "v0.32.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
+                },
+                "name": "Prepare verified Calico manifest",
+                "run": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "CALICO_MANIFEST": "${{ runner.temp }}/dawn-calico.yaml"
+                },
+                "name": "Install verified Calico",
+                "run": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Run Kubernetes compatibility harness",
+                "run": "pnpm verify:k8s:compat -- --target \"$DAWN_K8S_TARGET\" --context \"$DAWN_TEST_K8S_CONTEXT\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Upload Kubernetes compatibility artifacts",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "warn",
+                  "name": "kubernetes-compat-${{ matrix.target }}",
+                  "path": "artifacts/testing/kubernetes-compat/**",
+                  "retention-days": 7
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "kubernetes-compat",
+          "descriptor": {
+            "if": "always()",
+            "name": "kubernetes-compat",
+            "needs": [
+              "scope",
+              "compat"
+            ],
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 5
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "COMPAT_RESULT": "${{ needs.compat.result }}",
+                  "REQUIRED": "${{ needs.scope.outputs.required }}",
+                  "SCOPE_RESULT": "${{ needs.scope.result }}"
+                },
+                "name": "Evaluate Kubernetes compatibility result",
+                "run": "set -eu\nif [ \"$SCOPE_RESULT\" != \"success\" ]; then\n  echo \"Kubernetes compatibility scope did not succeed: $SCOPE_RESULT\" >&2\n  exit 1\nfi\ncase \"$REQUIRED\" in\n  false)\n    if [ \"$COMPAT_RESULT\" = \"skipped\" ]; then\n      exit 0\n    fi\n    echo \"Unrequired Kubernetes compatibility work was not skipped: $COMPAT_RESULT\" >&2\n    exit 1\n    ;;\n  true)\n    if [ \"$COMPAT_RESULT\" = \"success\" ]; then\n      exit 0\n    fi\n    echo \"Required Kubernetes compatibility work did not succeed: $COMPAT_RESULT\" >&2\n    exit 1\n    ;;\n  *)\n    echo \"Malformed or missing Kubernetes compatibility scope output\" >&2\n    exit 1\n    ;;\nesac\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "scope",
+          "descriptor": {
+            "outputs": {
+              "matrix": "${{ steps.policy.outputs.matrix }}",
+              "required": "${{ steps.policy.outputs.required }}"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                  "EVENT_NAME": "${{ github.event_name }}",
+                  "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"
+                },
+                "id": "policy",
+                "name": "Compute compatibility scope",
+                "run": "set -eu\ncase \"$EVENT_NAME\" in\n  pull_request)\n    REQUIRED=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event pull_request --base \"$BASE_SHA\" --head \"$HEAD_SHA\")\"\n    ;;\n  schedule|workflow_dispatch)\n    REQUIRED=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event \"$EVENT_NAME\")\"\n    ;;\n  *)\n    echo \"Unsupported workflow event: $EVENT_NAME\" >&2\n    exit 1\n    ;;\nesac\ncase \"$REQUIRED\" in\n  true|false) ;;\n  *) echo \"Malformed compatibility scope output\" >&2; exit 1 ;;\nesac\nMATRIX=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts matrix)\"\n[ -n \"$MATRIX\" ] || { echo \"Empty compatibility matrix output\" >&2; exit 1; }\n[ \"$(printf '%s' \"$MATRIX\" | wc -l | tr -d ' ')\" -eq 0 ] \\\n  || { echo \"Compatibility matrix output must be compact\" >&2; exit 1; }\nprintf 'required=%s\\nmatrix=%s\\n' \"$REQUIRED\" \"$MATRIX\" >> \"$GITHUB_OUTPUT\"\n"
+              }
+            }
+          ]
+        }
+      ]
+    },
     "publish-chart.yml": {
       "classification": "safe",
       "descriptor": {
         "name": "Publish Chart",
         "on": {
           "push": {
-            "branches": ["main"],
-            "paths": ["charts/dawn-sandbox-infra/**", "charts/dawn-app/**"]
+            "branches": [
+              "main"
+            ],
+            "paths": [
+              "charts/dawn-sandbox-infra/**",
+              "charts/dawn-app/**"
+            ]
           }
         },
         "permissions": {
@@ -1762,7 +2068,10 @@
             "runs-on": "ubuntu-latest",
             "strategy": {
               "matrix": {
-                "chart": ["dawn-sandbox-infra", "dawn-app"]
+                "chart": [
+                  "dawn-sandbox-infra",
+                  "dawn-app"
+                ]
               }
             },
             "timeout-minutes": 10
@@ -2084,7 +2393,9 @@
         "name": "Release",
         "on": {
           "push": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           },
           "schedule": [
             {
@@ -2101,7 +2412,9 @@
               "operation": {
                 "default": "reconcile",
                 "description": "Reconcile this candidate",
-                "options": ["reconcile"],
+                "options": [
+                  "reconcile"
+                ],
                 "required": true,
                 "type": "choice"
               },
@@ -2123,7 +2436,11 @@
           "id": "attest",
           "descriptor": {
             "if": "needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
-            "needs": ["detect", "hydrate", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "tag"
+            ],
             "outputs": {
               "attestation_artifact_id": "${{ steps.evidence.outputs.artifact-id }}"
             },
@@ -2218,7 +2535,12 @@
           "id": "correlate-audit",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'complete-release-audit' || needs.record-audit-dispatch.result == 'success')",
-            "needs": ["detect", "hydrate", "record-audit-dispatch", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "record-audit-dispatch",
+              "tag"
+            ],
             "outputs": {
               "audit_artifact_id": "${{ steps.audit-result.outputs.artifact-id }}"
             },
@@ -2439,7 +2761,12 @@
           "id": "dispatch-audit",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'dispatch-release-audit' || needs.reconcile-smokes.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-smokes", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-smokes",
+              "tag"
+            ],
             "outputs": {
               "dispatch_artifact_id": "${{ steps.receipt.outputs.artifact-id }}"
             },
@@ -2503,7 +2830,12 @@
           "id": "escrow",
           "descriptor": {
             "if": "needs.attest.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
-            "needs": ["attest", "detect", "hydrate", "tag"],
+            "needs": [
+              "attest",
+              "detect",
+              "hydrate",
+              "tag"
+            ],
             "permissions": {
               "actions": "read",
               "attestations": "read",
@@ -2573,7 +2905,11 @@
           "id": "hydrate",
           "descriptor": {
             "if": "always() && needs.detect.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition != 'prepare-artifacts' || needs.prepare.result == 'success')",
-            "needs": ["detect", "prepare", "tag"],
+            "needs": [
+              "detect",
+              "prepare",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.runtime.outputs.artifact-id }}",
               "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}"
@@ -2727,7 +3063,10 @@
           "id": "prepare",
           "descriptor": {
             "if": "needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && needs.detect.outputs.next_transition == 'prepare-artifacts'",
-            "needs": ["detect", "tag"],
+            "needs": [
+              "detect",
+              "tag"
+            ],
             "outputs": {
               "handoff_artifact_id": "${{ steps.handoff.outputs.artifact-id }}",
               "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}",
@@ -2856,7 +3195,12 @@
           "id": "publish-npm",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\"]'), needs.detect.outputs.next_transition) && (!contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition) || needs.escrow.result == 'success')",
-            "needs": ["detect", "escrow", "hydrate", "tag"],
+            "needs": [
+              "detect",
+              "escrow",
+              "hydrate",
+              "tag"
+            ],
             "outputs": {
               "npm_artifact_id": "${{ steps.npm.outputs.artifact-id }}"
             },
@@ -2944,7 +3288,12 @@
           "id": "publish-release",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'publish-github-release' || needs.correlate-audit.result == 'success')",
-            "needs": ["correlate-audit", "detect", "hydrate", "tag"],
+            "needs": [
+              "correlate-audit",
+              "detect",
+              "hydrate",
+              "tag"
+            ],
             "permissions": {
               "actions": "read",
               "contents": "write"
@@ -3022,7 +3371,12 @@
           "id": "reconcile-npm",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'reconcile-npm-evidence' || needs.publish-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "publish-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "publish-npm",
+              "tag"
+            ],
             "permissions": {
               "actions": "read",
               "contents": "write"
@@ -3208,7 +3562,12 @@
           "id": "record-audit-dispatch",
           "descriptor": {
             "if": "needs.dispatch-audit.result == 'success' && needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition)",
-            "needs": ["detect", "dispatch-audit", "hydrate", "tag"],
+            "needs": [
+              "detect",
+              "dispatch-audit",
+              "hydrate",
+              "tag"
+            ],
             "outputs": {
               "dispatch_artifact_id": "${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}"
             },
@@ -3280,7 +3639,12 @@
           "id": "smoke-metadata",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-npm",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3364,7 +3728,12 @@
           "id": "smoke-published-harness",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-npm",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3445,7 +3814,12 @@
           "id": "smoke-runtime-targets",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-npm",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3526,7 +3900,12 @@
           "id": "smoke-scaffold",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-npm",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3607,7 +3986,12 @@
           "id": "smoke-storage",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "needs": [
+              "detect",
+              "hydrate",
+              "reconcile-npm",
+              "tag"
+            ],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3764,7 +4148,9 @@
         "on": {
           "branch_protection_rule": null,
           "push": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           },
           "schedule": [
             {
@@ -3834,7 +4220,9 @@
         "name": "Version Packages",
         "on": {
           "push": {
-            "branches": ["main"]
+            "branches": [
+              "main"
+            ]
           }
         },
         "permissions": {

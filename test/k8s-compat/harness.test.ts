@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -2463,7 +2462,6 @@ describe("shell supersession mapping", () => {
   const mapping = [
     {
       script: "test/k8s-smoke/setup-network-policy-control.sh",
-      sha256: "928868766a2696e4813f601a82864851f07ce57920d4e393f5c72fbb598a7919",
       assertions: [
         {
           behavior: "server Pod becomes Ready",
@@ -2508,32 +2506,54 @@ describe("shell supersession mapping", () => {
     },
     {
       script: "test/k8s-smoke/assert-reaper.sh",
-      sha256: "f476484111bc85f75742965ef01f56acdabf57509f4e0815a4d58ee632680aef",
       assertions: [
         {
           behavior: "a manual Job is created from the installed CronJob and completes",
           evidence: 'create job --from=cronjob/dawn-reaper "$JOB"',
           probeIds: ["reaper.lifecycle.before-upgrade", "reaper.lifecycle.after-infra-upgrade"],
+          structuredEvidence: [
+            "reaperJob(suspendedCronJob, state, jobName)",
+            "await waitForCompletedReaperJob(state, jobName)",
+            '"Reaper Job must have a live Complete=True condition"',
+          ],
         },
         {
           behavior: "the stale unreferenced PVC is deleted",
           evidence: 'wait --for=delete "pvc/$STALE_PVC"',
           probeIds: ["reaper.lifecycle.before-upgrade", "reaper.lifecycle.after-infra-upgrade"],
+          structuredEvidence: [
+            '"--for=delete"',
+            'const staleName = resourceName(state.runId, "reaper-stale-pvc")',
+            'throw new Error("Reaper stale PVC must be deleted")',
+          ],
         },
         {
           behavior: "the new unreferenced PVC receives a positive marker",
           evidence: "new PVC marker is not a positive integer",
           probeIds: ["reaper.lifecycle.before-upgrade", "reaper.lifecycle.after-infra-upgrade"],
+          structuredEvidence: [
+            'const marker = newAnnotations["dawn.sh/unbound-since"]',
+            "!/^[1-9]\\d*$/.test(marker)",
+            'throw new Error("Reaper new PVC marker must be a positive integer")',
+          ],
         },
         {
           behavior: "the referenced PVC remains live",
           evidence: 'get pvc "$REFERENCED_PVC" >/dev/null',
           probeIds: ["reaper.lifecycle.before-upgrade", "reaper.lifecycle.after-infra-upgrade"],
+          structuredEvidence: [
+            "byName.has(input.referencedName)",
+            'throw new Error("Reaper referenced PVC must be retained without metadata.deletionTimestamp")',
+          ],
         },
         {
           behavior: "the retained referenced PVC has no unbound marker",
           evidence: "referenced PVC marker was not cleared",
           probeIds: ["reaper.lifecycle.before-upgrade", "reaper.lifecycle.after-infra-upgrade"],
+          structuredEvidence: [
+            'Object.hasOwn(referencedAnnotations, "dawn.sh/unbound-since")',
+            'throw new Error("Reaper referenced PVC must be retained and unmarked")',
+          ],
         },
       ],
     },
@@ -2554,29 +2574,28 @@ describe("shell supersession mapping", () => {
     expect(mapping.flatMap(({ assertions }) => assertions.map(({ behavior }) => behavior))).toEqual(
       requiredBehaviors,
     )
+    const probeSource = await readFile(
+      join(REPOSITORY_ROOT, "scripts/kubernetes-compat/probes.ts"),
+      "utf8",
+    )
 
     for (const entry of mapping) {
-      const source = await readFile(join(REPOSITORY_ROOT, entry.script), "utf8")
-      expect(createHash("sha256").update(source).digest("hex")).toBe(entry.sha256)
+      await expect(readFile(join(REPOSITORY_ROOT, entry.script), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      })
       for (const assertion of entry.assertions) {
-        expect(source).toContain(assertion.evidence)
-        if ("structuredEvidence" in assertion) {
-          const probeSource = await readFile(
-            join(REPOSITORY_ROOT, "scripts/kubernetes-compat/probes.ts"),
-            "utf8",
-          )
-          for (const evidence of assertion.structuredEvidence) {
-            expect(probeSource).toContain(evidence)
-          }
-          const clientCompletion = probeSource.slice(
-            probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
-            probeSource.indexOf(
-              "return createNetworkControlLease",
-              probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
-            ),
-          )
-          expect(clientCompletion).not.toContain('"--for=condition=Ready"')
+        expect(assertion.evidence).toMatch(/\S/)
+        for (const evidence of assertion.structuredEvidence) {
+          expect(probeSource).toContain(evidence)
         }
+        const clientCompletion = probeSource.slice(
+          probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
+          probeSource.indexOf(
+            "return createNetworkControlLease",
+            probeSource.indexOf("createObjectCommand(state.context, state.namespace), client"),
+          ),
+        )
+        expect(clientCompletion).not.toContain('"--for=condition=Ready"')
         for (const probeId of assertion.probeIds) {
           expect(KUBERNETES_COMPAT_PROBE_IDS).toContain(probeId)
         }
