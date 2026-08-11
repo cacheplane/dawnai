@@ -1,6 +1,6 @@
 # Dawn API Reference Platform Design
 
-**Status:** Proposed
+**Status:** Approved
 **Primary audience:** Application developers who need exact Dawn package,
 subpath, and TypeScript contracts after learning the framework through the
 journey documentation
