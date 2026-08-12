@@ -276,6 +276,53 @@ export async function focusReport(page: Page): Promise<FocusReport> {
 }
 
 /**
+ * The engine's roving cell: the one cell the grid MARKS focused, and the one cell in the
+ * body that is tabbable. Asserting they are the SAME node is what "roving tabindex" means
+ * — design §9.2's body clause — and it is the half of that clause which holds today. Note
+ * the claim is about CELLS: every row's select `<button>` is separately tabbable, which is
+ * the half that does not hold and is `a11y-keyboard.spec.ts`' subject.
+ *
+ * The address the grid BELIEVES IN, whether or not DOM focus is currently sitting on it —
+ * the complement of `focusReport` above, and not interchangeable with it. Pressing
+ * load-more is itself a focus move: the footer is outside the viewport (design §9.2) and
+ * pretable will not take DOM focus back off a node outside the grid (`isFocusOursToMove`),
+ * so "the append left focus where it was" is a claim about THIS address, while "DOM focus
+ * followed the arrow key" is a claim about that one. A spec that means both owes both.
+ *
+ * Located on `data-pretable-focused`, the PUBLISHED channel, rather than on the roving
+ * `tabindex` — which pretable derives from the same `cellIsFocused` flag. The tabindex is
+ * asserted to be on that same node instead of selected by.
+ *
+ * There is no roving cell at the body's ENTRY tab stop: DOM focus is on the scroll-content
+ * box and the grid has marked nothing, so this throws until an arrow key has seated one.
+ * Group rows DO have one — their cells carry the same flag and tabindex a record's do.
+ *
+ * THROWS rather than returning a sentinel when either count is wrong, so callers wrap it
+ * in `toPass` (which retries a throwing callback) rather than `expect.poll` (which does
+ * not) — the rendered set can still change a frame after the phase reads `idle`.
+ */
+export async function rovingCell(page: Page): Promise<{ rowId: string; columnId: string }> {
+  return grid(page).evaluate((viewport) => {
+    const focused = viewport.querySelectorAll('[data-pretable-cell][data-pretable-focused="true"]')
+    if (focused.length !== 1) {
+      throw new Error(`the grid marks ${focused.length} cells focused, not exactly one`)
+    }
+    const tabbable = viewport.querySelectorAll('[data-pretable-cell][tabindex="0"]')
+    if (tabbable.length !== 1 || tabbable[0] !== focused[0]) {
+      throw new Error(
+        `${tabbable.length} body cell(s) are tabbable and the focused one is ` +
+          `${tabbable[0] === focused[0] ? "among" : "not among"} them`,
+      )
+    }
+    const cell = focused[0] as HTMLElement
+    return {
+      rowId: cell.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
+      columnId: cell.getAttribute("data-pretable-column-id") ?? "",
+    }
+  })
+}
+
+/**
  * Put DOM focus on one record's cell in `columnId` and confirm it landed there.
  *
  * The column is a parameter with no default because the row-select column is the trap:

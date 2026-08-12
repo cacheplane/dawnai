@@ -1,11 +1,9 @@
-import type { Page } from "@playwright/test"
 import { TEST_IDS } from "../src/components/memory/test-ids"
 import { BROWSE_PAGE_SIZE, BROWSE_SEED_COUNT } from "../test/seed"
 import { expect, test } from "./fixtures"
 import {
   A11Y_FOCUS_DOOMED_DRAWN_INDEX,
   A11Y_FOCUS_FORGOTTEN_ID,
-  browseRegion,
   browseSeedRecordsAfterA11yFocus,
   DRAWN_FIRST_WINDOW,
   DRAWN_FIRST_WINDOW_AFTER_A11Y_FOCUS,
@@ -22,6 +20,7 @@ import {
   n,
   openBrowse,
   recordsOnly,
+  rovingCell,
   rowIds,
   sortByHeader,
   status,
@@ -53,45 +52,6 @@ const FOCUS_COLUMN = "status"
  *  first column that is not the row-select one — which is the column pretable's own pivot
  *  branch re-seats focus into. */
 const GROUP_COLUMN_ID = "__pretable_group__"
-
-/**
- * The address the grid's own focus flag names — the engine's focus, whether or not DOM
- * focus is currently sitting on it.
- *
- * Needed because pressing the load-more button is itself a focus move: the footer is
- * outside the viewport (design §9.2), so after the click `document.activeElement` is the
- * button, and pretable will not take DOM focus back off a node outside the grid
- * (`isFocusOursToMove`). "The append left focus where it was" is therefore a claim about
- * the engine's address.
- *
- * Located on `data-pretable-focused`, the PUBLISHED channel, rather than on the roving
- * `tabindex` — which pretable derives from the same `cellIsFocused` flag. The tabindex is
- * asserted to be on that same node instead of selected by, so this also states design
- * §9.2's single entry stop for the body: exactly one cell in it is tabbable, and it is the
- * focused one.
- */
-async function rovingCell(page: Page): Promise<{ rowId: string; columnId: string }> {
-  return browseRegion(page).evaluate((region) => {
-    const viewport = region.querySelector("[data-pretable-scroll-viewport]")
-    if (viewport === null) throw new Error("the browse grid is not in the document")
-    const focused = viewport.querySelectorAll('[data-pretable-cell][data-pretable-focused="true"]')
-    if (focused.length !== 1) {
-      throw new Error(`the grid marks ${focused.length} cells focused, not exactly one`)
-    }
-    const tabbable = viewport.querySelectorAll('[data-pretable-cell][tabindex="0"]')
-    if (tabbable.length !== 1 || tabbable[0] !== focused[0]) {
-      throw new Error(
-        `${tabbable.length} body cell(s) are tabbable and the focused one is ` +
-          `${tabbable[0] === focused[0] ? "among" : "not among"} them`,
-      )
-    }
-    const cell = focused[0] as HTMLElement
-    return {
-      rowId: cell.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
-      columnId: cell.getAttribute("data-pretable-column-id") ?? "",
-    }
-  })
-}
 
 test.describe("focus continuity", () => {
   test.setTimeout(120_000)

@@ -1,15 +1,22 @@
 import type { Locator, Page } from "@playwright/test"
 import { TEST_IDS } from "../src/components/memory/test-ids"
-import { BROWSE_PAGE_SIZE, browseSeedRecords, seedRecordsMatching } from "../test/seed"
+import {
+  BROWSE_PAGE_SIZE,
+  BROWSE_RESIDENT_CAP,
+  browseSeedRecords,
+  seedRecordsMatching,
+} from "../test/seed"
 import { expect, test } from "./fixtures"
 import {
   browseSeedRecordsAfterA11yFocus,
   drainSeededFetchErrors,
   expectPhase,
+  focusReport,
   grid,
   loadMore,
   n,
   openBrowse,
+  rovingCell,
   sortHeader,
   status,
   statusText,
@@ -36,7 +43,9 @@ import {
  * Restarting a walk by re-focusing `<body>` does not work and silently costs a whole lap:
  * Chromium keeps a sequential-navigation starting point that `body.focus()` does not
  * reset, so the next Tab continues from the last real element and the "restarted" walk
- * has to cross the grid to come round again.
+ * has to cross the grid to come round again. A walk that means to describe the page's
+ * order therefore starts where the load left focus and lets `walkUntil` press first, so
+ * that stop #1 is IN the record rather than consumed ahead of it.
  *
  * TWO of §9.2's claims are false against what ships. Both are pinned INVERTED rather than
  * deleted, so the day either is fixed this file reddens and the design and the test get
@@ -46,7 +55,13 @@ import {
 
 /** A stop on a tab walk, resolved to the §9.2 region that owns it. Structured rather
  *  than a printed string, because the ORDER of the regions is itself one of §9.2's
- *  claims and a string blob can only be eyeballed. */
+ *  claims and a string blob can only be eyeballed.
+ *
+ *  `tag` is `"BODY"` or `"NONE"` for the two focus-less states, which are different page
+ *  states and are kept apart for that reason: `<body>` is where a portaled popover drops
+ *  focus when it closes, while a null active element means the document has no focus owner
+ *  at all. An assertion that meant one of them would be satisfied by the other if this
+ *  collapsed them. */
 interface Stop {
   readonly tag: string
   readonly label: string
@@ -59,7 +74,12 @@ async function activeStop(page: Page): Promise<Stop> {
     ({ loadMoreId, bulkBarId }) => {
       const el = document.activeElement as HTMLElement | null
       if (el === null || el === document.body) {
-        return { tag: "BODY", label: "", region: "elsewhere" as const, rowSelect: false }
+        return {
+          tag: el === null ? "NONE" : "BODY",
+          label: "",
+          region: "elsewhere" as const,
+          rowSelect: false,
+        }
       }
       // The header row lives INSIDE the scroll viewport (it is sticky, not a sibling), so
       // it has to be tested before the viewport or every header control reports as body.
@@ -88,15 +108,24 @@ async function activeStop(page: Page): Promise<Stop> {
  *
  * The budget is a diagnostic ceiling, not a claim: it exists so an unreachable target
  * reports the walk it made instead of running until the test timeout — which is what a
- * budget-free version does, and it reports as a timeout with nothing in it. The default
- * is set well above what the topology costs TODAY (which is `BROWSE_PAGE_SIZE` more than
- * §9.2 describes), so a "never reached" means genuinely unreachable rather than merely
- * expensive; the COST is asserted separately, where it reads as the defect it is.
+ * budget-free version does, and it reports as a timeout with nothing in it.
+ *
+ * DERIVED rather than chosen, because a literal is a silent coupling to the page size.
+ * Today the body costs one stop per LOADED row (see DIVERGENCE 2), so a walk that crosses
+ * it after a single load-more already costs `BROWSE_PAGE_SIZE * 2` — and a ceiling picked
+ * against today's one-window crossing would report a merely EXPENSIVE walk as an
+ * unreachable control, which is the one thing this must never do. `BROWSE_RESIDENT_CAP` is
+ * the most rows the client will ever hold at once, so this bounds the worst crossing the
+ * page can produce, plus room for the chrome on either side of it. The COST is asserted
+ * separately, where it reads as the defect it is.
  */
 async function walkUntil(
   page: Page,
   predicate: () => Promise<boolean>,
-  { key = "Tab", budget = 400 }: { key?: "Tab" | "Shift+Tab"; budget?: number } = {},
+  {
+    key = "Tab",
+    budget = BROWSE_RESIDENT_CAP + 40,
+  }: { key?: "Tab" | "Shift+Tab"; budget?: number } = {},
 ): Promise<Stop[]> {
   const walked: Stop[] = []
   for (let step = 0; step < budget; step += 1) {
@@ -104,9 +133,15 @@ async function walkUntil(
     await page.keyboard.press(key)
     walked.push(await activeStop(page))
   }
+  // SUMMARISED, not dumped: the budget admits ~1,000 stops, and printing each one buries
+  // the two things a reader needs — the shape of the walk, and where it ended up.
   throw new Error(
-    `never reached the target in ${budget} ${key} stops; walked: ` +
-      walked.map((stop) => `${stop.region}:${stop.tag}|${stop.label}`).join(" -> "),
+    `never reached the target in ${budget} ${key} stops; regions: ` +
+      `${regionOrder(walked).join(" -> ")}; last stops: ` +
+      walked
+        .slice(-20)
+        .map((stop) => `${stop.region}:${stop.tag}|${stop.label}`)
+        .join(" -> "),
   )
 }
 
@@ -117,52 +152,6 @@ function regionOrder(walk: readonly Stop[]): string[] {
 
 function hasFocus(locator: Locator): Promise<boolean> {
   return locator.evaluate((node) => node === document.activeElement)
-}
-
-/** Where DOM focus is, as a cell address — the read that answers for a GROUP row too.
- *  `rovingCell` below is the stronger claim and cannot serve here: the group row's cells
- *  are rendered by a component of their own, so a walk that stops on the head of a
- *  grouped model has no `[data-pretable-focused]` cell to find. */
-async function focusedCell(
-  page: Page,
-): Promise<{ isCell: boolean; rowId: string; columnId: string }> {
-  return page.evaluate(() => {
-    const el = document.activeElement as HTMLElement | null
-    return {
-      isCell: el?.hasAttribute("data-pretable-cell") ?? false,
-      rowId: el?.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
-      columnId: el?.getAttribute("data-pretable-column-id") ?? "",
-    }
-  })
-}
-
-/**
- * The engine's roving cell: the one cell marked focused, and the one cell that is
- * tabbable. Asserting they are the SAME node is what "roving tabindex" means, and it is
- * the half of §9.2's body clause that HOLDS.
- *
- * THROWS rather than returning a sentinel when either count is wrong, so callers wrap it
- * in `toPass` (which retries a throwing callback) rather than `expect.poll` (which does
- * not) — the rendered set can still change a frame after the phase reads `idle`.
- */
-async function rovingCell(page: Page): Promise<{ rowId: string; columnId: string }> {
-  return grid(page).evaluate((viewport) => {
-    const focused = viewport.querySelectorAll('[data-pretable-cell][data-pretable-focused="true"]')
-    if (focused.length !== 1) {
-      throw new Error(`the grid marks ${focused.length} cells focused, not exactly one`)
-    }
-    const tabbable = viewport.querySelectorAll('[data-pretable-cell][tabindex="0"]')
-    if (tabbable.length !== 1 || tabbable[0] !== focused[0]) {
-      throw new Error(
-        `${tabbable.length} body cell(s) are tabbable and they are not the focused one`,
-      )
-    }
-    const cell = focused[0] as HTMLElement
-    return {
-      rowId: cell.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
-      columnId: cell.getAttribute("data-pretable-column-id") ?? "",
-    }
-  })
 }
 
 /** The `status: active` population, in the two fixture states this file can meet: a solo
@@ -185,8 +174,16 @@ test.describe("keyboard-only walkthrough", () => {
     await openBrowse(page)
 
     // 1. FILTERS. Walk to the funnel, open it, tick a value, commit — all by key.
-    await page.locator("body").press("Tab")
-    const statusFunnel = page.getByRole("button", { name: "Filter status", exact: true })
+    //
+    // The walk starts from where the load left focus and `walkUntil` presses before it
+    // records, so its first entry IS the page's first tab stop.
+    expect((await activeStop(page)).tag).toBe("BODY")
+    // SCOPED to the browse grid, like `openFilterMenu`'s identical query: `list-page`
+    // keeps this subtree mounted across every view switch and a search renders one more
+    // `MemoryGrid` per result group, so an unscoped funnel query resolves to 1 + N — and
+    // `hasFocus` goes through `locator.evaluate`, which is strict, so a later walk over a
+    // search-bearing page would throw rather than quietly miss.
+    const statusFunnel = grid(page).getByRole("button", { name: "Filter status", exact: true })
     await walkUntil(page, () => hasFocus(statusFunnel))
     await page.keyboard.press("Enter")
     const menu = page.locator("[data-pretable-filter-menu]")
@@ -209,11 +206,16 @@ test.describe("keyboard-only walkthrough", () => {
 
     // The gesture reached the SERVER, not merely the funnel's own display state: the
     // matching population is now the active one. Read off the page and held to the two
-    // states the shared fixture can be in.
+    // states the shared fixture can be in, so a page reporting a count from nowhere fails.
+    //
+    // RETRIED, and phrased as the ANSWER rather than as two gates in front of it: both
+    // gates are satisfiable while the unfiltered total is still on screen. Pretable renders
+    // `data-pretable-filter-active` off its own client filter model, and the `idle` above
+    // can be the state the gesture was about to leave — the request it causes is dispatched
+    // from an effect a tick later.
     await expect(statusFunnel).toHaveAttribute("data-pretable-filter-active", "true")
-    const rendered = await total(page).innerText()
-    expect(ACTIVE_POPULATIONS.map(n)).toContain(rendered)
-    const matching = Number(rendered.replaceAll(",", ""))
+    await expect(total(page)).toHaveText(new RegExp(`^(${ACTIVE_POPULATIONS.map(n).join("|")})$`))
+    const matching = Number((await total(page).innerText()).replaceAll(",", ""))
     await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, matching))
 
     // DIVERGENCE 1 — design §1.1, which records it as a pre-existing pretable gap and
@@ -224,7 +226,8 @@ test.describe("keyboard-only walkthrough", () => {
     // turn this into `await expect(statusFunnel).toBeFocused()`.
     expect(
       (await activeStop(page)).tag,
-      "design §1.1 records that pretable's FilterMenu does not restore focus on Escape",
+      "design §1.1 records that pretable's FilterMenu does not restore focus on Escape; it " +
+        "drops focus to <body>",
     ).toBe("BODY")
 
     // 2. SORT, from the header cell — which pretable renders as a real <button>, so it is
@@ -246,7 +249,7 @@ test.describe("keyboard-only walkthrough", () => {
     // 3. SELECTION, from the header checkbox — BACKWARDS, because the select-all sits at
     // the head of the header row and the sort left focus in the middle of it. A sort
     // pivots the datasetKey and clears selection (§9.3), so this cannot be done first.
-    const selectAll = page.locator("[data-pretable-row-select-all]")
+    const selectAll = grid(page).locator("[data-pretable-row-select-all]")
     const back = await walkUntil(page, () => hasFocus(selectAll), {
       key: "Shift+Tab",
       budget: 30,
@@ -267,8 +270,7 @@ test.describe("keyboard-only walkthrough", () => {
 
     // The order design §9.2 states, as the walk actually ran it: header controls, then
     // the body, then the load-more footer, then the rest of the page. The bulk bar IS
-    // "content after the grid" — reaching it is D1-A11Y-04's no-keyboard-trap clause, and
-    // BULK ACTIONS are keyboard-operable exactly because this walk ends on one.
+    // "content after the grid" — reaching it is D1-A11Y-04's no-keyboard-trap clause.
     expect(regionOrder(walk)).toEqual(["header", "body", "load-more", "bulk-bar"])
 
     const bodyStops = walk.filter((stop) => stop.region === "body")
@@ -287,16 +289,41 @@ test.describe("keyboard-only walkthrough", () => {
     // screen. Measured as an exact count so a partial fix is visible: one stop per loaded
     // data row (group headers render no select control and cost nothing), plus the entry.
     //
-    // The user cost IS the number: the load-more control is 200 key presses away at the
-    // first window and 1,000 at BROWSE_RESIDENT_CAP. The fix is upstream in pretable, not
-    // in this page — the Inspector cannot decline the row-select column without dropping
-    // the bulk actions D1 requires. When it lands, these two become `toBe(0)`/`toBe(1)`.
+    // The user cost IS the number: the load-more control is `BROWSE_PAGE_SIZE` key presses
+    // away at the first window. By the same mechanism it WOULD be `BROWSE_RESIDENT_CAP`
+    // once the client is holding its cap — an extrapolation from the rule this assertion
+    // pins, not a second measurement; nothing in this file pages past two windows. The fix
+    // is upstream in pretable, not in this page — the Inspector cannot decline the
+    // row-select column without dropping the bulk actions D1 requires. When it lands, these
+    // two become `toBe(0)` / `toBe(1)`.
     expect(
       bodyStops.filter((stop) => stop.rowSelect).length,
       "design §9.2 says the grid body is a single tab stop; @pretable/react 0.3.0 adds " +
         "one native stop per loaded row through the row-select <button>",
     ).toBe(BROWSE_PAGE_SIZE)
     expect(bodyStops.length).toBe(BROWSE_PAGE_SIZE + 1)
+
+    // BULK ACTIONS are OPERABLE by key, not merely reachable — §9.2 asks for both, and a
+    // walk that only lands on the control proves the weaker half. Enter runs the handler,
+    // which asks `window.confirm` BEFORE it writes: the confirm's own text is therefore
+    // proof the handler fired with the whole selection, and dismissing it is what keeps
+    // this walkthrough a pure reader. Activating for real would forget `BROWSE_PAGE_SIZE`
+    // records out of the store every spec in this lane shares.
+    let confirmed = "<no dialog>"
+    page.once("dialog", (dialog) => {
+      confirmed = `${dialog.type()}|${dialog.message()}`
+      void dialog.dismiss()
+    })
+    await page.keyboard.press("Enter")
+    await expect
+      .poll(() => confirmed)
+      .toBe(`confirm|Permanently forget ${BROWSE_PAGE_SIZE} memor(ies)?`)
+    // Dismissed means nothing was written: no bulk error, the selection intact, the
+    // population untouched — and the control kept focus, so step 5 continues from here.
+    await expect(page.getByTestId(TEST_IDS.bulkError)).toHaveCount(0)
+    await expect(page.getByTestId(TEST_IDS.bulkBar)).toContainText(`${BROWSE_PAGE_SIZE} selected`)
+    await expect(status(page)).toHaveText(statusText(BROWSE_PAGE_SIZE, matching))
+    await expect(forget).toBeFocused()
 
     // 5. LOAD-MORE is the stop immediately before the bulk bar, so one Shift+Tab is the
     // whole distance back to it — and it is operable by key.
@@ -324,7 +351,7 @@ test.describe("keyboard-only walkthrough", () => {
     // control before it is. The predicate is the REGION and not "inside the grid": the
     // header row is a descendant of the scroll viewport, so a containment test is
     // satisfied by the first header button and would never reach the body at all.
-    await page.locator("body").press("Tab")
+    expect((await activeStop(page)).tag).toBe("BODY")
     const entry = await walkUntil(page, async () => (await activeStop(page)).region === "body", {
       budget: 120,
     })
@@ -340,29 +367,44 @@ test.describe("keyboard-only walkthrough", () => {
     // this lane — entering straight out of the header row seats the head cell, entering
     // after the longer walk above leaves DOM focus on the scroll-content box — so nothing
     // here is allowed to depend on which happened.
+    //
+    // `focusReport` and not `rovingCell` until the arrows have run: at the entry stop the
+    // grid has marked NO cell, so `rovingCell` throws there by design. A non-empty ROW id
+    // is what says the focused node is a cell in the body — the header row's cells carry
+    // `data-pretable-column-id` too, but no row id — and it answers for the head of this
+    // grouped model, which is a GROUP row, exactly as it does for a record.
     await page.keyboard.press("ArrowDown")
     await expect(async () => {
-      const seated = await focusedCell(page)
-      expect(seated.isCell).toBe(true)
+      const seated = await focusReport(page)
       expect(seated.rowId).not.toBe("")
+      expect(seated.columnId).not.toBe("")
+      expect(seated.inGrid).toBe(true)
     }).toPass({ timeout: 15_000 })
-    const first = await focusedCell(page)
-    expect((await activeStop(page)).region).toBe("body")
+    const first = await focusReport(page)
 
     // Roving: another arrow moves the engine's focus to a different row and DOM focus
     // follows it, without leaving the viewport.
     await page.keyboard.press("ArrowDown")
     await expect(async () => {
-      expect((await focusedCell(page)).rowId).not.toBe(first.rowId)
+      const moved = await focusReport(page)
+      expect(moved.rowId).not.toBe(first.rowId)
+      expect(moved.rowId).not.toBe("")
+      expect(moved.inGrid).toBe(true)
     }).toPass({ timeout: 15_000 })
-    expect((await activeStop(page)).region).toBe("body")
 
-    // Now that the arrows have moved off the head — which in the unscoped browse is a
-    // GROUP row, rendered by a component of its own — the stronger half of §9.2's body
-    // clause is checkable: the roving tabindex. Exactly one cell is marked focused,
-    // exactly one is tabbable, and they are the same node.
+    // Now the stronger half of §9.2's body clause is checkable: the roving tabindex.
+    // Exactly one cell is marked focused, exactly one is tabbable, they are the same node
+    // — AND that node is where DOM focus actually is, which is the half a perfectly
+    // self-consistent engine could satisfy while the browser's focus sat somewhere else.
+    //
+    // Both reads inside ONE retry, so a commit landing between them is re-driven rather
+    // than reported as a mismatch; `rovingCell` throws on a transient re-measure, which
+    // with `retries: 0` would be a hard suite failure rather than a re-driven read.
     await expect(async () => {
-      expect((await rovingCell(page)).rowId).not.toBe("")
+      const roving = await rovingCell(page)
+      expect(roving.rowId).not.toBe("")
+      const dom = await focusReport(page)
+      expect({ rowId: dom.rowId, columnId: dom.columnId }).toEqual(roving)
     }).toPass({ timeout: 15_000 })
 
     // DIVERGENCE 2, at the exact point design §9.2 makes the claim. `tabBehavior="exit"`
@@ -391,9 +433,13 @@ test.describe("keyboard-only walkthrough", () => {
       await route.continue()
     })
     await page.goto("/memory")
+    // Subsumes the `data-pretable-hydrated` gate every sibling spec takes before its first
+    // key press: `useHydrated` is a `useSyncExternalStore` that answers false on the server
+    // and renders on the same node as the phase, so an `error` phase is only producible by
+    // the hydrated client's own failed fetch.
     await expect(grid(page)).toHaveAttribute("data-pretable-data-phase", "error")
 
-    await page.locator("body").press("Tab")
+    expect((await activeStop(page)).tag).toBe("BODY")
     const retry = page.getByTestId(TEST_IDS.retryInitial)
     const walk = await walkUntil(page, () => hasFocus(retry), { budget: 60 })
 
