@@ -2,11 +2,13 @@ export type { BuiltInModelProviderId, ModelProviderId } from "@dawn-ai/sdk"
 export { Command } from "@langchain/langgraph"
 export type {
   AgentStreamChunk,
+  AgentTurnResult,
   DawnToolDefinition,
 } from "./agent-adapter.js"
 export {
   __resetMaterializedAgentsForTests,
   executeAgent,
+  executeAgentTurn,
   materializeAgentGraph,
   streamAgent,
 } from "./agent-adapter.js"

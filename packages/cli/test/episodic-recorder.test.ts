@@ -6,7 +6,13 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { type MemoryRecord, sqliteMemoryStore } from "@dawn-ai/memory"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { executeRoute, streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
+import { readPendingInterrupts, resolvePendingResume } from "../src/lib/dev/pending-interrupts.js"
+import {
+  executeRoute,
+  invokeResolvedRoute,
+  resolveCheckpointer,
+  streamResolvedRoute,
+} from "../src/lib/runtime/execute-route.js"
 import { type EpisodeInput, recordEpisode } from "../src/lib/runtime/record-episode.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -331,6 +337,84 @@ describe("episodic auto-recorder (aimock harness)", () => {
         })),
       })
       expect(resumed.finalMessage).toContain("Deployed")
+
+      const episodes = await episodicRecords(appRoot)
+      expect(episodes).toHaveLength(1)
+      const ep = episodes[0] as MemoryRecord
+      expect(ep.data.outcome).toBe("ok")
+      expect(ep.data.input).toBe("deploy to staging")
+      expect(ep.content).toMatch(/^run ok: deploy to staging/)
+      expect(ep.data.toolsUsed).toContain("deployProd")
+    } finally {
+      await h.close()
+    }
+  }, 120_000)
+
+  it("HITL on the INVOKE path: a parked turn records nothing; the completing resume records exactly one episode", async () => {
+    const { createAgentHarness, script } = await loadTesting()
+    const appRoot = await makeApp("export default { memory: { episodes: { enabled: true } } }\n", {
+      approveDeploy: true,
+    })
+    // The harness supplies the aimock model server + env plumbing (and its
+    // close() resets the materialized-agent/config caches); the turns are
+    // driven directly so turn 1 goes through the NON-streaming invoke path —
+    // the one POST /threads/:id/runs/wait uses, where the agent-adapter's
+    // interrupt chunks are drained away and never reach the caller.
+    const h = await createAgentHarness({
+      appRoot,
+      route: "/chat#agent",
+      fixtures: script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    })
+    const threadId = "t-wait-park"
+    const routeArgs = {
+      appRoot,
+      routeFile: join(appRoot, "src", "app", "chat", "index.ts"),
+      routeId: "/chat",
+      routePath: "src/app/chat/index.ts",
+      threadId,
+    }
+    try {
+      // Turn 1: the model calls the approve-listed tool → the run parks on a
+      // HITL interrupt. The tool did NOT execute — no episode may exist.
+      const parked = await invokeResolvedRoute({
+        ...routeArgs,
+        input: { messages: [{ role: "user", content: "deploy to staging" }] },
+      })
+      expect(parked.status).toBe("passed")
+
+      const checkpointer = await resolveCheckpointer(appRoot)
+      const pending = await readPendingInterrupts(checkpointer, threadId)
+      // Sanity: the turn really parked (a pending __interrupt__ write exists).
+      expect(pending?.interrupts).toHaveLength(1)
+      expect(await episodicRecords(appRoot)).toHaveLength(0)
+
+      // Turn 2: approve → the tool executes and the turn completes. Exactly
+      // one episode for the whole run, carrying the ORIGINAL question and the
+      // actually-executed tool.
+      const resolution = resolvePendingResume(
+        (pending?.interrupts ?? []).map((entry) => ({
+          interruptId: entry.interruptId,
+          payload: "once" as const,
+          status: "resolved" as const,
+        })),
+        pending ?? { interrupts: [], malformed: true },
+      )
+      if (!resolution.ok || resolution.mode !== "resume") {
+        throw new Error(`expected a resumable pending snapshot, got ${JSON.stringify(resolution)}`)
+      }
+      let finalMessage = ""
+      for await (const chunk of streamResolvedRoute({
+        ...routeArgs,
+        input: { messages: [] },
+        resume: resolution.resume,
+      })) {
+        if (chunk.type === "chunk" && typeof chunk.data === "string") finalMessage += chunk.data
+      }
+      expect(finalMessage).toContain("Deployed")
 
       const episodes = await episodicRecords(appRoot)
       expect(episodes).toHaveLength(1)
