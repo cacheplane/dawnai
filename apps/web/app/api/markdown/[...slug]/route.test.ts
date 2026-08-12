@@ -27,6 +27,16 @@ describe("markdown route", () => {
     expect(await response.text()).toContain("# Add a Tool")
   })
 
+  it.each([
+    [["api", "sdk"], "# @dawn-ai/sdk"],
+    [["api", "generated-routes"], "# dawn:routes"],
+  ])("serves nested API reference %s", async (slug, h1) => {
+    const response = await getMarkdown(slug)
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain(h1)
+  })
+
   it("rejects an empty slug", async () => {
     expect((await getMarkdown([])).status).toBe(400)
   })

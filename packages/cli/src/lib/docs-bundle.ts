@@ -44,24 +44,36 @@ export function parseFrontmatter(raw: string): { data: DocFrontmatter; body: str
 /**
  * Convert an MDX doc page to plain markdown suitable for the bundled tree.
  * Minimal transform: strip frontmatter (promoting `title` to an H1 when the
- * body has none), drop module `import`/`export` lines OUTSIDE fenced code, and
- * remove `<RelatedCards … />` navigation components. Code fences are untouched.
+ * body has none), drop module `import`/`export` lines and API behavior authority
+ * metadata OUTSIDE fenced code, and remove `<RelatedCards … />` navigation
+ * components. Code fences are untouched.
  */
 export function mdxToMarkdown(raw: string): string {
   const { data, body } = parseFrontmatter(raw)
   const out: string[] = []
-  let inFence = false
+  let fence: { readonly character: "`" | "~"; readonly length: number } | undefined
   for (const line of body.split("\n")) {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence
+    const fenceMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!fence && fenceMatch?.[2] && (fenceMatch[2][0] === "~" || !fenceMatch[3]?.includes("`"))) {
+      fence = { character: fenceMatch[2][0] as "`" | "~", length: fenceMatch[2].length }
       out.push(line)
       continue
     }
-    if (inFence) {
+    if (fence) {
       out.push(line)
+      if (
+        fenceMatch?.[2]?.[0] === fence.character &&
+        fenceMatch[2].length >= fence.length &&
+        fenceMatch[3]?.trim() === ""
+      ) {
+        fence = undefined
+      }
       continue
     }
     if (/^(import|export)\s/.test(line)) {
+      continue
+    }
+    if (/^\{\/\* api-behavior-authorities: \[[\s\S]*\] \*\/\}$/.test(line.trim())) {
       continue
     }
     out.push(line)
@@ -124,16 +136,29 @@ export function parseNav(navValue: unknown): NavEntry[] {
   return entries
 }
 
-/** Load exactly the exported `DOCS_NAV` runtime value from a TypeScript module. */
-export async function loadNav(navFile: string): Promise<NavEntry[]> {
+/** Load journey navigation, or the authored subset of exhaustive API navigation. */
+type LoadNavOptions =
+  | { readonly exhaustive?: false }
+  | { readonly exhaustive: true; readonly existingSlugs: ReadonlySet<string> }
+
+export async function loadNav(navFile: string, options: LoadNavOptions = {}): Promise<NavEntry[]> {
   const loaded = (await tsImport(pathToFileURL(navFile).href, import.meta.url)) as Record<
     string,
     unknown
   >
-  if (!("DOCS_NAV" in loaded)) {
-    throw new TypeError(`${navFile} does not export DOCS_NAV`)
+  if (options.exhaustive) {
+    if (!("ALL_DOCS_PAGES" in loaded) || !Array.isArray(loaded.ALL_DOCS_PAGES)) {
+      throw new TypeError(`${navFile} does not export ALL_DOCS_PAGES`)
+    }
+    const entries = parsePages(loaded.ALL_DOCS_PAGES)
+    return entries.filter(({ slug }) => options.existingSlugs.has(slug))
   }
+  if (!("DOCS_NAV" in loaded)) throw new TypeError(`${navFile} does not export DOCS_NAV`)
   return parseNav(loaded.DOCS_NAV)
+}
+
+function parsePages(value: readonly unknown[]): NavEntry[] {
+  return parseNav([{ items: value }])
 }
 
 /** Flatten an evaluated `DOCS_NAV` value to doc slugs in reading order. */

@@ -71,8 +71,9 @@ function maskFencedCode(source: string): string {
         return maskText(line)
       }
 
-      const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
-      if (!opening) return line
+      const openingMatch = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(content)
+      const opening = openingMatch?.[1]
+      if (!opening || (opening[0] === "`" && openingMatch?.[2]?.includes("`"))) return line
       fence = { character: opening[0] ?? "", length: opening.length }
       return maskText(line)
     })
@@ -634,6 +635,27 @@ describe("docs links and in-page anchors", () => {
 `
 
     expect(collectMdxNavigationHrefs(source)).toEqual(["/docs/still-visible"])
+  })
+
+  it("keeps links and headings visible after an invalid backtick-fence opener", () => {
+    const source = `\`\`\`md \`invalid\`
+## Visible heading
+[Visible link](/docs/routes)
+`
+
+    expect(markdownHeadings(source).map(({ text }) => text)).toEqual(["Visible heading"])
+    expect(markdownDestinations(source)).toEqual(["/docs/routes"])
+  })
+
+  it("allows backticks in tilde-fence info strings and masks their contents", () => {
+    const source = `~~~md \`valid\`
+## Hidden heading
+[Hidden link](/docs/routes)
+~~~
+`
+
+    expect(markdownHeadings(source)).toEqual([])
+    expect(markdownDestinations(source)).toEqual([])
   })
 
   it("recognizes only the docs root and slash-delimited docs routes", () => {

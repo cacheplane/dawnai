@@ -1,0 +1,206 @@
+# @dawn-ai/cli
+
+## Use this when
+
+Most application developers use the `dawn` command to develop, test, build, and serve an app. Import the package root only to embed the Node server. Use `/fetch` when an edge adapter supplies generated modules and the durable stores its routes need; it may also supply an already-constructed configuration, while omitted configuration uses runtime defaults. `/runtime` is low-level tooling; `/testing` is a deprecated compatibility alias.
+
+## Install and import
+
+For command-only development, install the CLI as a development dependency:
+
+```bash
+pnpm add -D @dawn-ai/cli
+pnpm exec dawn dev
+```
+
+Install it as a runtime dependency when production code or a generated server imports the package:
+
+```bash
+pnpm add @dawn-ai/cli
+```
+
+```ts
+import { serveRuntime } from "@dawn-ai/cli"
+import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/cli` | node-only | not-claimed | application | supported |
+| `@dawn-ai/cli/fetch` | edge-safe | not-claimed | integration | supported |
+| `@dawn-ai/cli/runtime` | node-only | not-claimed | tooling | low-level |
+| `@dawn-ai/cli/testing` | node-only | not-claimed | testing | supported |
+| `bin:dawn` | node-only | n/a | tooling | supported |
+
+## Public exports
+
+### `@dawn-ai/cli`
+
+| Export | Responsibility |
+|---|---|
+| `DawnStaticModules` | Map generated route modules for runtime boot. |
+| `ServeRuntimeHandle` | Control an embedded server. |
+| `ServeRuntimeOptions` | Configure an embedded Node server. |
+| `StaticRouteModule` | Describe one generated route module. |
+| `config` | Re-export [`@dawn-ai/core` configuration typing](/docs/api/core#dawn-aicore). |
+| `createProgram` | Construct the command program for custom I/O. |
+| `isExecutedAsMain` | Detect direct executable invocation. |
+| `loadStaticModules` | Load generated static route modules. |
+| `renderError` | Format a CLI-facing error. |
+| `run` | Run the command program with explicit arguments. |
+| `serveRuntime` | Start the production Node runtime server. |
+
+### `@dawn-ai/cli/fetch`
+
+| Export | Responsibility |
+|---|---|
+| `BootResolvedInstances` | Hold stores resolved before request handling. |
+| `DawnStaticModules` | Map generated route modules. |
+| `RequestStores` | Supply request-scoped durable stores. |
+| `RuntimeBootFallbacks` | Define optional runtime boot fallbacks. |
+| `RuntimeEnv` | Re-export the [`@dawn-ai/core` runtime environment type](/docs/api/core#dawn-aicore). |
+| `RuntimeFetchHandler` | Handle a web-standard runtime request. |
+| `StartRuntimeServerOptions` | Share runtime assembly inputs. |
+| `StaticRouteModule` | Describe one materialized route module. |
+| `StaticRouteModuleInput` | Describe a generated route-module input. |
+| `StaticToolModuleInput` | Describe a generated tool-module input. |
+| `StreamChunk` | Represent one runtime stream chunk. |
+| `buildStaticRouteModule` | Build one route module without filesystem discovery. |
+| `createRuntimeFetchHandler` | Assemble a web-standard request handler. |
+| `normalizeMiddlewareModule` | Normalize generated middleware exports. |
+| `readRuntimeEnv` | Re-export [`@dawn-ai/core` environment lookup](/docs/api/core#dawn-aicore). |
+| `seedDawnConfig` | Re-export [`@dawn-ai/core` static configuration seeding](/docs/api/core#dawn-aicore). |
+| `seedModelImporter` | Re-export the `@dawn-ai/langchain` static importer seam; its deep reference is deferred. |
+| `seedRuntimeEnv` | Re-export [`@dawn-ai/core` environment seeding](/docs/api/core#dawn-aicore). |
+
+### `@dawn-ai/cli/runtime`
+
+| Export | Responsibility |
+|---|---|
+| `DawnResumeEntry` | Describe one submitted interrupt decision. |
+| `DawnStaticModules` | Map generated route modules. |
+| `MaterializeResolvedRouteGraphOptions` | Configure route graph materialization. |
+| `PendingInterrupt` | Describe a pending human decision. |
+| `PendingInterruptSnapshot` | Snapshot pending decisions for a thread. |
+| `PermissionDecision` | Represent a human permission decision. |
+| `PreparedRouteModules` | Hold prepared modules for a route. |
+| `ResumeResolution` | Represent resolved resume input. |
+| `RuntimeFetchHandler` | Handle runtime fetch requests. |
+| `RuntimeRegistry` | Resolve materialized routes. |
+| `RuntimeRequestListener` | Handle Node HTTP requests. |
+| `SandboxManager` | Manage runtime sandboxes. |
+| `ServeRuntimeHandle` | Control a running server. |
+| `ServeRuntimeOptions` | Configure production server boot. |
+| `StartRuntimeServerOptions` | Configure low-level server assembly. |
+| `StaticRouteModule` | Describe a generated route module. |
+| `StaticRouteModuleInput` | Describe a route-module input. |
+| `StaticToolModuleInput` | Describe a tool-module input. |
+| `StreamChunk` | Represent one stream chunk. |
+| `__resetMaterializedAgentsForTests` | Reset LangChain materialization caches in tests. |
+| `__resetRouteLoadCachesForTests` | Reset route-loader caches in tests. |
+| `buildStaticRouteModule` | Build a static route module. |
+| `createRuntimeFetchHandler` | Assemble the Node fetch handler. |
+| `createRuntimeRegistry` | Construct a runtime route registry. |
+| `createRuntimeRequestListener` | Construct a Node request listener. |
+| `executeResolvedRoute` | Execute a resolved route. |
+| `invokeResolvedRoute` | Invoke a resolved route graph. |
+| `loadStaticModules` | Load generated route modules. |
+| `materializeResolvedRouteGraph` | Materialize a resolved graph. |
+| `normalizeMiddlewareModule` | Normalize middleware exports. |
+| `readPendingInterrupts` | Read pending human decisions. |
+| `resolveCheckpointer` | Resolve the configured checkpointer. |
+| `resolvePendingResume` | Resolve submitted interrupt decisions. |
+| `resolveSandboxManager` | Resolve the server sandbox manager. |
+| `resolveThreadsStore` | Resolve the configured thread store. |
+| `runMemoryCommand` | Run the low-level memory command implementation. |
+| `runTypegen` | Generate application route declarations. |
+| `seedPreparedRouteModules` | Seed prepared route modules. |
+| `serveRuntime` | Start the production runtime server. |
+| `startRuntimeServer` | Assemble and start the Node server. |
+| `streamResolvedRoute` | Stream a resolved route. |
+
+These exports exist for framework tooling and test harnesses. Application code should prefer root `serveRuntime` or the edge-safe `/fetch` entry.
+
+### `@dawn-ai/cli/testing`
+
+| Export | Responsibility |
+|---|---|
+| `expectError` | Deprecated alias of `@dawn-ai/sdk/testing` `expectError`. |
+| `expectMeta` | Deprecated alias of `@dawn-ai/sdk/testing` `expectMeta`. |
+| `expectOutput` | Deprecated alias of `@dawn-ai/sdk/testing` `expectOutput`. |
+
+New scenario files should import these aliases from [`@dawn-ai/sdk/testing`](/docs/api/sdk#dawn-aisdktesting).
+
+### `bin:dawn`
+
+`bin:dawn` is the executable target, not a TypeScript subpath. It runs the `add`, `build`, `check`, `dev`, `docs`, `eval`, `inspect`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify` commands. See the [CLI Reference](/docs/cli) for command syntax.
+
+## Key contracts
+
+### `serveRuntime()`
+
+Use this root export to embed Dawn's production Node server. It starts once, returns a close handle, and does not watch the filesystem.
+
+```ts api-contract="@dawn-ai/cli#.:serveRuntime"
+export declare function serveRuntime(opts: ServeRuntimeOptions): Promise<ServeRuntimeHandle>
+```
+
+```ts api-contract="@dawn-ai/cli#.:ServeRuntimeOptions"
+export interface ServeRuntimeOptions {
+  readonly appRoot: string
+  readonly host?: string
+  readonly port?: number
+  readonly installSignalHandlers?: boolean
+  readonly modules?: DawnStaticModules
+  readonly config?: DawnConfig
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+  readonly memoryStore?: () => Promise<MemoryStore>
+  readonly middleware?: DawnMiddleware
+}
+```
+
+**Fields: `@dawn-ai/cli#.:ServeRuntimeOptions`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly appRoot` | `string` | yes | Select the Dawn application root. |
+| `readonly host` | `string` | no | Override the listen host. |
+| `readonly port` | `number` | no | Override the listen port. |
+| `readonly installSignalHandlers` | `boolean` | no | Opt into SIGTERM and SIGINT shutdown handlers. |
+| `readonly modules` | `DawnStaticModules` | no | Supply build-time generated route modules. |
+| `readonly config` | `DawnConfig` | no | Supply an already-constructed application configuration. |
+| `readonly checkpointer` | `BaseCheckpointSaver` | no | Supply the boot-resolved checkpointer. |
+| `readonly threadsStore` | `ThreadsStore` | no | Supply the boot-resolved thread store. |
+| `readonly permissionsStore` | `PermissionsStore \| (() => Promise<PermissionsStore>)` | no | Supply a permissions store or its async factory. |
+| `readonly memoryStore` | `() => Promise<MemoryStore>` | no | Supply the lazy memory-store factory. |
+| `readonly middleware` | `DawnMiddleware` | no | Supply preloaded middleware. |
+
+#### Behavior contract `cli.serve.production-boot`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/cli/test/serve-runtime.test.ts","testNames":["boots without running typegen (never writes .dawn artifacts)"]}] */}
+serveRuntime starts without running type generation or writing .dawn artifacts.
+
+#### Behavior contract `cli.serve-runtime.port-precedence`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/cli/test/serve-runtime.test.ts","testNames":["empty PORT env resolves to the 8000 default (not a random port)","non-numeric PORT env resolves to the 8000 default","numeric PORT env is honored","explicit port always wins, including 0 for a random port"]}] */}
+serveRuntime uses an explicit port first, then a numeric PORT value, then 8000. Empty or non-numeric PORT values also fall back to 8000; an explicit 0 still requests a random port.
+
+### Runtime ownership
+
+`serveRuntime()` starts once and does not watch files or run type generation at boot. The `/fetch` handler has no filesystem fallback for its module map or for applicable required stores, so an edge host must inject them. Configuration may be supplied already constructed; when omitted, runtime defaults apply.
+
+#### Behavior contract `cli.fetch.request-store-lifecycle`
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/cli/src/lib/dev/runtime-fetch-core.ts","selector":"CLOSE_DRAIN_DEADLINE_MS"},{"kind":"test-assertion","file":"packages/cli/test/request-stores.test.ts","testNames":["builds and disposes stores once per request, never reusing them"]},{"kind":"test-assertion","file":"packages/cli/test/request-stores.test.ts","testNames":["disposes only AFTER an SSE body finishes, not when fetch resolves"]},{"kind":"test-assertion","file":"packages/cli/test/request-stores.test.ts","testNames":["close() does not return while a store disposal is still in flight"]},{"kind":"test-assertion","file":"packages/cli/test/runtime-fetch-parity.test.ts","testNames":["close() with an entirely unread SSE body warns after the drain deadline and proceeds"]}] */}
+A requestStores factory creates and disposes stores per request. Disposal waits for an SSE body to finish. close() waits for in-flight disposal while its bounded shutdown drain remains open; after the 30-second default deadline it warns and proceeds.
+
+## Examples and related guides
+
+```ts
+import { serveRuntime } from "@dawn-ai/cli"
+
+const server = await serveRuntime({ appRoot: process.cwd(), port: 8000 })
+console.log(server.url)
+```
+
+Continue with [CLI Reference](/docs/cli), [Embed the Runtime](/docs/embedding), [Edge and Hono](/docs/deployment/edge), and [Deployment Options](/docs/deployment).

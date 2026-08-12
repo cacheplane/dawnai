@@ -85,6 +85,18 @@ const EXPECTED_DOCS_NAV = [
   { slug: "errors", label: "Error Codes" },
   { slug: "faq", label: "FAQ" },
 ] as const
+const LANDED_API_REFERENCE_PAGES = [
+  { slug: "api/sdk", label: "@dawn-ai/sdk" },
+  { slug: "api/cli", label: "@dawn-ai/cli" },
+  { slug: "api/core", label: "@dawn-ai/core" },
+  { slug: "api/generated-routes", label: "dawn:routes" },
+] as const
+const apiHubIndex = EXPECTED_DOCS_NAV.findIndex(({ slug }) => slug === "api")
+const EXPECTED_TRANSITIONAL_DOCS = [
+  ...EXPECTED_DOCS_NAV.slice(0, apiHubIndex + 1),
+  ...LANDED_API_REFERENCE_PAGES,
+  ...EXPECTED_DOCS_NAV.slice(apiHubIndex + 1),
+] as const
 const scannedTextExtensions = new Set([
   ".cjs",
   ".css",
@@ -287,6 +299,59 @@ describe("mdxToMarkdown()", () => {
     expect(out).toContain('import { agent } from "@dawn-ai/sdk"')
   })
 
+  it("strips API behavior authority comments outside fences", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const raw = `# X\n\n${marker}\nVisible claim.\n\n\`${marker}\`\n\n\`\`\`md\n${marker}\n\`\`\`\n`
+    const out = mdxToMarkdown(raw)
+
+    expect(out).toContain("Visible claim.")
+    expect(out).toContain(`\`${marker}\``)
+    expect(out).toContain(`\`\`\`md\n${marker}\n\`\`\``)
+    expect(out).not.toContain(`# X\n\n${marker}\nVisible claim.`)
+    expect(out.split(marker)).toHaveLength(3)
+  })
+
+  it("matches fenced blocks by delimiter character and minimum opening length", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const raw = [
+      "# X",
+      "",
+      "~~~~md",
+      marker,
+      "~~~",
+      marker,
+      "~~~~",
+      marker,
+      "",
+      "````md",
+      marker,
+      "```",
+      marker,
+      "````",
+      marker,
+      "",
+    ].join("\n")
+
+    const out = mdxToMarkdown(raw)
+    expect(out.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(
+      4,
+    )
+    expect(out).toContain(`~~~~md\n${marker}\n~~~\n${marker}\n~~~~`)
+    expect(out).toContain(`\`\`\`\`md\n${marker}\n\`\`\`\n${marker}\n\`\`\`\``)
+  })
+
+  it("rejects backticks in backtick-fence info strings but permits them for tilde fences", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const invalid = mdxToMarkdown(`# X\n\n\`\`\`md \`invalid\`\n${marker}\n`)
+    const valid = mdxToMarkdown(`# X\n\n~~~md \`valid\`\n${marker}\n~~~\n`)
+
+    expect(invalid).not.toContain(marker)
+    expect(valid).toContain(`~~~md \`valid\`\n${marker}\n~~~`)
+  })
+
   it("does not add a second H1 when the body already starts with one", () => {
     const raw = "---\ntitle: Dup\n---\n# Real Heading\n\nBody.\n"
     const out = mdxToMarkdown(raw)
@@ -316,10 +381,19 @@ describe("parseNavOrder()", () => {
     ])
   })
 
-  it("loads the complete real registry in an independently pinned reading order", async () => {
+  it("loads only the journey registry for callers that explicitly request DOCS_NAV", async () => {
     expect(await loadNav(join(repoRoot, "apps/web/app/components/docs/nav.ts"))).toEqual(
       EXPECTED_DOCS_NAV,
     )
+  })
+
+  it("loads landed paired API leaves in exhaustive registry order", async () => {
+    expect(
+      await loadNav(join(repoRoot, "apps/web/app/components/docs/nav.ts"), {
+        exhaustive: true,
+        existingSlugs: new Set(EXPECTED_TRANSITIONAL_DOCS.map(({ slug }) => slug)),
+      }),
+    ).toEqual(EXPECTED_TRANSITIONAL_DOCS)
   })
 
   it("loads only exported DOCS_NAV, ignoring comments, strings, and non-exported lookalikes", async () => {
@@ -379,12 +453,12 @@ describe("generated documentation bundle", () => {
     const topics = [...readme.matchAll(/^- \[([^\]]+)\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
       match[1] && match[2] ? [{ title: match[1], file: match[2] }] : [],
     )
-    const expectedFiles = EXPECTED_DOCS_NAV.map((entry) =>
+    const expectedFiles = EXPECTED_TRANSITIONAL_DOCS.map((entry) =>
       entry.slug === "recipes" ? "recipes/index.md" : `${entry.slug}.md`,
     )
 
     expect(topics).toEqual(
-      EXPECTED_DOCS_NAV.map((entry, index) => ({
+      EXPECTED_TRANSITIONAL_DOCS.map((entry, index) => ({
         title: entry.label,
         file: expectedFiles[index] ?? "",
       })),
@@ -393,6 +467,14 @@ describe("generated documentation bundle", () => {
       title: "Recipes Overview",
       file: "recipes/index.md",
     })
+    expect(topics).toHaveLength(62)
+    expect(topics.slice(apiHubIndex, apiHubIndex + 5).map(({ title }) => title)).toEqual([
+      "API Reference",
+      "@dawn-ai/sdk",
+      "@dawn-ai/cli",
+      "@dawn-ai/core",
+      "dawn:routes",
+    ])
     expect(topics).toContainEqual({
       title: "Long-term Memory",
       file: "memory/long-term.md",

@@ -255,6 +255,29 @@ function wrapperHref(file: string): string {
   return `/docs/${slug}`
 }
 
+function transitionalTopologyFailures(
+  journeyHrefs: readonly string[],
+  apiHrefs: readonly string[],
+  contentHrefs: readonly string[],
+  wrapperHrefs: readonly string[],
+): string[] {
+  const journey = new Set(journeyHrefs)
+  const allowedApi = new Set(apiHrefs)
+  const content = new Set(contentHrefs)
+  const wrappers = new Set(wrapperHrefs)
+  const failures: string[] = []
+  for (const href of journey) {
+    if (!content.has(href)) failures.push(`missing journey content: ${href}`)
+    if (!wrappers.has(href)) failures.push(`missing journey wrapper: ${href}`)
+  }
+  for (const href of new Set([...content, ...wrappers])) {
+    if (journey.has(href)) continue
+    if (!allowedApi.has(href)) failures.push(`unregistered docs leaf: ${href}`)
+    if (content.has(href) !== wrappers.has(href)) failures.push(`unpaired API leaf: ${href}`)
+  }
+  return failures
+}
+
 describe("documentation registry invariants", () => {
   it("uses the exact eight-section foundation", () => {
     expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
@@ -324,7 +347,7 @@ describe("documentation registry invariants", () => {
     }
   })
 
-  it("registers exactly the authored content and route wrappers", () => {
+  it("keeps journey pages exact and allows only paired registered API leaves during authoring", () => {
     const navHrefs = DOCS_PAGES.map((page) => page.href)
     const contentHrefs = filesUnder(CONTENT_ROOT, (file) => file.endsWith(".mdx"))
       .map(contentHref)
@@ -334,13 +357,46 @@ describe("documentation registry invariants", () => {
       .filter((href) => href !== "/docs")
       .sort()
 
-    expect([...navHrefs].sort()).toEqual(contentHrefs)
-    expect([...navHrefs].sort()).toEqual(wrapperHrefs)
+    expect(
+      transitionalTopologyFailures(
+        navHrefs,
+        API_REFERENCE_PAGES.map(({ href }) => href),
+        contentHrefs,
+        wrapperHrefs,
+      ),
+    ).toEqual([])
+  })
+
+  it("rejects unregistered and unpaired leaves during incremental API authoring", () => {
+    const journey = ["/docs/api"]
+    const registered = ["/docs/api/sdk"]
+
+    expect(
+      transitionalTopologyFailures(
+        journey,
+        registered,
+        [...journey, ...registered, "/docs/api/foreign"],
+        [...journey, ...registered, "/docs/api/foreign"],
+      ),
+    ).toContain("unregistered docs leaf: /docs/api/foreign")
+    expect(
+      transitionalTopologyFailures(journey, registered, [...journey, ...registered], journey),
+    ).toContain("unpaired API leaf: /docs/api/sdk")
   })
 
   it("keeps nav labels, first MDX headings, and wrapper titles identical", () => {
     const processCountBefore = docTitleAnalysisProcessCount
-    const fixtures = DOCS_PAGES.map((item) => {
+    const contentHrefSet = new Set(
+      filesUnder(CONTENT_ROOT, (file) => file.endsWith(".mdx")).map(contentHref),
+    )
+    const wrapperHrefSet = new Set(
+      filesUnder(WRAPPERS_ROOT, (file) => file === "page.tsx").map(wrapperHref),
+    )
+    const authoredApiPages = API_REFERENCE_PAGES.filter(({ href }) => {
+      return contentHrefSet.has(href) && wrapperHrefSet.has(href)
+    })
+    const authoredPages = [...DOCS_PAGES, ...authoredApiPages]
+    const fixtures = authoredPages.map((item) => {
       const slug = item.href.replace(/^\/docs\//, "")
       const contentPath = join(
         CONTENT_ROOT,
@@ -355,8 +411,8 @@ describe("documentation registry invariants", () => {
     const analyses = analyzeDocTitlesBatch(fixtures)
 
     expect(docTitleAnalysisProcessCount - processCountBefore).toBe(1)
-    expect(analyses).toHaveLength(DOCS_PAGES.length)
-    for (const [index, item] of DOCS_PAGES.entries()) {
+    expect(analyses).toHaveLength(authoredPages.length)
+    for (const [index, item] of authoredPages.entries()) {
       const { firstH1, metadataTitle } = analyses[index] ?? {}
 
       expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
@@ -466,6 +522,30 @@ export const metadata: Metadata = { title: "Real Title" }
       `\`\`\`md
 # Fake
 \`\`\`
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("does not open a backtick fence whose info string contains a backtick", () => {
+    const analysis = analyzeDocTitles(
+      `\`\`\`md \`invalid\`
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("allows backticks in tilde-fence info strings", () => {
+    const analysis = analyzeDocTitles(
+      `~~~md \`valid\`
+# Fake
+~~~
 # Real Title
 `,
       wrapper,

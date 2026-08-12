@@ -99,12 +99,10 @@ function normalizePath(path) {
   return posix.normalize(path.replaceAll("\\", "/").replace(/^\.\//, ""))
 }
 
-const virtualProgramCache = new Map()
-
 function virtualProgram(files, packages = []) {
-  const cacheKey = JSON.stringify([files, packages])
-  const cached = virtualProgramCache.get(cacheKey)
-  if (cached) return cached
+  // Do not cache Programs across fixtures. Mutation batches intentionally use
+  // distinct virtual files, and retaining every checker until process exit can
+  // exhaust Node's default heap. Contract fingerprints have their own compact cache.
   const root = "/fixture"
   const normalizedFiles = new Map(
     Object.entries(files).map(([path, source]) => [`${root}/${normalizePath(path)}`, source]),
@@ -189,7 +187,6 @@ function virtualProgram(files, packages = []) {
       return program.getSourceFile(`${root}/${normalizePath(path)}`)
     },
   }
-  virtualProgramCache.set(cacheKey, result)
   return result
 }
 
@@ -721,7 +718,11 @@ function moduleInventory(program, sourcePath) {
   if (!moduleSymbol) return { sourceFile, exports: new Map() }
   const exports = new Map()
   for (const publicSymbol of program.checker.getExportsOfModule(moduleSymbol)) {
-    const name = String(publicSymbol.escapedName)
+    const escapedName = String(publicSymbol.escapedName)
+    // TypeScript escapes identifiers beginning with `__` by adding exactly one
+    // underscore. Restore the authored public name without collapsing a literal
+    // third (or later) underscore.
+    const name = escapedName.startsWith("___") ? escapedName.slice(1) : escapedName
     const target = resolveAliasedSymbol(publicSymbol, program.checker)
     exports.set(name, {
       fingerprint: declarationsFingerprint(target?.declarations ?? [], name, program.checker),
@@ -760,8 +761,9 @@ function maskMdx(source, { comments = true, fences = true } = {}) {
         characters.splice(offset, line.length, ...replacement)
         if (shouldClose) open = null
       } else {
-        const run = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
-        if (run) {
+        const opening = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(content)
+        const run = opening?.[1]
+        if (run && (run[0] === "~" || !opening?.[2]?.includes("`"))) {
           open = { character: run[0], length: run.length }
           const replacement = maskText(line)
           characters.splice(offset, line.length, ...replacement)
@@ -1079,7 +1081,7 @@ function contractFencesFromDocument(document) {
     }
 
     const opening = /^([ \t]{0,3})(`{3,}|~{3,})(.*)$/.exec(lines[index])
-    if (!opening) continue
+    if (!opening || (opening[2][0] === "`" && opening[3].includes("`"))) continue
     const info = opening[3].trim()
     const contract =
       opening[1] === "" && opening[2] === "```"
@@ -1325,7 +1327,7 @@ function behaviorBlocks(document) {
     const end = next?.index ?? lines.length
     const blockLines = lines.slice(heading.index + 1, end)
     const firstLine = blockLines[0]?.trim() ?? ""
-    const markerMatch = /^<!-- api-behavior-authorities: (\[[\s\S]*\]) -->$/.exec(firstLine)
+    const markerMatch = /^\{\/\* api-behavior-authorities: (\[[\s\S]*\]) \*\/\}$/.exec(firstLine)
     let identities = null
     if (markerMatch) {
       try {

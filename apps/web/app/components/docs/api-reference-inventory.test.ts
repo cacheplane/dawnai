@@ -1,13 +1,105 @@
 import { spawnSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render-route-types"
-import { GENERATED_ROUTES_ARTIFACT } from "./api-reference"
+import {
+  API_BEHAVIOR_CONTRACTS,
+  ARTIFACT_REGISTRY,
+  GENERATED_ROUTES_ARTIFACT,
+} from "./api-reference"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
+
+const foundationalPages = [
+  { slug: "sdk", label: "@dawn-ai/sdk", href: "/docs/api/sdk" },
+  { slug: "cli", label: "@dawn-ai/cli", href: "/docs/api/cli" },
+  { slug: "core", label: "@dawn-ai/core", href: "/docs/api/core" },
+  { slug: "generated-routes", label: "dawn:routes", href: "/docs/api/generated-routes" },
+] as const
+
+const foundationalSections = [
+  "Use this when",
+  "Install and import",
+  "Compatibility and audience",
+  "Public exports",
+  "Key contracts",
+  "Examples and related guides",
+] as const
+
+const foundationalPackageSlugs = new Map([
+  ["@dawn-ai/sdk", "sdk"],
+  ["@dawn-ai/cli", "cli"],
+  ["@dawn-ai/core", "core"],
+])
+
+const foundationalCompatibilityRows = [
+  ...ARTIFACT_REGISTRY.flatMap((artifact) => {
+    const slug =
+      "packageName" in artifact ? foundationalPackageSlugs.get(artifact.packageName) : null
+    if (!slug) return []
+
+    if (artifact.kind === "import" && artifact.surfaceKind === "typescript-runtime") {
+      const surface =
+        artifact.subpath === "."
+          ? artifact.packageName
+          : `${artifact.packageName}${artifact.subpath.slice(1)}`
+      return [
+        {
+          slug,
+          cells: [
+            surface,
+            artifact.runtime,
+            artifact.purity,
+            artifact.audience,
+            artifact.stability,
+          ],
+        },
+      ]
+    }
+
+    if (
+      artifact.kind === "operated" &&
+      artifact.packageName === "@dawn-ai/cli" &&
+      artifact.selector === "bin.dawn"
+    ) {
+      return [
+        {
+          slug,
+          cells: ["bin:dawn", artifact.runtime, "n/a", artifact.audience, artifact.stability],
+        },
+      ]
+    }
+
+    return []
+  }),
+  {
+    slug: "generated-routes",
+    cells: [
+      GENERATED_ROUTES_ARTIFACT.moduleName,
+      "generated types",
+      GENERATED_ROUTES_ARTIFACT.audience,
+      GENERATED_ROUTES_ARTIFACT.stability,
+    ],
+  },
+]
+
+function compatibilityRow(cells: readonly string[]): string {
+  return `| ${cells.map((cell, index) => (index === 0 ? `\`${cell}\`` : cell)).join(" | ")} |`
+}
+
+function foundationalContent(slug: string): string {
+  const path = join(REPO_ROOT, "apps/web/content/docs/api", `${slug}.mdx`)
+  return existsSync(path) ? readFileSync(path, "utf8") : ""
+}
+
+function foundationalWrapper(slug: string): string {
+  const path = join(REPO_ROOT, "apps/web/app/docs/api", slug, "page.tsx")
+  return existsSync(path) ? readFileSync(path, "utf8") : ""
+}
 
 interface InventoryFixture {
   readonly name: string
@@ -211,10 +303,10 @@ const agentConfigFieldTable = `**Fields: \`@dawn-ai/sdk#.:AgentConfig\`**
 | \`readonly strategy\` | \`"fast" \\| "slow"\` | no | Execution strategy. |`
 
 const behaviorMarker =
-  '<!-- api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"BehaviorOptions.retries"},{"kind":"test-assertion","file":"packages/sdk/test/behavior.test.ts","testNames":["uses three retries","uses matrix","polls status"]}] -->'
+  '{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"BehaviorOptions.retries"},{"kind":"test-assertion","file":"packages/sdk/test/behavior.test.ts","testNames":["uses three retries","uses matrix","polls status"]}] */}'
 
 const selectorMarker =
-  '<!-- api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"retryDefault"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"Mode.Fast"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"Limits.max"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"behaviorMap.retry"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"decide.branch[0]"}] -->'
+  '{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"retryDefault"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"Mode.Fast"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"Limits.max"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"behaviorMap.retry"},{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"decide.branch[0]"}] */}'
 
 function baseline(): InventoryFixture {
   return {
@@ -299,7 +391,7 @@ See <https://dawn.example/retry>, <mailto:help@dawn.example>, and <help@dawn.exa
 />
 
 #### Behavior contract \`sdk-options-shape\`
-<!-- api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"BehaviorOptions"}] -->
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"BehaviorOptions"}] */}
 import {
   cards,
 } from "./cards.js"
@@ -311,7 +403,7 @@ export behavior remains visible.
 Retry options expose the supported attempt range.
 
 #### Behavior contract \`sdk-choice-branch\`
-<!-- api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"choose.branch[0]"}] -->
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sdk/src/behavior.ts","selector":"choose.branch[0]"}] */}
 Active choices select the on branch.
 
 #### Behavior contract \`sdk-selector-shapes\`
@@ -1089,6 +1181,12 @@ export interface MergedOptions extends ExtraOptions {
   mutated("behavior-marker-changed", (fixture) => {
     replaceDoc(fixture, '"selector":"BehaviorOptions.retries"', '"selector":"BehaviorOptions.mode"')
   }),
+  mutated("behavior-html-marker", (fixture) => {
+    replaceDoc(fixture, behaviorMarker, `${behaviorMarker.slice(3, -3).replace(/^ /, "<!-- ")} -->`)
+  }),
+  mutated("behavior-marker-not-immediate", (fixture) => {
+    replaceDoc(fixture, behaviorMarker, `Prose before marker.\n${behaviorMarker}`)
+  }),
   mutated("behavior-contract-extra-field", (fixture) => {
     firstBehaviorContract(fixture).unexpected = true
   }),
@@ -1156,9 +1254,33 @@ export interface MergedOptions extends ExtraOptions {
     replaceDoc(fixture, behaviorMarker, "")
     appendToPrimaryDoc(fixture, sdkRetriesBlock())
   }),
+  mutated("invalid-backtick-info-visible", (fixture) => {
+    appendToPrimaryDoc(
+      fixture,
+      `\`\`\`md \`invalid\`
+${ownershipTable([["Ghost", "This visible decoy must be rejected."]], "@x/foreign")}`,
+    )
+  }),
 ]
 
 const acceptanceFixtures: InventoryFixture[] = [
+  mutated("leading-underscore-public-exports", (fixture) => {
+    replaceDoc(
+      fixture,
+      "| `defaultExport` | Call the default helper. |",
+      "| `defaultExport` | Call the default helper. |\n| `__testHook` | Reset test state. |\n| `___literalName` | Preserve a literal triple-underscore name. |",
+    )
+    fixture.files["packages/sdk/src/index.ts"] +=
+      "\nexport const __testHook = true\nexport const ___literalName = true\n"
+  }),
+  mutated("leading-underscore-owner-mutation", (fixture) => {
+    replaceDoc(
+      fixture,
+      "| `defaultExport` | Call the default helper. |",
+      "| `defaultExport` | Call the default helper. |\n| `___testHook` | Wrong escaped spelling. |",
+    )
+    fixture.files["packages/sdk/src/index.ts"] += "\nexport const __testHook = true\n"
+  }),
   mutated("nested-contract-fence-decoy", (fixture) => {
     appendToPrimaryDoc(
       fixture,
@@ -1167,6 +1289,14 @@ const acceptanceFixtures: InventoryFixture[] = [
 export declare const Ghost: string
 \`\`\`
 \`\`\`\``,
+    )
+  }),
+  mutated("tilde-info-backtick-decoy", (fixture) => {
+    appendToPrimaryDoc(
+      fixture,
+      `~~~md \`valid\`
+${ownershipTable([["Ghost", "This fenced decoy must be ignored."]], "@x/foreign")}
+~~~`,
     )
   }),
   mutated("unescaped-code-span-pipe", (fixture) => {
@@ -1476,12 +1606,15 @@ const fixtures: InventoryFixture[] = [
   ...generatedReviewFixtures,
 ]
 
-const subprocess = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-api-inventory"], {
-  cwd: REPO_ROOT,
-  encoding: "utf8",
-  input: JSON.stringify(fixtures),
-  maxBuffer: 16 * 1024 * 1024,
-})
+const fixtureInput = JSON.stringify(fixtures)
+const subprocesses = [
+  spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-api-inventory"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    input: fixtureInput,
+    maxBuffer: 16 * 1024 * 1024,
+  }),
+]
 
 interface Analysis {
   readonly name: string
@@ -1492,17 +1625,140 @@ interface Analysis {
   }[]
 }
 
-const analyses =
+const analyses = subprocesses.flatMap((subprocess) =>
   subprocess.status === 0 && subprocess.stdout.startsWith("[")
     ? (JSON.parse(subprocess.stdout) as readonly Analysis[])
-    : []
+    : [],
+)
 const byName = new Map(analyses.map((analysis) => [analysis.name, analysis]))
 
+describe("foundational API reference pages", () => {
+  it.each(foundationalPages)("uses the exact title, H1, and wrapper href for $href", (page) => {
+    const content = foundationalContent(page.slug)
+    const wrapper = foundationalWrapper(page.slug)
+
+    expect(content.match(/^# (.+)$/m)?.[1]).toBe(page.label)
+    expect(wrapper).toContain(`export const metadata: Metadata = { title: "${page.label}" }`)
+    expect(wrapper).toContain(`<DocsPage href="${page.href}" Content={Content} />`)
+  })
+
+  it.each(foundationalPages)("uses the six-section reference template for $href", (page) => {
+    const headings = [...foundationalContent(page.slug).matchAll(/^## (.+)$/gm)].map(
+      (match) => match[1],
+    )
+    expect(headings).toEqual(foundationalSections)
+  })
+
+  it("keeps SDK root, pure, and testing surfaces distinct", () => {
+    const content = foundationalContent("sdk")
+    expect(content).toContain("### `@dawn-ai/sdk`")
+    expect(content).toContain("### `@dawn-ai/sdk/pure`")
+    expect(content).toContain("### `@dawn-ai/sdk/testing`")
+    expect(content).toContain("not the `@dawn-ai/testing` package")
+  })
+
+  it("keeps CLI imports and executable distinct", () => {
+    const content = foundationalContent("cli")
+    for (const surface of [
+      "@dawn-ai/cli",
+      "@dawn-ai/cli/fetch",
+      "@dawn-ai/cli/runtime",
+      "@dawn-ai/cli/testing",
+      "bin:dawn",
+    ]) {
+      expect(content).toContain(`### \`${surface}\``)
+    }
+  })
+
+  it("publishes the exact ServeRuntimeOptions contract and all current fields", () => {
+    const content = foundationalContent("cli")
+    expect(content).toContain('```ts api-contract="@dawn-ai/cli#.:ServeRuntimeOptions"')
+    expect(content).toContain("**Fields: `@dawn-ai/cli#.:ServeRuntimeOptions`**")
+    for (const field of [
+      "appRoot",
+      "host",
+      "port",
+      "installSignalHandlers",
+      "modules",
+      "config",
+      "checkpointer",
+      "threadsStore",
+      "permissionsStore",
+      "memoryStore",
+      "middleware",
+    ]) {
+      expect(content).toContain(`| \`readonly ${field}`)
+    }
+    expect(content).not.toContain("| `readonly sandboxManager`")
+  })
+
+  it("defers canonical-owner deep links until stable anchors land", () => {
+    expect(foundationalContent("cli")).not.toContain("/docs/api#dawn-ai-langchain")
+    expect(foundationalContent("core")).not.toContain("/docs/api#dawn-ai-sqlite-storage")
+  })
+
+  it("marks the Core compiler subpath as internal", () => {
+    const content = foundationalContent("core")
+    expect(content).toContain("### `@dawn-ai/core/internal/compiler`")
+    expect(content).toMatch(/@dawn-ai\/core\/internal\/compiler[\s\S]{0,500}\binternal\b/i)
+  })
+
+  it.each(foundationalCompatibilityRows)(
+    "renders the registry-derived compatibility row for $cells.0",
+    ({ cells, slug }) => {
+      expect(foundationalContent(slug)).toContain(compatibilityRow(cells))
+    },
+  )
+
+  it.each(foundationalCompatibilityRows)(
+    "rejects compatibility-label drift for $cells.0",
+    ({ cells, slug }) => {
+      for (let index = 1; index < cells.length; index += 1) {
+        const mutated = [...cells]
+        mutated[index] = `wrong-${index}`
+        expect(foundationalContent(slug)).not.toContain(compatibilityRow(mutated))
+      }
+    },
+  )
+
+  it("passes the source-derived foundational inventory and behavior contracts", () => {
+    const result = spawnSync(
+      process.execPath,
+      [CHECK_DOCS_PATH, "--analyze-foundational-api-references"],
+      { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    )
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ failures: [] })
+  })
+
+  it("registers source-coupled defaults, errors, and lifecycle behavior", () => {
+    expect(API_BEHAVIOR_CONTRACTS.map(({ id }) => id)).toEqual([
+      "sdk.agent.descriptor-shape",
+      "sdk.middleware.result-shapes",
+      "sdk.validate-model-id.advisory",
+      "cli.serve.production-boot",
+      "cli.serve-runtime.port-precedence",
+      "cli.fetch.request-store-lifecycle",
+      "core.load-config.failed-load-eviction",
+      "core.state.reducer-resolution",
+      "generated-routes.state-conditional",
+      "generated-routes.tool-signatures",
+    ])
+  })
+})
+
 describe("source-derived API inventory", () => {
-  it("runs every isolated fixture through one stdin-fed batch", () => {
-    expect(subprocess.status, subprocess.stderr || subprocess.stdout).toBe(0)
-    expect(subprocess.stderr).toBe("")
+  it("runs every isolated fixture through one compact stdin-fed process", () => {
+    expect(fixtures).toHaveLength(157)
+    expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)
+    expect(Buffer.byteLength(fixtureInput)).toBeLessThan(2 * 1024 * 1024)
+    expect(subprocesses).toHaveLength(1)
+    for (const subprocess of subprocesses) {
+      expect(subprocess.status, subprocess.stderr || subprocess.stdout).toBe(0)
+      expect(subprocess.stderr).toBe("")
+    }
     expect(analyses).toHaveLength(fixtures.length)
+    expect(new Set(analyses.map(({ name }) => name)).size).toBe(fixtures.length)
   })
 
   it("accepts checker-derived named, wildcard, alias, and default re-exports", () => {
@@ -1551,6 +1807,12 @@ describe("source-derived API inventory", () => {
     expect(byName.get("nested-contract-fence-decoy")?.failures).toEqual([])
   })
 
+  it("rejects visible ownership after an invalid backtick-fence opener", () => {
+    expect(byName.get("invalid-backtick-info-visible")?.failures).toEqual(
+      expect.arrayContaining([expect.stringMatching(/@x\/foreign#\.:Ghost.*known detailed/i)]),
+    )
+  })
+
   it.each([
     "unescaped-code-span-pipe",
     "class-private-details-ignored",
@@ -1570,6 +1832,8 @@ describe("source-derived API inventory", () => {
     "source-ast-comments",
     "contract-literal-quote-style",
     "workspace-package-reexports",
+    "leading-underscore-public-exports",
+    "tilde-info-backtick-decoy",
   ])("accepts %s", (name) => {
     expect(byName.get(name)?.failures).toEqual([])
   })
@@ -1703,6 +1967,7 @@ describe("source-derived API inventory", () => {
     ["field-table-malformed-columns", /field table.*(?:row|structure)/i],
     ["foreign-ownership-key", /@x\/foreign#\.:Ghost.*known detailed/i],
     ["malformed-ownership-key", /malformed.*ownership/i],
+    ["leading-underscore-owner-mutation", /___testHook.*stale|__testHook.*undocumented/i],
     ["ownership-wrong-owner-page", /ownership.*canonical owner page/i],
   ])("rejects %s globally", (name, diagnostic) => {
     expect(byName.get(name)?.failures).toEqual(
@@ -1723,6 +1988,8 @@ describe("source-derived API inventory", () => {
     ["behavior-authority-removed", /sdk-retries.*authorit.*identity/i],
     ["behavior-marker-removed", /sdk-retries.*authorit.*marker/i],
     ["behavior-marker-changed", /sdk-retries.*authorit.*identity/i],
+    ["behavior-html-marker", /sdk-retries.*authorit.*marker/i],
+    ["behavior-marker-not-immediate", /sdk-retries.*authorit.*marker/i],
     ["behavior-contract-extra-field", /sdk-retries.*registry.*field/i],
     ["behavior-source-declaration", /sdk-options-shape.*source-ast.*BehaviorOptions/i],
     ["behavior-source-branch", /sdk-choice-branch.*source-ast.*choose\.branch\[0\]/i],

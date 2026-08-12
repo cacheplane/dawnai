@@ -25,7 +25,11 @@ import {
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
-import { analyzeApiInventoryBatch, manifestArtifactEntries } from "./lib/docs-api-inventory.mjs"
+import {
+  analyzeApiInventoryBatch,
+  manifestArtifactEntries,
+  readPublicSourceInventory,
+} from "./lib/docs-api-inventory.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
 const { default: GithubSlugger } = await import(
@@ -53,8 +57,9 @@ function maskFencedCode(source) {
         return maskText(line)
       }
 
-      const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
-      if (!opening) return line
+      const openingMatch = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(content)
+      const opening = openingMatch?.[1]
+      if (!opening || (opening[0] === "`" && openingMatch?.[2]?.includes("`"))) return line
       fence = { character: opening[0], length: opening.length }
       return maskText(line)
     })
@@ -784,6 +789,99 @@ if (process.argv[2] === "--analyze-api-inventory") {
       else resolveWrite()
     })
   })
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-foundational-api-references") {
+  const foundationalRegistry = await tsImport(
+    pathToFileURL(resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")).href,
+    import.meta.url,
+  )
+  const sourceInventory = await readPublicSourceInventory(repoRoot)
+  const foundationalHrefs = new Set([
+    "/docs/api/sdk",
+    "/docs/api/cli",
+    "/docs/api/core",
+    "/docs/api/generated-routes",
+  ])
+  const pages = foundationalRegistry.API_REFERENCE_PAGES.filter(({ href }) =>
+    foundationalHrefs.has(href),
+  )
+  const ownerByPackage = new Map(
+    pages.flatMap((page) =>
+      page.surfaceName === "dawn:routes"
+        ? []
+        : page.ownerPackageNames.map((name) => [name, page.href]),
+    ),
+  )
+  const artifacts = foundationalRegistry.ARTIFACT_REGISTRY.flatMap((artifact) => {
+    if (artifact.kind === "generated") return [artifact]
+    if (
+      artifact.kind !== "import" ||
+      artifact.coverage !== "detailed" ||
+      !ownerByPackage.has(artifact.packageName)
+    ) {
+      return []
+    }
+    return [{ ...artifact, ownerHref: ownerByPackage.get(artifact.packageName) }]
+  })
+  const documents = pages.map(({ href }) => ({
+    href,
+    path: docHrefToContentPath(href),
+    source: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
+  }))
+  const authorityFiles = new Set(
+    foundationalRegistry.API_BEHAVIOR_CONTRACTS.flatMap(({ authorities }) =>
+      authorities.map(({ file }) => file),
+    ),
+  )
+  for (const file of authorityFiles) {
+    if (!Object.hasOwn(sourceInventory.files, file)) {
+      sourceInventory.files[file] = readFileSync(resolve(repoRoot, file), "utf8")
+    }
+  }
+  const generatedManifest = {
+    appRoot: "/fixture/app",
+    routes: [
+      {
+        id: "/hello/[tenant]",
+        pathname: "/hello/[tenant]",
+        kind: "workflow",
+        entryFile: "/fixture/app/hello/[tenant].ts",
+        routeDir: "/fixture/app/hello/[tenant]",
+        segments: [
+          { kind: "static", raw: "hello" },
+          { kind: "dynamic", name: "tenant", raw: "[tenant]" },
+        ],
+      },
+    ],
+  }
+  const { renderDawnTypes } = await tsImport(
+    pathToFileURL(resolve(repoRoot, "packages/core/src/typegen/render-route-types.ts")).href,
+    import.meta.url,
+  )
+  const generatedDeclarations = renderDawnTypes(
+    generatedManifest,
+    [
+      {
+        pathname: "/hello/[tenant]",
+        tools: [{ name: "greet", description: "Greet", inputType: "void", outputType: "string" }],
+      },
+    ],
+    [{ pathname: "/hello/[tenant]", fields: [{ name: "status", type: '"ready"' }] }],
+  )
+  const [analysis] = analyzeApiInventoryBatch([
+    {
+      name: "foundational-api-references",
+      packages: sourceInventory.packages,
+      artifacts,
+      documents,
+      behaviorContracts: foundationalRegistry.API_BEHAVIOR_CONTRACTS,
+      files: sourceInventory.files,
+      generatedAuthorities: [{ moduleName: "dawn:routes", declarations: generatedDeclarations }],
+    },
+  ])
+  process.stdout.write(`${JSON.stringify({ failures: analysis.failures })}\n`)
   process.exit(0)
 }
 
@@ -3345,6 +3443,9 @@ const wrapperDocHrefs = walkFiles(docsWrapperRoot, (file) => basename(file) === 
 const navDocHrefSet = new Set(uniqueNavDocHrefs)
 const contentDocHrefSet = new Set(contentDocHrefs)
 const wrapperDocHrefSet = new Set(wrapperDocHrefs)
+const apiReferencePageByHref = new Map(
+  (apiReferenceRegistry?.API_REFERENCE_PAGES ?? []).map((page) => [page.href, page]),
+)
 
 for (const href of uniqueNavDocHrefs) {
   if (!contentDocHrefSet.has(href)) {
@@ -3355,7 +3456,14 @@ for (const href of uniqueNavDocHrefs) {
   }
 }
 
-for (const { label, href } of navDocEntries) {
+const authoredRegisteredDocs = [
+  ...navDocEntries,
+  ...[...apiReferencePageByHref.values()].filter(
+    ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
+  ),
+]
+
+for (const { label, href } of authoredRegisteredDocs) {
   if (!contentDocHrefSet.has(href) || !wrapperDocHrefSet.has(href)) continue
 
   const contentPath = resolve(repoRoot, docHrefToContentPath(href))
@@ -3378,14 +3486,18 @@ for (const { label, href } of navDocEntries) {
 }
 
 for (const href of contentDocHrefs) {
-  if (!navDocHrefSet.has(href)) {
+  if (!navDocHrefSet.has(href) && !apiReferencePageByHref.has(href)) {
     failures.push(`Authored docs content for ${href} is not registered in DOCS_NAV`)
+  } else if (apiReferencePageByHref.has(href) && !wrapperDocHrefSet.has(href)) {
+    failures.push(`Authored API reference content for ${href} is missing its paired wrapper`)
   }
 }
 
 for (const href of wrapperDocHrefs) {
-  if (!navDocHrefSet.has(href)) {
+  if (!navDocHrefSet.has(href) && !apiReferencePageByHref.has(href)) {
     failures.push(`Docs wrapper for ${href} is not registered in DOCS_NAV`)
+  } else if (apiReferencePageByHref.has(href) && !contentDocHrefSet.has(href)) {
+    failures.push(`API reference wrapper for ${href} is missing its paired content`)
   }
 }
 

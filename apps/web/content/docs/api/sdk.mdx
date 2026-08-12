@@ -1,0 +1,222 @@
+# @dawn-ai/sdk
+
+## Use this when
+
+Start here when you build a Dawn application. `@dawn-ai/sdk` owns the route-authoring types and helpers most application code uses. Reach for `/pure` only when an integration needs dependency-free path or hash utilities, and `/testing` when you author route scenarios for `dawn test`.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/sdk
+```
+
+```ts
+import { agent, defineMiddleware, defineMemory } from "@dawn-ai/sdk"
+import { pureJoin } from "@dawn-ai/sdk/pure"
+import { scenarios } from "@dawn-ai/sdk/testing"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/sdk` | edge-safe | not-claimed | application | supported |
+| `@dawn-ai/sdk/pure` | edge-safe | dependency-free | integration | supported |
+| `@dawn-ai/sdk/testing` | node-only | not-claimed | testing | supported |
+
+`@dawn-ai/sdk/testing` is the route-scoped scenario API used by `dawn test`; it is not the `@dawn-ai/testing` package, which provides a programmatic agent harness.
+
+## Public exports
+
+### `@dawn-ai/sdk`
+
+| Export | Responsibility |
+|---|---|
+| `AgentConfig` | Configure an agent route. |
+| `ConstraintContext` | Describe the live context passed to a tool constraint. |
+| `ConstraintPredicate` | Validate one tool call before execution. |
+| `ConstraintVerdict` | Express a constraint decision. |
+| `DawnAgent` | Represent an authored agent route. |
+| `DelegationConfig` | Configure subagent delegation policy. |
+| `DelegationConstraintPredicate` | Validate a delegated request. |
+| `DelegationContext` | Describe a delegated request's live context. |
+| `DelegationRequest` | Describe a delegated input. |
+| `DelegationRule` | Express one named delegation policy. |
+| `DelegationRules` | Map subagent names to delegation policy. |
+| `DelegationVerdict` | Express a delegation constraint decision. |
+| `ReasoningConfig` | Configure model reasoning effort. |
+| `RetryConfig` | Configure model-call retry attempts and delay. |
+| `SubagentMap` | Map local subagent names to agents. |
+| `ToolScope` | Select and gate route tools. |
+| `agent` | Declare an agent route. |
+| `isDawnAgent` | Test whether a value is an authored Dawn agent. |
+| `BackendAdapter` | Define a route backend adapter contract. |
+| `DawnErrorCode` | Name a registered Dawn error. |
+| `DawnErrorDescriptor` | Describe a registered Dawn error. |
+| `DAWN_ERRORS` | Read the error descriptor registry. |
+| `describeError` | Look up an error descriptor. |
+| `errorDocsUrl` | Build the documentation URL for an error code. |
+| `AnthropicModelId` | Name a curated Anthropic model. |
+| `GoogleModelId` | Name a curated Google model. |
+| `KnownModelId` | Offer curated model autocomplete while accepting custom string IDs. |
+| `OpenAiModelId` | Name a curated OpenAI model. |
+| `XaiModelId` | Name a curated xAI model. |
+| `ANTHROPIC_MODEL_IDS` | List curated Anthropic model IDs. |
+| `CURATED_MODEL_IDS` | Map curated providers to model IDs. |
+| `GOOGLE_MODEL_IDS` | List curated Google model IDs. |
+| `OPENAI_MODEL_IDS` | List curated OpenAI model IDs. |
+| `XAI_MODEL_IDS` | List curated xAI model IDs. |
+| `DefinedMemory` | Represent a typed memory declaration. |
+| `MemoryScopeDimension` | Define one typed memory namespace dimension. |
+| `defineMemory` | Declare a typed long-term memory schema. |
+| `ContinueResult` | Continue middleware execution with optional context. |
+| `DawnMiddleware` | Define the middleware function contract. |
+| `MiddlewareRequest` | Describe a middleware request. |
+| `MiddlewareResult` | Express a middleware decision. |
+| `RejectResult` | Stop middleware execution with a response. |
+| `allow` | Continue middleware execution. |
+| `defineMiddleware` | Preserve types for a middleware function. |
+| `reject` | Stop middleware execution. |
+| `BuiltInModelProviderId` | Name a built-in model provider. |
+| `ModelProviderId` | Name a built-in or custom model provider. |
+| `inferProvider` | Infer a provider from a model ID. |
+| `SUPPORTED_AGENT_PROVIDERS` | List providers built into agent materialization. |
+| `RouteConfig` | Describe route metadata. |
+| `RouteKind` | Name a supported route kind. |
+| `RouteStateMap` | Expose an open compatibility interface for route state. |
+| `RouteToolMap` | Expose an open compatibility interface for route tools. |
+| `RuntimeContext` | Provide request-scoped runtime data. |
+| `RuntimeTool` | Describe a runtime tool callable. |
+| `ToolRegistry` | Map runtime tool names to callables. |
+| `Prettify` | Flatten an object type for editor display. |
+| `ModelIdValidation` | Represent advisory model-ID validation. |
+| `validateModelId` | Check a model ID against curated suggestions. |
+| `DawnToolContext` | Provide context to a Dawn tool. |
+| `WorkspaceFs` | Define the workspace filesystem contract exposed to tools. |
+
+### `@dawn-ai/sdk/pure`
+
+| Export | Responsibility |
+|---|---|
+| `POSIX_SEP` | Expose the portable path separator. |
+| `pureBasename` | Read the last path component. |
+| `pureDirname` | Read the parent path. |
+| `pureJoin` | Join path segments without Node dependencies. |
+| `pureRelative` | Compute one portable relative path. |
+| `pureResolve` | Resolve portable path segments. |
+| `sha1Hex` | Compute a SHA-1 hexadecimal digest. |
+| `sha256Hex` | Compute a SHA-256 hexadecimal digest. |
+
+### `@dawn-ai/sdk/testing`
+
+| Export | Responsibility |
+|---|---|
+| `RouteScenarioMap` | Receive generated route-to-tool augmentation. |
+| `RuntimeErrorExpectation` | Describe an expected scenario error. |
+| `RuntimeExecutionBaseResult` | Share fields across scenario execution results. |
+| `RuntimeExecutionError` | Describe a failed execution error. |
+| `RuntimeExecutionErrorKind` | Name a runtime failure kind. |
+| `RuntimeExecutionFailureResult` | Represent a failed execution. |
+| `RuntimeExecutionMode` | Name the materialized route mode. |
+| `RuntimeExecutionResult` | Represent either execution outcome. |
+| `RuntimeExecutionSuccessResult` | Represent a successful execution. |
+| `RuntimeExecutionTiming` | Describe execution timing. |
+| `RuntimeMetaExpectation` | Describe expected runtime metadata. |
+| `ScenarioDescriptor` | Represent one authored scenario. |
+| `ScenarioSuiteBuilder` | Build route-scoped scenarios fluently. |
+| `ScenarioSuiteDescriptor` | Represent a completed scenario suite. |
+| `ScenarioToolCallExpectationDescriptor` | Describe an expected tool call. |
+| `ScenarioToolCallRecord` | Record an observed tool call. |
+| `ScenarioToolMockDescriptor` | Describe a mocked tool response. |
+| `expectError` | Assert a failed runtime result. |
+| `expectMeta` | Assert selected runtime metadata. |
+| `expectOutput` | Assert a successful runtime output. |
+| `isScenarioSuite` | Test whether a value is a scenario suite. |
+| `readScenarioSuite` | Read a scenario suite descriptor. |
+| `scenarios` | Start a typed scenario suite for a route. |
+
+## Key contracts
+
+### `agent()` and `AgentConfig`
+
+Use `agent()` as a route module's default export. `model` and `systemPrompt` are required; optional policy, retry, reasoning, subagent, and tool fields are preserved on the branded descriptor.
+
+```ts api-contract="@dawn-ai/sdk#.:agent"
+export declare function agent<const Subagents extends SubagentMap = {}>(
+  config: AgentConfig<Subagents>,
+): DawnAgent<Subagents>
+```
+
+```ts api-contract="@dawn-ai/sdk#.:AgentConfig"
+export interface AgentConfig<Subagents extends SubagentMap = {}> {
+  readonly delegation?: DelegationConfig<NoInfer<Extract<keyof Subagents, string>>>
+  readonly description?: string
+  readonly model: KnownModelId
+  readonly provider?: ModelProviderId
+  readonly reasoning?: ReasoningConfig
+  readonly retry?: RetryConfig
+  readonly recursionLimit?: number
+  readonly subagents?: Subagents
+  readonly tools?: ToolScope
+  readonly systemPrompt: string
+}
+```
+
+**Fields: `@dawn-ai/sdk#.:AgentConfig`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly delegation` | `DelegationConfig<NoInfer<Extract<keyof Subagents, string>>>` | no | Control dispatch to named subagents. |
+| `readonly description` | `string` | no | Describe the agent for selection. |
+| `readonly model` | `KnownModelId` | yes | Select the model. |
+| `readonly provider` | `ModelProviderId` | no | Override provider inference. |
+| `readonly reasoning` | `ReasoningConfig` | no | Tune reasoning effort. |
+| `readonly retry` | `RetryConfig` | no | Tune transient retry behavior. |
+| `readonly recursionLimit` | `number` | no | Cap LangGraph super-steps. |
+| `readonly subagents` | `Subagents` | no | Register child agents by name. |
+| `readonly tools` | `ToolScope` | no | Scope and gate tools. |
+| `readonly systemPrompt` | `string` | yes | Set the agent's system instruction. |
+
+#### Behavior contract `sdk.agent.descriptor-shape`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sdk/test/agent.test.ts","testNames":["descriptor is recognized by isDawnAgent","carries a tools scope through to the descriptor","omits tools when not provided"]}] */}
+agent() returns a branded descriptor and includes optional tool scope only when supplied.
+
+### `allow()` and `reject()`
+
+Middleware returns an explicit continue or reject result. Use `allow(context?)` to continue and `reject(status, body?)` to stop the request.
+
+#### Behavior contract `sdk.middleware.result-shapes`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sdk/test/middleware.test.ts","testNames":["returns a reject result with status and body","omits body when not provided","returns a continue result with context","omits context when not provided"]}] */}
+allow() and reject() return discriminated result objects; omitted context and body properties are absent.
+
+### `validateModelId()`
+
+Use this helper to improve author feedback for likely model-ID typos. It does not restrict custom model IDs.
+
+#### Behavior contract `sdk.validate-model-id.advisory`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sdk/test/validate-model-id.test.ts","testNames":["flags a near-miss on a curated provider with distance-then-prefix-ranked suggestions","stays silent for uncurated providers","stays silent when no provider can be resolved"]}] */}
+Model validation is advisory: curated near-misses return provider-specific suggestions, while an uncurated or unresolved provider returns ok: true.
+
+#### Application guidance
+
+Treat `ok: false` as a warning for application feedback, not a runtime gate.
+
+### `RouteConfig`
+
+`runtime`, `streaming`, and `tags` are reserved metadata and do not change execution today. Select deployment runtime with `build.targets`, select streaming through the endpoint or transport, and do not rely on tags for behavior.
+
+### Choosing a surface
+
+Application routes normally import the root. Use `/pure` for infrastructure that must avoid runtime dependencies. Use `/testing` in `*.scenario.ts` files; use `@dawn-ai/testing` when a test needs a programmatic harness instead. Its detailed reference lands with the testing package page.
+
+## Examples and related guides
+
+```ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "Answer concisely.",
+})
+```
+
+Continue with [Agents](/docs/agents), [Middleware](/docs/middleware), [Long-term Memory](/docs/memory/long-term), [Scenario Testing](/docs/testing), and [Agent Test Harness](/docs/testing-agents).

@@ -49,9 +49,217 @@ export interface ApiBehaviorContract {
   readonly authorities: readonly [ApiBehaviorAuthority, ...ApiBehaviorAuthority[]]
 }
 
-// Behavior entries land with the authored API pages. Keeping the typed registry here lets
-// the isolated analyzer and those pages share one contract without enabling global coverage.
-export const API_BEHAVIOR_CONTRACTS = [] as const satisfies readonly ApiBehaviorContract[]
+export const API_BEHAVIOR_CONTRACTS = [
+  {
+    id: "sdk.agent.descriptor-shape",
+    ownerHref: "/docs/api/sdk",
+    claim:
+      "agent() returns a branded descriptor and includes optional tool scope only when supplied.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sdk/test/agent.test.ts",
+        testNames: [
+          "descriptor is recognized by isDawnAgent",
+          "carries a tools scope through to the descriptor",
+          "omits tools when not provided",
+        ],
+        assertionFingerprint:
+          'expect(isDawnAgent(descriptor)).toBe(true)\nexpect(a.tools).toEqual({ allow: ["readFile"], deny: ["runBash"] })\nexpect("tools" in a).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "sdk.middleware.result-shapes",
+    ownerHref: "/docs/api/sdk",
+    claim:
+      "allow() and reject() return discriminated result objects; omitted context and body properties are absent.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sdk/test/middleware.test.ts",
+        testNames: [
+          "returns a reject result with status and body",
+          "omits body when not provided",
+          "returns a continue result with context",
+          "omits context when not provided",
+        ],
+        assertionFingerprint:
+          'expect ( result ) . toEqual ( { action : "reject" , status : 401 , body : { error : "Unauthorized" } , } )\nexpect ( result ) . toStrictEqual ( { action : "reject" , status : 403 } )\nexpect ( Object . hasOwn ( result , "body" ) ) . toBe ( false )\nexpect ( result ) . toEqual ( { action : "continue" , context : { userId : "user-1" , orgId : "org-1" } , } )\nexpect ( result ) . toStrictEqual ( { action : "continue" } )\nexpect ( Object . hasOwn ( result , "context" ) ) . toBe ( false )',
+      },
+    ],
+  },
+  {
+    id: "sdk.validate-model-id.advisory",
+    ownerHref: "/docs/api/sdk",
+    claim:
+      "Model validation is advisory: curated near-misses return provider-specific suggestions, while an uncurated or unresolved provider returns ok: true.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sdk/test/validate-model-id.test.ts",
+        testNames: [
+          "flags a near-miss on a curated provider with distance-then-prefix-ranked suggestions",
+          "stays silent for uncurated providers",
+          "stays silent when no provider can be resolved",
+        ],
+        assertionFingerprint:
+          'expect(result.ok).toBe(false)\nexpect(result.provider).toBe("openai")\nexpect(result.suggestions).toEqual(["gpt-5.4", "gpt-5.5", "gpt-4o"])\nexpect(validateModelId({ model: "llama3.1", provider: "ollama" })).toEqual({ ok: true })\nexpect(validateModelId({ model: "anything", provider: "openrouter" })).toEqual({ ok: true })\nexpect(validateModelId({ model: "mixtral-8x22b" })).toEqual({ ok: true })\nexpect(validateModelId({ model: "totally-custom" })).toEqual({ ok: true })',
+      },
+    ],
+  },
+  {
+    id: "cli.serve.production-boot",
+    ownerHref: "/docs/api/cli",
+    claim: "serveRuntime starts without running type generation or writing .dawn artifacts.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/serve-runtime.test.ts",
+        testNames: ["boots without running typegen (never writes .dawn artifacts)"],
+        assertionFingerprint:
+          'expect(existsSync(join(appRoot, ".dawn"))).toBe(false)\nexpect(response.status).toBe(200)\nexpect(existsSync(join(appRoot, ".dawn/dawn.generated.d.ts"))).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "cli.serve-runtime.port-precedence",
+    ownerHref: "/docs/api/cli",
+    claim:
+      "serveRuntime uses an explicit port first, then a numeric PORT value, then 8000. Empty or non-numeric PORT values also fall back to 8000; an explicit 0 still requests a random port.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/serve-runtime.test.ts",
+        testNames: [
+          "empty PORT env resolves to the 8000 default (not a random port)",
+          "non-numeric PORT env resolves to the 8000 default",
+          "numeric PORT env is honored",
+          "explicit port always wins, including 0 for a random port",
+        ],
+        assertionFingerprint:
+          'expect(resolveServePort(undefined, "")).toBe(8000)\nexpect(resolveServePort(undefined, "not-a-number")).toBe(8000)\nexpect(resolveServePort(undefined, "3000")).toBe(3000)\nexpect(resolveServePort(0, "8000")).toBe(0)\nexpect(resolveServePort(5555, "")).toBe(5555)',
+      },
+    ],
+  },
+  {
+    id: "cli.fetch.request-store-lifecycle",
+    ownerHref: "/docs/api/cli",
+    claim:
+      "A requestStores factory creates and disposes stores per request. Disposal waits for an SSE body to finish. close() waits for in-flight disposal while its bounded shutdown drain remains open; after the 30-second default deadline it warns and proceeds.",
+    authorities: [
+      {
+        kind: "source-ast",
+        file: "packages/cli/src/lib/dev/runtime-fetch-core.ts",
+        selector: "CLOSE_DRAIN_DEADLINE_MS",
+        expected: "const CLOSE_DRAIN_DEADLINE_MS = 30_000;",
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/request-stores.test.ts",
+        testNames: ["builds and disposes stores once per request, never reusing them"],
+        assertionFingerprint:
+          'expect((await handler.fetch(new Request("http://x/healthz"))).status).toBe(200)\nexpect((await handler.fetch(new Request("http://x/healthz"))).status).toBe(200)\nexpect(built).toEqual([1, 2])\nexpect(disposed).toEqual([1, 2])',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/request-stores.test.ts",
+        testNames: ["disposes only AFTER an SSE body finishes, not when fetch resolves"],
+        assertionFingerprint:
+          'expect(response.status).toBe(200)\nexpect(disposed).toEqual([])\nexpect(first.done).toBe(false)\nexpect(disposed).toEqual([])\nexpect(body).toContain("RUN_STARTED")\nexpect(body).toContain("bundled reply")\nexpect(body).toContain("RUN_FINISHED")\nexpect(disposed).toEqual([1])\nexpect(threads.has("th-per-request")).toBe(true)',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/request-stores.test.ts",
+        testNames: ["close() does not return while a store disposal is still in flight"],
+        assertionFingerprint:
+          'expect((await handler.fetch(new Request("http://x/healthz"))).status).toBe(200)\nexpect(events).toEqual(["dispose:start"])\nexpect(closed).toBe(false)\nexpect(events).toEqual(["dispose:start", "dispose:end", "close:returned"])',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/cli/test/runtime-fetch-parity.test.ts",
+        testNames: [
+          "close() with an entirely unread SSE body warns after the drain deadline and proceeds",
+        ],
+        assertionFingerprint:
+          'expect(response.status).toBe(200)\nexpect(handler.state.activeRequests).toBe(1)\nexpect(warn).toHaveBeenCalledTimes(1)\nexpect(String(warn.mock.calls[0]?.[0])).toContain("1 request(s)")\nexpect(String(warn.mock.calls[0]?.[0])).toContain("proceeding with shutdown")',
+      },
+    ],
+  },
+  {
+    id: "core.load-config.failed-load-eviction",
+    ownerHref: "/docs/api/core",
+    claim:
+      "loadDawnConfig memoizes per app root. A failed in-flight load is evicted only while that same promise remains cached, so a seed written during the load survives its later rejection.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/config-loader-seam.test.ts",
+        testNames: [
+          "dispatches through the registered loader and memoizes its result",
+          "a seed survives an in-flight registered load rejecting after the seed lands",
+        ],
+        assertionFingerprint:
+          'expect(first.config.appDir).toBe("src/app")\nexpect(second).toBe(first)\nexpect(calls).toBe(1)\nawait expect(inFlight).rejects.toThrow(/loader blew up/)\nexpect(loaded.configPath).toBe("<seeded>")\nexpect(loaded.config.appDir).toBe("seeded")',
+      },
+    ],
+  },
+  {
+    id: "core.state.reducer-resolution",
+    ownerHref: "/docs/api/core",
+    claim:
+      "resolveStateFields infers append for array defaults and replace for scalar defaults, honors explicit reducer overrides, and sorts fields by name.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/resolve-state-fields.test.ts",
+        testNames: [
+          "infers append reducer for array defaults",
+          "infers replace reducer for scalar defaults",
+          "reducer overrides take precedence",
+          "sorts fields alphabetically by name",
+        ],
+        assertionFingerprint:
+          'expect ( result ) . toEqual ( [ { name : "results" , reducer : "append" , default : [ ] } , { name : "tags" , reducer : "append" , default : [ "initial" ] } , ] )\nexpect ( result ) . toEqual ( [ { name : "active" , reducer : "replace" , default : true } , { name : "confidence" , reducer : "replace" , default : 0 } , { name : "context" , reducer : "replace" , default : "" } , ] )\nexpect ( result ) . toEqual ( [ { name : "results" , reducer : customReducer , default : [ ] } ] )\nexpect ( result [ 0 ] ?. name ) . toBe ( "alpha" )\nexpect ( result [ 1 ] ?. name ) . toBe ( "zeta" )',
+      },
+    ],
+  },
+  {
+    id: "generated-routes.state-conditional",
+    ownerHref: "/docs/api/generated-routes",
+    claim:
+      "DawnRouteState and RouteState are generated when route state is present and omitted when state types are not supplied.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/render-route-types.test.ts",
+        testNames: [
+          "adds only the state exports when generated route state is present",
+          "does NOT include DawnRouteState when stateTypes is omitted",
+        ],
+        assertionFingerprint:
+          'expect ( output ) . toContain ( renderStateTypes ( stateTypes ) . trimEnd ( ) )\nexpect ( ambientModuleExports ( output , "dawn:routes" ) ) . toEqual ( [ "DawnRouteParams" , "DawnRoutePath" , "DawnRouteState" , "DawnRouteTools" , "RouteState" , "RouteTools" , ] )\nexpect ( output ) . not . toContain ( "DawnRouteState" )',
+      },
+    ],
+  },
+  {
+    id: "generated-routes.tool-signatures",
+    ownerHref: "/docs/api/generated-routes",
+    claim:
+      "DawnRouteTools omits routes with no tools and renders void-input tools as zero-argument functions returning promises.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/render-tool-types.test.ts",
+        testNames: [
+          "omits zero-tool routes and renders void-input tools as zero-argument promises",
+        ],
+        assertionFingerprint:
+          'expect(result).not.toContain(\'"/without-tools"\')\nexpect(result).toContain("readonly ping: () => Promise<string>;")',
+      },
+    ],
+  },
+] as const satisfies readonly ApiBehaviorContract[]
 
 interface ArtifactPolicy {
   readonly coverage: ApiReferenceCoverage

@@ -59,7 +59,7 @@ for (const abs of mdxFiles) {
   })
 }
 
-const nav = await loadNav(navFile)
+const nav = await loadNav(navFile, { exhaustive: true, existingSlugs: new Set(bySlug.keys()) })
 const labelOf = new Map(nav.map((entry) => [entry.slug, entry.label]))
 const finalize = (info) => ({
   slug: info.slug,

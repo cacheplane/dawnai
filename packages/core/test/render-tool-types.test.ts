@@ -132,6 +132,19 @@ describe("renderToolTypes", () => {
     `)
   })
 
+  test("omits zero-tool routes and renders void-input tools as zero-argument promises", () => {
+    const result = renderToolTypes([
+      { pathname: "/without-tools", tools: [] },
+      {
+        pathname: "/ping",
+        tools: [{ name: "ping", inputType: "void", outputType: "string" }],
+      },
+    ])
+
+    expect(result).not.toContain('"/without-tools"')
+    expect(result).toContain("readonly ping: () => Promise<string>;")
+  })
+
   test("multiple routes each with tools render all routes", () => {
     const routeTools: RouteToolTypes[] = [
       {
