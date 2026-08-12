@@ -42,14 +42,6 @@ const RUNTIME_SOURCE_EXTENSIONS = new Set([
 const MODEL_LAYER_EXTERNALS = ["@langchain/*", "langchain", "openai"]
 const FULL_GRAPH_EXTERNALS = MODEL_LAYER_EXTERNALS
 const COMPUTED_LOAD_BOUNDARIES = [
-  // loadMiddleware is injected as a Node fallback. The edge path requires options/modules
-  // middleware and never calls this dynamic application-file probe.
-  {
-    pathSuffix: "/packages/cli/dist/lib/dev/middleware.js",
-    enclosing: "loadMiddleware",
-    call: "import(path)",
-    start: 1464,
-  },
   // Model and embedder providers are selected by the application and already form the
   // authoritative model-layer boundary in fetch-entry-purity.
   {
@@ -1385,7 +1377,16 @@ describe("API reference compatibility guards", () => {
     ).loadOccurrences
     const firstLoad = duplicateLoads[0]
     expect(firstLoad).toBeDefined()
-    const fixtureBoundary = { ...COMPUTED_LOAD_BOUNDARIES[0], start: firstLoad?.start ?? -1 }
+    // Synthetic, not a registry entry: these assertions pin what identifies a
+    // boundary (path suffix, enclosing function, call text, exact offset), so they
+    // must keep exercising a `loadMiddleware`/`import(path)` shape whatever
+    // COMPUTED_LOAD_BOUNDARIES happens to hold.
+    const fixtureBoundary = {
+      pathSuffix: "/packages/cli/dist/lib/dev/middleware.js",
+      enclosing: "loadMiddleware",
+      call: "import(path)",
+      start: firstLoad?.start ?? -1,
+    }
     expect(
       duplicateLoads.filter((occurrence) =>
         matchesComputedLoadBoundary(
