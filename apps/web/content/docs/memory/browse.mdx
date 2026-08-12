@@ -99,7 +99,7 @@ Normalized `filters` are AND-combined and permit at most one predicate per field
 
 Content filters are case-insensitive in both in-repo stores. SQLite's built-in `lower()` folds ASCII only, so non-ASCII content matching can differ from Postgres. For example, case variants containing `É` may match under the Postgres database's case-folding rules but not under stock SQLite. Namespace filters remain case-sensitive and byte-exact.
 
-Call `validateBrowseQuery` at the untrusted boundary even though the in-repo stores validate defensively. The detailed limits, constants, and error codes belong in the [API Reference](/docs/api); map a `BrowseQueryError` to a client error rather than retrying it as a store outage.
+Call `validateBrowseQuery` at the untrusted boundary even though the in-repo stores validate defensively. The detailed limits, constants, and error codes belong in the [memory API reference](/docs/api/memory#trust-boundaries); map a `BrowseQueryError` to a client error rather than retrying it as a store outage.
 
 Top-level `status: []` and `kind: []` are valid and match nothing: “any of no values” is false. In the normalized `filters` array, empty `in` or `notIn` filter values are invalid because a present filter with no choices is treated as a UI/query-construction error. Validate arbitrary JSON and map `BrowseQueryError` to HTTP 400 as the handler does; unexpected store or infrastructure failures remain server errors.
 

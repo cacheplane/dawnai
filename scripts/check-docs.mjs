@@ -472,6 +472,50 @@ function markdownHeadings(source) {
   })
 }
 
+function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
+  const masked = maskFencedCode(source)
+    .replace(/<!--[\s\S]*?-->/g, (comment) => maskText(comment))
+    .replace(/{\/\*[\s\S]*?\*\/}/g, (comment) => maskText(comment))
+  const blocks = masked.split(/\n[ \t]*\n/).filter((block) => block.trim() !== "")
+  for (const block of blocks) {
+    const mentioned = new Set()
+    for (const symbol of knownSymbols) {
+      if (block.includes(`\`${symbol}\``)) mentioned.add(symbol)
+    }
+    const isDense =
+      mentioned.size >= threshold &&
+      knownSymbols.size > 0 &&
+      mentioned.size / knownSymbols.size >= 0.6
+    if (!isDense) continue
+
+    const blockLines = block.split(/\r?\n/)
+    const symbolFirst = new Set()
+    for (const line of blockLines) {
+      const content = line
+        .trimStart()
+        .replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, "")
+        .replace(/^\|\s*/, "")
+      for (const symbol of mentioned) {
+        if (content.startsWith(`\`${symbol}\``)) symbolFirst.add(symbol)
+      }
+    }
+    if (symbolFirst.size >= threshold) return true
+
+    const symbolBearingLines = blockLines.flatMap((line) => {
+      const symbols = [...mentioned].filter((symbol) => line.includes(`\`${symbol}\``))
+      return symbols.length === 0 ? [] : [{ line, symbolCount: symbols.length }]
+    })
+    const isDescriptiveWorkflowList =
+      symbolBearingLines.length >= 2 &&
+      symbolBearingLines.every(
+        ({ line, symbolCount }) =>
+          /^(?:[-*+]\s+|\d+[.)]\s+)/.test(line.trimStart()) && symbolCount <= 1,
+      )
+    if (!isDescriptiveWorkflowList) return true
+  }
+  return false
+}
+
 function markdownSectionRange(source, predicate) {
   const headings = markdownHeadings(source)
   const headingIndex = headings.findIndex(predicate)
@@ -1514,51 +1558,12 @@ const accuracyContracts = [
   {
     file: "apps/web/content/docs/api.mdx",
     required: [
+      "## Package and surface index",
+      "## Reference conventions",
       "## @dawn-ai/cli",
       "### @dawn-ai/cli/fetch",
       "## @dawn-ai/memory",
       "### @dawn-ai/memory/browse",
-      "lower-level tooling",
-      "serveRuntime",
-      "ServeRuntimeHandle",
-      "ServeRuntimeOptions",
-      "loadStaticModules",
-      "DawnStaticModules",
-      "createRuntimeFetchHandler",
-      "RuntimeFetchHandler",
-      "buildStaticRouteModule",
-      "requestStores",
-      "partial allocation",
-      "does not own or close injected boot stores",
-      "requires `modules` during handler construction",
-      "boot `threadsStore` and `checkpointer` must be instances",
-      "boot `permissionsStore` may be an instance or an async factory",
-      "Only the boot `memoryStore` thunk is lazy",
-      "`requestStores` runs before route dispatch",
-      "may eagerly create its per-request memory store",
-      "falls through to the corresponding boot store",
-      "at least one query token",
-      "query-less branch runs first",
-      "BROWSE_DEFAULT_LIMIT = 50",
-      "BROWSE_MAX_LIMIT = 1000",
-      "1,024 UTF-8 bytes",
-      "4,096 characters",
-      "full millisecond UTC instants",
-      "at most eight filters and three sort entries",
-      "nonzero offset",
-      "excludes `limit`, `offset`, and `cursor`",
-      "readonly key: readonly BrowseCursorValue[]",
-      "readonly field: BrowseSortField",
-      "readonly column: string",
-      'readonly field: "status"',
-      'field: "updatedAt"',
-      'column: "updated_at"',
-      "inclusive UTC-day lower bound",
-      "exclusive upper bound",
-      "all-maximal prefix has no finite upper bound",
-      "empty prefix",
-      '"invalid-query"',
-      '"continuation-invalid"',
     ],
     forbidden: [
       "@dawn-ai/cli/runtime is the application embedding",
@@ -3220,7 +3225,7 @@ const maintainedDocsPages = new Map(
     const source = readFileSync(file, "utf8")
     const masked = maskMarkdownCodeAndComments(source)
     const slugger = new GithubSlugger()
-    const headings = new Set(
+    const ids = new Set(
       [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
         if (match.index === undefined) return []
         const lineEnd = source.indexOf("\n", match.index)
@@ -3237,7 +3242,13 @@ const maintainedDocsPages = new Map(
         return [slugger.slug(text)]
       }),
     )
-    return [route, headings]
+    for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
+      const id = match[1]
+      if (!id) continue
+      if (ids.has(id)) failures.push(`${relativeToRoot(file)} has duplicate id ${id}`)
+      ids.add(id)
+    }
+    return [route, ids]
   }),
 )
 
@@ -3250,10 +3261,10 @@ for (const filePath of maintainedReadmeFiles) {
     const normalized = normalizeMaintainedDocsDestination(destination)
     if (!normalized) continue
     const [path, fragment] = normalized.split("#")
-    const headings = maintainedDocsPages.get(path)
-    if (!headings) {
+    const ids = maintainedDocsPages.get(path)
+    if (!ids) {
       failures.push(`${relativeToRoot(filePath)} links missing docs page ${normalized}`)
-    } else if (fragment && !headings.has(fragment)) {
+    } else if (fragment && !ids.has(fragment)) {
       failures.push(`${relativeToRoot(filePath)} links missing docs heading ${normalized}`)
     }
   }
@@ -3618,6 +3629,172 @@ if (apiReferenceRegistry) {
       failures.push(
         `${entry.packageName} canonical reference destination must be ${expectedDestination}`,
       )
+    }
+  }
+
+  const apiHubSource = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+  const catalogRange = markdownSectionRange(
+    apiHubSource,
+    ({ text }) => text === "Package and surface index",
+  )
+  const artifactByAddress = new Map(
+    ARTIFACT_REGISTRY.map((artifact) => [
+      apiReferenceRegistry.artifactAddressFor(artifact),
+      artifact,
+    ]),
+  )
+  const artifactLabel = (address) => {
+    const artifact = artifactByAddress.get(address)
+    if (!artifact) return `<unknown:${address}>`
+    if (artifact.kind === "import") {
+      return artifact.subpath === "."
+        ? artifact.packageName
+        : `${artifact.packageName}/${artifact.subpath.slice(2)}`
+    }
+    return artifact.kind === "operated" ? artifact.selector : artifact.moduleName
+  }
+  const expectedCatalogRows = PACKAGE_CATALOG.map((entry) => {
+    const explicitAnchor = entry.canonicalReferenceDestination.startsWith("/docs/api#")
+      ? `<span id="${entry.canonicalReferenceDestination.slice("/docs/api#".length)}"></span>`
+      : ""
+    const artifacts = entry.artifactAddresses
+      .map((address) => `\`${artifactLabel(address)}\``)
+      .join("<br />")
+    return `| ${explicitAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
+  })
+  const catalogSource = catalogRange ? apiHubSource.slice(catalogRange.start, catalogRange.end) : ""
+  const catalogLines = catalogSource.split(/\r?\n/)
+  const maskedCatalogLines = maskMarkdownCodeAndComments(catalogSource).split(/\r?\n/)
+  const activeCatalogTableLines = catalogLines.filter(
+    (line, index) => line.startsWith("|") && maskedCatalogLines[index]?.trim() !== "",
+  )
+  const expectedCatalogHeader =
+    "| Package | Purpose | Audience | Stability | Surfaces | README | Reference | Guide |"
+  const expectedCatalogSeparator = "|---|---|---|---|---|---|---|---|"
+  const actualCatalogRows = activeCatalogTableLines.slice(2)
+  const maskedCatalogSource = maskMarkdownCodeAndComments(catalogSource)
+  const markdownCatalogTables =
+    maskedCatalogSource.match(
+      /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/gm,
+    ) ?? []
+  const rawCatalogTableElements =
+    maskedCatalogSource.match(/<\/?(?:table|thead|tbody|tfoot|tr|th|td)\b/gi) ?? []
+  let remainingCatalogMarkup = maskedCatalogSource.replaceAll("<br />", "")
+  for (const entry of PACKAGE_CATALOG) {
+    if (!entry.canonicalReferenceDestination.startsWith("/docs/api#")) continue
+    const id = entry.canonicalReferenceDestination.slice("/docs/api#".length)
+    remainingCatalogMarkup = remainingCatalogMarkup.replaceAll(`<span id="${id}"></span>`, "")
+  }
+  const activeCatalogMdxConstructs = [
+    ...(remainingCatalogMarkup.match(/<\/?[A-Za-z][^>]*>/g) ?? []),
+    ...(remainingCatalogMarkup.match(/^\s*(?:import|export)\b.*$/gm) ?? []),
+    ...(remainingCatalogMarkup.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) ?? []),
+  ]
+  if (JSON.stringify(actualCatalogRows) !== JSON.stringify(expectedCatalogRows)) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must visibly match PACKAGE_CATALOG bidirectionally and in registry order",
+    )
+  }
+  if (
+    activeCatalogTableLines[0] !== expectedCatalogHeader ||
+    activeCatalogTableLines[1] !== expectedCatalogSeparator
+  ) {
+    failures.push("apps/web/content/docs/api.mdx package catalog header is malformed")
+  }
+  if (markdownCatalogTables.length !== 1) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must use exactly one Markdown table",
+    )
+  }
+  if (rawCatalogTableElements.length > 0) {
+    failures.push("apps/web/content/docs/api.mdx package catalog must not use raw table markup")
+  }
+  if (activeCatalogMdxConstructs.length > 0) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must not contain active MDX components, declarations, or expressions beyond registered anchors and table line breaks",
+    )
+  }
+  const applicationShortcutDestinations = [
+    "/docs/api/sdk",
+    "/docs/api/cli",
+    "/docs/api/testing",
+    "/docs/api/evals",
+    "/docs/api/generated-routes",
+  ]
+  const tableIndex = maskMarkdownCodeAndComments(catalogSource).search(/^\| Package \|/m)
+  const sectionHeadingEnd = catalogSource.indexOf("\n")
+  const shortcutSource =
+    tableIndex === -1
+      ? ""
+      : catalogSource.slice(sectionHeadingEnd === -1 ? 0 : sectionHeadingEnd + 1, tableIndex)
+  const shortcutDestinations = linkDestinations(shortcutSource).filter((destination) =>
+    destination.startsWith("/docs/api/"),
+  )
+  if (
+    !/Application shortcuts:/i.test(maskMarkdownCodeAndComments(shortcutSource)) ||
+    markdownHeadings(shortcutSource).length !== 0 ||
+    JSON.stringify(shortcutDestinations) !== JSON.stringify(applicationShortcutDestinations)
+  ) {
+    failures.push(
+      "apps/web/content/docs/api.mdx application shortcuts must contain exactly SDK, CLI, Testing, Evals, and generated-routes links before the catalog table with no heading",
+    )
+  }
+
+  const detailedPackages = PACKAGE_CATALOG.filter(({ canonicalReferenceDestination }) =>
+    /^\/docs\/api\/[^#]+$/.test(canonicalReferenceDestination),
+  )
+  for (const entry of detailedPackages) {
+    const readme = readFileSync(resolve(repoRoot, entry.readmePath), "utf8")
+    const readmeDestinations = linkDestinations(readme)
+    for (const required of [
+      `https://dawnai.org${entry.canonicalReferenceDestination}`,
+      `https://dawnai.org${entry.conceptualGuideDestination}`,
+    ]) {
+      if (!readmeDestinations.includes(required)) {
+        failures.push(
+          `${entry.readmePath} is missing registry-derived README contract: ${required}`,
+        )
+      }
+    }
+    if (!readme.includes(`from "${entry.packageName}"`)) {
+      failures.push(`${entry.readmePath} is missing its primary package import`)
+    }
+    const ownerMdx = readFileSync(
+      resolve(
+        repoRoot,
+        "apps/web/content/docs",
+        `${entry.canonicalReferenceDestination.slice("/docs/".length)}.mdx`,
+      ),
+      "utf8",
+    )
+    const knownSymbols = new Set(
+      [...maskMarkdownCodeAndComments(ownerMdx).matchAll(/^\| `([^`]+)` \|/gm)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      ),
+    )
+    if (hasExhaustiveApiSymbolInventory(readme, knownSymbols)) {
+      failures.push(`${entry.readmePath} duplicates the exhaustive API inventory`)
+    }
+    for (const address of entry.artifactAddresses) {
+      const artifact = artifactByAddress.get(address)
+      if (artifact?.kind !== "import" || artifact.surfaceKind !== "typescript-runtime") {
+        continue
+      }
+      const surface = artifactLabel(address)
+      const readmeLines = readme.split(/\r?\n/)
+      const maskedReadmeLines = maskMarkdownCodeAndComments(readme).split(/\r?\n/)
+      const boundaryLine = readmeLines.find(
+        (line, index) =>
+          line.includes(`\`${surface}\``) &&
+          line.toLowerCase().includes(artifact.runtime) &&
+          line.toLowerCase().includes(artifact.stability) &&
+          maskedReadmeLines[index]?.trim() !== "",
+      )
+      if (!boundaryLine) {
+        failures.push(
+          `${entry.readmePath} must bind ${surface} to ${artifact.runtime} and ${artifact.stability} on one visible line`,
+        )
+      }
     }
   }
 }
@@ -4007,14 +4184,9 @@ const frozenApiHeadingIds = [
   "related",
 ]
 const apiHeadingIds = markdownHeadings(apiMdx).map(({ id }) => id)
-const firstApiHeadingMismatch = Array.from(
-  { length: Math.max(apiHeadingIds.length, frozenApiHeadingIds.length) },
-  (_, index) => index,
-).find((index) => apiHeadingIds[index] !== frozenApiHeadingIds[index])
-
-if (firstApiHeadingMismatch !== undefined) {
+if (JSON.stringify(apiHeadingIds) !== JSON.stringify(frozenApiHeadingIds)) {
   failures.push(
-    `apps/web/content/docs/api.mdx heading ${firstApiHeadingMismatch + 1} mismatch: expected ${JSON.stringify(frozenApiHeadingIds[firstApiHeadingMismatch] ?? null)}, received ${JSON.stringify(apiHeadingIds[firstApiHeadingMismatch] ?? null)} (expected exactly ${frozenApiHeadingIds.length} ordered heading ids, received ${apiHeadingIds.length})`,
+    `apps/web/content/docs/api.mdx must retain exactly ${frozenApiHeadingIds.length} frozen heading ids in order with no additions`,
   )
 }
 const requiredApiPackageHeadings = [
