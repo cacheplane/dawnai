@@ -262,6 +262,46 @@ export interface FocusReport {
  * tell "focus moved to the head of the NEW result" — which is what design §4.2 promises —
  * from focus that was re-asserted at the same coordinates over different rows.
  */
+/**
+ * `focusReport`, plus the drawn head, in the SAME evaluation — and the one derived fact a
+ * caller asking "did the pivot seat focus at the head?" actually wants.
+ *
+ * This exists because pairing `focusReport` with a separately-sampled `rowIds` reopens the
+ * straddle `focusReport` was written to close. `rowIds` is documented one-shot ("the
+ * rendered set can still change a frame after the phase reads `idle`"), so a head pinned
+ * from it right after `expectPhase(page, "idle")` can name a row the result no longer
+ * leads with. A poll written against that stale head then waits out its timeout while
+ * focus sits correctly on the real head — which is exactly how this failed in CI, reading
+ * `route=/chat` as the head while focus was on `route=/notes`.
+ *
+ * Sampling both here means the comparison can never straddle a commit, whatever made the
+ * order move: a late re-render, a second fetch, or a re-group. `focusIsHead` is computed
+ * in-page for the same reason every other field is — a caller recomputing it from two
+ * fields of two samples is the bug again.
+ */
+export async function headAndFocusReport(
+  page: Page,
+): Promise<FocusReport & { readonly head: string; readonly focusIsHead: boolean }> {
+  return browseRegion(page).evaluate((region) => {
+    const active = document.activeElement as HTMLElement | null
+    const viewport = region.querySelector("[data-pretable-scroll-viewport]")
+    const head =
+      viewport?.querySelector("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? ""
+    const rowId =
+      active?.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? ""
+    return {
+      head,
+      rowId,
+      columnId: active?.getAttribute("data-pretable-column-id") ?? "",
+      inGrid: viewport?.contains(active ?? null) ?? false,
+      onBody: active === document.body,
+      // `head !== ""` matters: before the first paint both sides are `""` and a bare
+      // equality would report the head as focused when nothing is drawn at all.
+      focusIsHead: head !== "" && rowId === head,
+    }
+  })
+}
+
 export async function focusReport(page: Page): Promise<FocusReport> {
   return browseRegion(page).evaluate((region) => {
     const active = document.activeElement as HTMLElement | null
