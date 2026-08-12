@@ -38,6 +38,11 @@ interface SearchResponse {
  *  that lists which ids failed and why. */
 type ErrorSource = "stats" | "search"
 
+/** The counts' cadence. Exported because the suspension around a bulk run is timed
+ *  against it: a test that bounds a run's window has to outlast this to mean anything,
+ *  and a poll that merely had no time to tick reads exactly like a suspended one. */
+export const STATS_POLL_INTERVAL_MS = 2000
+
 /** Timeline window presets → milliseconds back from now ("all" = unbounded). */
 const WINDOWS = {
   "24h": 24 * 60 * 60 * 1000,
@@ -293,12 +298,15 @@ export function ListPage() {
     refreshBrowse()
   }, [refreshRequested, browsePhase, refreshBrowse])
 
-  // Suspended for the run on the same flag as the browse above, so the two cadences stay
-  // in step: the counts and the rows are two readings of one store, and a stats tick
-  // landing between two per-id writes would quote a half-applied batch beside a grid that
-  // is deliberately holding still. `usePolling` runs one immediate tick whenever `enabled`
-  // changes, so this costs one extra stats read at each edge of the run and none inside it.
-  const stats = usePolling(statsFn, 2000, live && !bulkRunning)
+  // Suspended for the run on the same flag as the browse above: the counts and the rows
+  // are two readings of one store, and a stats tick landing between two per-id writes
+  // would quote a half-applied batch beside a grid that is deliberately holding still.
+  // The flag is raised from the same event that issues the first write, so this only
+  // holds because `usePolling` suspends SILENTLY — a hook that took a parting tick on the
+  // way down would take it concurrently with that write, which is the reading this is
+  // here to prevent. Resuming ticks at once, so the run costs one stats read at its
+  // trailing edge and none inside it.
+  const stats = usePolling(statsFn, STATS_POLL_INTERVAL_MS, live && !bulkRunning)
 
   // Search is fetched once per (debounced) query change, never polled — a
   // hybrid store would call the embedder on every search request.

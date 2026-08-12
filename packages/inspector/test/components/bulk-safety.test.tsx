@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { ListPage } from "../../src/components/memory/list-page"
+import { BROWSE_POLL_INTERVAL_MS } from "../../src/browse/use-memory-browse"
+import { BulkBar } from "../../src/components/memory/bulk-bar"
+import { ListPage, STATS_POLL_INTERVAL_MS } from "../../src/components/memory/list-page"
 import { TEST_IDS } from "../../src/components/memory/test-ids"
 import { browseSeedRecords } from "../seed"
 
@@ -8,6 +10,12 @@ const RECORDS = browseSeedRecords().slice(0, 4)
 const FAILING_ID = RECORDS[1]?.id as string
 /** A row the forget SUCCEEDS on — the only kind that can tell a prune from a no-op. */
 const SUCCEEDED_ID = RECORDS[0]?.id as string
+
+/** How long the isolation test below holds each write. The writes are sequential, so a
+ *  run spans this once per id — but the window an ordering can be read across runs from
+ *  the FIRST write being issued to the LAST, which is one gap shorter. */
+const WRITE_LATENCY_MS = 900
+const RUN_WINDOW_MS = (RECORDS.length - 1) * WRITE_LATENCY_MS
 
 let posted: string[] = []
 /** Browse responses served, to wait for the reconciling refresh rather than guess at it. */
@@ -202,12 +210,18 @@ describe("bulk partial failure", () => {
 
 describe("bulk run isolation", () => {
   /**
-   * The suspension above is read through the status bar; this reads it through the WIRE.
-   * The stub serves its own `order` log rather than the shared one because the property
-   * is an ORDERING — where the browse requests sit relative to the run's writes — and
-   * the shared stub counts them without recording when they happened.
+   * The suspension above is read through the status bar; this reads it through the WIRE,
+   * for BOTH polls — the rows and the counts are two readings of one store, and a run
+   * that stills only the rows still paints a half-applied number beside them. The stub
+   * serves its own `order` log rather than the shared one because the property is an
+   * ORDERING — where the reads sit relative to the run's writes — and the shared stub
+   * counts them without recording when they happened.
    */
-  it("issues no browse request between the first and last per-id write", async () => {
+  it("issues no browse or stats request between the first and last per-id write", async () => {
+    // The window has to outlast the slower poll or neither assertion below proves
+    // anything: a poll still armed but with no time to tick reads exactly like a
+    // suspended one, and the test would pass on a reverted suspension.
+    expect(RUN_WINDOW_MS).toBeGreaterThan(Math.max(BROWSE_POLL_INTERVAL_MS, STATS_POLL_INTERVAL_MS))
     const order: string[] = []
     vi.stubGlobal(
       "fetch",
@@ -215,16 +229,15 @@ describe("bulk run isolation", () => {
         const url = String(input)
         if (init?.method === "POST") {
           order.push(`POST ${url}`)
-          // Long enough that a 2 s poll tick would certainly land inside the run if
-          // polling were still armed.
-          await new Promise((resolve) => setTimeout(resolve, 900))
+          await new Promise((resolve) => setTimeout(resolve, WRITE_LATENCY_MS))
           return Response.json({ ok: true })
         }
         if (url.includes("/api/memory/list")) {
           order.push("LIST")
           return Response.json({ records: RECORDS, total: RECORDS.length, continuation: null })
         }
-        if (url.includes("/api/memory/stats"))
+        if (url.includes("/api/memory/stats")) {
+          order.push("STATS")
           return Response.json({
             total: RECORDS.length,
             byStatus: {},
@@ -232,6 +245,7 @@ describe("bulk run isolation", () => {
             byNamespace: {},
             bySourceType: {},
           })
+        }
         return Response.json({})
       }),
     )
@@ -251,16 +265,24 @@ describe("bulk run isolation", () => {
     const firstPost = order.findIndex((entry) => entry.startsWith("POST"))
     const lastPost = order.length - 1 - [...order].reverse().findIndex((e) => e.startsWith("POST"))
     expect(order.slice(firstPost, lastPost)).not.toContain("LIST")
+    expect(order.slice(firstPost, lastPost)).not.toContain("STATS")
   }, 30_000)
 
   /**
    * Driven through `BulkBar` directly: the property is that the run holds the ids the
    * CONFIRMATION named, and only a caller that can swap `ticked` mid-flight can tell that
    * apart from re-reading the prop. `ListPage` cannot be made to do that on demand.
+   *
+   * What carries the property is the CLOSURE — the click handler captured `ticked` from
+   * the render it fired on, and every later render is a different array the run cannot
+   * see. The defensive copy inside `run` is not it: deleting the copy leaves this test
+   * green. The failure mode this rules out is a loop that re-reads the live selection per
+   * iteration, which is why the swap happens between two writes rather than before them.
    */
   it("runs against the ids confirmed, not the ids currently ticked", async () => {
-    const { BulkBar } = await import("../../src/components/memory/bulk-bar")
-    const posted: string[] = []
+    // Named apart from the file-level `posted`: this test drives the bar alone, and the
+    // shared stub that fills the other one is not installed over this render.
+    const written: string[] = []
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -268,8 +290,8 @@ describe("bulk run isolation", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        posted.push(String(input))
-        if (posted.length === 1) await gate
+        written.push(String(input))
+        if (written.length === 1) await gate
         return Response.json({ ok: true })
       }),
     )
@@ -296,7 +318,7 @@ describe("bulk run isolation", () => {
     )
     release?.()
     // The run still targets the CONFIRMED four.
-    await waitFor(() => expect(posted).toHaveLength(ids.length), { timeout: 20_000 })
-    for (const id of ids) expect(posted.some((url) => url.includes(id))).toBe(true)
+    await waitFor(() => expect(written).toHaveLength(ids.length), { timeout: 20_000 })
+    for (const id of ids) expect(written.some((url) => url.includes(id))).toBe(true)
   }, 30_000)
 })
