@@ -1,16 +1,21 @@
 # Dev Server
 
-`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It also exposes an AG-UI SSE endpoint for web clients such as CopilotKit. It watches route and tool files, and on any meaningful change regenerates types and restarts the child route runtime so every request runs against current code.
+`dawn dev` is the local application loop: it starts Dawn's HTTP runtime, watches
+your app, regenerates types, and replaces the child runtime when source files
+change. Use this page to start and operate the server; use the linked protocol
+guides when you are building a client.
 
 ## Starting the server
 
-```
+```bash
 dawn dev
 ```
 
-By default the server binds an ephemeral localhost port (announced on stdout as `Dawn dev ready at http://127.0.0.1:<port>`). Pass `--port <n>` for a stable port:
+The server binds an ephemeral localhost port and prints a URL such as
+`Dawn dev ready at http://127.0.0.1:43127`. Select a stable port when another
+process needs a predictable address:
 
-```
+```bash
 dawn dev --port 3001
 ```
 
@@ -18,286 +23,89 @@ The bind address is always `127.0.0.1`.
 
 ## Invoking a route
 
-With the server running in one terminal, you can hit it from another:
-
-```
-echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' --url http://127.0.0.1:3001
-```
-
-`dawn run` resolves the route id to a `route` key of the form `<routeId>#<kind>` (e.g. `/research#agent`), POSTs to `/threads/<t-cli-uuid>/runs/wait` with `{route, input}`, and prints the result.
-
-## Agent Protocol endpoints
-
-The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
-
-### Thread lifecycle with curl
-
-The following sequence creates a thread, runs a route, and reads the final state:
+With the server running, invoke a route from another terminal:
 
 ```bash
-# 1. Create a thread (body is optional)
-curl -X POST http://127.0.0.1:3001/threads \
-  -H 'content-type: application/json' \
-  -d '{}'
-# -> { "thread_id": "...", "created_at": "...", "updated_at": "...", "metadata": {}, "status": "idle" }
-
-THREAD_ID="<thread_id from above>"
-
-# 2. Run the route (blocking)
-curl -X POST http://127.0.0.1:3001/threads/$THREAD_ID/runs/wait \
-  -H 'content-type: application/json' \
-  -d '{
-    "route": "/research#agent",
-    "input": { "messages": [{ "role": "user", "content": "What is LangGraph?" }] }
-  }'
-# -> final state JSON
-
-# 3. Read the latest checkpoint state
-curl http://127.0.0.1:3001/threads/$THREAD_ID/state
+echo '{"messages":[{"role":"user","content":"Hello"}]}' |
+  dawn run '/research' --url http://127.0.0.1:3001
 ```
 
-<Tabs>
-  <Tab label="GET /healthz">
-    Readiness check. Bypasses middleware.
+`dawn run` resolves the route to its `<routeId>#<kind>` assistant id, creates a
+thread id for the call, sends the input through Agent Protocol, and prints the
+final state.
 
-    ```
-    GET /healthz
-    -> 200 { "status": "ready" }
-    ```
+## Restart cycle
 
-    Returns 200 once the child runtime is up; non-200 means not-ready. `dawn dev` itself uses this endpoint internally to detect readiness.
-  </Tab>
-  <Tab label="POST /threads">
-    Create a new thread.
+When a meaningful app file changes, Dawn regenerates types before it launches
+the replacement runtime. Ignored paths such as `.dawn/`, `workspace/`, and
+lockfiles do not trigger a restart; the restart log names the reason for changes
+that do.
 
-    ```
-    POST /threads
-    Body (optional): { "metadata": { "key": "value" } }
-    -> 200 { "thread_id", "created_at", "updated_at", "metadata", "status" }
-    ```
+The parent owns the app root, watcher, session, selected port, and stable URL across restarts;
+the child owns the HTTP listener and route graph. Each restart stops that child
+and its listener, then starts a fresh child on the same port. This is a
+child-process restart, not in-process HMR and not a parent-owned bound listener.
 
-    Body is optional. If provided, a `metadata` object is stored with the thread.
-  </Tab>
-  <Tab label="GET /threads/:thread_id">
-    Fetch a thread by id.
+The replacement child reloads the app and `dawn.config.ts`, including store and
+runtime configuration. Configuration edits take effect on that restart; the
+parent does not keep the previously loaded configuration alive.
 
-    ```
-    GET /threads/:thread_id
-    -> 200 { thread object }
-    -> 404 if not found
-    ```
-  </Tab>
-  <Tab label="DELETE /threads/:thread_id">
-    Delete a thread and its checkpoints (best-effort).
-
-    ```
-    DELETE /threads/:thread_id
-    -> 204 No Content
-    ```
-  </Tab>
-  <Tab label="/runs/wait">
-    Synchronous run — blocks until the route completes, returns the final state as JSON.
-
-    ```
-    POST /threads/:thread_id/runs/wait
-    Body: {
-      "route": "/research#agent",
-      "input": { "messages": [{ "role": "user", "content": "..." }] }
-    }
-    -> 200 final state JSON
-    ```
-
-    `route` is required and must be in the form `<routeId>#<kind>` (e.g. `/research#agent`). A bare route id without the `#<kind>` suffix returns 404 "Unknown route". The `input` field is optional and defaults to `{}`.
-  </Tab>
-  <Tab label="/runs/stream">
-    Streaming run — same body shape as `runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of events as the route progresses.
-
-    ```
-    POST /threads/:thread_id/runs/stream
-    Body: {
-      "route": "/research#agent",
-      "input": { "messages": [{ "role": "user", "content": "..." }] }
-    }
-    -> 200 text/event-stream
-    ```
-
-    Each SSE event has an `event:` line (the event type) and a `data:` line (JSON payload):
-
-    ```
-    event: chunk
-    data: "partial text output"
-
-    event: tool_call
-    data: {"name":"search","input":{"query":"..."}}
-
-    event: tool_result
-    data: {"name":"search","output":"..."}
-
-    event: done
-    data: {"output":{...}}
-    ```
-
-    #### SSE event types
-
-    | Event type | Payload shape | Description |
-    |---|---|---|
-    | `chunk` | `"<text>"` | Streamed text fragment from the model |
-    | `tool_call` | `{ name, input }` | Tool invocation about to be executed |
-    | `tool_result` | `{ name, output }` | Result returned by a tool |
-    | `plan_update` | `{ todos: [...] }` | Planning capability progress update |
-    | `interrupt` | `{ interruptId, ... }` | Human-in-the-loop pause; requires a `/resume` call |
-    | `subagent.start` | `{ ... }` | Subagent beginning execution |
-    | `subagent.tool_call` | `{ name, input }` | Tool call inside a subagent |
-    | `subagent.tool_result` | `{ name, output }` | Tool result inside a subagent |
-    | `subagent.message` | `{ ... }` | Message emitted by a subagent |
-    | `subagent.end` | `{ ... }` | Subagent finished |
-    | `done` | `{ output }` | Final event; marks end of stream |
-  </Tab>
-  <Tab label="GET /threads/:thread_id/state">
-    Read the latest checkpoint state for a thread.
-
-    ```
-    GET /threads/:thread_id/state
-    -> 200 { config, created_at, metadata, next, parent_config, values }
-    -> 404 if no checkpoint found
-    ```
-  </Tab>
-  <Tab label="POST /threads/:thread_id/resume">
-    Resolve every human-in-the-loop interrupt currently parked on the root thread. The response streams the continuation as SSE (same event types as `runs/stream`).
-
-    ```
-    POST /threads/:thread_id/resume
-    Body: {
-      "resume": [
-        {
-          "interruptId": "<id from the interrupt event>",
-          "status": "resolved",
-          "payload": "once" | "always" | "deny"
-        }
-      ],
-      "route": "/research#agent"
-    }
-    -> 200 text/event-stream (continuation)
-    ```
-
-    `resume` must contain the complete pending interrupt set, with each public `interruptId` exactly once. A `cancelled` entry has only `interruptId` and `status` and maps to denial. The body requires exactly `resume` and `route`, and each entry rejects unknown fields. Nested subagent interrupts are resumed through this root thread; clients never address the child checkpoint separately. The removed scalar resume body is not accepted.
-  </Tab>
-  <Tab label="POST /threads/:thread_id/cancel">
-    Stop the run currently in flight on a thread. Checkpointed state is kept, so the thread can still be inspected or resumed afterwards; there is no rollback.
-
-    ```
-    POST /threads/:thread_id/cancel
-    -> 200 { "thread_id": "...", "status": "interrupted" }
-    -> 404 if no such thread
-    -> 409 if the thread exists but no run is in flight
-    ```
-
-    A cancelled SSE run terminates with `event: done` and `data: {"output":{"cancelled":true}}`, which is how clients tell cancellation apart from failure. A cancelled `runs/wait` returns `409` with `error.details.code` of `run_cancelled` — it has not sent a response body yet, so it can still use a status code, whereas a stream has already committed to `200`.
-  </Tab>
-</Tabs>
-
-The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request body works against `dawn dev` and against a deployed runtime.
-
-### One run at a time per thread
-
-A thread runs at most one run at a time. Starting a second run on a thread that is already running returns `409` with `error.details.code` of `run_in_flight`. Concurrent runs previously drove the same LangGraph checkpoint thread and interleaved their writes, so this turns silent state corruption into a clear error.
-
-The gate is tracked in memory by the process serving the request, not by the thread's stored status — so a server that crashes mid-run does not leave the thread permanently unrunnable.
-
-### Client disconnect
-
-Agent Protocol runs **keep going** when the client disconnects. Runs are checkpointed and threads are resumable, so a dropped connection is treated as a lost viewer rather than a lost intent — and on the wire a deliberate stop is indistinguishable from a flaky network. This matches LangGraph Platform, which defaults to `on_disconnect: "continue"` for the same endpoints.
-
-To actually stop a run, call `POST /threads/:thread_id/cancel`.
-
-The [AG-UI endpoint](#ag-ui-endpoint) takes the opposite default and aborts on disconnect, because it is an ephemeral surface with no reattach and nothing to resume.
-
-<Callout type="warn" title="Run tracking is single-replica">
-Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. This is not a new constraint — Dawn's threads database and checkpoints are already pod-local — but it is worth knowing before scaling out. See [deployment](/docs/deployment).
-</Callout>
-
-## AG-UI endpoint
-
-For UI clients that speak [AG-UI](https://github.com/ag-ui-protocol/ag-ui), `dawn dev` also serves:
-
-```http
-POST /agui/{routeId}
-content-type: application/json
-accept: text/event-stream
-```
-
-The body must be an AG-UI `RunAgentInput`. Dawn creates the thread when the incoming `threadId` is new, maps the newest user message to the route input, streams the route, and translates Dawn chunks into AG-UI events with `@dawn-ai/ag-ui`.
-
-The URL segment after `/agui/` is the URL-encoded Dawn assistant id (`<routeId>#<kind>`):
-
-```text
-Dawn route key: /chat#agent
-AG-UI URL:      /agui/%2Fchat%23agent
-```
-
-The endpoint emits `RUN_STARTED`, assistant text events, tool call/result events, and one terminal `RUN_FINISHED` or `RUN_ERROR`. A parked run uses the standard AG-UI interrupt outcome on `RUN_FINISHED`; successful runs use the success outcome. Planning and subagent capability events have no v1 AG-UI mapping and are ignored.
-
-Human-in-the-loop answers use the top-level AG-UI `RunAgentInput.resume` array. Every answer is addressed to one pending interrupt:
-
-```json
-{
-  "threadId": "thread-1",
-  "runId": "run-2",
-  "messages": [],
-  "tools": [],
-  "context": [],
-  "state": {},
-  "resume": [
-    { "interruptId": "perm-abc123", "status": "resolved", "payload": "once" }
-  ]
-}
-```
-
-The chat example includes a CopilotKit v2 client wired through this endpoint; see `examples/chat/web` and the `@dawn-ai/ag-ui` package README.
-
-## Tracing
-
-If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically sets `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to name the LangSmith project used for traces. See [Observability](/docs/observability) for a full walkthrough, including how to read traces and the HITL interrupt gotcha.
-
-## Middleware
-
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, and `/resume` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, and state endpoints do not invoke middleware. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
-
-`MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
-
-## Hot reload
-
-When you save a file under `src/app/`, the dev server:
-
-<Steps>
-  <Step title="Classifies the change">
-    Ignorable paths (`.dawn/`, `workspace/`, lockfiles) are skipped. Every other change — route files, tools, `state.ts`, reducers, config, middleware — restarts the child, and the restart log line names the reason (for example `Restarting Dawn dev server (tool change: src/tools/search.ts)`).
-  </Step>
-  <Step title="Restarts the child runtime">
-    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. Typegen runs before every spawn, so the fresh child always sees current generated types. The old child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
-  </Step>
-  <Step title="Preserves route ids">
-    Routes keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding a `route` key continues to work without reconnection.
-  </Step>
-</Steps>
-
-<Callout type="info" title="Why this architecture">
-  Running the route runtime in a child process means the parent HTTP server is unaffected by a route's crash. The dev server stays up even when your code throws — you just see the error in the logs and save to retry.
-</Callout>
+The default SQLite threads store and checkpointer preserve persisted threads and
+checkpoints across child restarts. Configured durable stores preserve data when
+the replacement child reconnects; an in-memory store does not survive the
+child-process restart. In-flight work gets a short shutdown grace window before
+the old child can be force-killed.
 
 ## Logging
 
-The parent process keeps the HTTP server alive while child route runtimes restart. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window.
+The ready line identifies the current URL, and each restart line identifies the
+changed file category. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to change the grace
+window used while stopping a child runtime.
+
+## Agent Protocol endpoints
+
+The HTTP contract moved to [Agent Protocol](/docs/dev-server/agent-protocol).
+
+#### SSE event types
+
+Event table: [Agent Protocol](/docs/dev-server/agent-protocol).
+
+### Thread lifecycle with curl
+
+[Agent Protocol](/docs/dev-server/agent-protocol) has the copyable create, run,
+and state sequence.
+
+### One run at a time per thread
+
+See [Agent Protocol](/docs/dev-server/agent-protocol) for run serialization and
+explicit cancellation.
+
+### Client disconnect
+
+See [Agent Protocol](/docs/dev-server/agent-protocol) for the durable
+viewer-disconnect policy.
+
+## AG-UI endpoint
+
+Browser clients use the separate [AG-UI endpoint and lifecycle](/docs/ag-ui).
+
+## Tracing
+
+See [Observability](/docs/observability) for environment variables, trace setup,
+and interrupt-related trace behavior.
+
+## Middleware
+
+See [Middleware](/docs/middleware) for execution-route behavior and
+[Security Architecture](/docs/security-architecture) for the management routes
+that require service-wide outer authentication.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/testing", title: "Testing", subtitle: "run scenarios against a live dev server via run.url" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangSmith handoff" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates local runtime requests" },
-  { href: "/docs/planning", title: "Planning", subtitle: "plan_update events over /runs/stream" },
-  { href: "/docs/subagents", title: "Subagents", subtitle: "child events stream as subagent.*" },
-  { href: "/docs/faq", title: "FAQ", subtitle: "where AG-UI and CopilotKit fit" },
-  { href: "/docs/cli", title: "CLI", subtitle: "dawn dev flags and all other commands" },
-  { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "recipe consuming /runs/stream SSE frames" },
+  { href: "/docs/dev-server/agent-protocol", title: "Agent Protocol", subtitle: "thread, run, stream, resume, cancel, and candidate-management contracts" },
+  { href: "/docs/ag-ui", title: "AG-UI and Web Clients", subtitle: "the browser-oriented endpoint and adapter" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "exercise scenarios against a live server" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "choose a production target after local development" },
+  { href: "/docs/cli", title: "CLI Reference", subtitle: "all dawn dev flags and commands" },
 ]} />

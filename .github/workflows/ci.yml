@@ -210,9 +210,10 @@ jobs:
 
   postgres-storage-docker:
     runs-on: ubuntu-latest
-    # Three test files each start their own postgres:16 container, and a cold
-    # runner also pulls the image. 30 minutes leaves headroom for a slow pull
-    # plus the per-container startup timeout without masking a hung suite.
+    # Five test files (four in @dawn-ai/postgres-storage, one in @dawn-ai/cli)
+    # each start their own postgres:16 container, and a cold runner also pulls
+    # the image. 30 minutes leaves headroom for a slow pull plus the
+    # per-container startup timeout without masking a hung suite.
     timeout-minutes: 30
 
     steps:
@@ -243,6 +244,25 @@ jobs:
 
       - name: Real-Postgres storage tests
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
+
+      - name: Real-Postgres Agent Protocol pending-interrupts tests
+        # GET /threads/:id/pending_interrupts is purely checkpoint-backed, so the
+        # spec asks for it against both checkpointer fixtures. This job already
+        # has Docker and a built workspace, so the gated @dawn-ai/cli lane rides
+        # here rather than paying for a fourth Postgres job.
+        #
+        # A filename filter passed to the package's OWN test script, not a
+        # spelled-out `exec vitest`: nobody runs this lane locally, so a config
+        # move or a new setupFiles in that script must not leave this one lane
+        # silently running a different vitest from every other lane.
+        #
+        # Green here means the Postgres assertions RAN, not merely that nothing
+        # failed. Two different mistakes are covered by two different
+        # mechanisms: a filter that matches no file exits 1 on its own
+        # (`passWithNoTests` is false by default in vitest 4), and a suite that
+        # matches but skips is caught by the "gated Postgres lane" self-check in
+        # the test file — vitest has no fail-on-skipped flag to do it from here.
+        run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint
 
   edge-workerd:
     runs-on: ubuntu-latest
@@ -324,9 +344,95 @@ jobs:
             console.log("workerd lane ran: " + passed + " passed, 0 skipped.")
           ' "${{ runner.temp }}/workerd-lane-report.json"
 
+  vercel-native:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: vercel-preview
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Prepare native Vercel artifact directory
+        run: install -d -m 0700 -- "${{ runner.temp }}/vercel-native"
+
+      - name: Run native Vercel previews
+        id: native-vercel
+        env:
+          DAWN_TEST_VERCEL: "1"
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: >-
+          pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts
+          --reporter=json
+          --outputFile.json="${{ runner.temp }}/vercel-native/vitest.json"
+
+      - name: Reconcile and remove native Vercel resources
+        id: native-vercel-cleanup
+        if: always()
+        env:
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --cleanup
+
+      - name: Assert closed native Vercel receipt
+        env:
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --assert-receipt
+
+      - name: Prepare native Vercel diagnostics
+        id: native_vercel_diagnostics
+        if: always()
+        env:
+          DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+          DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+          DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+          DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+          DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+        run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --prepare-artifacts
+
+      - name: Upload native Vercel diagnostics
+        if: failure() && steps.native_vercel_diagnostics.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vercel-native-diagnostics
+          path: ${{ runner.temp }}/vercel-native/upload/
+          if-no-files-found: error
+          retention-days: 3
+
   inspector-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20: the browser lane below adds a chromium download, a second
+    # standalone boot and 19 single-worker spec files (44 tests) on top of the
+    # vitest lane.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -357,6 +463,27 @@ jobs:
 
       - name: Inspector standalone e2e
         run: DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test
+
+      - name: Install Playwright browsers
+        # `--filter` is required, not stylistic: @playwright/test is a dependency of
+        # packages/inspector only, so a bare root `pnpm exec playwright` fails with
+        # ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL / Command "playwright" not found.
+        run: pnpm --filter @dawn-ai/inspector exec playwright install --with-deps chromium
+
+      - name: Inspector browser verification
+        # Boots the same .next/standalone artifact the vitest lane above uses (`Inspector
+        # standalone e2e`, not the browser-install step immediately above), against a
+        # seeded 1250-record store. `workers: 1` in playwright.config.ts is load-bearing:
+        # the specs share one store and several mutate it.
+        run: pnpm --filter @dawn-ai/inspector test:e2e
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: inspector-playwright-traces
+          path: packages/inspector/test-results
+          retention-days: 7
 
   chart-validate:
     runs-on: ubuntu-latest

@@ -1,6 +1,6 @@
-# Typed state
+# Typed State
 
-You want a typed state shape for a route, with dynamic URL segments captured into it automatically. Here's how.
+You want a typed state shape for a route, including the values needed to run it. Here's how.
 
 ## The code
 
@@ -9,6 +9,8 @@ You want a typed state shape for a route, with dynamic URL segments captured int
 import { z } from "zod"
 
 export default z.object({
+  /** Tenant supplied in the run input */
+  tenant: z.string(),
   /** Accumulated tool-call results */
   context: z.string().default(""),
   /** Number of records returned by the lookup tool */
@@ -20,27 +22,39 @@ export default z.object({
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
-import type state from "./state.js"
+import state from "./state.js"
 
-type HelloState = z.infer<typeof state> & { readonly tenant: string }
+type HelloState = z.infer<typeof state>
 
 export async function workflow(
-  state: HelloState,
+  input: unknown,
   ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
 ) {
-  // state.tenant is populated from the URL segment.
-  // state.context and state.count have their Zod-defined defaults.
-  const { records } = await ctx.tools.lookup({ tenant: state.tenant, query: "*" })
-  return { ...state, count: records.length }
+  const parsed: HelloState = state.parse(input)
+  const { records } = await ctx.tools.lookup({ tenant: parsed.tenant, query: "*" })
+  return { ...parsed, count: records.length }
 }
 ```
 </CodeGroup>
 
 ## Notes
 
-- **Dynamic segments are not in the schema.** `[tenant]` is injected from the pathname onto `state.tenant` at runtime. Adding it to the Zod schema would conflict with the path injection.
-- **Field names match segment names exactly.** Dawn wires `[tenant]` to `state.tenant` by name, not by position.
-- **Defaults come from Zod.** Anything declared with `.default(...)` is filled in when the caller omits it.
+- **Include route values in the schema.** `[tenant]` is part of the route id; the workflow validates `tenant` from the input by calling `state.parse(input)`.
+- **Route ids stay parameterized.** Run this route as `/hello/[tenant]` with input for `tenant`:
+
+  ```bash
+  echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
+  ```
+
+  For an Agent Protocol run, send the same input in the body:
+
+  ```json
+  { "route": "/hello/[tenant]#workflow", "input": { "tenant": "acme" } }
+  ```
+
+  A concrete `/hello/acme` path is not how Dawn populates route state.
+- **Parse workflow input explicitly.** Workflow routes do not automatically parse `state.ts`. Calling `state.parse(input)` validates the input and applies fields declared with `.default(...)` when the caller omits them.
+- **This workflow imports and parses the schema directly.** It can keep `tenant` required. For agent-state discovery, Dawn instead validates `{}` to extract defaults; if you reuse this schema for an agent route, make every top-level field accept missing input so discovery does not skip it.
 - **State is JSON-serializable.** It crosses the runtime boundary on every `runs/wait` and `runs/stream` call. Use primitives, plain objects, arrays.
 
 ## Related
@@ -48,6 +62,7 @@ export async function workflow(
 <RelatedCards items={[
   { href: "/docs/state", title: "State", subtitle: "the full state contract, reducers, and merge rules" },
   { href: "/docs/routes", title: "Routes", subtitle: "pathname conventions and dynamic segments" },
-  { href: "/docs/recipes/add-a-tool", title: "Add a tool", subtitle: "read state inside a tool via ctx" },
-  { href: "/docs/api", title: "API Reference", subtitle: "RouteState<P>, RuntimeContext, and RouteTools" },
+  { href: "/docs/recipes/add-a-tool", title: "Add a Tool", subtitle: "read state inside a tool via ctx" },
+  { href: "/docs/api/generated-routes#state", title: "Generated route types", subtitle: "RouteState<P> and generated state contracts" },
+  { href: "/docs/api/sdk#dawn-aisdk-1", title: "SDK Reference", subtitle: "RuntimeContext and route-authoring types" },
 ]} />

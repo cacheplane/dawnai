@@ -77,4 +77,21 @@ describe("build targets that cannot carry a policy", () => {
       code: "DAWN_E1005",
     })
   })
+
+  // `vercel` landed on main while this branch was open. It shares `hono`'s
+  // bundled web runtime and so shares its inability to probe a policy file at
+  // boot — but the guard was enumerated per target, so it inherited nothing.
+  // The probe now sits in `emitWebRuntimeArtifacts`; this is the test that
+  // would have caught the gap, and that a third web target gets for free.
+  it("fails the vercel build", async () => {
+    const appRoot = await fixtureApp({ "src/thread-access.ts": POLICY_FILE })
+    await expect(buildTargets.vercel?.emit(emitContext(appRoot))).rejects.toMatchObject({
+      code: "DAWN_E1005",
+    })
+  })
+
+  it("names the target that refused, not the shared emitter", async () => {
+    const appRoot = await fixtureApp({ "src/thread-access.ts": POLICY_FILE })
+    await expect(buildTargets.vercel?.emit(emitContext(appRoot))).rejects.toThrow(/vercel/)
+  })
 })

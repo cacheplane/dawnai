@@ -920,6 +920,8 @@ describe("release workflow published TypeScript tooling verification", () => {
 describe("expectedFilesForPackage", () => {
   it("returns AG-UI entrypoint expectations", () => {
     assert.deepEqual(expectedFilesForPackage("@dawn-ai/ag-ui"), [
+      "dist/activities.js",
+      "dist/activities.d.ts",
       "dist/index.js",
       "dist/index.d.ts",
       "dist/sse.js",
@@ -977,6 +979,8 @@ describe("AG-UI installed probes", () => {
     assert.match(source, /import \{ encodeAgUiSse \} from "@dawn-ai\/ag-ui\/sse"/)
     assert.ok(
       source.includes(`assert.deepEqual(Object.keys(root).sort(), [
+  "DAWN_PLAN_ACTIVITY_TYPE",
+  "DAWN_SUBAGENT_ACTIVITY_TYPE",
   "createCounterIdFactory",
   "createDefaultIdFactory",
   "fromRunAgentInput",
@@ -984,6 +988,8 @@ describe("AG-UI installed probes", () => {
 ])`),
       "ESM probe must compare the complete sorted root export surface",
     )
+    assert.match(source, /assert\.equal\(root\.DAWN_PLAN_ACTIVITY_TYPE, "dawn\.plan"\)/)
+    assert.match(source, /assert\.equal\(root\.DAWN_SUBAGENT_ACTIVITY_TYPE, "dawn\.subagent"\)/)
     assert.ok(
       source.includes(`for (const exportName of [
   "createCounterIdFactory",
@@ -1018,6 +1024,8 @@ describe("AG-UI installed probes", () => {
     }
     assert.ok(
       source.includes(`type RootValueSurface = readonly [
+  typeof DAWN_PLAN_ACTIVITY_TYPE,
+  typeof DAWN_SUBAGENT_ACTIVITY_TYPE,
   typeof createCounterIdFactory,
   typeof createDefaultIdFactory,
   typeof fromRunAgentInput,
@@ -1035,6 +1043,8 @@ describe("AG-UI installed probes", () => {
       "ToAguiOptions",
       "DawnAgentStreamChunk",
       "RunContext",
+      "DawnPlanActivityContent",
+      "DawnSubagentActivityContent",
     ]) {
       assert.match(source, new RegExp(`type ${typeName}`))
     }
@@ -1049,6 +1059,8 @@ describe("AG-UI installed probes", () => {
   ToAguiOptions,
   DawnAgentStreamChunk,
   RunContext,
+  DawnPlanActivityContent,
+  DawnSubagentActivityContent,
 ]`),
       "type probe must exercise every canonical root type",
     )
@@ -2292,6 +2304,7 @@ async function createAgUiProbeFixture(options = {}) {
 export function createDefaultIdFactory() {}
 export function fromRunAgentInput(input) { return input }
 export function toAguiEvents(events) { return events }
+export { DAWN_PLAN_ACTIVITY_TYPE, DAWN_SUBAGENT_ACTIVITY_TYPE } from "./activities.js"
 `
   const canonicalFunctionDeclarations = {
     createCounterIdFactory: "export declare function createCounterIdFactory(): IdFactory",
@@ -2316,8 +2329,38 @@ export interface AguiOutboundEvent { readonly type: string }
 export interface ToAguiOptions { readonly idFactory?: IdFactory }
 export type DawnAgentStreamChunk = { readonly type: string; readonly data?: unknown }
 export interface RunContext { readonly threadId: string; readonly runId: string }
+export {
+  DAWN_PLAN_ACTIVITY_TYPE,
+  DAWN_SUBAGENT_ACTIVITY_TYPE,
+  type DawnPlanActivityContent,
+  type DawnSubagentActivityContent,
+} from "./activities.js"
 ${includedFunctionDeclarations}
 ${options.extraRootDeclarations ?? ""}`
+  const activitiesJavaScript = `export const DAWN_PLAN_ACTIVITY_TYPE = "dawn.plan"
+export const DAWN_SUBAGENT_ACTIVITY_TYPE = "dawn.subagent"
+`
+  const activitiesDeclarations = `export declare const DAWN_PLAN_ACTIVITY_TYPE: "dawn.plan"
+export declare const DAWN_SUBAGENT_ACTIVITY_TYPE: "dawn.subagent"
+export interface DawnPlanActivityContent {
+  readonly todos: ReadonlyArray<{
+    readonly content: string
+    readonly status: "pending" | "in_progress" | "completed"
+  }>
+}
+export interface DawnSubagentActivityContent {
+  readonly name: string
+  readonly depth: number
+  readonly status: "running" | "completed" | "failed"
+  readonly todos?: DawnPlanActivityContent["todos"]
+  readonly tools: ReadonlyArray<{
+    readonly name: string
+    readonly status: "running" | "completed" | "incomplete"
+  }>
+  readonly totalToolCount: number
+  readonly error?: string
+}
+`
   const sseJavaScript =
     options.sseSource ??
     `export function encodeAgUiSse(event) {
@@ -2337,6 +2380,8 @@ ${options.extraRootDeclarations ?? ""}`
     writeFile(join(root, "smoke-ag-ui.ts"), agUiTypeProbeSource(), "utf8"),
     writeFile(join(root, "tsconfig.ag-ui.json"), JSON.stringify(agUiTypeScriptConfig()), "utf8"),
     writeFile(join(packageRoot, "package.json"), JSON.stringify(packageJson), "utf8"),
+    writeFile(join(distRoot, "activities.js"), activitiesJavaScript, "utf8"),
+    writeFile(join(distRoot, "activities.d.ts"), activitiesDeclarations, "utf8"),
     writeFile(join(distRoot, "index.js"), rootJavaScript, "utf8"),
     writeFile(join(distRoot, "index.d.ts"), rootDeclarations, "utf8"),
     writeFile(join(distRoot, "sse.js"), sseJavaScript, "utf8"),

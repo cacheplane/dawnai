@@ -1,99 +1,140 @@
-# `dawn.config.ts` Reference
+# Configuration Reference
 
-`dawn.config.ts` is a TypeScript file at your app root that exports a single default object conforming to the `DawnConfig` interface. Dawn loads it (via `tsx`) before every CLI command and at runtime startup. If the file is absent, all keys take their documented defaults — no file is required for a working app.
+`dawn.config.ts` is the typed application contract at the app root. The CLI
+uses it with `package.json` to find a Dawn app, so the file is required even
+though every `DawnConfig` field is optional. Node processes load the module once;
+`dawn dev` picks up an edit by restarting its child runtime. Filesystem-free
+runtimes receive an already-constructed config object instead of loading this
+file.
 
-Run [`dawn verify`](/docs/cli) as your preflight before `dawn dev` or `dawn start`: it validates this config and app integrity plus environment readiness (Node version, the provider API key your routes need, and — when `sandbox` is configured — the Docker daemon).
-
-```ts
-// dawn.config.ts
-export default {
-  // ...
-} satisfies import("@dawn-ai/core").DawnConfig
-```
+Use [`dawn verify`](/docs/cli) to check the config, route tree, Node version,
+provider credentials, and configured sandbox preflight before serving the app.
 
 ## Complete annotated example
 
-The snippet below is an extended version of the research starter template's config. It demonstrates every commonly-used key in one place.
+This file is copyable as written. Uncomment the instance-valued fields only
+after importing or constructing the corresponding implementation.
 
-```ts
-// dawn.config.ts
-export default {
-  // Where Dawn discovers your routes. Defaults to "src/app".
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/core"
+
+export default config({
   appDir: "src/app",
 
-  // HITL permissions. Default mode is "interactive": any bash command not on
-  // the allow-list pauses the run for human approval via interrupt().
-  // Override at runtime with the DAWN_PERMISSIONS_MODE env variable.
+  // A configured sandbox overrides these backends for sandboxed threads.
+  backends: {
+    // filesystem: customFilesystem,
+    // exec: customExec,
+  },
+
   permissions: {
     mode: "interactive",
-    allow: {
-      bash: ["ls", "cat", "head", "wc"],
-    },
-    deny: {
-      bash: ["rm -rf", "sudo", "chmod 777", "curl", "wget"],
-    },
+    allow: { bash: ["ls", "cat"], tool: ["deployPreview"] },
+    deny: { bash: ["rm -rf"] },
+    // store: sharedPermissionsStore,
   },
 
-  // Tool-output offloading. Large results are spilled to
-  // workspace/tool-outputs/ and replaced in-context with a short stub that
-  // the agent reads back on demand via readFile.
+  // Defaults are local SQLite/file stores under .dawn/.
+  // checkpointer: sharedCheckpointer,
+  // threadsStore: sharedThreadsStore,
+
+  // Used by dawn dev/inspect; dawn start receives env from its host.
+  env: "./.env",
+
   toolOutput: {
-    offloadThresholdChars: 1500, // default 40000
-    previewLines: 10,            // default 10
-    // maxBytes: 268435456,      // default 256 MB
-    // ttlMs: 10800000,          // default 3 h
-    // gcThrottleMs: 10000,      // default 10 s
-    // noOffloadTools: [],       // merged with built-in exempt tools
+    offloadThresholdChars: 40_000,
+    previewLines: 10,
+    maxBytes: 268_435_456,
+    ttlMs: 10_800_000,
+    gcThrottleMs: 10_000,
+    noOffloadTools: [],
   },
 
-  // Conversation summarization — compress older history once a thread exceeds
-  // maxTokens. Disabled by default.
   summarization: {
-    enabled: true,
-    maxTokens: 12000,      // default 12000
-    keepRecentTurns: 6,    // default 6
-    // model: "gpt-5-mini",  // defaults to the route's own model
+    enabled: false,
+    maxTokens: 12_000,
+    keepRecentTurns: 6,
+    // model: "gpt-5-mini",
+    // tokenCounter: async (text) => countTokens(text),
+    // summarize: async ({ messages, model, previousSummary, signal }) => "...",
   },
 
-  // Long-term memory governance. A route opts in by adding a memory.ts; the
-  // keys below tune how those typed memories are stored, recalled, and written.
-  // Defaults apply to every route with a memory.ts even when this key is absent.
+  build: { targets: ["node", "langsmith"] },
+
+  // sandbox: {
+  //   provider: dockerSandbox({ image: "node:24-slim" }),
+  //   network: { mode: "allow", denylist: ["169.254.169.254"] },
+  //   // network: { mode: "deny", allowlist: ["api.openai.com"] },
+  //   env: { NODE_ENV: "production" },
+  //   resources: { memoryMb: 1024, cpus: 1, timeoutMs: 120_000, diskGb: 10 },
+  //   security: {
+  //     dropAllCapabilities: true,
+  //     noNewPrivileges: true,
+  //     readOnlyRootFilesystem: true,
+  //     runAsNonRoot: true,
+  //     // runAsNonRoot: { uid: 1000, gid: 1000 },
+  //     pidsLimit: 512,
+  //   },
+  //   idleTimeoutMs: 600_000,
+  // },
+
   memory: {
-    writes: "candidate",   // "off" | "candidate" | "auto" | "ask" — default "candidate"
-    indexMaxEntries: 20,   // default — cap on memories injected into the prompt index
-    // store: myMemoryStore,  // default: SQLite at .dawn/memory.sqlite
-    // resolveScope: ({ routePath, appRoot }) => ({ tenant: "acme" }),
-    // recall: { weights: { relevance: 0.6, recency: 0.3, confidence: 0.1 } },  // ranked-recall tuning (see Memory)
+    // enabled: true, // inert compatibility field; memory.ts opts a route in
+    // store: sharedMemoryStore,
+    writes: "candidate",
+    indexMaxEntries: 20,
+    recall: {
+      weights: { relevance: 0.6, recency: 0.3, confidence: 0.1 },
+      recencyHalfLifeMs: 1_209_600_000,
+      candidatePool: 256,
+    },
+    // vector: {
+    //   embedder,
+    //   weights: { keyword: 1, vector: 1 },
+    //   rrfK: 60,
+    //   vectorK: 64,
+    //   recencyWeight: 0.3,
+    //   confidenceWeight: 0.1,
+    // },
+    episodes: {
+      enabled: false,
+      ttlMs: 2_592_000_000,
+      cap: 500,
+      includeFailedRuns: true,
+      embed: false,
+    },
+    distill: {
+      model: "gpt-5-mini",
+      provider: "openai",
+      maxBatches: 5,
+      consolidate: {
+        olderThanMs: 604_800_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        // ttlMs: 2_592_000_000,
+        sourceTtlMs: 604_800_000,
+      },
+      reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
+    },
+    // resolveScope: ({ routePath, appRoot }) => ({ route: routePath, app: appRoot }),
   },
-
-  // SQLite persistence is on by default — no config needed.
-  // Threads survive a restart. Override only if you need a custom backend,
-  // e.g. @dawn-ai/postgres-storage for a shared database (see Postgres backend).
-  // checkpointer: myCheckpointer,
-  // threadsStore: myThreadsStore,
-
-  // Path to the env file used by `dawn dev` and `dawn verify`.
-  // env: "./.env",  // default
-}
+})
 ```
-
----
 
 ## Key reference
 
 ### `appDir`
 
-| Type | Default |
-|---|---|
-| `string` | `"src/app"` |
+```ts
+appDir?: string
+```
 
-The directory (relative to the app root) where Dawn discovers routes. Dawn walks `appDir` and treats every `index.ts` it finds as a route entry. Most apps never need to set this.
-
----
+Default: `"src/app"`. The path is relative to the app root and selects the tree
+where Dawn discovers route `index.ts` files. An authored value replaces the
+default; there is no environment override. Keep it inside the app root. See
+[Routes](/docs/routes) for the discovered layout.
 
 ### `backends`
-
-Controls the workspace filesystem and exec backends. See [Workspace Filesystem](/docs/workspace) for a full explanation of what backends do and how to swap or layer them.
 
 ```ts
 backends?: {
@@ -102,198 +143,152 @@ backends?: {
 }
 ```
 
-| Sub-key | Type | Default | Description |
-|---|---|---|---|
-| `filesystem` | `FilesystemBackend` | Built-in local FS | Handles `readFile`, `writeFile`, `listDir` workspace operations. |
-| `exec` | `ExecBackend` | Built-in `child_process` exec | Handles `runBash` workspace operations. |
-
-Swap out either backend to sandbox filesystem access, redirect writes, or add custom logging middleware (see `compose()` and `withFilesystemLogging` / `withExecLogging` in `@dawn-ai/workspace`).
-
----
+Defaults: the local filesystem and local child-process executor. For a
+sandboxed thread, the sandbox handle's filesystem and executor take precedence;
+otherwise configured backends beat the local defaults. Live backend objects
+cannot cross a static edge build boundary. See [Workspace
+Filesystem](/docs/workspace) for backend composition and path-jail behavior.
 
 ### `permissions`
 
-Controls the Human-in-the-Loop (HITL) permission gate. The `permissions` key governs which workspace operations require human approval, which are pre-approved, and which are always denied. See the [Permissions](/docs/permissions) reference for the full interrupt/resume lifecycle.
-
 ```ts
 permissions?: {
-  mode?: PermissionMode
-  allow?: Record<string, string[]>
-  deny?: Record<string, string[]>
+  mode?: "interactive" | "non-interactive" | "bypass"
+  allow?: Readonly<Record<string, readonly string[]>>
+  deny?: Readonly<Record<string, readonly string[]>>
   store?: PermissionsStore
 }
 ```
 
-#### `permissions.mode`
+Without a custom store, the defaults are `mode: "interactive"`, empty config
+maps, and `.dawn/permissions.json` for persisted interactive decisions.
+`DAWN_PERMISSIONS_MODE` overrides `permissions.mode`; a deny match beats an
+allow match. The reserved `tool` and `subagent` keys use exact matching, while
+resource paths, bash commands, and memory scopes use prefix matching.
 
-| Type | Default | Env override |
-|---|---|---|
-| `"interactive" \| "non-interactive" \| "bypass"` | `"interactive"` | `DAWN_PERMISSIONS_MODE` |
-
-- **`interactive`** — Commands and paths not on the allow-list trigger `interrupt()`, pausing the run for human approval. The default for local development.
-- **`non-interactive`** — Unknown commands are denied automatically without pausing. Use in CI or headless environments.
-- **`bypass`** — All permission checks are skipped. Use only in trusted, sandboxed environments.
-
-`DAWN_PERMISSIONS_MODE` (set to `interactive`, `non-interactive`, or `bypass`) overrides the config-file value at runtime.
-
-#### `permissions.allow` and `permissions.deny`
-
-Pattern maps keyed by tool name (e.g. `bash`, `readFile`). Values are glob-style pattern strings matched against the candidate command or path. `allow` entries are seeded into `.dawn/permissions.json` at startup; `deny` entries are checked first and cannot be overridden by a human approval. Both lists are merged with any patterns the user approves interactively during a session.
-
-#### `permissions.allow.tool`
-
-Pre-approves tools gated by a route's `tools: { approve }` (see [Tools](/docs/tools#requiring-approval-per-call) and [Permissions](/docs/permissions#per-tool-approval)). Unlike `bash` and path patterns, entries under the reserved `tool` key match the tool name **exactly** — no prefix matching.
-
-```ts title="dawn.config.ts"
-export default {
-  permissions: {
-    allow: { tool: ["deployProd"] },
-  },
-}
-```
+Config `allow` and `deny` maps stay in memory and do not seed the runtime permissions store.
+An interactive **Always** decision is what persists a runtime
+allow entry. See [Permissions](/docs/permissions) for mode behavior and the
+interrupt/resume lifecycle.
 
 #### `permissions.store`
 
-| Type | Default |
-|---|---|
-| `PermissionsStore` (`@dawn-ai/permissions`) | file-backed store at `.dawn/permissions.json` |
-
-Replaces the file-backed store — for example with [`createPostgresPermissionsStore`](#postgres-backend) when several app instances must share one set of runtime grants.
-
-A custom store **owns its own mode and allow/deny lists**: pass them to its factory. Dawn deliberately does not re-apply the sibling `permissions.mode` / `allow` / `deny` fields — or the `DAWN_PERMISSIONS_MODE` env override — on top of a custom store, because re-wrapping would silently double-apply them. The runtime only calls `load()` on the store you supply, then reads it.
-
----
+A supplied `PermissionsStore` replaces the file-backed store and is loaded
+before use. The custom store owns its mode and allow/deny policy: sibling
+`permissions.mode`, `allow`, `deny`, and `DAWN_PERMISSIONS_MODE` are not applied
+again. In an embedded runtime, a boot-supplied store takes precedence over this
+config field.
 
 ### `checkpointer`
 
-| Type | Default |
-|---|---|
-| `BaseCheckpointSaver` (LangGraph) | SQLite at `.dawn/checkpoints.sqlite` |
+```ts
+checkpointer?: BaseCheckpointSaver
+```
 
-A LangGraph checkpoint saver. Dawn defaults to a SQLite-backed saver that persists graph state across restarts — no configuration is needed for local development. Override to plug in a different storage backend; `postgresCheckpointer` from `@dawn-ai/postgres-storage` is the supported shared-database option (see [Postgres backend](#postgres-backend)).
-
-Thread state survives a `dawn dev` restart automatically when the default checkpointer is in use.
-
----
+Default: SQLite at `.dawn/checkpoints.sqlite`. A boot-supplied checkpointer
+takes precedence, then this field, then the default. Checkpoints hold graph
+state; they are not thread metadata. See [Persistence and
+Tenancy](/docs/persistence) before sharing or deleting state across replicas.
 
 ### `threadsStore`
 
-| Type | Default |
-|---|---|
-| `ThreadsStore` (`@dawn-ai/sqlite-storage`) | SQLite at `.dawn/threads.sqlite` |
+```ts
+threadsStore?: ThreadsStore
+```
 
-Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. The AP thread endpoints (`POST /threads`, `GET /threads/:id/state`, and related) operate on this store — see [Dev Server](/docs/dev-server) for the full endpoint reference. Override to provide a custom store implementation — `createPostgresThreadsStore` from `@dawn-ai/postgres-storage` is the supported shared-database option (see [Postgres backend](#postgres-backend)).
-
----
+Default: SQLite at `.dawn/threads.sqlite`. A boot-supplied thread store takes
+precedence, then this field, then the default. It stores Agent Protocol thread
+metadata, not graph checkpoints; configure both stores when replicas share
+threads. See [Persistence and Tenancy](/docs/persistence) for the storage
+boundary and deletion order.
 
 ### `env`
 
-| Type | Default | Scope |
-|---|---|---|
-| `string` | `"./.env"` | `dawn dev`, `dawn verify` only |
+```ts
+env?: string
+```
 
-Path to the `.env` file loaded for local development commands, relative to the app root. This setting does **not** affect the deploy artifact — environment variables for production are configured separately in `langgraph.json` (see [Deployment](/docs/deployment)).
+Default: `"./.env"`, relative to the app root. For `dawn dev` and `dawn
+inspect`, precedence is `--env-file`, then `config.env`, then the default.
+`dawn verify` checks the resolved file without loading it into the current
+process. `config.env` is loaded by `dawn dev` and `dawn inspect`, not by `dawn
+start`; production variables must come from the shell or hosting platform.
 
----
+The LangSmith artifact independently chooses `.env.example` when present and
+`.env` otherwise. Its JSON records an env-file path, not variable names, and it
+does not use `config.env`. See [Deployment Options](/docs/deployment) for each
+target's environment contract.
 
 ### `toolOutput`
 
-Configures tool-output offloading. When a tool returns a result whose serialized length exceeds `offloadThresholdChars`, Dawn writes the full output to `workspace/tool-outputs/` and injects a compact stub into the agent's context. The agent can retrieve the full content on demand via the `readFile` tool. See [Context Management](/docs/context-management) for the full offloading and summarization picture.
+```ts
+toolOutput?: {
+  offloadThresholdChars?: number
+  previewLines?: number
+  maxBytes?: number
+  ttlMs?: number
+  gcThrottleMs?: number
+  noOffloadTools?: readonly string[]
+}
+```
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `offloadThresholdChars` | `number` | `40000` | Serialized character length above which a tool output is offloaded. |
-| `previewLines` | `number` | `10` | Number of leading lines kept in the in-context stub (the "preview"). |
-| `maxBytes` | `number` | `268435456` | Maximum total bytes retained under `workspace/tool-outputs/`. Oldest files are removed first when the budget is exceeded. That is 256 MB. |
-| `ttlMs` | `number` | `10800000` | Delete offloaded files older than this many milliseconds. Default is 3 hours (10,800,000 ms). |
-| `gcThrottleMs` | `number` | `10000` | Minimum milliseconds between GC scans. Default is 10 seconds. |
-| `noOffloadTools` | `string[]` | `[]` | Additional tool names whose output is never offloaded. Merged with the built-in exempt set (`readFile`, `listDir`), which are always exempt so the agent can read back offloaded content without triggering re-offload. |
+On a Node runtime with a workspace filesystem, defaults are `40_000` characters,
+`10` preview lines, `268_435_456` bytes (256 MB), a `10_800_000` ms (3 hour)
+TTL, and a `10_000` ms GC throttle. `noOffloadTools` defaults to `[]` and is
+unioned with the always-exempt `readFile` and `listDir`. Authored values replace
+their individual defaults.
 
-Offloading needs a filesystem, so this key is [gated off the `hono` target](/docs/deployment#what-the-edge-cannot-serve): setting it while `"hono"` is in `build.targets` fails the build with `DAWN_E1005`, and a runtime with no filesystem raises the same code per request. An empty `toolOutput: {}` configures nothing and is not gated. See [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target) if this turned a passing build red.
-
----
+Offloaded data lives under `workspace/tool-outputs/`; retention is a context
+budget, not durable storage. A non-empty block is incompatible with the
+filesystem-free Hono target (`DAWN_E1005`). See [Context
+Management](/docs/context-management) for retrieval and cleanup behavior.
 
 ### `summarization`
 
-Configures conversation summarization. When enabled, Dawn compresses older message history once the thread exceeds `maxTokens`, keeping the most-recent turns verbatim. See [Context Management](/docs/context-management) for how offloading and summarization interact.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | `boolean` | `false` | Enable conversation summarization. Off by default. |
-| `maxTokens` | `number` | `12000` | Token count above which older history is summarized. |
-| `keepRecentTurns` | `number` | `6` | Most-recent turns (each starting at a `HumanMessage`) kept verbatim, never summarized. |
-| `model` | `string` | Route's model | Model used for the summary LLM call. Defaults to the same model the route uses. |
-| `tokenCounter` | `(text: string) => number \| Promise<number>` | Lazy `gpt-tokenizer` (o200k_base) | Custom token counting function. |
-| `summarize` | `(args) => Promise<string>` | Built-in single-LLM-call summarizer | Custom summary generator. Receives `messages`, `model`, `previousSummary`, and `signal`. |
-
----
-
-### `memory`
-
-Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememorydef) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
-
 ```ts
-memory?: {
-  store?: MemoryStore
-  writes?: "off" | "candidate" | "auto" | "ask"
-  indexMaxEntries?: number
-  recall?: {
-    weights?: { relevance?: number; recency?: number; confidence?: number }
-    recencyHalfLifeMs?: number
-    candidatePool?: number
-  }
-  resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
+summarization?: {
+  enabled?: boolean
+  maxTokens?: number
+  keepRecentTurns?: number
+  model?: string
+  tokenCounter?: (text: string) => number | Promise<number>
+  summarize?: (args: {
+    messages: readonly unknown[]
+    model: string
+    previousSummary?: string
+    signal: AbortSignal
+  }) => Promise<string>
 }
 ```
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `store` | `MemoryStore` | SQLite at `.dawn/memory.sqlite` | The memory store backend. Defaults to an SQLite-backed store at `<appRoot>/.dawn/memory.sqlite`. Override to plug in a custom backend. |
-| `writes` | `"off" \| "candidate" \| "auto" \| "ask"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). `ask` — same as `auto`, except a supersede (belief contradiction) interrupts for human Once/Always/Deny approval when running interactively; headless behaves exactly like `auto`. |
-| `indexMaxEntries` | `number` | `20` | Cap on how many in-scope memories are injected into the prompt memory index. |
-| `recall` | `{ weights?, recencyHalfLifeMs?, candidatePool? }` | relevance/recency/confidence `0.6`/`0.3`/`0.1`, 14-day half-life, pool `256` | Ranked-recall tuning for `recall({ query })`. `weights` blends IDF relevance, recency decay, and stored confidence; `recencyHalfLifeMs` sets the recency half-life; `candidatePool` caps how many newest token-matches a ranked search scores. Query-less recall (the injected index) is unaffected. |
-| `resolveScope` | `(ctx: { routePath; appRoot }) => Record<string, string>` | — | Supplies runtime namespace dimensions (e.g. `tenant`, `user`, `agent`) for the memory namespace. Only the dimensions a route declares in its `memory.ts` scope are applied. |
-
-See [Memory](/docs/memory) for the full long-term-memory model and [Permissions](/docs/permissions#memory-write-approval-writes-ask) for the `ask`-mode HITL flow, plus the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
-
----
+Defaults: disabled, `maxTokens: 12_000`, `keepRecentTurns: 6`, the route model,
+a lazy `gpt-tokenizer` `o200k_base` counter, and the built-in one-call
+summarizer. Each authored field replaces its default. Enabling summarization
+without either a route model or `summarization.model` cannot create a
+summarizer. See [Context Management](/docs/context-management) for when history
+is compressed and what remains verbatim.
 
 ### `build`
 
-| Type | Default |
-|---|---|
-| `{ targets?: string[] }` | `{ targets: ["node", "langsmith"] }` |
-
-Deployment build configuration for `dawn build`.
-
 ```ts
-build?: {
-  targets?: string[]
-}
+build?: { targets?: readonly string[] }
 ```
 
-`targets` selects which deployment artifacts `dawn build` emits. Known targets:
-- `"node"` — a runnable Node server entry (`.dawn/build/server.mjs`, which boots `serveRuntime`) plus a hardened `Dockerfile`. This is the only target that engages the sandbox in production. Run it with `dawn start` or `docker build`/`docker run`.
-- `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json` and the per-route materialized graph entry files).
-- `"hono"` — an edge entry point (`.dawn/build/app.mjs`), its module manifest and per-request Postgres store factory, and a `wrangler.toml` scaffold, for Cloudflare Workers and other web-standard runtimes. **Not emitted by default**, and it serves a [subset of Dawn](/docs/deployment#what-the-edge-cannot-serve) — the build fails with `DAWN_E1005` when the app uses something the edge cannot run, and a runtime with no filesystem fallbacks raises the same code on every request for anything that got past the build gate. Neither can fire on the `node` target.
-
-`node` and `langsmith` are emitted by default. Naming `targets` **replaces** that list rather than adding to it: restrict to one — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way, and name every target you want otherwise (`{ build: { targets: ["node", "hono"] } }`). See [Deployment](/docs/deployment) for the full bridge.
-
----
+Default: `["node", "langsmith"]`. An authored `targets` array replaces that
+list; it does not add to it. Supported values are `"node"`, `"langsmith"`, and
+the opt-in `"hono"` subset. Choose only targets whose runtime can materialize
+the configured capabilities. See [Deployment Options](/docs/deployment) for
+the artifact and compatibility matrix.
 
 ### `sandbox`
-
-| Type | Default |
-|---|---|
-| `SandboxConfig` | none — filesystem/exec run on the host by default |
-
-Routes workspace filesystem and exec calls through an isolated `SandboxProvider` (e.g. `dockerSandbox` or `kubernetesSandbox` from `@dawn-ai/sandbox`) instead of the host process. Opt in per app; omit entirely for the default host-backed behavior.
 
 ```ts
 sandbox?: {
   provider: SandboxProvider
-  network?: { mode: "allow"; denylist?: string[] } | { mode: "deny"; allowlist?: string[] }
-  env?: Record<string, string>
+  network?:
+    | { mode: "allow"; denylist?: readonly string[] }
+    | { mode: "deny"; allowlist?: readonly string[] }
+  env?: Readonly<Record<string, string>>
   resources?: { memoryMb?: number; cpus?: number; timeoutMs?: number; diskGb?: number }
   security?: {
     dropAllCapabilities?: boolean
@@ -306,24 +301,94 @@ sandbox?: {
 }
 ```
 
-| Sub-key | Type | Default | Description |
-|---|---|---|---|
-| `provider` | `SandboxProvider` | — (required) | The sandbox implementation, e.g. `dockerSandbox({ image })` or `kubernetesSandbox({ image, namespace? })`. |
-| `network` | `{ mode: "allow" \| "deny"; denylist?/allowlist? }` | provider-defined | Network egress policy applied inside the sandbox. |
-| `env` | `Record<string, string>` | `{}` | Explicit env injected into the sandbox. The host env is never inherited. |
-| `resources` | `{ memoryMb?; cpus?; timeoutMs?; diskGb? }` | provider-defined | Resource limits and per-command timeout. `diskGb` sizes the per-thread volume on PVC-backed providers (Kubernetes); Docker ignores it. |
-| `security` | `SandboxSecurityPolicy` | hardened (Docker) | Provider-agnostic hardening intent — capability drop, no-new-privileges, read-only rootfs, non-root uid/gid, pids limit. Fields left unset take the provider's secure default. |
-| `idleTimeoutMs` | `number` | `600000` (10 min) | Manager-level idle reap window before a warm sandbox is released. |
+Default: no sandbox, so workspace operations use the selected host backends.
+When configured, `provider` is required; the manager defaults to an allow-mode
+network policy that denies `169.254.169.254`, injects no host environment, and
+releases idle compute after `600_000` ms. Resource and security enforcement is
+provider-specific; Docker's security fields default hardened. `diskGb` matters
+to PVC-backed providers and Docker ignores it. At runtime, an
+injected `sandboxManager` takes precedence over `config.sandbox`; config is
+used only when the host does not supply a manager. See [Execution
+Sandbox](/docs/sandbox) before relaxing isolation or network policy.
 
-See [Execution Sandbox](/docs/sandbox) for provider setup, the security-hardening defaults, and the Kubernetes provider.
+### `memory`
 
----
+```ts
+memory?: {
+  enabled?: boolean
+  store?: MemoryStoreLike
+  writes?: "off" | "candidate" | "auto" | "ask"
+  indexMaxEntries?: number
+  recall?: {
+    weights?: { relevance?: number; recency?: number; confidence?: number }
+    recencyHalfLifeMs?: number
+    candidatePool?: number
+  }
+  vector?: {
+    embedder: Embedder
+    weights?: { keyword?: number; vector?: number }
+    rrfK?: number
+    vectorK?: number
+    recencyWeight?: number
+    confidenceWeight?: number
+  }
+  episodes?: {
+    enabled?: boolean
+    ttlMs?: number
+    cap?: number
+    includeFailedRuns?: boolean
+    embed?: boolean
+  }
+  distill?: {
+    model?: string
+    provider?: ModelProviderId
+    maxBatches?: number
+    consolidate?: {
+      olderThanMs?: number
+      minBatchSize?: number
+      maxBatchSize?: number
+      ttlMs?: number
+      sourceTtlMs?: number
+    }
+    reflect?: {
+      minNewRecords?: number
+      maxRecords?: number
+      writes?: "candidate" | "auto"
+    }
+  }
+  resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
+}
+```
+
+The route's `memory.ts`, not `memory.enabled`, opts into typed memory;
+`enabled` is an inert compatibility field. Defaults are SQLite at
+`.dawn/memory.sqlite`, `writes: "candidate"`, and `indexMaxEntries: 20`.
+Keyword recall defaults to relevance/recency/confidence weights
+`0.6`/`0.3`/`0.1`, a 14-day half-life, and a `256`-record candidate pool.
+Vector recall is absent by default; when present it requires `embedder` and
+defaults to keyword/vector weights `1`/`1`, `rrfK: 60`, `vectorK: 64`,
+`recencyWeight: 0.3`, and `confidenceWeight: 0.1`.
+
+Episodes default disabled with a 30-day TTL, cap `500`, failed runs included,
+and no embeddings (`embed: true` is unsupported). Distillation runs only when
+invoked: defaults are `gpt-5-mini`, inferred provider then `openai`, five
+batches; consolidate after seven days in batches of 5–50 with no summary TTL
+and a seven-day source TTL; reflect after 10 new records over at most 100,
+writing candidates. `resolveScope` receives only `routePath` and `appRoot`, so
+derive tenant or user dimensions from application-owned context. A custom store
+owns its own retrieval behavior rather than these default-store tuning blocks.
+At runtime, an injected `memoryStore` takes precedence over `config.memory.store`;
+config precedes the default SQLite store. See [Long-term
+Memory](/docs/memory/long-term) for governance, [Recall and
+Retrieval](/docs/memory/retrieval) for ranking, [Episodes](/docs/memory/episodes)
+for run history, and [Distillation](/docs/memory/distillation) for explicit
+consolidation and reflection.
 
 ## Postgres backend
 
-Dawn's three durable runtime stores — `checkpointer`, `threadsStore`, and `permissions.store` — all default to a local file under `.dawn/`. That is right for development and for a single long-lived process, and wrong for a deployment where more than one instance serves the same threads, or where the filesystem is ephemeral or read-only.
-
-`@dawn-ai/postgres-storage` provides all three against one Postgres database:
+Shared Postgres persistence requires three explicit entries: the checkpointer,
+thread store, and permission store. They are separate because checkpoints,
+thread metadata, and runtime grants have different contracts.
 
 ```bash
 pnpm add @dawn-ai/postgres-storage pg
@@ -338,85 +403,26 @@ import {
 } from "@dawn-ai/postgres-storage"
 import { Pool } from "pg"
 
-// One pool, shared by all three stores — managed Postgres caps connections,
-// and three owned pools burn three times the budget for no benefit.
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
-
-// Required, not optional. `pg` emits 'error' on the POOL when an IDLE client
-// fails, and an EventEmitter 'error' with no listener is an uncaught exception
-// that ends the process. Idle connections drop routinely — server restart,
-// failover, `idle_session_timeout` — so without this a normal Postgres blip
-// takes your app down instead of the pool replacing one connection. A pool you
-// build is yours to handle; the stores never attach a listener to it.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 pool.on("error", (error) => {
-  console.error("postgres pool client error (connection dropped):", error)
+  console.error("Postgres pool client error:", error)
 })
 
 export default config({
   checkpointer: postgresCheckpointer({ pool }),
   threadsStore: createPostgresThreadsStore({ pool }),
   permissions: {
-    mode: "non-interactive",
     store: createPostgresPermissionsStore({ pool, mode: "non-interactive" }),
   },
 })
 ```
 
-Any Postgres 14+ database works; no extensions are required. Each store migrates lazily on first use under a `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database converge instead of racing. Call `ready()` on a store to migrate at boot instead.
+Attach an `error` listener to an injected `pg.Pool`. The application owns the pool
+and must end it after Dawn has stopped accepting and draining requests;
+the stores do not close an injected pool. Postgres shares durable rows, but it
+does not distribute active-run or cancel coordination between processes. Use
+sticky or thread-aware routing, or provide a distributed coordination layer.
 
-#### Two entry points
-
-`pool` is **required** on the main entry, which imports `pg` for types only so that it links on a runtime where a raw TCP driver cannot be bundled at all. The pool is typed structurally (`{ query, connect, end }`), so a `pg.Pool` and a `@neondatabase/serverless` WebSocket pool both satisfy it.
-
-`@dawn-ai/postgres-storage/node` is the same three factories with a `connectionString` convenience layered on, and it does import `pg` as a value:
-
-```ts
-import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
-
-// Builds and owns a pg pool; close() ends it.
-const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
-```
-
-Reach for `/node` on Node, Bun, or a Vercel function running the Node.js runtime when you want the convenience. Use the main entry with your own pool everywhere else.
-
-Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
-
-### What this does and does not run on
-
-| Host | Works | Notes |
-|---|---|---|
-| Node, Bun | Yes | Direct TCP to Postgres. Exercised in CI. |
-| Vercel functions (Node.js runtime) | Should, untested | Direct TCP to Postgres — the runtime is Node, so `pg` behaves as it does above. Nothing here has been run on Vercel, so this is inference from the driver rather than a measurement. Vercel's **Edge** runtime has no raw TCP socket and needs the Cloudflare Workers row's treatment instead. |
-| Cloudflare Workers | **Not with `pg`** | `pg` opens a TCP socket, which workerd does not provide — so the `/node` entry is unusable there. Inject a [`@neondatabase/serverless`](https://github.com/neondatabase/serverless) WebSocket `Pool` into the main entry instead; it satisfies `SqlPool`, and a throwaway spike confirmed inside real workerd that the checkpointer's `BEGIN`/`COMMIT`/`ROLLBACK` are genuine session transactions on that path. That wiring is what `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates, and a gated CI lane exercises it inside real workerd end to end — at the AG-UI level, [with limits worth reading](/docs/deployment#what-is-proven-and-what-is-not). Build the pool and the stores **per request** — see [why](/docs/deployment#why-the-stores-are-per-request). [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) should also work but is untested; it needs a Cloudflare account. |
-
-### Your app owns store teardown
-
-`handler.close()` on the web-standard runtime handler stops accepting requests, aborts the shutdown controller, drains in-flight requests, and releases sandboxes. It does **not** touch the stores — the runtime never created them, so it does not own their lifetime.
-
-Each store exposes `close()`. A store built from `connectionString` (via the `/node` entry) owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
-
-```ts
-await handler.close()
-await pool.end()
-```
-
-### Storage shape and known limits
-
-- **Checkpoint payloads are opaque.** The serialized checkpoint, its metadata, and pending-write values are stored as `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not used: it rejects a NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which reach checkpoints in normal operation through tool output.
-- **Unchanged channel values repeat per checkpoint.** Each checkpoint stores its channel values as one payload rather than deduplicating across checkpoints. SQLite has the same property and Dawn has lived with it; on Postgres the same shape costs more, because every repeat crosses the network and lands in TOAST storage. This has not been benchmarked — size your database accordingly for long threads carrying large state.
-- **The per-thread run gate is in-process.** The runtime's "one run at a time per thread" check lives in instance memory, so two instances can each start a run on the same thread. A shared store makes that visible; it does not cause it. Serialize at the routing layer if you need a hard guarantee.
-- **Thread timestamps are `text`, not `timestamptz`.** `created_at` / `updated_at` are app-generated ISO-8601 strings, so the exact string handed to an API client comes back unchanged. Ordering uses `COLLATE "C"` so it does not depend on the database's locale.
-- **Rows are plaintext.** Treat the database as sensitive application data.
-
-See [API Reference](/docs/api#dawn-aipostgres-storage) for the full option and type surface.
-
----
-
-## Related
-
-<RelatedCards items={[
-  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "backends, tools, and the workspace sandbox model" },
-  { href: "/docs/cli", title: "CLI Reference", subtitle: "commands that read dawn.config.ts" },
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "dawn dev flags and the Agent Protocol HTTP endpoints" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "production environment variables and the deploy workflow" },
-]} />
+See [Persistence and Tenancy](/docs/persistence) for migration, lifecycle,
+retention, and deletion contracts, then [Production
+Topology](/docs/production-topology) for replica routing and shutdown order.

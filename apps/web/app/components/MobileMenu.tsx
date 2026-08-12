@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useId, useRef, useState } from "react"
 import { CopyCommand } from "./CopyCommand"
-import { DOCS_NAV } from "./docs/nav"
+import { MobileDocsNav } from "./docs/MobileDocsNav"
 
 interface SiteLink {
   readonly label: string
@@ -33,9 +33,32 @@ export function MobileMenu() {
   const [isOpen, setIsOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const menuId = useId()
 
   const isDocsPage = pathname.startsWith("/docs")
+
+  // Native modal dialogs remove their closed content from sequential focus
+  // and make the rest of the page inert while open.
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+
+    if (isOpen && !dialog.open) dialog.showModal()
+    if (!isOpen && dialog.open) dialog.close()
+  }, [isOpen])
+
+  // Do not leave an active modal hidden by the md:hidden breakpoint.
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 48rem)")
+    const closeAtDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) setIsOpen(false)
+    }
+
+    if (desktop.matches) setIsOpen(false)
+    desktop.addEventListener("change", closeAtDesktop)
+    return () => desktop.removeEventListener("change", closeAtDesktop)
+  }, [])
 
   // Body scroll lock + focus management
   useEffect(() => {
@@ -52,16 +75,6 @@ export function MobileMenu() {
         triggerRef.current?.focus()
       }
     }
-  }, [isOpen])
-
-  // Esc key closes
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsOpen(false)
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
   }, [isOpen])
 
   // Close on route change
@@ -92,15 +105,16 @@ export function MobileMenu() {
         </svg>
       </button>
 
-      {/* Overlay */}
-      <div
+      <dialog
+        ref={dialogRef}
         id={menuId}
-        role="dialog"
-        aria-modal="true"
         aria-label="Site menu"
-        className={`md:hidden fixed inset-0 z-50 bg-page transition-opacity duration-200 ease-out ${
-          isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-        }`}
+        onCancel={(event) => {
+          event.preventDefault()
+          setIsOpen(false)
+        }}
+        onClose={() => setIsOpen(false)}
+        className="md:hidden fixed inset-0 z-50 m-0 h-dvh max-h-none w-full max-w-none border-0 bg-page p-0"
       >
         <div className="h-full overflow-y-auto">
           {/* Header strip */}
@@ -156,7 +170,7 @@ export function MobileMenu() {
               ))}
             </ul>
             <div className="mt-5 px-3">
-              <CopyCommand command="pnpm create dawn-ai-app" />
+              <CopyCommand command="npm create dawn-ai-app@latest my-agent" />
             </div>
           </div>
 
@@ -166,39 +180,11 @@ export function MobileMenu() {
               <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-3">
                 Documentation
               </p>
-              <nav className="space-y-5">
-                {DOCS_NAV.map((section) => (
-                  <div key={section.label}>
-                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-1.5 px-3">
-                      {section.label}
-                    </p>
-                    <ul className="space-y-0.5">
-                      {section.items.map((item) => {
-                        const active = pathname === item.href
-                        return (
-                          <li key={item.href}>
-                            <Link
-                              href={item.href}
-                              onClick={() => setIsOpen(false)}
-                              className={`block text-sm px-3 py-2 rounded-md transition-colors ${
-                                active
-                                  ? "text-accent-saas bg-accent-saas-soft"
-                                  : "text-ink-muted hover:text-ink hover:bg-surface"
-                              }`}
-                            >
-                              {item.label}
-                            </Link>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </nav>
+              <MobileDocsNav pathname={pathname} onNavigate={() => setIsOpen(false)} />
             </div>
           )}
         </div>
-      </div>
+      </dialog>
     </>
   )
 }

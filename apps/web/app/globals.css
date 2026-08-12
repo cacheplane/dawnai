@@ -62,6 +62,17 @@ html {
   overflow-wrap: break-word;
 }
 
+@media (max-width: 47.999rem) {
+  .mdx-inline-code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  pre .mdx-inline-code {
+    white-space: inherit;
+    overflow-wrap: normal;
+  }
+}
+
 /* Block code (`<code>` inside `<pre>`) inherits the same MDX `code:` override and
    therefore gets the .mdx-inline-code class. Strip the chip treatment when it's
    nested inside a <pre> so shiki's tokenized output renders as a normal block. */

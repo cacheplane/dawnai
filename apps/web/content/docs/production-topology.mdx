@@ -1,0 +1,71 @@
+# Production Topology
+
+Start with one Dawn process and add infrastructure only for a measured requirement. Shared persistence, replica coordination, streaming behavior, readiness, and shutdown are separate design decisions.
+
+## Start with one process
+
+The smallest production shape is the Node runtime with a durable local disk. One process owns the HTTP listener and its in-memory run registry; default SQLite files hold checkpoints and thread metadata, while the default permission store uses a local file.
+
+Bind the service to a private interface or put it behind an authenticated edge, persist the app's `.dawn/` and `workspace/` data, and arrange signal-driven shutdown. This topology avoids cross-replica races because every run for the service reaches the same process.
+
+## Where state lives
+
+| State | Placement | Replica implication |
+|---|---|---|
+| Active-run gate, abort controllers, cancellation registry, resume claims, and the in-session thread-to-route map | process-local memory in one runtime handler | Another process cannot observe, serialize, or cancel this process's active run |
+| Checkpoints, thread metadata, and runtime permission grants | Local SQLite/file stores by default; configurable shared durable stores | Shared records survive replacement compute, but they do not coordinate active execution |
+| Typed long-term memory | Separate local SQLite store or configured shared memory backend | Namespace and retention are application-owned; it is not part of the three runtime Postgres stores |
+| `workspace/` files | Local filesystem backend by default | Ephemeral or replica-local disks diverge unless the application supplies durable shared behavior |
+| Sandbox workspace | Provider-managed per-thread volume | Release and destroy semantics depend on the provider; route requests must reach the intended volume |
+| Middleware context and per-request stores | One request/run lifetime | Never use them as cross-request or cross-replica state |
+
+See [Persistence and Tenancy](/docs/persistence) for the data lifecycle matrix.
+
+## Move to ephemeral compute
+
+Before replacing local disk with ephemeral instances, move checkpoints, thread metadata, and permission decisions to Postgres with the three `@dawn-ai/postgres-storage` adapters. Choose a separate backend for long-term memory. Decide explicitly whether workspace files and sandbox volumes must survive process or pod replacement.
+
+Use one application-owned pool where the host permits it, handle idle pool errors, and close the runtime handler before ending the pool. An edge runtime may instead require request-scoped pools; follow the generated Hono store lifetime rather than reusing request-bound sockets across invocations.
+
+## Add replicas safely
+
+Replicas need both shared persistence **and** guaranteed thread-aware routing or serialization. Dawn has no distributed run coordinator: each handler's one-run-per-thread gate and cancellation registry are process-local.
+
+For Agent Protocol routes, the thread id is present in paths such as `/threads/:thread_id/runs/stream` and `/threads/:thread_id/cancel`. Route all operations for an active thread—including cancellation—to the instance that owns its run, or place a distributed coordinator in front of execution. A persisted `busy` status is metadata, not a safe lock.
+
+AG-UI sends its `threadId` in the request body to `/agui/:routeId`. An ordinary path-only load balancer cannot derive thread affinity from that body automatically. Use a gateway that understands the request, a trusted affinity token established before dispatch, or another serialization design you can test under concurrent requests.
+
+## Streaming and proxy behavior
+
+Agent Protocol execution is durable with respect to its viewer: if the client disconnects from `/runs/stream` or abandons `/runs/wait`, the run continues until it completes, is explicitly cancelled, or the runtime shuts down. Route cancellation to the owning process.
+
+AG-UI is ephemeral. Disconnecting or cancelling its response aborts the request's run. Configure proxies to pass server-sent events without buffering, preserve heartbeat traffic, and allow timeouts long enough for expected turns. Test disconnects at the browser, proxy, and runtime—not only with a direct local request.
+
+## Health and readiness
+
+`GET /healthz` returns a successful liveness response from the route table. That does not prove that Postgres, model providers, sandbox infrastructure, or every configured backend can serve a turn.
+
+The fetch runtime calls `requestStores` before route dispatch, so a fetch/Hono host may initialize request-scoped stores even for `/healthz`. Treat that as an implementation detail, not a comprehensive dependency probe. Add an application-owned readiness check for the dependencies and migrations your rollout requires, and keep it behind the same outer access controls as the rest of the service.
+
+## Shutdown and rollouts
+
+When invoked, the runtime handler's `close()` stops accepting requests, aborts shutdown-aware work, and waits up to 30 seconds for response bodies, active runs, and request-store disposal before proceeding. It then releases active sandboxes while keeping provider volumes according to provider semantics. Work that ignores cancellation can outlive the bounded drain.
+
+Injected stores and pools remain application-owned. Await `close()` before closing those resources so in-flight routes do not write through a pool that has already ended.
+
+`dawn start` opts into SIGINT/SIGTERM handling. `serveRuntime` defaults signal installation off, and the generated Node `server.mjs` calls it without that option, so the generated server does not currently install signal handlers. Use `dawn start` or provide a host entry that receives platform signals, invokes and awaits `close()`, and exits according to your supervisor's contract.
+
+## Kubernetes implications
+
+An HPA adds or removes replicas; a PodDisruptionBudget limits simultaneous voluntary disruption. Both can improve availability, but neither serializes a thread, routes cancellation, drains a Dawn handler, or makes local disk shared.
+
+For Kubernetes, combine an application-level readiness probe, a termination grace period longer than the chosen drain budget, a signal-aware entry point, and verified thread-affinity or coordination. Exercise rolling updates with a live Agent Protocol stream, an AG-UI disconnect, a cancel request, and a pod replacement while shared stores remain available.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/persistence", title: "Persistence and Tenancy", subtitle: "where each data class lives and who owns deletion" },
+  { href: "/docs/security-architecture", title: "Security Architecture", subtitle: "protect every exposed runtime surface" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "current build targets and artifacts" },
+  { href: "/docs/embedding", title: "Embed the Runtime", subtitle: "own handler and shutdown lifetimes" },
+]} />

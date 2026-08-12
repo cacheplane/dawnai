@@ -1,4 +1,22 @@
+export type { BrowseCursorPayload, BrowseCursorValue } from "./browse-cursor.js"
+export {
+  BROWSE_CURSOR_VERSION,
+  browseCursorKey,
+  browseQueryFingerprint,
+  decodeBrowseCursor,
+  encodeBrowseCursor,
+} from "./browse-cursor.js"
 export { normalizeSetFilter } from "./browse-filter.js"
+export type { ResolvedBrowseSort } from "./browse-order.js"
+export { DEFAULT_BROWSE_ORDER, resolveBrowseOrder } from "./browse-order.js"
+export { namespacePrefixUpperBound, utcDayAfter, utcDayStart } from "./browse-range.js"
+export {
+  BROWSE_DEFAULT_LIMIT,
+  BROWSE_MAX_LIMIT,
+  BROWSE_SORT_FIELDS,
+  BrowseQueryError,
+  validateBrowseQuery,
+} from "./browse-validate.js"
 export {
   buildConsolidationPrompt,
   buildReflectionPrompt,
@@ -43,8 +61,11 @@ export {
 export { sqliteMemoryStore } from "./sqlite-store.js"
 export { tokenize } from "./tokenize.js"
 export type {
+  BrowseFilter,
   BrowsePage,
   BrowseQuery,
+  BrowseSortEntry,
+  BrowseSortField,
   MemoryKind,
   MemoryQuery,
   MemoryRecord,

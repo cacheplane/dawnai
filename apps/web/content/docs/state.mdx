@@ -4,13 +4,14 @@ Routes may declare a state contract in a colocated `state.ts` file. State is the
 
 ## The shape
 
-When present, `state.ts` default-exports a Zod schema or Standard Schema value. Agent routes use it to parse defaults at runtime, and you can derive the TypeScript type via `z.infer<typeof state>`:
+When present, `state.ts` default-exports a Zod schema or Standard Schema value. Agent routes discover and apply state defaults from it, and you can derive the TypeScript type via `z.infer<typeof state>`:
 
 <CodeGroup>
 ```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
 export default z.object({
+  tenant: z.string().default(""),
   /** Accumulated context from tool call results */
   context: z.string().default(""),
 })
@@ -20,18 +21,22 @@ export default z.object({
 // workflow form
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { z } from "zod"
-import type state from "./state.js"
+import state from "./state.js"
 
 type HelloState = z.infer<typeof state>
 
-export async function workflow(state: HelloState, ctx: RuntimeContext) {
-  // state.context is string (Zod-parsed default `""` is applied when caller omits it)
+export async function workflow(input: unknown, ctx: RuntimeContext): Promise<HelloState> {
+  const parsed = state.parse(input)
+  ctx.signal.throwIfAborted()
+  return { ...parsed, context: parsed.context }
 }
 ```
 </CodeGroup>
 
+Agent-state discovery extracts defaults by validating `{}`. A schema that rejects `{}` is skipped, so its agent state defaults and generated types are not produced. Make every top-level field accept missing input, usually with `.default(...)`. Agent routes apply defaults from a successfully discovered schema automatically. Plain workflows must parse their unknown input explicitly, as above; their schema defaults appear only after `state.parse(input)` succeeds.
+
 <Callout type="info" title="Zod or any Standard Schema">
-  State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.
+  State discovery accepts a Zod-compatible schema or any value that implements [Standard Schema](https://standardschema.dev/). It calls `~standard.validate({})` when that slot is present, otherwise `.parse({})`, and requires a successful object value. The scaffold uses Zod.
 </Callout>
 
 ## Dynamic segments are route params
@@ -69,7 +74,7 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
 
 <Steps>
   <Step title="State must be JSON-serializable">
-    Dawn serializes state across runtime boundaries (dev server, scenario tests, LangSmith). Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
+    Dawn serializes state across runtime boundaries (`dawn run`, `dawn dev`, the Node runtime, Hono builds, and scenario tests), and LangSmith serializes state at its own boundary. Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
   </Step>
   <Step title="Prefer readonly">
     Mark fields `readonly` (or use Zod's `.readonly()`) when they should not be mutated. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
@@ -84,7 +89,8 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
 State crosses the runtime boundary at every entry point:
 
 - `dawn run` — JSON via stdin, JSON via stdout.
-- `runs/wait` and `runs/stream` (locally under `dawn dev`, on LangSmith in prod) — JSON over HTTP keyed by the route id (`route` in the request body locally; `assistant_id` on LangSmith).
+- `runs/wait` and `runs/stream` under `dawn dev`, the Node runtime (`dawn start` or `.dawn/build/server.mjs`), and Hono builds — Dawn's HTTP envelope uses `{ route, input }`, where `route` is `<routeId>#<kind>`.
+- LangSmith deployments are a separate product boundary. They use LangSmith's own request envelope, keyed by `assistant_id`; do not send Dawn's `{ route, input }` body unchanged.
 
 Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the route result crosses the boundary.
 
@@ -94,7 +100,7 @@ Tool results, intermediate values, and other in-route data live inside the entry
   { href: "/docs/routes", title: "Routes", subtitle: "how state types flow into route entries" },
   { href: "/docs/tools", title: "Tools", subtitle: "tools that read or mutate state" },
   { href: "/docs/planning", title: "Planning", subtitle: "the todos channel is contributed at runtime" },
-  { href: "/docs/testing", title: "Testing", subtitle: "asserting state shape in scenarios" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "how state serialization requirements apply across the runtime boundary" },
-  { href: "/docs/recipes/typed-state", title: "Typed state", subtitle: "recipe wiring dynamic segments into a typed shape" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "asserting state shape in scenarios" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "how state serialization requirements apply across the runtime boundary" },
+  { href: "/docs/recipes/typed-state", title: "Typed State", subtitle: "recipe wiring dynamic segments into a typed shape" },
 ]} />

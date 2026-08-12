@@ -4,9 +4,9 @@ Dawn is pre-1.0. The API surface is still moving, and the safest posture is to p
 
 ## Fixed-group versioning
 
-Every `@dawn-ai/*` package — `cli`, `core`, `sdk`, `ag-ui`, `sandbox`, `memory`, `memory-pgvector`, `permissions`, `workspace`, `sqlite-storage`, `langchain`, `langgraph`, `testing`, `evals`, `devkit`, `vite-plugin`, `create-dawn-app`, and the rest — is released together under one version number via [Changesets](https://github.com/changesets/changesets)' fixed-group mode. If `@dawn-ai/cli` is at `0.8.12`, so is every other `@dawn-ai/*` package in that release. There's no independent versioning between packages to reason about, and no compatibility matrix to check — install matching versions and you're done.
+Every publishable Dawn package — `@dawn-ai/cli`, `@dawn-ai/core`, `@dawn-ai/sdk`, the other `@dawn-ai/*` packages, and `create-dawn-ai-app` — is released together under one version number via [Changesets](https://github.com/changesets/changesets)' fixed-group mode. If `@dawn-ai/cli` is at `0.8.12`, so is every other package in that release. There's no independent versioning between packages to reason about, and no compatibility matrix to check — install matching versions and you're done.
 
-The two Helm charts (`dawn-sandbox-infra`, `dawn-app`) track the same package train through their `appVersion` field, but they're published separately as OCI artifacts, not npm packages — see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes) for how to pull a specific chart version.
+The two Helm charts (`dawn-sandbox-infra`, `dawn-app`) track the same package train through their `appVersion` field, but they're published separately as OCI artifacts, not npm packages — see [Kubernetes](/docs/deployment/kubernetes) for how to pull a specific chart version.
 
 ## How to read what changed
 
@@ -42,9 +42,23 @@ Each release is built from the changeset entries merged since the previous one �
     dawn test
     ```
 
-    `dawn verify` catches app-contract, route-discovery, typegen, and missing-dependency drift in one call; `dawn test` re-runs your scenario coverage against the new version. See [CLI](/docs/cli) and [Testing](/docs/testing).
+    `dawn verify` runs five phases: app discovery and config validation; route discovery; tool type extraction and typegen rendering; advisory checks for missing dependencies and provider environment variables; and runtime readiness for Node plus any configured sandbox provider. `dawn test` re-runs your scenario coverage against the new version. See [CLI](/docs/cli) and [Testing](/docs/testing).
   </Step>
 </Steps>
+
+## Node 24 is the minimum
+
+Current Dawn packages declare `node >=24.0.0`, and `create-dawn-ai-app` refuses to scaffold on older releases. Before upgrading dependencies, move local version-manager files, CI runners, and custom container bases to Node 24 or later, reinstall with that runtime, and run `dawn verify`. Node 24 also supplies the npm and unflagged `node:sqlite` versions the scaffold expects.
+
+## Node-only imports moved to `/node`
+
+If application tooling imports filesystem or process-backed helpers, update the import specifier while keeping the symbol unchanged:
+
+- From `@dawn-ai/core/node`: `discoverRoutes`, `findDawnApp`, `assertDawnRoutesDir`, `extractToolSchemasForRoute`, `extractToolTypesForRoute`, and `registerTsxLoader`.
+- From `@dawn-ai/permissions/node`: `createPermissionsStore`.
+- From `@dawn-ai/workspace/node`: `localFilesystem` and `localExec`.
+
+For example, change `import { discoverRoutes } from "@dawn-ai/core"` to `import { discoverRoutes } from "@dawn-ai/core/node"`. Runtime-agnostic contracts and helpers remain on each package's main entry; use `/node` only for the explicit Node surface.
 
 ## Pinning
 
@@ -77,7 +91,7 @@ target, and the matching runtime check (below) cannot fire on Node at all.
 quietly do nothing on a runtime with no filesystem. All three now raise
 `DAWN_E1005` on every request instead, naming the feature and the config key that
 introduced it. See [What the edge cannot
-serve](/docs/deployment#what-the-edge-cannot-serve).
+serve](/docs/deployment/edge#what-the-edge-cannot-serve).
 
 This closes a gap the build gate could not: composing an entry by hand over
 `@dawn-ai/cli/fetch` is a supported way to deploy, and such an app never runs the
@@ -96,7 +110,7 @@ already doing nothing.
 In `0.8.19` the main entry accepted either and built its own `pg` pool from a
 connection string; it no longer does, because it now imports `pg` for **types
 only** so that the package links on a runtime with no TCP sockets — which is
-what makes the [`hono` edge target](/docs/deployment#the-hono-build-target)
+what makes the [`hono` edge target](/docs/deployment/edge)
 possible at all.
 
 `connectionString` is gone from the main entry's option type, so passing it
@@ -142,7 +156,7 @@ pin exact versions and read the notes — is not boilerplate.
 
 ## `kind: "reflection"` is now accepted
 
-[Memory distillation](/docs/memory#distillation) wired the `reflection` kind.
+[Memory distillation](/docs/memory/distillation) wired the `reflection` kind.
 `defineMemory({ kind: "reflection" })` and the generated `remember` tool now
 accept it — previously it was typed but threw *"memory kind 'reflection' is not
 yet wired"* at write time. Reflections are **append-only** (like episodic
@@ -186,7 +200,7 @@ Two related behavior changes in the same release:
 
 ## MemoryStore now requires `prune`
 
-[Episodic memory](/docs/memory#episodic-memory) added a required retention
+[Episodic memory](/docs/memory/episodes#episodic-memory) added a required retention
 method to the `MemoryStore` contract. If you implement a custom store for
 `config.memory.store`, add it:
 
@@ -223,8 +237,8 @@ against a custom store to verify the contract.
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/cli", title: "CLI", subtitle: "dawn verify and dawn typegen for post-upgrade checks" },
-  { href: "/docs/testing", title: "Testing", subtitle: "scenario coverage to re-run after an upgrade" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "the node, langsmith, and hono build targets, and the Helm charts' own versioning" },
+  { href: "/docs/cli", title: "CLI Reference", subtitle: "dawn verify and dawn typegen for post-upgrade checks" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "scenario coverage to re-run after an upgrade" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "the node, langsmith, and hono build targets, and the Helm charts' own versioning" },
   { href: "/docs/faq", title: "FAQ", subtitle: "the pre-1.0 stability note this page backs" },
 ]} />

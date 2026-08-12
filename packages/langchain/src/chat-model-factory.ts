@@ -2,6 +2,8 @@ import { readRuntimeEnv } from "@dawn-ai/core"
 import type { BuiltInModelProviderId, ReasoningConfig } from "@dawn-ai/sdk"
 import { errorDocsUrl, validateModelId } from "@dawn-ai/sdk"
 
+import { defaultModelImporter } from "#default-model-importer"
+
 type Importer = (specifier: string) => Promise<Record<string, unknown>>
 type ChatModelConstructor = new (options: Record<string, unknown>) => unknown
 
@@ -116,10 +118,7 @@ export async function createChatModel(options: {
 }): Promise<unknown> {
   warnOnUnknownModelId({ model: options.model, provider: options.provider })
   const spec = providerSpecs[options.provider]
-  const importer =
-    options.importer ??
-    seededImporter ??
-    ((specifier: string) => import(specifier) as Promise<Record<string, unknown>>)
+  const importer = options.importer ?? seededImporter ?? defaultModelImporter
 
   let moduleExports: Record<string, unknown>
   try {

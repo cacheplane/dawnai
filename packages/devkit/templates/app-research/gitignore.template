@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .dawn/
+.vercel/
 .env
 .env.*
 !.env.example

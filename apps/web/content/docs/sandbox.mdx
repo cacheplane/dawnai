@@ -1,12 +1,16 @@
 # Execution Sandbox
 
-The execution sandbox gives each Agent-Protocol conversation thread a hard-isolated workspace — filesystem, shell, and network — instead of the local `<appRoot>/workspace/` directory the agent otherwise reads and writes on the host. It's opt-in: add a `sandbox` key to `dawn.config.ts` and every `readFile`, `writeFile`, `listDir`, and `runBash` call for that thread routes into the isolated environment through a provider-agnostic `SandboxProvider` contract. Dawn ships a Docker reference implementation.
+The execution sandbox gives a provider-keyed Agent Protocol thread an isolated filesystem, shell, and network boundary instead of letting workspace tools operate in the app's local `workspace/` directory. That boundary depends on thread IDs remaining distinct after provider resource naming; the built-in providers do not add an application or tenant namespace. Add a `sandbox` key to `dawn.config.ts`, and Dawn routes `readFile`, `writeFile`, `listDir`, and `runBash` through a `SandboxProvider`. Dawn includes a Docker reference implementation; the same portable contract also supports other providers.
 
-This is a distinct layer from the other two access controls in Dawn: [tool scoping](/docs/tools) decides *which* tools the model may call; [permissions](/docs/permissions) decide *whether a given call should run* (human-in-the-loop approval); the sandbox decides *what an allowed, approved call can actually touch*. The three compose — none of them substitutes for the others.
+This is one of three independent controls: [tool scoping](/docs/tools) decides which tools the model can call, [permissions](/docs/permissions) decide whether a call may run, and the sandbox constrains what an allowed call can touch. Use all three where your threat model calls for them.
 
 ## Quickstart
 
-Docker must be installed and the daemon running. Configure a provider in `dawn.config.ts` using the typed `config()` helper (a bare object still works — `config()` is pure identity for IntelliSense):
+Install Docker, start its daemon, and configure `dockerSandbox`:
+
+```bash
+pnpm add @dawn-ai/sandbox
+```
 
 ```ts title="dawn.config.ts"
 import { config } from "@dawn-ai/cli"
@@ -14,7 +18,7 @@ import { dockerSandbox } from "@dawn-ai/sandbox"
 
 export default config({
   sandbox: {
-    provider: dockerSandbox({ image: "node:22-slim" }),
+    provider: dockerSandbox({ image: "node:24-slim" }),
     network: { mode: "allow", denylist: ["169.254.169.254"] },
     env: { NODE_ENV: "production" },
     resources: { memoryMb: 512, cpus: 1, timeoutMs: 120_000 },
@@ -23,282 +27,115 @@ export default config({
 })
 ```
 
-No `sandbox` key means no behavior change — the app keeps using the local `workspace/` directory exactly as before.
-
-`dawn check` validates the `sandbox` config shape and runs the provider's `preflight()` — for `dockerSandbox`, that means confirming the Docker daemon is reachable — so a misconfiguration or a stopped daemon fails at check time instead of mid-run.
+No `sandbox` key means no behavior change: workspace tools still use the app's local `workspace/` directory. `dawn check` validates the configuration and calls the provider's optional `preflight()`. For Docker, that check confirms the daemon is reachable so a stopped daemon fails before the first agent turn.
 
 ## What's isolated
 
-- **Filesystem** — `readFile`, `writeFile`, and `listDir` operate inside the sandbox's workspace volume. The host filesystem is never touched.
-- **Shell** — `runBash` executes inside the sandbox, still gated by the [permissions](/docs/permissions) allow/deny lists.
-- **Network** — governed by the configured [network policy](#network-policy); `deny` mode is zero egress.
-- **Environment** — the host's environment variables are never inherited. Only the key/value pairs in `sandbox.env` are injected into the sandbox.
-- **Resources** — `resources.memoryMb` and `resources.cpus` cap the sandbox's memory and CPU; `resources.timeoutMs` caps how long a single exec call may run.
+- **Filesystem** — workspace file tools use a sandbox volume, not the host filesystem.
+- **Shell** — `runBash` executes in the sandbox and remains subject to permissions.
+- **Network** — `sandbox.network` expresses portable policy intent; enforcement depends on the provider.
+- **Environment** — the host environment is not inherited. Only `sandbox.env` entries are injected.
+- **Resources** — `memoryMb` and `cpus` cap compute; `timeoutMs` caps one command.
 
 ## Lifecycle
 
-One sandbox is created per conversation thread, on that thread's first turn. It stays warm and is reused across every subsequent turn on the same thread — the agent isn't paying container start-up cost on every message.
+Dawn passes the conversation thread ID to the provider and reuses the resulting sandbox across turns.
 
-- **Persistence** — the workspace (a named volume) survives across turns, across a container being idle-reaped, and across a full server restart. On the next turn, the provider reattaches the existing volume by its deterministic name rather than starting from an empty workspace.
-- **Idle reap** — a thread with no activity for `idleTimeoutMs` (default 10 minutes) has its warm container released. The volume is kept, so the next turn on that thread reattaches it with all files intact.
-- **Thread delete** — an Agent-Protocol `DELETE` on the thread destroys the sandbox *and* its volume. This is the only operation that discards the workspace permanently.
+- `acquire()` creates or reattaches the thread's live compute and workspace.
+- Idle reap and `release()` discard warm compute but retain the workspace volume.
+- A later turn reattaches that retained volume.
+- Thread deletion calls `destroy()`, removing both compute and workspace data.
 
-Turn trace: turn 1 on a new thread → no live sandbox → `acquire()` creates the container and volume. Turns 2..N on the same thread → the same live sandbox is reused. Thread idle past `idleTimeoutMs` → container released, volume kept. Next turn after that → `acquire()` reattaches the existing volume into a fresh container. Thread deleted → `destroy()` removes the container and the volume.
+Storage is named from a provider-specific transformation of the thread ID so a provider can reattach it after compute is released. Provider retention can shorten this lifecycle: an operator-owned cleanup policy may delete released storage before the thread is deleted. See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for that provider's reaper boundary. Subagents share their parent's thread and therefore share its sandbox.
+
+<Callout type="warn" title="Canonicalize IDs and separate provider scopes">
+  Docker substitutes unsupported name characters, while Kubernetes lowercases, substitutes, trims, and conditionally truncates its resource-name input. This is a lossy sanitizer boundary: distinct short IDs that differ only by case or substituted punctuation can name the same container, volume, Pod, PVC, or NetworkPolicy. The current runtime does not add an app or tenant discriminator and does not hash every sanitized ID.
+
+  Before a caller can select `thread_id`, map application ownership to a collision-resistant, provider-safe canonical thread ID that is globally unique within that provider scope; opaque lowercase UUID/ULID-style IDs are safer than meaningful caller strings. Run each application or trust boundary against a separate Docker daemon or equivalent isolated Docker context. Mutually untrusted tenants must not share a provider scope in which their names can alias. Changing built-in resource naming to hash every ID would affect reattachment to existing volumes, so treat that runtime change as a compatibility-sensitive follow-up rather than assuming it here.
+</Callout>
 
 ## Security hardening
 
-The Docker provider is hardened by default — a fresh `dockerSandbox()` config with no `security` key applies all of the following:
+The Docker provider applies these defaults:
 
-| Control | Default | Effect |
-| --- | --- | --- |
-| Linux capabilities | `--cap-drop ALL` | The container gets none of the default Docker capability set (no `CAP_NET_RAW`, `CAP_SYS_ADMIN`, etc.) |
-| Privilege escalation | `--security-opt no-new-privileges` | setuid/setgid binaries can't escalate to root inside the container |
-| Process count | `--pids-limit 512` | Caps forked processes as a fork-bomb defense |
-| Root filesystem | `--read-only` + `--tmpfs /tmp` + `--tmpfs /run` | The image's root filesystem is immutable; only the workspace volume and the two tmpfs mounts are writable |
-| User | `--user 1000:1000` with `HOME=/workspace` | The process runs as a non-root uid/gid instead of the image's default (often root) |
+| Control | Docker mechanism |
+| --- | --- |
+| Linux capabilities | `--cap-drop ALL` |
+| Privilege escalation | `--security-opt no-new-privileges` |
+| Process count | `--pids-limit 512` |
+| Root filesystem | `--read-only`, with writable `/tmp` and `/run` tmpfs mounts |
+| User | `--user 1000:1000`, with `HOME=/workspace` |
 
-This is expressed as a provider-agnostic `SandboxPolicy.security` intent, not a Docker-only flag set — a future microVM- or gVisor-backed provider implements the same fields against its own mechanism.
+The portable `security` policy exposes `dropAllCapabilities`, `noNewPrivileges`, `readOnlyRootFilesystem`, `runAsNonRoot`, and `pidsLimit`. Each can be overridden for a compatible image, but every relaxation changes the isolation boundary.
 
-Every control has a per-flag opt-out for images that need it:
-
-```ts title="dawn.config.ts"
-import { config } from "@dawn-ai/cli"
-import { dockerSandbox } from "@dawn-ai/sandbox"
-
-export default config({
-  sandbox: {
-    provider: dockerSandbox({ image: "node:22-slim" }),
-    security: { runAsNonRoot: false, readOnlyRootFilesystem: false }, // opt out if your image needs it
-  },
-})
-```
-
-`security` accepts:
-
-- `dropAllCapabilities?: boolean` — default `true`
-- `noNewPrivileges?: boolean` — default `true`
-- `readOnlyRootFilesystem?: boolean` — default `true`
-- `runAsNonRoot?: boolean | { uid: number; gid: number }` — default `true` (uid/gid `1000:1000`); pass an object for a different fixed uid/gid, or `false` to run as the image's default user
-- `pidsLimit?: number` — default `512`
-
-<Callout type="warn" title="Bake system deps into your image">
-  The read-only root filesystem and non-root user mean runtime `apt`/`apk` installs, `npm install -g`, and writes outside the workspace all fail by default — there's nowhere writable for them to land. Install system packages and global tooling at image-build time, and let the agent mutate only its workspace at runtime. If a workload genuinely needs to write elsewhere or run as root, opt out with `readOnlyRootFilesystem: false` / `runAsNonRoot: false`.
+<Callout type="warn" title="Bake dependencies into the image">
+  The default non-root user and read-only root filesystem prevent runtime package installs and writes outside the workspace or scratch mounts. Install system and global dependencies when building the image.
 </Callout>
 
 ### Per-command timeout
 
-`resources.timeoutMs` bounds how long a single `runBash` call may run, enforced inside the container (the command is wrapped in `timeout`; an overrun exits with code `124`):
+`resources.timeoutMs` bounds one `runBash` call. Docker wraps the command with GNU `timeout`; an overrun exits with code `124`, rounded up to a whole second. The limit applies only when configured, and the sandbox image must contain the `timeout` binary. `node:24-slim`, Debian, and Ubuntu include or can install it; minimal and distroless images may not.
 
 ```ts
 sandbox: {
-  provider: dockerSandbox({ image: "node:22-slim" }),
+  provider: dockerSandbox({ image: "node:24-slim" }),
   resources: { timeoutMs: 120_000 },
 },
 ```
 
-It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured). Enforcement shells out to the `timeout` binary (GNU coreutils) inside the container, so when you set `resources.timeoutMs` make sure your image ships it — most full base images (`node:22-slim`, `debian`, `ubuntu`) do, but minimal ones (`alpine` without the `coreutils` package, distroless) may not. The ceiling is rounded up to whole seconds (`timeoutMs: 500` enforces a 1-second limit).
-
 ## Network policy
 
-`sandbox.network` takes one of two shapes:
+The portable policy has two modes:
 
-- **`{ mode: "deny" }`** — zero egress. This is an exact guarantee in the Docker reference (`--network none`); the sandbox cannot reach the network at all. An optional `allowlist` may be added for providers that support scoped egress.
-- **`{ mode: "allow", denylist?: [...] }`** — egress is on by default, with an optional denylist of hosts to block.
+- `{ mode: "deny" }` asks the provider for default-closed egress. Docker enforces this with `--network none`.
+- `{ mode: "allow", denylist?: [...] }` leaves egress open and expresses hosts that should be blocked.
 
-The default, when `network` is omitted, is `{ mode: "allow", denylist: ["169.254.169.254"] }` — the cloud-metadata endpoint is blocked out of the box since it's a common SSRF target.
+When omitted, the policy defaults to allow mode with `169.254.169.254` in the denylist. Docker's allow-mode denylist is best-effort, not a rigorous firewall; use an egress proxy or another provider when host-level filtering is a security boundary. Docker deny mode is the stronger reference behavior because `--network none` removes network access.
 
-<Callout type="warn" title="allow-mode denylist is best-effort">
-  In the Docker reference provider, the `allow`-mode denylist is **best-effort**, not enforced with the same rigor as `deny` mode. Blocking arbitrary outbound hosts from inside a container needs an in-container firewall rule or an egress proxy; the reference does not guarantee every denylisted host is unreachable. `deny` mode's `--network none` remains exact. A provider backed by a microVM or a cloud sandbox can enforce the denylist more strongly.
-</Callout>
+Provider mappings are intentionally not identical. Read the provider-specific guide before assuming Docker behavior applies elsewhere.
 
 ## Kubernetes provider
 
-`kubernetesSandbox` runs each thread's sandbox as a Kubernetes Pod instead of a local Docker container, for deployments where the Dawn server itself runs in a cluster:
-
-```ts title="dawn.config.ts"
-import { config } from "@dawn-ai/cli"
-import { kubernetesSandbox } from "@dawn-ai/sandbox"
-
-export default config({
-  sandbox: {
-    provider: kubernetesSandbox({ image: "node:22-slim", namespace: "dawn-sandboxes" }),
-    network: { mode: "deny" },
-    resources: { memoryMb: 512, cpus: 1, diskGb: 2 },
-  },
-})
-```
-
-`kubernetesSandbox({ image, namespace?, storageClass?, startupTimeoutMs? })` implements the same `SandboxProvider` contract as `dockerSandbox` — every `security`, `network`, and `resources` field on `SandboxConfig` means the same thing regardless of which provider is configured.
-
-**Per thread:** a Pod plus a per-thread `ReadWriteOnce` PersistentVolumeClaim mounted at `/workspace`, mirroring the Docker provider's named-volume persistence. `release()` deletes the Pod but keeps the PVC, so the next turn's `acquire()` schedules a fresh Pod against the existing claim with the workspace intact. `destroy()` deletes both the Pod and the PVC, discarding the workspace permanently — the same lifecycle semantics as the Docker provider's container/volume split, just on Kubernetes' own objects.
-
-**Auth:** the provider talks to the Kubernetes API using `@kubernetes/client-node`'s `loadFromDefault()`, which auto-detects an in-cluster ServiceAccount token when the Dawn server itself runs as a Pod, or a local kubeconfig otherwise. The in-cluster token path is the documented production setup.
-
-**Sizing:** `resources.diskGb` sets the PVC's storage request. It's new to this provider — `dockerSandbox` ignores it, since Docker volumes aren't quota-bound the same way.
+Configuration, prerequisites, and the cluster security boundary live in [Kubernetes Sandbox](/docs/sandbox/kubernetes).
 
 ### Security hardening on Kubernetes
 
-The `security` intent maps onto the Pod and container `SecurityContext` fields instead of `docker run` flags, but the defaults and opt-outs are identical to the table in [Security hardening](#security-hardening):
-
-| Control | Kubernetes mechanism |
-| --- | --- |
-| Non-root user | `securityContext.fsGroup` — kubelet recursively `chown`s the PVC to the given gid on mount, so there's no chown-init container and no root step at all |
-| Read-only root filesystem | `readOnlyRootFilesystem: true` on the container `SecurityContext`, plus `emptyDir` volumes mounted at `/tmp` and `/run` for scratch space |
-| Dropped capabilities | `capabilities.drop: ["ALL"]` |
-| Privilege escalation | `allowPrivilegeEscalation: false` |
-| Seccomp | `seccompProfile: { type: "RuntimeDefault" }` by default |
-
-Sandbox Pods also set `automountServiceAccountToken: false`, so a compromised sandbox process has no Kubernetes API credentials to steal — it can't call the cluster API even if it escapes the container boundary.
-
-`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod or per-namespace process-count field equivalent to Docker's `--pids-limit` (`pids` is not a valid `LimitRange`/`ResourceQuota` resource). Fork-bomb defense on Kubernetes is a **node-level** kubelet setting (`podPidsLimit` / `--pod-max-pids`) that a cluster operator configures on the nodes running sandbox Pods; it cannot be set by the provider or a namespaced chart.
+See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for Pod security contexts, Pod Security Standards, resource controls, ServiceAccount-token isolation, and PID-limit scope.
 
 ### Network policy on Kubernetes
 
-The same `network` config (`{ mode: "deny", allowlist? }` or `{ mode: "allow", denylist? }`) is honored, but enforcement is a Kubernetes `NetworkPolicy` object rather than a container network mode:
-
-- **`{ mode: "deny" }`** — the provider creates a per-thread `NetworkPolicy` that denies all egress from the sandbox Pod except to cluster DNS and any CIDRs listed in `allowlist`.
-- **`{ mode: "allow" }`** — no `NetworkPolicy` is created, so egress is open by default; a `denylist`, if given, is best-effort only and not enforced — the same honest-scope caveat as the Docker provider's `allow`-mode denylist.
-
-<Callout type="warn" title="NetworkPolicy needs a policy-capable CNI">
-  A Kubernetes `NetworkPolicy` object is inert unless the cluster's CNI plugin enforces it — Calico and Cilium do; some CNIs silently ignore `NetworkPolicy` entirely. `dawn check` runs this provider's `preflight()`, which warns when it can't confirm the cluster's CNI enforces `NetworkPolicy`, but it can't guarantee enforcement the way `--network none` does for Docker's `deny` mode. Confirm your cluster's CNI supports `NetworkPolicy` before relying on `deny` mode as a hard boundary.
-</Callout>
-
-Kubernetes Pod isolation is the same boundary class as Docker's container isolation, not a microVM — the same caveats in [What it is — and isn't](#what-it-is--and-isnt) apply. The namespace, RBAC, default-deny `NetworkPolicy`, `LimitRange`, and PVC-reaper are provisioned separately by the Helm chart below, not by the provider itself.
+See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for DNS exceptions, CNI requirements, and how chart and per-thread NetworkPolicies compose.
 
 ## Deploying the sandbox infrastructure (Helm)
 
-For the orientation-level view of both charts before diving into the reference below, see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes).
-
-`kubernetesSandbox` assumes a namespace already exists with the RBAC, quotas, and network policy the provider's Pods need. The `dawn-sandbox-infra` Helm chart provisions that cluster-side infrastructure — install it once per cluster (or per environment) before pointing `kubernetesSandbox` at it:
-
-```bash
-helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
-```
-
-Or from a local checkout of the chart:
-
-```bash
-helm install dawn-sandbox-infra ./charts/dawn-sandbox-infra
-```
-
-What it provisions:
-
-- **Namespace** (`dawn-sandboxes` by default) with configurable Pod Security Standard labels.
-- **Least-privilege RBAC** — a `dawn-orchestrator` ServiceAccount, Role, and RoleBinding scoped to exactly what the provider needs: creating/getting/deleting Pods and PersistentVolumeClaims, `pods/exec`, and managing NetworkPolicies. No access to Secrets or any other resource.
-- **A default-deny egress `NetworkPolicy` backstop** — selects Dawn-managed sandbox Pods via `app.kubernetes.io/managed-by=dawn`, with a carve-out for cluster DNS. Helm-managed reaper and control-plane Pods are excluded so they retain Kubernetes API access.
-- **`ResourceQuota` and `LimitRange`** — namespace-wide aggregate caps plus container-level cpu/memory/ephemeral-storage defaults. (PID limiting is node-level on Kubernetes and cannot be set by a namespaced chart — see [Security hardening on Kubernetes](#security-hardening-on-kubernetes).)
-- **Pod Security Standards** — namespace labels controlling what the cluster's built-in admission controller allows.
-- **A PVC reaper** — a CronJob that marks and eventually deletes sandbox PVCs that are no longer referenced by any Pod, so abandoned per-thread volumes don't accumulate.
+Install and operate `dawn-sandbox-infra` with the canonical [Kubernetes Sandbox guide](/docs/sandbox/kubernetes).
 
 ### Key caveats
 
-<Callout type="warn" title="The namespace must match the provider config">
-  The chart's `namespace.name` (default `dawn-sandboxes`) **must match** the `namespace` passed to `kubernetesSandbox({ namespace })` in `dawn.config.ts`. If they diverge, the provider's Pods are created in a namespace with none of the RBAC, quota, or network policy the chart set up.
-</Callout>
-
-Pod Security Standards default to `enforce: baseline` with `warn`/`audit: restricted` — permissive enough that most images pass, while still surfacing restricted-profile warnings. Tighten enforcement with:
-
-```bash
-helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-  --set podSecurityStandard.enforce=restricted
-```
-
-<Callout type="warn" title="Restricted enforcement rejects the provider's opt-outs">
-  Setting `podSecurityStandard.enforce=restricted` means the namespace's admission controller rejects any sandbox Pod that opts out of the provider's default hardening (`runAsNonRoot: false`, `readOnlyRootFilesystem: false`, and similar `security` overrides in `dawn.config.ts`). Only tighten to `restricted` if every image running in the namespace can pass that profile.
-</Callout>
-
-<Callout type="warn" title="The default-deny egress backstop overrides allow-mode">
-  The chart's default-deny egress `NetworkPolicy` selects Dawn-managed sandbox Pods via `app.kubernetes.io/managed-by=dawn`. It excludes Helm-managed reaper and control-plane Pods so they can reach the Kubernetes API, but sandbox Pods configured with `network: { mode: "allow" }` still have no egress unless you disable the backstop:
-
-  ```bash
-  helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-    --set networkPolicy.defaultDenyEgress=false
-  ```
-
-  With the backstop disabled, per-thread `deny`-mode NetworkPolicies created by the provider still work as documented — only the chart-managed backstop is removed.
-</Callout>
-
-The PVC reaper's time-to-live is configurable via `reaper.ttlHours` (default `168`, one week) — a PVC with no Pod referencing it for longer than the TTL is deleted:
-
-```bash
-helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-  --set reaper.ttlHours=24
-```
-
-`dawn-sandbox-infra` is the second of three sub-projects in Dawn's Kubernetes arc: this chart hardens the cluster for the sandbox provider; the `dawn-app` chart below runs the Dawn app itself on Kubernetes, completing the arc.
+Namespace alignment, storage, DNS, CNI enforcement, quotas, and PVC cleanup are covered in [Kubernetes Sandbox](/docs/sandbox/kubernetes).
 
 ## Deploying a Dawn app (Helm)
 
-`dawn build`'s `node` target (see [Deploying to production (Node/Docker)](/docs/deployment#deploying-to-production-nodedocker)) emits a `server.mjs` plus a hardened `Dockerfile` that boot the real Dawn runtime. **Build that image when your app configures `kubernetesSandbox`** — the sandbox provider only runs inside the Dawn runtime process, so an image built from the `langsmith` target's `langgraph.json` (containerized separately with `@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the Kubernetes API and will not create sandbox Pods, even with `kubernetesSandbox` configured in `dawn.config.ts`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image or bake `dawn.config.ts`; the image is the runtime contract.
-
-```bash
-# Build the image via dawn build's node target (on by default)
-dawn build
-docker build -t ghcr.io/you/your-app:latest .
-
-# Install the chart against that image
-helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --set image.repository=ghcr.io/you/your-app \
-  --set image.tag=latest
-```
-
-Or from a local checkout of the chart:
-
-```bash
-helm install dawn-app ./charts/dawn-app --set image.repository=ghcr.io/you/your-app
-```
-
-`image.repository` is required — install/upgrade fails fast with a clear error if it's unset. `containerPort` (default `8000`) and `healthPath` (default `/healthz`) are also values, matching the `node` target's Dockerfile (`EXPOSE 8000`, `/healthz`) out of the box — verify both against your built image before relying on the defaults if you're deploying a differently-shaped image, since they drive the liveness/readiness/startup probes.
+Deploy the app with [Kubernetes](/docs/deployment/kubernetes); operate its provider with [Kubernetes Sandbox](/docs/sandbox/kubernetes).
 
 ### ServiceAccount and namespace wiring
 
-If your app's `dawn.config.ts` configures `kubernetesSandbox`, the app process calls the Kubernetes API to create sandbox Pods — so the app's own Pod must run under a ServiceAccount bound to the `dawn-sandbox-infra` chart's `dawn-orchestrator` Role. Two ways to satisfy that, via `values.serviceAccount`:
+Use [Kubernetes Sandbox](/docs/sandbox/kubernetes) for RBAC and [Kubernetes deployment](/docs/deployment/kubernetes) for the app chart.
 
-- **Run the app in the sandbox namespace.** Install `dawn-app` into the same namespace as `dawn-sandbox-infra` (`sandboxNamespace`, default `dawn-sandboxes`) and reuse the existing `dawn-orchestrator` ServiceAccount (`serviceAccount.create=false`, the default).
-- **Add a cross-namespace subject.** Keep the app in its own namespace, set `serviceAccount.create=true` so the chart creates a ServiceAccount there, then bind it to the sandbox-infra Role by adding it to that chart's `orchestrator.subjects`:
+### Env, secrets, and replicas
 
-  ```bash
-  helm upgrade dawn-sandbox-infra charts/dawn-sandbox-infra \
-    --reuse-values \
-    --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"dawn-app","namespace":"default"}'
-  ```
-
-The chart's post-install NOTES print the exact subject to add for your release. Either way, keep `sandboxNamespace` (informational only) in sync with the `namespace` passed to `kubernetesSandbox({ namespace })` in `dawn.config.ts` and with `dawn-sandbox-infra`'s `namespace.name`.
-
-### Env, secrets, and scaling
-
-Supply environment variables directly (`env`) or via an existing Secret (`secretName`, wired as a convenience `envFrom.secretRef` — the chart does not template Secrets itself):
-
-```bash
-helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --set image.repository=ghcr.io/you/your-app \
-  --set secretName=my-app-secrets
-```
-
-Ingress, autoscaling, and a PodDisruptionBudget are all opt-in:
-
-```bash
-helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --set image.repository=ghcr.io/you/your-app \
-  --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=app.example.com \
-  --set autoscaling.enabled=true --set autoscaling.maxReplicas=10 \
-  --set podDisruptionBudget.enabled=true
-```
-
-<Callout type="warn" title="A user-built image, not a Dawn-hosted runtime">
-  This chart cannot validate a real Dawn app end-to-end in CI — that needs an app image and model credentials. CI instead validates the chart's manifests (lint, render, `kubeconform`) plus a gated `kind` smoke test that installs the chart with a placeholder image and confirms the Deployment and Service come up and serve traffic. Validating your actual app image against a real model is your responsibility.
-</Callout>
+See [Kubernetes deployment](/docs/deployment/kubernetes) for app settings and [Kubernetes Sandbox](/docs/sandbox/kubernetes) for namespace controls.
 
 ## Subagents
 
-A subagent dispatch runs under the same conversation thread as its parent, so it resolves to and shares the parent's sandbox — the coordinator and its subagents operate in one isolated environment, not one each.
+A subagent runs under its parent's conversation thread. The coordinator and all of its subagents therefore resolve to the same sandbox and workspace rather than receiving one sandbox each.
 
 ## Custom providers
 
-`SandboxProvider` is the contract any isolation backend implements — Docker, a microVM, or a cloud sandbox service:
+Implement `SandboxProvider` to integrate a microVM, cloud sandbox, or another isolation backend:
 
 ```ts
-import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
+import type { SandboxHandle, SandboxPolicy } from "@dawn-ai/sandbox"
 
 export interface SandboxProvider {
   readonly name: string
@@ -309,13 +146,17 @@ export interface SandboxProvider {
   }): Promise<SandboxHandle>
   release(threadId: string): Promise<void>
   destroy(threadId: string): Promise<void>
-  preflight?(): Promise<{ readonly ok: boolean; readonly detail?: string }>
+  preflight?(): Promise<{
+    readonly ok: boolean
+    readonly detail?: string
+    readonly warnings?: readonly string[]
+  }>
 }
 ```
 
-`acquire` is create-or-reattach and idempotent per `threadId`: called at the start of every turn, it returns the same live sandbox until `release` or `destroy` is called. `release` drops warm compute but keeps the workspace volume (idle reap, server shutdown); `destroy` removes the volume too (thread delete). The returned `SandboxHandle`'s `filesystem` and `exec` are the same `FilesystemBackend`/`ExecBackend` interfaces the [workspace](/docs/workspace) capability already consumes, so wiring a new provider in requires no change to the capability itself.
+`acquire()` must be idempotent for a thread. `release()` drops warm compute while retaining workspace data; `destroy()` removes both. `preflight()` can fail a configuration before runtime or return `warnings` when a provider cannot prove a requested control.
 
-Validate a custom provider against the same conformance suite `dockerSandbox` and `fakeSandbox` are held to:
+Validate the implementation with the shared conformance suite:
 
 ```ts
 import { runProviderConformance } from "@dawn-ai/sandbox/testing"
@@ -329,11 +170,11 @@ runProviderConformance({
 })
 ```
 
-The conformance kit checks `acquire` idempotency and reattachment, per-thread isolation, `release`-keeps/`destroy`-clears volume semantics, and that `exec` returns a numeric exit code.
+The suite checks acquire/reattach idempotency, per-thread isolation, release-versus-destroy storage semantics, and numeric command exit codes.
 
 ## Testing your agent
 
-`fakeSandbox()` from `@dawn-ai/sandbox/testing` is an in-memory `SandboxProvider` — deterministic, CI-safe, and requires no Docker daemon:
+Use `fakeSandbox()` for deterministic tests that need the provider contract without Docker:
 
 ```ts title="dawn.config.ts (test)"
 import { config } from "@dawn-ai/cli"
@@ -344,38 +185,33 @@ export default config({
 })
 ```
 
-Use it in harness-driven tests the same way you'd test any other agent route — it satisfies the same `SandboxProvider` contract as `dockerSandbox`, so wiring behavior (per-thread isolation, warm reuse, subagents sharing a thread's sandbox) is exercised without spinning up containers.
+This exercises Dawn's per-thread acquisition, reuse, and subagent wiring. Provider conformance and gated integration tests cover the actual isolation backend.
 
 ## Verifying the full arc (end-to-end)
 
-Two gated CI lanes prove the whole deployment path composes — a real Dawn app, built the user-facing way (`dawn build`'s [node target](/docs/deployment)) and deployed, drives the provider **from inside its own running workload** to spawn a real, isolated sandbox on an Agent-Protocol request, then tears it down:
+Two gated CI lanes exercise a built Dawn app, a real provider, command output inside the isolated workload, and cleanup after thread deletion:
 
-- **`sandbox-docker-e2e`** — the app runs as a container with the host Docker socket mounted and drives `dockerSandbox` (docker-out-of-docker) to spawn a **sibling** sandbox container.
-- **`sandbox-k8s-e2e`** — the app runs as a Pod (deployed by the [`dawn-app` chart](#deploying-a-dawn-app-helm), using the orchestrator ServiceAccount from the [`dawn-sandbox-infra` chart](#deploying-the-sandbox-infrastructure-helm)) and drives `kubernetesSandbox` to spawn a sandbox **Pod** in the sandbox namespace.
+- `sandbox-docker-e2e` runs the app as a container and drives `dockerSandbox` to create a sibling container.
+- `sandbox-k8s-e2e` deploys the app and drives `kubernetesSandbox` to create a sandbox Pod; operational setup is in [Kubernetes Sandbox](/docs/sandbox/kubernetes).
 
-Both are deterministic (the agent turn is driven by a mocked model, no API key) and assert on the **real in-sandbox command output** — that `runBash` ran as the hardened non-root user (`id -u` = `1000`) inside the sandbox workload (not the app), and that the sandbox Pod/container and its volume are removed on thread delete. They're gated behind `DAWN_TEST_SMOKE_E2E=1` and run on demand, the same way the provider conformance lanes do.
+Both use a mocked model, assert that the in-sandbox process runs as UID `1000`, and confirm compute and storage are removed on thread deletion. They run only when `DAWN_TEST_SMOKE_E2E=1` is enabled.
 
-The distinction they lock in: only the **Dawn runtime** server (`dawn dev`, `dawn start`, or the node target's `server.mjs`) engages the sandbox. An image built via the LangSmith/`langgraphjs` platform path never runs the Dawn runtime and never touches the sandbox — see [Deploying to production](/docs/deployment). The [`hono` target](/docs/deployment#edge-runtimes) does run the Dawn runtime, but an edge runtime can neither start a container nor talk to a container daemon, so that build fails with `DAWN_E1005` when `sandbox` is configured rather than deploying an app whose isolation silently does nothing.
-
-The build gate is not the last word, because it can be bypassed: an entry composed by hand over `@dawn-ai/cli/fetch` never runs that target. So a runtime that supplies no filesystem fallbacks and was handed a `sandbox` block it cannot honor raises the same `DAWN_E1005` on **every** request, health checks included — it refuses to serve rather than running every tool unsandboxed. Injecting your own `sandboxManager` satisfies it; that caller is serving `sandbox` for real. None of this can fire on Node, whatever you configure: the check short-circuits on the presence of the filesystem fallbacks, which every Node entry point supplies, so a Node app with no `sandbox` key goes on reading and writing the host `workspace/` directory exactly as it always has.
+Only a Dawn runtime entry (`dawn dev`, `dawn start`, or the Node build target) constructs the configured sandbox. LangSmith platform artifacts do not run that runtime. Edge targets reject incompatible filesystem and sandbox capabilities rather than silently running workspace tools without isolation; see [Deployment Options](/docs/deployment).
 
 ## What it is — and isn't
 
-**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; `network: { mode: "deny" }` is zero egress; the workspace survives turns, server restarts, and container crashes; hardened by default — all Linux capabilities dropped, no privilege escalation, a read-only root filesystem, a non-root user, and a process-count limit, each with an explicit opt-out.
+**It is:** a filesystem and process boundary keyed by the provider's derived thread resource name; explicit environment injection; CPU and memory controls; provider-specific network policy; a workspace lifecycle that outlives warm compute; and hardened Docker defaults including a non-root user, dropped capabilities, no privilege escalation, a read-only root filesystem, and a process-count limit.
 
-**Is not:** a guarantee against container-escape zero-days. Dropped capabilities, a non-root user, a read-only root filesystem, and deny-mode networking materially raise the bar an attacker has to clear, but this remains Docker's isolation boundary, not a microVM. That's why the hardening is expressed as a provider-agnostic `SandboxPolicy.security` intent rather than a Docker-specific flag set: a gVisor-, Kata-, or cloud-microVM-backed provider satisfies the same seam with a stronger underlying substrate, as a drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
+**It is not:** authorization, tool selection, or a guarantee against container-escape vulnerabilities. Tool scoping and permissions remain separate controls. Docker's allow-mode denylist is best-effort, and container isolation is not a microVM boundary. For hostile multi-tenant workloads, implement a stronger provider behind the same `SandboxProvider` seam and validate its controls against your threat model.
 
-Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
-
-The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all — Kubernetes has no namespaced PID cap, so fork-bomb defense is a node-level kubelet setting (`podPidsLimit`) the cluster operator configures, not something the provider or the Helm chart can set.
+Kubernetes maps the same policy intent to different mechanisms and limitations. Treat [Kubernetes Sandbox](/docs/sandbox/kubernetes) as canonical for that provider rather than inferring Kubernetes behavior from Docker.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the pluggable backend the sandbox's handle satisfies" },
-  { href: "/docs/permissions", title: "Permissions", subtitle: "human-in-the-loop approval for paths and runBash commands" },
-  { href: "/docs/tools", title: "Tools", subtitle: "tool scoping — which tools a route's agent may call" },
-  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including the sandbox key" },
-  { href: "/docs/subagents", title: "Subagents", subtitle: "how subagents share their parent thread's sandbox" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "the node build target and dawn start, which engage the sandbox in production" },
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the pluggable backends a sandbox handle satisfies" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "approval policy for workspace and shell calls" },
+  { href: "/docs/tools", title: "Tools", subtitle: "which tools an agent may call" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "the sandbox configuration shape" },
+  { href: "/docs/sandbox/kubernetes", title: "Kubernetes Sandbox", subtitle: "provider and cluster operations" },
 ]} />

@@ -51,8 +51,80 @@ export interface VectorRankingOptions {
   readonly confidenceWeight?: number
   readonly recencyHalfLifeMs?: number
 }
+/** Sortable browse fields. A CLOSED whitelist: these are the only names that ever
+ *  reach a SQL identifier position (see browse-order.ts). */
+export type BrowseSortField =
+  | "updatedAt"
+  | "createdAt"
+  | "confidence"
+  | "namespace"
+  | "kind"
+  | "status"
+
+export interface BrowseSortEntry {
+  readonly field: BrowseSortField
+  readonly dir: "asc" | "desc"
+}
+
+/** One normalized predicate. AND-combined with the other filters and with the
+ *  top-level shorthand fields. At most ONE filter per `field` (mirrors the
+ *  one-filter-per-column model of the grid that drives this API), rejected by
+ *  `validateBrowseQuery` rather than last-one-wins; within-field multi-value exists
+ *  only through `in`/`notIn`. */
+export type BrowseFilter =
+  // The enum arms are split PER FIELD, not shared as `field: "status" | "kind"` with
+  // `values: readonly string[]` — a shared arm compiles
+  // `{field: "status", op: "in", values: ["actve"]}`, losing the typo check the
+  // `status` shorthand below already gives us for the identical query.
+  | {
+      readonly field: "status"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryStatus[]
+    }
+  | {
+      readonly field: "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryKind[]
+    }
+  | {
+      readonly field: "content"
+      readonly op: "contains" | "notContains" | "equals" | "notEquals" | "startsWith" | "endsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "namespace"
+      readonly op: "equals" | "startsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
+      readonly value: number
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "between"
+      readonly min: number
+      readonly max: number
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "onDay" | "beforeDay" | "afterDay"
+      /** "YYYY-MM-DD", interpreted as a UTC day. */
+      readonly day: string
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "betweenDays"
+      /** Inclusive of both UTC days. */
+      readonly fromDay: string
+      readonly untilDay: string
+    }
 export interface BrowseQuery {
   readonly namespacePrefix?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
+   *  no prefix semantics. ANDed with everything else, `namespacePrefix` included. */
+  readonly namespace?: string
   /** One status, or a set matching any of them. An EMPTY set matches nothing —
    *  "any of none" is false, and reading it as "unfiltered" would show every
    *  row to a caller that had just narrowed to zero. */
@@ -68,10 +140,39 @@ export interface BrowseQuery {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
+  /** AND-combined normalized predicates: at most one per `field` and at most 8 in
+   *  total, both enforced by `validateBrowseQuery`. Both in-repo stores evaluate
+   *  every arm; a field with no clause is REJECTED as a `BrowseQueryError` rather
+   *  than ignored. */
+  readonly filters?: readonly BrowseFilter[]
+  /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. Both in-repo stores
+   *  break that tie on BYTES, so they return the same sequence for tied rows whatever
+   *  the database's default collation. */
+  readonly orderBy?: readonly BrowseSortEntry[]
+  /** Opaque continuation from a prior `BrowsePage`. It belongs to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch with a
+   *  `BrowseQueryError` coded `continuation-invalid`. Applied as a keyset window, so
+   *  a row inserted above the seam between pages cannot displace one out of the walk
+   *  the way an `offset` would.
+   *
+   *  `now` is part of that fingerprint — it decides which rows are expired — so a
+   *  caller walking pages must hold ONE `now` for the whole walk. Re-stamping it per
+   *  request (`new Date().toISOString()`) rejects every continuation it is given. */
+  readonly cursor?: string
 }
 export interface BrowsePage {
   readonly records: readonly MemoryRecord[]
+  /** Exact count of the whole matching set — NOT of this window, and NOT reduced by
+   *  a `cursor`. Rows and total are two separate statements, so a store must read them
+   *  inside ONE transaction snapshot: both in-repo stores do, and a store that does not
+   *  can hand back a `total` that no version of the table ever agreed with `records` on. */
   readonly total: number
+  /** Opaque keyset continuation, or null when this window did not fill `limit`.
+   *  Issued whenever the page FILLED rather than over-fetching `limit + 1` to learn
+   *  whether a further row exists, so a walk over an exact multiple of `limit`
+   *  legitimately ends in one empty window rather than an error. */
+  readonly continuation: string | null
 }
 export interface MemoryStats {
   readonly total: number

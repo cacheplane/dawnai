@@ -106,9 +106,13 @@ describe("every runtime thread-metadata write goes through the guard", () => {
       })
     }
     expect(unguarded).toEqual([])
-    // Two run-stream writers in runtime-fetch-core.ts and one in
-    // agui-handler.ts. Bump this when a guarded write path is added, so the
-    // scan can never pass by finding nothing.
-    expect(sites).toBe(3)
+    // Two run-stream writers in runtime-fetch-core.ts, one in agui-handler.ts,
+    // and the park/clear pair in parked-route.ts. Bump this when a guarded
+    // write path is added, so the scan can never pass by finding nothing.
+    //
+    // The parked-route pair arrived with PR #443 and reached this branch at the
+    // merge, unguarded — which is the scan earning its keep: it named both
+    // sites rather than leaving them to review.
+    expect(sites).toBe(5)
   })
 })

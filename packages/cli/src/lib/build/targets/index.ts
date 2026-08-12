@@ -3,6 +3,7 @@ import type { CommandIo } from "../../output.js"
 import { honoTarget } from "./hono.js"
 import { langsmithTarget } from "./langsmith.js"
 import { nodeTarget } from "./node.js"
+import { vercelTarget } from "./vercel.js"
 
 /**
  * Everything a build target needs to emit its artifacts. These are the real
@@ -38,15 +39,16 @@ export const buildTargets: Readonly<Record<string, BuildTarget>> = {
   [nodeTarget.name]: nodeTarget,
   [langsmithTarget.name]: langsmithTarget,
   [honoTarget.name]: honoTarget,
+  [vercelTarget.name]: vercelTarget,
 }
 
 /**
  * Default targets emitted when `config.build.targets` is not set.
  *
- * `hono` is deliberately absent: the edge serves an honest SUBSET of Dawn (no
- * sandbox, no workspace tooling) and needs durable stores configured, so it is
- * opt-in via `build: { targets: [...] }` rather than something every `dawn
- * build` starts emitting.
+ * `hono` and `vercel` are deliberately absent: edge targets serve an honest
+ * SUBSET of Dawn (no sandbox, no workspace tooling) and need durable stores
+ * configured, so they are opt-in via `build: { targets: [...] }` rather than
+ * something every `dawn build` starts emitting.
  */
 export const DEFAULT_BUILD_TARGETS: readonly string[] = ["node", "langsmith"]
 

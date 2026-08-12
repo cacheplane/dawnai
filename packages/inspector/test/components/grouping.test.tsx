@@ -107,6 +107,25 @@ describe("grouping by namespace", () => {
     expect(container.querySelectorAll("[data-pretable-row]")).toHaveLength(3)
   })
 
+  it("marks group child counts as loaded-scope when the window is partial", () => {
+    // Grouping over a window is permitted but MARKED: "(2 loaded)" makes no
+    // claim about the population, which is what replaces the old gate that hid
+    // grouping entirely whenever the page was not the whole answer.
+    const { container } = render(
+      <MemoryGrid
+        records={records}
+        onSelect={vi.fn()}
+        groupByNamespace
+        resultMeta={{ total: { kind: "exact", count: 900 }, datasetKey: "k1" }}
+        dataState={{ phase: "idle" }}
+      />,
+    )
+    const counts = [...container.querySelectorAll("[data-pretable-group-count]")].map(
+      (el) => el.textContent,
+    )
+    expect(counts.join(",")).toContain("loaded")
+  })
+
   it("returns to a flat list when grouping is turned off", () => {
     const { container, rerender } = render(
       <MemoryGrid records={records} onSelect={vi.fn()} groupByNamespace />,
@@ -120,7 +139,7 @@ describe("grouping by namespace", () => {
   })
 })
 
-describe("grouping is gated on a complete page", () => {
+describe("grouping over a partial page is marked, not withheld", () => {
   const stats: MemoryStats = {
     total: 3,
     byStatus: { active: 3 },
@@ -137,7 +156,7 @@ describe("grouping is gated on a complete page", () => {
         const body = u.includes("/api/memory/stats")
           ? stats
           : u.includes("/api/memory/list")
-            ? { records, total }
+            ? { records, total, continuation: null }
             : { groups: [] }
         return new Response(JSON.stringify(body), {
           status: 200,
@@ -147,7 +166,13 @@ describe("grouping is gated on a complete page", () => {
     )
   }
 
-  it("groups when the page holds every matching row", async () => {
+  function groupCounts(container: HTMLElement): string {
+    return [...container.querySelectorAll("[data-pretable-group-count]")]
+      .map((el) => el.textContent)
+      .join(",")
+  }
+
+  it("groups when the page holds every matching row, and claims the population", async () => {
     stubApi(records.length)
     const { container } = render(<ListPage />)
     await screen.findByText("content n1")
@@ -155,17 +180,21 @@ describe("grouping is gated on a complete page", () => {
     await waitFor(() => {
       expect(container.querySelectorAll("[data-pretable-group-row]").length).toBe(2)
     })
+    // The page IS the population, so an unqualified "(2)" is the honest count.
+    expect(groupCounts(container)).not.toContain("loaded")
   })
 
-  it("stays flat when the page is truncated, so no count contradicts the rail", async () => {
+  it("groups a truncated page, with counts that claim only the loaded rows", async () => {
     // Group headers count the rows the grid HOLDS. On a truncated page that is
     // an artifact of where the cap fell — it read "(197)" beside a rail saying
-    // 250 — so the structure is withheld rather than shown with a false number.
+    // 250 — so the count says "loaded" rather than the structure being withheld.
     stubApi(records.length + 40)
     const { container } = render(<ListPage />)
     await screen.findByText("content n1")
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(container.querySelectorAll("[data-pretable-group-row]").length).toBe(0)
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-pretable-group-row]").length).toBe(2)
+    })
+    expect(groupCounts(container)).toContain("loaded")
   })
 })

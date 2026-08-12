@@ -1,4 +1,4 @@
-# Dispatch from a route
+# Dispatch from a Route
 
 You want one route to invoke another — for example, a coordinator agent that delegates a step to a specialized research subagent. Here's how.
 
@@ -26,7 +26,7 @@ export default agent({
 })
 ```
 
-The coordinator calls the subagent by name at runtime:
+This is an internal `task` tool call emitted by the coordinator's model, not TypeScript route code that an author imports or calls:
 
 ```ts
 task({
@@ -60,6 +60,9 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
   })
+  if (!threadRes.ok) {
+    throw new Error(`thread creation failed: ${threadRes.status}`)
+  }
   const { thread_id } = (await threadRes.json()) as { thread_id: string }
 
   // Run the remote route and wait for the result.
@@ -68,7 +71,7 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       route: "/research#agent",
-      input: { query: state.job },
+      input: { messages: [{ role: "user", content: state.job }] },
     }),
   })
 
@@ -76,8 +79,12 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     throw new Error(`dispatch failed: ${res.status}`)
   }
 
-  const result = (await res.json()) as { readonly output: string }
-  return { ...state, summary: result.output }
+  const remoteState = (await res.json()) as {
+    readonly messages?: readonly { readonly content?: unknown }[]
+  }
+  const lastMessage = remoteState.messages?.at(-1)
+  const summary = typeof lastMessage?.content === "string" ? lastMessage.content : ""
+  return { ...state, summary }
 }
 ```
 
@@ -86,14 +93,15 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
 - **EPHEMERAL port.** `dawn dev` picks a random port unless you pass `--port <n>`. Never hard-code `127.0.0.1:3001` — pass `DAWN_RUNTIME_URL` via env instead. With a fixed port: `dawn dev --port 3001`.
 - **AP body shape.** The request body is `{ route, input }` where `route` is the `assistant_id` string (e.g. `"/research#agent"`) and `input` is the route's state payload.
 - **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `runs/wait` and `runs/stream` call.
-- **Use `/threads/:id/runs/stream` for long-running children.** Same body, SSE response — see [Stream output](/docs/recipes/stream-output).
+- **Cancellation does not cross the service boundary.** Parent cancellation or shutdown does not automatically cancel the remote Agent Protocol run. Disconnecting the wait request is an AP viewer disconnect, so the remote run intentionally continues. To propagate cancellation, retain the remote thread id and call `POST /threads/:thread_id/cancel` when the caller's own `ctx.signal` aborts.
+- **Use `/threads/:id/runs/stream` for long-running children.** Same body, SSE response — see [Stream Output](/docs/recipes/stream-output).
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/subagents", title: "Subagents", subtitle: "idiomatic task() dispatch and discovery rules" },
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "/runs/wait envelope and the assistant-id format" },
+  { href: "/docs/dev-server/agent-protocol", title: "Agent Protocol", subtitle: "/runs/wait envelope and the assistant-id format" },
   { href: "/docs/routes", title: "Routes", subtitle: "route entries and the typed RuntimeContext" },
-  { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "incremental responses from a dispatched route" },
-  { href: "/docs/api", title: "API Reference", subtitle: "RuntimeContext and the workflow entry signature" },
+  { href: "/docs/recipes/stream-output", title: "Stream Output", subtitle: "incremental responses from a dispatched route" },
+  { href: "/docs/api/sdk#dawn-aisdk-1", title: "SDK Reference", subtitle: "RuntimeContext for route execution" },
 ]} />

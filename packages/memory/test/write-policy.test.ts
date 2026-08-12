@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { writePolicyFor } from "../src/index.js"
+import { type MemoryRecord, sqliteMemoryStore, writePolicyFor } from "../src/index.js"
 
 describe("writePolicyFor", () => {
   it("semantic reconciles", () => {
@@ -13,5 +13,23 @@ describe("writePolicyFor", () => {
   })
   it("procedural still throws a not-yet-wired error", () => {
     expect(() => writePolicyFor("procedural")).toThrow(/not yet wired/)
+  })
+  it("the low-level store accepts a typed procedural record", async () => {
+    const store = sqliteMemoryStore({ path: ":memory:" })
+    const record: MemoryRecord = {
+      id: "procedure-1",
+      kind: "procedural",
+      namespace: "route=/support",
+      content: "Escalate failed payments after three retries.",
+      data: { retries: 3 },
+      source: { type: "human", id: "operator" },
+      confidence: 1,
+      tags: ["billing"],
+      status: "active",
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    }
+    await store.put(record)
+    expect(await store.get(record.id)).toMatchObject({ id: record.id, kind: "procedural" })
   })
 })

@@ -51,17 +51,17 @@ So with the defaults (1s base, 3 attempts):
 | 2 | ~1000–1500 ms |
 | 3 | ~2000–2500 ms |
 
-The cap at 10 seconds prevents pathological backoff for long retry chains.
+The non-stream fallback honors the configured `baseDelay`. The cap at 10 seconds prevents pathological backoff for long retry chains.
 
 ## Streaming behavior
 
-For streaming routes, retry only applies if the failure happens **before any token or event is yielded to the client**. Once content has streamed, the partial response is committed — Dawn cannot retry a partially-emitted stream because the client has already seen content. In that case the error propagates through the stream.
+For streaming routes, retry only applies if the failure happens **before any token or event is yielded to the client**. The current streaming path starts retries with a 1-second base delay regardless of the configured `baseDelay`. Once content has streamed, the partial response is committed — Dawn cannot retry a partially-emitted stream because the client has already seen content. In that case the error propagates through the stream.
 
 If you need stronger retry guarantees in streaming mode, wrap the call at a higher level in your client or use `/threads/:id/runs/wait` for operations where partial output is not useful.
 
 ## Abort signals
 
-If the request's `AbortSignal` fires mid-retry (client disconnect, server shutdown), the retry chain aborts immediately with `Operation aborted`. This is the same signal that propagates to your tool implementations as `ctx.signal`.
+An Agent Protocol viewer disconnect does not abort the run; the run stays available for the thread to resume. An AG-UI disconnect, explicit Agent Protocol cancellation (`POST /threads/:id/cancel`), and server shutdown do abort the run. The resulting signal reaches agent execution and tools as `ctx.signal`, but provider and tool operations must cooperate with that signal for pending I/O to stop promptly.
 
 ## Per-route, not global
 
@@ -92,6 +92,6 @@ There is no global retry config — each route states its own intent.
 <RelatedCards items={[
   { href: "/docs/routes", title: "Routes", subtitle: "agent() descriptor and the four route kinds" },
   { href: "/docs/tools", title: "Tools", subtitle: "tool error handling and the ctx.signal contract" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "how retry composes with dawn build output" },
-  { href: "/docs/recipes/retry-flaky-tools", title: "Retry flaky tools", subtitle: "recipe applying retry policies per route" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "how retry composes with dawn build output" },
+  { href: "/docs/recipes/retry-flaky-tools", title: "Retry Transient Model Calls", subtitle: "recipe applying agent retry policies per route" },
 ]} />

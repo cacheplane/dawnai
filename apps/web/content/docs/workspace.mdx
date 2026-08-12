@@ -205,6 +205,12 @@ The agent uses `listDir` and `readFile` to explore and read corpus documents. It
 
 Agent memory lives at `workspace/AGENTS.md` and is automatically injected into the system prompt. See [Memory](/docs/memory) for details.
 
+<Callout type="warn" title="Treat AGENTS.md as shared prompt input">
+  Dawn re-reads the host app root's `workspace/AGENTS.md` into prompt context on every turn for every consuming `agent()` route and subagent. With the default local app-root filesystem, `writeFile({ path: "AGENTS.md", ... })` targets that same file, so a route can persist instructions that affect later requests and other consuming agents sharing the app root. A sandbox or custom filesystem backend may send `writeFile` to a different filesystem and does not automatically change the host file this prompt marker reads. Raw graph, workflow, and chain routes do not consume this prompt file.
+
+  Use separate app roots or prompt-memory trust domains for different tenants. A per-thread sandbox alone does not isolate this host prompt source. Constrain or deny writes from untrusted agents when they can reach it, review seeded content, and never copy raw untrusted text into `workspace/AGENTS.md`.
+</Callout>
+
 ## Tool-output offloading
 
 When a tool returns a large result, Dawn can spill it to `workspace/tool-outputs/` and replace the in-context payload with a short stub the agent can read back on demand using `readFile`. This keeps the context window tidy without losing information. See [Context Management](/docs/context-management) for configuration options and how offloading composes with conversation summarization.
@@ -247,8 +253,8 @@ One permission model regardless of whether the LLM or your code initiates the I/
 
 <RelatedCards items={[
   { href: "/docs/permissions", title: "Permissions", subtitle: "control which paths and runBash commands require human approval" },
-  { href: "/docs/memory", title: "Memory", subtitle: "workspace/AGENTS.md injected into every agent turn" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace/AGENTS.md re-read by consuming agent routes" },
   { href: "/docs/context-management", title: "Context Management", subtitle: "tool-output offloading and conversation summarization" },
-  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including backends" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "dawn.config.ts reference including backends" },
   { href: "/docs/agents", title: "Agents", subtitle: "agent routes and how tools are wired in" },
 ]} />

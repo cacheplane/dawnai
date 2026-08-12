@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import matter from "gray-matter"
 import readingTime from "reading-time"
+import { webContentRoot } from "../../../lib/content-root"
 
 export const KNOWN_TAGS = ["philosophy", "typescript", "agents", "releases", "patterns"] as const
 
@@ -121,7 +122,7 @@ export function loadPostsFromDir(
   return visible.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 
-const CONTENT_DIR = join(process.cwd(), "content", "blog")
+const CONTENT_DIR = join(webContentRoot(), "blog")
 
 let cache: Post[] | null = null
 

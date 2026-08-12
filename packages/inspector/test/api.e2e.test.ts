@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { type MemoryRecord, sqliteMemoryStore } from "@dawn-ai/memory"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { browseSearchParams, canonicalBrowseQuery } from "../src/browse/canonical-query"
 import {
   gated,
   type InspectorServer,
@@ -121,6 +122,130 @@ describe.skipIf(!gated)("memory JSON API", () => {
     const page = (await res.json()) as { records: MemoryRecord[]; total: number }
     expect(page.total).toBe(3)
     expect(page.records.every((r) => r.namespace === "route=/notes")).toBe(true)
+  })
+
+  it("browse accepts JSON filters and orderBy, and reports a continuation", async () => {
+    const filters = encodeURIComponent(
+      JSON.stringify([{ field: "content", op: "contains", value: "acme" }]),
+    )
+    const res = await fetch(`${server.base}/api/memory/list?filters=${filters}`)
+    expect(res.status).toBe(200)
+    const page = (await res.json()) as {
+      records: MemoryRecord[]
+      total: number
+      continuation: string | null
+    }
+    expect(page.records.map((r) => r.id).sort()).toEqual(["active1", "cand1"])
+    expect(page.total).toBe(2)
+    expect(page.continuation).toBeNull()
+
+    const orderBy = encodeURIComponent(JSON.stringify([{ field: "namespace", dir: "asc" }]))
+    // ONE `now` for the whole walk: it is part of the cursor fingerprint, so letting the
+    // route stamp a fresh one per request would reject the continuation it just issued.
+    const walk = `orderBy=${orderBy}&limit=2&now=2026-08-09T00%3A00%3A00.000Z`
+    const ordered = await fetch(`${server.base}/api/memory/list?${walk}`)
+    const orderedPage = (await ordered.json()) as {
+      records: MemoryRecord[]
+      continuation: string | null
+    }
+    // Pinned to the ids namespace-asc puts first, which the default updatedAt-desc order
+    // does NOT (that leads with cand2) — otherwise a dropped `orderBy` would still pass.
+    expect(orderedPage.records.map((r) => r.id)).toEqual(["active1", "cand1"])
+    expect(orderedPage.continuation).not.toBeNull()
+
+    const next = await fetch(
+      `${server.base}/api/memory/list?${walk}&cursor=${encodeURIComponent(orderedPage.continuation as string)}`,
+    )
+    expect(next.status).toBe(200)
+    const nextPage = (await next.json()) as { records: MemoryRecord[] }
+    expect(nextPage.records.map((r) => r.id)).toEqual(["cand2", "other1"])
+  })
+
+  it("walks a continuation using the params the Inspector itself emits", async () => {
+    // The client's own emitter against the real route — the one test that can catch a
+    // wire format invented on the client side. It switches the expiry cutoff OFF
+    // (`includeExpired=1`) rather than pinning a `now`, which is what makes its walk
+    // survive the fingerprint check that the test below shows an unpinned walk failing.
+    const query = canonicalBrowseQuery({
+      view: "list",
+      orderBy: [{ field: "namespace", dir: "asc" }],
+    })
+    const head = await fetch(
+      `${server.base}/api/memory/list?${browseSearchParams(query, { limit: 2, cursor: null })}`,
+    )
+    expect(head.status).toBe(200)
+    const headPage = (await head.json()) as {
+      records: MemoryRecord[]
+      continuation: string | null
+    }
+    expect(headPage.records.map((r) => r.id)).toEqual(["active1", "cand1"])
+    expect(typeof headPage.continuation).toBe("string")
+
+    // Far enough apart that a per-request `now` stamp could not collide, so passing here
+    // means the client's params really do keep `now` out of the fingerprint.
+    await new Promise((done) => setTimeout(done, 5))
+    const next = await fetch(
+      `${server.base}/api/memory/list?${browseSearchParams(query, {
+        limit: 2,
+        cursor: headPage.continuation as string,
+      })}`,
+    )
+    expect(next.status).toBe(200)
+    const nextPage = (await next.json()) as { records: MemoryRecord[] }
+    expect(nextPage.records.map((r) => r.id)).toEqual(["cand2", "other1"])
+  })
+
+  it("browse cannot walk a continuation unless the caller pins `now`", async () => {
+    // The route's per-request stamp is a first-page default only: `now` is part of the
+    // cursor fingerprint, so an unpinned walk rejects the continuation it was just handed.
+    const orderBy = encodeURIComponent(JSON.stringify([{ field: "namespace", dir: "asc" }]))
+    const first = await fetch(`${server.base}/api/memory/list?orderBy=${orderBy}&limit=2`)
+    expect(first.status).toBe(200)
+    const { continuation } = (await first.json()) as { continuation: string | null }
+    expect(typeof continuation).toBe("string")
+    // Far enough apart that the next request's stamp cannot land in the same millisecond.
+    await new Promise((done) => setTimeout(done, 5))
+    const next = await fetch(
+      `${server.base}/api/memory/list?orderBy=${orderBy}&limit=2&cursor=${encodeURIComponent(continuation as string)}`,
+    )
+    expect(next.status).toBe(400)
+    expect((await next.json()) as { error: string; code: string }).toMatchObject({
+      code: "continuation-invalid",
+    })
+  })
+
+  it("browse narrows to an exact namespace", async () => {
+    const res = await fetch(
+      `${server.base}/api/memory/list?namespace=${encodeURIComponent("route=/other")}`,
+    )
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id)).toEqual(["other1"])
+    expect(page.total).toBe(1)
+  })
+
+  it("browse rejects malformed filters, bad sorts, oversized limits and forged cursors", async () => {
+    const badJson = await fetch(`${server.base}/api/memory/list?filters=%7Bnope`)
+    expect(badJson.status).toBe(400)
+    expect(((await badJson.json()) as { error: string }).error).toContain(
+      "filters must be valid JSON",
+    )
+
+    const badSort = encodeURIComponent(JSON.stringify([{ field: "content", dir: "asc" }]))
+    const sortRes = await fetch(`${server.base}/api/memory/list?orderBy=${badSort}`)
+    expect(sortRes.status).toBe(400)
+    expect(((await sortRes.json()) as { error: string }).error).toContain("unknown sort field")
+
+    const overLimit = await fetch(`${server.base}/api/memory/list?limit=5000`)
+    expect(overLimit.status).toBe(400)
+    expect(((await overLimit.json()) as { error: string }).error).toContain("at most 1000")
+
+    const forged = await fetch(`${server.base}/api/memory/list?cursor=not-a-real-cursor`)
+    expect(forged.status).toBe(400)
+    // Pinned on the CODE, not the prose: a continuation can be wrong several ways
+    // (undecodable, wrong version, wrong query) and they share one stable name.
+    expect((await forged.json()) as { error: string; code: string }).toMatchObject({
+      code: "continuation-invalid",
+    })
   })
 
   it("stats aggregates byStatus and byNamespace", async () => {

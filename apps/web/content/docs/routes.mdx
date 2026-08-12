@@ -45,7 +45,7 @@ import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
 import type state from "./state.js"
 
-type HelloState = z.infer<typeof state> & { readonly tenant: string }
+type HelloState = z.infer<typeof state>
 
 export async function workflow(
   state: HelloState,
@@ -96,7 +96,7 @@ $ echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 $ dawn dev    # HMR + dev server
 ```
 
-Programmatic dispatch is also available — see [Dev Server](/docs/dev-server) for the runtime API and the `runs/wait` / `runs/stream` endpoints.
+Programmatic dispatch is also available — see [Agent Protocol](/docs/dev-server/agent-protocol) for the runtime API and the `runs/wait` / `runs/stream` endpoints.
 
 ## Related
 
@@ -106,6 +106,6 @@ Programmatic dispatch is also available — see [Dev Server](/docs/dev-server) f
   { href: "/docs/state", title: "State", subtitle: "typed JSON input and output" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "child routes under subagents/<leaf>" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "auth, logging, request gates" },
-  { href: "/docs/retry", title: "Retry", subtitle: "retry strategy at agent / tool level" },
-  { href: "/docs/recipes/dispatch-from-route", title: "Dispatch from a route", subtitle: "recipe calling one route from another over /runs/wait" },
+  { href: "/docs/retry", title: "Retry", subtitle: "retry strategy for agent model calls" },
+  { href: "/docs/recipes/dispatch-from-route", title: "Dispatch from a Route", subtitle: "recipe calling one route from another over /runs/wait" },
 ]} />

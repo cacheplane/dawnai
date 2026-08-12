@@ -27,16 +27,24 @@ const GATED: readonly string[] = [
 ]
 
 /**
- * Thread-scoped and NOT yet gated. PR B moves all four onto GATED; until then
- * they are gated by route middleware only. `POST /agui/:routeId` is on this
+ * Thread-scoped and NOT gated by this PR — they are gated by route middleware
+ * only. PR B moves the first four onto GATED. `POST /agui/:routeId` is on this
  * list precisely because its pattern contains no "threads" — it still resolves
  * a client-supplied thread id, creates the row and writes its metadata.
+ *
+ * `GET /pending_interrupts` arrived with PR #443, which gates it on ROUTE
+ * IDENTITY. Whether it also moves onto the thread-access axis in PR B is the
+ * spec's open question and is still undecided; it sits here either way, because
+ * under both answers this PR leaves it gated by route middleware alone. If the
+ * answer is "one axis" it joins GATED in PR B; if it is "two axes" it moves to
+ * its own documented list rather than staying here.
  */
 const DEFERRED: readonly string[] = [
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/),
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/wait(?:\?.*)?$/),
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/),
   routeKey("POST", /^\/agui\/(?<routeId>[^/?#]+)(?:\?.*)?$/),
+  routeKey("GET", /^\/threads\/(?<thread_id>[^/?#]+)\/pending_interrupts(?:\?.*)?$/),
 ]
 
 /**
@@ -59,12 +67,13 @@ const routes = buildRouteTable({} as unknown as Parameters<typeof buildRouteTabl
 const actual = routes.map((route) => `${route.method} ${route.pattern.source}`)
 
 describe("route-table coverage", () => {
-  it("has 13 entries on this branch", () => {
-    // PR #443 adds `GET /threads/:thread_id/pending_interrupts` as a 14th. It
-    // does not exist here, so it is on none of the lists below. Classifying it
-    // becomes required at the rebase — see the spec's "Open question for
-    // review" (docs/superpowers/specs/2026-08-10-thread-access-design.md).
-    expect(actual).toHaveLength(13)
+  it("has 14 entries on this branch", () => {
+    // 14 since PR #443 merged and this branch took `main` in, adding
+    // `GET /threads/:thread_id/pending_interrupts`. It is CLASSIFIED (see
+    // DEFERRED) rather than counted, which is the whole point of this pair of
+    // assertions: bumping the number without adding the route to a list would
+    // let a new thread endpoint ship ungated and silent.
+    expect(actual).toHaveLength(14)
   })
 
   it("classifies every route as gated, deferred or exempt", () => {

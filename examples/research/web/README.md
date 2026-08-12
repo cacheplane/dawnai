@@ -4,12 +4,14 @@ A [CopilotKit](https://docs.copilotkit.ai) v2 app (`@copilotkit/react-core/v2` +
 `@copilotkit/runtime`) whose runtime route (`app/api/copilotkit/route.ts`) registers an
 `HttpAgent` pointed at Dawn's encoded `/research#agent` AG-UI endpoint (see
 `@dawn-ai/ag-ui`). It mirrors `examples/chat/web` (the canonical AG-UI wiring
-reference) and adds research suggestions, generic tool cards, standard permission
-handling, and memory-candidate approval.
+reference) and adds research suggestions, plan and researcher activity cards,
+generic tool cards, standard permission handling, and memory-candidate approval.
 
 This app runs **live** against a real model — there is no aimock/demo mode here. The
-deterministic, no-key proof that the research route and its AG-UI wire protocol work is
-the server's own offline test/eval suite (`examples/research/server`).
+focused web tests render the activity components to static markup, proving their
+presentation without a browser or model. The packaged generated-research activation
+drives the deterministic server and AG-UI client path, proving activity snapshots reach
+the client before the final report. Neither test is a browser test or a live-model run.
 
 ## Architecture
 
@@ -25,9 +27,21 @@ browser
   served via `copilotRuntimeNextJSAppRouterEndpoint`. No LLM credentials live here; the
   Dawn server holds `OPENAI_API_KEY`.
 - `app/page.tsx` — `CopilotKit` (`runtimeUrl="/api/copilotkit"`) wrapping a
-  `CopilotSidebar` (streaming chat transcript + cited report), plus suggestion
-  prompts, generic tool cards, standard permission handling, and the memory-review
-  panel.
+  `CopilotSidebar` (streaming chat transcript + cited report), with the stable
+  module-level activity renderer registry, 100 ms render throttle, suggestion prompts,
+  generic root-tool cards, standard permission handling, and the memory-review panel.
+- `app/components/ActivitySchemas.ts` — strict runtime schemas for Dawn's public plan
+  and subagent activity content. Incompatible payloads fail closed.
+- `app/components/ActivityChecklist.tsx` and `PlanActivityCard.tsx` — the checklist
+  shared by root and child cards, plus the root plan card. Each checklist view displays
+  at most eight items plus `+N more`, while its snapshot retains the complete valid
+  todo list. The root card derives its completed count from that full snapshot.
+- `app/components/SubagentActivityCard.tsx` — researcher name, depth, lifecycle status,
+  optional child checklist, at most five recent child-tool name/status summaries, total
+  tool count, and an optional error capped at 400 characters.
+- `app/components/ActivityRenderers.tsx` — the module-level
+  `activityMessageRenderers` registry, keyed by the public
+  `DAWN_PLAN_ACTIVITY_TYPE` and `DAWN_SUBAGENT_ACTIVITY_TYPE` constants.
 - `app/components/MemoryCandidates.tsx` — after a research run proposes durable memory
   via `remember()`, the candidate (`status:"candidate"`) shows up in this panel with
   **Approve**/**Reject** buttons, backed by the dev server's
@@ -39,10 +53,27 @@ Components/hooks that omit `agentId` resolve CopilotKit's default agent id
 (`"default"`), which the runtime route registers as the Dawn `/research` agent — same
 pattern as `examples/chat/web`, no per-component wiring needed.
 
-The AG-UI v1 adapter intentionally ignores planning and subagent capability
-events. Interrupts use the standard AG-UI run outcome and top-level resume
-array; this example does not add a client-specific compatibility component for
-them.
+Root plan snapshots replace the stable `dawn:plan:${runId}` message and carry
+the complete todo list. Each researcher snapshot replaces
+`dawn:subagent:${call_id}` and carries only its name, depth,
+`running`/`completed`/`failed` status, optional todos, bounded tool summaries,
+total tool count, and optional bounded error. Todo status is
+`pending`/`in_progress`/`completed`; tool-summary status is
+`running`/`completed`/`incomplete`. `subagent.message` is consumed without an
+activity emission. The `dawn.plan` and `dawn.subagent` activity content supplied
+to the cards excludes child reasoning or prose, prompts, tool inputs, tool
+outputs, final child answers, route ids, and raw runtime ids.
+
+Ordinary root `task` tool call/result events remain a separate surface. Root task
+events can carry the coordinator-visible input and result. The current generic card
+reduces task input to the subagent name and may show the result. The activity renderers
+neither suppress nor specialize those events.
+
+Choose the safe **Research a topic** suggestion to see plan and researcher
+progress before the cited answer. Activity cards are informational: generic
+root-tool rendering remains registered, while standard interrupt UI exclusively
+owns permission actions. Suggestions, memory review, and the server-held
+`OPENAI_API_KEY` flow are unchanged.
 
 ## Running
 
@@ -58,10 +89,11 @@ pnpm dev                             # server on :3002, web on :3010
 # open http://localhost:3010
 ```
 
-`pnpm --filter @dawn-example/research-web typecheck` / `build` cover this package in CI —
-that verifies the CopilotKit/AG-UI wiring compiles and the Next.js app builds. It does
-**not** exercise a live model; there's no automated substitute for the smoke below
-because this client intentionally has no demo/mock mode.
+`pnpm --filter @dawn-example/research-web test` renders the cards on the server and
+checks their schemas and bounds. `typecheck` / `build` verify the CopilotKit/AG-UI
+wiring compiles and the Next.js app builds. The repository's packaged research
+activation proves the deterministic wire path. These checks do **not** drive a browser
+or exercise a live model; this client intentionally has no demo/mock mode.
 
 ## Live smoke checklist (run manually, with a real `OPENAI_API_KEY`)
 
@@ -70,7 +102,7 @@ because this client intentionally has no demo/mock mode.
    `OPENAI_API_KEY`.
 3. Run `pnpm dev` there (server :3002, web :3010).
 4. Open http://localhost:3010. Send a research question — expect a streamed, cited
-   report in the sidebar.
+   report in the sidebar, with plan and researcher cards updating before the answer.
 5. If the run calls `remember()`, expect the **Memory candidates** panel to populate
    once the run finishes. Click **Approve** on one — expect it to disappear from the
    panel (now `status:"active"` in `.dawn/memory.sqlite`); **Reject** deletes it.

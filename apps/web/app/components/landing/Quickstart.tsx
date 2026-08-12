@@ -13,18 +13,18 @@ interface Step {
 const STEPS: readonly Step[] = [
   {
     n: 1,
-    title: "Scaffold",
-    body: "One command. You'll get a working Dawn app with a typed example route and the dev server running.",
+    title: "Scaffold research",
+    body: "Create the research starter: a typed agent route, shared tools, memory, skills, subagents, and a local corpus.",
   },
   {
     n: 2,
-    title: "Run an example",
-    body: "Open the support route, fire a request, and watch the graph state flow through the tool handler in your terminal.",
+    title: "Test offline",
+    body: "Run its deterministic agent harness tests and replay-backed quality eval without an API key.",
   },
   {
     n: 3,
-    title: "Port a graph",
-    body: "Bring one of your existing LangGraph.js graphs and rewrite it as a Dawn route — keep the logic, drop the orchestration boilerplate.",
+    title: "Choose what’s next",
+    body: "Opt into live dev, adapt a route to your application, or build for your deployment target.",
   },
 ]
 
@@ -55,7 +55,7 @@ export function Quickstart() {
               <p className="mt-3 text-sm text-ink-muted leading-[22px] flex-1">{step.body}</p>
               {step.n === 1 ? (
                 <div className="mt-5">
-                  <CopyCommand command="pnpm create dawn-ai-app" />
+                  <CopyCommand command="npm create dawn-ai-app@latest my-agent" />
                 </div>
               ) : null}
             </Card>

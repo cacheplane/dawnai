@@ -30,6 +30,11 @@ export {
   createCapabilityRegistry,
 } from "./capabilities/registry.js"
 export type {
+  BrowseFilterLike,
+  BrowsePageLike,
+  BrowseQueryLike,
+  BrowseSortEntryLike,
+  BrowseSortFieldLike,
   CapabilityContribution,
   CapabilityMarker,
   CapabilityMarkerContext,

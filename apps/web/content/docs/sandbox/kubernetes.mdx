@@ -1,0 +1,97 @@
+# Kubernetes Sandbox
+
+Use `kubernetesSandbox` when the Dawn runtime already runs in Kubernetes and each Agent Protocol thread needs an isolated Pod-backed workspace. This is a container boundary, not a microVM boundary. Before production use, provide a dynamic volume provisioner, a compatible sandbox image, sufficient Pod/PVC quota, and a policy-enforcing CNI if NetworkPolicy is part of the security boundary.
+
+The application process needs Kubernetes API credentials to create and exec into sandbox workloads. The sandbox Pods themselves do not: Dawn sets `automountServiceAccountToken: false` on every provider-managed Pod.
+
+## Install the sandbox infrastructure
+
+The `dawn-sandbox-infra` chart creates the target namespace, orchestrator ServiceAccount and RBAC, default-deny egress backstop, resource controls, Pod Security Standard labels, and PVC reaper. Install it once per cluster or environment:
+
+```bash
+helm upgrade --install dawn-sandbox-infra \
+  oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --set namespace.name=dawn-sandboxes
+```
+
+The default namespace is already `dawn-sandboxes`; setting it explicitly makes the provider/chart contract visible. Review values before changing namespace ownership or disabling a control.
+
+## Configure the provider
+
+Point the provider at exactly the namespace the infrastructure chart manages:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+import { kubernetesSandbox } from "@dawn-ai/sandbox"
+
+export default config({
+  sandbox: {
+    provider: kubernetesSandbox({
+      image: "node:24-slim",
+      namespace: "dawn-sandboxes",
+    }),
+    network: { mode: "deny" },
+    resources: { memoryMb: 512, cpus: 1, diskGb: 2 },
+  },
+})
+```
+
+`storageClass` and `startupTimeoutMs` are optional provider settings. `resources.diskGb` becomes the PVC storage request; confirm the selected StorageClass can provision that request.
+
+The namespace is also the provider resource-name scope. Give each application or trust boundary a separate Kubernetes namespace. Before a caller can choose `thread_id`, map ownership to a collision-resistant, provider-safe canonical thread ID that is globally unique inside that namespace. The provider lowercases the ID, replaces unsupported characters, trims dashes, and only adds a hash when the cleaned form is overlength. That lossy sanitizer means distinct short IDs that differ by case or substituted punctuation can still address the same Pod, PVC, and NetworkPolicy. Mutually untrusted tenants must not share a provider namespace in which their resource names can alias. Hashing every ID in the runtime would break reattachment to existing PVC names and is therefore a compatibility-sensitive follow-up, not a current guarantee.
+
+The provider replaces the image entrypoint with `sleep infinity` and runs shell and filesystem operations through `sh -c`. The image must provide a POSIX `sh`, a `sleep` implementation that accepts `infinity`, and the core utilities used by the filesystem backend (`cat`, `mkdir`, `dirname`, `ls`, `realpath`, `stat`, `rm`, and `touch`). It also needs `timeout` when `resources.timeoutMs` is set. The hardened default runs as numeric UID/GID `1000:1000`; an `/etc/passwd` entry is not required, but the image's executables and filesystem permissions must work for that identity. Set an explicit compatible UID/GID through `security.runAsNonRoot` when they do not.
+
+## Wire application RBAC
+
+The app Pod's ServiceAccount must be a subject of the infrastructure chart's `dawn-orchestrator` RoleBinding. That Role is limited to the provider's Pod, Pod exec, PVC, and NetworkPolicy operations; it does not grant Secret access.
+
+The default same-namespace deployment reuses `dawn-orchestrator`. For a separate application namespace, add the app ServiceAccount to `orchestrator.subjects` before deploying the app so there is no running-but-unauthorized interval. Follow [Kubernetes deployment](/docs/deployment/kubernetes) for the ordered RoleBinding and application-chart commands. Keep these three values aligned:
+
+- `dawn-sandbox-infra`'s `namespace.name`;
+- `kubernetesSandbox({ namespace: "dawn-sandboxes" })`;
+- the application chart's informational `sandboxNamespace`.
+
+Changing `sandboxNamespace` alone does not move workloads or change RBAC.
+
+## Pod and workspace lifecycle
+
+Each distinct provider resource key receives one keeper Pod and one `ReadWriteOnce` PVC mounted at `/workspace`.
+
+- `acquire()` creates the PVC and Pod or reattaches the live pair.
+- `release()` deletes the Pod and retains the PVC for the next turn.
+- `destroy()` deletes the Pod, per-thread NetworkPolicy, and PVC.
+
+Idle reap and server shutdown both call `release()`, so their Pods disappear while their PVCs remain unreferenced. With the chart reaper enabled, that storage is not retained indefinitely: the reaper has no Dawn thread metadata and considers every unreferenced Dawn PVC eligible. On its default hourly schedule, a run marks an unreferenced PVC that has no valid marker and clears the marker from a PVC it observes referenced by a Pod. A scheduled reaper run deletes a currently unreferenced PVC when its stored marker is older than `reaper.ttlHours` (default `168`). A reattachment resets the marker only if a reaper run observes the PVC referenced by a Pod. A short reattachment entirely between scheduled runs may therefore leave an old marker in place; after the Pod is released, the next run can delete the PVC after recent use. This includes a still-live thread released by idle reap or shutdown. If its PVC is deleted, the next `acquire()` provisions a replacement and starts with an empty workspace. Operators who need thread workspaces to survive longer must tune `reaper.ttlHours` or disable the reaper and own cleanup another way.
+
+The provider applies non-root execution, dropped capabilities, no privilege escalation, RuntimeDefault seccomp, and writable scratch mounts around its read-only-root default. The chart labels the namespace for Pod Security Standards—baseline enforcement and restricted warnings/auditing by default—but the cluster admission controller decides whether an image and policy are accepted. Validate your image under the profile you enforce.
+
+`ResourceQuota` caps aggregate namespace consumption. `LimitRange` supplies CPU, memory, and ephemeral-storage defaults. Monitor reaper deletions alongside Pod and PVC lifecycle so storage-retention failures are distinguishable from application behavior.
+
+## NetworkPolicy and DNS
+
+The infrastructure chart installs a default-deny egress backstop for Pods labeled `app.kubernetes.io/managed-by=dawn`, with UDP/TCP port 53 allowed to `kube-system`. Therefore deny mode is **not zero egress**: DNS remains allowed, including the DNS-tunneling risk that follows from that exception.
+
+NetworkPolicy objects have no effect unless the cluster uses a policy-enforcing CNI such as Calico or Cilium. The chart does not install or configure a CNI, and operators must validate DNS and policy behavior on the actual cluster.
+
+The chart backstop and provider policy are additive. With `networkPolicy.defaultDenyEgress=true`, a provider setting of `network: { mode: "allow" }` cannot override the chart policy and does not reopen egress. In allow mode the provider emits no per-thread NetworkPolicy and does not enforce `denylist`; the chart backstop is the only Dawn-supplied egress restriction. If you disable that backstop without an operator-owned replacement, egress is open. In deny mode, the provider creates a per-thread policy with DNS and configured CIDR exceptions.
+
+## PID and resource exhaustion
+
+Kubernetes has no namespaced `LimitRange` or `ResourceQuota` field for process count. PID limits are a node/runtime concern: configure kubelet `podPidsLimit` (or its runtime equivalent) on nodes that schedule sandbox Pods. The chart does not supply PID limits, and `security.pidsLimit` is not enforced by the Kubernetes provider.
+
+CPU, memory, ephemeral-storage, PVC count, and requested storage remain chart-managed controls. Monitor quota pressure, Pending Pods, failed volume provisioning, evictions, and reaper activity; none of those failure modes is reported as model behavior.
+
+## Preflight and end-to-end verification
+
+`dawn check` calls the provider's `preflight()`. It performs a SelfSubjectAccessReview for Pod-create authorization only. A successful result does not create a Pod, bind a PVC, exec a command, resolve DNS, or prove CNI enforcement. The default client reports that NetworkPolicy enforcement is unknown because Kubernetes does not provide a portable way to confirm what the CNI enforces; surface that warning rather than treating it as proof.
+
+Use both gated lanes as combined evidence. `sandbox-k8s-e2e`, enabled with `DAWN_TEST_SMOKE_E2E=1`, proves the built app and provider are wired together: it creates a Pod, PVC, and per-thread NetworkPolicy, executes as a non-root user, and removes the Pod and PVC on thread deletion. The `sandbox-k8s-e2e` lane does not test DNS or blocked egress. The separate `sandbox-k8s` integration lane runs against kind with Calico and proves DNS resolution plus blocked egress, including the chart backstop around an allow-mode sandbox. Neither substitutes for verifying the StorageClass, CNI, DNS, admission, quotas, and cleanup settings in your production cluster.
+
+## Operational references
+
+- [Kubernetes deployment](/docs/deployment/kubernetes) — build the Node image, install the app chart, wire its ServiceAccount, and plan rollouts and replicas.
+- [`dawn-sandbox-infra` chart README](https://github.com/cacheplane/dawnai/blob/main/charts/dawn-sandbox-infra/README.md) — infrastructure behavior, reaper compatibility, and honest scope.
+- [`dawn-sandbox-infra` values](https://github.com/cacheplane/dawnai/blob/main/charts/dawn-sandbox-infra/values.yaml) — namespace, PSS, quota, network, and reaper settings.
+- [`dawn-app` chart values](https://github.com/cacheplane/dawnai/blob/main/charts/dawn-app/values.yaml) — application ServiceAccount and sandbox namespace settings.
+- [Execution Sandbox](/docs/sandbox) — portable provider contract, Docker reference behavior, and custom-provider testing.

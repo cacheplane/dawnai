@@ -18,10 +18,10 @@ function XIcon() {
 }
 
 const NOT_DOING = [
-  "Dawn is not a runtime — your graphs run on LangGraph.js, full stop.",
+  "Dawn does not replace LangGraph.js — agent routes materialize LangGraph graphs.",
   "Dawn does not proxy provider calls — raw graph and chain routes use the clients you instantiate.",
   "Dawn does not host your agents — it emits artifacts for your deployment target.",
-  "Dawn does not lock you in — eject to raw StateGraph at any time without rewriting.",
+  "Dawn does not wrap raw graph and chain exports in a proprietary runtime format.",
 ]
 
 export function KeepTheRuntime() {
@@ -42,19 +42,19 @@ export function KeepTheRuntime() {
         <div className="mt-8 grid lg:grid-cols-[1.2fr_1fr] gap-10 lg:gap-16">
           <div className="space-y-5 text-lg text-ink-muted leading-[30px] max-w-[58ch]">
             <p>
-              Dawn compiles to LangGraph constructs. Routes become nodes, tools become callable
-              bindings, state becomes a typed channel. You can read the generated graph, drop into
-              raw{" "}
+              Node and Hono targets are Dawn HTTP runtimes; the LangSmith target emits graph
+              entries. Agent routes materialize LangGraph graphs, while workflows keep their
+              authored function shape and raw graph and chain exports remain portable. You can still
+              drop into raw{" "}
               <code className="text-sm font-mono text-ink bg-page px-1.5 py-0.5 rounded border border-divider">
                 StateGraph
               </code>{" "}
-              for any node, or swap a Dawn route for a hand-written one without touching the rest of
-              your app.
+              where you need direct control.
             </p>
             <p>
-              If Dawn disappears tomorrow, your raw graphs are still valid LangGraph.js. Your
-              provider clients in graph and chain routes are still your provider clients. Dawn is
-              the scaffolding between you and the runtime — not a replacement for it.
+              Your raw graphs stay valid LangGraph.js, and graph and chain routes keep the provider
+              clients you instantiate. Dawn supplies the route and target boundaries around that
+              code without replacing it.
             </p>
           </div>
 

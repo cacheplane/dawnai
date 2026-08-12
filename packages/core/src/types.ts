@@ -86,6 +86,10 @@ export interface DawnConfig {
      *   `wrangler.toml` scaffold. Opt-in only, and never emitted by default:
      *   the edge serves a subset of Dawn (no sandbox, no workspace tooling) and
      *   requires durable stores to be configured.
+     * - `"vercel"` — Vercel Build Output API artifacts under `.vercel/output/`.
+     *   Opt-in only, and never emitted by default: it serves the same edge
+     *   subset of Dawn as `"hono"` (no sandbox, no workspace tooling) and
+     *   requires durable stores to be configured.
      *
      * Defaults to `["node", "langsmith"]` when omitted.
      */

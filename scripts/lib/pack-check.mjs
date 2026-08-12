@@ -50,10 +50,14 @@ export const packages = [
       "dist/agent-adapter.d.ts",
       "dist/chain-adapter.js",
       "dist/chain-adapter.d.ts",
+      "dist/default-model-importer.js",
+      "dist/default-model-importer.d.ts",
       "dist/index.js",
       "dist/index.d.ts",
       "dist/retry.js",
       "dist/retry.d.ts",
+      "dist/static-model-importer.js",
+      "dist/static-model-importer.d.ts",
       "dist/tool-converter.js",
       "dist/tool-converter.d.ts",
       "README.md",
@@ -151,6 +155,8 @@ export const packages = [
   {
     dir: "packages/ag-ui",
     expectedFiles: [
+      "dist/activities.js",
+      "dist/activities.d.ts",
       "dist/ids.js",
       "dist/ids.d.ts",
       "dist/inbound.js",
