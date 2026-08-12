@@ -297,7 +297,7 @@
           "id": "inspector-e2e",
           "descriptor": {
             "runs-on": "ubuntu-latest",
-            "timeout-minutes": 20
+            "timeout-minutes": 35
           },
           "steps": [
             {
@@ -347,6 +347,33 @@
               "descriptor": {
                 "name": "Inspector standalone e2e",
                 "run": "DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install Playwright browsers",
+                "run": "pnpm --filter @dawn-ai/inspector exec playwright install --with-deps chromium"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Inspector browser verification",
+                "run": "pnpm --filter @dawn-ai/inspector test:e2e"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Upload Playwright traces",
+                "if": "failure()",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "name": "inspector-playwright-traces",
+                  "path": "packages/inspector/test-results",
+                  "retention-days": 7
+                }
               }
             }
           ]
