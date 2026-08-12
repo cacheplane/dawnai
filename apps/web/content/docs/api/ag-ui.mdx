@@ -32,6 +32,10 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 |---|---|
 | `createCounterIdFactory` | Create deterministic IDs for tests and reproducible adapters. |
 | `createDefaultIdFactory` | Create unique runtime event IDs. |
+| `DAWN_PLAN_ACTIVITY_TYPE` | Identify Dawn plan activity snapshots as `dawn.plan`. |
+| `DAWN_SUBAGENT_ACTIVITY_TYPE` | Identify Dawn subagent activity snapshots as `dawn.subagent`. |
+| `DawnPlanActivityContent` | Describe the complete public plan snapshot. |
+| `DawnSubagentActivityContent` | Describe allowlisted subagent progress. |
 | `IdFactory` | Define event-ID generation. |
 | `DawnMessage` | Describe a normalized inbound message. |
 | `DawnRunInput` | Describe normalized Dawn run input. |
@@ -51,6 +55,48 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 | `encodeAgUiSse` | Encode one AG-UI event as an SSE frame. |
 
 ## Key contracts
+
+### Activity identifiers and payloads
+
+```ts api-contract="@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE"
+export declare const DAWN_PLAN_ACTIVITY_TYPE: "dawn.plan"
+```
+
+```ts api-contract="@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE"
+export declare const DAWN_SUBAGENT_ACTIVITY_TYPE: "dawn.subagent"
+```
+
+```ts api-contract="@dawn-ai/ag-ui#.:DawnPlanActivityContent"
+export interface DawnPlanActivityContent {
+  readonly todos: ReadonlyArray<{
+    readonly content: string
+    readonly status: "pending" | "in_progress" | "completed"
+  }>
+}
+```
+
+```ts api-contract="@dawn-ai/ag-ui#.:DawnSubagentActivityContent"
+export interface DawnSubagentActivityContent {
+  readonly name: string
+  readonly depth: number
+  readonly status: "running" | "completed" | "failed"
+  readonly todos?: DawnPlanActivityContent["todos"]
+  readonly tools: ReadonlyArray<{
+    readonly name: string
+    readonly status: "running" | "completed" | "incomplete"
+  }>
+  readonly totalToolCount: number
+  readonly error?: string
+}
+```
+
+#### Behavior contract `ag-ui.activities.plan-snapshot`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/ag-ui/test/outbound.test.ts","testNames":["plan activity does not flush an open text message"]}] */}
+A valid plan update becomes a complete replacement snapshot with activity type `dawn.plan` and the stable message ID `dawn:plan:<runId>` without breaking an open assistant text message.
+
+#### Behavior contract `ag-ui.activities.subagent-privacy`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/ag-ui/test/activities.test.ts","testNames":["retains only the five newest tool summaries while counting each id once","completes once, marks running tools incomplete, and freezes terminal state","caps failure errors at 400 characters","consumes child messages and exposes only allowlisted public fields"]}] */}
+A subagent snapshot exposes allowlisted progress only: name, depth, status, optional todos, at most five tool name/status summaries, the total tool count, and an error capped at 400 characters. It never includes child prompts, prose, tool inputs, tool outputs, final answers, route IDs, call IDs, or raw runtime IDs.
 
 ### `ToAguiOptions`
 

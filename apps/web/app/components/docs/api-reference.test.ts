@@ -107,7 +107,11 @@ const EXPECTED_OPERATED_ARTIFACTS = [
 
 const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
+  "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:DawnPlanActivityContent",
+  "@dawn-ai/ag-ui#.:DawnSubagentActivityContent",
   "@dawn-ai/ag-ui#.:RunContext",
   "@dawn-ai/ag-ui#.:ToAguiOptions",
   "@dawn-ai/ag-ui#.:fromRunAgentInput",
@@ -816,7 +820,7 @@ describe("published manifest address inventory", () => {
 describe("package catalog", () => {
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(59)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(63)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")

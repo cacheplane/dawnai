@@ -704,7 +704,11 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
 
 const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
+  "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:DawnPlanActivityContent",
+  "@dawn-ai/ag-ui#.:DawnSubagentActivityContent",
   "@dawn-ai/ag-ui#.:RunContext",
   "@dawn-ai/ag-ui#.:ToAguiOptions",
   "@dawn-ai/ag-ui#.:fromRunAgentInput",

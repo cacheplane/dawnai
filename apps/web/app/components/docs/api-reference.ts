@@ -261,6 +261,41 @@ export const API_BEHAVIOR_CONTRACTS = [
     ],
   },
   {
+    id: "ag-ui.activities.plan-snapshot",
+    ownerHref: "/docs/api/ag-ui",
+    claim:
+      "A valid plan update becomes a complete replacement snapshot with activity type dawn.plan and the stable message ID dawn:plan:<runId> without breaking an open assistant text message.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/ag-ui/test/outbound.test.ts",
+        testNames: ["plan activity does not flush an open text message"],
+        assertionFingerprint:
+          'expect ( events . map ( ( event ) => event . type ) ) . toEqual ( [ EventType . RUN_STARTED , EventType . TEXT_MESSAGE_START , EventType . TEXT_MESSAGE_CONTENT , EventType . ACTIVITY_SNAPSHOT , EventType . TEXT_MESSAGE_CONTENT , EventType . TEXT_MESSAGE_END , EventType . RUN_FINISHED , ] )\nexpect ( ActivitySnapshotEventSchema . parse ( activity ) ) . toEqual ( { type : EventType . ACTIVITY_SNAPSHOT , messageId : "dawn:plan:rn-1" , activityType : DAWN_PLAN_ACTIVITY_TYPE , replace : true , content : { todos } , } )\nexpect ( events . filter ( ( event ) => event . type === EventType . TEXT_MESSAGE_CONTENT ) ) . toMatchObject ( [ { messageId : "msg-1" , delta : "before" } , { messageId : "msg-1" , delta : "after" } , ] )',
+      },
+    ],
+  },
+  {
+    id: "ag-ui.activities.subagent-privacy",
+    ownerHref: "/docs/api/ag-ui",
+    claim:
+      "A subagent snapshot exposes allowlisted progress only: name, depth, status, optional todos, at most five tool name/status summaries, the total tool count, and an error capped at 400 characters. It never includes child prompts, prose, tool inputs, tool outputs, final answers, route IDs, call IDs, or raw runtime IDs.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/ag-ui/test/activities.test.ts",
+        testNames: [
+          "retains only the five newest tool summaries while counting each id once",
+          "completes once, marks running tools incomplete, and freezes terminal state",
+          "caps failure errors at 400 characters",
+          "consumes child messages and exposes only allowlisted public fields",
+        ],
+        assertionFingerprint:
+          'expect ( snapshot ?. content ) . toMatchObject ( { tools : [ { name : "toolName2" , status : "running" } , { name : "toolName3" , status : "running" } , { name : "toolName4" , status : "running" } , { name : "toolName5" , status : "running" } , { name : "toolName6" , status : "running" } , ] , totalToolCount : 6 , } )\nexpect ( projector . project ( "subagent.tool_result" , { ... identity , id : "tool-1" } ) ) . toBeNull ( )\nexpect ( completed ?. content ) . toMatchObject ( { tools : [ { name : "toolName2" , status : "running" } , { name : "toolName3" , status : "running" } , { name : "toolName4" , status : "running" } , { name : "toolName5" , status : "running" } , { name : "toolName6" , status : "completed" } , ] , totalToolCount : 6 , } )\nexpect ( reinserted ?. content ) . toMatchObject ( { tools : [ { name : "toolName3" , status : "running" } , { name : "toolName4" , status : "running" } , { name : "toolName5" , status : "running" } , { name : "toolName6" , status : "completed" } , { name : "toolName1" , status : "running" } , ] , totalToolCount : 6 , } )\nexpect ( ActivitySnapshotEventSchema . parse ( reinserted ) ) . toEqual ( reinserted )\nexpect ( ended ?. content ) . toEqual ( { name : "researcher" , depth : 1 , status : "completed" , todos , tools : [ { name : "searchCorpus" , status : "incomplete" } , { name : "readDoc" , status : "completed" } , ] , totalToolCount : 2 , } )\nexpect ( JSON . stringify ( ended ) ) . not . toContain ( "private child answer" )\nexpect ( ActivitySnapshotEventSchema . parse ( ended ) ) . toEqual ( ended )\nexpect ( projector . project ( "subagent.end" , identity ) ) . toBeNull ( )\nexpect ( projector . project ( "subagent.start" , identity ) ) . toBeNull ( )\nexpect ( projector . project ( "subagent.tool_call" , { ... identity , id : "tool-late" , tool : "lateTool" , } ) , ) . toBeNull ( )\nexpect ( projector . project ( "subagent.plan_update" , { ... identity , todos : [ ] } ) ) . toBeNull ( )\nexpect ( ended ?. content ) . toMatchObject ( { status : "failed" , error : "x" . repeat ( 400 ) , } )\nexpect ( ActivitySnapshotEventSchema . parse ( ended ) ) . toEqual ( ended )\nexpect ( projector . project ( "subagent.message" , { ... identity , content : "private child prose" , reasoning : "private reasoning" , } ) , ) . toBeNull ( )\nexpect ( Object . keys ( call ?. content ?? { } ) . sort ( ) ) . toEqual ( [ "depth" , "name" , "status" , "tools" , "totalToolCount" , ] )\nexpect ( Object . keys ( ended ?. content ?? { } ) . sort ( ) ) . toEqual ( [ "depth" , "name" , "status" , "tools" , "totalToolCount" , ] )\nexpect ( serializedContent ) . not . toContain ( privateValue )',
+      },
+    ],
+  },
+  {
     id: "ag-ui.outbound.errors-as-events",
     ownerHref: "/docs/api/ag-ui",
     claim:
@@ -602,7 +637,11 @@ export interface PackageCatalogEntry {
 // public source export and its canonical owner page.
 export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
+  "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:DawnPlanActivityContent",
+  "@dawn-ai/ag-ui#.:DawnSubagentActivityContent",
   "@dawn-ai/ag-ui#.:RunContext",
   "@dawn-ai/ag-ui#.:ToAguiOptions",
   "@dawn-ai/ag-ui#.:fromRunAgentInput",

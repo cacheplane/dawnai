@@ -1856,6 +1856,8 @@ describe("foundational API reference pages", () => {
       "core.state.reducer-resolution",
       "generated-routes.state-conditional",
       "generated-routes.tool-signatures",
+      "ag-ui.activities.plan-snapshot",
+      "ag-ui.activities.subagent-privacy",
       "ag-ui.outbound.errors-as-events",
       "ag-ui.inbound.lossless-input",
       "memory.namespace.stable-encoding",
@@ -1871,6 +1873,21 @@ describe("foundational API reference pages", () => {
       "evals.scorer-errors.zero-score",
       "evals.run-and-gate",
     ])
+  })
+
+  it("keeps AG-UI activity identifiers, payloads, and privacy behavior source-coupled", () => {
+    const content = foundationalContent("ag-ui")
+    for (const exportName of [
+      "DAWN_PLAN_ACTIVITY_TYPE",
+      "DAWN_SUBAGENT_ACTIVITY_TYPE",
+      "DawnPlanActivityContent",
+      "DawnSubagentActivityContent",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+      expect(API_REQUIRED_CONTRACT_KEYS).toContain(`@dawn-ai/ag-ui#.:${exportName}`)
+    }
+    expect(content).toContain("complete replacement snapshot")
+    expect(content).toContain("never includes child prompts, prose, tool inputs, tool outputs")
   })
 })
 
@@ -2068,6 +2085,8 @@ ${packageExample("memory-pgvector").replace(
       "core.state.reducer-resolution",
       "generated-routes.state-conditional",
       "generated-routes.tool-signatures",
+      "ag-ui.activities.plan-snapshot",
+      "ag-ui.activities.subagent-privacy",
       "ag-ui.outbound.errors-as-events",
       "ag-ui.inbound.lossless-input",
       "memory.namespace.stable-encoding",
