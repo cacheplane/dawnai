@@ -5,6 +5,13 @@ import { Button } from "../ui/button"
 import { type MemoryVerb, mutateMemories } from "./actions"
 import { TEST_IDS } from "./test-ids"
 
+/** What a finished run reports. The ids that SUCCEEDED are deliberately not among it:
+ *  the caller narrows the selection to exactly `failed`, so naming the other half would
+ *  be a second way to say the same thing, free to drift from the first. */
+export interface BulkOutcome {
+  readonly failed: readonly string[]
+}
+
 /**
  * Acts on the rows ticked in the grid. Approve is offered only for the
  * candidates in the selection — approving anything else is not a thing the
@@ -20,12 +27,12 @@ export function BulkBar({
   ticked: readonly string[]
   /** The rows currently on screen, to tell candidates from the rest. */
   records: readonly MemoryRecord[]
-  /** The ids that SUCCEEDED and the ids that FAILED, separately. The caller prunes the
-   *  succeeded ones from the selection so a re-run retries failures only — a retry can
-   *  never repeat a completed destructive action (D1-SELECT-04). */
-  onDone: (outcome: { succeeded: string[]; failed: string[] }) => void
-  /** Fired before the first per-id POST. The caller suspends polling for the duration
-   *  of the run so a refresh cannot land between two writes of the same batch. */
+  /** The caller narrows the selection to exactly these, so a re-run retries the
+   *  failures and can never repeat a completed destructive action (D1-SELECT-04). */
+  onDone: (outcome: BulkOutcome) => void
+  /** Fired before the first per-id POST. The caller suspends browse polling until
+   *  `onDone`, so this bar is not unmounted out from under a run in flight: `failures`
+   *  below is component state, and it is the only record of which ids errored. */
   onStart: () => void
   onClear: () => void
 }) {
@@ -37,22 +44,26 @@ export function BulkBar({
   )
 
   const run = async (ids: readonly string[], verb: MemoryVerb) => {
-    // Snapshot AT CONFIRMATION. `ids` is a fresh array on every render, so freezing it
-    // here is what makes the run proceed against exactly the confirmed set even as the
-    // grid updates beneath it.
+    // A copy for hygiene, not a guarantee: the closure already holds the array the
+    // confirmation was asked about, and callers only ever REPLACE `ticked`, never
+    // mutate it in place, so nothing here could observe a later change either way.
     const targets = [...ids]
     setBusy(true)
     setFailures(undefined)
     onStart()
     const results = await mutateMemories(targets, verb)
     setBusy(false)
-    const failed = results.flatMap((r) => (r.error ? [r.id] : []))
-    const succeeded = results.flatMap((r) => (r.error ? [] : [r.id]))
-    const errors = results.flatMap((r) => (r.error ? [`${r.id}: ${r.error}`] : []))
+    // One derivation of "which ones failed", read twice: the ids go back to the caller
+    // to become the selection, the messages stay here to be shown.
+    const errored = results.flatMap((r) => (r.error ? [r] : []))
     // Some may still have succeeded, so refresh either way — but say plainly
     // how many did not, rather than reporting a clean sweep.
-    if (errors.length > 0) setFailures({ attempted: targets.length, errors })
-    onDone({ succeeded, failed })
+    if (errored.length > 0)
+      setFailures({
+        attempted: targets.length,
+        errors: errored.map((r) => `${r.id}: ${r.error}`),
+      })
+    onDone({ failed: errored.map((r) => r.id) })
   }
 
   return (

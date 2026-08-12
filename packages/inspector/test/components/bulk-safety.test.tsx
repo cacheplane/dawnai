@@ -6,17 +6,33 @@ import { browseSeedRecords } from "../seed"
 
 const RECORDS = browseSeedRecords().slice(0, 4)
 const FAILING_ID = RECORDS[1]?.id as string
+/** A row the forget SUCCEEDS on — the only kind that can tell a prune from a no-op. */
+const SUCCEEDED_ID = RECORDS[0]?.id as string
 
 let posted: string[] = []
+/** Browse responses served, to wait for the reconciling refresh rather than guess at it. */
+let listed = 0
+/** Set to hold every POST mid-flight, so a run can be observed while it is running. */
+let postGate: Promise<void> | undefined
 
+/**
+ * The list route answers with all four records for the whole test, INCLUDING the three
+ * the forget succeeds on. A faithful store would drop them, and dropping them would take
+ * the evidence with it: a row absent from the grid paints no checkbox, so a selection
+ * the code failed to prune would be invisible rather than wrong. Keeping the rows is
+ * what makes `aria-checked` on a succeeded row a real reading of the engine's state.
+ */
 function stubFetch(): void {
   posted = []
+  listed = 0
+  postGate = undefined
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (init?.method === "POST") {
         posted.push(url)
+        if (postGate !== undefined) await postGate
         if (url.includes(FAILING_ID))
           return Response.json({ error: "not a candidate" }, { status: 409 })
         return Response.json({ ok: true })
@@ -29,8 +45,10 @@ function stubFetch(): void {
           byNamespace: {},
           bySourceType: {},
         })
-      if (url.includes("/api/memory/list"))
+      if (url.includes("/api/memory/list")) {
+        listed += 1
         return Response.json({ records: RECORDS, total: RECORDS.length, continuation: null })
+      }
       return Response.json({})
     }),
   )
@@ -73,6 +91,7 @@ describe("bulk partial failure", () => {
     const bar = await screen.findByTestId(TEST_IDS.bulkBar)
     expect(bar.textContent).toContain(String(RECORDS.length))
 
+    const listedBeforeRun = listed
     fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
     await waitFor(() => expect(posted).toHaveLength(RECORDS.length))
 
@@ -81,13 +100,31 @@ describe("bulk partial failure", () => {
       expect(screen.getByTestId(TEST_IDS.bulkBar).textContent).toContain("1 selected"),
     )
     expect(screen.getByTestId(TEST_IDS.bulkError).textContent).toContain(FAILING_ID)
-    // The engine agrees with the bar: the surviving tick is a whole row, not the
-    // indeterminate box a short cell range leaves behind.
+    // The engine agrees with the bar, read on BOTH sides. The failure's box is a whole
+    // row, not the indeterminate box a short cell range leaves behind — and a succeeded
+    // row is unticked, which is the reading that distinguishes a prune from a no-op:
+    // select-all had already ticked the failure, so its box alone proves nothing.
     expect(
       document
         .querySelector(`[data-pretable-row-id="${FAILING_ID}"] [data-pretable-row-select]`)
         ?.getAttribute("aria-checked"),
     ).toBe("true")
+    expect(
+      document
+        .querySelector(`[data-pretable-row-id="${SUCCEEDED_ID}"] [data-pretable-row-select]`)
+        ?.getAttribute("aria-checked"),
+    ).toBe("false")
+
+    // And it HOLDS through the reconciling refresh. `onTickedChange` mirrors the grid's
+    // selection back into the bar's count, so an unpruned engine would re-arm the bar at
+    // four the moment the next answer landed — after the assertions above had passed.
+    await waitFor(() => expect(listed).toBeGreaterThan(listedBeforeRun))
+    expect(screen.getByTestId(TEST_IDS.bulkBar).textContent).toContain("1 selected")
+    expect(
+      document
+        .querySelector(`[data-pretable-row-id="${SUCCEEDED_ID}"] [data-pretable-row-select]`)
+        ?.getAttribute("aria-checked"),
+    ).toBe("false")
 
     // Retry: exactly one further POST, and it is the failure.
     posted = []
@@ -100,11 +137,65 @@ describe("bulk partial failure", () => {
     render(<ListPage />)
     await tickEveryLoadedRow()
     await screen.findByTestId(TEST_IDS.bulkBar)
-    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
+    // DISMISS. This test wants the question, not the answer: confirming would launch
+    // four real POSTs whose completion handler fires a refresh, and those land after
+    // the assertions — against a `fetch` that `afterEach` has already unstubbed.
     const confirmMock = vi.mocked(window.confirm)
+    confirmMock.mockReturnValue(false)
+    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
     expect(confirmMock).toHaveBeenCalledTimes(1)
     const message = String(confirmMock.mock.calls[0]?.[0] ?? "")
     expect(message).toContain(String(RECORDS.length))
     expect(message).toMatch(/selected|loaded/i)
+    expect(posted).toHaveLength(0)
+  })
+
+  /**
+   * Read through the status bar because that is where `paused` reaches the DOM: the bar
+   * quotes an "Updated <time>" instant only while polling is suspended, and shows
+   * nothing while it is live. The property under test is that the suspension covers the
+   * whole run — the bar's failure list is component state, and a tick that empties
+   * `ticked` mid-run unmounts the bar and takes that list with it.
+   */
+  it("suspends browse polling from the first POST until the run completes", async () => {
+    let release = (): void => {}
+    postGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    render(<ListPage />)
+    await tickEveryLoadedRow()
+    await screen.findByTestId(TEST_IDS.bulkBar)
+    expect(screen.queryByTestId(TEST_IDS.asOf)).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
+    await screen.findByTestId(TEST_IDS.asOf)
+
+    postGate = undefined
+    release()
+    await waitFor(() => expect(posted).toHaveLength(RECORDS.length))
+    // And it is a suspension, not a stop: polling resumes on completion.
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.asOf)).toBeNull())
+  })
+
+  /**
+   * The completion refresh is redundant while polling is live — resuming from the
+   * suspension above already ticks. Turning polling OFF is what makes it the only thing
+   * that would ever fetch the post-write answer, so it is the only setting in which the
+   * call can be observed at all.
+   */
+  it("reconciles the grid after a run with live polling off", async () => {
+    render(<ListPage />)
+    await tickEveryLoadedRow()
+    await screen.findByTestId(TEST_IDS.bulkBar)
+
+    fireEvent.click(screen.getByTestId(TEST_IDS.liveToggle))
+    // Paused, and settled: the stamp appears once `live` is off, and any tick that was
+    // already in flight has landed by then — so `listed` stops moving on its own here.
+    await screen.findByTestId(TEST_IDS.asOf)
+    const listedWhilePaused = listed
+
+    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
+    await waitFor(() => expect(posted).toHaveLength(RECORDS.length))
+    await waitFor(() => expect(listed).toBeGreaterThan(listedWhilePaused))
   })
 })

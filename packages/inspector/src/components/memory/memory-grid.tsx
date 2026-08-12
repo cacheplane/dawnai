@@ -250,6 +250,12 @@ function toRow(record: MemoryRecord): GridRow {
  * the page groups by namespace, and `hideGroupedColumns` takes `namespace` back out
  * again — so a short span leaves the box `mixed`, the row absent from
  * `onRowSelectionChange`, and the bulk bar gone with it.
+ *
+ * Which makes `first` the whole of the correctness here, and `last` inert: the surface
+ * widens a range to every data column as soon as EITHER end is the checkbox column, and
+ * the checkbox column always leads `getColumns()`. A wrong `last` therefore cannot be
+ * caught by any test. Read it from the same list anyway — the day the checkbox column
+ * stops leading, `last` is what has to be right.
  */
 export function buildRowSelection(
   rowIds: readonly string[],

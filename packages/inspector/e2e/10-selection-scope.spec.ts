@@ -73,8 +73,14 @@ async function drawnSelection(page: Page): Promise<{ id: string; selected: boole
     )
 }
 
-// D1-SELECT-01..04. The header checkbox says what it covers, an append does not corrupt
-// the selection, and a query change clears it.
+// One criterion per test, in file order: the header checkbox says what it covers
+// (D1-SELECT-01), an append does not corrupt the selection (-03), and a query change
+// clears it (-02).
+//
+// NOT 04. That one is "a retry after a partial failure re-attempts the failures only",
+// and reaching it needs a mutation that fails for one id and succeeds for the others —
+// an outcome this lane cannot stage against a real store. It is covered against a
+// stubbed route in test/components/bulk-safety.test.tsx instead.
 //
 // This file does NOT mutate the store: the three tests select, page and filter, all of
 // which are client state. It runs after scenario 9 in a full suite, so it reads the

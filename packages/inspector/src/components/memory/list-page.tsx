@@ -9,7 +9,7 @@ import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BrowseErrorBanners, type BrowseErrorEntry, BrowseStatusBar } from "./browse-chrome"
 import { loadMoreState } from "./browse-window"
-import { BulkBar } from "./bulk-bar"
+import { BulkBar, type BulkOutcome } from "./bulk-bar"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { LoadMoreFooter } from "./load-more-footer"
@@ -257,9 +257,13 @@ export function ListPage() {
   }, [filters, sort, namespace, view, timelineSince])
 
   // Search replaces the browse view entirely, so browse stops polling behind it. A bulk
-  // run suspends it too: the writes go one at a time, and a tick landing between two of
-  // them would swap the rows the run is still working through — and with them the
-  // `records` the bar reads to decide which ids are candidates.
+  // run suspends it too, for a narrower reason than "the rows must hold still": the bar
+  // below is unmounted at `ticked.length === 0`, and the per-id failure list lives in
+  // ITS state. A tick landing between two of the run's writes can drop every ticked row
+  // from the answer — forgetting the whole loaded page does exactly that — which empties
+  // `ticked` through `onTickedChange` and destroys the only channel that would have said
+  // what failed. This does NOT make the run atomic: a request already in flight when the
+  // run starts still lands. It bounds the window to one that is already open.
   const browse = useMemoryBrowse({ query: browseQuery, live: live && !query && !bulkRunning })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
@@ -344,7 +348,7 @@ export function ListPage() {
   }, [])
   const handleBulkStart = useCallback(() => setBulkRunning(true), [])
   const handleBulkDone = useCallback(
-    ({ failed }: { succeeded: string[]; failed: string[] }) => {
+    ({ failed }: BulkOutcome) => {
       // Succeeded ids leave the selection; failures stay, with their per-id errors, so
       // the obvious next action retries exactly what did not happen.
       // The DRAWN columns, read at completion: grouping and the checkbox column both
@@ -356,11 +360,20 @@ export function ListPage() {
           grid.getColumns().map((column) => column.id),
         ),
       )
+      // Both writers, on purpose. The line above already reaches `ticked` the long way
+      // round — the engine emits its new row selection and `onTickedChange` mirrors it
+      // back — so this one is normally redundant, and no test can tell it apart. It is
+      // here so the prune does not RIDE on that emit: this is the one write that says
+      // what the RUN concluded rather than what the grid happens to be drawing.
       setTicked(failed)
       setBulkRunning(false)
-      // One refresh on completion reconciles the grid: deleted rows leave, approved
-      // rows change status in place. The datasetKey is unchanged, so the surviving
-      // selection is preserved deliberately.
+      // Reconcile the grid: deleted rows leave, approved rows change status in place.
+      // The datasetKey is unchanged, so the surviving selection is preserved
+      // deliberately. This exists for the LIVE-OFF case, which `setBulkRunning(false)`
+      // cannot cover: clearing that flag only resumes polling when `live` is also on,
+      // and with it off nothing else would ever fetch the post-write answer. With live
+      // on the resume tick beats this call and single flight drops it — the refresh
+      // still happens, just not because of this line.
       requestRefresh()
     },
     [requestRefresh],
