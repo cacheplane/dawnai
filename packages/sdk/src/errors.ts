@@ -78,6 +78,11 @@ export const DAWN_ERRORS = {
     title: "Thread access policy failed to load",
     docsPath: "/docs/thread-access#load-failures",
   },
+  DAWN_E3004: {
+    code: "DAWN_E3004",
+    title: "Middleware failed to load",
+    docsPath: "/docs/middleware#when-middleware-fails-to-load",
+  },
   DAWN_E4001: {
     code: "DAWN_E4001",
     title: "Model provider package missing",

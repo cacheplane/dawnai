@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -6,7 +5,7 @@ import type { DawnConfig, RouteManifest } from "@dawn-ai/core"
 import { providerPackages } from "@dawn-ai/langchain"
 import { type BuiltInModelProviderId, inferProvider } from "@dawn-ai/sdk"
 
-import { middlewareCandidatePaths } from "../../dev/middleware.js"
+import { findMiddlewareFile } from "../../dev/middleware-node.js"
 import { loadDawnConfig } from "../../node-config.js"
 import { CliError, writeLine } from "../../output.js"
 import { scanRouteProviders } from "../../runtime/collect-route-providers.js"
@@ -64,13 +63,13 @@ export async function emitWebRuntimeArtifacts(
   for (const route of manifest.routes) {
     discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
   }
-  // Same candidate list, same precedence order, as the dynamic probe. The
-  // manifest carries the result, and `createRuntimeFetchHandler` prefers
-  // `modules.middleware` — which is how app.mjs mounts app middleware without
-  // a filesystem probe it could not perform on the edge.
-  const middlewareFile = middlewareCandidatePaths(appRoot).find((candidate) =>
-    existsSync(candidate),
-  )
+  // The same resolution the dynamic probe performs — shared, not re-derived,
+  // so a present-but-unreadable middleware file cannot drop out of the edge
+  // manifest and ship an ungated bundle. The manifest carries the result, and
+  // `createRuntimeFetchHandler` prefers `modules.middleware` — which is how
+  // app.mjs mounts app middleware without a filesystem probe it could not
+  // perform on the edge.
+  const middlewareFile = findMiddlewareFile(appRoot)
 
   const modulesPath = join(outputDir, "modules.edge.mjs")
   const modulesEntry = emitEdgeModulesFile(

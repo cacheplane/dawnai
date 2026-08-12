@@ -481,10 +481,10 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const handler = await createHandler(await fixtureApp({ "src/middleware.ts": ECHO_MIDDLEWARE }))
     const threadId = "t-gated"
 
-    // Prove the fixture middleware LOADED before reading anything into a 200.
-    // loadMiddleware swallows every import error and returns undefined, so an
-    // unloadable fixture serves 200s indistinguishable from a handler that
-    // never calls runMiddleware — and this GET would look gated when it is not.
+    // Prove the fixture middleware RAN before reading anything into a 200. An
+    // unloadable fixture now fails the boot rather than silently yielding no
+    // middleware, but a handler that never calls runMiddleware would still serve
+    // 200s here and make this GET look gated when it is not.
     // This pair is also the "identical to the POST stream" gating assertion.
     const streamRejected = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
     expect(streamRejected.status).toBe(403)

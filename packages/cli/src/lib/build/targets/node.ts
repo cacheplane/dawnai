@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
-import { middlewareCandidatePaths } from "../../dev/middleware.js"
+import { findMiddlewareFile } from "../../dev/middleware-node.js"
 import { writeLine } from "../../output.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
 import {
@@ -88,12 +88,14 @@ export const nodeTarget: BuildTarget = {
     for (const route of manifest.routes) {
       discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
     }
-    // Middleware probe: middlewareCandidatePaths is the SAME list, in the
-    // SAME precedence order, the dynamic `loadMiddleware` walks — the static
-    // build can never bind a different file than dev would.
-    const middlewareFile = middlewareCandidatePaths(appRoot).find((candidate) =>
-      existsSync(candidate),
-    )
+    // Middleware probe: `findMiddlewareFile` is the SAME resolution, over the
+    // SAME candidate list in the SAME precedence order, that the dynamic
+    // `loadMiddleware` performs — the static build can never bind a different
+    // file than dev would. It is shared rather than a local `existsSync` scan
+    // because `existsSync` answers `false` for EVERY error, so a middleware
+    // file that is present but unreadable would drop out of the manifest here
+    // and the built server would run ungated.
+    const middlewareFile = findMiddlewareFile(appRoot)
 
     const modulesPath = join(buildDir, "modules.mjs")
     await writeFile(
