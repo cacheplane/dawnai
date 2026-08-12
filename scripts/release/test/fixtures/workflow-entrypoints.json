@@ -71,7 +71,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "fetch-depth": 0
                 }
@@ -103,7 +103,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -144,7 +144,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -238,7 +238,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -255,7 +255,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -304,7 +304,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -321,7 +321,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -390,7 +390,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -407,7 +407,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -449,7 +449,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -466,7 +466,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -515,7 +515,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -532,7 +532,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -584,7 +584,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -601,7 +601,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -665,7 +665,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -682,7 +682,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -784,7 +784,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -801,7 +801,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -926,7 +926,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -943,7 +943,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -985,7 +985,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -1002,7 +1002,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -1146,7 +1146,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -1163,7 +1163,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -1298,7 +1298,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "fetch-depth": 1
                 }
@@ -1322,7 +1322,7 @@
                 "name": "Claude review",
                 "id": "claude",
                 "if": "steps.preflight.outputs.skip != 'true'",
-                "uses": "anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342",
+                "uses": "anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79",
                 "with": {
                   "github_token": "${{ secrets.GITHUB_TOKEN }}",
                   "anthropic_api_key": "${{ secrets.ANTHROPIC_API_KEY }}",
@@ -1387,14 +1387,14 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
                 "name": "Initialize CodeQL",
-                "uses": "github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+                "uses": "github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3",
                 "with": {
                   "languages": "javascript-typescript",
                   "build-mode": "none"
@@ -1405,7 +1405,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Perform CodeQL Analysis",
-                "uses": "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+                "uses": "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3",
                 "with": {
                   "category": "/language:javascript-typescript"
                 }
@@ -1448,7 +1448,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -1537,7 +1537,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
               }
             },
             {
@@ -1554,7 +1554,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -1643,7 +1643,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "fetch-depth": 0,
                   "ref": "main",
@@ -1665,7 +1665,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -1749,7 +1749,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "fetch-depth": 0
                 }
@@ -1769,7 +1769,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "cache": "pnpm"
@@ -1794,7 +1794,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup Node.js for publishing",
-                "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.17.0",
                   "registry-url": "https://registry.npmjs.org"
@@ -1937,7 +1937,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Checkout",
-                "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "persist-credentials": false
                 }
@@ -1947,7 +1947,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Run Scorecard",
-                "uses": "ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a",
+                "uses": "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc",
                 "with": {
                   "results_file": "scorecard.sarif",
                   "results_format": "sarif",
@@ -1959,7 +1959,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Upload SARIF",
-                "uses": "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9",
+                "uses": "github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3",
                 "with": {
                   "sarif_file": "scorecard.sarif"
                 }

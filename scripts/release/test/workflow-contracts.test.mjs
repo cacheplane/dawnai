@@ -34,8 +34,8 @@ const EXECUTABLE_ALLOWLIST = JSON.parse(
   await readBoundedFixture(EXECUTABLE_ALLOWLIST_PATH, { root: ROOT }),
 )
 const LEGACY_SAFE_ENTRYPOINTS = new Set([
-  "step-uses:actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-  "step-uses:actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+  "step-uses:actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+  "step-uses:actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   "step-uses:pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
   "run:pnpm install --frozen-lockfile",
   "run:pnpm ci:validate",
@@ -295,7 +295,7 @@ test("testing-windows has one exact safe descriptor and executable classificatio
         classification: "safe",
         descriptor: {
           name: "Checkout",
-          uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
         },
       },
       {
@@ -310,7 +310,7 @@ test("testing-windows has one exact safe descriptor and executable classificatio
         classification: "safe",
         descriptor: {
           name: "Setup Node.js",
-          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version": "24.17.0", cache: "pnpm" },
         },
       },

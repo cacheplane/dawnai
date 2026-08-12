@@ -7,9 +7,9 @@ const approvedKindNodeImage =
   "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
 const approvedReaperImage =
   "docker.io/alpine/k8s:1.35.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807"
-const checkoutAction = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+const checkoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 const pnpmSetupAction = "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
-const nodeSetupAction = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+const nodeSetupAction = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
 const uploadArtifactAction = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 function githubExpression(expression: string): string {

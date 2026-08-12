@@ -18,7 +18,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -34,7 +34,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -50,7 +50,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -186,7 +186,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -202,7 +202,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -234,7 +234,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -250,7 +250,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -290,7 +290,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -306,7 +306,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -338,7 +338,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -354,7 +354,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -394,7 +394,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -410,7 +410,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -450,7 +450,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -466,7 +466,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -538,7 +538,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -554,7 +554,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -610,7 +610,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -706,7 +706,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -722,7 +722,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -810,7 +810,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -826,7 +826,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -946,7 +946,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -962,7 +962,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1018,7 +1018,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1052,7 +1052,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1068,7 +1068,7 @@
         "stepIndex": 2,
         "step": "Claude review",
         "kind": "step-uses",
-        "value": "anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342"
+        "value": "anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79"
       },
       {
         "classification": "safe",
@@ -1086,7 +1086,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1094,7 +1094,7 @@
         "stepIndex": 1,
         "step": "Initialize CodeQL",
         "kind": "step-uses",
-        "value": "github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
+        "value": "github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3"
       },
       {
         "classification": "safe",
@@ -1102,7 +1102,7 @@
         "stepIndex": 2,
         "step": "Perform CodeQL Analysis",
         "kind": "step-uses",
-        "value": "github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
+        "value": "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3"
       }
     ],
     "publish-chart.yml": [
@@ -1112,7 +1112,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1146,7 +1146,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1162,7 +1162,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1204,7 +1204,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1220,7 +1220,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1262,7 +1262,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1278,7 +1278,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1302,7 +1302,7 @@
         "stepIndex": 5,
         "step": "Setup Node.js for publishing",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "publication",
@@ -1384,7 +1384,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1392,7 +1392,7 @@
         "stepIndex": 1,
         "step": "Run Scorecard",
         "kind": "step-uses",
-        "value": "ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a"
+        "value": "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc"
       },
       {
         "classification": "safe",
@@ -1400,7 +1400,7 @@
         "stepIndex": 2,
         "step": "Upload SARIF",
         "kind": "step-uses",
-        "value": "github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9"
+        "value": "github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3"
       }
     ]
   }

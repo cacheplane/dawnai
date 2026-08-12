@@ -42,7 +42,7 @@ const EXPECTED_RELEASE_WORKFLOW = {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "fetch-depth": 0 },
         },
         {
@@ -52,14 +52,14 @@ const EXPECTED_RELEASE_WORKFLOW = {
         },
         {
           name: "Setup Node.js",
-          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version": "24.17.0", cache: "pnpm" },
         },
         { name: "Install", run: "pnpm install --frozen-lockfile" },
         { name: "Validate Release Candidate", run: "pnpm ci:validate" },
         {
           name: "Setup Node.js for publishing",
-          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: {
             "node-version": "24.17.0",
             "registry-url": "https://registry.npmjs.org",
