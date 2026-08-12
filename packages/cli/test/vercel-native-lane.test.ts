@@ -5293,6 +5293,43 @@ describe("runtime log scan", () => {
     })
   })
 
+  // Vercel finalizes a request row AFTER the invocation returns: responseStatusCode
+  // goes 0 -> 200 and cache "" -> "MISS". That rewrite is a new fingerprint for the
+  // SAME row id, and when the row carries the marker it used to be counted twice,
+  // failing a healthy deployment purely on poll timing. The sibling test above
+  // mutates a row too, but only a marker-less one, so it never caught this.
+  test("counts one marker row across the versions Vercel writes as a request settles", async () => {
+    const startMs = 1_800_000_000_000
+    let current = startMs
+    const clock = {
+      now: () => current,
+      sleep: async (milliseconds: number) => {
+        current += milliseconds
+      },
+    }
+    const inFlight = validLogRow({ cache: "", id: "request-marker", responseStatusCode: 0 })
+    const settled = validLogRow({ cache: "MISS", id: "request-marker", responseStatusCode: 200 })
+    const result = await pollNativeVercelRuntimeLogs({
+      clock,
+      deploymentId,
+      logBoundary: {
+        logs: async () => {
+          const elapsed = current - startMs
+          if (elapsed < 4_000) return ""
+          return `${JSON.stringify(elapsed < 10_000 ? inFlight : settled)}\n`
+        },
+      },
+      logMarker,
+      orgId: "team_Test123",
+      projectId,
+      queryStartMs: startMs,
+    })
+    // Both versions are still reported as distinct row versions -- the quiet-interval
+    // logic depends on seeing them -- but they are ONE marker occurrence.
+    expect(result.markerOccurrences).toBe(1)
+    expect(result.uniqueRowVersions).toBe(2)
+  })
+
   test("rejects duplicate marker versions, child failure, and the 180-second deadline", async () => {
     const startMs = 1_800_000_000_000
     const base = {
@@ -5374,10 +5411,18 @@ describe("runtime log scan", () => {
     expect(calls).toBe(2)
   })
 
+  // A later version of one row is the same request re-reported, so a benign rewrite
+  // must NOT count twice (see the settling test above). What must still reject is a
+  // genuine second occurrence: the row's own logs growing to carry the marker twice.
   test("counts a changed version of the same marker row and rejects the second occurrence", async () => {
     const startMs = 1_800_000_000_000
     let current = startMs
     let calls = 0
+    const markerEntry = (version: number) => ({
+      level: "info",
+      message: `dawn-vercel-fixture-log ${logMarker}`,
+      context: { version },
+    })
     await expect(
       pollNativeVercelRuntimeLogs({
         clock: {
@@ -5392,13 +5437,7 @@ describe("runtime log scan", () => {
             calls += 1
             return `${JSON.stringify(
               validLogRow({
-                logs: [
-                  {
-                    level: "info",
-                    message: `dawn-vercel-fixture-log ${logMarker}`,
-                    context: { version: calls },
-                  },
-                ],
+                logs: calls === 1 ? [markerEntry(1)] : [markerEntry(1), markerEntry(2)],
               }),
             )}\n`
           },
