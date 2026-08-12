@@ -1,22 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  // The Playwright lane, type-checked as its OWN project rather than as more entries in
-  // `tsconfig.json`'s `include`.
-  //
-  // Two reasons it cannot just live there. `next build` type-checks whatever that file
-  // includes, and this package ships `.next/standalone` to npm — so a type error in a
-  // spec would fail the published build. And the lane imports `src/components/memory/
-  // test-ids`, which is a test-only contract module; the product build has no business
-  // resolving it.
-  //
-  // Without this project nothing checks these files at all: Playwright STRIPS types, it
-  // does not check them, so a spec's type error reaches the runner as a collection
-  // failure with no line number. `lint` already covers the same paths.
   "extends": "./tsconfig.json",
-  "compilerOptions": {
-    // The default `.tsbuildinfo` path is derived from this file's name, so the two
-    // projects do not clobber each other's cache.
-    "incremental": true
-  },
+  "compilerOptions": { "incremental": true },
   "include": ["e2e/**/*.ts", "playwright.config.ts"]
 }

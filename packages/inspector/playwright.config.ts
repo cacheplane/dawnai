@@ -1,3 +1,19 @@
+/**
+ * Type-checking for this lane lives in `tsconfig.e2e.json`, a separate project
+ * rather than more entries in `tsconfig.json`'s `include`. Two reasons it cannot
+ * just live there: `next build` type-checks whatever that file includes and this
+ * package ships `.next/standalone` to npm, so a type error in a spec would fail
+ * the published build; and the lane imports `src/components/memory/test-ids`, a
+ * test-only contract module the product build has no business resolving.
+ *
+ * Without that project nothing checks these files at all — Playwright STRIPS
+ * types, it does not check them, so a spec's type error reaches the runner as a
+ * collection failure with no line number.
+ *
+ * The config itself carries no comments: `scripts/check-build-cache-config.mjs`
+ * reads every `tsconfig*.json` with a strict `JSON.parse`, and no other tsconfig
+ * in this repo uses JSONC.
+ */
 import { defineConfig } from "@playwright/test"
 
 const port = process.env.INSPECTOR_E2E_PORT ?? "3919"

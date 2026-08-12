@@ -1,3 +1,9 @@
+/**
+ * This file and the `test/seed-store.ts` it pulls are loaded under bare `node`,
+ * whose ESM resolver does no extension inference — so their relative imports
+ * must carry `.ts`, which is why the package enables
+ * `allowImportingTsExtensions`.
+ */
 // Playwright's `webServer` command. Wipes and re-seeds the browse fixture, then execs
 // the BUILT standalone server — the same artifact `dawn inspect` ships, which is the
 // only thing worth asserting against. Run under Node 24: this file is TypeScript and
