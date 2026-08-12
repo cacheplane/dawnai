@@ -5,6 +5,7 @@ import {
   asDrawn,
   browseRegion,
   DRAWN_FIRST_WINDOW,
+  drainSeededFetchErrors,
   expectDrawnRows,
   expectPhase,
   grid,
@@ -16,40 +17,9 @@ import {
   waitOnePollPeriod,
 } from "./helpers"
 
-/**
- * What the browser logs for a browse response the page asked for and the server refused.
- * Every test below injects one deliberately, so this line is the SUBJECT here rather than
- * the defect the `consoleErrors` fixture exists to catch.
- *
- * The ENDPOINT is half the test, not decoration: Chromium's message text names only the
- * status, so a shape-only match would drain an unrelated 500 from any other route as
- * readily as the injected one. The `consoleErrors` fixture appends the location URL for
- * exactly this.
- */
-function isSeededBrowseFailure(line: string): boolean {
-  return /Failed to load resource: .*status of 500/.test(line) && line.includes("/api/memory/list")
-}
-
-/**
- * Account for the console errors this spec CAUSED, and leave everything else for the
- * fixture to fail on.
- *
- * Not a waiver. The gate is the `consoleErrors` fixture's own teardown check, and it
- * reads the same array this drains — so anything not matching the injected shape is
- * re-asserted here (reddening at the drain, with the offending line in the message) and
- * anything logged after the drain still reaches the fixture untouched.
- *
- * `expected` is a floor, not a formality: a spec whose fault injection silently stopped
- * matching would produce NO console error, and a drain that merely filtered would let
- * that pass while proving nothing about the failure path it claims to exercise.
- */
-function drainSeededFetchErrors(consoleErrors: string[], expected: number): void {
-  const seeded = consoleErrors.filter(isSeededBrowseFailure)
-  const unexpected = consoleErrors.filter((line) => !isSeededBrowseFailure(line))
-  consoleErrors.length = 0
-  expect(unexpected, "console errors this spec did not inject").toEqual([])
-  expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
-}
+// Every test below injects a browse failure deliberately, so `drainSeededFetchErrors`
+// accounts for the console lines this spec CAUSED — they are its subject rather than the
+// defect the `consoleErrors` fixture exists to catch.
 
 // D1-DATA-06, D1-UX-01, D1-UX-03. A failed refresh or append never discards fulfilled
 // records, the failure is visible in its OWN banner slot, and retry is safe.

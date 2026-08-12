@@ -168,7 +168,7 @@ export async function rowIdsAndTotal(page: Page): Promise<{ ids: string[]; total
   )
 }
 
-const GROUP_ROW_ID_PREFIX = "__group__:"
+export const GROUP_ROW_ID_PREFIX = "__group__:"
 
 /** Pretable's group row id, mirrored: `__group__:<columnId>=s:<value>` with `%`, `/`
  *  and `=` percent-escaped (grid-core `makeGroupId`/`escapeGroupKey`). */
@@ -238,6 +238,100 @@ export function recordCells(page: Page, columnId: string): Locator {
   return grid(page)
     .locator("[data-pretable-row-id]:not([data-pretable-group-row])")
     .locator(`[data-pretable-cell][data-pretable-column-id="${columnId}"]`)
+}
+
+export interface FocusReport {
+  /** `""` when DOM focus is not on a row — on `<body>`, or on the viewport itself. */
+  readonly rowId: string
+  /** Read off the active element ITSELF, so a non-empty value already means the focused
+   *  node IS a cell rather than something inside one. It also excludes the row-select
+   *  cell, which carries `data-pretable-cell` too and would otherwise satisfy a bare "on
+   *  a data cell" claim. */
+  readonly columnId: string
+  readonly inGrid: boolean
+  readonly onBody: boolean
+}
+
+/**
+ * Where DOM focus is, relative to the browse grid — one page evaluation, so every field
+ * answers for the same instant. Two locator reads would carry a driver round trip between
+ * them and could straddle a commit.
+ *
+ * The ADDRESS, not merely the shape. A report of containment plus "is a cell" is
+ * identical before and after a dataset pivot, so an expectation written against it cannot
+ * tell "focus moved to the head of the NEW result" — which is what design §4.2 promises —
+ * from focus that was re-asserted at the same coordinates over different rows.
+ */
+export async function focusReport(page: Page): Promise<FocusReport> {
+  return browseRegion(page).evaluate((region) => {
+    const active = document.activeElement as HTMLElement | null
+    const viewport = region.querySelector("[data-pretable-scroll-viewport]")
+    return {
+      rowId: active?.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
+      columnId: active?.getAttribute("data-pretable-column-id") ?? "",
+      inGrid: viewport?.contains(active ?? null) ?? false,
+      onBody: active === document.body,
+    }
+  })
+}
+
+/**
+ * Put DOM focus on one record's cell in `columnId` and confirm it landed there.
+ *
+ * The column is a parameter with no default because the row-select column is the trap:
+ * it carries `data-pretable-cell` too, and clicking it ticks a row and focuses a button
+ * instead of moving the grid's own cell focus. Naming the column makes every caller say
+ * which one it meant.
+ *
+ * The Escape is not incidental. Pretable routes a data-cell click to `onRowActivate` and
+ * this page opens the detail sheet from it, so every cell click here also opens a sheet
+ * that would otherwise own focus for the rest of the test. The sheet restores focus to
+ * its opener from an unmount layout effect, which is why the read after it is POLLED: a
+ * one-shot read in the same tick as `toHaveCount(0)` sees `<body>`.
+ */
+export async function focusRecordCell(page: Page, rowId: string, columnId: string): Promise<void> {
+  await grid(page)
+    .locator(`[data-pretable-row-id="${rowId}"]`)
+    .locator(`[data-pretable-cell][data-pretable-column-id="${columnId}"]`)
+    .click()
+  await page.keyboard.press("Escape")
+  await expect(page.getByLabel("Close detail")).toHaveCount(0)
+  await expect
+    .poll(() => focusReport(page))
+    .toEqual({ rowId, columnId, inGrid: true, onBody: false })
+}
+
+/**
+ * What the browser logs for a browse response a spec made the server refuse.
+ *
+ * The ENDPOINT is half the match, not decoration: Chromium's message text names only the
+ * status, so a shape-only match would drain an unrelated 500 from any other route as
+ * readily as the injected one. The `consoleErrors` fixture appends the location URL for
+ * exactly this.
+ */
+export function isSeededBrowseFailure(line: string): boolean {
+  return /Failed to load resource: .*status of 500/.test(line) && line.includes(BROWSE_ENDPOINT)
+}
+
+/**
+ * Account for the console errors a spec CAUSED, and leave everything else for the
+ * `consoleErrors` fixture to fail on.
+ *
+ * Not a waiver. The gate is that fixture's own teardown check, and it reads the same
+ * array this drains — so anything not matching the injected shape is re-asserted here
+ * (reddening at the drain, with the offending line in the message) and anything logged
+ * after the drain still reaches the fixture untouched.
+ *
+ * `expected` is a floor, not a formality: a spec whose fault injection silently stopped
+ * matching would produce NO console error, and a drain that merely filtered would let
+ * that pass while proving nothing about the failure path it claims to exercise.
+ */
+export function drainSeededFetchErrors(consoleErrors: string[], expected: number): void {
+  const seeded = consoleErrors.filter(isSeededBrowseFailure)
+  const unexpected = consoleErrors.filter((line) => !isSeededBrowseFailure(line))
+  consoleErrors.length = 0
+  expect(unexpected, "console errors this spec did not inject").toEqual([])
+  expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
 }
 
 /** A floor on how much of the window the virtualizer has to actually draw. Without one,
@@ -598,3 +692,75 @@ export const SCENARIO_9_STABLE_DRAWN_PREFIX = (() => {
   }
   return index
 })()
+
+// `a11y-focus.spec.ts`'S PERMANENT MUTATION OF THE SHARED FIXTURE.
+//
+// The lane's second data-driven removal, derived here for scenario 9's reason and by its
+// discipline: `playwright.config` runs one worker in file-path order, so every spec whose
+// filename sorts after `a11y-focus.spec.ts` inherits this write, and the only way such a
+// spec can compute the store it will actually meet is if the choice is made HERE rather
+// than picked off the page inside that spec and left in a comment.
+
+/**
+ * Where in the drawn projection that spec removes a row: the midpoint of the region every
+ * projection of this fixture agrees on.
+ *
+ * DEEP and MODE-INDEPENDENT, and the derivation is chosen for both at once. Deep, because
+ * the claim being settled is that a repair moved focus to a NEIGHBOUR rather than to the
+ * head of the model, and those two are only distinguishable well below what a viewport at
+ * rest draws. Mode-independent, because two fixture states reach that spec — a whole-suite
+ * run arrives after scenario 9's two writes, a solo run re-seeds and meets the pristine
+ * store — and inside `SCENARIO_9_STABLE_DRAWN_PREFIX` both name the same rows, so one
+ * constant addresses both. The MIDPOINT rather than an offset from either end because a
+ * drawn WINDOW around this row then lies inside the agreed region too, which is what lets
+ * that spec pin the rows around it and not merely the row itself.
+ */
+export const A11Y_FOCUS_DOOMED_DRAWN_INDEX = Math.floor(SCENARIO_9_STABLE_DRAWN_PREFIX / 2)
+
+/**
+ * The record `a11y-focus.spec.ts` forgets.
+ *
+ * Its two drawn NEIGHBOURS have to be records as well, not just this row: pretable repairs
+ * focus by clamping to the same visible index, so the row the repair lands on is one of
+ * the two, and a group header there would make that spec's expectation a claim about a
+ * header it never focused. A seed change that moved a group boundary onto this position
+ * fails here, at module load, rather than as an unreadable row diff.
+ */
+export const A11Y_FOCUS_FORGOTTEN_ID = (() => {
+  const around = DRAWN_FIRST_WINDOW.slice(
+    A11Y_FOCUS_DOOMED_DRAWN_INDEX - 1,
+    A11Y_FOCUS_DOOMED_DRAWN_INDEX + 2,
+  )
+  if (around.length !== 3 || around.some((id) => id.startsWith(GROUP_ROW_ID_PREFIX))) {
+    throw new Error(
+      `drawn rows ${A11Y_FOCUS_DOOMED_DRAWN_INDEX - 1}..${A11Y_FOCUS_DOOMED_DRAWN_INDEX + 1} are ` +
+        `not three records: ${around.join(", ")}`,
+    )
+  }
+  return around[1] as string
+})()
+
+/**
+ * The fixture as `a11y-focus.spec.ts` leaves it, as data — the input a later spec's
+ * `seedIdsInDefaultOrder` / `seedRecordsMatching` call should take.
+ *
+ * Composed on top of `browseSeedRecordsAfterScenario9()`, so its `updatedAt` sentinel
+ * carries the same caveat: the ORDER this view produces is real and the approved record's
+ * rendered `updated` cell is not.
+ */
+export function browseSeedRecordsAfterA11yFocus(): readonly MemoryRecord[] {
+  return browseSeedRecordsAfterScenario9().filter((record) => record.id !== A11Y_FOCUS_FORGOTTEN_ID)
+}
+
+/**
+ * The drawn projection once that spec's write has landed.
+ *
+ * NOT `DRAWN_FIRST_WINDOW_AFTER_A11Y_FOCUS[i] === DRAWN_FIRST_WINDOW_AFTER_SCENARIO_9[i+1]`
+ * past the removal: the refreshed window backfills one record to stay at
+ * `BROWSE_PAGE_SIZE`, and grouping files that record under its own namespace rather than
+ * at the end, so rows both above and below the removal can move. Recomputed rather than
+ * spliced for exactly that reason.
+ */
+export const DRAWN_FIRST_WINDOW_AFTER_A11Y_FOCUS: readonly string[] = asDrawn(
+  seedIdsInDefaultOrder(browseSeedRecordsAfterA11yFocus()).slice(0, BROWSE_PAGE_SIZE),
+)

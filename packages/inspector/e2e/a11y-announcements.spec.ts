@@ -3,6 +3,7 @@ import { BROWSE_PAGE_SIZE } from "../test/seed"
 import { expect, test } from "./fixtures"
 import {
   applySetFilter,
+  drainSeededFetchErrors,
   expectPhase,
   liveRegionText,
   loadMore,
@@ -25,25 +26,6 @@ import {
  * against ONE sample — two successive polls can each be satisfied by a different sentence
  * and jointly prove nothing about either.
  */
-
-/** What the browser logs for the browse response the first test refuses. Mirrors
- *  `13-accessibility.spec.ts`: the ENDPOINT is half the match, because Chromium's message
- *  text names only the status. */
-function isSeededBrowseFailure(line: string): boolean {
-  return /Failed to load resource: .*status of 500/.test(line) && line.includes("/api/memory/list")
-}
-
-/** Account for the console errors this spec CAUSED and leave everything else for the
- *  fixture's own teardown gate. `expected` is a floor, not a formality: a fault injection
- *  that silently stopped matching would log nothing, and a drain that merely filtered
- *  would let that pass while proving nothing about the path it claims to walk. */
-function drainSeededFetchErrors(consoleErrors: string[], expected: number): void {
-  const seeded = consoleErrors.filter(isSeededBrowseFailure)
-  const unexpected = consoleErrors.filter((line) => !isSeededBrowseFailure(line))
-  consoleErrors.length = 0
-  expect(unexpected, "console errors this spec did not inject").toEqual([])
-  expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
-}
 
 /**
  * Every live region in the document, each reduced to WHO owns it.

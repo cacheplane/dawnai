@@ -7,8 +7,10 @@ import {
 } from "../test/seed"
 import { expect, test } from "./fixtures"
 import {
-  browseRegion,
+  drainSeededFetchErrors,
   expectPhase,
+  focusRecordCell,
+  focusReport,
   grid,
   liveRegionText,
   loadMore,
@@ -28,56 +30,6 @@ import {
  *  and every later poll is `refreshing`: a missed window is a hard failure that no
  *  auto-retry can absorb, which is what makes the margin worth its seconds. */
 const HOLD_MS = 5_000
-
-/** What the browser logs for the browse response this spec makes the server refuse.
- *  Mirrors `08-refresh-append-failure.spec.ts`: the ENDPOINT is half the match,
- *  because Chromium's message text names only the status. */
-function isSeededBrowseFailure(line: string): boolean {
-  return /Failed to load resource: .*status of 500/.test(line) && line.includes("/api/memory/list")
-}
-
-/** Account for the console errors this spec CAUSED and leave everything else for the
- *  fixture's own teardown gate. `expected` is a floor, not a formality: a fault
- *  injection that silently stopped matching would log nothing, and a drain that merely
- *  filtered would let that pass while proving nothing about the path it claims to walk. */
-function drainSeededFetchErrors(consoleErrors: string[], expected: number): void {
-  const seeded = consoleErrors.filter(isSeededBrowseFailure)
-  const unexpected = consoleErrors.filter((line) => !isSeededBrowseFailure(line))
-  consoleErrors.length = 0
-  expect(unexpected, "console errors this spec did not inject").toEqual([])
-  expect(seeded.length, "seeded 500s the browser logged").toBeGreaterThanOrEqual(expected)
-}
-
-/**
- * WHICH cell DOM focus is on, relative to the browse grid — read in ONE page evaluation
- * so every field answers for the same instant.
- *
- * The address, not merely the shape. A report of tag + containment + "is a cell" is
- * identical before and after a dataset pivot, so an expectation written against it cannot
- * tell "focus moved to the first data cell of the NEW result" — which is what §4.2
- * promises — from focus that was re-asserted at the same coordinates over different rows.
- * The row id is what distinguishes them, and it is the seed that says which row that
- * should be.
- *
- * `columnId` is read off the active element itself rather than off an ancestor, so a
- * non-empty value already means the focused node IS the cell. It also excludes the
- * row-select cell, which carries `data-pretable-cell` too and would otherwise satisfy a
- * bare "on a data cell" claim.
- */
-async function focusReport(
-  page: import("@playwright/test").Page,
-): Promise<{ tag: string; inGrid: boolean; rowId: string; columnId: string }> {
-  return browseRegion(page).evaluate((region) => {
-    const active = document.activeElement as HTMLElement | null
-    const viewport = region.querySelector("[data-pretable-scroll-viewport]")
-    return {
-      tag: active?.tagName ?? "",
-      inGrid: viewport?.contains(active ?? null) ?? false,
-      rowId: active?.closest("[data-pretable-row-id]")?.getAttribute("data-pretable-row-id") ?? "",
-      columnId: active?.getAttribute("data-pretable-column-id") ?? "",
-    }
-  })
-}
 
 // D1-A11Y-01..04, as one walkthrough: busy, count, position, stale, error and retry
 // are all identifiable, and focus is never lost across any of them.
@@ -118,28 +70,16 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     // BUSY: never as aria-busy. The lifecycle is a data attribute plus prose.
     await expect(grid(page)).not.toHaveAttribute("aria-busy", /.*/)
 
-    // Focus a DATA cell. Not `[data-pretable-cell]` first — that is the row-select
-    // checkbox cell, whose click focuses a button and ticks a row instead of moving
-    // the grid's own cell focus. A data-cell click is also row ACTIVATION (pretable
-    // routes click and Enter/Space alike to `onRowActivate`, and this page opens the
-    // detail sheet from it), so the sheet is dismissed again before the query change
-    // below, or the rest of this walkthrough would be about the sheet. Escape is the
-    // sheet's own documented dismissal and moves no focus of its own.
-    await firstRow.locator('[data-pretable-cell][data-pretable-column-id="status"]').click()
-    await page.keyboard.press("Escape")
-    await expect(page.getByLabel("Close detail")).toHaveCount(0)
-    // The precondition, asserted rather than assumed. §4.2's DK-change focus rule is
-    // conditional — "if DOM focus was inside the grid at the change" — so a run that
-    // reached the pivot with focus already elsewhere would satisfy the rule vacuously
-    // and prove nothing.
+    // Focus a DATA cell, by ID rather than through `firstRow`: the head of the default
+    // order is what the seed says it is, so naming it here makes the click's target a
+    // checked fact and not whatever the grid happened to draw first.
     //
-    // POLLED, and not for symmetry with the read after the pivot: the sheet restores focus
-    // to its opener from an unmount layout effect, and `toHaveCount(0)` above confirms only
-    // that the sheet is gone — a one-shot read landing in the same tick sees `<body>`.
+    // The precondition is asserted rather than assumed — `focusRecordCell` ends by
+    // pinning the whole address. §4.2's DK-change focus rule is conditional ("if DOM
+    // focus was inside the grid at the change"), so a run that reached the pivot with
+    // focus already elsewhere would satisfy the rule vacuously and prove nothing.
     const defaultHead = seedIdsInDefaultOrder(scoped)[0] as string
-    await expect
-      .poll(() => focusReport(page))
-      .toEqual({ tag: "DIV", inGrid: true, rowId: defaultHead, columnId: "status" })
+    await focusRecordCell(page, defaultHead, "status")
 
     // The query change is a SORT HEADER, and the choice is load-bearing. §4.2's rule
     // only governs a pivot that starts with focus inside the grid, and a funnel does
@@ -187,7 +127,7 @@ test.describe("scenario 13 — accessibility walkthrough", () => {
     expect(sortedHead).not.toBe(defaultHead)
     await expect
       .poll(() => focusReport(page))
-      .toEqual({ tag: "DIV", inGrid: true, rowId: sortedHead, columnId: "status" })
+      .toEqual({ rowId: sortedHead, columnId: "status", inGrid: true, onBody: false })
 
     // ERROR + RETRY: reachable by keyboard, announced through the polite region.
     await page.unrouteAll()
