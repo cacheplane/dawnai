@@ -4,11 +4,7 @@ export type { ApiReferencePage } from "./api-reference-pages"
 export { API_REFERENCE_PAGES, API_REFERENCE_PARENT } from "./api-reference-pages"
 
 export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal" | "deferred-to-pr2"
-export type ImportSurfaceKind =
-  | "typescript-runtime"
-  | "config-artifact"
-  | "metadata"
-  | "generated-types"
+export type ImportSurfaceKind = "typescript-runtime" | "config-artifact" | "metadata"
 export type OperatedArtifactKind = "executable" | "operated-application"
 export type RuntimeCompatibility = "node-only" | "edge-safe"
 export type ApiReferenceAudience =
@@ -66,7 +62,17 @@ export interface StaticImportArtifact extends ArtifactPolicy {
   readonly kind: "import"
   readonly packageName: string
   readonly subpath: string
-  readonly surfaceKind: "config-artifact" | "metadata" | "generated-types"
+  readonly surfaceKind: "config-artifact" | "metadata"
+}
+
+export interface GeneratedTypesArtifact extends ArtifactPolicy {
+  readonly kind: "generated"
+  readonly moduleName: "dawn:routes"
+  readonly ownerHref: "/docs/api/generated-routes"
+  readonly surfaceKind: "generated-types"
+  readonly coverage: "detailed"
+  readonly audience: "application"
+  readonly stability: "supported"
 }
 
 export interface OperatedArtifact extends ArtifactPolicy {
@@ -78,7 +84,11 @@ export interface OperatedArtifact extends ArtifactPolicy {
   readonly runtime: RuntimeCompatibility
 }
 
-export type ApiReferenceArtifact = RuntimeImportArtifact | StaticImportArtifact | OperatedArtifact
+export type ApiReferenceArtifact =
+  | RuntimeImportArtifact
+  | StaticImportArtifact
+  | GeneratedTypesArtifact
+  | OperatedArtifact
 
 export interface PackageCatalogEntry {
   readonly packageName: string
@@ -145,6 +155,16 @@ function operatedArtifact(
     stability,
   }
 }
+
+export const GENERATED_ROUTES_ARTIFACT = {
+  kind: "generated",
+  moduleName: "dawn:routes",
+  ownerHref: "/docs/api/generated-routes",
+  surfaceKind: "generated-types",
+  coverage: "detailed",
+  audience: "application",
+  stability: "supported",
+} as const satisfies GeneratedTypesArtifact
 
 export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/sdk", ".", "detailed", "edge-safe", "application"),
@@ -307,12 +327,13 @@ export const ARTIFACT_REGISTRY = [
     "catalog-only",
     "tooling",
   ),
+  GENERATED_ROUTES_ARTIFACT,
 ] as const satisfies readonly ApiReferenceArtifact[]
 
 export function artifactAddressFor(artifact: ApiReferenceArtifact): string {
-  return artifact.kind === "import"
-    ? `import:${artifact.packageName}:${artifact.subpath}`
-    : `operated:${artifact.packageName}:${artifact.selector}`
+  if (artifact.kind === "import") return `import:${artifact.packageName}:${artifact.subpath}`
+  if (artifact.kind === "operated") return `operated:${artifact.packageName}:${artifact.selector}`
+  return `generated:${artifact.moduleName}`
 }
 
 const importAddress = (packageName: string, subpath: string) =>
@@ -618,7 +639,6 @@ const PURITIES = new Set<RuntimePurity>(["dependency-free", "not-claimed"])
 const STATIC_SURFACES = new Set<StaticImportArtifact["surfaceKind"]>([
   "config-artifact",
   "metadata",
-  "generated-types",
 ])
 const OPERATED_ONLY_PACKAGES = new Set(["create-dawn-ai-app", "@dawn-ai/inspector"])
 
@@ -648,6 +668,31 @@ function validateArtifact(artifact: ApiReferenceArtifact): void {
     artifact.audience === "application"
   ) {
     throw new Error(`${artifact.coverage} artifacts cannot use the application audience`)
+  }
+
+  if (artifact.kind === "generated") {
+    assertExactFields(artifact, record, [
+      "kind",
+      "moduleName",
+      "ownerHref",
+      "surfaceKind",
+      "coverage",
+      "audience",
+      "stability",
+    ])
+    if (
+      artifact.moduleName !== "dawn:routes" ||
+      artifact.ownerHref !== "/docs/api/generated-routes" ||
+      artifact.surfaceKind !== "generated-types" ||
+      artifact.coverage !== "detailed" ||
+      artifact.audience !== "application" ||
+      artifact.stability !== "supported"
+    ) {
+      throw new Error(
+        "dawn:routes generated artifact must use the canonical owner, generated-types category, application audience, and supported stability",
+      )
+    }
+    return
   }
 
   if (artifact.kind === "import") {
@@ -723,12 +768,20 @@ export function validateApiReferenceRegistries(registries: ApiReferenceRegistrie
   }
 
   const addresses = new Set<string>()
+  const generatedArtifacts = registries.artifacts.filter(
+    (artifact): artifact is GeneratedTypesArtifact => artifact.kind === "generated",
+  )
+  if (generatedArtifacts.length !== 1) {
+    throw new Error("dawn:routes must have exactly one generated artifact registry record")
+  }
+  const generatedArtifact = generatedArtifacts[0]
+  if (!generatedArtifact) throw new Error("dawn:routes generated artifact is missing")
   for (const artifact of registries.artifacts) {
     validateArtifact(artifact)
     const address = artifactAddressFor(artifact)
     if (addresses.has(address)) throw new Error(`duplicate artifact address: ${address}`)
     addresses.add(address)
-    if (!packageNames.includes(artifact.packageName)) {
+    if (artifact.kind !== "generated" && !packageNames.includes(artifact.packageName)) {
       throw new Error(`artifact owner missing from package catalog: ${artifact.packageName}`)
     }
   }
@@ -748,6 +801,13 @@ export function validateApiReferenceRegistries(registries: ApiReferenceRegistrie
         throw new Error(`page owner missing from package catalog: ${owner}`)
     }
   }
+  const generatedPageMatches = registries.pages.filter(
+    ({ surfaceName, href }) =>
+      surfaceName === generatedArtifact.moduleName && href === generatedArtifact.ownerHref,
+  )
+  if (generatedPageMatches.length !== 1) {
+    throw new Error("dawn:routes generated artifact must map to its one canonical page")
+  }
 
   const catalogAddresses = new Set<string>()
   for (const entry of registries.packages) {
@@ -759,13 +819,14 @@ export function validateApiReferenceRegistries(registries: ApiReferenceRegistrie
         (candidate) => artifactAddressFor(candidate) === address,
       )
       if (!artifact) throw new Error(`package catalog references unknown artifact: ${address}`)
-      if (artifact.packageName !== entry.packageName) {
+      if (artifact.kind === "generated" || artifact.packageName !== entry.packageName) {
         throw new Error(`package catalog associates ${address} with the wrong package`)
       }
     }
   }
-  for (const address of addresses) {
-    if (!catalogAddresses.has(address))
+  for (const artifact of registries.artifacts) {
+    const address = artifactAddressFor(artifact)
+    if (artifact.kind !== "generated" && !catalogAddresses.has(address))
       throw new Error(`artifact missing from package catalog: ${address}`)
   }
 }

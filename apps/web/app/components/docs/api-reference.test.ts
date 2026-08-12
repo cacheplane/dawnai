@@ -8,6 +8,7 @@ import {
   type ApiReferenceArtifact,
   ARTIFACT_REGISTRY,
   artifactAddressFor,
+  GENERATED_ROUTES_ARTIFACT,
   PACKAGE_CATALOG,
   validateApiReferenceRegistries,
 } from "./api-reference"
@@ -279,10 +280,36 @@ describe("artifact registry", () => {
     expect(new Set(addresses).size).toBe(addresses.length)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import")).toHaveLength(42)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated")).toHaveLength(3)
+    expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated")).toEqual([
+      GENERATED_ROUTES_ARTIFACT,
+    ])
     expect(addresses).toContain("import:@dawn-ai/cli:.")
     expect(addresses).toContain("operated:@dawn-ai/cli:bin.dawn")
     expect(addresses).not.toContain("import:@dawn-ai/cli:bin.dawn")
     expect(addresses).toContain("operated:@dawn-ai/inspector:dawnInspector.server")
+    expect(addresses).toContain("generated:dawn:routes")
+  })
+
+  it("maps the manifest-less generated surface to its canonical page without package fields", () => {
+    expect(GENERATED_ROUTES_ARTIFACT).toEqual({
+      kind: "generated",
+      moduleName: "dawn:routes",
+      ownerHref: "/docs/api/generated-routes",
+      surfaceKind: "generated-types",
+      coverage: "detailed",
+      audience: "application",
+      stability: "supported",
+    })
+    expect("packageName" in GENERATED_ROUTES_ARTIFACT).toBe(false)
+    expect("runtime" in GENERATED_ROUTES_ARTIFACT).toBe(false)
+    expect("purity" in GENERATED_ROUTES_ARTIFACT).toBe(false)
+    expect(
+      API_REFERENCE_PAGES.filter(
+        ({ surfaceName, href }) =>
+          surfaceName === GENERATED_ROUTES_ARTIFACT.moduleName &&
+          href === GENERATED_ROUTES_ARTIFACT.ownerHref,
+      ),
+    ).toHaveLength(1)
   })
 
   it("pins the exact deferred-to-PR2 import allowlist", () => {
@@ -531,6 +558,7 @@ describe("package catalog", () => {
     const catalogByName = new Map(PACKAGE_CATALOG.map((entry) => [entry.packageName, entry]))
     const registryAddressesByPackage = new Map<string, string[]>()
     for (const artifact of ARTIFACT_REGISTRY) {
+      if (artifact.kind === "generated") continue
       const addresses = registryAddressesByPackage.get(artifact.packageName) ?? []
       addresses.push(artifactAddressFor(artifact))
       registryAddressesByPackage.set(artifact.packageName, addresses)
@@ -543,10 +571,18 @@ describe("package catalog", () => {
       )
     }
     for (const artifact of ARTIFACT_REGISTRY) {
+      if (artifact.kind === "generated") continue
       expect(catalogByName.get(artifact.packageName)?.artifactAddresses).toContain(
         artifactAddressFor(artifact),
       )
     }
+  })
+
+  it("rejects generated records that bypass their closed registry branch", () => {
+    expectRegistryRejection(
+      { ...GENERATED_ROUTES_ARTIFACT, packageName: "@dawn-ai/core" },
+      /generated artifact|invalid artifact fields|packageName/i,
+    )
   })
 
   it("routes detailed owners to leaves and all other packages to hub anchors", () => {

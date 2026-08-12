@@ -980,6 +980,39 @@ function ownershipRowsFromDocument(document) {
   return rows
 }
 
+function generatedOwnershipRowsFromDocument(document) {
+  const visibleLines = maskMdx(document.source).split(/\r?\n/)
+  const rows = []
+  let moduleName = null
+  for (let index = 0; index < visibleLines.length; index++) {
+    const heading = /^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(visibleLines[index])
+    if (heading) {
+      if (heading[1].length <= 3) moduleName = null
+      if (heading[1].length === 3) moduleName = renderedInline(heading[2])
+      continue
+    }
+    if (!moduleName || visibleLines[index].trim() !== "| Generated export | Responsibility |") {
+      continue
+    }
+    const separator = tableCells(visibleLines[index + 1] ?? "")
+    if (separator?.length !== 2 || separator.some((cell) => !/^:?-{3,}:?$/.test(cell))) {
+      continue
+    }
+    index += 2
+    while (index < visibleLines.length) {
+      const cells = tableCells(visibleLines[index])
+      if (cells?.length !== 2) break
+      const symbol = /^`([^`]+)`$/.exec(cells[0])?.[1]
+      if (symbol && renderedInline(cells[1])) {
+        rows.push({ moduleName, symbol, href: document.href, path: document.path })
+      }
+      index++
+    }
+    index--
+  }
+  return rows
+}
+
 function hasReservedApiContractMetadata(info) {
   let index = 0
   while (index < info.length && !/\s/.test(info[index])) index++
@@ -1684,6 +1717,220 @@ function surfaceDiagnostic(surface, symbol, owner, sourcePath, target) {
   return `package ${surface.packageName} subpath ${surface.subpath} symbol ${symbol} owner page ${owner} source barrel ${sourcePath} (manifest target ${target})`
 }
 
+const STABLE_GENERATED_ROUTE_EXPORTS = [
+  "DawnRouteParams",
+  "DawnRoutePath",
+  "DawnRouteTools",
+  "RouteTools",
+]
+const CONDITIONAL_GENERATED_ROUTE_EXPORTS = ["DawnRouteState", "RouteState"]
+
+function diagnosticText(diagnostic) {
+  return ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")
+}
+
+function generatedModuleInventory(declarations, moduleName) {
+  const declarationPath = "/fixture/dawn.generated.d.ts"
+  const scenarioPath = "/fixture/scenarios.generated.d.ts"
+  const libraryPath = "/fixture/generated-lib.d.ts"
+  const files = new Map([
+    [declarationPath, declarations],
+    [scenarioPath, ""],
+    [
+      libraryPath,
+      `interface Array<T> {}
+interface Boolean {}
+interface CallableFunction {}
+interface Function {}
+interface IArguments {}
+interface NewableFunction {}
+interface Number {}
+interface Object {}
+interface Promise<T> {}
+interface RegExp {}
+interface String {}
+`,
+    ],
+  ])
+  const options = {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    target: ts.ScriptTarget.ESNext,
+    noEmit: true,
+    noLib: true,
+    skipLibCheck: false,
+    types: [],
+  }
+  const defaultHost = ts.createCompilerHost(options)
+  const host = {
+    ...defaultHost,
+    fileExists(path) {
+      return files.has(normalizePath(path)) || defaultHost.fileExists(path)
+    },
+    getCurrentDirectory() {
+      return "/fixture"
+    },
+    getSourceFile(path, languageVersion) {
+      const source = files.get(normalizePath(path))
+      return source === undefined
+        ? defaultHost.getSourceFile(path, languageVersion)
+        : ts.createSourceFile(path, source, languageVersion, true)
+    },
+    readFile(path) {
+      return files.get(normalizePath(path)) ?? defaultHost.readFile(path)
+    },
+  }
+  const program = ts.createProgram([...files.keys()], options, host)
+  const syntactic = program.getSyntacticDiagnostics()
+  if (syntactic.length > 0) {
+    return { failure: `syntactic diagnostic: ${diagnosticText(syntactic[0])}` }
+  }
+  const diagnostics = ts.getPreEmitDiagnostics(program)
+  if (diagnostics.length > 0) {
+    return { failure: `semantic diagnostic: ${diagnosticText(diagnostics[0])}` }
+  }
+  const checker = program.getTypeChecker()
+  const modules = checker
+    .getAmbientModules()
+    .filter((candidate) => candidate.name === JSON.stringify(moduleName))
+  if (modules.length === 0) return { failure: "ambient module is missing" }
+  const declarationsForModule = modules[0].declarations ?? []
+  if (modules.length !== 1 || declarationsForModule.length !== 1) {
+    return { failure: "ambient module must have exactly one declaration" }
+  }
+  const exports = checker.getExportsOfModule(modules[0])
+  const valueExports = []
+  for (const exported of exports) {
+    const resolved =
+      exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported
+    if (!(resolved.flags & ts.SymbolFlags.Type) || resolved.flags & ts.SymbolFlags.Value) {
+      valueExports.push(exported.name)
+    }
+  }
+  return { exports: exports.map(({ name }) => name).sort(), valueExports }
+}
+
+function validateGeneratedSurfaces(fixture, failures) {
+  const surfaces = (fixture.artifacts ?? []).filter(({ kind }) => kind === "generated")
+  const authorities = fixture.generatedAuthorities ?? []
+  const ownership = fixture.documents.flatMap(generatedOwnershipRowsFromDocument)
+  if (surfaces.length === 0 && authorities.length === 0 && ownership.length === 0) return
+  if (surfaces.length !== 1) {
+    failures.push(
+      surfaces.length === 0
+        ? "generated surface dawn:routes registry record is missing"
+        : `generated surface dawn:routes must have exactly one registry record; received ${surfaces.length}`,
+    )
+  }
+  for (const surface of surfaces) {
+    const schemaFields = [
+      "audience",
+      "coverage",
+      "kind",
+      "moduleName",
+      "ownerHref",
+      "stability",
+      "surfaceKind",
+    ]
+    if (
+      !surface ||
+      typeof surface !== "object" ||
+      JSON.stringify(Object.keys(surface).sort()) !== JSON.stringify(schemaFields)
+    ) {
+      failures.push(
+        `generated surface ${String(surface?.moduleName ?? "dawn:routes")} fields do not match the generated-types schema (unexpected: ${
+          Object.keys(surface ?? {})
+            .filter((field) => !schemaFields.includes(field))
+            .join(", ") || "none"
+        })`,
+      )
+      continue
+    }
+    if (
+      surface.moduleName !== "dawn:routes" ||
+      surface.surfaceKind !== "generated-types" ||
+      surface.coverage !== "detailed" ||
+      surface.ownerHref !== "/docs/api/generated-routes" ||
+      surface.audience !== "application" ||
+      surface.stability !== "supported"
+    ) {
+      failures.push(
+        `generated surface dawn:routes owner must be /docs/api/generated-routes, audience must be application, and stability must be supported`,
+      )
+    }
+  }
+  const surface = surfaces[0]
+  if (!surface) return
+  const matchingAuthorities = authorities.filter(
+    ({ moduleName }) => moduleName === surface.moduleName,
+  )
+  if (matchingAuthorities.length === 0) {
+    failures.push(`generated surface dawn:routes authority is missing`)
+    return
+  }
+  if (matchingAuthorities.length !== 1) {
+    failures.push(`generated surface dawn:routes must have exactly one generated authority`)
+    return
+  }
+  const inventory = generatedModuleInventory(
+    matchingAuthorities[0].declarations,
+    surface.moduleName,
+  )
+  if (inventory.failure) {
+    failures.push(`generated surface dawn:routes ${inventory.failure}`)
+    return
+  }
+  if (inventory.valueExports.length > 0) {
+    failures.push(
+      `generated surface dawn:routes has value export ${inventory.valueExports.join(", ")}; generated exports must be type-only`,
+    )
+  }
+  const sourceExports = inventory.exports
+  const hasAnyStateExport = CONDITIONAL_GENERATED_ROUTE_EXPORTS.some((symbol) =>
+    sourceExports.includes(symbol),
+  )
+  const expectedExports = [
+    ...STABLE_GENERATED_ROUTE_EXPORTS,
+    ...(hasAnyStateExport ? CONDITIONAL_GENERATED_ROUTE_EXPORTS : []),
+  ].sort()
+  if (JSON.stringify(sourceExports) !== JSON.stringify(expectedExports)) {
+    failures.push(
+      `generated surface dawn:routes exports ${JSON.stringify(sourceExports)} instead of exact ${JSON.stringify(expectedExports)}`,
+    )
+  }
+
+  const ownedRows = ownership.filter((row) => row.moduleName === surface.moduleName)
+  const ownerPaths = new Set(ownedRows.map(({ href, path }) => `${href}\0${path}`))
+  if (ownerPaths.size === 0) {
+    failures.push(
+      `generated surface dawn:routes owner page ${surface.ownerHref} is missing a Generated export table`,
+    )
+    return
+  }
+  if (ownerPaths.size !== 1 || ownedRows.some(({ href }) => href !== surface.ownerHref)) {
+    failures.push(
+      `generated surface dawn:routes Generated export table must exist once on canonical owner page ${surface.ownerHref}`,
+    )
+  }
+  const ownedExports = ownedRows.map(({ symbol }) => symbol).sort()
+  if (
+    new Set(ownedExports).size !== ownedExports.length ||
+    JSON.stringify(ownedExports) !== JSON.stringify(sourceExports)
+  ) {
+    failures.push(
+      `generated surface dawn:routes owner page ${surface.ownerHref} exports ${JSON.stringify(ownedExports)} instead of source ${JSON.stringify(sourceExports)}`,
+    )
+  }
+
+  for (const row of ownership) {
+    if (row.moduleName !== surface.moduleName) {
+      failures.push(
+        `Generated export ${row.symbol} on owner page ${row.path} names unknown generated surface ${row.moduleName}`,
+      )
+    }
+  }
+}
+
 export function analyzeApiInventoryFixture(fixture) {
   const failures = []
   const program = virtualProgram(fixture.files ?? {}, fixture.packages ?? [])
@@ -1967,6 +2214,7 @@ export function analyzeApiInventoryFixture(fixture) {
   }
 
   validateBehaviorContracts(fixture, program, failures)
+  validateGeneratedSurfaces(fixture, failures)
   return {
     name: fixture.name,
     failures,

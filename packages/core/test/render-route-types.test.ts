@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
+import ts from "typescript"
 import { describe, expect, test } from "vitest"
 
 import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types"
 import { renderScenarioTypes, SCENARIO_TYPES_FILE } from "../src/typegen/render-scenario-types.ts"
-import type { RouteStateFields } from "../src/typegen/render-state-types"
+import { type RouteStateFields, renderStateTypes } from "../src/typegen/render-state-types"
+import { renderToolTypes } from "../src/typegen/render-tool-types"
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types"
 
 const MANIFEST_SNAPSHOT_PATH = fileURLToPath(
@@ -36,7 +38,159 @@ async function loadManifestSnapshot(): Promise<RouteManifest> {
   }
 }
 
+function ambientModuleExports(
+  source: string,
+  moduleName: string,
+  options: { readonly expectSemanticValidity?: boolean } = {},
+): string[] {
+  const declarationPath = "/fixture/dawn.generated.d.ts"
+  const scenarioPath = `/fixture/${SCENARIO_TYPES_FILE}`
+  const files = new Map([
+    [declarationPath, source],
+    [scenarioPath, ""],
+  ])
+  const compilerOptions = {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    target: ts.ScriptTarget.ESNext,
+  }
+  const defaultHost = ts.createCompilerHost(compilerOptions)
+  const host: ts.CompilerHost = {
+    ...defaultHost,
+    fileExists: (path) => files.has(path) || defaultHost.fileExists(path),
+    getCurrentDirectory: () => "/fixture",
+    getSourceFile(path, languageVersion) {
+      const content = files.get(path)
+      return content === undefined
+        ? defaultHost.getSourceFile(path, languageVersion)
+        : ts.createSourceFile(path, content, languageVersion, true)
+    },
+    readFile: (path) => files.get(path) ?? defaultHost.readFile(path),
+  }
+  const program = ts.createProgram([...files.keys()], compilerOptions, host)
+  expect(program.getSyntacticDiagnostics()).toEqual([])
+  if (options.expectSemanticValidity !== false) {
+    expect(ts.getPreEmitDiagnostics(program)).toEqual([])
+  }
+  const checker = program.getTypeChecker()
+  const ambientModule = checker
+    .getAmbientModules()
+    .find((candidate) => candidate.name === JSON.stringify(moduleName))
+  expect(ambientModule, `ambient module ${moduleName} is missing`).toBeDefined()
+  return checker
+    .getExportsOfModule(ambientModule as ts.Symbol)
+    .map(({ name }) => name)
+    .sort()
+}
+
 describe("renderDawnTypes", () => {
+  test("loads the exact stable no-state dawn:routes exports through TypeScript", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello/[tenant].tsx",
+          routeDir: "/tmp/example-app/hello/[tenant]",
+          segments: [
+            { kind: "static", value: "hello" },
+            { kind: "dynamic", name: "tenant" },
+          ],
+        },
+      ],
+    }
+    const toolTypes: RouteToolTypes[] = [
+      {
+        pathname: "/hello/[tenant]",
+        tools: [{ name: "greet", inputType: "{ tenant: string }", outputType: "string" }],
+      },
+    ]
+
+    const output = renderDawnTypes(manifest, toolTypes)
+
+    expect(output).toContain(renderToolTypes(toolTypes).trimEnd())
+    expect(ambientModuleExports(output, "dawn:routes")).toEqual([
+      "DawnRouteParams",
+      "DawnRoutePath",
+      "DawnRouteTools",
+      "RouteTools",
+    ])
+  })
+
+  test("adds only the state exports when generated route state is present", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello",
+          pathname: "/hello",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello.tsx",
+          routeDir: "/tmp/example-app/hello",
+          segments: [{ kind: "static", value: "hello" }],
+        },
+      ],
+    }
+    const stateTypes: RouteStateFields[] = [
+      { pathname: "/hello", fields: [{ name: "status", type: '"ready" | "done"' }] },
+    ]
+
+    const toolTypes: RouteToolTypes[] = [
+      {
+        pathname: "/hello",
+        tools: [{ name: "status", inputType: "void", outputType: '"ready" | "done"' }],
+      },
+    ]
+    const output = renderDawnTypes(manifest, toolTypes, stateTypes)
+
+    expect(output).toContain(renderStateTypes(stateTypes).trimEnd())
+    expect(ambientModuleExports(output, "dawn:routes")).toEqual([
+      "DawnRouteParams",
+      "DawnRoutePath",
+      "DawnRouteState",
+      "DawnRouteTools",
+      "RouteState",
+      "RouteTools",
+    ])
+  })
+
+  test("detects added and removed generated exports bidirectionally", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello",
+          pathname: "/hello",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello.tsx",
+          routeDir: "/tmp/example-app/hello",
+          segments: [{ kind: "static", value: "hello" }],
+        },
+      ],
+    }
+    const output = renderDawnTypes(manifest, [
+      {
+        pathname: "/hello",
+        tools: [{ name: "greet", inputType: "void", outputType: "string" }],
+      },
+    ])
+    const expected = ["DawnRouteParams", "DawnRoutePath", "DawnRouteTools", "RouteTools"]
+    const added = output.replace(
+      'declare module "dawn:routes" {',
+      'declare module "dawn:routes" {\n  export type UnexpectedRouteType = never;',
+    )
+    const removed = output.replace(/ {2}export interface DawnRouteTools \{[\s\S]*?\n {2}\}\n\n/, "")
+
+    expect(added).not.toBe(output)
+    expect(removed).not.toBe(output)
+    expect(ambientModuleExports(added, "dawn:routes")).not.toEqual(expected)
+    expect(
+      ambientModuleExports(removed, "dawn:routes", { expectSemanticValidity: false }),
+    ).not.toEqual(expected)
+  })
+
   test("renders a single declare module block with route params and tool types", () => {
     const manifest: RouteManifest = {
       appRoot: "/tmp/example-app",

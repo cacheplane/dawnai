@@ -3,6 +3,9 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
+import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render-route-types"
+import { GENERATED_ROUTES_ARTIFACT } from "./api-reference"
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
 
@@ -12,14 +15,20 @@ interface InventoryFixture {
     readonly dir: string
     readonly packageJson: Record<string, unknown>
   }[]
-  readonly artifacts: readonly Record<string, unknown>[]
+  readonly artifacts: Record<string, unknown>[]
   readonly documents: {
     readonly href: string
     readonly path: string
     source: string
   }[]
   readonly behaviorContracts: BehaviorContractFixture[]
+  readonly generatedAuthorities?: GeneratedAuthorityFixture[]
   readonly files: Record<string, string>
+}
+
+interface GeneratedAuthorityFixture extends Record<string, unknown> {
+  declarations: string
+  moduleName: string
 }
 
 interface BehaviorContractFixture extends Record<string, unknown> {
@@ -54,6 +63,62 @@ function ownershipTable(
     ...rows.map(([symbol, responsibility]) => `| \`${symbol}\` | ${responsibility} |`),
   ].join("\n")
 }
+
+function generatedOwnershipTable(symbols: readonly string[]): string {
+  return [
+    "### `dawn:routes`",
+    "",
+    "| Generated export | Responsibility |",
+    "|---|---|",
+    ...symbols.map((symbol) => `| \`${symbol}\` | Generated route contract. |`),
+  ].join("\n")
+}
+
+const noStateGeneratedExports = [
+  "DawnRoutePath",
+  "DawnRouteParams",
+  "DawnRouteTools",
+  "RouteTools",
+] as const
+
+const stateGeneratedExports = [...noStateGeneratedExports, "DawnRouteState", "RouteState"] as const
+
+const generatedManifest = {
+  appRoot: "/fixture/app",
+  routes: [
+    {
+      id: "/hello/[tenant]",
+      pathname: "/hello/[tenant]",
+      kind: "workflow",
+      entryFile: "/fixture/app/hello/[tenant].ts",
+      routeDir: "/fixture/app/hello/[tenant]",
+      segments: [
+        { kind: "static", value: "hello" },
+        { kind: "dynamic", name: "tenant" },
+      ],
+    },
+  ],
+} as Parameters<typeof renderDawnTypes>[0]
+const generatedToolTypes = [
+  {
+    pathname: "/hello/[tenant]",
+    tools: [
+      { name: "greet", description: "Greet the caller", inputType: "void", outputType: "string" },
+    ],
+  },
+] as Parameters<typeof renderDawnTypes>[1]
+const generatedStateTypes = [
+  {
+    pathname: "/hello/[tenant]",
+    fields: [{ name: "status", type: '"ready" | "done"' }],
+  },
+] as NonNullable<Parameters<typeof renderDawnTypes>[2]>
+const noStateGeneratedDeclarations = renderDawnTypes(generatedManifest, generatedToolTypes)
+const stateGeneratedDeclarations = renderDawnTypes(
+  generatedManifest,
+  generatedToolTypes,
+  generatedStateTypes,
+)
 
 const agentContract = `export declare function agent<TState extends object = Record<string, never>>(
   config: AgentConfig<TState>,
@@ -481,6 +546,35 @@ function mutated(name: string, mutate: (fixture: InventoryFixture) => void): Inv
   const fixture = structuredClone(baseline())
   ;(fixture as { name: string }).name = name
   mutate(fixture)
+  return fixture
+}
+
+function generatedFixture(
+  name: string,
+  declarations: string,
+  symbols: readonly string[] | null,
+): InventoryFixture {
+  const fixture: InventoryFixture = {
+    name,
+    packages: [],
+    artifacts: [structuredClone(GENERATED_ROUTES_ARTIFACT)],
+    documents: [],
+    behaviorContracts: [],
+    files: {},
+    generatedAuthorities: [
+      {
+        moduleName: GENERATED_ROUTES_ARTIFACT.moduleName,
+        declarations,
+      },
+    ],
+  }
+  if (symbols) {
+    fixture.documents.push({
+      href: GENERATED_ROUTES_ARTIFACT.ownerHref,
+      path: "docs/generated-routes.mdx",
+      source: generatedOwnershipTable(symbols),
+    })
+  }
   return fixture
 }
 
@@ -1278,10 +1372,108 @@ const unresolvedWorkspaceFixture = structuredClone(
 ;(unresolvedWorkspaceFixture as { name: string }).name = "unresolved-workspace-reexport"
 unresolvedWorkspaceFixture.packages.splice(1, 1)
 
+const generatedFixtures: InventoryFixture[] = [
+  generatedFixture("generated-owner-missing", noStateGeneratedDeclarations, null),
+  generatedFixture("generated-no-state", noStateGeneratedDeclarations, noStateGeneratedExports),
+  generatedFixture("generated-with-state", stateGeneratedDeclarations, stateGeneratedExports),
+  generatedFixture(
+    "generated-no-state-after-state",
+    noStateGeneratedDeclarations,
+    noStateGeneratedExports,
+  ),
+  generatedFixture(
+    "generated-export-added",
+    noStateGeneratedDeclarations.replace("\n}", "\n  export type UnexpectedRouteType = never;\n}"),
+    noStateGeneratedExports,
+  ),
+  generatedFixture(
+    "generated-export-removed",
+    noStateGeneratedDeclarations.replace(
+      / {2}export type RouteTools<P extends DawnRoutePath> = DawnRouteTools\[P\];\n/,
+      "",
+    ),
+    noStateGeneratedExports,
+  ),
+]
+function generatedMutation(
+  name: string,
+  mutate: (fixture: InventoryFixture) => void,
+): InventoryFixture {
+  const fixture = generatedFixture(name, noStateGeneratedDeclarations, noStateGeneratedExports)
+  mutate(fixture)
+  return fixture
+}
+
+const generatedReviewFixtures = [
+  generatedMutation("generated-registry-removed", (fixture) => fixture.artifacts.splice(0)),
+  generatedMutation("generated-registry-duplicated", (fixture) => {
+    fixture.artifacts.push(structuredClone(GENERATED_ROUTES_ARTIFACT))
+  }),
+  generatedMutation("generated-owner-wrong", (fixture) => {
+    ;(fixture.artifacts[0] as Record<string, unknown>).ownerHref = "/docs/api/wrong"
+  }),
+  generatedMutation("generated-audience-wrong", (fixture) => {
+    ;(fixture.artifacts[0] as Record<string, unknown>).audience = "tooling"
+  }),
+  generatedMutation("generated-stability-wrong", (fixture) => {
+    ;(fixture.artifacts[0] as Record<string, unknown>).stability = "low-level"
+  }),
+  generatedMutation("generated-runtime-forbidden", (fixture) => {
+    ;(fixture.artifacts[0] as Record<string, unknown>).runtime = "edge-safe"
+  }),
+  generatedMutation("generated-purity-forbidden", (fixture) => {
+    ;(fixture.artifacts[0] as Record<string, unknown>).purity = "dependency-free"
+  }),
+  generatedMutation("generated-authority-missing", (fixture) => {
+    ;(fixture as { generatedAuthorities: GeneratedAuthorityFixture[] }).generatedAuthorities = []
+  }),
+  generatedMutation("generated-module-missing", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) authority.declarations = authority.declarations.replace("dawn:routes", "other")
+  }),
+  generatedMutation("generated-module-duplicated", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) authority.declarations += '\ndeclare module "dawn:routes" {}\n'
+  }),
+  generatedMutation("generated-value-export", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) {
+      authority.declarations = authority.declarations.replace(
+        "export interface DawnRouteTools",
+        "export class DawnRouteTools",
+      )
+    }
+  }),
+  generatedMutation("generated-alias-export", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) {
+      authority.declarations = authority.declarations.replace(
+        "\n}",
+        "\n  type Hidden = string;\n  export { type Hidden as UnexpectedRouteType };\n}",
+      )
+    }
+  }),
+  generatedMutation("generated-parse-error", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) authority.declarations = authority.declarations.slice(0, -2)
+  }),
+  generatedMutation("generated-semantic-error", (fixture) => {
+    const authority = fixture.generatedAuthorities?.[0]
+    if (authority) {
+      authority.declarations = authority.declarations.replace(
+        "DawnRouteTools[P]",
+        "MissingRouteTools[P]",
+      )
+    }
+  }),
+]
+
 const fixtures: InventoryFixture[] = [
   ...mutationFixtures,
   ...acceptanceFixtures,
   unresolvedWorkspaceFixture,
+  ...generatedFixtures,
+  ...generatedReviewFixtures,
 ]
 
 const subprocess = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-api-inventory"], {
@@ -1315,6 +1507,44 @@ describe("source-derived API inventory", () => {
 
   it("accepts checker-derived named, wildcard, alias, and default re-exports", () => {
     expect(byName.get("baseline")?.failures).toEqual([])
+  })
+
+  it.each(["generated-no-state", "generated-with-state", "generated-no-state-after-state"])(
+    "accepts the exact %s ambient-module surface",
+    (name) => {
+      expect(byName.get(name)?.failures).toEqual([])
+    },
+  )
+
+  it("keeps generated surfaces manifest-less and lightweight in the shared batch", () => {
+    for (const fixture of generatedFixtures) {
+      expect(fixture.packages).toEqual([])
+      expect(fixture.files).toEqual({})
+    }
+  })
+
+  it.each([
+    ["generated-owner-missing", /dawn:routes.*missing.*Generated export table/i],
+    ["generated-export-added", /dawn:routes.*exports.*UnexpectedRouteType.*exact/i],
+    ["generated-export-removed", /dawn:routes.*exports.*instead of exact/i],
+    ["generated-registry-removed", /dawn:routes.*registry.*missing/i],
+    ["generated-registry-duplicated", /dawn:routes.*exactly one.*registry/i],
+    ["generated-owner-wrong", /dawn:routes.*owner.*generated-routes/i],
+    ["generated-audience-wrong", /dawn:routes.*audience.*application/i],
+    ["generated-stability-wrong", /dawn:routes.*stability.*supported/i],
+    ["generated-runtime-forbidden", /dawn:routes.*fields.*runtime/i],
+    ["generated-purity-forbidden", /dawn:routes.*fields.*purity/i],
+    ["generated-authority-missing", /dawn:routes.*authority.*missing/i],
+    ["generated-module-missing", /dawn:routes.*ambient module.*missing/i],
+    ["generated-module-duplicated", /dawn:routes.*ambient module.*exactly one/i],
+    ["generated-value-export", /dawn:routes.*value export.*DawnRouteTools/i],
+    ["generated-alias-export", /dawn:routes.*UnexpectedRouteType.*exact/i],
+    ["generated-parse-error", /dawn:routes.*syntactic diagnostic/i],
+    ["generated-semantic-error", /dawn:routes.*semantic diagnostic/i],
+  ])("rejects %s", (name, diagnostic) => {
+    expect(byName.get(name)?.failures).toEqual(
+      expect.arrayContaining([expect.stringMatching(diagnostic)]),
+    )
   })
 
   it("ignores tagged contract fences nested inside a longer outer fence", () => {

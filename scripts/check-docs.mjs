@@ -551,12 +551,13 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
     "operatedKind",
     "operated-application",
   ],
+  ["generated:dawn:routes", "detailed", "surfaceKind", "generated-types"],
 ]
 
 function apiArtifactAddress(artifact) {
-  return artifact.kind === "import"
-    ? `import:${artifact.packageName}:${artifact.subpath}`
-    : `operated:${artifact.packageName}:${artifact.selector}`
+  if (artifact.kind === "import") return `import:${artifact.packageName}:${artifact.subpath}`
+  if (artifact.kind === "operated") return `operated:${artifact.packageName}:${artifact.selector}`
+  return `generated:${artifact.moduleName}`
 }
 
 function tupleMismatchFields(actual, expected, fields) {
@@ -607,9 +608,9 @@ function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
   }
 
   const artifactPolicyTuples = artifacts.map((artifact) =>
-    artifact.kind === "import"
-      ? [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind]
-      : [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind],
+    artifact.kind === "operated"
+      ? [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind]
+      : [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind],
   )
   const artifactFields = ["address", "coverage", "kind field", "surfaceKind/operatedKind"]
   for (
@@ -635,7 +636,9 @@ function analyzeApiReferenceManifests({ manifests = [], artifacts = [] }) {
   const manifestEntries = manifestArtifactEntries(manifests)
   const manifestByAddress = new Map(manifestEntries.map((entry) => [entry.address, entry]))
   const registryByAddress = new Map(
-    artifacts.map((artifact) => [apiArtifactAddress(artifact), artifact]),
+    artifacts
+      .filter(({ kind }) => kind !== "generated")
+      .map((artifact) => [apiArtifactAddress(artifact), artifact]),
   )
 
   for (const entry of manifestEntries) {
@@ -707,6 +710,9 @@ if (process.argv[2] === "--analyze-api-reference-manifests") {
 
 if (process.argv[2] === "--analyze-api-inventory") {
   const fixtures = JSON.parse(readFileSync(0, "utf8"))
+  if (!Array.isArray(fixtures)) {
+    throw new Error("--analyze-api-inventory expects one JSON fixture batch on stdin")
+  }
   await new Promise((resolveWrite, rejectWrite) => {
     process.stdout.write(`${JSON.stringify(analyzeApiInventoryBatch(fixtures))}\n`, (error) => {
       if (error) rejectWrite(error)
@@ -3140,14 +3146,15 @@ if (apiReferenceRegistry) {
   }
 
   const artifactAddresses = ARTIFACT_REGISTRY.map(apiReferenceRegistry.artifactAddressFor)
-  if (ARTIFACT_REGISTRY.length !== 45 || new Set(artifactAddresses).size !== 45) {
-    failures.push("ARTIFACT_REGISTRY must contain exactly 45 unique artifact addresses")
+  if (ARTIFACT_REGISTRY.length !== 46 || new Set(artifactAddresses).size !== 46) {
+    failures.push("ARTIFACT_REGISTRY must contain exactly 46 unique artifact addresses")
   }
   const importCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import").length
   const operatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated").length
-  if (importCount !== 42 || operatedCount !== 3) {
+  const generatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated").length
+  if (importCount !== 42 || operatedCount !== 3 || generatedCount !== 1) {
     failures.push(
-      `ARTIFACT_REGISTRY must contain 42 imports and 3 operated artifacts; received ${importCount} and ${operatedCount}`,
+      `ARTIFACT_REGISTRY must contain 42 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
     )
   }
   const expectedDeferredImports = [
@@ -3209,6 +3216,7 @@ if (apiReferenceRegistry) {
 
   const artifactAddressesByPackage = new Map()
   for (const artifact of ARTIFACT_REGISTRY) {
+    if (artifact.kind === "generated") continue
     const addresses = artifactAddressesByPackage.get(artifact.packageName) ?? []
     addresses.push(apiReferenceRegistry.artifactAddressFor(artifact))
     artifactAddressesByPackage.set(artifact.packageName, addresses)
