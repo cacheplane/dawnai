@@ -81,6 +81,7 @@ const FOUNDATION_DOCS_NAV = [
       { label: "Production Topology", href: "/docs/production-topology" },
       { label: "Security Architecture", href: "/docs/security-architecture" },
       { label: "Access Control", href: "/docs/access-control" },
+      { label: "Thread Access", href: "/docs/thread-access" },
       { label: "Permissions", href: "/docs/permissions" },
       { label: "Retry", href: "/docs/retry" },
       { label: "Observability", href: "/docs/observability" },
@@ -300,19 +301,19 @@ describe("documentation registry invariants", () => {
     expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
   })
 
-  it("pins the exact 58-page reading order", () => {
+  it("pins the exact 59-page reading order", () => {
     const expectedPages = (FOUNDATION_DOCS_NAV as readonly DocsNavSection[]).flatMap(
       (section) => section.items,
     )
 
-    expect(expectedPages).toHaveLength(58)
+    expect(expectedPages).toHaveLength(59)
     expect(DOCS_PAGES).toEqual(expectedPages)
   })
 
   it("adds ten hidden API leaves immediately after the hub", () => {
-    expect(DOCS_NAV.reduce((count, section) => count + section.items.length, 0)).toBe(58)
-    expect(DOCS_PAGES).toHaveLength(58)
-    expect(ALL_DOCS_PAGES).toHaveLength(68)
+    expect(DOCS_NAV.reduce((count, section) => count + section.items.length, 0)).toBe(59)
+    expect(DOCS_PAGES).toHaveLength(59)
+    expect(ALL_DOCS_PAGES).toHaveLength(69)
 
     const hubIndex = ALL_DOCS_PAGES.findIndex(({ href }) => href === "/docs/api")
     expect(ALL_DOCS_PAGES.slice(hubIndex + 1, hubIndex + 11)).toEqual(API_REFERENCE_PAGES)

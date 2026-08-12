@@ -1,6 +1,7 @@
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { readPendingInterrupts } from "./pending-interrupts.js"
+import { assertNoReservedKey } from "./thread-metadata.js"
 
 /**
  * Thread-metadata key holding the route whose turn PARKED the interrupts that
@@ -122,7 +123,13 @@ export async function settleParkedRoute(options: {
     // could have cleared the key, and believing the stale copy would leave the
     // thread parked with nothing recorded. One write per parked turn is cheap
     // enough not to reason about that race at all.
-    await threadsStore.updateMetadata(threadId, { [PARKED_ROUTE_KEY]: routeKey })
+    // Guarded like every other runtime write: the merge is shallow and the
+    // access stamp shares this flat object, so no runtime patch may carry the
+    // reserved key. `PARKED_ROUTE_KEY` is not that key, which is exactly why
+    // this is an assertion and not a branch.
+    const parkPatch = { [PARKED_ROUTE_KEY]: routeKey }
+    assertNoReservedKey(parkPatch)
+    await threadsStore.updateMetadata(threadId, parkPatch)
     return
   }
   // The stale-read direction that survives here is the harmless one: believing
@@ -132,7 +139,9 @@ export async function settleParkedRoute(options: {
   try {
     const pending = options.pendingAfter ?? (await readParkedInterruptIds(checkpointer, threadId))
     if (pending.size > 0) return
-    await threadsStore.updateMetadata(threadId, { [PARKED_ROUTE_KEY]: null })
+    const clearPatch = { [PARKED_ROUTE_KEY]: null }
+    assertNoReservedKey(clearPatch)
+    await threadsStore.updateMetadata(threadId, clearPatch)
   } catch {
     // Deliberately silent — see above: keeping the old value over-restricts.
   }

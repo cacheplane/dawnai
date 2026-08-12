@@ -73,6 +73,11 @@ export const DAWN_ERRORS = {
     title: "Subagent dispatch denied",
     docsPath: "/docs/subagents#delegation-policy",
   },
+  DAWN_E3003: {
+    code: "DAWN_E3003",
+    title: "Thread access policy failed to load",
+    docsPath: "/docs/thread-access#load-failures",
+  },
   DAWN_E4001: {
     code: "DAWN_E4001",
     title: "Model provider package missing",

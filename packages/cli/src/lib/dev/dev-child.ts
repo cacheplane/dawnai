@@ -16,6 +16,17 @@ interface DevChildCommandOptions {
 export interface SpawnDevChildOptions {
   readonly appRoot: string
   readonly port: number
+  /**
+   * Sink for the child's stdout, verbatim (chunks carry their own newlines).
+   *
+   * The runtime runs in this child, so everything it prints — including the
+   * thread-access boot line, the only signal that an app's policy stopped
+   * binding — reaches the operator through here or not at all.
+   *
+   * The pipe is drained whether or not this is supplied: an unread `pipe`
+   * stdio fills its buffer and then blocks the child on its next write.
+   */
+  readonly onStdout?: (chunk: string) => void
 }
 
 export class DevChildStartupError extends Error {
@@ -204,6 +215,12 @@ export function spawnDevChild(options: SpawnDevChildOptions): SpawnedDevChild {
 
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk)
+  })
+
+  // Attached unconditionally — the listener is what puts the stream in flowing
+  // mode, so this is the drain as well as the forward.
+  child.stdout?.on("data", (chunk) => {
+    options.onStdout?.(String(chunk))
   })
 
   child.on("message", (message: unknown) => {

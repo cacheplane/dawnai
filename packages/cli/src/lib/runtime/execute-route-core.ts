@@ -64,7 +64,7 @@ import {
 } from "@dawn-ai/langchain"
 import { routeNamespaceKey } from "@dawn-ai/memory/namespace"
 import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { DawnMiddleware, ThreadAccessPolicy } from "@dawn-ai/sdk"
 import { type DawnAgent, isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
@@ -114,6 +114,17 @@ export interface RuntimeBootFallbacks {
   readonly loadConfig: (appRoot: string) => Promise<DawnConfig | undefined>
   /** The `src/middleware.ts` probe. */
   readonly loadMiddleware: (appRoot: string) => Promise<DawnMiddleware | undefined>
+  /**
+   * The `src/thread-access.ts` probe.
+   *
+   * OPTIONAL, unlike `loadMiddleware`, because this interface is exported: an
+   * external embedder constructing the bag as an object literal would fail to
+   * typecheck against a new required member. The cost is a silent-ungating
+   * vector — `fallbacks` present, this absent, no disk probe, no manifest and
+   * no error — which is paid for by the one boot line naming the resolution
+   * source.
+   */
+  readonly loadThreadAccess?: (appRoot: string) => Promise<ThreadAccessPolicy | undefined>
   /** Per-route disk load: route module, tools, state fields, memory.ts. */
   readonly loadRouteModules: (options: {
     readonly appRoot: string
@@ -223,6 +234,15 @@ export interface RuntimeBootFallbacks {
  *                               time can tell "had skills" from "had none")
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
  *                               approve (memory-handler)
+ *
+ * CONDITIONAL — one input, two answers, because the difference is the security
+ * property rather than a preference:
+ *   - `loadThreadAccess`      → absent policy file: degrades to "no gate", so an
+ *                               app that never had one keeps today's behavior
+ *                               exactly. Present policy file that cannot be
+ *                               bound: THROWS DAWN_E3003 and fails the boot.
+ *                               There is no path on which a policy the author
+ *                               wrote resolves to "allow all".
  */
 function requireFallbacks(
   fallbacks: RuntimeBootFallbacks | undefined,
