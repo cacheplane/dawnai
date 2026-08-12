@@ -31,14 +31,26 @@ describe("gate policies", () => {
   it("perScorer() requires each scorer with a threshold to meet it", () => {
     expect(gate.perScorer()(report).passed).toBe(false) // y: 0.5 < 0.8
   })
+  it("perScorer() ignores scorer aggregates without an explicit threshold", () => {
+    expect(
+      gate.perScorer()({
+        ...report,
+        byScorer: [{ scorer: "informational", mean: 0 }],
+      }).passed,
+    ).toBe(true)
+  })
   it("all() requires every policy; any() requires one", () => {
     expect(gate.all(gate.mean(0.7), gate.everyCase(0.5))(report).passed).toBe(true)
     expect(gate.all(gate.mean(0.7), gate.everyCase(0.6))(report).passed).toBe(false)
     expect(gate.any(gate.mean(0.9), gate.everyCase(0.5))(report).passed).toBe(true)
   })
   it("resolveGate prefers gate, then threshold sugar, then informational", () => {
-    expect(resolveGate({ name: "e", dataset: [], scorers: [], gate: gate.mean(0.9) })(report).passed).toBe(false)
-    expect(resolveGate({ name: "e", dataset: [], scorers: [], threshold: 0.7 })(report).passed).toBe(true)
+    expect(
+      resolveGate({ name: "e", dataset: [], scorers: [], gate: gate.mean(0.9) })(report).passed,
+    ).toBe(false)
+    expect(
+      resolveGate({ name: "e", dataset: [], scorers: [], threshold: 0.7 })(report).passed,
+    ).toBe(true)
     expect(resolveGate({ name: "e", dataset: [], scorers: [] })(report).passed).toBe(true) // informational
   })
 })

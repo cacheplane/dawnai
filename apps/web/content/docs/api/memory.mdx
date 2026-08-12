@@ -1,0 +1,318 @@
+# @dawn-ai/memory
+
+## Use this when
+
+Use this package when your application needs a standalone long-term-memory store or lower-level browse, namespace, ranking, and reconciliation utilities. Most Dawn routes should declare memory with `defineMemory()` and follow [Long-term Memory](/docs/memory/long-term).
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/memory
+```
+
+```ts
+import { sqliteMemoryStore } from "@dawn-ai/memory"
+import { validateBrowseQuery } from "@dawn-ai/memory/browse"
+import { serializeNamespace } from "@dawn-ai/memory/namespace"
+import { approveWithReconcile } from "@dawn-ai/memory/reconcile"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/memory` | node-only | not-claimed | application | supported |
+| `@dawn-ai/memory/browse` | edge-safe | dependency-free | integration | supported |
+| `@dawn-ai/memory/namespace` | edge-safe | not-claimed | integration | supported |
+| `@dawn-ai/memory/reconcile` | edge-safe | not-claimed | integration | supported |
+
+The root includes the SQLite store. Import `/browse`, `/namespace`, or `/reconcile` directly when an edge integration needs only that contract.
+
+## Public exports
+
+### `@dawn-ai/memory`
+
+| Export | Responsibility |
+|---|---|
+| `BrowseCursorPayload` | Describe decoded browse cursor metadata. |
+| `BrowseCursorValue` | Describe one cursor sort value. |
+| `BROWSE_CURSOR_VERSION` | Identify the cursor format. |
+| `browseCursorKey` | Build a cursor comparison key. |
+| `browseQueryFingerprint` | Fingerprint cursor-bound query inputs. |
+| `decodeBrowseCursor` | Decode and validate cursor structure. |
+| `encodeBrowseCursor` | Encode a browse cursor. |
+| `normalizeSetFilter` | Normalize a set-valued browse filter. |
+| `ResolvedBrowseSort` | Describe normalized browse ordering. |
+| `DEFAULT_BROWSE_ORDER` | Expose default browse ordering. |
+| `resolveBrowseOrder` | Normalize requested browse ordering. |
+| `namespacePrefixUpperBound` | Compute a half-open namespace-prefix bound. |
+| `utcDayAfter` | Compute the next UTC day. |
+| `utcDayStart` | Normalize a UTC day start. |
+| `BROWSE_DEFAULT_LIMIT` | Expose the default page size. |
+| `BROWSE_MAX_LIMIT` | Expose the recommended untrusted-boundary ceiling. |
+| `BROWSE_SORT_FIELDS` | List supported sort fields. |
+| `BrowseQueryError` | Report invalid browse input. |
+| `validateBrowseQuery` | Validate or reject browse input. |
+| `buildConsolidationPrompt` | Build a consolidation prompt. |
+| `buildReflectionPrompt` | Build a reflection prompt. |
+| `buildReflectionRecords` | Materialize reflection records. |
+| `buildReflectionWatermarkRecord` | Materialize a reflection watermark. |
+| `buildSummaryRecord` | Materialize a summary record. |
+| `ConsolidationBatch` | Describe one consolidation batch. |
+| `eventTimeOf` | Resolve a record's event time. |
+| `isoWeekKey` | Group an instant by ISO week. |
+| `parseConsolidationOutput` | Parse consolidation model output. |
+| `parseReflectionOutput` | Parse reflection model output. |
+| `ReflectionInput` | Describe reflection input. |
+| `ReflectionInsight` | Describe a parsed insight. |
+| `selectConsolidationBatches` | Select deterministic consolidation work. |
+| `selectReflectionInput` | Select deterministic reflection input. |
+| `fuseHybrid` | Fuse keyword and vector candidates. |
+| `rankKeywordCandidates` | Rank keyword candidates. |
+| `MemoryScopeTuple` | Describe ordered namespace dimensions. |
+| `parseNamespace` | Parse a serialized namespace. |
+| `routeNamespaceKey` | Normalize a route path for namespacing. |
+| `serializeNamespace` | Serialize namespace dimensions. |
+| `ApproveResult` | Describe reconciliation approval. |
+| `approveWithReconcile` | Approve a candidate with reconciliation. |
+| `classifyWrite` | Classify an add, update, or supersede. |
+| `WriteOp` | Name a classified write operation. |
+| `WritePolicy` | Describe per-kind write discipline. |
+| `writePolicyFor` | Resolve per-kind write discipline. |
+| `DEFAULT_CANDIDATE_POOL` | Expose default ranking candidate count. |
+| `DEFAULT_RECALL_WEIGHTS` | Expose default recall weights. |
+| `DEFAULT_RECENCY_HALF_LIFE_MS` | Expose default recency decay. |
+| `idf` | Compute inverse document frequency. |
+| `RecallRankingOptions` | Configure recall ranking. |
+| `RecallWeights` | Configure ranking weights. |
+| `recencyDecay` | Compute recency contribution. |
+| `scoreMemory` | Score one memory candidate. |
+| `sqliteMemoryStore` | Create a SQLite memory store. |
+| `tokenize` | Tokenize text for keyword recall. |
+| `BrowseFilter` | Describe one browse filter. |
+| `BrowsePage` | Describe a browse page. |
+| `BrowseQuery` | Describe browse input. |
+| `BrowseSortEntry` | Describe one sort entry. |
+| `BrowseSortField` | Name a sortable field. |
+| `MemoryKind` | Name a memory kind. |
+| `MemoryQuery` | Describe recall input. |
+| `MemoryRecord` | Describe a stored memory. |
+| `MemorySource` | Describe record provenance. |
+| `MemoryStats` | Describe store statistics. |
+| `MemoryStatus` | Name a record status. |
+| `MemoryStore` | Define the memory-store contract. |
+| `VectorRankingOptions` | Configure vector recall. |
+| `cosineSimilarity` | Compare vector direction. |
+| `DEFAULT_RRF_K` | Expose the reciprocal-rank constant. |
+| `DEFAULT_VECTOR_K` | Expose the default vector candidate count. |
+| `fuseRRF` | Fuse ranked lists by reciprocal rank. |
+| `RankedList` | Describe a ranked list. |
+
+### `@dawn-ai/memory/browse`
+
+| Export | Responsibility |
+|---|---|
+| `BrowseCursorPayload` | Describe decoded cursor metadata. |
+| `BrowseCursorValue` | Describe one cursor sort value. |
+| `BROWSE_CURSOR_VERSION` | Identify the cursor format. |
+| `browseCursorKey` | Build a cursor comparison key. |
+| `browseQueryFingerprint` | Bind a cursor to query inputs. |
+| `decodeBrowseCursor` | Decode a cursor. |
+| `encodeBrowseCursor` | Encode a cursor. |
+| `normalizeSetFilter` | Normalize a set filter. |
+| `ResolvedBrowseSort` | Describe normalized ordering. |
+| `DEFAULT_BROWSE_ORDER` | Expose default ordering. |
+| `resolveBrowseOrder` | Normalize ordering. |
+| `namespacePrefixUpperBound` | Compute a namespace-prefix bound. |
+| `utcDayAfter` | Compute the next UTC day. |
+| `utcDayStart` | Normalize a UTC day start. |
+| `BROWSE_DEFAULT_LIMIT` | Expose the default limit. |
+| `BROWSE_MAX_LIMIT` | Expose the recommended untrusted-boundary ceiling. |
+| `BROWSE_SORT_FIELDS` | List sortable fields. |
+| `BrowseQueryError` | Report invalid input. |
+| `validateBrowseQuery` | Validate or reject browse input. |
+| `BrowseFilter` | Describe one filter. |
+| `BrowsePage` | Describe a page. |
+| `BrowseQuery` | Describe browse input. |
+| `BrowseSortEntry` | Describe one sort entry. |
+| `BrowseSortField` | Name a sortable field. |
+| `MemoryKind` | Name a memory kind. |
+| `MemoryRecord` | Describe a memory row. |
+| `MemorySource` | Describe provenance. |
+| `MemoryStatus` | Name record status. |
+
+### `@dawn-ai/memory/namespace`
+
+| Export | Responsibility |
+|---|---|
+| `MemoryScopeTuple` | Describe ordered namespace dimensions. |
+| `parseNamespace` | Parse a serialized namespace. |
+| `routeNamespaceKey` | Normalize a route path. |
+| `serializeNamespace` | Serialize dimensions. |
+
+### `@dawn-ai/memory/reconcile`
+
+| Export | Responsibility |
+|---|---|
+| `ApproveResult` | Describe approval output. |
+| `approveWithReconcile` | Approve with deterministic reconciliation. |
+| `classifyWrite` | Classify a write. |
+| `WriteOp` | Name a write operation. |
+| `WritePolicy` | Describe write discipline. |
+| `writePolicyFor` | Resolve write discipline. |
+
+## Key contracts
+
+### `MemoryScopeTuple`
+
+```ts api-contract="@dawn-ai/memory#./namespace:MemoryScopeTuple"
+export interface MemoryScopeTuple {
+  readonly workspace?: string
+  readonly route?: string
+  readonly tenant?: string
+  readonly user?: string
+  readonly agent?: string
+}
+```
+
+**Fields: `@dawn-ai/memory#./namespace:MemoryScopeTuple`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly workspace` | `string` | no | Scope by application workspace. |
+| `readonly route` | `string` | no | Scope by route. |
+| `readonly tenant` | `string` | no | Scope by tenant. |
+| `readonly user` | `string` | no | Scope by user. |
+| `readonly agent` | `string` | no | Scope by agent. |
+
+### Store and query shapes
+
+```ts api-contract="@dawn-ai/memory#.:MemoryRecord"
+export interface MemoryRecord {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly namespace: string
+  readonly content: string
+  readonly data: Record<string, unknown>
+  readonly source: MemorySource
+  readonly confidence: number
+  readonly tags: readonly string[]
+  readonly status: MemoryStatus
+  readonly supersedes?: readonly string[]
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly effectiveAt?: string
+  readonly expiresAt?: string
+}
+```
+
+```ts api-contract="@dawn-ai/memory#.:MemoryQuery"
+export interface MemoryQuery {
+  readonly namespace: string
+  readonly query?: string
+  readonly kind?: MemoryKind
+  readonly tags?: readonly string[]
+  readonly status?: MemoryStatus
+  readonly limit?: number
+  readonly now?: string
+  readonly since?: string
+  readonly until?: string
+  readonly queryEmbedding?: Float32Array
+  readonly embedderId?: string
+  readonly vector?: VectorRankingOptions
+}
+```
+
+```ts api-contract="@dawn-ai/memory#.:BrowsePage"
+export interface BrowsePage {
+  readonly records: readonly MemoryRecord[]
+  readonly total: number
+  readonly continuation: string | null
+}
+```
+
+```ts api-contract="@dawn-ai/memory#.:BrowseQuery"
+export interface BrowseQuery {
+  readonly namespacePrefix?: string
+  readonly namespace?: string
+  readonly status?: MemoryStatus | readonly MemoryStatus[]
+  readonly kind?: MemoryKind | readonly MemoryKind[]
+  readonly sourceType?: MemorySource["type"]
+  readonly limit?: number
+  readonly offset?: number
+  readonly since?: string
+  readonly until?: string
+  readonly now?: string
+  readonly filters?: readonly BrowseFilter[]
+  readonly orderBy?: readonly BrowseSortEntry[]
+  readonly cursor?: string
+}
+```
+
+```ts api-contract="@dawn-ai/memory#.:MemoryStore"
+export interface MemoryStore {
+  put(
+    rec: MemoryRecord,
+    opts?: { readonly embedding?: Float32Array; readonly embeddingModel?: string },
+  ): Promise<void>
+  get(id: string): Promise<MemoryRecord | null>
+  search(q: MemoryQuery): Promise<readonly MemoryRecord[]>
+  update(id: string, patch: Partial<MemoryRecord>): Promise<void>
+  supersede(id: string, bySupersedingId: string): Promise<void>
+  delete(id: string): Promise<void>
+  listCandidates(namespacePrefix: string): Promise<readonly MemoryRecord[]>
+  browse(q?: BrowseQuery): Promise<BrowsePage>
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<MemoryStats>
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
+}
+```
+
+```ts api-contract="@dawn-ai/memory#./namespace:serializeNamespace"
+export declare function serializeNamespace(tuple: MemoryScopeTuple): string
+```
+
+```ts api-contract="@dawn-ai/memory#./reconcile:approveWithReconcile"
+export declare function approveWithReconcile(
+  store: MemoryStore,
+  id: string,
+  opts: { readonly identityKeys: readonly string[]; readonly now: string },
+): Promise<ApproveResult>
+```
+
+#### Behavior contract `memory.namespace.stable-encoding`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory/test/namespace.test.ts","testNames":["serializes a scope tuple with stable key order","throws on an empty tuple (fail-closed)","round-trips encoded values containing | = %"]}] */}
+serializeNamespace emits dimensions in a stable order, escapes reserved delimiters reversibly, and rejects an empty scope.
+
+### Trust boundaries
+
+`parseNamespace()` is a parser, not an authorization check: it ignores unknown and malformed parts. Browse cursors detect query mismatches but are not authenticated tokens. At an untrusted boundary, the server must own the namespace and enforce an application limit no larger than `BROWSE_MAX_LIMIT`.
+
+Call `validateBrowseQuery(query, { maxLimit: BROWSE_MAX_LIMIT })` at that boundary. Stores do not enforce the 1,000-row ceiling automatically.
+
+SQLite stores memory rows—including content, data, source, and tags—as plaintext. A namespace organizes records; it is not a security boundary. Protect the database file and its path with application and infrastructure access controls.
+
+#### Behavior contract `memory.browse.pure-subpath`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory/test/browse-contract.test.ts","testNames":["reaches nothing outside the pure browse sources"]}] */}
+The /browse entry reaches only the pure browse modules and no external package, so it does not pull node:sqlite into edge or browser bundles.
+
+#### Behavior contract `memory.write-policy`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory/test/write-policy.test.ts","testNames":["semantic reconciles","episodic appends","reflection appends (insights accumulate)","procedural still throws a not-yet-wired error","the low-level store accepts a typed procedural record"]},{"kind":"test-assertion","file":"packages/core/test/memory-capability-episodic.test.ts","testNames":["procedural kind returns a not-yet-wired tool error with zero store writes"]}] */}
+`writePolicyFor()` selects reconciliation for semantic memory and append behavior for episodic and reflection memory; it throws for procedural memory because that reconciliation policy is not implemented. Low-level `MemoryStore` implementations can store typed procedural records, while the generated `remember` tool returns a not-yet-wired rejection without throwing or writing.
+
+#### Approval caveats
+
+`approveWithReconcile()` uses a non-transactional read-classify-write sequence and scans at most 10,000 active rows. Semantic memory reconciles; episodic and reflection memory append.
+
+## Examples and related guides
+
+```ts
+import { sqliteMemoryStore } from "@dawn-ai/memory"
+
+const store = sqliteMemoryStore({ path: ".dawn/memory.sqlite" })
+const records = await store.search({ namespace: "workspace=acme", query: "shipping" })
+```
+
+Continue with [Long-term Memory](/docs/memory/long-term), [Recall and Retrieval](/docs/memory/retrieval), [Browse and Manage Memory](/docs/memory/browse), and [Persistence and Tenancy](/docs/persistence).

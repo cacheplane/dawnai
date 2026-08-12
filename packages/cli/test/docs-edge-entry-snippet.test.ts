@@ -13,12 +13,12 @@ import {
 } from "./helpers/hono-edge-fixture.js"
 
 // ---------------------------------------------------------------------------
-// THE DOCS' OWN QUICKSTART, BUNDLED.
+// THE CANONICAL EDGE GUIDE'S COMPOSITION SKELETON, BUNDLED.
 //
 // `edge-bundle-purity.test.ts` bundles the emitted `app.mjs` and proves the
-// GENERATED entry links clean. This one covers the other half of the deployment
-// page: the hand-wired snippet a reader copies when they want the fetch entry
-// without the `hono` target's scaffolding.
+// GENERATED entry links clean. This one covers the canonical Edge guide's
+// hand-wired lifecycle/composition skeleton, which a reader adapts when the
+// generated `app.mjs` cannot be used as the deployment entry unchanged.
 //
 // It exists because that snippet was wrong. It named `./.dawn/build/modules.mjs`
 // — the NODE target's manifest, which imports `node:path`, `node:url` and
@@ -37,33 +37,60 @@ import {
 // workerd, no network. It runs on every CI run.
 // ---------------------------------------------------------------------------
 
-const DEPLOYMENT_DOC = join(repoRoot, "apps", "web", "content", "docs", "deployment.mdx")
+const EDGE_DEPLOYMENT_DOC = join(
+  repoRoot,
+  "apps",
+  "web",
+  "content",
+  "docs",
+  "deployment",
+  "edge.mdx",
+)
 
-/** The heading whose first TypeScript fence is the snippet under test. */
-const SECTION_HEADING = "### The `@dawn-ai/cli/fetch` entry point"
+/** The heading whose first JavaScript fence is the skeleton under test. */
+const SECTION_HEADING = "## Compose through `@dawn-ai/cli/fetch`"
+const ROUTER_HEADING = "## Compose the Hono router"
 
 /** Where the docs tell the reader the build artifacts live. */
 const BUILD_DIR_PREFIX = "./.dawn/build/"
 
 /**
- * The first ```ts fence after {@link SECTION_HEADING}.
+ * The first ```js fence after {@link SECTION_HEADING}.
  *
  * Deliberately brittle about finding the heading: a silent "no snippet, nothing
  * to check" is exactly how a docs test rots into a no-op.
  */
-async function readQuickstartSnippet(): Promise<string> {
-  const source = await readFile(DEPLOYMENT_DOC, "utf8")
+async function readCompositionSkeleton(): Promise<string> {
+  const source = await readFile(EDGE_DEPLOYMENT_DOC, "utf8")
   const headingAt = source.indexOf(SECTION_HEADING)
   if (headingAt === -1) {
     throw new Error(
-      `${DEPLOYMENT_DOC} no longer contains the heading ${JSON.stringify(SECTION_HEADING)}. ` +
-        "This test pins the snippet under that heading — repoint it rather than deleting it.",
+      `${EDGE_DEPLOYMENT_DOC} no longer contains the heading ${JSON.stringify(SECTION_HEADING)}. ` +
+        "This test pins the canonical skeleton under that heading — repoint it rather than deleting it.",
     )
   }
-  const fence = /```ts\n([\s\S]*?)```/.exec(source.slice(headingAt))
+  const fence = /```js(?:\s+[^\n]*)?\n([\s\S]*?)```/.exec(source.slice(headingAt))
   if (fence?.[1] === undefined) {
     throw new Error(
-      `no \`\`\`ts fence follows ${JSON.stringify(SECTION_HEADING)} in ${DEPLOYMENT_DOC}.`,
+      `no \`\`\`js fence follows ${JSON.stringify(SECTION_HEADING)} in ${EDGE_DEPLOYMENT_DOC}.`,
+    )
+  }
+  return fence[1]
+}
+
+/** The declaration-free JavaScript host example that composes the Dawn router. */
+async function readHostRouterExample(): Promise<string> {
+  const source = await readFile(EDGE_DEPLOYMENT_DOC, "utf8")
+  const headingAt = source.indexOf(ROUTER_HEADING)
+  if (headingAt === -1) {
+    throw new Error(
+      `${EDGE_DEPLOYMENT_DOC} no longer contains the heading ${JSON.stringify(ROUTER_HEADING)}.`,
+    )
+  }
+  const fence = /```js title="host\.mjs"\n([\s\S]*?)```/.exec(source.slice(headingAt))
+  if (fence?.[1] === undefined) {
+    throw new Error(
+      `no declaration-free \`\`\`js title="host.mjs" fence follows ${JSON.stringify(ROUTER_HEADING)} in ${EDGE_DEPLOYMENT_DOC}.`,
     )
   }
   return fence[1]
@@ -154,9 +181,16 @@ afterEach(async () => {
   await Promise.all(created.splice(0).map(removeFixtureApp))
 })
 
-describe("the deployment docs' `@dawn-ai/cli/fetch` snippet, bundled as wrangler bundles", () => {
+describe("the canonical Edge guide's composition skeleton, bundled as wrangler bundles", () => {
+  test("presents the Hono host boundary as declaration-free JavaScript in host.mjs", async () => {
+    const example = await readHostRouterExample()
+    expect(example).toContain('import { dawnApp } from "./dawn-edge.mjs"')
+    expect(example).toContain('app.route("/", dawnApp)')
+    expect(example).not.toMatch(/^\s*(?:interface|type)\s/m)
+  })
+
   test("links with zero node: specifiers — and names the edge manifest, not the node one", async () => {
-    const lines = importLines(await readQuickstartSnippet())
+    const lines = importLines(await readCompositionSkeleton())
     expect(lines.length).toBeGreaterThan(0)
 
     // Both targets in one build dir so `modules.mjs` and `modules.edge.mjs` sit
@@ -178,7 +212,7 @@ describe("the deployment docs' `@dawn-ai/cli/fetch` snippet, bundled as wrangler
   }, 180_000)
 
   test("negative control: the node target's modules.mjs drags builtins in, so this can fail", async () => {
-    const lines = importLines(await readQuickstartSnippet())
+    const lines = importLines(await readCompositionSkeleton())
 
     const appRoot = await createFixtureApp("dawn-docs-edge-snippet-control-", ["node", "hono"])
     created.push(appRoot)

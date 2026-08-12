@@ -30,16 +30,17 @@
   "scripts": {
     "build": "next build && node scripts/post-build.mjs",
     "dev": "next dev",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test e2e playwright.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json"
   },
   "dependencies": {
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/memory": "workspace:*",
-    "@pretable/core": "0.0.8",
-    "@pretable/react": "0.0.8",
-    "@pretable/ui": "0.0.8",
+    "@pretable/core": "0.3.0",
+    "@pretable/react": "0.3.0",
+    "@pretable/ui": "0.3.0",
     "class-variance-authority": "^0.7.1",
     "next": "16.3.0",
     "react": "19.2.8",
@@ -48,6 +49,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",

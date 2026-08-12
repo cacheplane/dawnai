@@ -33,13 +33,28 @@ must be bound to the dawn-sandbox-infra chart's orchestrator Role.
 {{- if .Values.serviceAccount.create }}
 
 serviceAccount.create=true — this chart created the ServiceAccount above in
-THIS namespace ("{{ .Release.Namespace }}"). You must now bind it to the
-sandbox-infra orchestrator Role by adding it as a cross-namespace subject on
-the dawn-sandbox-infra release:
+THIS namespace ("{{ .Release.Namespace }}"). Before sending sandbox traffic,
+bind it to the sandbox-infra orchestrator Role without overwriting existing
+cross-namespace subjects.
 
-  helm upgrade dawn-sandbox-infra charts/dawn-sandbox-infra \
-    --reuse-values \
-    --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"{{ include "dawn-app.serviceAccountName" . }}","namespace":"{{ .Release.Namespace }}"}'
+First export the release's effective values:
+
+  helm get values dawn-sandbox-infra --all --output yaml \
+    > dawn-sandbox-infra-rbac-values.yaml
+
+Edit dawn-sandbox-infra-rbac-values.yaml so orchestrator.subjects contains the
+complete intended subject list: preserve every existing item and append:
+
+  - kind: ServiceAccount
+    name: {{ include "dawn-app.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+
+Inspect the complete file, then apply it. Helm replaces arrays, so never write
+a guessed numeric subject index:
+
+  helm upgrade dawn-sandbox-infra \
+    oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --values dawn-sandbox-infra-rbac-values.yaml
 {{- else }}
 
 serviceAccount.create=false (default) — this chart is reusing an EXISTING
@@ -52,7 +67,7 @@ works out of the box only if one of the following is true:
   2. The operator has added
        {kind: ServiceAccount, name: {{ include "dawn-app.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
      as a cross-namespace subject on the dawn-sandbox-infra chart's
-     `orchestrator.subjects` (same command shown above).
+     `orchestrator.subjects` using a complete values file as described above.
 {{- end }}
 
 Make sure your app's `dawn.config.ts` points the kubernetesSandbox provider at

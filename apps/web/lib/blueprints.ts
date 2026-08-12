@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import matter from "gray-matter"
+import { WEB_CONTENT_ROOT_ENV, webContentRoot } from "./content-root"
 
 export const ALLOWED_CATEGORIES = ["observability", "retrieval", "deploy"] as const
 export type BlueprintCategory = (typeof ALLOWED_CATEGORIES)[number]
@@ -27,12 +28,9 @@ const SITE = "https://dawnai.org"
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
 
 function defaultDir(): string {
-  const cwdDir = join(process.cwd(), "content/blueprints")
-  if (existsSync(cwdDir)) {
-    return cwdDir
-  }
-  // Fallback for when cwd is not apps/web (e.g. the workspace test runner runs
-  // from the repo root): resolve relative to this module (apps/web/lib).
+  const contentDir = join(webContentRoot(), "blueprints")
+  if (process.env[WEB_CONTENT_ROOT_ENV] || existsSync(contentDir)) return contentDir
+
   return join(MODULE_DIR, "..", "content", "blueprints")
 }
 

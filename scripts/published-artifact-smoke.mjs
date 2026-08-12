@@ -325,11 +325,16 @@ import * as root from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 
 assert.deepEqual(Object.keys(root).sort(), [
+  "DAWN_PLAN_ACTIVITY_TYPE",
+  "DAWN_SUBAGENT_ACTIVITY_TYPE",
   "createCounterIdFactory",
   "createDefaultIdFactory",
   "fromRunAgentInput",
   "toAguiEvents",
 ])
+
+assert.equal(root.DAWN_PLAN_ACTIVITY_TYPE, "dawn.plan")
+assert.equal(root.DAWN_SUBAGENT_ACTIVITY_TYPE, "dawn.subagent")
 
 for (const exportName of [
   "createCounterIdFactory",
@@ -353,6 +358,8 @@ assert.equal(payload.runId, "published-smoke")
 
 export function agUiTypeProbeSource() {
   return `import {
+  DAWN_PLAN_ACTIVITY_TYPE,
+  DAWN_SUBAGENT_ACTIVITY_TYPE,
   createCounterIdFactory,
   createDefaultIdFactory,
   fromRunAgentInput,
@@ -361,8 +368,10 @@ export function agUiTypeProbeSource() {
   type DawnAgentStreamChunk,
   type DawnInterruptEnvelope,
   type DawnMessage,
+  type DawnPlanActivityContent,
   type DawnResumeRequest,
   type DawnRunInput,
+  type DawnSubagentActivityContent,
   type IdFactory,
   type RunContext,
   type ToAguiOptions,
@@ -404,6 +413,8 @@ import { asToolCallData } from "@dawn-ai/ag-ui"
 import { asToolResultData } from "@dawn-ai/ag-ui"
 
 type RootValueSurface = readonly [
+  typeof DAWN_PLAN_ACTIVITY_TYPE,
+  typeof DAWN_SUBAGENT_ACTIVITY_TYPE,
   typeof createCounterIdFactory,
   typeof createDefaultIdFactory,
   typeof fromRunAgentInput,
@@ -420,6 +431,8 @@ type RootTypeSurface = readonly [
   ToAguiOptions,
   DawnAgentStreamChunk,
   RunContext,
+  DawnPlanActivityContent,
+  DawnSubagentActivityContent,
 ]
 
 declare const rootTypeSurface: RootTypeSurface
@@ -429,8 +442,32 @@ const chunk: DawnAgentStreamChunk = { type: "token", data: "hello" }
 const context: RunContext = { threadId: "published-smoke", runId: "published-smoke" }
 const options: ToAguiOptions = { idFactory }
 const encoder: typeof encodeAgUiSseFromSubpath = encodeAgUiSseFromSubpath
+const planActivity: DawnPlanActivityContent = {
+  todos: [{ content: "Search the corpus", status: "in_progress" }],
+}
+const subagentActivity: DawnSubagentActivityContent = {
+  name: "researcher",
+  depth: 1,
+  status: "running",
+  todos: planActivity.todos,
+  tools: [{ name: "searchCorpus", status: "completed" }],
+  totalToolCount: 1,
+}
+const planActivityType: "dawn.plan" = DAWN_PLAN_ACTIVITY_TYPE
+const subagentActivityType: "dawn.subagent" = DAWN_SUBAGENT_ACTIVITY_TYPE
 
-void [rootValueSurface, rootTypeSurface, chunk, context, options, encoder]
+void [
+  rootValueSurface,
+  rootTypeSurface,
+  chunk,
+  context,
+  options,
+  encoder,
+  planActivity,
+  subagentActivity,
+  planActivityType,
+  subagentActivityType,
+]
 `
 }
 

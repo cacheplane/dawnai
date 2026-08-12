@@ -15,6 +15,7 @@ import {
   type PendingInterrupt,
   type PendingInterruptSnapshot,
   type PermissionDecision,
+  parsePendingInterrupts,
   readPendingInterrupts,
   resolvePendingResume,
 } from "../src/lib/dev/pending-interrupts.js"
@@ -175,11 +176,13 @@ describe("readPendingInterrupts", () => {
           aliases: ["perm-1", RESUME_KEY_1],
           interruptId: "perm-1",
           resumeKey: RESUME_KEY_1,
+          value: { interruptId: "perm-1" },
         },
         {
           aliases: [RESUME_KEY_2],
           interruptId: RESUME_KEY_2,
           resumeKey: RESUME_KEY_2,
+          value: { kind: "permission" },
         },
       ],
       malformed: false,
@@ -200,6 +203,7 @@ describe("readPendingInterrupts", () => {
           aliases: ["perm-1", "outer-ap-id"],
           interruptId: "perm-1",
           resumeKey: null,
+          value: { interruptId: "perm-1" },
         },
       ],
       malformed: true,
@@ -269,6 +273,107 @@ describe("readPendingInterrupts", () => {
       code: "malformed_checkpoint",
       ok: false,
       status: 409,
+    })
+  })
+
+  test("surfaces the interrupt payload verbatim so a client can re-render the prompt", async () => {
+    const snapshot = await readPendingInterrupts(
+      fakeCheckpointer([
+        [
+          TASK_UUID_1,
+          "__interrupt__",
+          {
+            id: RESUME_KEY_1,
+            value: {
+              detail: { suggestedPattern: "deployProd", toolName: "deployProd" },
+              interruptId: "perm-1",
+              kind: "tool",
+              type: "permission-request",
+            },
+          },
+        ],
+      ]),
+      "thread-payload",
+    )
+
+    expect(snapshot?.interrupts[0]?.value).toEqual({
+      detail: { suggestedPattern: "deployProd", toolName: "deployProd" },
+      interruptId: "perm-1",
+      kind: "tool",
+      type: "permission-request",
+    })
+  })
+
+  test("reports an absent payload as undefined without marking the write malformed", async () => {
+    const snapshot = await readPendingInterrupts(
+      fakeCheckpointer([[TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1 }]]),
+      "thread-no-payload",
+    )
+
+    // toStrictEqual, not toEqual: toEqual ignores undefined-valued keys, so it
+    // would pass whether or not the parse sets `value` at all.
+    expect(snapshot).toStrictEqual({
+      interrupts: [
+        {
+          aliases: [RESUME_KEY_1],
+          interruptId: RESUME_KEY_1,
+          resumeKey: RESUME_KEY_1,
+          value: undefined,
+        },
+      ],
+      malformed: false,
+    })
+  })
+
+  // A non-record payload marks the snapshot malformed but the interrupt is still
+  // listed, carrying that payload verbatim. GET /threads/:id/pending_interrupts
+  // lists a malformed set and never surfaces `malformed`, so this junk reaches
+  // the client — pinned here so dropping it becomes a deliberate wire change.
+  test.each([
+    { name: "null", payload: null },
+    { name: "a string", payload: "oops" },
+    { name: "an array", payload: [] },
+  ])(
+    "lists $name as a non-record payload verbatim and marks the snapshot malformed",
+    async ({ payload }) => {
+      const snapshot = await readPendingInterrupts(
+        fakeCheckpointer([[TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1, value: payload }]]),
+        "thread-malformed-payload",
+      )
+
+      expect(snapshot).toStrictEqual({
+        interrupts: [
+          {
+            aliases: [RESUME_KEY_1],
+            interruptId: RESUME_KEY_1,
+            resumeKey: RESUME_KEY_1,
+            value: payload,
+          },
+        ],
+        malformed: true,
+      })
+    },
+  )
+})
+
+describe("parsePendingInterrupts", () => {
+  test("parses a tuple the caller already holds, with no checkpointer read", () => {
+    const tuple = {
+      pendingWrites: [
+        [TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1, value: { interruptId: "perm-1" } }],
+      ],
+    } as unknown as CheckpointTuple
+
+    expect(parsePendingInterrupts(tuple)).toEqual({
+      interrupts: [
+        {
+          aliases: ["perm-1", RESUME_KEY_1],
+          interruptId: "perm-1",
+          resumeKey: RESUME_KEY_1,
+          value: { interruptId: "perm-1" },
+        },
+      ],
+      malformed: false,
     })
   })
 })

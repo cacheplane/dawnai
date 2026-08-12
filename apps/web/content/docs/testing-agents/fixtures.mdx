@@ -1,0 +1,200 @@
+# Fixtures and Recording
+
+Use an inline fixture when a scenario is short enough to understand beside the test. Use a committed fixture file when several tests share an exchange, a tool chain is long, or reviewing the exact model traffic matters. Both replay deterministically; recording and live mode are explicit local opt-ins that call a real provider.
+
+## Choose inline fixtures or a committed fixture file
+
+Start inline with `script()`. A short intent → tool → answer flow is easier to maintain where it is asserted:
+
+```ts
+const fixtures = script()
+  .user("Filter open items")
+  .callsTool("applyFilter", { status: "open" })
+  .replies("Found 2 open items.")
+```
+
+Move the exchange to a committed fixture file when the script obscures the test or must be reused. Fixture replay replaces model HTTP traffic only: authored tools, capabilities, state, and any external I/O they perform still run.
+
+## How script matching works
+
+aimock selects each response using three match fields:
+
+- `userMessage` compares against the latest user message that contains text. A string from `.user()` matches when that latest text contains the fixture value; a trailing attachment-only user message is skipped in favor of the nearest text-bearing one.
+- `turnIndex` is the number of assistant messages already in the thread before that model call. It is cumulative in a continuing thread.
+- `hasToolResult` examines only messages after the latest user message. It is `false` for the current turn's initial model call and `true` after that turn produces a tool-role result. Earlier turns' tool results do not make the next turn's initial model call match `hasToolResult: true`.
+
+Within one `.user()` group, `script()` emits `turnIndex: 0` for the first response, then increments it for each tool call or reply; post-tool responses also set `hasToolResult: true`. Each new `.user()` group starts again at zero, so groups are suited to fresh-thread scenarios. For a same-thread follow-up, supply explicit fixtures with the cumulative `turnIndex` from the existing conversation.
+
+## Fixture files: author, commit, replay
+
+Resolve a fixture beside the test once, then pass that absolute path to the file helpers:
+
+```ts title="test/agent.test.ts"
+import { fileURLToPath } from "node:url"
+import { loadFixtures, script, writeFixtures } from "@dawn-ai/testing"
+
+const fixturesPath = fileURLToPath(
+  new URL("fixtures/filter-open.fixture.json", import.meta.url),
+)
+```
+
+`new URL(..., import.meta.url)` is relative to the test file. `loadFixtures(path)` and `writeFixtures(path, fixtures)` use the path exactly as supplied; a relative string passed directly to either helper is therefore relative to `process.cwd()`.
+
+### Author inline and snapshot to a file
+
+`writeFixtures` accepts a `script()` builder or a fixture array, creates parent directories, and writes formatted `{ "fixtures": [...] }` JSON.
+
+```ts title="test/agent.test.ts"
+writeFixtures(
+  fixturesPath,
+  script()
+    .user("Filter open items")
+    .callsTool("applyFilter", { status: "open" })
+    .replies("Found 2 open items."),
+)
+```
+
+Run this authoring step intentionally, inspect the JSON, and commit it. Do not leave snapshot generation in the normal test path.
+
+### Replay a fixture file in tests
+
+`loadFixtures` checks only the supported top-level container — a bare array or an object whose `fixtures` property is an array — and returns that array. It does not validate every fixture entry. Replay does not fall back to a provider: if no fixture matches, the model request fails.
+
+Choose one registration scope. Put a shared file in `createAgentHarness({ fixtures })`, or supply it before a run as below. Do not register the same fixture file at both scopes:
+
+```ts title="test/agent.test.ts"
+import { fileURLToPath } from "node:url"
+import { afterAll, it } from "vitest"
+import { createAgentHarness, expectFinalMessage, loadFixtures } from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+const fixturesPath = fileURLToPath(
+  new URL("fixtures/filter-open.fixture.json", import.meta.url),
+)
+const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
+
+afterAll(async () => {
+  await h.close()
+})
+
+it("replays a committed exchange", async () => {
+  const run = await h.run({
+    input: "Filter open items",
+    fixtures: loadFixtures(fixturesPath),
+  })
+  expectFinalMessage(run).toContain("Found 2")
+})
+```
+
+Fixtures supplied to `h.run()` are appended before that run, but they are not one-run overrides: they persist across later `h.run()` calls until `h.reset()` clears them. Because aimock selects the first registered matching fixture, overlapping additions can leave an older fixture shadowing a newer one. Use `h.reset()` between independent scenarios; omit it between turns that intentionally share one thread.
+
+A `turnIndex` mismatch is nonfatal by default: aimock can select a content-matching fixture at a different assistant-message count. Set `AIMOCK_STRICT_TURN_INDEX=1` in the test process when an exact `turnIndex` mismatch must reject the fixture. This strict-turn setting changes selection; replay still does not fall back to a real provider in either mode.
+
+### Record from a real model (local only)
+
+Integrated harness recording exercises one Dawn route and converts the most recent run's captured model traffic into replay keys. Use it only for one fresh-thread first run: construct a new harness, run one representative input immediately, inspect the result, then write it. Set `OPENAI_API_KEY` for the default upstream:
+
+```ts title="test/record-filter.ts"
+import { fileURLToPath } from "node:url"
+import { createAgentHarness, writeFixtures } from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+const fixturesPath = fileURLToPath(
+  new URL("fixtures/filter-open.fixture.json", import.meta.url),
+)
+const h = await createAgentHarness({
+  appRoot,
+  route: "/chat#agent",
+  record: true,
+})
+
+try {
+  await h.run({ input: "Filter open items" })
+  const fixtures = h.getRecordedFixtures()
+  writeFixtures(fixturesPath, fixtures)
+} finally {
+  await h.close()
+}
+```
+
+`getRecordedFixtures()` returns only traffic captured for the most recent `run()`. Its current conversion uses the first user message in the captured request, any tool-role message in the captured request for `hasToolResult`, and a zero-based index within only that latest run's captured calls for `turnIndex`. That is not a safe way to mint a later-turn fixture for an already-active thread: inspect and correct explicit match fields instead, or record from a new harness's first run.
+
+The standalone `record({ out, provider? })` helper is a distinct API. It launches the aimock recorder in a separate process; it does not create a Dawn harness, drive a route, or return fixtures:
+
+```ts title="scripts/record-fixture.ts"
+import { record } from "@dawn-ai/testing"
+
+record({ out: "test/fixtures/filter-open.fixture.json" })
+// Optional upstream override:
+record({
+  out: "test/fixtures/filter-open.fixture.json",
+  provider: "https://api.openai.com",
+})
+```
+
+A relative `out` path is interpreted by that child process relative to the inherited `process.cwd()`. Use an absolute path when the command may run from different directories. The call is synchronous and throws if the recorder exits unsuccessfully.
+
+## Live mode (real model)
+
+Use `live: true` only for local prompt validation. It proxies model calls to the real OpenAI endpoint, requires `OPENAI_API_KEY`, and registers no fixtures. The harness still captures the system prompt, but model output is nondeterministic:
+
+```ts title="test/agent.live.test.ts"
+import { fileURLToPath } from "node:url"
+import { it } from "vitest"
+import { createAgentHarness, expectFinalMessage, expectToolCalled } from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+
+it.skipIf(process.env.CI || !process.env.OPENAI_API_KEY)(
+  "checks the prompt against a real model",
+  async () => {
+    const h = await createAgentHarness({ appRoot, route: "/chat#agent", live: true })
+    try {
+      const run = await h.run({ input: "Filter open items" })
+      expectToolCalled(run, "applyFilter")
+      expectFinalMessage(run).toMatch(/open/i)
+    } finally {
+      await h.close()
+    }
+  },
+  120_000,
+)
+```
+
+Construct and close the live harness inside the skipped test so importing the module cannot start a real-model harness. Keep assertions loose: check that a tool was called, an answer has the expected shape, or a prompt contains a stable instruction. Avoid exact arguments and exact response text. Never run live mode in CI, even when a provider key happens to be present there.
+
+## CI rules and fixture drift
+
+CI should run fixture replay only, never record or live mode. Commit every fixture a test loads, keep recording scripts out of the test command, and fail when a fixture update is tracked or untracked:
+
+```yaml title=".github/workflows/ci.yml"
+- run: pnpm exec vitest --run
+- run: test -z "$(git status --porcelain -- test/fixtures/)"
+```
+
+Unlike `git diff`, the status-based fixture drift check catches both tracked edits and untracked fixture files. Code review still decides whether a changed exchange is correct. Keep record mode and live mode behind explicit local commands, not environment-dependent fallbacks inside ordinary tests.
+
+## Process-global constraints and cleanup
+
+One harness changes process-global aimock and environment state: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and materialized-model caches. Keep only one harness alive per process, run harness suites sequentially, or isolate them in subprocesses. Always `await h.close()` in `afterAll` or `finally`; cleanup stops aimock, releases sandboxes, restores the prior environment, and clears runtime caches.
+
+Record and live runs can send prompts, tool schemas, and conversation content to the configured provider. Treat captured files as reviewable source: remove secrets and irrelevant turns before committing them.
+
+## Update fixtures and troubleshoot
+
+When prompts, tools, or model behavior intentionally change:
+
+1. Re-run the authoring script or one integrated recording locally.
+2. Inspect the fixture diff for sensitive data and unexpected calls.
+3. Replay the focused test without provider credentials.
+4. Commit the fixture and test changes together.
+
+If replay reports no matching fixture, compare the actual user text, cumulative `turnIndex`, and `hasToolResult` with the JSON. If a later scenario matches an earlier wildcard, call `h.reset()` between them. If a following suite points at a stopped aimock port or inherits a temporary key, confirm every harness cleanup is awaited and that harnesses do not overlap.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/testing-agents", title: "Agent Test Harness", subtitle: "run routes and assert agent behavior deterministically" },
+  { href: "/docs/testing", title: "Scenario Testing", subtitle: "test route outputs with run.test.ts scenarios" },
+  { href: "/docs/evals", title: "Evals", subtitle: "score behavior across datasets and repeated cases" },
+]} />

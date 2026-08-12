@@ -1,0 +1,139 @@
+# Recall and Retrieval
+
+Recall is the agent-facing search path. The generated `recall` tool builds a scoped query and delegates to `MemoryStore.search`; use it when the question is “which memories help this run?” Administrative filtering belongs in [Browse and Manage Memory](/docs/memory/browse), not in the ranker.
+
+## The generated recall tool
+
+```ts
+await recall({
+  query: "customer shipping preference",
+  kind: "semantic",
+  tags: ["customer"],
+  since: "-30d",
+  limit: 8,
+})
+```
+
+The `memory.ts` scope declaration chooses which dimensions exist; runtime values plus `memory.resolveScope` construct the namespace for those dimensions. Built-in workspace and route values come from the app root and route path. `resolveScope` receives only `routePath` and `appRoot` and does not receive verified identity, so tenant/user scope still needs application-owned authenticated wiring.
+
+`since` and `until` accept ISO instants or relative expressions and are resolved against the request clock. The tool passes one fixed evaluation timestamp as `now`, which both filters expired rows and anchors recency scoring. Fix that clock in tests when asserting order or window boundaries.
+
+`MemoryStore.search` defaults to active records and a limit of eight. A query-less search filters by namespace, status, kind, tags, expiry, and optional event-time window without calculating relevance. Without a window it orders by `updatedAt`; with `since` or `until` it orders by `effectiveAt` (falling back to `createdAt`).
+
+Tags are applied after the result limit in both in-repo stores. Query-less search limits the ordered rows before filtering tags; ranked and hybrid search slice the ranked list first. Eligible tagged rows below that boundary are omitted, so a tagged result page can contain fewer than `limit` records. Treat this as narrowing a bounded recall result, not exhaustive tag pagination.
+
+## How recall ranks
+
+A keyword query tokenizes the query and record content, then ranks a bounded candidate pool with three signals:
+
+`candidatePool` first keeps the newest token-matching rows before scoring them. A highly relevant older token match outside that recency-truncated pool cannot rank into the result; increase the pool and evaluate latency/quality when histories grow.
+
+| Signal | Default weight | Purpose |
+|---|---:|---|
+| IDF-weighted relevance | 0.6 | Rewards matching rare, specific tokens |
+| Recency | 0.3 | Exponential decay with a 14-day half-life |
+| Confidence | 0.1 | Uses the stored record confidence |
+
+Ties break by newest `updatedAt`, then `id`. Matching is exact-token rather than stemming, so use consistent words for IDs, product names, and domain terms.
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    recall: {
+      weights: { relevance: 0.6, recency: 0.3, confidence: 0.1 },
+      recencyHalfLifeMs: 14 * 24 * 60 * 60 * 1000,
+      candidatePool: 256,
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+Reproducible evaluation requires the same store snapshot, tokenization/tuning, and fixed evaluation timestamp. Advancing `now` can change expiry and recency even when no row is written.
+
+## Semantic recall (opt-in)
+
+Add an embedder when paraphrases must match even without shared tokens:
+
+```ts title="dawn.config.ts"
+import { openaiEmbedder } from "@dawn-ai/langchain"
+
+export default {
+  memory: {
+    vector: {
+      embedder: openaiEmbedder(),
+      weights: { keyword: 1, vector: 1 },
+      rrfK: 60,
+      vectorK: 64,
+      recencyWeight: 0.3,
+      confidenceWeight: 0.1,
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+Hybrid search takes the union of the keyword list and vector-nearest list, combines their ranks with Reciprocal Rank Fusion, then applies bounded recency and confidence. Keyword matches remain present because embeddings are weak on exact IDs, codes, and names.
+
+Every stored embedding carries the embedder model id. Vector comparison includes only rows whose model id matches the active embedder, preventing comparisons across incompatible vector spaces. After changing embedders, older rows still participate in keyword search until you re-embed them.
+
+Writing or recalling degrades to keyword-only if embedding fails. Set `DAWN_DEBUG_MEMORY=1` when diagnosing silent fallbacks. For deterministic tests, use a fixed embedder such as `fakeEmbedder()` from `@dawn-ai/testing`.
+
+## Postgres backend (pgvector)
+
+Install `@dawn-ai/memory-pgvector` when several app instances need a shared memory store:
+
+```ts title="dawn.config.ts"
+import { openaiEmbedder } from "@dawn-ai/langchain"
+import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
+
+const embedder = openaiEmbedder()
+
+export default {
+  memory: {
+    store: pgvectorMemoryStore({
+      connectionString: process.env.DATABASE_URL!,
+      dimensions: embedder.dims,
+    }),
+    vector: { embedder },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+`dimensions` must match the embedder output dimension. The shared `embedder` value makes this a complete hybrid configuration; omitting `memory.vector` leaves the pgvector store on keyword-only recall even though it has a vector column.
+
+SQLite loads matching-model vectors and performs an exact vector scan in process. The pgvector store asks an HNSW index for approximate candidates before applying the shared hybrid stages. Candidate sets can therefore differ, and the two backends do not promise identical order. Evaluate retrieval quality per deployed backend and data distribution.
+
+A custom store owns ranking behavior, so the built-in `memory.recall` and `memory.vector` tuning is not automatically applied to arbitrary implementations. Document and test that store's `MemoryStore.search` contract explicitly.
+
+## The injected index
+
+Before the model starts, Dawn performs a query-less search for a small active-memory index and adds `id: content` lines to the prompt. It is a recency-ordered orientation aid, not the whole store and not semantic ranking. The agent should call `recall` when it needs a specific topic or time window.
+
+## Evaluate retrieval
+
+Build an evaluation set with expected record IDs, not exact prose. Include:
+
+1. literal codes and names that require keyword matching;
+2. paraphrases that need vectors;
+3. expired and out-of-window records;
+4. equal-relevance records with different timestamps or confidence;
+5. rows embedded by an older model id;
+6. enough data to exercise the configured candidate bounds.
+
+Pin the store contents, `now`, embedder output, and ranking config. Run the set against SQLite and pgvector independently instead of expecting backend-identical sequences.
+
+## Troubleshooting
+
+- No results: confirm the exact namespace, active status, kind, tags, and time window.
+- A record vanished: compare `expiresAt` with the fixed evaluation timestamp.
+- Literal ID misses: keep keyword recall enabled and use the exact token.
+- Paraphrase misses: verify the query and rows have embeddings with the same model id.
+- Different Postgres ordering: inspect HNSW candidate recall and ties before changing second-stage weights.
+- Admin page looks unlike recall: that is expected; `browse` filters and sorts records without semantic ranking.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory/long-term", title: "Long-term Memory", subtitle: "declare schema, scope, and writes" },
+  { href: "/docs/memory/episodes", title: "Episodes", subtitle: "time-windowed run history" },
+  { href: "/docs/memory/browse", title: "Browse and Manage Memory", subtitle: "administrative filters and cursors" },
+]} />

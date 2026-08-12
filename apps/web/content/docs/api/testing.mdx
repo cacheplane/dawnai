@@ -1,0 +1,229 @@
+# @dawn-ai/testing
+
+## Use this when
+
+Start here for programmatic tests of Dawn agents, tools, middleware, workspaces, stores, and Agent Protocol behavior. Use [`@dawn-ai/sdk/testing`](/docs/api/sdk#dawn-aisdktesting) instead when authoring route-scoped scenario files for `dawn test`.
+
+## Install and import
+
+```bash
+pnpm add -D @dawn-ai/testing vitest
+```
+
+```ts
+import { createAgentHarness, expectFinalMessage, script } from "@dawn-ai/testing"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/testing` | node-only | not-claimed | testing | supported |
+
+`createAgentHarness()` temporarily changes process-wide `OPENAI_BASE_URL` and `OPENAI_API_KEY`, resets runtime caches, and restores them on awaited close. Do not run concurrent harnesses in one process.
+
+## Public exports
+
+### `@dawn-ai/testing`
+
+| Export | Responsibility |
+|---|---|
+| `Aimock` | Control an aimock server. |
+| `createAimock` | Start an aimock server. |
+| `runCheckpointerConformance` | Register checkpointer conformance tests. |
+| `fakeEmbedder` | Create deterministic test embeddings. |
+| `AimockFixture` | Describe one model fixture. |
+| `AimockResponse` | Describe a fixture response. |
+| `AimockToolCall` | Describe a fixture tool call. |
+| `FixtureSet` | Collect aimock fixtures. |
+| `ScriptBuilder` | Build fixtures fluently. |
+| `script` | Start a fixture script. |
+| `loadFixtures` | Load fixtures from disk. |
+| `writeFixtures` | Write fixtures to disk. |
+| `AgentHarness` | Drive an agent route in-process. |
+| `AgentHarnessOptions` | Configure an agent harness. |
+| `createAgentHarness` | Create an agent harness. |
+| `AgentProtocolInjector` | Drive Agent Protocol requests in-process. |
+| `createAgentProtocolInjector` | Create an Agent Protocol injector. |
+| `InjectResult` | Describe an injected response. |
+| `expectFinalMessage` | Assert final output. |
+| `expectInterrupt` | Assert an interrupt. |
+| `expectNoInterrupt` | Assert no interrupt. |
+| `expectNoToolErrors` | Assert successful tool results. |
+| `expectOffloaded` | Assert result offloading. |
+| `expectPlan` | Assert plan state. |
+| `expectState` | Assert route state. |
+| `expectStreamedTokens` | Assert token streaming. |
+| `expectSubagent` | Assert subagent behavior. |
+| `expectSystemPrompt` | Assert the effective system prompt. |
+| `expectToolCalled` | Assert a tool call. |
+| `expectToolSequence` | Assert tool-call order. |
+| `InterruptInfo` | Describe a collected interrupt. |
+| `SubagentEvent` | Describe a subagent event. |
+| `SubagentRun` | Describe a collected subagent run. |
+| `Todo` | Describe a collected plan item. |
+| `seedMemory` | Seed a memory store for a test. |
+| `runMemoryStoreConformance` | Register memory-store conformance tests. |
+| `createMiddlewareHarness` | Create a middleware harness. |
+| `MiddlewareHarness` | Drive middleware with real request shapes. |
+| `PermissionsStoreInit` | Configure permissions conformance setup. |
+| `runPermissionsStoreConformance` | Register permissions-store conformance tests. |
+| `RecordOptions` | Configure the standalone recorder. |
+| `record` | Spawn the aimock recording CLI. |
+| `AgentRunResult` | Describe one collected agent run. |
+| `collectRunResult` | Collect a runtime stream. |
+| `deriveToolResults` | Correlate tool results with calls. |
+| `ObservedToolCall` | Describe an observed tool call. |
+| `ObservedToolResult` | Describe an observed tool result. |
+| `createSubprocessApp` | Start a real Dawn dev subprocess. |
+| `SubprocessApp` | Control a Dawn subprocess. |
+| `runThreadsStoreConformance` | Register threads-store conformance tests. |
+| `createToolHarness` | Create a tool harness. |
+| `ToolHarness` | Invoke a tool with Dawn context. |
+| `ToolHarnessOptions` | Configure a tool harness. |
+| `createWorkspaceHarness` | Create a temporary workspace harness. |
+| `WorkspaceHarness` | Control a test workspace. |
+| `WorkspaceHarnessOptions` | Configure workspace permissions. |
+
+## Key contracts
+
+### `AgentHarnessOptions`
+
+```ts api-contract="@dawn-ai/testing#.:AgentHarnessOptions"
+export interface AgentHarnessOptions {
+  readonly appRoot: string
+  readonly route: string
+  readonly fixtures?: FixtureSet
+  readonly live?: boolean
+  readonly record?: boolean
+  readonly recordUpstream?: string
+}
+```
+
+**Fields: `@dawn-ai/testing#.:AgentHarnessOptions`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly appRoot` | `string` | yes | Select the Dawn application. |
+| `readonly route` | `string` | yes | Select the route key. |
+| `readonly fixtures` | `FixtureSet` | no | Seed mock responses. |
+| `readonly live` | `boolean` | no | Proxy to a live OpenAI endpoint. |
+| `readonly record` | `boolean` | no | Capture upstream traffic for replay. |
+| `readonly recordUpstream` | `string` | no | Override the record-mode upstream. |
+
+```ts api-contract="@dawn-ai/testing#.:AgentHarness"
+export interface AgentHarness {
+  readonly baseUrl: string
+  run(opts: { input: string; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
+  resume(opts: {
+    resume: readonly DawnResumeEntry[]
+    fixtures?: FixtureSet | ScriptBuilder
+  }): Promise<AgentRunResult>
+  reset(): void
+  close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
+  getRecordedFixtures(): FixtureSet
+}
+```
+
+```ts api-contract="@dawn-ai/testing#.:createAgentHarness"
+export declare function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness>
+```
+
+```ts api-contract="@dawn-ai/testing#.:ScriptBuilder"
+export interface ScriptBuilder {
+  user(text: string): ScriptBuilder
+  callsTool(name: string, args: Record<string, unknown>, opts?: { id?: string }): ScriptBuilder
+  replies(content: string): ScriptBuilder
+  build(): FixtureSet
+}
+```
+
+```ts api-contract="@dawn-ai/testing#.:writeFixtures"
+export declare function writeFixtures(path: string, fixtures: FixtureSet | ScriptBuilder): void
+```
+
+```ts api-contract="@dawn-ai/testing#.:loadFixtures"
+export declare function loadFixtures(path: string): FixtureSet
+```
+
+```ts api-contract="@dawn-ai/testing#.:runMemoryStoreConformance"
+export declare function runMemoryStoreConformance(opts: {
+  readonly name: string
+  readonly makeStore: () => Promise<MemoryStore> | MemoryStore
+  readonly describe: (name: string, fn: () => void) => void
+  readonly close?: (store: MemoryStore) => Promise<void> | void
+}): void
+```
+
+```ts api-contract="@dawn-ai/testing#.:runCheckpointerConformance"
+export declare function runCheckpointerConformance(opts: {
+  readonly name: string
+  readonly makeSaver: () => Promise<BaseCheckpointSaver> | BaseCheckpointSaver
+  readonly describe: (name: string, fn: () => void) => void
+  readonly close?: (saver: BaseCheckpointSaver) => Promise<void> | void
+  readonly supports?: {
+    /** `list()` hydrates `pendingWrites` (SQLite: no). */
+    readonly listPendingWrites?: boolean
+    /** `list({ filter })` narrows by metadata (SQLite: no). */
+    readonly listFilter?: boolean
+  }
+}): void
+```
+
+```ts api-contract="@dawn-ai/testing#.:runPermissionsStoreConformance"
+export declare function runPermissionsStoreConformance(opts: {
+  readonly name: string
+  readonly makeStore: (init: PermissionsStoreInit) => Promise<PermissionsStore> | PermissionsStore
+  readonly describe: (name: string, fn: () => void) => void
+  readonly close?: (store: PermissionsStore) => Promise<void> | void
+}): void
+```
+
+```ts api-contract="@dawn-ai/testing#.:runThreadsStoreConformance"
+export declare function runThreadsStoreConformance(opts: {
+  readonly name: string
+  readonly makeStore: () => Promise<ThreadsStore> | ThreadsStore
+  readonly describe: (name: string, fn: () => void) => void
+  readonly close?: (store: ThreadsStore) => Promise<void> | void
+}): void
+```
+
+#### Behavior contract `testing.fake-embedder.deterministic`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/testing/test/fake-embedder.test.ts","testNames":["is deterministic and unit-length per text","returns a zero vector when the input has no supported tokens","returns an empty vector when dimensions are zero"]}] */}
+With positive dimensions, inputs containing supported tokens are unit-length and deterministic. Empty or tokenless inputs produce a zero vector; `fakeEmbedder({ dims: 0 })` produces an empty vector.
+
+#### Embedder defaults
+
+```ts api-contract="@dawn-ai/testing#.:fakeEmbedder"
+export declare function fakeEmbedder(opts?: { readonly dims?: number }): Embedder
+```
+
+The default is 64 dimensions.
+
+#### Behavior contract `testing.harness-isolation`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/testing/test/harness-fixtures.test.ts","testNames":["reset() isolates fixtures across scenarios — a wildcard fixture does not leak"]},{"kind":"test-assertion","file":"packages/testing/test/harness-construct.test.ts","testNames":["disposes via `await using` (no-throw, idempotent close)"]}] */}
+AgentHarness reset starts a fresh scenario and clears prior fixtures; close is idempotent and async disposal delegates to it.
+
+### Harness and fixture lifecycle
+
+Fixtures accumulate until `reset()`, and the first match wins. `reset()` starts a new harness thread and replaces fixtures; it does not erase every application store. Live and record are separate modes. `getRecordedFixtures()` returns only the latest run. The standalone `record()` helper spawns the aimock CLI and is not harness record mode.
+
+All four `run*Conformance` helpers register Vitest suites. Call them inside a test module with a fresh `makeStore`; they do not start Docker or Postgres. `createWorkspaceHarness()` is permissive by default and is not an execution sandbox. `fakeEmbedder()` is test data, not a production semantic model.
+
+## Examples and related guides
+
+```ts
+import { createAgentHarness, expectFinalMessage, script } from "@dawn-ai/testing"
+
+await using harness = await createAgentHarness({
+  appRoot: process.cwd(),
+  route: "/support#agent",
+})
+const result = await harness.run({
+  input: "Say hello",
+  fixtures: script().user("Say hello").replies("Hello!")
+})
+expectFinalMessage(result).toContain("Hello")
+```
+
+Continue with [Agent Test Harness](/docs/testing-agents), [Fixtures and Recording](/docs/testing-agents/fixtures), and [Scenario Testing](/docs/testing).

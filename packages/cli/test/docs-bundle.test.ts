@@ -11,19 +11,34 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, extname, join, relative, sep } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { tsImport } from "tsx/esm/api"
 import { describe, expect, it } from "vitest"
 import {
   buildReadme,
   extractSummary,
   extractTitle,
+  loadDocsPages,
   mdxToMarkdown,
+  parseDocsPages,
   parseFrontmatter,
-  parseNav,
-  parseNavOrder,
 } from "../src/lib/docs-bundle.js"
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..")
+interface RegistryPage {
+  readonly label: string
+  readonly href: string
+}
+
+const navModule = (await tsImport(
+  pathToFileURL(join(repoRoot, "apps/web/app/components/docs/nav.ts")).href,
+  import.meta.url,
+)) as { readonly ALL_DOCS_PAGES: readonly RegistryPage[] }
+const EXPECTED_DOCS = navModule.ALL_DOCS_PAGES.map(({ href, label }) => ({
+  slug: href.slice("/docs/".length),
+  label,
+}))
+const apiHubIndex = EXPECTED_DOCS.findIndex(({ slug }) => slug === "api")
 const scannedTextExtensions = new Set([
   ".cjs",
   ".css",
@@ -147,15 +162,17 @@ describe("current AG-UI documentation", () => {
     // are deliberately NOT listed: the canonicalized adapter still surfaces
     // permission gates as AG-UI standard interrupts, and the example UIs render
     // them with CopilotKit's current `useInterrupt` hook (see each example's
-    // PermissionInterrupt.tsx). What must stay gone is the *legacy* vocabulary
-    // below — the custom-event interrupt and the `forwardedProps` resume path.
+    // PermissionInterrupt.tsx). Exact `dawn.subagent` is now a valid standard
+    // activity type. What must stay gone is the *legacy* vocabulary below — the
+    // dotted custom-event family, custom-event interrupt, and `forwardedProps`
+    // resume path.
     const removed = [
       "createAgUiTranslator",
       "mapRunInput",
       'CUSTOM{name:"on_interrupt"}',
       "forwardedProps.command.resume",
       "STATE_SNAPSHOT",
-      "dawn.subagent",
+      "dawn.subagent.",
       "TodosPanel",
     ]
     const roots = [
@@ -224,6 +241,59 @@ describe("mdxToMarkdown()", () => {
     expect(out).toContain('import { agent } from "@dawn-ai/sdk"')
   })
 
+  it("strips API behavior authority comments outside fences", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const raw = `# X\n\n${marker}\nVisible claim.\n\n\`${marker}\`\n\n\`\`\`md\n${marker}\n\`\`\`\n`
+    const out = mdxToMarkdown(raw)
+
+    expect(out).toContain("Visible claim.")
+    expect(out).toContain(`\`${marker}\``)
+    expect(out).toContain(`\`\`\`md\n${marker}\n\`\`\``)
+    expect(out).not.toContain(`# X\n\n${marker}\nVisible claim.`)
+    expect(out.split(marker)).toHaveLength(3)
+  })
+
+  it("matches fenced blocks by delimiter character and minimum opening length", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const raw = [
+      "# X",
+      "",
+      "~~~~md",
+      marker,
+      "~~~",
+      marker,
+      "~~~~",
+      marker,
+      "",
+      "````md",
+      marker,
+      "```",
+      marker,
+      "````",
+      marker,
+      "",
+    ].join("\n")
+
+    const out = mdxToMarkdown(raw)
+    expect(out.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(
+      4,
+    )
+    expect(out).toContain(`~~~~md\n${marker}\n~~~\n${marker}\n~~~~`)
+    expect(out).toContain(`\`\`\`\`md\n${marker}\n\`\`\`\n${marker}\n\`\`\`\``)
+  })
+
+  it("rejects backticks in backtick-fence info strings but permits them for tilde fences", () => {
+    const marker =
+      '{/* api-behavior-authorities: [{"kind":"test-assertion","file":"x.test.ts","testNames":["works"]}] */}'
+    const invalid = mdxToMarkdown(`# X\n\n\`\`\`md \`invalid\`\n${marker}\n`)
+    const valid = mdxToMarkdown(`# X\n\n~~~md \`valid\`\n${marker}\n~~~\n`)
+
+    expect(invalid).not.toContain(marker)
+    expect(valid).toContain(`~~~md \`valid\`\n${marker}\n~~~`)
+  })
+
   it("does not add a second H1 when the body already starts with one", () => {
     const raw = "---\ntitle: Dup\n---\n# Real Heading\n\nBody.\n"
     const out = mdxToMarkdown(raw)
@@ -232,28 +302,155 @@ describe("mdxToMarkdown()", () => {
   })
 })
 
-describe("parseNavOrder()", () => {
-  it("returns doc slugs in source order without duplicates", () => {
-    const nav = `
-      { label: "Getting Started", href: "/docs/getting-started" },
-      { label: "Routes", href: "/docs/routes" },
-      { label: "Routes again", href: "/docs/routes" },
-    `
-    expect(parseNavOrder(nav)).toEqual(["getting-started", "routes"])
+describe("loadDocsPages()", () => {
+  it("loads every exhaustive page in canonical registry order", async () => {
+    expect(await loadDocsPages(join(repoRoot, "apps/web/app/components/docs/nav.ts"))).toEqual(
+      EXPECTED_DOCS,
+    )
+  })
+
+  it("loads only exported ALL_DOCS_PAGES, ignoring comments, strings, and non-exported lookalikes", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-docs-nav-"))
+    const navFile = join(fixtureRoot, "nav.ts")
+    try {
+      writeFileSync(
+        navFile,
+        `
+// export const ALL_DOCS_PAGES = [{ label: "Comment decoy", href: "/docs/faq" }]
+const text = 'export const ALL_DOCS_PAGES = [{ label: "String decoy", href: "/docs/errors" }]'
+const OTHER_PAGES = [{ label: "Non-exported decoy", href: "/docs/api" }]
+export const DOCS_NAV = [{ items: [{ label: "Journey decoy", href: "/docs/faq" }] }]
+export const ALL_DOCS_PAGES = [{ label: "Routes", href: "/docs/routes" }]
+void text
+void OTHER_PAGES
+`,
+      )
+
+      expect(await loadDocsPages(navFile)).toEqual([{ slug: "routes", label: "Routes" }])
+    } finally {
+      rmSync(fixtureRoot, { recursive: true })
+    }
+  })
+
+  it("rejects modules without the named exhaustive export", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-docs-pages-"))
+    const navFile = join(fixtureRoot, "nav.ts")
+    try {
+      writeFileSync(
+        navFile,
+        'export const DOCS_NAV = [{ items: [{ label: "Routes", href: "/docs/routes" }] }]\n',
+      )
+      await expect(loadDocsPages(navFile)).rejects.toThrow(/ALL_DOCS_PAGES/)
+    } finally {
+      rmSync(fixtureRoot, { recursive: true })
+    }
   })
 })
 
-describe("parseNav()", () => {
-  it("returns ordered slug/label pairs, deduped by slug", () => {
-    const nav = `
-      { label: "Getting Started", href: "/docs/getting-started" },
-      { label: "Tools", href: "/docs/tools" },
-      { label: "Tools again", href: "/docs/tools" },
-    `
-    expect(parseNav(nav)).toEqual([
+describe("parseDocsPages()", () => {
+  it("returns ordered nested slug/label pairs", () => {
+    expect(
+      parseDocsPages([
+        { label: "Getting Started", href: "/docs/getting-started" },
+        { label: "Tools", href: "/docs/tools" },
+        { label: "Long-term Memory", href: "/docs/memory/long-term" },
+        { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
+      ]),
+    ).toEqual([
       { slug: "getting-started", label: "Getting Started" },
       { slug: "tools", label: "Tools" },
+      { slug: "memory/long-term", label: "Long-term Memory" },
+      { slug: "recipes/add-a-tool", label: "Add a tool" },
     ])
+  })
+
+  it("rejects duplicate slugs instead of silently changing the registry", () => {
+    expect(() =>
+      parseDocsPages([
+        { label: "Tools", href: "/docs/tools" },
+        { label: "Tools again", href: "/docs/tools" },
+      ]),
+    ).toThrow(/duplicate.*tools/i)
+  })
+
+  it.each([
+    ["non-array", null],
+    ["non-object item", ["routes"]],
+    ["missing label", [{ href: "/docs/routes" }]],
+    ["empty label", [{ label: "", href: "/docs/routes" }]],
+    ["whitespace label", [{ label: " Routes ", href: "/docs/routes" }]],
+    ["multiline label", [{ label: "Routes\nInjected", href: "/docs/routes" }]],
+    ["missing href", [{ label: "Routes" }]],
+    ["docs root", [{ label: "Docs", href: "/docs/" }]],
+    ["fragment", [{ label: "Routes", href: "/docs/routes#agent" }]],
+    ["query", [{ label: "Routes", href: ["/docs/routes", "mode=all"].join("?") }]],
+    ["outside docs", [{ label: "Routes", href: "/routes" }]],
+    ["traversal", [{ label: "Routes", href: ["/docs", "..", "routes"].join("/") }]],
+    ["backslash", [{ label: "Routes", href: ["/docs/api", "routes"].join("\\") }]],
+    ["double separator", [{ label: "Routes", href: ["/docs/api", "routes"].join("//") }]],
+  ])("rejects malformed exhaustive pages: %s", (_name, value) => {
+    expect(() => parseDocsPages(value)).toThrow()
+  })
+})
+
+describe("generated documentation bundle", () => {
+  it("contains exactly one topic file per real nav entry in registry order", () => {
+    const readme = readFileSync(join(repoRoot, "packages/cli/docs/README.md"), "utf8")
+    const topics = [...readme.matchAll(/^- \[([^\]]+)\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
+      match[1] && match[2] ? [{ title: match[1], file: match[2] }] : [],
+    )
+    const expectedFiles = EXPECTED_DOCS.map((entry) =>
+      entry.slug === "recipes" ? "recipes/index.md" : `${entry.slug}.md`,
+    )
+    const actualFiles = readdirSync(join(repoRoot, "packages/cli/docs"), {
+      recursive: true,
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "README.md")
+      .map((entry) =>
+        relative(join(repoRoot, "packages/cli/docs"), join(entry.parentPath, entry.name)),
+      )
+      .sort()
+
+    expect(actualFiles).toEqual([...expectedFiles].sort())
+
+    expect(topics).toEqual(
+      EXPECTED_DOCS.map((entry, index) => ({
+        title: entry.label,
+        file: expectedFiles[index] ?? "",
+      })),
+    )
+    expect(topics).toContainEqual({
+      title: "Recipes Overview",
+      file: "recipes/index.md",
+    })
+    expect(topics).toHaveLength(EXPECTED_DOCS.length)
+    expect(topics.slice(apiHubIndex, apiHubIndex + 11).map(({ title }) => title)).toEqual([
+      "API Reference",
+      "@dawn-ai/sdk",
+      "@dawn-ai/cli",
+      "@dawn-ai/core",
+      "@dawn-ai/ag-ui",
+      "@dawn-ai/memory",
+      "@dawn-ai/memory-pgvector",
+      "@dawn-ai/postgres-storage",
+      "@dawn-ai/testing",
+      "@dawn-ai/evals",
+      "dawn:routes",
+    ])
+    expect(topics).toContainEqual({
+      title: "Long-term Memory",
+      file: "memory/long-term.md",
+    })
+    expect(topics).toContainEqual({
+      title: "Fixtures and Recording",
+      file: "testing-agents/fixtures.md",
+    })
+    for (const { title, file } of topics) {
+      const topicPath = join(repoRoot, "packages/cli/docs", file)
+      expect(existsSync(topicPath), file).toBe(true)
+      expect(extractTitle(readFileSync(topicPath, "utf8")), file).toBe(title)
+    }
   })
 })
 
@@ -280,7 +477,12 @@ describe("extractSummary()", () => {
 describe("buildReadme()", () => {
   it("renders an index linking each topic file with its description", () => {
     const md = buildReadme([
-      { slug: "tools", title: "Tools", description: "Co-located tools", file: "tools.md" },
+      {
+        slug: "tools",
+        title: "Tools",
+        description: "Co-located tools",
+        file: "tools.md",
+      },
       { slug: "state", title: "State", description: "", file: "state.md" },
     ])
     expect(md).toContain("# Dawn — Documentation")

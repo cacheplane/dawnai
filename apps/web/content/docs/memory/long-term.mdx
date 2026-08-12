@@ -1,0 +1,179 @@
+# Long-term Memory
+
+Use a route-local `memory.ts` when an agent needs durable, typed records rather than another prompt file. The declaration controls the record shape, kind, namespace dimensions, identity, and whether model-authored writes become active immediately or wait as candidates.
+
+## Declare a collection
+
+Place `memory.ts` beside the agent route:
+
+```ts title="src/app/support/memory.ts"
+import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({
+  kind: "semantic",
+  scope: ["workspace", "route"],
+  identity: ["subject", "attribute"],
+  schema: z.object({
+    subject: z.string(),
+    attribute: z.string(),
+    value: z.string(),
+  }),
+})
+```
+
+- `kind` is `semantic`, `episodic`, `reflection`, or `procedural`.
+- `scope` is a subset of `workspace`, `route`, `tenant`, `user`, and `agent`. It determines the namespace dimensions that isolate records.
+- `schema` validates `remember.data` at typegen time and again at runtime.
+- `identity` selects fields used to reconcile semantic facts. It defaults to `subject` and `predicate`.
+
+`semantic`, `episodic`, and `reflection` writes are wired today. `procedural` is declared in the type system but the generated write path is not wired; `remember` returns a clear rejection rather than inventing semantics.
+
+## Scope is addressing, not authentication
+
+The runtime constructs the route and workspace dimensions. Additional dimensions can come from `memory.resolveScope`:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    resolveScope: ({ routePath, appRoot }) => {
+      console.info("resolving memory scope", { routePath, appRoot })
+      return { agent: process.env.DAWN_AGENT_SLOT ?? "primary" }
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+Only dimensions declared by the route are retained, so this example requires `agent` in `memory.ts`'s `scope`. The callback receives only `routePath` and `appRoot`; it does not receive verified identity or middleware context. Never derive a tenant boundary from an untrusted route parameter, thread id, or request body. If a namespace needs a verified tenant or user, add application-owned wiring that has authenticated that identity and test cross-tenant isolation. See [Persistence and Tenancy](/docs/persistence#tenant-ownership).
+
+## Generated `recall` and `remember` tools
+
+Typegen adds generated `recall` and `remember` tools to an agent route with `memory.ts`:
+
+- `recall({ query?, kind?, tags?, limit?, since?, until? })` reads active in-scope records. [Recall and Retrieval](/docs/memory/retrieval) covers ranking and time windows.
+- `remember({ data, content, tags?, confidence? })` validates the typed data and stores a human-readable `content` string. It is omitted when `memory.writes` is `"off"`.
+
+The model-facing data type follows your Zod schema. Runtime validation remains authoritative when a model calls the tool.
+
+## Record identity and write behavior
+
+Semantic IDs are derived from the namespace and serialized data. With automatic writes, Dawn compares the configured identity fields against active semantic records:
+
+| Match | Result |
+|---|---|
+| No identity match | Append a new active record |
+| Same identity and same data | Update content, confidence, tags, and `updatedAt` on the existing record |
+| Same identity and different data | Write the new record and supersede the old one |
+
+Episodic and reflection records append instead of reconciling. Their IDs salt the namespace and data with the write timestamp, so repeated writes normally remain distinct. Because the store uses an ID-keyed upsert, identical namespace and data written in the same millisecond can produce the same ID and collide/upsert.
+
+Each record carries `createdAt` and `updatedAt`; append kinds also use that request timestamp as `effectiveAt`. The model can supply content, tags, and confidence, but not these identity or timestamp fields.
+
+## Write governance
+
+Configure the generated write tool in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    writes: "candidate",
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+| Mode | Behavior |
+|---|---|
+| `candidate` | Default. Writes are stored for review and do not appear in normal recall until approved. |
+| `auto` | Adds and reconciliations become active immediately. |
+| `ask` | Adds and idempotent updates act like `auto`; a semantic supersede crosses the memory permission gate. |
+| `off` | The generated `remember` tool is absent. |
+
+Candidate approval reconciles semantic identity before activation. Episodic and reflection candidates simply activate because append records do not contradict prior events or insights.
+
+### `ask` mode
+
+`ask` gates only the semantic contradiction branch. If the new fact has no matching identity, or repeats the same data, it writes without that prompt. Append-only episodic and reflection writes also do not trigger the supersede gate.
+
+In headless/non-interactive mode, an unknown decision is allowed, so `ask` behaves like `auto`; without a permissions store, the supersede is also allowed. Explicit deny rules are still honored. This makes `ask` a supervision affordance, not a security boundary. Use an explicit deny policy and application authorization when a write must be prevented, and remember that an interactive decision held in one process is not distributed authorization.
+
+## Reviewing candidates
+
+During development, inspect the queue with the CLI:
+
+```bash
+dawn memory list
+dawn memory approve <id>
+dawn memory reject <id>
+```
+
+The local runtime also exposes candidate list, approve, and reject management routes. They are not blanket authentication: put them behind application-owned authentication and tenant authorization before exposing them. For a broader admin surface, follow [Browse and Manage Memory](/docs/memory/browse).
+
+## Stores and lifecycle
+
+The default Node store is SQLite at `.dawn/memory.sqlite`. Supply `memory.store` for another backend. `@dawn-ai/memory-pgvector` provides a shared Postgres store and vector candidate retrieval; it remains a separate store from checkpoints, thread metadata, and permissions.
+
+Deleting a thread does not delete long-term memory. Use the store's `delete(id)` for an explicit record deletion and `prune({ now, namespacePrefix?, cap? })` for expired records and episodic caps. Design account deletion, retention, backups, and audit across every namespace-bearing store at the application layer.
+
+## Configuration
+
+A complete Node configuration can choose a store, governance mode, ranking, embeddings, episode recording, distillation, and scope resolution independently:
+
+```ts title="dawn.config.ts"
+import { sqliteMemoryStore } from "@dawn-ai/memory"
+
+export default {
+  memory: {
+    store: sqliteMemoryStore({ path: ".dawn/memory.sqlite" }),
+    writes: "candidate",
+    recall: { candidatePool: 256 },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+The built-in SQLite ranker options are ignored by a custom store, which owns its search behavior. Keep provider credentials and application identity outside model-authored scope data.
+
+## Testing
+
+Seed known records without asking a model to call `remember`:
+
+```ts title="test/support-memory.test.ts"
+import { basename } from "node:path"
+import { fileURLToPath } from "node:url"
+import { sqliteMemoryStore } from "@dawn-ai/memory"
+import { serializeNamespace } from "@dawn-ai/memory/namespace"
+import { seedMemory } from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+const store = sqliteMemoryStore({ path: ":memory:" })
+
+await seedMemory(store, [{
+  id: "customer-locale",
+  namespace: serializeNamespace({
+    workspace: basename(appRoot),
+    route: "/support",
+  }),
+  kind: "semantic",
+  content: "Customer prefers French replies",
+  data: { subject: "customer", attribute: "locale", value: "fr" },
+  status: "active",
+}])
+```
+
+This creates the same workspace value as the runtime: the basename of the app root, not the full filesystem path. The `:memory:` database is process-local and leaves no file to clean up. Assert the namespace, schema rejection, candidate approval, semantic update/supersede behavior, and retention separately. Fix timestamps in store tests so recency and expiry do not depend on wall-clock time.
+
+### Verifying against a real model
+
+After deterministic tool and store tests pass, run a narrow integration test that asks the configured model to recall a distinctive seeded fact and, separately, propose a write. Treat model phrasing as nondeterministic: assert the tool event or stored record rather than an exact natural-language sentence. Keep candidate mode enabled unless the test intentionally exercises automatic writes.
+
+## What's deferred
+
+The `procedural` kind is typed but not generated-write wired. There is no automatic migration between namespace schemes, no account-erasure transaction across stores, and no verified request principal passed into `resolveScope`. Build those application boundaries explicitly instead of assuming a declared scope supplies identity.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory/retrieval", title: "Recall and Retrieval", subtitle: "search, hybrid ranking, and backend differences" },
+  { href: "/docs/memory/episodes", title: "Episodes", subtitle: "record settled runs" },
+  { href: "/docs/memory/distillation", title: "Distillation", subtitle: "explicit consolidation and reflection" },
+  { href: "/docs/memory/browse", title: "Browse and Manage Memory", subtitle: "administrative filtering and pagination" },
+]} />

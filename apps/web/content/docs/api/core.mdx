@@ -1,0 +1,198 @@
+# @dawn-ai/core
+
+## Use this when
+
+Route authors normally use [`@dawn-ai/sdk`](/docs/api/sdk), not Core. Use `@dawn-ai/core` when you build a Dawn integration around configuration, capabilities, static type generation, or route metadata. Use `/node` for filesystem discovery and compiler-backed extraction. Do not build application code on `/internal/compiler`.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/core
+```
+
+```ts
+import { config, renderDawnTypes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/core` | edge-safe | not-claimed | integration | low-level |
+| `@dawn-ai/core/node` | node-only | not-claimed | integration | low-level |
+| `@dawn-ai/core/internal/compiler` | node-only | not-claimed | internal | internal |
+
+Importing `/node` registers the disk-backed `dawn.config.ts` loader. The root remains free of that filesystem-loader edge so a static runtime can seed configuration instead.
+
+## Public exports
+
+### `@dawn-ai/core`
+
+| Export | Responsibility |
+|---|---|
+| `ThreadsStore` | Re-export the `@dawn-ai/sqlite-storage` thread-store contract; its deep reference is deferred. |
+| `createAgentsMdMarker` | Create the AGENTS.md capability marker. |
+| `createMemoryMarker` | Create the typed-memory capability marker. |
+| `createMemoryMdMarker` | Create the memory.md capability marker. |
+| `RuntimeTodo` | Describe one runtime plan item. |
+| `createPlanningMarker` | Create the planning capability marker. |
+| `createSkillsMarker` | Create the skills capability marker. |
+| `createSubagentsMarker` | Create the subagents capability marker. |
+| `createWorkspaceMarker` | Create the workspace capability marker. |
+| `BUILT_IN_TOOL_NAMES` | List built-in capability tool names. |
+| `MemorySupersedeDetail` | Describe a gated memory supersede. |
+| `SubagentGateRequest` | Describe a gated subagent operation. |
+| `gateMemorySupersede` | Gate a memory supersede operation. |
+| `gateSubagentOp` | Gate a subagent operation. |
+| `gateToolOp` | Gate a tool operation. |
+| `wrapToolWithApproval` | Wrap a tool with approval handling. |
+| `wrapToolWithConstraint` | Wrap a tool with argument constraints. |
+| `AppliedContribution` | Record an applied capability contribution. |
+| `ApplyResult` | Return contributions and capability errors. |
+| `CapabilityError` | Describe capability detection or load failure. |
+| `CapabilityRegistry` | Hold capability markers. |
+| `applyCapabilities` | Detect and load registered capabilities. |
+| `createCapabilityRegistry` | Construct a capability registry. |
+| `BrowseFilterLike` | Define a memory browse filter boundary. |
+| `BrowsePageLike` | Define a memory browse page boundary. |
+| `BrowseQueryLike` | Define a memory browse query boundary. |
+| `BrowseSortEntryLike` | Define a memory sort entry boundary. |
+| `BrowseSortFieldLike` | Name memory browse sort fields. |
+| `CapabilityContribution` | Describe capability-provided runtime features. |
+| `CapabilityMarker` | Define capability detection and loading. |
+| `CapabilityMarkerContext` | Provide capability marker context. |
+| `DawnToolDefinition` | Describe a contributed Dawn tool. |
+| `Embedder` | Define the memory embedding seam. |
+| `MarkerFs` | Define capability filesystem operations. |
+| `MemoryContext` | Provide memory tool context. |
+| `MemoryKindLike` | Name memory kinds at the Core boundary. |
+| `MemoryRecordLike` | Describe a memory record at the Core boundary. |
+| `MemorySourceTypeLike` | Name memory source types. |
+| `MemoryStatusLike` | Name memory statuses. |
+| `MemoryStoreLike` | Define the runtime memory-store boundary. |
+| `MemoryWritesMode` | Configure runtime memory writes. |
+| `PromptFragment` | Describe capability prompt text. |
+| `StreamTransformer` | Transform runtime stream chunks. |
+| `StreamTransformerInput` | Describe a stream-transform input. |
+| `StreamTransformerOutput` | Describe a stream-transform output. |
+| `CreateWorkspaceFsOptions` | Configure workspace filesystem creation. |
+| `createWorkspaceFs` | Create a workspace filesystem facade. |
+| `DawnConfigLoader` | Define the configuration loader seam. |
+| `__clearDawnConfigCacheForTests` | Clear the config memo in tests. |
+| `loadDawnConfig` | Load or read a memoized app configuration. |
+| `registerConfigLoader` | Register a runtime-specific config loader. |
+| `seedDawnConfig` | Seed configuration for a static runtime. |
+| `config` | Preserve types for a Dawn config object. |
+| `isPrivateSegment` | Test whether a route segment is private. |
+| `isRouteGroupSegment` | Test whether a route segment is a group. |
+| `toRouteSegments` | Parse filesystem route segments. |
+| `RuntimeEnv` | Describe seeded runtime environment values. |
+| `__clearSeededRuntimeEnvForTests` | Clear seeded environment values in tests. |
+| `readRuntimeEnv` | Read process or seeded environment values. |
+| `seedRuntimeEnv` | Seed environment values for a static runtime. |
+| `ResolveStateFieldsOptions` | Configure state-field resolution. |
+| `resolveStateFields` | Normalize state defaults and reducers. |
+| `GuardedSubagentResult` | Represent a gated subagent result. |
+| `ResolveGuardedSubagentArgs` | Configure guarded subagent resolution. |
+| `resolveGuardedSubagent` | Resolve a subagent under policy. |
+| `ResolveSubagentRegistryArgs` | Configure subagent registry resolution. |
+| `dispatchableSubagents` | List subagents eligible for dispatch. |
+| `resolveSubagentRegistry` | Resolve local and conventional subagents. |
+| `DescriptorRouteIndex` | Index route descriptors for subagents. |
+| `ResolvedDelegationRule` | Represent a resolved delegation rule. |
+| `ResolvedSubagent` | Represent one resolved subagent. |
+| `ScopeInput` | Configure route tool scoping. |
+| `ToolOrigin` | Identify where a tool came from. |
+| `resolveToolScope` | Apply route tool policy. |
+| `toolOrigin` | Read a tool's origin. |
+| `renderDawnTypes` | Render the complete generated route module. |
+| `renderRouteTypes` | Render route path and parameter types. |
+| `renderScenarioTypes` | Render scenario map augmentation. |
+| `SCENARIO_TYPES_FILE` | Name the generated scenario declaration file. |
+| `RouteStateFields` | Describe generated state fields for one route. |
+| `renderStateTypes` | Render route state types. |
+| `renderToolTypes` | Render route tool types. |
+| `DawnConfig` | Configure a Dawn application. |
+| `DiscoveredDawnApp` | Describe a located Dawn application. |
+| `DiscoverRoutesOptions` | Configure route discovery. |
+| `ExtractedToolSchema` | Describe one extracted JSON tool schema. |
+| `ExtractedToolType` | Describe one extracted tool type. |
+| `FindDawnAppOptions` | Configure application-root discovery. |
+| `JsonSchemaProperty` | Describe a JSON Schema property. |
+| `LoadDawnConfigOptions` | Select the application whose config is loaded. |
+| `LoadedDawnConfig` | Return config, root, and config path. |
+| `NormalizedRouteModule` | Describe a normalized route module. |
+| `ResolvedStateField` | Describe a normalized state field. |
+| `RouteDefinition` | Describe one discovered route. |
+| `RouteKind` | Re-export the [`@dawn-ai/sdk` route-kind type](/docs/api/sdk#dawn-aisdk). |
+| `RouteManifest` | Describe all routes in an application. |
+| `RouteSegment` | Describe a static or dynamic route segment. |
+| `RouteToolSchemas` | Group extracted schemas by route. |
+| `RouteToolTypes` | Group extracted tool types by route. |
+| `StateFieldReducer` | Name a built-in state reducer. |
+
+### `@dawn-ai/core/node`
+
+| Export | Responsibility |
+|---|---|
+| `loadDawnConfigUncached` | Load `dawn.config.ts` directly from disk. |
+| `registerNodeConfigLoader` | Register the disk-backed config loader. |
+| `registerTsxLoader` | Register TypeScript module loading. |
+| `discoverRoutes` | Discover filesystem routes. |
+| `assertDawnRoutesDir` | Validate the routes directory. |
+| `findDawnApp` | Locate a Dawn application root. |
+| `nodeMarkerFs` | Provide Node filesystem operations to capability markers. |
+| `ExtractToolSchemasOptions` | Configure compiler-backed schema extraction. |
+| `extractToolSchemasForRoute` | Extract tool schemas for a route. |
+| `ExtractToolTypesOptions` | Configure compiler-backed type extraction. |
+| `extractToolTypesForRoute` | Extract tool types for a route. |
+
+### `@dawn-ai/core/internal/compiler`
+
+This discoverable subpath is internal. It has no application compatibility promise; the CLI owns its use during type generation.
+
+## Key contracts
+
+### `loadDawnConfig()`
+
+Use this low-level seam when an integration owns configuration loading. Most Node callers import `/node` to register disk loading; static runtimes seed config instead.
+
+```ts api-contract="@dawn-ai/core#.:loadDawnConfig"
+export declare function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig>
+```
+
+#### Behavior contract `core.load-config.failed-load-eviction`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/core/test/config-loader-seam.test.ts","testNames":["dispatches through the registered loader and memoizes its result","a seed survives an in-flight registered load rejecting after the seed lands"]}] */}
+loadDawnConfig memoizes per app root. A failed in-flight load is evicted only while that same promise remains cached, so a seed written during the load survives its later rejection.
+
+### `resolveStateFields()`
+
+This low-level helper turns state defaults and optional reducer overrides into the normalized fields consumed by type generation and runtime state assembly.
+
+```ts api-contract="@dawn-ai/core#.:resolveStateFields"
+export declare function resolveStateFields(
+  options: ResolveStateFieldsOptions,
+): readonly ResolvedStateField[]
+```
+
+#### Behavior contract `core.state.reducer-resolution`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/core/test/resolve-state-fields.test.ts","testNames":["infers append reducer for array defaults","infers replace reducer for scalar defaults","reducer overrides take precedence","sorts fields alphabetically by name"]}] */}
+resolveStateFields infers append for array defaults and replace for scalar defaults, honors explicit reducer overrides, and sorts fields by name.
+
+### Configuration ownership
+
+Use [Configuration Reference](/docs/configuration) for the full `DawnConfig` schema. The root loader is a runtime seam: Node callers import `/node` to register disk loading, while edge callers seed an already-constructed config.
+
+## Examples and related guides
+
+```ts
+import { config } from "@dawn-ai/core"
+
+export default config({
+  appDir: "src/app",
+  build: { targets: ["node"] },
+})
+```
+
+Continue with [Configuration Reference](/docs/configuration), [Routes](/docs/routes), [State](/docs/state), and [`dawn:routes`](/docs/api/generated-routes).

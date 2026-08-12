@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { runDocsCommand } from "../src/commands/docs.js"
+import { loadDocsPages } from "../src/lib/docs-bundle.js"
 import { CliError } from "../src/lib/output.js"
 
 function fixtureDocs(): string {
@@ -12,6 +13,11 @@ function fixtureDocs(): string {
   mkdirSync(join(dir, "recipes"))
   writeFileSync(join(dir, "recipes", "add-a-tool.md"), "# Add a tool\n")
   writeFileSync(join(dir, "recipes", "index.md"), "# Recipes\n\nTask-oriented how-tos.\n")
+  mkdirSync(join(dir, "memory"))
+  writeFileSync(
+    join(dir, "memory", "long-term.md"),
+    "# Long-term Memory\n\nTyped durable memory.\n",
+  )
   return dir
 }
 
@@ -19,13 +25,33 @@ function fakeIo() {
   const out: string[] = []
   const err: string[] = []
   return {
-    io: { stdout: (m: string) => out.push(m), stderr: (m: string) => err.push(m) },
+    io: {
+      stdout: (m: string) => out.push(m),
+      stderr: (m: string) => err.push(m),
+    },
     out,
     err,
   }
 }
 
 describe("runDocsCommand()", () => {
+  it("lists every generated API reference topic", async () => {
+    const docsDir = join(import.meta.dirname, "../docs")
+    const pages = await loadDocsPages(
+      join(import.meta.dirname, "../../../apps/web/app/components/docs/nav.ts"),
+    )
+    const { io, out } = fakeIo()
+
+    await runDocsCommand({ docsDir }, io)
+
+    const listed = out.join("\n")
+    const apiPages = pages.filter(({ slug }) => slug.startsWith("api/"))
+    expect(apiPages).toHaveLength(10)
+    for (const page of apiPages) {
+      expect(listed).toContain(page.slug)
+    }
+  })
+
   it("lists topics and prints the docs path when no topic is given", async () => {
     const dir = fixtureDocs()
     const { io, out } = fakeIo()
@@ -34,6 +60,7 @@ describe("runDocsCommand()", () => {
     expect(text).toContain(dir)
     expect(text).toContain("tools")
     expect(text).toContain("recipes/add-a-tool")
+    expect(text).toContain("memory/long-term")
   })
 
   it("prints a topic's markdown to stdout", async () => {
@@ -48,6 +75,14 @@ describe("runDocsCommand()", () => {
     const { io, out } = fakeIo()
     await runDocsCommand({ topic: "recipes/add-a-tool.md", docsDir: dir }, io)
     expect(out.join("\n")).toContain("# Add a tool")
+  })
+
+  it("prints a real-shaped nested memory topic", async () => {
+    const dir = fixtureDocs()
+    const { io, out } = fakeIo()
+    await runDocsCommand({ topic: "memory/long-term.md", docsDir: dir }, io)
+    expect(out.join("\n")).toContain("# Long-term Memory")
+    expect(out.join("\n")).toContain("Typed durable memory.")
   })
 
   it("resolves a directory slug to its index.md and lists it as the bare name", async () => {
