@@ -14,8 +14,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { type DawnPostgresSaver, postgresCheckpointer } from "../../postgres-storage/dist/node.js"
 import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
-import { terminalStatus } from "../src/lib/dev/runtime-fetch-core.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
+import { terminalStatus } from "../src/lib/dev/terminal-status.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
 

@@ -56,6 +56,28 @@ async function fixtureApp(overrides: Record<string, string> = {}): Promise<strin
   return appRoot
 }
 
+/** Agent route whose `deployProd` tool needs human approval, so the first call
+ * to it parks the turn on a real checkpointer-backed HITL interrupt. Same shape
+ * the Agent Protocol suite parks with, so both surfaces are proven against the
+ * same kind of park rather than a hand-rolled interrupt chunk. */
+const PARK_ROUTE = [
+  'import { agent } from "@dawn-ai/sdk"',
+  "export default agent({",
+  '  model: "gpt-5-mini",',
+  '  systemPrompt: "You are a test agent. Use the provided tools when asked.",',
+  '  tools: { approve: ["deployProd"] },',
+  "})",
+  "",
+].join("\n")
+
+const DEPLOY_TOOL = [
+  "/** Deploy to an environment. */",
+  "export default async function deployProd(input: { env: string }): Promise<string> {",
+  "  return 'deployed to ' + input.env",
+  "}",
+  "",
+].join("\n")
+
 function parseSseEvents(text: string): Record<string, unknown>[] {
   return text.split("\n\n").flatMap((frame) => {
     const data = frame
@@ -90,7 +112,10 @@ async function requestRun(
   })
 }
 
-async function setupServer(fixtures: ReturnType<ReturnType<typeof script>["build"]>) {
+async function setupServer(
+  fixtures: ReturnType<ReturnType<typeof script>["build"]>,
+  overrides: Record<string, string> = {},
+) {
   const aimock = await createAimock({ fixtures: [] })
   cleanup.push(() => aimock.close())
   const prevBaseUrl = process.env.OPENAI_BASE_URL
@@ -105,7 +130,7 @@ async function setupServer(fixtures: ReturnType<ReturnType<typeof script>["build
   })
   aimock.addFixtures(fixtures)
 
-  const appRoot = await fixtureApp()
+  const appRoot = await fixtureApp(overrides)
   const { listener, close } = await createRuntimeRequestListener({ appRoot })
   cleanup.push(() => close())
 
@@ -869,4 +894,137 @@ it("stops listening to the shutdown signal after a normal response completes", a
   // signal stayed subscribed to the shutdown signal forever, so this abort
   // would flip it to true. A removed listener leaves it false.
   expect(routeSignal?.aborted).toBe(false)
+})
+
+// ---------------------------------------------------------------------------
+// A parked turn takes the NORMAL completion path here: the adapter yields the
+// interrupt chunk and then `done`, so a drained stream is not evidence that the
+// turn finished. AG-UI ends the run on client disconnect, but a park is durable
+// state in the checkpointer and disconnecting does not un-park it — so every
+// path out of the turn has to record the park, not only the one that drained.
+// ---------------------------------------------------------------------------
+
+async function postParkRun(
+  port: number,
+  threadId: string,
+  message: string,
+): Promise<{ events: Record<string, unknown>[]; response: Response }> {
+  const response = await fetch(
+    `http://127.0.0.1:${port}/agui/${encodeURIComponent("/park#agent")}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify({
+        context: [],
+        forwardedProps: {},
+        messages: [{ id: "1", role: "user", content: message }],
+        runId: "park-run",
+        state: {},
+        threadId,
+        tools: [],
+      }),
+    },
+  )
+  return { events: parseSseEvents(await response.text()), response }
+}
+
+async function threadStatus(port: number, threadId: string): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/threads/${threadId}`)
+  expect(response.status).toBe(200)
+  return ((await response.json()) as { status: string }).status
+}
+
+/** Interrupt chunk in Dawn's own vocabulary — what `streamResolvedRoute` yields
+ * when a turn parks, upstream of the AG-UI translation. */
+function interruptChunk(interruptId: string) {
+  return {
+    type: "interrupt" as const,
+    data: { interruptId, kind: "tool", type: "permission-request" },
+  }
+}
+
+it("marks the thread interrupted when an AG-UI turn parks on a permission prompt", async () => {
+  const { port } = await setupServer(
+    script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    { "src/app/park/index.ts": PARK_ROUTE, "src/app/park/tools/deployProd.ts": DEPLOY_TOOL },
+  )
+
+  const { events, response } = await postParkRun(port, "agui-parked", "deploy to staging")
+
+  expect(response.status).toBe(200)
+  // Pins the premise rather than assuming it: without this the test passes
+  // vacuously the day the fixture stops parking.
+  expect(events.at(-1)).toMatchObject({ outcome: { type: "interrupt" } })
+  expect(await threadStatus(port, "agui-parked")).toBe("interrupted")
+}, 60_000)
+
+it("returns the thread to idle when an AG-UI turn completes without parking", async () => {
+  const { port } = await setupServer(script().user("hello").replies("Hi there!").build())
+
+  const { events } = await postRun(port, {
+    threadId: "agui-completed",
+    runId: "completed-run",
+    messages: [{ id: "1", role: "user", content: "hello" }],
+  })
+
+  // The other half of the rule: a turn that genuinely finished must not be
+  // dressed up as interrupted just because the parked case now is.
+  expect(events.at(-1)).toMatchObject({ outcome: { type: "success" } })
+  expect(await threadStatus(port, "agui-completed")).toBe("idle")
+}, 60_000)
+
+it("keeps a parked thread interrupted when the turn then fails", async () => {
+  const streamRoute: typeof streamResolvedRoute = async function* () {
+    yield interruptChunk("perm-then-fail")
+    throw new Error("route failed after parking")
+  }
+  const { port } = await setupControlledServer({ streamRoute })
+
+  const { events } = await postRun(port, {
+    threadId: "parked-then-failed",
+    runId: "parked-then-failed-run",
+    messages: [{ id: "1", role: "user", content: "deploy" }],
+  })
+
+  // toAguiEvents never throws into its consumer, so the failure arrives as a
+  // RUN_ERROR and the handler's loop drains — the same status write covers both.
+  expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR" })
+  expect(await threadStatus(port, "parked-then-failed")).toBe("interrupted")
+})
+
+it("keeps a parked thread interrupted when the client disconnects after the park", async () => {
+  let markParked: (() => void) | undefined
+  const parked = new Promise<void>((resolve) => {
+    markParked = resolve
+  })
+  const streamRoute: typeof streamResolvedRoute = async function* (options) {
+    yield interruptChunk("perm-then-disconnect")
+    // Reached only once the consumer has pulled the interrupt chunk, so the
+    // disconnect below is guaranteed to land AFTER the park was observed.
+    markParked?.()
+    await new Promise<void>((resolve) => {
+      options.signal?.addEventListener("abort", () => resolve(), { once: true })
+    })
+  }
+  const { port } = await setupControlledServer({ streamRoute })
+  const controller = new AbortController()
+
+  const response = await requestRun(
+    port,
+    {
+      threadId: "parked-then-disconnected",
+      runId: "parked-then-disconnected-run",
+      messages: [{ id: "1", role: "user", content: "deploy" }],
+    },
+    {},
+    controller.signal,
+  )
+  expect(response.status).toBe(200)
+  await parked
+  controller.abort()
+
+  // Ending the run does not end the wait for the human: the interrupt is
+  // already in the checkpoint, so a client that reconnects must not be told
+  // the agent finished.
+  await expect.poll(async () => threadStatus(port, "parked-then-disconnected")).toBe("interrupted")
 })

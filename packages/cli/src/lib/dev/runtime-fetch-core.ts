@@ -59,6 +59,7 @@ import {
   dawnErrorCodeOf,
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { terminalStatus } from "./terminal-status.js"
 import {
   normalizeThreadAccessResult,
   threadAccessBootLine,
@@ -2762,31 +2763,6 @@ function validateApRunBody(
     ok: true,
     routeKey: body.route,
   }
-}
-
-/**
- * The status a turn's thread is left in once it stops producing chunks.
- *
- * What the call sites cannot show: a parked turn takes the NORMAL completion
- * path — the agent adapter yields the interrupt chunk and then `done` — so a
- * drained stream is not evidence that the turn finished; and a turn that parked
- * before failing is still parked, its pending interrupt intact in the
- * checkpoint. Module scope rather than inline because more than one AP handler
- * has to end turns by this rule, and the two must not drift apart.
- *
- * Exported for the tests because the parked-and-failed combination, while it
- * genuinely happens, cannot be DRIVEN over HTTP: the only way into a handler's
- * catch with `sawInterrupt` set and the run not cancelled is the success-path
- * status write itself failing — it sits inside the same try — and
- * createRuntimeFetchHandler exposes no seam for a fault-injecting ThreadsStore.
- * That is also what the catch's `sawInterrupt` wiring is for: it retries the
- * same status rather than downgrading a parked thread to "idle".
- */
-export function terminalStatus(options: {
-  readonly cancelled: boolean
-  readonly sawInterrupt: boolean
-}): ThreadStatus {
-  return options.cancelled || options.sawInterrupt ? "interrupted" : "idle"
 }
 
 // ---------------------------------------------------------------------------

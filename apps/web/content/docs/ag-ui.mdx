@@ -150,6 +150,12 @@ AG-UI and Agent Protocol requests execute the same route code and use the same
 thread store and checkpointer. A caller can inspect state through Agent Protocol
 while a UI drives later turns through AG-UI.
 
+A turn that parks on a permission prompt leaves the thread `interrupted` rather
+than `idle`, on both surfaces. The park is written to the checkpointer, so it
+outlives the response that carried it: a client reading `GET /threads/:thread_id`
+after a reload sees that a human is still being waited on instead of being told
+the agent finished.
+
 They also share the same process-local one-active-run-per-thread gate. An
 ordinary run-slot collision—an AG-UI turn or Agent Protocol run that reaches an
 occupied slot—returns `409` with `error.details.code` set to `run_in_flight`.
@@ -177,10 +183,15 @@ runtime outside a trusted local environment.
   checkpoint.
 </Callout>
 
-Agent Protocol viewer disconnects continue the run. AG-UI viewer disconnects abort
-the run. For Agent Protocol, closing a `runs/stream`, `runs/wait`, or `resume`
-connection only detaches the viewer, so stop the run explicitly with
-`POST /threads/:thread_id/cancel`. Server shutdown also aborts in-flight work.
+Aborting the run does not discard a park it already reached. A permission prompt
+raised before the disconnect is durable, so the thread stays `interrupted` and
+the next request can resume it.
+
+The two surfaces differ here. Agent Protocol viewer disconnects continue the run;
+AG-UI viewer disconnects abort the run. For Agent Protocol, closing a
+`runs/stream`, `runs/wait`, or `resume` connection only detaches the viewer, so
+stop the run explicitly with `POST /threads/:thread_id/cancel`. Server shutdown
+also aborts in-flight work.
 
 ## Related
 
