@@ -685,7 +685,11 @@ describe("POST /threads/:id/cancel", () => {
     expect(body.error.details?.code).toBe("thread_not_found")
   }, 30_000)
 
-  it("409s when the thread exists but no run is in flight", async () => {
+  it("409s when the thread exists but no run is in flight (the claim is unbound)", async () => {
+    // The property under test moved from "nothing is awaited before cancel" to
+    // "the claim is bound before any await". The expectations are unchanged:
+    // with no run in flight there is nothing to claim, so the handler falls
+    // through to the same 409.
     const { handler } = await setupBlockingRoute()
 
     const createResponse = await handler.fetch(

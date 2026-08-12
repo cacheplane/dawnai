@@ -230,6 +230,11 @@ class InternalDevSession {
 
     const child = spawnDevChild({
       appRoot: app.appRoot,
+      // Through CommandIo like every other dev message, so a host that captures
+      // this session's output captures the runtime's too.
+      onStdout: (chunk) => {
+        this.io.stdout(chunk)
+      },
       port: this.port,
     })
 

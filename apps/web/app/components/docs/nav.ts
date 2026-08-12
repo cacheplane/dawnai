@@ -66,6 +66,7 @@ export const DOCS_NAV = [
       { label: "Production Topology", href: "/docs/production-topology" },
       { label: "Security Architecture", href: "/docs/security-architecture" },
       { label: "Access Control", href: "/docs/access-control" },
+      { label: "Thread Access", href: "/docs/thread-access" },
       { label: "Permissions", href: "/docs/permissions" },
       { label: "Retry", href: "/docs/retry" },
       { label: "Observability", href: "/docs/observability" },

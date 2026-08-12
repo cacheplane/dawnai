@@ -25,6 +25,7 @@ import type { RunRegistry } from "./run-registry.js"
 import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { assertNoReservedKey } from "./thread-metadata.js"
 
 export interface AgUiFetchRequestOptions {
   readonly appRoot: string
@@ -279,7 +280,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // allowed to start overwrites it. See PARKED_ROUTE_KEY. This endpoint is the
     // one the CopilotKit UIs drive, so it is where most parks are born; a park
     // it failed to record would be a park that endpoint could not protect.
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // See the same guard in runtime-fetch-core.ts: the metadata merge is
+    // shallow, so nothing the runtime writes may carry the access stamp's key.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
 
     const accept = request.headers.get("accept") ?? undefined

@@ -34,6 +34,7 @@ export {
   type ServeRuntimeOptions,
   serveRuntime,
 } from "./lib/dev/serve-runtime.js"
+export { normalizeThreadAccessResult } from "./lib/dev/thread-access.js"
 export {
   __resetRouteLoadCachesForTests,
   executeResolvedRoute,

@@ -53,6 +53,11 @@ export {
   type ObservedToolResult,
 } from "./run-result.js"
 export { createSubprocessApp, type SubprocessApp } from "./subprocess.js"
+export {
+  createThreadAccessHarness,
+  type ThreadAccessCheckSpec,
+  type ThreadAccessHarness,
+} from "./thread-access-harness.js"
 export { runThreadsStoreConformance } from "./threads-conformance.js"
 export {
   createToolHarness,
