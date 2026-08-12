@@ -49,6 +49,8 @@ const EXPECTED_REFERENCE_PAGES = [
   ],
   ["@dawn-ai/workspace", "/docs/api/workspace", "@dawn-ai/workspace", ["@dawn-ai/workspace"]],
   ["@dawn-ai/sandbox", "/docs/api/sandbox", "@dawn-ai/sandbox", ["@dawn-ai/sandbox"]],
+  ["@dawn-ai/langgraph", "/docs/api/langgraph", "@dawn-ai/langgraph", ["@dawn-ai/langgraph"]],
+  ["@dawn-ai/langchain", "/docs/api/langchain", "@dawn-ai/langchain", ["@dawn-ai/langchain"]],
   [
     "@dawn-ai/sqlite-storage",
     "/docs/api/sqlite-storage",
@@ -57,13 +59,7 @@ const EXPECTED_REFERENCE_PAGES = [
   ],
 ] as const
 
-const EXPECTED_DEFERRED_IMPORTS = [
-  ["@dawn-ai/langgraph", "."],
-  ["@dawn-ai/langgraph", "./define-entry"],
-  ["@dawn-ai/langgraph", "./route-module"],
-  ["@dawn-ai/langchain", "."],
-  ["@dawn-ai/langchain", "./package.json"],
-] as const
+const EXPECTED_DEFERRED_IMPORTS = [] as const
 
 const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/sdk", "."],
@@ -92,6 +88,11 @@ const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/workspace", "./node"],
   ["@dawn-ai/sandbox", "."],
   ["@dawn-ai/sandbox", "./testing"],
+  ["@dawn-ai/langgraph", "."],
+  ["@dawn-ai/langgraph", "./define-entry"],
+  ["@dawn-ai/langgraph", "./route-module"],
+  ["@dawn-ai/langchain", "."],
+  ["@dawn-ai/langchain", "./package.json"],
   ["@dawn-ai/sqlite-storage", "."],
 ] as const
 
@@ -120,6 +121,19 @@ const EXPECTED_OPERATED_ARTIFACTS = [
 ] as const
 
 const EXPECTED_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -317,7 +331,7 @@ describe("API reference page registry", () => {
         ownerPackageNames,
       ]),
     ).toEqual(EXPECTED_REFERENCE_PAGES)
-    expect(API_REFERENCE_PAGES).toHaveLength(14)
+    expect(API_REFERENCE_PAGES).toHaveLength(16)
     for (const page of API_REFERENCE_PAGES) {
       expect(page.parent).toEqual({ label: "API Reference", href: "/docs/api" })
     }
@@ -399,12 +413,7 @@ describe("artifact registry", () => {
           ARTIFACT_REGISTRY[0],
       ),
     ).toContain("catalog summary")
-    expect(
-      artifactBoundaryFor(
-        ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "deferred-to-pr2") ??
-          ARTIFACT_REGISTRY[0],
-      ),
-    ).toContain("catalog summary")
+    expect(ARTIFACT_REGISTRY.some(({ coverage }) => coverage === "deferred-to-pr2")).toBe(false)
     expect(
       artifactBoundaryFor(
         ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "internal") ?? ARTIFACT_REGISTRY[0],
@@ -863,7 +872,7 @@ describe("published manifest address inventory", () => {
 describe("package catalog", () => {
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(92)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(105)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")

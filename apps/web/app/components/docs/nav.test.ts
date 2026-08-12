@@ -310,14 +310,14 @@ describe("documentation registry invariants", () => {
     expect(DOCS_PAGES).toEqual(expectedPages)
   })
 
-  it("adds fourteen hidden API leaves immediately after the hub", () => {
+  it("adds sixteen hidden API leaves immediately after the hub", () => {
     expect(DOCS_NAV.reduce((count, section) => count + section.items.length, 0)).toBe(59)
     expect(DOCS_PAGES).toHaveLength(59)
-    expect(ALL_DOCS_PAGES).toHaveLength(73)
+    expect(ALL_DOCS_PAGES).toHaveLength(75)
 
     const hubIndex = ALL_DOCS_PAGES.findIndex(({ href }) => href === "/docs/api")
-    expect(ALL_DOCS_PAGES.slice(hubIndex + 1, hubIndex + 15)).toEqual(API_REFERENCE_PAGES)
-    expect(ALL_DOCS_PAGES[hubIndex + 15]?.href).toBe("/docs/errors")
+    expect(ALL_DOCS_PAGES.slice(hubIndex + 1, hubIndex + 17)).toEqual(API_REFERENCE_PAGES)
+    expect(ALL_DOCS_PAGES[hubIndex + 17]?.href).toBe("/docs/errors")
   })
 
   it("uses unique section labels, page labels, and hrefs", () => {

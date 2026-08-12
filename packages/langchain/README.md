@@ -6,6 +6,8 @@
 
 LangChain backend adapters for Dawn, the TypeScript meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps. Dawn uses this package to materialize `chain` routes and provider-aware `agent` routes — handling tool conversion, streaming, and retry.
 
+`@dawn-ai/langchain` is an edge-safe, supported integration surface for Dawn's emitted edge target.
+
 `agent()` materialization resolves a LangChain chat model from the route descriptor. Dawn includes `@langchain/openai` for the default/backcompat path and lazy-loads optional provider packages when an agent selects or infers another provider.
 
 ## OpenAI embedder
@@ -51,7 +53,8 @@ pnpm add @langchain/openrouter    # openrouter
 
 ## Documentation
 
-- [Routes](https://dawnai.org/docs/routes)
+- [LangChain API reference](https://dawnai.org/docs/api/langchain)
+- [Agents](https://dawnai.org/docs/agents)
 - [Memory](https://dawnai.org/docs/memory)
 - [Getting started](https://dawnai.org/docs/getting-started)
 

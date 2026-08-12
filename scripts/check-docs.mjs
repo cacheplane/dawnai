@@ -656,6 +656,22 @@ const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
     "/docs/api",
   ],
   [
+    "@dawn-ai/langgraph",
+    "/docs/api/langgraph",
+    "@dawn-ai/langgraph",
+    ["@dawn-ai/langgraph"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/langchain",
+    "/docs/api/langchain",
+    "@dawn-ai/langchain",
+    ["@dawn-ai/langchain"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
     "@dawn-ai/sqlite-storage",
     "/docs/api/sqlite-storage",
     "@dawn-ai/sqlite-storage",
@@ -693,21 +709,21 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["import:@dawn-ai/workspace:./node", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/sandbox:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/sandbox:./testing", "detailed", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:.", "detailed", "surfaceKind", "typescript-runtime"],
   [
     "import:@dawn-ai/langgraph:./define-entry",
-    "deferred-to-pr2",
+    "detailed",
     "surfaceKind",
     "typescript-runtime",
   ],
   [
     "import:@dawn-ai/langgraph:./route-module",
-    "deferred-to-pr2",
+    "detailed",
     "surfaceKind",
     "typescript-runtime",
   ],
-  ["import:@dawn-ai/langchain:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/langchain:./package.json", "deferred-to-pr2", "surfaceKind", "metadata"],
+  ["import:@dawn-ai/langchain:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langchain:./package.json", "detailed", "surfaceKind", "metadata"],
   ["import:@dawn-ai/sqlite-storage:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/config-biome:.", "catalog-only", "surfaceKind", "config-artifact"],
   ["import:@dawn-ai/config-biome:./biome", "catalog-only", "surfaceKind", "config-artifact"],
@@ -735,6 +751,19 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
 ]
 
 const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -839,6 +868,9 @@ const DEPENDENCY_FREE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:./pure",
   "import:@dawn-ai/memory:./browse",
   "import:@dawn-ai/workspace:.",
+  "import:@dawn-ai/langgraph:.",
+  "import:@dawn-ai/langgraph:./define-entry",
+  "import:@dawn-ai/langgraph:./route-module",
 ])
 const EDGE_SAFE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:.",
@@ -3706,18 +3738,12 @@ if (apiReferenceRegistry) {
       `ARTIFACT_REGISTRY must contain 42 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
     )
   }
-  const expectedDeferredImports = [
-    ["@dawn-ai/langgraph", "."],
-    ["@dawn-ai/langgraph", "./define-entry"],
-    ["@dawn-ai/langgraph", "./route-module"],
-    ["@dawn-ai/langchain", "."],
-    ["@dawn-ai/langchain", "./package.json"],
-  ]
+  const expectedDeferredImports = []
   const deferredImports = ARTIFACT_REGISTRY.filter(
     (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
   ).map(({ packageName, subpath }) => [packageName, subpath])
   if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
-    failures.push("ARTIFACT_REGISTRY does not match the exact 5-import deferred-to-pr2 allowlist")
+    failures.push("ARTIFACT_REGISTRY deferred-to-pr2 allowlist must be empty")
   }
 
   const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(

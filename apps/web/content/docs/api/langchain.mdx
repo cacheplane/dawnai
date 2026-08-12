@@ -1,0 +1,280 @@
+# @dawn-ai/langchain
+
+## Use this when
+
+Use this integration package when framework code must materialize Dawn agent descriptors, adapt LangChain runnables, convert Dawn tools, configure provider loading, or compose the package's retry, summarization, offloading, and subagent helpers. Most application code declares agents through [`agent()`](/docs/api/sdk#agent-and-agentconfig) and lets the Dawn runtime call this layer.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/langchain @langchain/core @langchain/langgraph-checkpoint
+```
+
+```ts
+import {
+  chainAdapter,
+  openaiEmbedder,
+  resolveProvider,
+  withRetry,
+} from "@dawn-ai/langchain"
+```
+
+Install the optional LangChain provider package selected by your agents. `@langchain/openai` is included; Anthropic, Google, Mistral, Groq, Ollama, xAI, and OpenRouter integrations are optional peer dependencies.
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/langchain` | edge-safe | not-claimed | integration | supported |
+| `@dawn-ai/langchain/package.json` | package metadata | n/a | tooling | supported |
+
+The runtime root is edge-safe for Dawn's emitted Hono/workerd target. Compatibility evidence includes the emitted Hono app round trip on Node and a gated real-workerd lane without `nodejs_compat`; guards bundle the exact surface with the model layer externalized. This is not a dependency-free claim or a promise of generic browser portability: provider integrations, application tools, stores, and dynamically selected imports retain their own requirements. `./package.json` is data for tooling, not TypeScript inventory or runtime code.
+
+## Public exports
+
+### `@dawn-ai/langchain`
+
+Agent materialization and streaming:
+
+| Export | Responsibility |
+|---|---|
+| `AgentStreamChunk` | Describe streamed tokens, tool activity, interrupts, completion, and extensions. |
+| `DawnToolDefinition` | Describe a Dawn tool accepted by agent materialization. |
+| `__resetMaterializedAgentsForTests` | Reset the process-global materialized-agent cache for tests. |
+| `executeAgent` | Consume an agent stream and return its completed output. |
+| `materializeAgentGraph` | Compile a Dawn agent descriptor into a LangGraph graph. |
+| `streamAgent` | Stream normalized agent chunks. |
+| `chainAdapter` | Adapt a LangChain runnable to Dawn's chain backend contract. |
+
+Provider and retry helpers:
+
+| Export | Responsibility |
+|---|---|
+| `BuiltInModelProviderId` | Re-export the SDK-owned built-in provider union. |
+| `ModelProviderId` | Re-export the SDK-owned provider identifier. |
+| `createChatModel` | Load and construct a selected provider chat model. |
+| `providerPackages` | Map built-in provider IDs to integration packages. |
+| `seedModelImporter` | Install the process-global fallback provider importer. |
+| `inferProvider` | Re-export SDK provider inference. |
+| `resolveProvider` | Resolve an explicit provider or infer one from a model ID. |
+| `RetryOptions` | Configure retry attempts, backoff, cap, and cancellation. |
+| `isRetryableError` | Classify known transient error messages. |
+| `withRetry` | Retry transient async failures with jittered exponential backoff. |
+| `openaiEmbedder` | Construct the OpenAI-backed memory embedder. |
+
+Offloading and tools:
+
+| Export | Responsibility |
+|---|---|
+| `OffloadStoreOptions` | Configure an offload store and its cleanup limits. |
+| `buildOffloadFileName` | Produce a sanitized deterministic output filename. |
+| `OffloadStore` | Persist tool output and perform throttled best-effort cleanup. |
+| `OffloadToolOutputCtx` | Configure one conditional tool-output offload. |
+| `offloadToolOutput` | Replace oversized output with a saved-file preview stub. |
+| `buildStub` | Format a human-readable offloaded-output stub. |
+| `OffloadFn` | Describe the tool converter's output-offload callback. |
+| `convertToolToLangChain` | Convert a Dawn tool into a LangChain structured tool. |
+| `executeWithToolLoop` | Invoke a chain and execute bounded tool-call rounds. |
+| `UnwrappedToolResult` | Describe agent-visible content and optional state updates. |
+| `unwrapToolResult` | Decode Dawn's strict `{ result, state? }` tool-return wrapper. |
+| `Command` | Re-export LangGraph's resume/state-update command. |
+
+State, subagents, and summarization:
+
+| Export | Responsibility |
+|---|---|
+| `materializeStateSchema` | Build a LangGraph annotation root from resolved state fields. |
+| `ResolvedSubagentGraph` | Describe a resolved child route graph. |
+| `SubagentResolver` | Resolve an allowed task request to a child graph or rejection. |
+| `convertSubagentTaskToLangChain` | Convert Dawn's task placeholder to a resumable LangChain tool. |
+| `RunningSummary` | Track summary text and covered message count. |
+| `TokenCounter` | Count text tokens synchronously or asynchronously. |
+| `SummarizeFn` | Describe the injected summarization operation. |
+| `ResolvedSummarizationConfig` | Hold resolved thresholds and summarization dependencies. |
+| `PreModelHookState` | Describe messages and the optional running summary. |
+| `PreModelHookResult` | Return a model-only message view and updated summary. |
+| `buildSummarizationHook` | Build the non-destructive pre-model summary hook. |
+| `splitForSummary` | Split aged messages from recent turns. |
+| `defaultSummarize` | Summarize messages with the selected chat model. |
+| `countMessagesTokens` | Count tokens across LangChain messages. |
+| `defaultTokenCounter` | Count tokens with the package tokenizer. |
+
+`__resetMaterializedAgentsForTests` is public so the testing harness can reach it, but its name and contract are testing-only; it mutates process-wide cache state and is not an application lifecycle API. Helpers exported by implementation modules but omitted from the root barrel—such as `composePromptMessages`, `AgentOptions`, `ResolvedStateField`, `ExecuteWithToolLoopOptions`, `BuildStubArgs`, `jsonSchemaToZod`, warning/message helpers, and default importers—are not owned exports here.
+
+### `@dawn-ai/langchain/package.json`
+
+This subpath exposes package metadata as JSON for tooling. It has no TypeScript export inventory, runtime compatibility classification, or purity claim; do not execute it as application code.
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/langchain#.:AgentStreamChunk"
+export interface AgentStreamChunk {
+  readonly type: "token" | "tool_call" | "tool_result" | "interrupt" | "done" | (string & {})
+  readonly data: unknown
+}
+```
+
+**Fields: `@dawn-ai/langchain#.:AgentStreamChunk`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly type` | `"token" \| "tool_call" \| "tool_result" \| "interrupt" \| "done" \| (string & {})` | yes | Identify the chunk kind. |
+| `readonly data` | `unknown` | yes | Carry the chunk payload. |
+
+```ts api-contract="@dawn-ai/langchain#.:RetryOptions"
+export interface RetryOptions {
+  readonly maxAttempts?: number
+  readonly baseDelayMs?: number
+  readonly maxDelayMs?: number
+  readonly signal?: AbortSignal
+}
+```
+
+**Fields: `@dawn-ai/langchain#.:RetryOptions`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly maxAttempts` | `number` | no | Set total attempts; defaults to `3`. |
+| `readonly baseDelayMs` | `number` | no | Set the first backoff; defaults to `1000`. |
+| `readonly maxDelayMs` | `number` | no | Cap backoff; defaults to `10000`. |
+| `readonly signal` | `AbortSignal` | no | Cancel the retry loop. |
+
+```ts api-contract="@dawn-ai/langchain#.:resolveProvider"
+export declare function resolveProvider(options: {
+  readonly model: string
+  readonly provider?: ModelProviderId
+}): BuiltInModelProviderId
+```
+
+```ts api-contract="@dawn-ai/langchain#.:withRetry"
+export declare function withRetry<T>(
+  fn: () => Promise<T>,
+  options?: RetryOptions,
+): Promise<T>
+```
+
+```ts api-contract="@dawn-ai/langchain#.:OffloadToolOutputCtx"
+export interface OffloadToolOutputCtx {
+  readonly toolName: string
+  readonly thresholdChars: number
+  readonly previewLines: number
+  readonly store: Pick<OffloadStore, "write">
+  readonly signal?: AbortSignal
+  readonly toolCallId?: string
+}
+```
+
+**Fields: `@dawn-ai/langchain#.:OffloadToolOutputCtx`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly toolName` | `string` | yes | Name the output's tool. |
+| `readonly thresholdChars` | `number` | yes | Set the character threshold. |
+| `readonly previewLines` | `number` | yes | Set the retained preview length. |
+| `readonly store` | `Pick<OffloadStore, "write">` | yes | Persist full output. |
+| `readonly signal` | `AbortSignal` | no | Cancel the write. |
+| `readonly toolCallId` | `string` | no | Key the filename; content hashing is the fallback. |
+
+```ts api-contract="@dawn-ai/langchain#.:UnwrappedToolResult"
+export interface UnwrappedToolResult {
+  readonly content: string
+  readonly stateUpdates: Record<string, unknown> | undefined
+}
+```
+
+**Fields: `@dawn-ai/langchain#.:UnwrappedToolResult`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly content` | `string` | yes | Carry agent-visible content. |
+| `readonly stateUpdates` | `Record<string, unknown> \| undefined` | yes | Carry optional channel updates. |
+
+Several callable exports intentionally expose non-barrel helper shapes in their declarations. Read these shapes inline; they are not independently importable exports:
+
+```ts
+type Importer = (specifier: string) => Promise<Record<string, unknown>>
+type ResolvedStateField = {
+  readonly name: string
+  readonly reducer: "append" | "replace" | ((current: unknown, incoming: unknown) => unknown)
+  readonly default: unknown
+}
+type ToolExecutor = {
+  readonly name: string
+  readonly run: (
+    input: unknown,
+    context: {
+      readonly middleware?: Readonly<Record<string, unknown>>
+      readonly signal: AbortSignal
+    },
+  ) => Promise<unknown> | unknown
+}
+type ExecuteWithToolLoopOptions = {
+  readonly chain: { readonly invoke: (input: unknown) => Promise<unknown> }
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly tools: readonly ToolExecutor[]
+  readonly signal: AbortSignal
+  readonly maxIterations?: number
+}
+type BuildStubArgs = {
+  readonly content: string
+  readonly relPath: string
+  readonly previewLines: number
+  readonly thresholdChars: number
+}
+```
+
+The larger inline `AgentOptions` shape used by `executeAgent` and `streamAgent` requires `checkpointer`, `entry`, `input`, `routeParamNames`, `signal`, and `tools`; it also accepts middleware, retry, state, prompt, offload, summarization, subagent, thread, sandbox, and cache-bypass controls. The subagent converter accepts a private `{ name, description?, schema? }` placeholder, and the tool converter accepts the same basic tool definition plus a `run` callback. `defaultSummarize` accepts messages, model, optional previous summary, and signal.
+
+Materialized graphs are cached by descriptor plus checkpointer. Sandbox-bound tools, subagents, stream transformers, and explicit bypass requests skip reuse. A checkpointer is mandatory at runtime; `threadId` is also required for an interrupted run to resume. Generated edge assembly must seed its static provider importer before model construction.
+
+#### Behavior contract `langchain.provider.explicit`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langchain/test/model-provider-resolver.test.ts","testNames":["explicit provider bypasses inference"]}] */}
+An explicit model provider bypasses provider inference.
+
+#### Provider lifecycle and failure boundaries
+
+Unknown explicit providers throw with the supported list. If no provider is explicit and inference fails, resolution throws before model construction. `seedModelImporter()` is last-call-wins process state; seed it during runtime assembly, not per request.
+
+#### Behavior contract `langchain.retry.exhaustion`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langchain/test/retry.test.ts","testNames":["throws after max attempts exhausted"]}] */}
+Retry throws after the configured maximum attempts are exhausted.
+
+#### Retry failure boundaries
+
+Only recognized transient messages retry. Non-transient failures throw immediately, cancellation throws `Operation aborted`, and retry delays include up to 500 ms of jitter capped by `maxDelayMs`.
+
+#### Behavior contract `langchain.tool-loop.limit`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langchain/test/tool-loop.test.ts","testNames":["limits tool loop iterations to prevent infinite loops"]}] */}
+The tool loop limits iterations to prevent an infinite loop.
+
+#### Tool-loop failure boundaries
+
+Unknown tools and thrown tool failures become `ToolMessage` error content. Reaching the default 10 rounds, or an explicit lower limit, throws rather than returning a partial result.
+
+#### Behavior contract `langchain.chain.stream-fallback`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langchain/test/chain-adapter.test.ts","testNames":["stream falls back to invoke when no stream method"]}] */}
+A chain stream falls back to invoke when the entry has no stream method.
+
+#### Chain, offload, and summarization boundaries
+
+The fallback yields the invocation result once. Both execute and stream reject entries without `invoke`; native `stream()` results may be returned directly or through a promise.
+
+Offload thresholds count characters, and the full tool output is written into the workspace; both stored content and preview stubs may contain sensitive data. Filenames sanitize tool names and call IDs; without a call ID they use a content hash. Cleanup is throttled and best-effort, while `offloadToolOutput()` returns original content if persistence fails. Tool wrapper recognition is strict: extra keys, arrays, missing `result`, or `result: undefined` use plain-return handling. Summarization changes only the model's input view; on summarizer failure it falls back to full history for that turn. It is context compression, not a trust or security boundary.
+
+## Examples and related guides
+
+```ts
+import { chainAdapter, resolveProvider, withRetry } from "@dawn-ai/langchain"
+
+const provider = resolveProvider({ model: "gpt-5-mini" })
+const runnable = {
+  invoke: async (input: { prompt: string }) => ({ provider, answer: input.prompt }),
+}
+
+const result = await withRetry(
+  () =>
+    chainAdapter.execute(runnable, { prompt: "hello" }, {
+      signal: new AbortController().signal,
+    }),
+  { maxAttempts: 3 },
+)
+```
+
+Continue with [Agents](/docs/agents), [Context Management](/docs/context-management), [Retry](/docs/retry), and [SDK API](/docs/api/sdk).

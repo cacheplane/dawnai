@@ -1510,6 +1510,41 @@ describe("API reference compatibility guards", () => {
     }
   })
 
+  it("pins the LangGraph and LangChain runtime boundaries from their emitted graphs", async () => {
+    const artifacts = await loadRuntimeArtifacts()
+    const byAddress = new Map(artifacts.map((artifact) => [addressFor(artifact), artifact]))
+
+    for (const address of [
+      "import:@dawn-ai/langgraph:.",
+      "import:@dawn-ai/langgraph:./define-entry",
+      "import:@dawn-ai/langgraph:./route-module",
+    ]) {
+      const artifact = byAddress.get(address)
+      expect(artifact).toMatchObject({
+        runtime: "edge-safe",
+        purity: "dependency-free",
+        guardIds: ["edge-import-bundle", "dependency-free-import-graph"],
+      })
+
+      const graph = await browserGraph(artifact as ImportArtifact)
+      expect(runtimeDependencyEdges(graph), address).toEqual([])
+      const langgraphRoot = `${await packageDirectory("@dawn-ai/langgraph")}/`
+      expect(
+        Object.keys(graph.inputs)
+          .filter((input) => !input.endsWith("api-reference-boundary.mjs"))
+          .map((input) => resolve(packageFixtureRoot, input))
+          .filter((input) => !input.startsWith(langgraphRoot)),
+        address,
+      ).toEqual([])
+    }
+
+    expect(byAddress.get("import:@dawn-ai/langchain:.")).toMatchObject({
+      runtime: "edge-safe",
+      purity: "not-claimed",
+      guardIds: ["edge-import-bundle"],
+    })
+  })
+
   it("executes every known guard against every exact registry address", async () => {
     const artifacts = await loadRuntimeArtifacts()
     const usedGuardIds = new Set<GuardId>()

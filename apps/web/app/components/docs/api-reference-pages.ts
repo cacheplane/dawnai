@@ -29,6 +29,8 @@ export const API_REFERENCE_PAGES = [
   referencePage("@dawn-ai/permissions", "/docs/api/permissions", ["@dawn-ai/permissions"]),
   referencePage("@dawn-ai/workspace", "/docs/api/workspace", ["@dawn-ai/workspace"]),
   referencePage("@dawn-ai/sandbox", "/docs/api/sandbox", ["@dawn-ai/sandbox"]),
+  referencePage("@dawn-ai/langgraph", "/docs/api/langgraph", ["@dawn-ai/langgraph"]),
+  referencePage("@dawn-ai/langchain", "/docs/api/langchain", ["@dawn-ai/langchain"]),
   referencePage("@dawn-ai/sqlite-storage", "/docs/api/sqlite-storage", ["@dawn-ai/sqlite-storage"]),
 ] as const satisfies readonly ApiReferencePage[]
 

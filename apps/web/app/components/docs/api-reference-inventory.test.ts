@@ -47,6 +47,8 @@ const packagePages = [
   },
   { slug: "workspace", label: "@dawn-ai/workspace", href: "/docs/api/workspace" },
   { slug: "sandbox", label: "@dawn-ai/sandbox", href: "/docs/api/sandbox" },
+  { slug: "langgraph", label: "@dawn-ai/langgraph", href: "/docs/api/langgraph" },
+  { slug: "langchain", label: "@dawn-ai/langchain", href: "/docs/api/langchain" },
   {
     slug: "sqlite-storage",
     label: "@dawn-ai/sqlite-storage",
@@ -150,6 +152,20 @@ function foundationalContent(slug: string): string {
 function foundationalWrapper(slug: string): string {
   const path = join(REPO_ROOT, "apps/web/app/docs/api", slug, "page.tsx")
   return existsSync(path) ? readFileSync(path, "utf8") : ""
+}
+
+function langchainPrivateHelperShapeFailures(source: string): string[] {
+  const start = source.indexOf("type ToolExecutor = {")
+  const end = source.indexOf("type BuildStubArgs = {", start)
+  if (start === -1 || end === -1) return ["missing bounded private helper-shape section"]
+  const section = source.slice(start, end)
+  return [
+    "readonly middleware?: Readonly<Record<string, unknown>>",
+    ") => Promise<unknown> | unknown",
+    "readonly middlewareContext?: Readonly<Record<string, unknown>>",
+  ]
+    .filter((contract) => !section.includes(contract))
+    .map((contract) => `missing private helper contract: ${contract}`)
 }
 
 function packageExample(slug: string): string {
@@ -1959,6 +1975,12 @@ describe("foundational API reference pages", () => {
       "sandbox.kubernetes.release",
       "sandbox.kubernetes.allow-network",
       "sandbox.error.create",
+      "langgraph.entry.exclusive",
+      "langgraph.route-module.surface",
+      "langchain.provider.explicit",
+      "langchain.retry.exhaustion",
+      "langchain.tool-loop.limit",
+      "langchain.chain.stream-fallback",
       "sqlite.checkpointer.persistence",
       "sqlite.threads.order",
       "sqlite.db.pragmas",
@@ -2007,6 +2029,23 @@ describe("package API reference pages", () => {
     expect(foundationalContent("permissions")).toContain("### `@dawn-ai/permissions/node`")
     expect(foundationalContent("workspace")).toContain("### `@dawn-ai/workspace/node`")
     expect(foundationalContent("sandbox")).toContain("### `@dawn-ai/sandbox/testing`")
+  })
+
+  it("keeps LangChain's leaked tool-loop helper shape exact without publishing it", () => {
+    const content = foundationalContent("langchain")
+    expect(langchainPrivateHelperShapeFailures(content)).toEqual([])
+    for (const contract of [
+      "readonly middleware?: Readonly<Record<string, unknown>>",
+      ") => Promise<unknown> | unknown",
+      "readonly middlewareContext?: Readonly<Record<string, unknown>>",
+    ]) {
+      expect(langchainPrivateHelperShapeFailures(content.replace(contract, ""))).toEqual([
+        `missing private helper contract: ${contract}`,
+      ])
+    }
+    expect(content).not.toContain("| `ExecuteWithToolLoopOptions` |")
+    expect(content).not.toContain("| `ToolExecutor` |")
+    expect(content).not.toContain('api-contract="@dawn-ai/langchain#.:ExecuteWithToolLoopOptions"')
   })
 
   it("documents the exact Sandbox root and testing ownership", () => {
@@ -2338,7 +2377,7 @@ ${packageExample("memory-pgvector").replace(
     }
   })
 
-  it("passes the source-derived inventory and behavior contracts for all fourteen owners", () => {
+  it("passes the source-derived inventory and behavior contracts for all sixteen owners", () => {
     const result = spawnSync(
       process.execPath,
       [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
@@ -2404,6 +2443,12 @@ ${packageExample("memory-pgvector").replace(
       "sandbox.kubernetes.release",
       "sandbox.kubernetes.allow-network",
       "sandbox.error.create",
+      "langgraph.entry.exclusive",
+      "langgraph.route-module.surface",
+      "langchain.provider.explicit",
+      "langchain.retry.exhaustion",
+      "langchain.tool-loop.limit",
+      "langchain.chain.stream-fallback",
       "sqlite.checkpointer.persistence",
       "sqlite.threads.order",
       "sqlite.db.pragmas",

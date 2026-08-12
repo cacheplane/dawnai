@@ -740,6 +740,93 @@ export const API_BEHAVIOR_CONTRACTS = [
     ],
   },
   {
+    id: "langgraph.entry.exclusive",
+    ownerHref: "/docs/api/langgraph",
+    claim: "A route module must provide exactly one of graph or workflow.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langgraph/test/define-entry.test.ts",
+        testNames: [
+          "rejects modules that provide both graph and workflow",
+          "rejects modules that provide neither graph nor workflow",
+        ],
+        assertionFingerprint:
+          'expect ( ( ) => defineEntry ( { graph , workflow , } as never ) , ) . toThrow ( `Route index.ts must export exactly one of "workflow" or "graph"` )\nexpect ( ( ) => normalizeRouteModule ( invalidModule as never ) ) . toThrow ( `Route index.ts must export exactly one of "workflow" or "graph"` , )\nexpect ( ( ) => defineEntry ( { } as never ) ) . toThrow ( `Route index.ts exports neither "workflow" nor "graph"` , )\nexpect ( ( ) => normalizeRouteModule ( { } as never ) ) . toThrow ( `Route index.ts exports neither "workflow" nor "graph"` , )',
+      },
+    ],
+  },
+  {
+    id: "langgraph.route-module.surface",
+    ownerHref: "/docs/api/langgraph",
+    claim:
+      "The route-module subpath exposes only its published normalization and route-module contracts.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langgraph/test/route-module.test.ts",
+        testNames: ["exposes publishable exports and types on the package surface"],
+        assertionFingerprint:
+          'expect ( packageJson . types ) . toBe ( "./dist/index.d.ts" )\nexpect ( packageJson . exports [ "." ] ?. types ) . toBe ( "./dist/index.d.ts" )\nexpect ( packageJson . exports [ "." ] ?. default ) . toBe ( "./dist/index.js" )\nexpect ( packageJson . exports [ "./route-module" ] ?. types ) . toBe ( "./dist/route-module.d.ts" )',
+      },
+    ],
+  },
+  {
+    id: "langchain.provider.explicit",
+    ownerHref: "/docs/api/langchain",
+    claim: "An explicit model provider bypasses provider inference.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/model-provider-resolver.test.ts",
+        testNames: ["explicit provider bypasses inference"],
+        assertionFingerprint:
+          'expect ( resolveProvider ( { provider : "groq" , model : "llama-3.3-70b-versatile" } ) ) . toBe ( "groq" )',
+      },
+    ],
+  },
+  {
+    id: "langchain.retry.exhaustion",
+    ownerHref: "/docs/api/langchain",
+    claim: "Retry throws after the configured maximum attempts are exhausted.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/retry.test.ts",
+        testNames: ["throws after max attempts exhausted"],
+        assertionFingerprint:
+          'await expect ( withRetry ( async ( ) => { attempts ++ throw new Error ( "503 Service Unavailable" ) } , { baseDelayMs : 10 , maxAttempts : 2 } , ) , ) . rejects . toThrow ( "503 Service Unavailable" )\nexpect ( attempts ) . toBe ( 2 )',
+      },
+    ],
+  },
+  {
+    id: "langchain.tool-loop.limit",
+    ownerHref: "/docs/api/langchain",
+    claim: "The tool loop limits iterations to prevent an infinite loop.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/tool-loop.test.ts",
+        testNames: ["limits tool loop iterations to prevent infinite loops"],
+        assertionFingerprint:
+          'await expect ( executeWithToolLoop ( { chain : mockChain , input : { } , tools , signal : new AbortController ( ) . signal , maxIterations : 3 , } ) , ) . rejects . toThrow ( /maximum.*iterations/i )',
+      },
+    ],
+  },
+  {
+    id: "langchain.chain.stream-fallback",
+    ownerHref: "/docs/api/langchain",
+    claim: "A chain stream falls back to invoke when the entry has no stream method.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/chain-adapter.test.ts",
+        testNames: ["stream falls back to invoke when no stream method"],
+        assertionFingerprint: 'expect ( chunks ) . toEqual ( [ { result : { msg : "hi" } } ] )',
+      },
+    ],
+  },
+  {
     id: "sqlite.checkpointer.persistence",
     ownerHref: "/docs/api/sqlite-storage",
     claim: "A file-backed SQLite checkpoint persists across saver instances.",
@@ -869,6 +956,19 @@ export interface PackageCatalogEntry {
 // an ordinary example. The inventory analyzer resolves every key back to the
 // public source export and its canonical owner page.
 export const API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -1101,26 +1201,38 @@ export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/workspace", "./node", "detailed", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", ".", "detailed", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", "./testing", "detailed", "node-only", "testing"),
-  runtimeImport("@dawn-ai/langgraph", ".", "deferred-to-pr2", "edge-safe", "integration"),
+  runtimeImport(
+    "@dawn-ai/langgraph",
+    ".",
+    "detailed",
+    "edge-safe",
+    "integration",
+    "supported",
+    "dependency-free",
+  ),
   runtimeImport(
     "@dawn-ai/langgraph",
     "./define-entry",
-    "deferred-to-pr2",
+    "detailed",
     "edge-safe",
     "integration",
+    "supported",
+    "dependency-free",
   ),
   runtimeImport(
     "@dawn-ai/langgraph",
     "./route-module",
-    "deferred-to-pr2",
+    "detailed",
     "edge-safe",
     "integration",
+    "supported",
+    "dependency-free",
   ),
-  runtimeImport("@dawn-ai/langchain", ".", "deferred-to-pr2", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/langchain", ".", "detailed", "edge-safe", "integration"),
   staticImport(
     "@dawn-ai/langchain",
     "./package.json",
-    "deferred-to-pr2",
+    "detailed",
     "metadata",
     "tooling",
     "supported",
@@ -1357,7 +1469,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/langchain",
     "LangChain backend adapters for Dawn agents and chains.",
     "packages/langchain/README.md",
-    "/docs/api#dawn-ai-langchain",
+    "/docs/api/langchain",
     "/docs/agents",
     [
       importAddress("@dawn-ai/langchain", "."),
@@ -1370,7 +1482,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/langgraph",
     "LangGraph runtime adapters and route contracts.",
     "packages/langgraph/README.md",
-    "/docs/api#dawn-ai-langgraph",
+    "/docs/api/langgraph",
     "/docs/routes",
     [
       importAddress("@dawn-ai/langgraph", "."),
