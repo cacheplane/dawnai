@@ -1493,6 +1493,23 @@ describe("API reference compatibility guards", () => {
     ).toEqual([])
   })
 
+  it("pins the Sandbox and SQLite Storage Node runtime boundaries", async () => {
+    const artifacts = await loadRuntimeArtifacts()
+    const byAddress = new Map(artifacts.map((artifact) => [addressFor(artifact), artifact]))
+
+    for (const address of [
+      "import:@dawn-ai/sandbox:.",
+      "import:@dawn-ai/sandbox:./testing",
+      "import:@dawn-ai/sqlite-storage:.",
+    ]) {
+      expect(byAddress.get(address)).toMatchObject({
+        runtime: "node-only",
+        purity: "not-claimed",
+        guardIds: ["node-import-bundle", "browser-import-negative-control"],
+      })
+    }
+  })
+
   it("executes every known guard against every exact registry address", async () => {
     const artifacts = await loadRuntimeArtifacts()
     const usedGuardIds = new Set<GuardId>()

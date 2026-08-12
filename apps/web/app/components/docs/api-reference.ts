@@ -684,6 +684,124 @@ export const API_BEHAVIOR_CONTRACTS = [
       },
     ],
   },
+  {
+    id: "sandbox.docker.release",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Docker release removes the container but retains its volume; destroy removes both.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/docker-sandbox.unit.test.ts",
+        testNames: ["release removes container but not volume; destroy removes both"],
+        assertionFingerprint:
+          'expect(runs.some((r) => r[0] === "rm" && r.includes("dawn-sbx-abc"))).toBe(true)\nexpect(runs.some((r) => r[0] === "volume" && r[1] === "rm")).toBe(false)\nexpect ( runs . some ( ( r ) => r [ 0 ] === "volume" && r [ 1 ] === "rm" && r . includes ( "dawn-sbx-vol-abc" ) ) , ) . toBe ( true )',
+      },
+    ],
+  },
+  {
+    id: "sandbox.kubernetes.release",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Kubernetes release deletes the Pod but retains the PVC; destroy removes both.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/kube-sandbox.unit.test.ts",
+        testNames: ["release deletes the pod but keeps the PVC; destroy removes both"],
+        assertionFingerprint:
+          'expect(k.pods.has("dawn-sbx-t")).toBe(false)\nexpect(k.pvcs.has("dawn-sbx-vol-t")).toBe(true)\nexpect(k.pvcs.has("dawn-sbx-vol-t")).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "sandbox.kubernetes.allow-network",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Kubernetes network:allow without an allowlist emits no NetworkPolicy.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/kube-sandbox.unit.test.ts",
+        testNames: ["network:allow with no allowlist emits no NetworkPolicy"],
+        assertionFingerprint: 'expect(k.netpols.has("dawn-sbx-net-t")).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "sandbox.error.create",
+    ownerHref: "/docs/api/sandbox",
+    claim: "A failed sandbox container creation is tagged DAWN_E2001.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/sandbox-error-code.test.ts",
+        testNames: ["a failed container creation throws an error tagged DAWN_E2001"],
+        assertionFingerprint:
+          'await expect ( p . acquire ( { threadId : "t1" , policy : { network : { mode : "deny" } } , signal : signal ( ) } ) , ) . rejects . toMatchObject ( { code : "DAWN_E2001" } )',
+      },
+    ],
+  },
+  {
+    id: "sqlite.checkpointer.persistence",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "A file-backed SQLite checkpoint persists across saver instances.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/checkpointer.test.ts",
+        testNames: ["persists across saver instances (file-backed)"],
+        assertionFingerprint: "expect(t?.checkpoint.channel_values).toEqual({ x: 1 })",
+      },
+    ],
+  },
+  {
+    id: "sqlite.threads.order",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "listThreads returns most-recently-updated threads first.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/threads.test.ts",
+        testNames: ["listThreads returns most-recently-updated first"],
+        assertionFingerprint:
+          "expect(list[0]?.thread_id).toBe(b.thread_id)\nexpect(list[1]?.thread_id).toBe(a.thread_id)",
+      },
+    ],
+  },
+  {
+    id: "sqlite.db.pragmas",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "SQLite opens with WAL mode, foreign keys enabled, and synchronous NORMAL.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/db.test.ts",
+        testNames: [
+          "opens a database with WAL journal_mode, foreign_keys ON, and synchronous=NORMAL",
+        ],
+        assertionFingerprint:
+          'expect(journal.journal_mode).toBe("wal")\nexpect(fk.foreign_keys).toBe(1)\nexpect(sync.synchronous).toBe(1)',
+      },
+    ],
+  },
+  {
+    id: "sqlite.public.no-close",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "The public SQLite saver and thread store expose no explicit close method.",
+    authorities: [
+      {
+        kind: "source-ast",
+        file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+        selector: "DawnSqliteSaver.publicMembers",
+        expected: "public members: deleteThread, getTuple, list, put, putWrites",
+      },
+      {
+        kind: "source-ast",
+        file: "packages/sqlite-storage/src/threads/store.ts",
+        selector: "ThreadsStore.publicMembers",
+        expected:
+          "public members: createThread, deleteThread, getThread, listThreads, updateMetadata, updateStatus",
+      },
+    ],
+  },
 ] as const satisfies readonly ApiBehaviorContract[]
 
 interface ArtifactPolicy {
@@ -792,6 +910,10 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
   "@dawn-ai/permissions#.:PermissionDecision",
   "@dawn-ai/permissions#.:PermissionMode",
   "@dawn-ai/permissions#.:PermissionsFile",
@@ -807,6 +929,14 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -969,8 +1099,8 @@ export const ARTIFACT_REGISTRY = [
     "dependency-free",
   ),
   runtimeImport("@dawn-ai/workspace", "./node", "detailed", "node-only", "application"),
-  runtimeImport("@dawn-ai/sandbox", ".", "deferred-to-pr2", "node-only", "application"),
-  runtimeImport("@dawn-ai/sandbox", "./testing", "deferred-to-pr2", "node-only", "testing"),
+  runtimeImport("@dawn-ai/sandbox", ".", "detailed", "node-only", "application"),
+  runtimeImport("@dawn-ai/sandbox", "./testing", "detailed", "node-only", "testing"),
   runtimeImport("@dawn-ai/langgraph", ".", "deferred-to-pr2", "edge-safe", "integration"),
   runtimeImport(
     "@dawn-ai/langgraph",
@@ -995,7 +1125,7 @@ export const ARTIFACT_REGISTRY = [
     "tooling",
     "supported",
   ),
-  runtimeImport("@dawn-ai/sqlite-storage", ".", "deferred-to-pr2", "node-only", "application"),
+  runtimeImport("@dawn-ai/sqlite-storage", ".", "detailed", "node-only", "application"),
 
   staticImport(
     "@dawn-ai/config-biome",
@@ -1302,7 +1432,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/sandbox",
     "Docker-backed isolated workspace execution for Dawn agents.",
     "packages/sandbox/README.md",
-    "/docs/api#dawn-ai-sandbox",
+    "/docs/api/sandbox",
     "/docs/sandbox",
     [importAddress("@dawn-ai/sandbox", "."), importAddress("@dawn-ai/sandbox", "./testing")],
     "application",
@@ -1326,7 +1456,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/sqlite-storage",
     "Local SQLite persistence for Dawn runtime state.",
     "packages/sqlite-storage/README.md",
-    "/docs/api#dawn-ai-sqlite-storage",
+    "/docs/api/sqlite-storage",
     "/docs/persistence",
     [importAddress("@dawn-ai/sqlite-storage", ".")],
     "application",

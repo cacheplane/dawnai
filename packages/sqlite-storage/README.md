@@ -6,7 +6,13 @@
 
 SQLite-backed storage adapter for Dawn — durable persistence for agent state and runtime data.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
+This is part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). See the [API reference](https://dawnai.org/docs/api/sqlite-storage) and [persistence guide](https://dawnai.org/docs/persistence).
+
+```ts
+import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
+```
+
+`@dawn-ai/sqlite-storage` is node-only and supported for local persistence.
 
 ## License
 

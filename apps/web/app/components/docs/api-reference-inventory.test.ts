@@ -46,6 +46,12 @@ const packagePages = [
     href: "/docs/api/permissions",
   },
   { slug: "workspace", label: "@dawn-ai/workspace", href: "/docs/api/workspace" },
+  { slug: "sandbox", label: "@dawn-ai/sandbox", href: "/docs/api/sandbox" },
+  {
+    slug: "sqlite-storage",
+    label: "@dawn-ai/sqlite-storage",
+    href: "/docs/api/sqlite-storage",
+  },
 ] as const
 const allReferencePages = [...foundationalPages, ...packagePages] as const
 
@@ -705,6 +711,66 @@ function mutated(name: string, mutate: (fixture: InventoryFixture) => void): Inv
   ;(fixture as { name: string }).name = name
   mutate(fixture)
   return fixture
+}
+
+function publicMembersFixture(
+  name: string,
+  addCloseTo?: "saver" | "store" | "base",
+): InventoryFixture {
+  const saverClose = addCloseTo === "saver" ? "\n  close(): void {}" : ""
+  const storeClose = addCloseTo === "store" ? "\n  close(): void" : ""
+  const baseClose = addCloseTo === "base" ? "\n  close(): void {}" : ""
+  return {
+    name,
+    packages: [],
+    artifacts: [],
+    documents: [
+      {
+        href: "/docs/api/sqlite-storage",
+        path: "docs/sqlite-storage.mdx",
+        source: `#### Behavior contract \`sqlite-public-members\`
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sqlite-storage/src/checkpointer/saver.ts","selector":"DawnSqliteSaver.publicMembers"},{"kind":"source-ast","file":"packages/sqlite-storage/src/threads/store.ts","selector":"ThreadsStore.publicMembers"}] */}
+The public saver and thread store omit close.`,
+      },
+    ],
+    behaviorContracts: [
+      {
+        id: "sqlite-public-members",
+        ownerHref: "/docs/api/sqlite-storage",
+        claim: "The public saver and thread store omit close.",
+        authorities: [
+          {
+            kind: "source-ast",
+            file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+            selector: "DawnSqliteSaver.publicMembers",
+            expected: "public members: baseMethod, getTuple, put",
+          },
+          {
+            kind: "source-ast",
+            file: "packages/sqlite-storage/src/threads/store.ts",
+            selector: "ThreadsStore.publicMembers",
+            expected: "public members: createThread, listThreads",
+          },
+        ],
+      },
+    ],
+    files: {
+      "packages/sqlite-storage/src/checkpointer/saver.ts": `class BaseCheckpointSaver {
+  baseMethod(): void {}${baseClose}
+}
+export class DawnSqliteSaver extends BaseCheckpointSaver {
+  constructor(private readonly db: unknown) {}
+  async getTuple(): Promise<unknown> { return undefined }
+  protected internal(): void {}
+  private secret(): void {}
+  async put(): Promise<void> {}${saverClose}
+}`,
+      "packages/sqlite-storage/src/threads/store.ts": `export interface ThreadsStore {
+  createThread(): Promise<void>
+  listThreads(): Promise<unknown[]>${storeClose}
+}`,
+    },
+  }
 }
 
 function generatedFixture(
@@ -1689,6 +1755,10 @@ const fixtures: InventoryFixture[] = [
   unresolvedWorkspaceFixture,
   ...generatedFixtures,
   ...generatedReviewFixtures,
+  publicMembersFixture("public-members-baseline"),
+  publicMembersFixture("behavior-public-members-saver-close", "saver"),
+  publicMembersFixture("behavior-public-members-store-close", "store"),
+  publicMembersFixture("behavior-public-members-inherited-close", "base"),
 ]
 
 const fixtureInput = JSON.stringify(fixtures)
@@ -1885,6 +1955,14 @@ describe("foundational API reference pages", () => {
       "workspace.compose.order",
       "workspace.exec.timeout",
       "workspace.filesystem.symlink",
+      "sandbox.docker.release",
+      "sandbox.kubernetes.release",
+      "sandbox.kubernetes.allow-network",
+      "sandbox.error.create",
+      "sqlite.checkpointer.persistence",
+      "sqlite.threads.order",
+      "sqlite.db.pragmas",
+      "sqlite.public.no-close",
     ])
   })
 
@@ -1928,6 +2006,102 @@ describe("package API reference pages", () => {
     )
     expect(foundationalContent("permissions")).toContain("### `@dawn-ai/permissions/node`")
     expect(foundationalContent("workspace")).toContain("### `@dawn-ai/workspace/node`")
+    expect(foundationalContent("sandbox")).toContain("### `@dawn-ai/sandbox/testing`")
+  })
+
+  it("documents the exact Sandbox root and testing ownership", () => {
+    const content = foundationalContent("sandbox")
+    for (const exportName of [
+      "SandboxConfig",
+      "SandboxHandle",
+      "SandboxPolicy",
+      "SandboxProvider",
+      "DockerSandboxOptions",
+      "dockerSandbox",
+      "KubeClient",
+      "KubernetesSandboxOptions",
+      "kubernetesSandbox",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    for (const exportName of ["fakeSandbox", "runProviderConformance"]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    for (const privateName of [
+      "sandboxUnavailable",
+      "KubePodSpec",
+      "PodPhase",
+      "resolveSecurity",
+    ]) {
+      expect(content).not.toContain(`| \`${privateName}\` |`)
+    }
+    expect(content).toContain("canonical field owner is [Workspace](/docs/api/workspace)")
+    expect(content).not.toContain("**Fields: `@dawn-ai/sandbox#.:SandboxProvider`**")
+  })
+
+  it("documents the exact SQLite Storage root ownership", () => {
+    const content = foundationalContent("sqlite-storage")
+    for (const exportName of [
+      "SqliteCheckpointerOptions",
+      "DawnSqliteSaver",
+      "sqliteCheckpointer",
+      "CreateThreadInput",
+      "Thread",
+      "ThreadStatus",
+      "ThreadsStore",
+      "ThreadsStoreOptions",
+      "createThreadsStore",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+  })
+
+  it("keeps Sandbox and SQLite lifecycle and trust boundaries explicit", () => {
+    const sandbox = foundationalContent("sandbox")
+    expect(sandbox).toContain("cleanup calls swallow provider deletion errors")
+    expect(sandbox).toContain("PVC wait stops after 30 seconds")
+    expect(sandbox).toContain("does not promise unrestricted egress")
+    expect(sandbox).toContain("does not prove NetworkPolicy enforcement")
+    expect(sandbox).toContain("gated Docker and Kubernetes integration lanes")
+
+    const sqlite = foundationalContent("sqlite-storage")
+    expect(sqlite).toContain("opens and retains a `DatabaseSync` handle")
+    expect(sqlite).toContain("does not close automatically")
+    expect(sqlite).toContain("Use separate files")
+    expect(sqlite).toContain("`checkpoints.sqlite` and `threads.sqlite`")
+    expect(sqlite).toContain("WAL applies only to file-backed databases")
+    expect(sqlite).toContain("does not define a tie-break")
+  })
+
+  it("installs Vitest before showing the Sandbox testing subpath import", () => {
+    const content = foundationalContent("sandbox")
+    const install = content.indexOf("pnpm add -D vitest")
+    const testingImport = content.indexOf('from "@dawn-ai/sandbox/testing"')
+    expect(install).toBeGreaterThan(-1)
+    expect(testingImport).toBeGreaterThan(install)
+  })
+
+  it("couples SQLite's missing public close hooks to both public-member sets", () => {
+    expect(API_BEHAVIOR_CONTRACTS.find(({ id }) => id === "sqlite.public.no-close")).toEqual({
+      id: "sqlite.public.no-close",
+      ownerHref: "/docs/api/sqlite-storage",
+      claim: "The public SQLite saver and thread store expose no explicit close method.",
+      authorities: [
+        {
+          kind: "source-ast",
+          file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+          selector: "DawnSqliteSaver.publicMembers",
+          expected: "public members: deleteThread, getTuple, list, put, putWrites",
+        },
+        {
+          kind: "source-ast",
+          file: "packages/sqlite-storage/src/threads/store.ts",
+          selector: "ThreadsStore.publicMembers",
+          expected:
+            "public members: createThread, deleteThread, getThread, listThreads, updateMetadata, updateStatus",
+        },
+      ],
+    })
   })
 
   it("documents the exact Permissions root and node ownership", () => {
@@ -2164,7 +2338,7 @@ ${packageExample("memory-pgvector").replace(
     }
   })
 
-  it("passes the source-derived inventory and behavior contracts for all twelve owners", () => {
+  it("passes the source-derived inventory and behavior contracts for all fourteen owners", () => {
     const result = spawnSync(
       process.execPath,
       [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
@@ -2226,13 +2400,21 @@ ${packageExample("memory-pgvector").replace(
       "workspace.compose.order",
       "workspace.exec.timeout",
       "workspace.filesystem.symlink",
+      "sandbox.docker.release",
+      "sandbox.kubernetes.release",
+      "sandbox.kubernetes.allow-network",
+      "sandbox.error.create",
+      "sqlite.checkpointer.persistence",
+      "sqlite.threads.order",
+      "sqlite.db.pragmas",
+      "sqlite.public.no-close",
     ])
   })
 })
 
 describe("source-derived API inventory", () => {
   it("runs every isolated fixture through one compact stdin-fed process", () => {
-    expect(fixtures).toHaveLength(161)
+    expect(fixtures).toHaveLength(165)
     expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)
     expect(Buffer.byteLength(fixtureInput)).toBeLessThan(2 * 1024 * 1024)
     expect(subprocesses).toHaveLength(1)
@@ -2246,6 +2428,7 @@ describe("source-derived API inventory", () => {
 
   it("accepts checker-derived named, wildcard, alias, and default re-exports", () => {
     expect(byName.get("baseline")?.failures).toEqual([])
+    expect(byName.get("public-members-baseline")?.failures).toEqual([])
   })
 
   it.each(["generated-no-state", "generated-with-state", "generated-no-state-after-state"])(
@@ -2488,6 +2671,15 @@ describe("source-derived API inventory", () => {
     ["behavior-selector-object", /sdk-selector-shapes.*source-ast.*behaviorMap\.retry/i],
     ["behavior-selector-arrow-branch", /sdk-selector-shapes.*source-ast.*decide\.branch/i],
     ["behavior-selector-ambiguous", /sdk-selector-shapes.*source-ast.*retryDefault/i],
+    [
+      "behavior-public-members-saver-close",
+      /sqlite-public-members.*DawnSqliteSaver\.publicMembers/i,
+    ],
+    ["behavior-public-members-store-close", /sqlite-public-members.*ThreadsStore\.publicMembers/i],
+    [
+      "behavior-public-members-inherited-close",
+      /sqlite-public-members.*DawnSqliteSaver\.publicMembers/i,
+    ],
     ["behavior-duplicate-test-name", /sdk-retries.*test-assertion.*uses three retries/i],
     ["behavior-await", /sdk-retries.*test-assertion.*uses three retries/i],
     ["duplicate-behavior-id", /duplicate.*sdk-retries/i],

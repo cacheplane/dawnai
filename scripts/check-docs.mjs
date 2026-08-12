@@ -647,6 +647,22 @@ const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
     "API Reference",
     "/docs/api",
   ],
+  [
+    "@dawn-ai/sandbox",
+    "/docs/api/sandbox",
+    "@dawn-ai/sandbox",
+    ["@dawn-ai/sandbox"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/sqlite-storage",
+    "/docs/api/sqlite-storage",
+    "@dawn-ai/sqlite-storage",
+    ["@dawn-ai/sqlite-storage"],
+    "API Reference",
+    "/docs/api",
+  ],
 ]
 
 const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
@@ -675,8 +691,8 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["import:@dawn-ai/permissions:./node", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/workspace:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/workspace:./node", "detailed", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/sandbox:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/sandbox:./testing", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:./testing", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
   [
     "import:@dawn-ai/langgraph:./define-entry",
@@ -692,7 +708,7 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ],
   ["import:@dawn-ai/langchain:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/langchain:./package.json", "deferred-to-pr2", "surfaceKind", "metadata"],
-  ["import:@dawn-ai/sqlite-storage:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sqlite-storage:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/config-biome:.", "catalog-only", "surfaceKind", "config-artifact"],
   ["import:@dawn-ai/config-biome:./biome", "catalog-only", "surfaceKind", "config-artifact"],
   ["import:@dawn-ai/config-typescript:.", "catalog-only", "surfaceKind", "config-artifact"],
@@ -760,6 +776,10 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
   "@dawn-ai/permissions#.:PermissionDecision",
   "@dawn-ai/permissions#.:PermissionMode",
   "@dawn-ai/permissions#.:PermissionsFile",
@@ -775,6 +795,14 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -1138,6 +1166,10 @@ if (process.argv[2] === "--analyze-detailed-api-references") {
 }
 
 const checks = [
+  {
+    file: "apps/web/content/docs/api/sandbox.mdx",
+    patterns: ["pnpm add -D vitest", 'from "@dawn-ai/sandbox/testing"'],
+  },
   {
     file: "apps/web/content/docs/api/memory.mdx",
     patterns: [
@@ -3675,20 +3707,17 @@ if (apiReferenceRegistry) {
     )
   }
   const expectedDeferredImports = [
-    ["@dawn-ai/sandbox", "."],
-    ["@dawn-ai/sandbox", "./testing"],
     ["@dawn-ai/langgraph", "."],
     ["@dawn-ai/langgraph", "./define-entry"],
     ["@dawn-ai/langgraph", "./route-module"],
     ["@dawn-ai/langchain", "."],
     ["@dawn-ai/langchain", "./package.json"],
-    ["@dawn-ai/sqlite-storage", "."],
   ]
   const deferredImports = ARTIFACT_REGISTRY.filter(
     (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
   ).map(({ packageName, subpath }) => [packageName, subpath])
   if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
-    failures.push("ARTIFACT_REGISTRY does not match the exact 8-import deferred-to-pr2 allowlist")
+    failures.push("ARTIFACT_REGISTRY does not match the exact 5-import deferred-to-pr2 allowlist")
   }
 
   const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(

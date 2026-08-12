@@ -48,17 +48,21 @@ const EXPECTED_REFERENCE_PAGES = [
     ["@dawn-ai/permissions"],
   ],
   ["@dawn-ai/workspace", "/docs/api/workspace", "@dawn-ai/workspace", ["@dawn-ai/workspace"]],
+  ["@dawn-ai/sandbox", "/docs/api/sandbox", "@dawn-ai/sandbox", ["@dawn-ai/sandbox"]],
+  [
+    "@dawn-ai/sqlite-storage",
+    "/docs/api/sqlite-storage",
+    "@dawn-ai/sqlite-storage",
+    ["@dawn-ai/sqlite-storage"],
+  ],
 ] as const
 
 const EXPECTED_DEFERRED_IMPORTS = [
-  ["@dawn-ai/sandbox", "."],
-  ["@dawn-ai/sandbox", "./testing"],
   ["@dawn-ai/langgraph", "."],
   ["@dawn-ai/langgraph", "./define-entry"],
   ["@dawn-ai/langgraph", "./route-module"],
   ["@dawn-ai/langchain", "."],
   ["@dawn-ai/langchain", "./package.json"],
-  ["@dawn-ai/sqlite-storage", "."],
 ] as const
 
 const EXPECTED_DETAILED_IMPORTS = [
@@ -86,6 +90,9 @@ const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/permissions", "./node"],
   ["@dawn-ai/workspace", "."],
   ["@dawn-ai/workspace", "./node"],
+  ["@dawn-ai/sandbox", "."],
+  ["@dawn-ai/sandbox", "./testing"],
+  ["@dawn-ai/sqlite-storage", "."],
 ] as const
 
 const EXPECTED_CATALOG_AND_INTERNAL_IMPORTS = [
@@ -154,6 +161,10 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
   "@dawn-ai/permissions#.:PermissionDecision",
   "@dawn-ai/permissions#.:PermissionMode",
   "@dawn-ai/permissions#.:PermissionsFile",
@@ -169,6 +180,14 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -298,7 +317,7 @@ describe("API reference page registry", () => {
         ownerPackageNames,
       ]),
     ).toEqual(EXPECTED_REFERENCE_PAGES)
-    expect(API_REFERENCE_PAGES).toHaveLength(12)
+    expect(API_REFERENCE_PAGES).toHaveLength(14)
     for (const page of API_REFERENCE_PAGES) {
       expect(page.parent).toEqual({ label: "API Reference", href: "/docs/api" })
     }
@@ -844,7 +863,7 @@ describe("published manifest address inventory", () => {
 describe("package catalog", () => {
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(80)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(92)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")

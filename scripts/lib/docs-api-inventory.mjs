@@ -1475,7 +1475,36 @@ function variableDeclarationFingerprint(declaration, sourceFile) {
   return `${[...modifiers, kind].join(" ")} ${printed(declaration, sourceFile)};`
 }
 
-function sourceSelectorFingerprint(sourceFile, selector) {
+function sourceSelectorFingerprint(sourceFile, selector, checker) {
+  const publicMembers = /^([A-Za-z_$][\w$]*)\.publicMembers$/.exec(selector)
+  if (publicMembers) {
+    const declaration = uniqueNamedDeclaration(sourceFile.statements, publicMembers[1])
+    if (
+      !declaration ||
+      (!ts.isClassDeclaration(declaration) && !ts.isInterfaceDeclaration(declaration))
+    ) {
+      return null
+    }
+    const symbol = declaration.name && checker.getSymbolAtLocation(declaration.name)
+    if (!symbol) return null
+    const instanceType = checker.getDeclaredTypeOfSymbol(symbol)
+    const names = checker
+      .getPropertiesOfType(instanceType)
+      .filter((property) => {
+        const declarations = property.declarations ?? []
+        return !declarations.some((member) =>
+          member.modifiers?.some(
+            (candidate) =>
+              candidate.kind === ts.SyntaxKind.PrivateKeyword ||
+              candidate.kind === ts.SyntaxKind.ProtectedKeyword,
+          ),
+        )
+      })
+      .map(({ name }) => name)
+      .sort()
+    return `public members: ${names.join(", ")}`
+  }
+
   const branch = /^([A-Za-z_$][\w$]*)\.branch\[(\d+)\]$/.exec(selector)
   if (branch) {
     const declaration = uniqueNamedDeclaration(sourceFile.statements, branch[1])
@@ -1679,7 +1708,7 @@ function validateBehaviorContracts(fixture, program, failures) {
         continue
       }
       if (authority.kind === "source-ast") {
-        const actual = sourceSelectorFingerprint(sourceFile, authority.selector)
+        const actual = sourceSelectorFingerprint(sourceFile, authority.selector, program.checker)
         if (actual === null || normalizePrinted(actual) !== normalizePrinted(authority.expected)) {
           failures.push(
             `behavior contract ${contract.id} source-ast ${authority.selector} fingerprint mismatch in ${authority.file}: expected ${JSON.stringify(authority.expected)}, received ${JSON.stringify(actual)}`,

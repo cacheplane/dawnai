@@ -1,0 +1,117 @@
+# @dawn-ai/sandbox
+
+## Use this when
+
+Use this Node-only package when a Dawn application needs the reference Docker or Kubernetes `SandboxProvider`, or when a provider author needs the shared conformance suite. The portable sandbox interfaces are re-exported for discovery, but their canonical field owner is [Workspace](/docs/api/workspace).
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/sandbox
+pnpm add -D vitest
+```
+
+```ts
+import { dockerSandbox, kubernetesSandbox } from "@dawn-ai/sandbox"
+import { fakeSandbox, runProviderConformance } from "@dawn-ai/sandbox/testing"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/sandbox` | node-only | not-claimed | application | supported |
+| `@dawn-ai/sandbox/testing` | node-only | not-claimed | testing | supported |
+
+The root uses Node APIs, Docker process execution, and the Kubernetes client. `/testing` imports Vitest and is test-facing. Ordinary package tests use fakes; real-provider evidence lives in gated Docker and Kubernetes integration lanes.
+
+## Public exports
+
+### `@dawn-ai/sandbox`
+
+| Export | Responsibility |
+|---|---|
+| `SandboxConfig` | Re-export the portable application sandbox configuration from Workspace. |
+| `SandboxHandle` | Re-export the portable acquired-handle contract from Workspace. |
+| `SandboxPolicy` | Re-export portable network, environment, resource, and security intent from Workspace. |
+| `SandboxProvider` | Re-export the portable provider lifecycle contract from Workspace. |
+| `DockerSandboxOptions` | Configure the Docker image and optional injected Docker seam. |
+| `dockerSandbox` | Create the Docker provider. |
+| `KubeClient` | Describe the public Kubernetes client seam; helper request shapes remain implementation details. |
+| `KubernetesSandboxOptions` | Configure the Kubernetes image, namespace, storage class, timeout, and client seam. |
+| `kubernetesSandbox` | Create the Kubernetes provider. |
+
+### `@dawn-ai/sandbox/testing`
+
+| Export | Responsibility |
+|---|---|
+| `fakeSandbox` | Create an in-memory provider for unit and wiring tests. |
+| `runProviderConformance` | Register Vitest cases for persistence, isolation, and execution behavior. |
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/sandbox#.:KubernetesSandboxOptions"
+export interface KubernetesSandboxOptions {
+  readonly image: string
+  readonly namespace?: string
+  readonly storageClass?: string
+  readonly startupTimeoutMs?: number
+  readonly client?: KubeClient
+}
+```
+
+```ts api-contract="@dawn-ai/sandbox#.:dockerSandbox"
+export declare function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider
+```
+
+```ts api-contract="@dawn-ai/sandbox#.:kubernetesSandbox"
+export declare function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvider
+```
+
+```ts api-contract="@dawn-ai/sandbox#./testing:runProviderConformance"
+export declare function runProviderConformance(opts: {
+  readonly name: string
+  readonly makeProvider: () => SandboxProvider
+  readonly describe: (name: string, fn: () => void) => void
+}): void
+```
+
+#### Behavior contract `sandbox.docker.release`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sandbox/test/docker-sandbox.unit.test.ts","testNames":["release removes container but not volume; destroy removes both"]}] */}
+Docker release removes the container but retains its volume; destroy removes both.
+
+#### Behavior contract `sandbox.kubernetes.release`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sandbox/test/kube-sandbox.unit.test.ts","testNames":["release deletes the pod but keeps the PVC; destroy removes both"]}] */}
+Kubernetes release deletes the Pod but retains the PVC; destroy removes both.
+
+#### Operational cleanup caveat
+
+These are successful-path lifecycle contracts. The cleanup calls swallow provider deletion errors, and the Kubernetes PVC wait stops after 30 seconds; operators must detect and reap leftovers.
+
+#### Behavior contract `sandbox.kubernetes.allow-network`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sandbox/test/kube-sandbox.unit.test.ts","testNames":["network:allow with no allowlist emits no NetworkPolicy"]}] */}
+Kubernetes `network:allow` without an allowlist emits no NetworkPolicy.
+
+#### Network enforcement caveat
+
+No provider-created policy does not promise unrestricted egress: cluster defaults, infrastructure policies, and CNI behavior still apply. Preflight checks Kubernetes API reachability and Pod-creation RBAC; it does not prove NetworkPolicy enforcement.
+
+#### Behavior contract `sandbox.error.create`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sandbox/test/sandbox-error-code.test.ts","testNames":["a failed container creation throws an error tagged DAWN_E2001"]}] */}
+A failed sandbox container creation is tagged `DAWN_E2001`.
+
+#### Provider identity and reattachment caveat
+
+Provider names sanitize caller-supplied thread IDs and can collide; applications must supply provider-name-safe unique IDs. A running Kubernetes Pod is reattached without applying changed image, environment, resources, or security, and a prior deny policy is not removed by a later allow acquire. Release before changing provider options or policy.
+
+## Examples and related guides
+
+```ts
+import { dockerSandbox } from "@dawn-ai/sandbox"
+
+const provider = dockerSandbox({ image: "node:24-slim" })
+const status = await provider.preflight?.()
+if (!status?.ok) throw new Error(status?.detail ?? "Sandbox unavailable")
+```
+
+The image must provide the shell and utilities the backends invoke, including `sleep`, `timeout`, `realpath`, `stat`, and core file utilities. Continue with [Execution Sandbox](/docs/sandbox), [Kubernetes Sandbox](/docs/sandbox/kubernetes), and [Workspace API](/docs/api/workspace).

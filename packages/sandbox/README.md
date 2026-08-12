@@ -12,6 +12,10 @@ This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://git
 Conceptual docs: [Execution Sandbox](https://dawnai.org/docs/sandbox),
 [Workspace Filesystem](https://dawnai.org/docs/workspace), and
 [Configuration](https://dawnai.org/docs/configuration).
+API reference: [@dawn-ai/sandbox](https://dawnai.org/docs/api/sandbox).
+
+- `@dawn-ai/sandbox` is node-only and supported.
+- `@dawn-ai/sandbox/testing` is node-only, test-facing, and supported.
 
 ## Install
 
