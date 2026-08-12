@@ -1,4 +1,5 @@
 import type {
+  ActivitySnapshotEvent,
   Interrupt,
   RunErrorEvent,
   RunFinishedEvent,
@@ -12,6 +13,7 @@ import type {
   ToolCallStartEvent,
 } from "@ag-ui/core"
 import { EventType } from "@ag-ui/core"
+import { createDawnActivityProjector, isDawnActivityChunkType } from "./activities.js"
 import { createDefaultIdFactory, type IdFactory } from "./ids.js"
 import { toAguiInterrupt } from "./interrupts.js"
 import {
@@ -33,6 +35,7 @@ export type AguiOutboundEvent =
   | ToolCallArgsEvent
   | ToolCallEndEvent
   | ToolCallResultEvent
+  | ActivitySnapshotEvent
 
 export interface ToAguiOptions {
   readonly idFactory?: IdFactory
@@ -59,8 +62,9 @@ function stringifyContent(output: unknown): string {
 
 /**
  * Map a Dawn agent stream (`token | tool_call | tool_result | interrupt |
- * done`) to an AG-UI event stream. Stateful: it frames assistant text and tool
- * calls that Dawn emits implicitly, and it never throws into the consumer - an
+ * done`) to AG-UI events, including snapshots for recognized Dawn plan and
+ * subagent activity chunks. Stateful: it frames assistant text and tool calls
+ * that Dawn emits implicitly, and it never throws into the consumer - an
  * upstream error becomes a `RUN_ERROR` event and a clean return.
  */
 export async function* toAguiEvents(
@@ -69,6 +73,7 @@ export async function* toAguiEvents(
   options: ToAguiOptions = {},
 ): AsyncGenerator<AguiOutboundEvent> {
   const nextId = options.idFactory ?? createDefaultIdFactory()
+  const activityProjector = createDawnActivityProjector(ctx.runId)
   let openMessageId: string | null = null
   const pendingFallbackToolCallIds = new Map<string, string[]>()
   const pendingInterrupts: Interrupt[] = []
@@ -94,6 +99,12 @@ export async function* toAguiEvents(
           }
           return
         }
+        continue
+      }
+
+      if (isDawnActivityChunkType(chunk.type)) {
+        const activity = activityProjector.project(chunk.type, chunk.data)
+        if (activity !== null) yield activity
         continue
       }
 
@@ -174,8 +185,8 @@ export async function* toAguiEvents(
         }
         default:
           yield* flushText()
-          // Unknown/capability chunk types (e.g. plan_update) have no v1
-          // AG-UI mapping - ignore them.
+          // Unknown extension chunks (e.g. capability.unknown) flush open text
+          // and are ignored.
           break
       }
     }

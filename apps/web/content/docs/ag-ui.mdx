@@ -1,4 +1,4 @@
-# AG-UI & Web Clients
+# AG-UI and Web Clients
 
 Dawn exposes [AG-UI](https://github.com/ag-ui-protocol/ag-ui) for browser clients
 alongside Agent Protocol. `@dawn-ai/ag-ui` is the pure translation library: it
@@ -6,8 +6,10 @@ maps Dawn stream chunks to AG-UI events and maps `RunAgentInput` back to a
 Dawn-shaped run input. The package owns no server, transport, or agent runtime.
 
 `dawn dev` and the production runtime started by `dawn start` use that adapter to
-serve an SSE endpoint. For its complete request and middleware behavior, see
-[Dev Server](/docs/dev-server#ag-ui-endpoint).
+serve an SSE endpoint. This page is the canonical request, resume, threading,
+and lifecycle guide. See [Middleware](/docs/middleware) for execution gating
+and [Security Architecture](/docs/security-architecture) for the service routes
+that require outer authentication.
 
 ## The endpoint
 
@@ -39,6 +41,11 @@ browser
 CopilotKit's sidebar uses the literal agent id `default` when none is supplied,
 so the example registers the Dawn route under that key. See
 `examples/chat/web/README.md` for the complete setup and smoke checklist.
+That basic client registers no activity renderers. For plan and researcher
+cards, use the [activity-aware research recipe](/docs/recipes/research-web-ui)
+and its
+[`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
+implementation.
 
 ## Adapter API
 
@@ -75,13 +82,44 @@ correlation.
 | `token` | `TEXT_MESSAGE_START` once, then `TEXT_MESSAGE_CONTENT` per delta |
 | `tool_call` | close open text, then `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END` |
 | `tool_result` | close open text, then `TOOL_CALL_RESULT` |
+| root `plan_update` | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.plan` |
+| `subagent.start` and matching child plan/tool/result/end chunks | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.subagent` |
 | `interrupt` | terminal `RUN_FINISHED` with `outcome.type: "interrupt"` |
 | `done` | terminal `RUN_FINISHED` with `outcome.type: "success"` |
 | upstream error | terminal `RUN_ERROR` |
 
-Planning updates, subagent capability events, and unknown chunk types have no v1
-mapping and are ignored. The adapter does not invent application state or
-protocol-specific custom events.
+### Activity snapshots
+
+Activities use standard AG-UI framing and complete replacement snapshots. A
+root plan has stable message id `dawn:plan:${runId}`, activity type `dawn.plan`,
+and content containing only the complete todo list. Todo status is exactly
+`pending`, `in_progress`, or `completed`. Dawn emits no seeded-plan activity at
+run start; the first snapshot follows a valid root `plan_update`.
+
+Each subagent has stable message id `dawn:subagent:${call_id}`, activity type
+`dawn.subagent`, and complete content with its name, positive integer depth,
+`running`/`completed`/`failed` status, an optional current todo list, up to five
+recent child-tool name/status summaries, and the total observed tool count.
+Tool-summary status is exactly `running`, `completed`, or `incomplete`. A failed
+activity can also contain a human-readable error capped at 400 characters.
+Because every event has `replace: true`, later snapshots replace the same
+stable activity message.
+
+The adapter validates the full internal identity
+`{ call_id, subagent, route_id, depth }` on every recognized child event. Only
+an exact match with the original `subagent.start` can update its activity;
+`call_id` is used only to form the stable standard message id, while `route_id`
+and child tool ids remain internal. None is duplicated in public content.
+`subagent.message` is consumed without emission.
+
+This boundary excludes child reasoning and prose, prompts, tool inputs, tool
+outputs, final child answers, route ids, and raw runtime ids. It is an explicit
+allowlist rather than a generic capability mapping: unknown capability chunks
+retain the existing behavior of closing any open text message and then being
+ignored. Dawn emits neither activity deltas nor a raw advanced child stream.
+Activities are informational; standard interrupt UI remains the only place to
+resolve or cancel permission requests. No queued, waiting, cancelled, or
+parent-task correlation state is inferred.
 
 ### Inbound input
 
@@ -118,6 +156,23 @@ outlives the response that carried it: a client reading `GET /threads/:thread_id
 after a reload sees that a human is still being waited on instead of being told
 the agent finished.
 
+They also share the same process-local one-active-run-per-thread gate. An
+ordinary run-slot collision—an AG-UI turn or Agent Protocol run that reaches an
+occupied slot—returns `409` with `error.details.code` set to `run_in_flight`.
+A second concurrent resume is stopped by the shared resume claim before it
+reaches the run registry and returns `resume_in_progress`. Shared durable stores
+do not distribute that coordination across replicas.
+
+## Middleware and service authentication
+
+Dawn execution middleware gates AG-UI route execution just as it gates Agent
+Protocol execution. It can reject the request or pass context into authored
+tools. It is not service-wide authentication: thread management, state,
+cancellation, memory-candidate management, and health routes bypass it. See
+[Middleware](/docs/middleware) for the request contract and
+[Security Architecture](/docs/security-architecture) before exposing the
+runtime outside a trusted local environment.
+
 ## Disconnect and reconnect
 
 <Callout type="warn" title="No reconnect or replay support">
@@ -132,15 +187,17 @@ Aborting the run does not discard a park it already reached. A permission prompt
 raised before the disconnect is durable, so the thread stays `interrupted` and
 the next request can resume it.
 
-Agent Protocol has the opposite disconnect policy: closing a `runs/stream`,
-`runs/wait`, or `resume` connection only disconnects the viewer, and the run
-continues. Stop it explicitly with `POST /threads/:thread_id/cancel`; server
-shutdown also aborts in-flight work.
+The two surfaces differ here. Agent Protocol viewer disconnects continue the run;
+AG-UI viewer disconnects abort the run. For Agent Protocol, closing a
+`runs/stream`, `runs/wait`, or `resume` connection only detaches the viewer, so
+stop the run explicitly with `POST /threads/:thread_id/cancel`. Server shutdown
+also aborts in-flight work.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "the AG-UI endpoint, resume validation, and middleware behavior" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "start and restart the local runtime" },
+  { href: "/docs/dev-server/agent-protocol", title: "Agent Protocol", subtitle: "the durable thread and run lifecycle" },
   { href: "/docs/permissions", title: "Permissions", subtitle: "the Dawn decisions carried by resolved interrupt payloads" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "building and starting the production runtime" },
+  { href: "/docs/deployment", title: "Deployment Options", subtitle: "building and starting the production runtime" },
 ]} />

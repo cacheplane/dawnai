@@ -44,6 +44,8 @@ const FATAL_NPM_VIEW_CODES = new Set([
 
 const packageFileExpectations = {
   "@dawn-ai/ag-ui": [
+    "dist/activities.js",
+    "dist/activities.d.ts",
     "dist/index.js",
     "dist/index.d.ts",
     "dist/sse.js",

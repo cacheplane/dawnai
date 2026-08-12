@@ -382,6 +382,14 @@
       },
       {
         "classification": "safe",
+        "job": "postgres-storage-docker",
+        "stepIndex": 6,
+        "step": "Real-Postgres Agent Protocol pending-interrupts tests",
+        "kind": "run",
+        "value": "DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint"
+      },
+      {
+        "classification": "safe",
         "job": "edge-workerd",
         "stepIndex": 0,
         "step": "Checkout",
@@ -571,6 +579,30 @@
         "step": "Inspector standalone e2e",
         "kind": "run",
         "value": "DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test"
+      },
+      {
+        "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 6,
+        "step": "Install Playwright browsers",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/inspector exec playwright install --with-deps chromium"
+      },
+      {
+        "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 7,
+        "step": "Inspector browser verification",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/inspector test:e2e"
+      },
+      {
+        "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 8,
+        "step": "Upload Playwright traces",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       },
       {
         "classification": "safe",

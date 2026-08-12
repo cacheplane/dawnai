@@ -28,11 +28,17 @@ curl -N "http://127.0.0.1:3000/agui/%2Fresearch%23agent" \
 ```
 
 That's the [AG-UI](https://github.com/ag-ui-protocol/ag-ui) endpoint (`/agui/<route>`).
-For a **web UI**, follow the *Research assistant web UI* recipe in the Dawn
-docs. Its CopilotKit client adds streaming chat and cited reports, generic tool
-cards, suggestion prompts, standard permission handling, and memory-candidate
-review. The current AG-UI adapter does not expose live planning or subagent
-activity panels.
+Alongside text, root tools, and interrupts, it emits standard replacement
+`dawn.plan` and `dawn.subagent` activity messages for valid planning and matched
+delegated-work progress. For a **web UI**, follow the
+[Research assistant web UI](https://dawnai.org/docs/recipes/research-web-ui)
+recipe or the separate
+[`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
+client. That CopilotKit example renders the activity messages as plan and
+researcher cards and also provides cited reports, generic tool cards, suggestion
+prompts, standard permission handling, and memory-candidate review. This
+generated starter remains server-first and contains no web UI, client
+dependencies, or activity renderers.
 
 ## Check it offline
 

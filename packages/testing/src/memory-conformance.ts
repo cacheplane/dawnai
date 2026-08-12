@@ -508,6 +508,58 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse returns identical ordered ids for a composed filter on every backend", async () => {
+      const s = await makeStore()
+      try {
+        for (let index = 0; index < 40; index += 1) {
+          await s.put(
+            rec({
+              id: `cmp-${String(index).padStart(3, "0")}`,
+              kind: index % 2 === 0 ? "semantic" : "episodic",
+              namespace: index % 5 === 0 ? "route=/a-archive" : "route=/a",
+              content: index % 3 === 0 ? "needle body" : "filler body",
+              confidence: (index % 4) / 4,
+              status: index % 3 === 0 ? "active" : "candidate",
+              // Ten records per stamp so the id tie-break decides order INSIDE the
+              // window, not only at a page seam this single window never reaches.
+              updatedAt: new Date(
+                Date.UTC(2026, 0, 1) + Math.floor(index / 10) * 60_000,
+              ).toISOString(),
+            }),
+          )
+        }
+        const page = await s.browse({
+          namespace: "route=/a",
+          limit: 10,
+          filters: [
+            { field: "status", op: "in", values: ["active"] },
+            { field: "kind", op: "in", values: ["semantic"] },
+            { field: "content", op: "contains", value: "needle" },
+          ],
+          orderBy: [{ field: "updatedAt", dir: "desc" }],
+        })
+        // Byte-exact expectation, computed the way both stores must compute it: no
+        // archive rows, active ∧ semantic ∧ needle, updatedAt DESC then id ASC.
+        //
+        // The survivors are the indices divisible by 6 — `% 2` picks semantic and
+        // `% 3` picks active-and-needle together — minus those divisible by 5, which
+        // the exact `namespace` puts in the archive: 6, 12, 18, 24, 36. Two of them
+        // (12 and 18) share a minute stamp, so their relative order is decided by the
+        // id terminator rather than by the sort key — which is the half of this a
+        // backend can silently get wrong while looking right.
+        expect(page.records.map((record) => record.id)).toEqual([
+          "cmp-036",
+          "cmp-024",
+          "cmp-012",
+          "cmp-018",
+          "cmp-006",
+        ])
+        expect(page.total).toBe(5)
+        expect(page.continuation).toBeNull()
+      } finally {
+        await close?.(s)
+      }
+    })
     test("browse content filters are case-insensitive substring matches, not LIKE patterns", async () => {
       const s = await makeStore()
       try {

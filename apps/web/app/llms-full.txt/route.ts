@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises"
 import path, { join } from "node:path"
 import { NextResponse } from "next/server"
 import { PROMPTS } from "../../content/prompts"
+import { webContentRoot } from "../../lib/content-root"
 import { getAllPosts } from "../components/blog/post-index"
-import { DOCS_PAGES } from "../components/docs/nav"
+import { ALL_DOCS_PAGES } from "../components/docs/nav"
 
-const CONTENT_ROOT = path.join(process.cwd(), "content")
+const CONTENT_ROOT = webContentRoot()
 
 const TEMPLATES = [{ title: "AGENTS.md template", path: "templates/AGENTS.md" }]
 
@@ -39,7 +40,7 @@ async function buildLlmsFull(): Promise<string> {
     "",
   ]
 
-  for (const page of DOCS_PAGES) {
+  for (const page of ALL_DOCS_PAGES) {
     sections.push(
       `### ${page.label}`,
       "",
@@ -67,7 +68,7 @@ async function buildLlmsFull(): Promise<string> {
     "",
   )
   for (const post of getAllPosts()) {
-    const raw = readFileSync(join(process.cwd(), "content", "blog", post.sourceFile), "utf8")
+    const raw = readFileSync(join(CONTENT_ROOT, "blog", post.sourceFile), "utf8")
     sections.push(`\n## ${post.title}\n\n${raw}\n`)
   }
 

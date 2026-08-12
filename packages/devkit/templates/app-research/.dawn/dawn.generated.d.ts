@@ -20,7 +20,7 @@ declare module "dawn:routes" {
       readonly listDir: (input: { path?: string }) => Promise<string[]>;
       readonly runBash: (input: { command: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
       readonly remember: (input: { data: import("zod").infer<(typeof import("../src/app/research/memory").default)["schema"]>; content: string; tags?: string[]; confidence?: number }) => Promise<string>;
-      readonly recall: (input: { query?: string; kind?: "semantic" | "episodic" | "procedural" | "reflection"; tags?: string[]; limit?: number }) => Promise<string>;
+      readonly recall: (input: { query?: string; kind?: "semantic" | "episodic" | "procedural" | "reflection"; tags?: string[]; limit?: number; since?: string; until?: string }) => Promise<string>;
     };
     "/research/subagents/researcher": {
       readonly readDoc: (input: Parameters<typeof import("../src/tools/readDoc.js").default>[0]) => Promise<Awaited<ReturnType<typeof import("../src/tools/readDoc.js").default>>>;

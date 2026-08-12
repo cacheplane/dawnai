@@ -1,11 +1,12 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { activityMessageRenderers } from "./components/ActivityRenderers"
 import { DemoSuggestions } from "./components/DemoSuggestions"
 import { MemoryCandidates } from "./components/MemoryCandidates"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 import { ToolCallCard } from "./components/ToolCallCard"
 
-// Notes (verified against installed @copilotkit/react-core@1.62.3 types — see
+// Notes (verified against installed @copilotkit/react-core@1.66.4 types — see
 // examples/chat/web/app/page.tsx for the original investigation):
 // - Use the `CopilotKit` wrapper (not bare `CopilotKitProvider`) per CopilotKit's own v2
 //   guidance: it adds the error boundary, toasts, and threads provider around the context.
@@ -24,7 +25,11 @@ import { ToolCallCard } from "./components/ToolCallCard"
 //   (the UI froze outright). 100ms keeps it live-feeling while capping re-renders.
 export default function Home() {
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" defaultThrottleMs={100}>
+    <CopilotKit
+      runtimeUrl="/api/copilotkit"
+      defaultThrottleMs={100}
+      renderActivityMessages={activityMessageRenderers}
+    >
       <DemoSuggestions />
       <PermissionInterrupt />
       <ToolCallCard />

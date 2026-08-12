@@ -250,6 +250,9 @@ describe("runTypegen", () => {
     expect(content).toContain(
       'data: import("zod").infer<(typeof import("../src/app/hello/[tenant]/memory").default)["schema"]>',
     )
+    expect(content).toContain(
+      'readonly recall: (input: { query?: string; kind?: "semantic" | "episodic" | "procedural" | "reflection"; tags?: string[]; limit?: number; since?: string; until?: string }) => Promise<string>;',
+    )
     expect(content).not.toContain("data: Record<string, unknown>")
     // Existing user tool still present alongside the capability-contributed ones
     expect(content).toContain("greet")

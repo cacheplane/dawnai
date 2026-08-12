@@ -5,14 +5,13 @@
 # contract.
 #
 # Recommended image source: `dawn build`'s node target (the default) emits a
-# server.mjs + hardened Dockerfile that boot the real Dawn runtime — build
-# that image with `docker build .` at the app root (see
-# docs/deployment.mdx#deploying-to-production-nodedocker). Use this target
-# whenever dawn.config.ts configures kubernetesSandbox: only the Dawn runtime
-# process creates sandbox Pods, so an image built the alternate way (the
-# langsmith target's langgraph.json, containerized with
-# `langgraphjs dockerfile`) never calls the sandbox provider even if the
-# config is present. See docs/sandbox.mdx#deploying-a-dawn-app-helm.
+# .dawn/build/server.mjs + hardened Dockerfile that boot the Dawn HTTP runtime.
+# Build that image with `docker build .` at the app root (see
+# apps/web/content/docs/deployment/node.mdx). The chart's Service and HTTP
+# probes require this Node-target server contract; LangSmith graph artifacts
+# are platform deployment artifacts, not compatible chart images. See
+# apps/web/content/docs/deployment/kubernetes.mdx for app deployment and
+# https://dawnai.org/docs/sandbox/kubernetes for Kubernetes Sandbox operations.
 
 image:
   # repository: REQUIRED at install time. Defaults to "" so `helm lint`
@@ -31,6 +30,9 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Keep one replica until shared durable stores plus thread-aware routing or
+# distributed serialization and cancel routing are configured. The chart does
+# not enforce those application-level requirements.
 replicaCount: 1
 
 # containerPort: the port your image's HTTP server listens on inside the
@@ -42,7 +44,9 @@ containerPort: 8000
 
 # healthPath: the HTTP path your image serves health checks on. Defaults to
 # /healthz, matching both dawn build's node-target server (serveRuntime) and
-# its Dockerfile HEALTHCHECK. Used for liveness/readiness/startup probes.
+# its Dockerfile HEALTHCHECK. It is the common liveness/readiness/startup probe
+# path, but Dawn's response is process liveness and does not validate model,
+# database, or sandbox dependencies.
 healthPath: /healthz
 
 probes:
@@ -106,8 +110,9 @@ serviceAccount:
   name: dawn-orchestrator
   annotations: {}
 
-# automountServiceAccountToken: the app needs the token to call the
-# Kubernetes API (unlike sandbox pods, which do not need it).
+# automountServiceAccountToken: the app needs the token when kubernetesSandbox
+# calls the Kubernetes API (unlike sandbox pods, which do not need it). Apps
+# without kubernetesSandbox should disable this where their setup allows.
 automountServiceAccountToken: true
 
 # sandboxNamespace: informational only — must match the app's
@@ -124,9 +129,9 @@ secretName: ""
 
 resources: {}
 
-# securityContext: hardened but app-appropriate. The app's own Pod (running
-# the node-target server.mjs, or a langgraphjs-built image) is not a sandbox
-# pod but should still be least-privilege.
+# securityContext: hardened but app-appropriate. The app's own Pod runs the
+# node-target .dawn/build/server.mjs; it is not a sandbox pod but should still
+# be least-privilege.
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false

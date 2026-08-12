@@ -4,71 +4,29 @@
 
 # @dawn-ai/cli
 
-The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps — a local HMR development runtime with durable threads, route execution, validation and typegen, and a build step that produces the configured deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
+The `dawn` command and runtime embedding entry points for developing, checking, testing, building, and serving Dawn applications.
 
 ## Install
 
-Project-local (recommended):
-
-```sh
-npm install -D @dawn-ai/cli
-# or
+```bash
 pnpm add -D @dawn-ai/cli
+pnpm exec dawn dev
 ```
 
-Global:
+Install it as a production dependency only when your application imports the runtime:
 
-```sh
-npm install -g @dawn-ai/cli
-# or
-pnpm add -g @dawn-ai/cli
+```ts
+import { serveRuntime } from "@dawn-ai/cli"
 ```
 
-Installs a `dawn` binary on your `PATH`. Requires Node.js 24 or later.
+## Runtime and stability
 
-## Commands
+- `@dawn-ai/cli` and its `dawn` command are supported node-only application/tooling surfaces.
+- `@dawn-ai/cli/fetch` is a supported edge-safe integration surface for generated fetch deployments.
+- `@dawn-ai/cli/runtime` is node-only and low-level.
+- `@dawn-ai/cli/testing` is a supported node-only testing surface.
 
-| Command        | Description                                                  |
-|----------------|--------------------------------------------------------------|
-| `dawn dev`     | Start the Dawn local development runtime                     |
-| `dawn check`   | Validate a Dawn app without writing files                     |
-| `dawn verify`  | Verify dependencies and generated types are in sync          |
-| `dawn build`   | Generate the configured deployment artifacts                  |
-| `dawn run`     | Execute one Dawn route invocation                            |
-| `dawn test`    | Run route test scenarios                                     |
-| `dawn routes`  | List discovered Dawn routes (use `--json` for machine output)|
-| `dawn typegen` | Generate Dawn route and tool types into `.dawn/`             |
-
-## Usage
-
-```sh
-# Start the local dev runtime
-pnpm dawn dev
-
-# Validate the app without writing generated files
-pnpm dawn check
-
-# Write route and tool types into .dawn/
-pnpm dawn typegen
-
-# Produce the configured deployment artifacts
-pnpm dawn build
-```
-
-Run `dawn <command> --help` for command-specific options.
-
-## Documentation
-
-Full reference and guides:
-
-- [CLI](https://dawnai.org/docs/cli)
-- [Dev server](https://dawnai.org/docs/dev-server)
-- [Deployment](https://dawnai.org/docs/deployment)
-- [Getting started](https://dawnai.org/docs/getting-started)
-
----
-
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+Use the [CLI API reference](https://dawnai.org/docs/api/cli) for imports and embedding contracts, and the [CLI guide](https://dawnai.org/docs/cli) for commands and workflows. The generated CLI docs bundle includes every registered package reference page.
 
 ## License
 

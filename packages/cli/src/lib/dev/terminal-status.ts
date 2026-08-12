@@ -16,6 +16,14 @@ import type { ThreadStatus } from "@dawn-ai/sqlite-storage"
  * AG-UI handler, so putting it there would make the handler import back into
  * its own composition root.
  *
+ * Exported rather than internal because the parked-and-failed combination,
+ * while it genuinely happens, cannot be DRIVEN over HTTP: the only way into a
+ * handler's catch with `sawInterrupt` set and the run not cancelled is the
+ * success-path status write itself failing — it sits inside the same try — and
+ * `createRuntimeFetchHandler` exposes no seam for a fault-injecting
+ * ThreadsStore. That is also what the catch's `sawInterrupt` wiring is for: it
+ * retries the same status rather than downgrading a parked thread to "idle".
+ *
  * `cancelled` is per-surface. Agent Protocol is durable and has an explicit
  * `POST /threads/:id/cancel`, so a cancelled run there is a turn a client may
  * still come back to. AG-UI is ephemeral and ends its run on client disconnect,

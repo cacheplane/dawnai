@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { type MemoryRecord, sqliteMemoryStore } from "@dawn-ai/memory"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { browseSearchParams, canonicalBrowseQuery } from "../src/browse/canonical-query"
 import {
   gated,
   type InspectorServer,
@@ -154,6 +155,40 @@ describe.skipIf(!gated)("memory JSON API", () => {
 
     const next = await fetch(
       `${server.base}/api/memory/list?${walk}&cursor=${encodeURIComponent(orderedPage.continuation as string)}`,
+    )
+    expect(next.status).toBe(200)
+    const nextPage = (await next.json()) as { records: MemoryRecord[] }
+    expect(nextPage.records.map((r) => r.id)).toEqual(["cand2", "other1"])
+  })
+
+  it("walks a continuation using the params the Inspector itself emits", async () => {
+    // The client's own emitter against the real route — the one test that can catch a
+    // wire format invented on the client side. It switches the expiry cutoff OFF
+    // (`includeExpired=1`) rather than pinning a `now`, which is what makes its walk
+    // survive the fingerprint check that the test below shows an unpinned walk failing.
+    const query = canonicalBrowseQuery({
+      view: "list",
+      orderBy: [{ field: "namespace", dir: "asc" }],
+    })
+    const head = await fetch(
+      `${server.base}/api/memory/list?${browseSearchParams(query, { limit: 2, cursor: null })}`,
+    )
+    expect(head.status).toBe(200)
+    const headPage = (await head.json()) as {
+      records: MemoryRecord[]
+      continuation: string | null
+    }
+    expect(headPage.records.map((r) => r.id)).toEqual(["active1", "cand1"])
+    expect(typeof headPage.continuation).toBe("string")
+
+    // Far enough apart that a per-request `now` stamp could not collide, so passing here
+    // means the client's params really do keep `now` out of the fingerprint.
+    await new Promise((done) => setTimeout(done, 5))
+    const next = await fetch(
+      `${server.base}/api/memory/list?${browseSearchParams(query, {
+        limit: 2,
+        cursor: headPage.continuation as string,
+      })}`,
     )
     expect(next.status).toBe(200)
     const nextPage = (await next.json()) as { records: MemoryRecord[] }

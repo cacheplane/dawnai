@@ -155,6 +155,8 @@ export const packages = [
   {
     dir: "packages/ag-ui",
     expectedFiles: [
+      "dist/activities.js",
+      "dist/activities.d.ts",
       "dist/ids.js",
       "dist/ids.d.ts",
       "dist/inbound.js",

@@ -1,0 +1,111 @@
+# @dawn-ai/memory-pgvector
+
+## Use this when
+
+Use this package when multiple Dawn application instances need shared long-term memory with Postgres and pgvector. Keep SQLite for local or single-instance use; choose this backend when shared durability and vector retrieval justify operating Postgres.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/memory-pgvector pg
+```
+
+```ts
+import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/memory-pgvector` | node-only | not-claimed | application | supported |
+
+The store uses `pg`, initializes the pgvector extension and its tables lazily, and requires database credentials with the needed DDL and extension privileges.
+
+## Public exports
+
+### `@dawn-ai/memory-pgvector`
+
+| Export | Responsibility |
+|---|---|
+| `PgvectorMemoryStore` | Extend `MemoryStore` with pool lifecycle. |
+| `pgvectorMemoryStore` | Create a Postgres and pgvector memory store. |
+| `assertIdentifier` | Reject unsafe SQL identifiers. |
+| `initSchema` | Initialize pgvector storage schema. |
+| `vectorColumnDef` | Select vector storage and operator class by dimensions. |
+
+## Key contracts
+
+### `PgvectorMemoryStore`
+
+```ts api-contract="@dawn-ai/memory-pgvector#.:PgvectorMemoryStore"
+export interface PgvectorMemoryStore extends MemoryStore {
+  close(): Promise<void>
+}
+```
+
+An injected pool remains caller-owned: `close()` is a no-op, and the caller owns pool error handling. A store-created pool receives an error listener and is ended by `close()`.
+
+```ts api-contract="@dawn-ai/memory-pgvector#.:pgvectorMemoryStore"
+export declare function pgvectorMemoryStore(opts: {
+  /** Postgres connection string; used to build an owned pool. */
+  connectionString?: string
+  /** An existing pool to use instead of building one from `connectionString`. */
+  pool?: Pool
+  /** Embedding dimensions (≤2000 → `vector`, ≤4000 → `halfvec`). */
+  dimensions: number
+  /** HNSW index/search tuning; all fields defaulted. */
+  index?: { m?: number; efConstruction?: number; efSearch?: number }
+  /** Postgres schema to place tables in. */
+  schema?: string
+  /** Table name prefix (isolates multiple stores in one database). */
+  tablePrefix?: string
+  /** Recall ranking tuning; all fields defaulted. See @dawn-ai/memory score.ts. */
+  recall?: RecallRankingOptions
+  /** Store-level hybrid tuning; used when a query omits `vector`. All fields defaulted. */
+  vector?: VectorRankingOptions
+}): PgvectorMemoryStore
+```
+
+#### Behavior contract `memory-pgvector.schema.identifier-validation`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory-pgvector/test/schema.test.ts","testNames":["rejects identifiers with unsafe characters"]}] */}
+pgvector schema and table-prefix identifiers reject unsafe characters before Dawn interpolates them into DDL.
+
+#### Behavior contract `memory-pgvector.dimension-branches`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory-pgvector/test/schema.test.ts","testNames":["dims ≤ 2000 → plain vector + vector_cosine_ops","2000 < dims ≤ 4000 → halfvec + halfvec_cosine_ops (text-embedding-3-large)","dims > 4000 → throws a clear error naming the ceiling","non-positive/non-integer dims throw","validates dimensions at construction time"]}] */}
+The store rejects invalid dimensions at construction: 1–2000 use vector cosine indexes, 2001–4000 use halfvec cosine indexes, and larger, nonpositive, or noninteger values throw.
+
+#### Behavior contract `memory-pgvector.update-preserves-embedding`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/memory-pgvector/test/pgvector-integration.test.ts","testNames":["halfvec update preserves the stored embedding without recomputing changed content"]}] */}
+`update()` preserves the row's stored embedding. Content or data updates do not recompute that embedding, so after changing semantic content, compute a replacement and call `put(updatedRecord, { embedding, embeddingModel })` to avoid stale vector results.
+
+### Initialization and retrieval
+
+Initialization is memoized per store instance. `CREATE IF NOT EXISTS` does not migrate an existing vector dimension or HNSW tuning, so treat those as schema decisions. Dimensions up to 2,000 use `vector`; dimensions up to 4,000 use `halfvec`; larger or non-positive dimensions fail during construction.
+
+Both `queryEmbedding` and `embedderId` are required to activate hybrid retrieval. Keyword and vector candidates are fused in application code. `schema` and `tablePrefix` organize tables; they are not tenant authorization boundaries. Stored memory is plaintext unless your database and infrastructure provide encryption.
+
+## Examples and related guides
+
+```ts
+import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
+
+const connectionString = process.env.DATABASE_URL
+if (!connectionString) {
+  throw new Error("DATABASE_URL is required")
+}
+
+const store = pgvectorMemoryStore({
+  connectionString,
+  dimensions: 1536,
+  tablePrefix: "support_memory",
+})
+
+try {
+  await store.search({ namespace: "workspace=acme", query: "shipping" })
+} finally {
+  await store.close()
+}
+```
+
+Continue with [Long-term Memory](/docs/memory/long-term), [Recall and Retrieval](/docs/memory/retrieval), and [Persistence and Tenancy](/docs/persistence).

@@ -27,6 +27,7 @@ import {
   handleMemoryRejectRequest,
 } from "./memory-handler.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
+import { readParkedInterruptIds, readParkedRoute, settleParkedRoute } from "./parked-route.js"
 import {
   createPendingResumeClaims,
   type DawnResumeEntry,
@@ -48,6 +49,7 @@ import {
   dawnErrorCodeOf,
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
+import { terminalStatus } from "./terminal-status.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
@@ -941,9 +943,35 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
+        // Refused while a turn is executing, for the same reason a second run
+        // is: deleting a thread out from under its own in-flight turn is
+        // incoherent whoever asks. The turn keeps running against state that no
+        // longer exists, and every write it has left to make — status, metadata,
+        // the parked-route gate — targets a row that is gone. Those writes do
+        // not fail, they NO-OP (`updateMetadata` returns early on a missing
+        // row), so the turn parks durably while its gate records nothing, and
+        // the next run to touch the thread recreates the row with its own route.
+        // The run registry already owns the "one turn at a time on a thread"
+        // invariant, so it is the natural place to answer from, and its slot is
+        // held across every settle — including the /runs/wait arms that defer
+        // their release until an abandoned route unwinds.
+        if (getRunRegistry(request).has(threadId)) {
+          return Response.json(
+            createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+              code: "run_in_flight",
+            }),
+            { status: 409 },
+          )
+        }
         const checkpointer = getCheckpointer(request)
-        await getThreadsStore(request).deleteThread(threadId)
-        // Best-effort: delete checkpoints if the saver supports it.
+        // Checkpoints BEFORE the row, and deliberately not the other way round:
+        // the two deletes are not atomic, so one of them has to be the one that
+        // can be left undone. Losing the row first would strand a live payload
+        // behind a thread the endpoint 404s for — until any run recreates the
+        // row and serves it under the new route. Losing the payload first
+        // strands nothing: the row still carries the recorded parking route, so
+        // whatever remains stays gated exactly as it was, and the caller sees
+        // the failure and can retry.
         if (
           typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
         ) {
@@ -953,6 +981,7 @@ function buildRouteTable(ctx: {
             }
           ).deleteThread(threadId)
         }
+        await getThreadsStore(request).deleteThread(threadId)
         if (sandboxManager) await sandboxManager.destroyThread(threadId)
         return new Response(null, { status: 204 })
       },
@@ -1158,6 +1187,26 @@ function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
+    // GET /threads/:thread_id/pending_interrupts — durable HITL prompts
+    // ------------------------------------------------------------------
+    // Not a collision with GET /threads/:thread_id: that pattern's
+    // [^/?#]+ capture cannot span a slash.
+    {
+      handle: async (request, params) =>
+        handleApPendingInterruptsRequest({
+          checkpointer: getCheckpointer(request),
+          middleware,
+          registry,
+          request,
+          threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore: getThreadsStore(request),
+        }),
+      method: "GET",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/pending_interrupts(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
     // POST /threads/:thread_id/resume — resolve a parked interrupt
     // ------------------------------------------------------------------
     {
@@ -1322,10 +1371,19 @@ async function handleApStreamRequest(options: {
     )
   }
 
+  // Taken from the thread already loaded above, so the turn's own settle call
+  // can tell whether a parking route was recorded without a second store
+  // round-trip. Only ever consulted to decide whether to CLEAR — see
+  // settleParkedRoute for why a value sampled this early is safe there.
+  const previousParkedRoute = readParkedRoute(thread)
+
   // Record which route last ran on this thread so the resume endpoint can
   // re-invoke it without requiring the client to repeat the route key.
   // The in-memory map is fast-path for the current server session; the thread
   // metadata persists it to SQLite so resume survives a server restart.
+  //
+  // Deliberately NOT the identity GET /pending_interrupts gates on: this is
+  // overwritten by any run the caller is allowed to start. See PARKED_ROUTE_KEY.
   threadRouteMap.set(threadId, routeKey)
   try {
     await threadsStore.updateMetadata(threadId, { route: routeKey })
@@ -1358,6 +1416,13 @@ async function handleApStreamRequest(options: {
   // (subprocess, non-abort-aware SDK, CPU-bound loop) keeps running after
   // that race is won. See the finally below for why this matters.
   let sourceCleanup: Promise<void> | undefined
+  // A parked turn takes the NORMAL completion path: the adapter yields the
+  // interrupt chunk and then `done`, so a drained loop does not mean the turn
+  // finished. Without this, a thread waiting on a human reads back as "idle"
+  // and a reconnecting client is told the agent is done. Deliberately the
+  // handler's own flag, so parked-status honesty depends on nothing outside
+  // this request.
+  let sawInterrupt = false
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -1389,9 +1454,30 @@ async function handleApStreamRequest(options: {
           for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
             sourceCleanup = p
           })) {
+            if (chunk.type === "interrupt") sawInterrupt = true
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
-          await threadsStore.updateStatus(threadId, "idle")
+          // Before the status write, and inside the same try, so a failure to
+          // tighten the gate on a parked turn surfaces rather than leaving a
+          // thread that reads "interrupted" with its prompt gated on whatever
+          // route runs next.
+          await settleParkedRoute({
+            canPark: route.mode === "agent",
+            checkpointer,
+            parked: sawInterrupt,
+            previousParkedRoute,
+            routeKey,
+            threadId,
+            threadsStore,
+          })
+          // Deliberately not run.cancelled: the loop drained, so the turn
+          // finished. A cancel that lost the race against the last chunk does
+          // not retroactively interrupt it — the same abort-vs-settle race the
+          // /runs/wait re-check documents at length.
+          await threadsStore.updateStatus(
+            threadId,
+            terminalStatus({ cancelled: false, sawInterrupt }),
+          )
         } catch (error) {
           // A cancelled run is not a failure: clients must be able to tell the
           // two apart without inferring it from a truncated stream.
@@ -1404,8 +1490,20 @@ async function handleApStreamRequest(options: {
                 type: "done",
               }
           safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+          // A turn that parked before failing is still parked, so the gate has
+          // to be recorded here too — including when the failure IS the
+          // success-path settle above. Retried, not skipped.
+          await settleParkedRoute({
+            canPark: route.mode === "agent",
+            checkpointer,
+            parked: sawInterrupt,
+            previousParkedRoute,
+            routeKey,
+            threadId,
+            threadsStore,
+          }).catch(() => undefined)
           await threadsStore
-            .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+            .updateStatus(threadId, terminalStatus({ cancelled: run.cancelled, sawInterrupt }))
             .catch(() => undefined)
         }
       } finally {
@@ -1545,9 +1643,40 @@ async function handleApWaitRequest(options: {
     )
   }
 
-  // Record route for potential resume (in-memory fast-path + durable metadata)
+  // See handleApStreamRequest: taken from the thread already loaded above.
+  const previousParkedRoute = readParkedRoute(thread)
+
+  // Record route for potential resume (in-memory fast-path + durable metadata).
+  // Not the identity GET /pending_interrupts gates on — see PARKED_ROUTE_KEY.
   threadRouteMap.set(threadId, routeKey)
+  // Unlike the streaming handlers, this one has no chunks to watch: executeAgent
+  // drains the adapter's stream and returns only the `done` payload, so both the
+  // interrupt chunks and LangGraph's `__interrupt__` key are gone by the time
+  // the output lands here. The park is therefore detected by DIFFING the
+  // checkpoint's pending-interrupt ids across the turn. It has to be a diff and
+  // not just "is anything pending afterwards": interrupts this turn did not
+  // park belong to whichever route did, and letting a turn claim them is the
+  // same repointing PARKED_ROUTE_KEY exists to prevent.
+  //
+  // COST, stated plainly: an agent turn through this endpoint pays two extra
+  // getTuple calls — this one and its partner below — every time, including on
+  // threads that never park. Neither can be made lazy. The "after" read is the
+  // only park signal this endpoint has, and the "before" read cannot wait until
+  // something looks interesting: by the time the turn has run, its starting
+  // state is unobservable. Deferring it on a cheap proxy does not work either —
+  // thread STATUS is the obvious one, and it is precisely the signal this
+  // endpoint deliberately does not maintain (see the settle call below).
+  //
+  // Accepted because of what it is measured against: an agent turn is at least
+  // one model round-trip and several checkpoint WRITES, so two reads are noise
+  // beside it. The routes where a per-request read would actually show up —
+  // plain graph, chain, workflow — pay nothing at all, because nothing but an
+  // agent route is handed a checkpointer to park into, which also makes their
+  // diff known-empty without asking.
+  const canPark = route.mode === "agent"
+  let interruptIdsBefore: ReadonlySet<string> = new Set()
   try {
+    if (canPark) interruptIdsBefore = await readParkedInterruptIds(checkpointer, threadId)
     await threadsStore.updateMetadata(threadId, { route: routeKey })
     await threadsStore.updateStatus(threadId, "busy")
   } catch (error) {
@@ -1576,9 +1705,47 @@ async function handleApWaitRequest(options: {
     )
   }
 
+  /**
+   * Bind this turn's gate to the route that parked, whatever way the turn ended.
+   *
+   * Every arm has to call it, not just the one that returns output. A turn that
+   * parked and was then cancelled is still parked — its `__interrupt__` write is
+   * durable and the endpoint will serve it — so an arm that returns without
+   * settling leaves `parked_route` unset on a thread's first park, and the
+   * endpoint falls through to the `threadRouteMap ?? metadata.route` chain that
+   * any allowed run can repoint. "Leaving the recorded value alone
+   * over-restricts" is only true once a value is recorded; on the first park
+   * there is nothing to leave alone.
+   *
+   * Always a post-hoc diff, never "is anything pending now": interrupts this
+   * turn did not park belong to whichever route did.
+   */
+  const settleParkedRouteForTurn = async (): Promise<void> => {
+    const interruptIdsAfter = canPark
+      ? await readParkedInterruptIds(checkpointer, threadId).catch(() => undefined)
+      : undefined
+    await settleParkedRoute({
+      canPark,
+      checkpointer,
+      parked: interruptIdsAfter
+        ? [...interruptIdsAfter].some((id) => !interruptIdsBefore.has(id))
+        : false,
+      ...(interruptIdsAfter ? { pendingAfter: interruptIdsAfter } : {}),
+      previousParkedRoute,
+      routeKey,
+      threadId,
+      threadsStore,
+    }).catch(() => undefined)
+  }
+
   // Set only when the route is abandoned (detached, not stopped) rather than
   // genuinely settled — see the finally below.
   let abandoned = false
+  // Set when the route is STILL EXECUTING as this handler returns. The settle
+  // then cannot happen at return time: the route may not have written its
+  // interrupt yet, and reading the checkpoint now would miss a park that lands
+  // a moment later. It has to hang off resultPromise instead — see the finally.
+  let settleAfterRouteUnwinds = false
   let resultPromise: ReturnType<typeof invokeResolvedRoute> | undefined
   try {
     resultPromise = invokeResolvedRoute({
@@ -1603,6 +1770,11 @@ async function handleApWaitRequest(options: {
     const result = await raceRequestAgainstShutdown(resultPromise, run.signal)
 
     if (result === SHUTDOWN_ABORTED) {
+      // Neither arm below has a settled route: raceRequestAgainstShutdown stops
+      // WAITING for resultPromise, it never stops the route. So both defer the
+      // gate write until the route genuinely unwinds.
+      settleAfterRouteUnwinds = true
+
       // A cancelled run is not server shutdown: the caller asked to wait for
       // a result that no longer exists because someone cancelled the run —
       // that is a conflict, not a 503.
@@ -1624,6 +1796,12 @@ async function handleApWaitRequest(options: {
     }
 
     if (result.status === "failed") {
+      // Settled inline, unlike the two arms above: resultPromise has resolved,
+      // so the route is done writing and the slot is still held. Once, before
+      // the sub-branching, so all three exits below are covered — a turn that
+      // parked and THEN failed is still parked.
+      await settleParkedRouteForTurn()
+
       // Defensive re-check, not dead code: resultPromise can settle in the
       // same tick the abort fires, so the Promise.race above can resolve to
       // the settled promise rather than the abort — SHUTDOWN_ABORTED is not
@@ -1659,20 +1837,222 @@ async function handleApWaitRequest(options: {
       )
     }
 
+    // A /runs/wait turn CAN park, and this gate has to know about it even though
+    // the spec leaves this endpoint out of the parked-STATUS work below: a park
+    // recorded nowhere is a park whose prompt stays gated on the last-run route,
+    // which any run the caller is allowed to start can repoint. The status
+    // contract below is untouched — a parked /runs/wait turn still reads "idle".
+    await settleParkedRouteForTurn()
+
+    // Deliberately unconditional, unlike the streaming handlers' terminalStatus:
+    // the spec scopes parked-status honesty to the streaming endpoints, so a
+    // /runs/wait turn that parks still reads "idle" here. Clients detect that
+    // case via GET /threads/:id/pending_interrupts.
     await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
     return Response.json(result.output, { status: 200 })
   } finally {
-    if (abandoned && resultPromise) {
-      // Hold the slot until the abandoned route genuinely finishes rather
-      // than freeing it the instant the 409 is decided (see the comment
-      // above). The outcome is discarded — nobody is waiting on it anymore —
-      // and any rejection is swallowed so it never surfaces as an unhandled
-      // rejection.
-      void resultPromise.finally(() => run.release()).catch(() => undefined)
+    if (settleAfterRouteUnwinds && resultPromise) {
+      // The route outlived this response. Its park — if it parks at all — may
+      // land AFTER the 409 was sent, so the gate write chases the route rather
+      // than the response: settle once resultPromise has genuinely unwound.
+      // `.catch` first so a rejected route still reaches the settle; the
+      // outcome itself is discarded, since nobody is waiting on it anymore.
+      //
+      // Best-effort on the shutdown arm specifically, which (as before this
+      // change) frees the slot without waiting: another run could in principle
+      // be admitted before this settles. Not tightened here because holding a
+      // slot open across shutdown would delay process exit, and the arm that
+      // an unauthenticated caller can actually drive — cancel — is the one
+      // that keeps its slot.
+      void resultPromise
+        .catch(() => undefined)
+        .then(settleParkedRouteForTurn)
+        .catch(() => undefined)
+        .finally(() => {
+          // Hold the slot until the abandoned route genuinely finishes rather
+          // than freeing it the instant the 409 is decided, or a newly admitted
+          // run would interleave checkpoint writes with it.
+          if (abandoned) run.release()
+        })
+      if (!abandoned) run.release()
     } else {
       run.release()
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// AP pending-interrupts handler — durable HITL prompts for a reconnected client
+// ---------------------------------------------------------------------------
+
+async function handleApPendingInterruptsRequest(options: {
+  readonly checkpointer: BaseCheckpointSaver
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
+  readonly request: Request
+  readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
+}): Promise<Response> {
+  const { checkpointer, middleware, registry, request, threadId, threadRouteMap, threadsStore } =
+    options
+
+  // Thread first, with the same code POST /cancel and POST /resume use for an
+  // unknown thread, so a client branches on one code across the AP surface.
+  // Thread existence is therefore observable BEFORE any middleware runs — the
+  // same as POST /resume, which answers 404 long before it calls
+  // runMiddleware. Deliberate, and mandated by §1 of the spec; the interrupt
+  // payloads themselves stay behind the middleware gate below.
+  const thread = await threadsStore.getThread(threadId)
+  if (!thread) {
+    return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
+      status: 404,
+    })
+  }
+
+  // Route identity for middleware. The PARKING route wins — the route whose own
+  // turn left these interrupts in the checkpoint (see PARKED_ROUTE_KEY) — and
+  // only then the last-run chain POST /resume uses: the in-memory map as the
+  // fast path for this server session, thread metadata to survive a restart.
+  // There is no client-supplied fallback; a GET has no body to carry one.
+  //
+  // Gating on the last-run route ALONE is a hole, not an inherited convention.
+  // Every endpoint that starts a turn overwrites that identity before executing
+  // anything, so a caller a routeId-scoped policy allows on some cheaper route
+  // could park-swap their way in: start a run on the route they are allowed,
+  // and the same GET that was refused now answers with the parked prompt's
+  // `interruptId` and `resumeKey`. POST /resume resolving identity the same way
+  // is not a precedent for it: /resume only chooses which route to re-invoke
+  // and never returns the payload. This endpoint is what makes route identity
+  // control read access, so it is what has to be bound to the parking route.
+  //
+  // WHAT THIS GATE ACTUALLY PROTECTS is narrower than it looks, and worth being
+  // exact about so nobody defends the wrong thing. The prompt's semantic
+  // content — the tool name, its argument preview, the fact that a decision is
+  // pending — is ALREADY readable without passing this gate: ungated
+  // GET /threads/:id/state returns the messages carrying the tool call and its
+  // arguments verbatim, plus `next: ["__interrupt__"]`. The ADDRESSING PAIR is
+  // what is genuinely gated here and nowhere else. (Gating /state is tracked
+  // separately; this endpoint is not the place to compensate for it.)
+  //
+  // And what that leak is, stated precisely because it is easy to get
+  // backwards: it is DISCLOSURE, not approval. It is NOT bounded by /resume
+  // gating on an identity the attacker cannot forge — /resume resolves
+  // `threadRouteMap ?? metadata.route ?? body.route`, every term of which a
+  // park-swap controls. What actually stops them is that resuming the route
+  // they swapped in does not answer the prompt the other route parked: a plain
+  // graph route ignores `resume` entirely, and an agent route replays its own
+  // graph, destroying the pending set rather than resolving it. So the prompt
+  // stays unanswered — which makes this a confidentiality fix, and means the
+  // secrecy of `resumeKey` is not what the permission decision rests on.
+  //
+  // RESIDUALS, deliberately accepted. Every HTTP endpoint that can park records
+  // it — /runs/stream, /runs/wait (on all four of its exit arms), /resume and
+  // /agui — so what is left is the cases where no record was ever written:
+  //   1. a thread parked by a build that predates this key;
+  //   2. a park whose metadata write itself failed, on one of the arms that
+  //      swallow that error rather than mask the failure that brought them
+  //      there (the streaming catch paths, /agui's finally);
+  //   3. a /runs/wait park whose settle was deferred behind an abandoned route
+  //      — cancelled or shut down — that had still not unwound when the process
+  //      exited.
+  // All three fall through to the chain below and stay swappable until the
+  // thread's next turn settles. Detecting them from the checkpoint would mean
+  // inferring an owner for interrupts nobody recorded — and the only inferable
+  // owner is the last-run route, which is exactly the value an attacker
+  // controls.
+  //
+  // A fourth path parks without recording, and is called out separately because
+  // it is not an HTTP endpoint at all: `createAgentHarness`
+  // (packages/testing/src/harness.ts) drives `streamResolvedRoute` directly,
+  // taking no run slot and settling nothing. It is fail-closed by accident
+  // rather than design — a harness run writes no threads-store row, so this
+  // endpoint 404s on it before middleware is ever consulted — and it is
+  // test-only. Worth knowing before someone gives the harness a threads store.
+  //
+  // What is NOT on this list any more: deleting the thread row mid-turn. Every
+  // settle ends in `updateMetadata`, which no-ops rather than fails on a missing
+  // row, so a delete landing between turn start and the interrupt write used to
+  // produce a durable park with no record. DELETE now refuses while a run is in
+  // flight (see the route above), which closes that window rather than narrowing
+  // it: before the turn starts nothing is parked, and after it settles the row
+  // and the payload go together.
+  const parkedRoute = readParkedRoute(thread)
+  const persistedRoute = thread.metadata.route
+  const routeKey =
+    parkedRoute ??
+    threadRouteMap.get(threadId) ??
+    (typeof persistedRoute === "string" ? persistedRoute : undefined)
+  if (!routeKey) {
+    // Fail closed: with no route there is no identity at all to gate on, and
+    // route-scoped middleware would silently fall through on an endpoint that
+    // serves interrupt payloads. Deliberately a different code from /resume's
+    // route_not_found: that one is fixable by passing `route` in the body.
+    return Response.json(
+      createRequestErrorBody(
+        `No route recorded for thread "${threadId}": it has never run, so its pending ` +
+          "interrupts cannot be gated by route middleware.",
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
+  }
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    // Same code and status as the branch above: both mean "this thread has no
+    // usable route identity", and the caller is still ungated here, so the
+    // server-derived route key is deliberately NOT echoed — it would tell
+    // anyone who can name a thread id which route that thread ran. The other
+    // `Unknown route` sites can echo safely because there the key came from
+    // the caller's own request body.
+    return Response.json(
+      createRequestErrorBody(
+        `The route recorded for thread "${threadId}" is no longer registered.`,
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
+  }
+
+  const requestUrl = new URL(request.url)
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: headersToRecord(request.headers),
+    // The first AP endpoint where middleware sees a method other than POST.
+    method: "GET",
+    // Always empty: run endpoints derive params from the request input via
+    // extractRouteParams, and a checkpoint has no input to reconstruct them
+    // from. Middleware gating on req.params.orgId for an `[orgId]` route sees
+    // {} here — as it does on /resume.
+    params: {},
+    routeId: route.routeId,
+    url: `${requestUrl.pathname}${requestUrl.search}`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    return statusResponse(mwResult.status, mwResult.body)
+  }
+
+  // A known thread with no checkpoint has nothing parked. That is a 200 with an
+  // empty list, not a 404: "no such thread" and "nothing pending" are different
+  // answers and a reconnecting client acts on them differently.
+  //
+  // A malformed pending-write set is still listed — this endpoint reports what
+  // is parked, and POST /resume is the surface that refuses to act on writes it
+  // cannot address safely (malformed_checkpoint).
+  const snapshot = await readPendingInterrupts(checkpointer, threadId)
+  const interrupts = (snapshot?.interrupts ?? []).map(({ interruptId, resumeKey, value }) => ({
+    interruptId,
+    resumeKey,
+    value,
+  }))
+  return Response.json(
+    { interrupts },
+    // Checkpoint state changes under the client; a cached answer would show a
+    // prompt that has already been resolved.
+    { headers: { "cache-control": "no-store" }, status: 200 },
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1770,7 +2150,9 @@ async function handleResumeRequest(options: {
     //   1. in-memory map (fast-path, current server session)
     //   2. durable thread metadata (survives a server restart)
     //   3. client-supplied `route` in the resume body (explicit override)
-    const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
+    const resumingThread = await threadsStore.getThread(threadId)
+    const persistedRoute = resumingThread?.metadata.route
+    const previousParkedRoute = readParkedRoute(resumingThread)
     const routeKey =
       threadRouteMap.get(threadId) ??
       (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
@@ -1828,6 +2210,10 @@ async function handleResumeRequest(options: {
     // resumed run. Explicit cancellation uses POST /threads/:id/cancel.
     const encoder = new TextEncoder()
     let sourceCleanup: Promise<void> | undefined
+    // A resumed turn can park again (an "once" decision authorizes one call,
+    // not the tool). Same reasoning as handleApStreamRequest: the adapter's
+    // `done` follows the interrupt chunk, so a drained loop is not completion.
+    let sawInterrupt = false
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -1860,9 +2246,29 @@ async function handleResumeRequest(options: {
             for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
               sourceCleanup = p
             })) {
+              if (chunk.type === "interrupt") sawInterrupt = true
               safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
             }
-            await threadsStore.updateStatus(threadId, "idle")
+            // A resume that parks again re-arms the gate on the route that
+            // parked; one that answers the last prompt retires it. Same
+            // ordering and same failure contract as handleApStreamRequest.
+            await settleParkedRoute({
+              canPark: route.mode === "agent",
+              checkpointer,
+              parked: sawInterrupt,
+              previousParkedRoute,
+              routeKey,
+              threadId,
+              threadsStore,
+            })
+            // Deliberately not run.cancelled: the loop drained, so the turn
+            // finished. A cancel that lost the race against the last chunk does
+            // not retroactively interrupt it — the same abort-vs-settle race the
+            // /runs/wait re-check documents at length.
+            await threadsStore.updateStatus(
+              threadId,
+              terminalStatus({ cancelled: false, sawInterrupt }),
+            )
           } catch (error) {
             // A cancelled run is not a failure: clients must be able to tell the
             // two apart without inferring it from a truncated stream.
@@ -1875,8 +2281,17 @@ async function handleResumeRequest(options: {
                   type: "done",
                 }
             safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+            await settleParkedRoute({
+              canPark: route.mode === "agent",
+              checkpointer,
+              parked: sawInterrupt,
+              previousParkedRoute,
+              routeKey,
+              threadId,
+              threadsStore,
+            }).catch(() => undefined)
             await threadsStore
-              .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+              .updateStatus(threadId, terminalStatus({ cancelled: run.cancelled, sawInterrupt }))
               .catch(() => undefined)
           }
         } finally {

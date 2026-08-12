@@ -14,6 +14,7 @@ import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
+import { readParkedRoute, settleParkedRoute } from "./parked-route.js"
 import {
   type PendingResumeClaims,
   readPendingInterrupts,
@@ -74,9 +75,10 @@ interface AgUiRequestOptions extends Omit<AgUiFetchRequestOptions, "request"> {
  * Separate from `normalizeDawnStream`, and upstream of it, because that one has
  * already translated chunks into AG-UI's vocabulary by the time anything
  * downstream sees them, while a park has to be recognised by Dawn's own
- * `interrupt` chunk. Being upstream also means the flag is set before the
- * enqueue, so a park observed after the client has gone — the controller closed,
- * every write a no-op — still counts.
+ * `interrupt` chunk — the same signal `handleApStreamRequest` watches for
+ * inline. Being upstream also means the flag is set before the enqueue, so a
+ * park observed after the client has gone — the controller closed, every write
+ * a no-op — still counts.
  */
 async function* observeInterrupts(
   chunks: AsyncIterable<StreamChunk>,
@@ -269,9 +271,18 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     }
     releaseRunBeforeStream = run.release
 
-    if (!(await threadsStore.getThread(threadId))) {
+    // Read before the turn, for the same reason and with the same staleness
+    // caveat as the Agent Protocol handlers: only the CLEAR consults it.
+    const existingThread = await threadsStore.getThread(threadId)
+    const previousParkedRoute = readParkedRoute(existingThread)
+    if (!existingThread) {
       await threadsStore.createThread({ thread_id: threadId })
     }
+    // The last-run route, and therefore NOT the identity
+    // GET /threads/:id/pending_interrupts gates on — any run the caller is
+    // allowed to start overwrites it. See PARKED_ROUTE_KEY. This endpoint is the
+    // one the CopilotKit UIs drive, so it is where most parks are born; a park
+    // it failed to record would be a park that endpoint could not protect.
     await threadsStore.updateMetadata(threadId, { route: routeKey })
     await threadsStore.updateStatus(threadId, "busy")
 
@@ -283,6 +294,10 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // interrupt chunk and then `done` — so a drained loop does not mean the turn
     // finished. The handler's own flag, so parked-status honesty depends on
     // nothing outside this request.
+    //
+    // This is the change #443's note about the "idle" status write being
+    // "deliberately left alone (tracked separately)" was pointing at; that note
+    // is gone because this is the separate tracking, landed.
     let sawInterrupt = false
     // From here on, the stream owns both the request listeners and any resume
     // claim. Its execution-finally path releases the claim only after the
@@ -331,6 +346,21 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
               safeEnqueue(controller, encoder.encode(encodeAgUiSse(event, accept)))
             }
           } finally {
+            // This finally covers BOTH the drained and the failed turn, which is
+            // exactly the pair the Agent Protocol handlers cover with a
+            // success-path call plus a catch-path retry: a turn that parked
+            // before failing is still parked. Errors are swallowed rather than
+            // propagated because throwing from here would replace whatever
+            // error brought us into the finally, masking the real failure.
+            await settleParkedRoute({
+              canPark: route.mode === "agent",
+              checkpointer,
+              parked: sawInterrupt,
+              previousParkedRoute,
+              routeKey,
+              threadId,
+              threadsStore,
+            }).catch(() => undefined)
             // One write covers the drained turn, the failed one and the
             // disconnected one, because `toAguiEvents` never throws into its
             // consumer: an upstream error or abort arrives as a RUN_ERROR event

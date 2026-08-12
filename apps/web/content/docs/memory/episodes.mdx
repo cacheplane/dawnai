@@ -1,0 +1,131 @@
+# Episodes
+
+Episodes record what a run did so later runs can recall recent operational history. Dawn supports two paths: an opt-in runtime recorder for settled agent runs, and agent-authored `episodic` records written through the generated `remember` tool.
+
+## Episodic memory
+
+Episodic records append. A later event does not reconcile or supersede an earlier event merely because their data looks similar. Recall can filter them by an event-time window; [Distillation](/docs/memory/distillation) can later compact old episodes or derive reflections.
+
+## Enabling the run recorder
+
+The recorder is disabled by default. Enable it for agent routes that have a resolved memory context:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    episodes: {
+      enabled: true,
+      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      cap: 500,
+      includeFailedRuns: true,
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+The TTL defaults to 30 days, the cap to 500 episodes per namespace, and failed runs are included. The recorder does not embed episodes: `embed` currently resolves to false, and setting it to true warns once while the record still lands without an embedding.
+
+The recorder shares the long-term write switch: `memory.writes: "off"` makes the recorder a no-op even when `memory.episodes.enabled` is true. Use `off` when the entire route must remain recall-only.
+
+## What gets recorded
+
+One completed run produces one active episodic record:
+
+```json
+{
+  "kind": "episodic",
+  "content": "run ok: summarize invoice 8821 (2 tools, 1.4s)",
+  "data": {
+    "input": "summarize invoice 8821",
+    "outcome": "ok",
+    "toolsUsed": ["readFile", "lookupInvoice"],
+    "durationMs": 1400,
+    "threadId": "thread-123",
+    "runId": "run-456"
+  },
+  "source": { "type": "run", "id": "run-456" },
+  "effectiveAt": "2026-08-10T18:00:00.000Z"
+}
+```
+
+The source id prefers `runId`, then `threadId`, then the start instant. Input is bounded, tool names are unique, and `outcome` is `ok` or `error`. Successful episodes derive tool names from final route state; failed episode records currently use `toolsUsed: []` because no final state is available, even if tools ran before the error. The run's event timestamp is `effectiveAt` at start; `createdAt` and `updatedAt` are the recorder's finish/write time. The record expires relative to the start time.
+
+Recorder errors never fail the user run; the first failure is logged and later failures are muted in that process. Monitor the store if episode capture is operationally required.
+
+## Settled, failed, and parked runs
+
+- A settled successful run records `outcome: "ok"`.
+- A settled thrown run records `outcome: "error"` when `includeFailedRuns` is true.
+- A parked interrupt is not completed until a later resume settles or fails. The parked turn records nothing, preventing a half-finished run from appearing as history.
+
+This distinction matters for human-in-the-loop permissions: seeing an interrupt event is not evidence that the route finished.
+
+## Retention
+
+After writing an episode, the recorder calls `prune` for the namespace. Pruning removes rows whose `expiresAt` is at or before the fixed `now`, then removes the oldest episodic rows beyond the cap using `effectiveAt` (falling back to `createdAt`) and `id` as a tie-break.
+
+Retention is lazy: a write or explicit pruning command performs it. It is not a precise background timer. Run `dawn memory prune` on an application-owned schedule if stale rows must be removed without new traffic.
+
+Thread deletion does not remove episodes. Design tenant erasure and retention around the memory namespace, not the thread metadata lifecycle.
+
+## Time-windowed recall
+
+```ts
+await recall({
+  kind: "episodic",
+  query: "deployment failure",
+  since: "-24h",
+  until: "2026-08-11T00:00:00.000Z",
+})
+```
+
+The generated tool resolves relative expressions against one request timestamp. `since` is inclusive and `until` is exclusive over `effectiveAt`, falling back to `createdAt`. Query-less windowed recall orders by that event time; a query adds keyword ranking, recency, and confidence.
+
+## Governance
+
+Auto-recorded episodes are active operational records and do not pass through candidate review. Limit who can run a route, derive tenant namespaces from verified application identity, and avoid putting secrets into model input that the recorder may retain.
+
+Agent-authored episodes follow `memory.writes`: `candidate` waits for review, while `auto` and `ask` activate append records without a supersede prompt. An application can therefore govern runtime telemetry and model-authored narratives differently only by choosing whether to enable the recorder and how to expose the remember tool.
+
+## Agent-authored episodes
+
+Declare `kind: "episodic"` in the route's `memory.ts` when the agent should write domain events itself:
+
+```ts title="src/app/support/memory.ts"
+import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({
+  kind: "episodic",
+  scope: ["workspace", "route"],
+  schema: z.object({
+    event: z.string(),
+    ticketId: z.string(),
+  }),
+})
+```
+
+Agent-authored episodes use the remember call's write timestamp for `effectiveAt` and have no automatic episode-recorder TTL. Apply explicit retention through the store or CLI. They append even when identity fields match.
+
+## Testing
+
+Test episode behavior with a fixed clock and a real store implementation:
+
+1. absent config records nothing;
+2. success and permitted failure create the expected source/data shape;
+3. a parked interrupt creates no episode before resume;
+4. resume settlement creates one episode, not one per turn;
+5. expiry and the 500-row default cap prune the correct oldest records;
+6. `embed: true` still produces a record without an embedding;
+7. `memory.writes: "off"` records nothing even when episodes are enabled;
+8. a failed run records an empty `toolsUsed` list.
+
+Use an isolated namespace per test. Query by kind and time window rather than relying on wall-clock ordering.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory/long-term", title: "Long-term Memory", subtitle: "schema, namespace, and governance" },
+  { href: "/docs/memory/retrieval", title: "Recall and Retrieval", subtitle: "time windows and ranking" },
+  { href: "/docs/memory/distillation", title: "Distillation", subtitle: "compact episodes and derive insights" },
+]} />

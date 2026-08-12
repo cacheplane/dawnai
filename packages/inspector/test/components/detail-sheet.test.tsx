@@ -53,7 +53,11 @@ function stubApi(opts: {
       return opts.onAction?.(verb) ?? jsonResponse({ ok: true })
     }
     if (u.includes("/api/memory/list")) {
-      return jsonResponse({ records: opts.actives ?? [], total: (opts.actives ?? []).length })
+      return jsonResponse({
+        records: opts.actives ?? [],
+        total: (opts.actives ?? []).length,
+        continuation: null,
+      })
     }
     return jsonResponse(opts.rec)
   })
@@ -148,7 +152,7 @@ describe("DetailSheet", () => {
       vi.fn(async (url: RequestInfo | URL) => {
         const u = String(url)
         if (u.includes("/api/memory/list")) {
-          return jsonResponse({ records: [contradictingActive], total: 1 })
+          return jsonResponse({ records: [contradictingActive], total: 1, continuation: null })
         }
         if (u.includes("/api/memory/active9")) return jsonResponse(other)
         return jsonResponse(candidate)
@@ -213,7 +217,7 @@ describe("DetailSheet", () => {
         if (u.includes("/api/memory/list")) {
           // total exceeds returned records — actives beyond the limit were
           // never compared, so no-conflict cannot be claimed.
-          return jsonResponse({ records: [unrelatedActive], total: 1001 })
+          return jsonResponse({ records: [unrelatedActive], total: 1001, continuation: null })
         }
         return jsonResponse(candidate)
       }),

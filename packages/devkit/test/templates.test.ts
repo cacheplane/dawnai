@@ -18,6 +18,8 @@ const RESEARCH_PARITY_ROOTS = [
   "workspace",
 ] as const
 
+const RESEARCH_PARITY_IGNORED_PATHS = new Set(["workspace/reports", "workspace/tool-outputs"])
+
 interface ParityEntry {
   readonly kind: "directory" | "file"
   readonly normalizedPath: string
@@ -63,6 +65,9 @@ async function inventoryParityTree(
     normalizedSegments: readonly string[],
   ): Promise<void> {
     const physicalPath = physicalSegments.join("/")
+    const normalizedPath = normalizedSegments.join("/")
+    if (RESEARCH_PARITY_IGNORED_PATHS.has(normalizedPath)) return
+
     const stats = await lstat(join(root, ...physicalSegments)).catch((error: unknown) => {
       if (isMissingPathError(error)) return undefined
       throw error
@@ -71,7 +76,7 @@ async function inventoryParityTree(
     if (stats === undefined) return
 
     const kind = stats.isDirectory() ? "directory" : "file"
-    entries.push({ kind, normalizedPath: normalizedSegments.join("/"), physicalPath })
+    entries.push({ kind, normalizedPath, physicalPath })
 
     if (kind === "file") return
 
@@ -220,6 +225,38 @@ describe("research template parity with examples/research/server", () => {
       normalizedPathCollisions: [],
       unexpectedTemplatePaths: [],
     })
+  })
+
+  it("ignores gitignored runtime workspace outputs", async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "dawn-research-parity-runtime-"))
+    const fixtureExampleRoot = join(fixtureRoot, "example")
+    const fixtureTemplateRoot = join(fixtureRoot, "template")
+
+    try {
+      await Promise.all([
+        mkdir(join(fixtureExampleRoot, "workspace/reports"), { recursive: true }),
+        mkdir(join(fixtureExampleRoot, "workspace/tool-outputs"), { recursive: true }),
+        mkdir(join(fixtureTemplateRoot, "workspace"), { recursive: true }),
+      ])
+      await Promise.all([
+        writeFile(join(fixtureExampleRoot, "workspace/.gitignore"), "same"),
+        writeFile(join(fixtureExampleRoot, "workspace/reports/report.md"), "runtime report"),
+        writeFile(
+          join(fixtureExampleRoot, "workspace/tool-outputs/readDoc-call_read_big_1.txt"),
+          "runtime tool output",
+        ),
+        writeFile(join(fixtureTemplateRoot, "workspace/gitignore.template"), "same"),
+      ])
+
+      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+        contentDriftedPaths: [],
+        missingTemplatePaths: [],
+        normalizedPathCollisions: [],
+        unexpectedTemplatePaths: [],
+      })
+    } finally {
+      await rm(fixtureRoot, { force: true, recursive: true })
+    }
   })
 
   it("classifies missing, unexpected, colliding, and drifted paths independently", async () => {

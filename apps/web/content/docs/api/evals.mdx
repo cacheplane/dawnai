@@ -1,0 +1,165 @@
+# @dawn-ai/evals
+
+## Use this when
+
+Use this package when application behavior needs repeatable datasets, scorers, reports, and release gates. Build deterministic agent runs with `@dawn-ai/testing`, then use `runEval()` to score them.
+
+## Install and import
+
+```bash
+pnpm add -D @dawn-ai/evals @dawn-ai/testing
+```
+
+```ts
+import { contains, defineEval, gate, runEval } from "@dawn-ai/evals"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/evals` | node-only | not-claimed | testing | supported |
+
+The root resolves JSON and JSONL datasets from disk, so it is a Node testing surface even though individual scorers may be pure.
+
+## Public exports
+
+### `@dawn-ai/evals`
+
+| Export | Responsibility |
+|---|---|
+| `defineEval` | Validate and preserve an eval definition. |
+| `gate` | Build report gate policies. |
+| `resolveGate` | Resolve explicit, threshold, or informational policy. |
+| `LlmJudgeOptions` | Configure an LLM judge. |
+| `llmJudge` | Build an LLM-judged scorer. |
+| `resolveDataset` | Resolve inline, JSON, JSONL, or factory data. |
+| `RunEvalOptions` | Configure case execution and dataset paths. |
+| `runEval` | Run and score an eval definition. |
+| `NormalizedScore` | Describe a normalized verdict. |
+| `normalizeScore` | Clamp a score into the report shape. |
+| `contains` | Score final-message substring presence. |
+| `custom` | Wrap an application scorer. |
+| `exactMatch` | Score exact final-message equality. |
+| `jsonEquals` | Score JSON serialization equality. |
+| `memoryFresh` | Score expected fresh memory text. |
+| `memoryIsolated` | Score absence of forbidden memory text. |
+| `memoryRecalled` | Score expected recalled IDs. |
+| `regex` | Score a final-message regular expression. |
+| `tokensUnder` | Score a strict collected-stream-delta budget. |
+| `toolCalled` | Score whether a tool was called. |
+| `CaseResult` | Describe scores for one case. |
+| `CaseScore` | Describe one case-scorer result. |
+| `Dataset` | Name accepted dataset sources. |
+| `EvalCase` | Describe one dataset row. |
+| `EvalDefinition` | Configure an evaluation. |
+| `EvalReport` | Describe the complete report. |
+| `GatePolicy` | Define report pass policy. |
+| `GateResult` | Describe a gate decision. |
+| `Score` | Name accepted scorer output. |
+| `ScoredReport` | Describe data passed to a gate. |
+| `Scorer` | Define one scoring function. |
+| `ScorerAggregate` | Describe one scorer's aggregate. |
+
+## Key contracts
+
+### `EvalDefinition`
+
+```ts api-contract="@dawn-ai/evals#.:EvalDefinition"
+export interface EvalDefinition {
+  readonly name: string
+  readonly route?: string
+  readonly dataset: Dataset
+  readonly scorers: readonly Scorer[]
+  readonly threshold?: number
+  readonly gate?: GatePolicy
+}
+```
+
+**Fields: `@dawn-ai/evals#.:EvalDefinition`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly name` | `string` | yes | Name the report. |
+| `readonly route` | `string` | no | Select a route key. |
+| `readonly dataset` | `Dataset` | yes | Supply inline, file, or factory cases. |
+| `readonly scorers` | `readonly Scorer[]` | yes | Score every case. |
+| `readonly threshold` | `number` | no | Shorthand for a mean gate. |
+| `readonly gate` | `GatePolicy` | no | Define explicit report pass policy. |
+
+```ts api-contract="@dawn-ai/evals#.:defineEval"
+export declare function defineEval(def: EvalDefinition): EvalDefinition
+```
+
+```ts api-contract="@dawn-ai/evals#.:EvalCase"
+export interface EvalCase {
+  readonly name?: string
+  readonly input: unknown
+  readonly expected?: unknown
+  readonly fixtures?: FixtureSet | ScriptBuilder
+  readonly metadata?: Record<string, unknown>
+}
+```
+
+```ts api-contract="@dawn-ai/evals#.:Scorer"
+export interface Scorer {
+  readonly name: string
+  readonly threshold?: number
+  readonly score: (run: AgentRunResult, testCase: EvalCase) => Score | Promise<Score>
+}
+```
+
+```ts api-contract="@dawn-ai/evals#.:RunEvalOptions"
+export interface RunEvalOptions {
+  readonly runCase: (testCase: EvalCase) => Promise<AgentRunResult>
+  readonly baseDir?: string
+}
+```
+
+```ts api-contract="@dawn-ai/evals#.:EvalReport"
+export interface EvalReport extends ScoredReport {
+  readonly gated: boolean
+  readonly passed: boolean
+  readonly reason?: string
+}
+```
+
+```ts api-contract="@dawn-ai/evals#.:runEval"
+export declare function runEval(
+  def: EvalDefinition,
+  options: RunEvalOptions,
+): Promise<EvalReport>
+```
+
+#### Behavior contract `evals.scorer-errors.zero-score`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/evals/test/run-eval.test.ts","testNames":["a thrown scorer scores 0 with the error in reason and does not abort"]}] */}
+runEval records a thrown scorer as a zero with its error reason and continues evaluating the report.
+
+#### Behavior contract `evals.run-and-gate`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/evals/test/run-eval.test.ts","testNames":["scores every case×scorer, aggregates, and applies the gate","a thrown scorer scores 0 with the error in reason and does not abort","is informational (passes) when no gate or threshold is set"]},{"kind":"test-assertion","file":"packages/evals/test/gate.test.ts","testNames":["perScorer() requires each scorer with a threshold to meet it","perScorer() ignores scorer aggregates without an explicit threshold","resolveGate prefers gate, then threshold sugar, then informational"]}] */}
+runEval scores every case with every scorer; a scorer exception becomes zero without aborting; an explicit gate wins over threshold, and no gate or threshold is informational and passes. `gate.perScorer()` checks only scorers with explicit thresholds and ignores scorers without one.
+
+### Evaluation semantics
+
+Cases and scorers run sequentially. A scorer error is contained, but a `runCase` error is not. An explicit `gate` wins over top-level `threshold`; without either, the report is informational with `gated: false` and `passed: true`. A scorer's own threshold controls its case pass bar and inclusion in `gate.perScorer()`; case pass status otherwise uses the separate default bar of `0.5`. `gate.perScorer()` ignores scorers without an explicit threshold.
+
+`defineEval()` rejects an empty inline dataset, but a file or factory may resolve empty. Programmatic `runEval()` resolves relative dataset paths from `baseDir` or the current working directory; the CLI supplies the eval file's context. `jsonEquals()` uses `JSON.stringify()` equality. `tokensUnder()` is strictly less than its budget and counts collected stream chunks or deltas, not model-tokenizer tokens. Memory scorers are behavioral signals—not authorization checks.
+
+## Examples and related guides
+
+```ts
+import { contains, defineEval, gate } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+export default defineEval({
+  name: "support replies",
+  route: "/support#agent",
+  dataset: [{
+    input: "Where is my order?",
+    fixtures: script().user("Where is my order?").replies("Your order is in transit."),
+  }],
+  scorers: [contains("order", { threshold: 1 })],
+  gate: gate.perScorer(),
+})
+```
+
+Continue with [Evals](/docs/evals), [Agent Test Harness](/docs/testing-agents), and [Fixtures and Recording](/docs/testing-agents/fixtures).
