@@ -1,8 +1,18 @@
 import { seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
-import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type {
+  DawnMiddleware,
+  MiddlewareRequest,
+  ThreadAccessDeny,
+  ThreadAccessPolicy,
+  ThreadAccessRequest,
+  ThreadAction,
+  ThreadOperation,
+  ThreadSubject,
+} from "@dawn-ai/sdk"
+import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
+import type { Thread, ThreadStatus, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
   collectRuntimeCapabilityGaps,
@@ -50,19 +60,25 @@ import {
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 import { terminalStatus } from "./terminal-status.js"
+import {
+  normalizeThreadAccessResult,
+  threadAccessBootLine,
+  validateThreadAccessPolicy,
+} from "./thread-access.js"
+import { assertNoReservedKey, stripReservedThreadMetadata } from "./thread-metadata.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
 // ---------------------------------------------------------------------------
 
-type RouteHandler = (request: Request, params: Record<string, string>) => Promise<Response>
+export type RouteHandler = (request: Request, params: Record<string, string>) => Promise<Response>
 
 /**
  * Boot state threaded verbatim into every route execution: the supplied
  * DawnConfig (so no route re-reads `dawn.config.ts`) and the node filesystem
  * fallback bag (absent on edge runtimes, where every store is injected).
  */
-type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
+export type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
 
 /**
  * Fail loudly for the inputs a correct run cannot do without. Which inputs
@@ -109,6 +125,37 @@ function requireStore<T>(store: T | undefined, what: string): T {
 }
 
 /**
+ * A resolved thread-access policy that is not a policy. Raised at boot, from
+ * here rather than from the loader, because this is the ONE seam all three
+ * resolution layers pass through — the disk probe validates on its way out, but
+ * an injected `options.threadAccess` and a hand-built `modules.threadAccess`
+ * never touch it, and both cross a boundary where the type is erased.
+ *
+ * A local class, not `CliError`: `../output.js` is node-only and this module is
+ * in the `@dawn-ai/cli/fetch` graph. `dawnErrorCodeOf` reads the code back, the
+ * same way it does for `MissingStoreError`.
+ */
+class ThreadAccessPolicyError extends Error {
+  readonly code = "DAWN_E3003"
+  constructor(source: string, reason: string) {
+    super(
+      `Thread access policy from ${source} is not a valid policy: ${reason}. ` +
+        "Dawn will not boot with a policy it cannot apply, because every thread endpoint would be ungated.",
+    )
+    this.name = "ThreadAccessPolicyError"
+  }
+}
+
+function threadAccessSourceLabel(source: {
+  readonly fromManifest: boolean
+  readonly fromOptions: boolean
+}): string {
+  if (source.fromOptions) return "the runtime options"
+  if (source.fromManifest) return "the build manifest"
+  return "src/thread-access.ts"
+}
+
+/**
  * A gated feature this app is configured for that this runtime cannot serve —
  * the REQUEST-time half of the `hono` target's build gate, raising the same
  * `DAWN_E1005`.
@@ -151,7 +198,7 @@ export function isEventStream(contentType: string | null): boolean {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
 }
 
-interface RouteMatcher {
+export interface RouteMatcher {
   readonly method: string
   readonly pattern: RegExp
   readonly handle: RouteHandler
@@ -276,6 +323,33 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // Authorization, unlike middleware, must never resolve to "allow all" by
+  // accident: `loadThreadAccess` throws DAWN_E3003 rather than degrading when a
+  // policy file exists but cannot be bound. An absent file resolves to
+  // undefined — an app that never had a policy keeps today's behavior exactly.
+  const threadAccess: ThreadAccessPolicy | undefined =
+    options.threadAccess ??
+    options.modules?.threadAccess ??
+    (await fallbacks?.loadThreadAccess?.(options.appRoot))
+  const threadAccessSource = {
+    fromManifest: options.modules?.threadAccess !== undefined,
+    fromOptions: options.threadAccess !== undefined,
+    resolved: threadAccess !== undefined,
+  }
+  // Validated HERE, not only in the loader, so no layer can bypass the check:
+  // the disk probe validates on its way out, but an injected policy and a
+  // hand-built manifest entry both arrive with their types erased. Re-running
+  // it on the disk value costs one shape check per boot and removes the
+  // "which layer validated this?" question entirely.
+  if (threadAccess !== undefined) {
+    const reason = validateThreadAccessPolicy(threadAccess)
+    if (reason)
+      throw new ThreadAccessPolicyError(threadAccessSourceLabel(threadAccessSource), reason)
+  }
+  // One line per boot, and the only signal an operator has that a policy
+  // vanished. Emitted AFTER resolution and validation, so any DAWN_E3003
+  // pre-empts it: a boot that failed never claims to have bound anything.
+  console.log(threadAccessBootLine(threadAccessSource))
   // `requestStores` makes the boot resolution below OPTIONAL, but only on a
   // runtime that has no filesystem to fall back to. Every node caller keeps
   // resolving exactly as before (it has `fallbacks`); an edge caller that
@@ -533,6 +607,7 @@ export async function createRuntimeFetchHandler(
       },
       cancel: (threadId, reason) =>
         reason === undefined ? runRegistry.cancel(threadId) : runRegistry.cancel(threadId, reason),
+      claim: (threadId) => runRegistry.claim(threadId),
       has: (threadId) => runRegistry.has(threadId),
     }
   }
@@ -568,6 +643,7 @@ export async function createRuntimeFetchHandler(
     middleware,
     registry,
     resumeClaims,
+    threadAccess,
     ...(sandboxManager ? { sandboxManager } : {}),
     getShutdownSignal,
     // Boot manifest → route execution derives the subagents descriptor maps
@@ -816,6 +892,203 @@ function trackStreamSettled(
 }
 
 // ---------------------------------------------------------------------------
+// Thread access gate
+// ---------------------------------------------------------------------------
+
+type GateOk = { readonly ok: true; readonly stamp?: Record<string, unknown> }
+type GateDenied = { readonly ok: false; readonly response: Response }
+type Gate = GateOk | GateDenied
+
+interface GateSpec {
+  readonly action: ThreadAction
+  readonly operation: ThreadOperation
+  readonly threadId?: string
+  readonly thread?: Thread
+  readonly requestedMetadata?: Record<string, unknown>
+  /** The response a denied READ must be indistinguishable from. Supply it whenever action is "read". */
+  readonly notFound?: () => Response
+}
+
+/** Allocated once: every no-op gate and every stamp-less allow returns this. */
+const GATE_OK: Gate = { ok: true }
+
+/**
+ * A stamp is honored on `create` ONLY. Carrying one on any other allow is a
+ * policy-authoring mistake rather than a request failure, so it is reported
+ * once per process rather than once per request — unlike the malformed-return
+ * warn, which is a bug that should stay noisy.
+ */
+let warnedIgnoredStamp = false
+
+/**
+ * Narrowing rather than a boolean, so the `await` branch typechecks. Nothing in
+ * `packages/cli/src` had one before this.
+ */
+function isThenable<T>(value: T | Promise<T>): value is Promise<T> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  )
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Split the stored metadata: `access` is the server stamp, `metadata` is
+ * everything else. A policy therefore never sees the reserved key inside
+ * `metadata` and is never tempted to authorize against the untrusted sibling.
+ *
+ * Own properties only, both ways. The reserved key is read with `hasOwn` rather
+ * than off the object, and each survivor is DEFINED rather than assigned: the
+ * stored metadata is client-authored JSON, so it can carry `__proto__` as an
+ * own data property, and `copy[key] = value` for that key runs the inherited
+ * setter and swaps the copy's prototype instead of adding a property. Either
+ * shortcut would let a forged stamp resolve through the chain on an object that
+ * reports it stripped.
+ */
+function toThreadSubject(thread: Thread): ThreadSubject {
+  const reserved = Object.hasOwn(thread.metadata, THREAD_ACCESS_METADATA_KEY)
+    ? thread.metadata[THREAD_ACCESS_METADATA_KEY]
+    : undefined
+  const metadata: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(thread.metadata)) {
+    if (key === THREAD_ACCESS_METADATA_KEY) continue
+    Object.defineProperty(metadata, key, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    })
+  }
+  return {
+    access: isPlainRecord(reserved) ? reserved : undefined,
+    created_at: thread.created_at,
+    metadata,
+    status: thread.status,
+    thread_id: thread.thread_id,
+    updated_at: thread.updated_at,
+  }
+}
+
+/** Structural equality over JSON-shaped values (no Dates, no Maps, no cycles). */
+function jsonDeepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => jsonDeepEqual(item, b[index]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const leftKeys = Object.keys(left)
+  if (leftKeys.length !== Object.keys(right).length) return false
+  return leftKeys.every((key) => Object.hasOwn(right, key) && jsonDeepEqual(left[key], right[key]))
+}
+
+/**
+ * Did `createThread` actually insert, or did it hand back a row that was
+ * already there? Best-effort collision detection, NOT the security boundary —
+ * the unconditional `update` recheck beside it is. It is decisive exactly when
+ * the policy stamped (an adopted row carries a different stamp, or none) and
+ * indecisive in the one case where it does not matter: a `permit()` with no
+ * stamp on a create with no metadata has nothing to distinguish and also
+ * nothing to authorize against later.
+ */
+function isRowWeJustWrote(thread: Thread, stored: Record<string, unknown> | undefined): boolean {
+  return thread.created_at === thread.updated_at && jsonDeepEqual(thread.metadata, stored ?? {})
+}
+
+/**
+ * Every deny becomes bytes here.
+ *
+ * `{ code: … }` is the SECOND positional argument — `details`, not `options` —
+ * so it lands at `error.details.code` with no `error.code` / `docsUrl`, exactly
+ * as `run_in_flight` and `thread_not_found` do. Deliberately no registry code
+ * on the deny path: `DAWN_E3003` is for load failures, and a docs URL on a 403
+ * is noise.
+ *
+ * Every branch supplies a literal body, and the guard is on
+ * `result.body !== undefined` rather than on key presence, because
+ * `Response.json(undefined)` throws and `statusResponse` would turn that into a
+ * 500. A deny must never be able to 500.
+ */
+function denyResponse(
+  action: ThreadAction,
+  result: ThreadAccessDeny,
+  notFound: (() => Response) | undefined,
+): Response {
+  const status = result.status ?? (action === "read" ? 404 : 403)
+  if (result.body !== undefined) return statusResponse(status, result.body)
+  if (status === 404 && notFound) return notFound()
+  if (status === 404) {
+    return Response.json(createRequestErrorBody("Thread not found"), { status: 404 })
+  }
+  return Response.json(createRequestErrorBody("Forbidden", { code: "thread_access_denied" }), {
+    status: 403,
+  })
+}
+
+/**
+ * Build this request's gate.
+ *
+ * Returns a no-op gate when the app has no policy — the ONLY thing a hook-less
+ * app pays is this closure allocation. No store read, no reordering, nothing.
+ *
+ * `Gate | Promise<Gate>`, never `Promise<Gate>`: a policy handler that returns a
+ * plain object (the header-only case) is resolved with ZERO microtask
+ * boundaries, which is what keeps the `/cancel` claim binding meaningful.
+ * Callers do `const settled = isThenable(g) ? await g : g`.
+ */
+function makeThreadGate(
+  policy: ThreadAccessPolicy | undefined,
+  request: Request,
+): (spec: GateSpec) => Gate | Promise<Gate> {
+  if (!policy) return () => GATE_OK
+  const headers = headersToRecord(request.headers)
+  const method = request.method
+  const parsed = new URL(request.url)
+  const url = `${parsed.pathname}${parsed.search}`
+  return (spec) => {
+    const handler = policy[spec.action] ?? policy.fallback
+    const accessRequest: ThreadAccessRequest = {
+      action: spec.action,
+      headers,
+      method,
+      operation: spec.operation,
+      requestedMetadata: spec.requestedMetadata,
+      thread: spec.thread ? toThreadSubject(spec.thread) : undefined,
+      threadId: spec.threadId,
+      url,
+    }
+    const settle = (value: unknown): Gate => {
+      const result = normalizeThreadAccessResult(value, spec.operation, spec.threadId)
+      if (result.decision === "allow") {
+        if (!result.stamp) return GATE_OK
+        if (spec.action === "create") return { ok: true, stamp: result.stamp }
+        // Dropped, not merged: the stamp is the server's answer to "who created
+        // this thread", and honoring it here would let any later allow rewrite
+        // it through the store's shallow merge.
+        if (!warnedIgnoredStamp) {
+          warnedIgnoredStamp = true
+          console.warn(
+            `Dawn thread access: the policy returned a stamp on a ${spec.action} allow ` +
+              `(${spec.operation}). Stamps are honored on create only, so it was ignored. ` +
+              "This warning is emitted once per process.",
+          )
+        }
+        return GATE_OK
+      }
+      return { ok: false, response: denyResponse(spec.action, result, spec.notFound) }
+    }
+    const returned = handler(accessRequest) as unknown
+    return isThenable(returned) ? returned.then(settle) : settle(returned)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Route table builder
 // ---------------------------------------------------------------------------
 
@@ -826,7 +1099,13 @@ function trackStreamSettled(
  * them once, up front, and hands the resolved values to the sub-handlers below
  * — whose signatures are unchanged.
  */
-function buildRouteTable(ctx: {
+/**
+ * Exported for `test/thread-access-coverage.test.ts`, which walks every entry
+ * and requires each to be classified as gated, deferred or exempt. Not part of
+ * any package barrel — `fetch-exports.ts` and `runtime-exports.ts` re-export
+ * only `createRuntimeFetchHandler`.
+ */
+export function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
@@ -844,6 +1123,11 @@ function buildRouteTable(ctx: {
   readonly getThreadsStore: (request: Request) => ThreadsStore
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
+  /**
+   * The boot-resolved policy. `buildRouteTable` runs before any request exists,
+   * so the gate itself is built per handler invocation from this.
+   */
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly resumeClaims: PendingResumeClaims
   readonly sandboxManager?: SandboxManager
   /**
@@ -868,6 +1152,7 @@ function buildRouteTable(ctx: {
     getThreadsStore,
     middleware,
     registry,
+    threadAccess,
     getShutdownSignal,
     resumeClaims,
     sandboxManager,
@@ -911,9 +1196,54 @@ function buildRouteTable(ctx: {
             metadata = bodyMetadata
           }
         }
-        const thread = await getThreadsStore(request).createThread(
-          metadata !== undefined ? { metadata } : {},
-        )
+        // Unconditional, hook or no hook: the reserved key is Dawn's, contains
+        // a colon (so it cannot be written as a JS property identifier), and
+        // stripping it always means an app that adopts a policy later can never
+        // inherit a stamp a client forged before it did.
+        const clientMetadata = stripReservedThreadMetadata(metadata)
+        const gate = makeThreadGate(threadAccess, request)
+        const created = gate({
+          action: "create",
+          operation: "thread.create",
+          ...(clientMetadata !== undefined ? { requestedMetadata: clientMetadata } : {}),
+        })
+        const settled = isThenable(created) ? await created : created
+        if (!settled.ok) return settled.response
+
+        const stored = settled.stamp
+          ? { ...(clientMetadata ?? {}), [THREAD_ACCESS_METADATA_KEY]: settled.stamp }
+          : clientMetadata
+        const input = stored !== undefined ? { metadata: stored } : {}
+
+        let thread = await getThreadsStore(request).createThread(input)
+
+        // Both of the following are inside the hook branch. A hook-less app
+        // makes the one createThread call above and returns, exactly as today.
+        if (threadAccess) {
+          // The id is server-generated and only 32 bits wide, so the row that
+          // came back is not necessarily the row we wrote: Postgres upserts on a
+          // collision and returns the existing row with its existing metadata,
+          // discarding the caller's. Retry rather than hand back a stranger's
+          // thread — a bare re-authorization would be safe but would 403 a
+          // create the caller was fully entitled to make.
+          for (let attempt = 1; attempt < 3 && !isRowWeJustWrote(thread, stored); attempt++) {
+            thread = await getThreadsStore(request).createThread(input)
+          }
+
+          // Unconditional: authorize the ROW, not the intent. Never a stamp
+          // comparison — when the policy returns permit() with no stamp both
+          // sides are undefined, the comparison passes, and the loser proceeds
+          // on the winner's row with no re-authorization at all.
+          const recheck = gate({
+            action: "update",
+            operation: "thread.create",
+            thread,
+            threadId: thread.thread_id,
+          })
+          const rechecked = isThenable(recheck) ? await recheck : recheck
+          if (!rechecked.ok) return rechecked.response
+        }
+
         return Response.json(thread, { status: 200 })
       },
       method: "POST",
@@ -925,12 +1255,24 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (request, params) => {
-        const thread = await getThreadsStore(request).getThread(params.thread_id ?? "")
-        if (!thread) {
-          return Response.json(createRequestErrorBody("Thread not found"), {
-            status: 404,
-          })
-        }
+        const threadId = params.thread_id ?? ""
+        // The gate runs AFTER the lookup and a denial routes through this same
+        // literal, so "404 means the row does not exist" stays true for a
+        // policied app — agui-endpoint.test.ts pins that invariant.
+        const thread = await getThreadsStore(request).getThread(threadId)
+        const notFound = () =>
+          Response.json(createRequestErrorBody("Thread not found"), { status: 404 })
+        const gate = makeThreadGate(threadAccess, request)
+        const g = gate({
+          action: "read",
+          notFound,
+          operation: "thread.get",
+          threadId,
+          ...(thread ? { thread } : {}),
+        })
+        const settled = isThenable(g) ? await g : g
+        if (!settled.ok) return settled.response
+        if (!thread) return notFound()
         return Response.json(thread, { status: 200 })
       },
       method: "GET",
@@ -943,6 +1285,28 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
+        if (threadAccess) {
+          // First in the handler, and a `getThread` this endpoint does not do
+          // today — hook path only. The gate authorizes with `thread:
+          // undefined` when the row is missing rather than short-circuiting to
+          // 204, so "not yours" and "never existed" answer identically and the
+          // existence oracle a 403 would otherwise open stays shut.
+          const thread = await getThreadsStore(request).getThread(threadId)
+          const gate = makeThreadGate(threadAccess, request)
+          const g = gate({
+            action: "delete",
+            operation: "thread.delete",
+            threadId,
+            ...(thread ? { thread } : {}),
+          })
+          const settled = isThenable(g) ? await g : g
+          if (!settled.ok) return settled.response
+        }
+        // AFTER the gate, deliberately. A 409 here and a 403 from the gate are
+        // distinguishable, so answering the run-in-flight case first would tell
+        // an unauthorized caller whether someone else's thread is busy — the
+        // activity oracle the 403/404 split exists to keep shut.
+        //
         // Refused while a turn is executing, for the same reason a second run
         // is: deleting a thread out from under its own in-flight turn is
         // incoherent whoever asks. The turn keeps running against state that no
@@ -999,20 +1363,38 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        // Cancel first: it is synchronous, so nothing can interleave between
-        // observing the slot and aborting it. Awaiting getThread beforehand
-        // would open a window in which the run we cancel is not the run the
-        // caller observed (run N finishes and releases its slot, run N+1
-        // begins on the same thread, and the cancel — issued against N — hits
-        // N+1 instead).
+        // Synchronous, FIRST statement, nothing awaited before it: the claim
+        // binds to the run the caller observed, so anything that runs after it
+        // (in a later slice, an awaited authorization check) can no longer make
+        // the cancel land on run N+1. `cancel(threadId)` resolved the entry at
+        // call time, which is why that ordering used to be load-bearing.
         //
         // Known, accepted race: a cancel arriving between the route finishing
         // and its idle-status write completing still finds the slot and reports
         // "interrupted" for a run that actually completed. The window is a
         // single DB write wide and corrupts nothing — the streaming client has
-        // already received the real output. Closing it would require tracking a
-        // settled state per run, which is not worth the complexity.
-        if (getRunRegistry(request).cancel(threadId)) {
+        // already received the real output.
+        const claim = getRunRegistry(request).claim(threadId)
+        if (threadAccess) {
+          // Safe to await only because the claim is already bound. The two are
+          // load-bearing together: without the claim this read would let the
+          // cancel land on run N+1.
+          const thread = await getThreadsStore(request).getThread(threadId)
+          const gate = makeThreadGate(threadAccess, request)
+          const g = gate({
+            action: "update",
+            operation: "thread.cancel",
+            threadId,
+            ...(thread ? { thread } : {}),
+          })
+          const settled = isThenable(g) ? await g : g
+          if (!settled.ok) return settled.response
+        }
+        // A stale claim falls through to the existing 409: "the run you
+        // observed already finished" is the honest answer, where cancelling
+        // through the registry by thread id would silently kill a run the
+        // caller never saw.
+        if (claim?.cancel()) {
           return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
         }
         const thread = await getThreadsStore(request).getThread(threadId)
@@ -1164,14 +1546,29 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
+        const notFound = () =>
+          Response.json(createRequestErrorBody("No checkpoint found for thread"), { status: 404 })
+        if (threadAccess) {
+          // The one extra store read this endpoint pays, and only with a policy
+          // installed. The checkpointer is a SEPARATE store from ThreadsStore,
+          // so a transcript can exist for a thread whose row is gone — the gate
+          // therefore runs with `thread: undefined` rather than skipping.
+          const thread = await getThreadsStore(request).getThread(threadId)
+          const gate = makeThreadGate(threadAccess, request)
+          const g = gate({
+            action: "read",
+            notFound,
+            operation: "thread.state",
+            threadId,
+            ...(thread ? { thread } : {}),
+          })
+          const settled = isThenable(g) ? await g : g
+          if (!settled.ok) return settled.response
+        }
         const tuple = await getCheckpointer(request).getTuple({
           configurable: { thread_id: threadId, checkpoint_ns: "" },
         })
-        if (!tuple) {
-          return Response.json(createRequestErrorBody("No checkpoint found for thread"), {
-            status: 404,
-          })
-        }
+        if (!tuple) return notFound()
         const apState = {
           config: tuple.config,
           created_at: new Date().toISOString(),
@@ -1386,7 +1783,12 @@ async function handleApStreamRequest(options: {
   // overwritten by any run the caller is allowed to start. See PARKED_ROUTE_KEY.
   threadRouteMap.set(threadId, routeKey)
   try {
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // The stamp lives in the same flat metadata object and this merge is
+    // shallow, so a future patch that carried the reserved key would silently
+    // overwrite it. Assertion, not a gate: reaching it is a Dawn bug.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
   } catch (error) {
     // The stream's finally has not been armed yet, so nothing else would ever
@@ -1677,7 +2079,12 @@ async function handleApWaitRequest(options: {
   let interruptIdsBefore: ReadonlySet<string> = new Set()
   try {
     if (canPark) interruptIdsBefore = await readParkedInterruptIds(checkpointer, threadId)
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    const routePatch = { route: routeKey }
+    // The stamp lives in the same flat metadata object and this merge is
+    // shallow, so a future patch that carried the reserved key would silently
+    // overwrite it. Assertion, not a gate: reaching it is a Dawn bug.
+    assertNoReservedKey(routePatch)
+    await threadsStore.updateMetadata(threadId, routePatch)
     await threadsStore.updateStatus(threadId, "busy")
   } catch (error) {
     // Nothing else will ever free this slot — without an explicit release

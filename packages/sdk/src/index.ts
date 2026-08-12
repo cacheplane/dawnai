@@ -56,6 +56,18 @@ export type {
   RuntimeTool,
   ToolRegistry,
 } from "./runtime-context.js"
+export type {
+  DawnThreadAccess,
+  ThreadAccessAllow,
+  ThreadAccessDeny,
+  ThreadAccessPolicy,
+  ThreadAccessRequest,
+  ThreadAccessResult,
+  ThreadAction,
+  ThreadOperation,
+  ThreadSubject,
+} from "./thread-access.js"
+export { defineThreadAccess, deny, permit, THREAD_ACCESS_METADATA_KEY } from "./thread-access.js"
 export type { Prettify } from "./types.js"
 export type { ModelIdValidation } from "./validate-model-id.js"
 export { validateModelId } from "./validate-model-id.js"

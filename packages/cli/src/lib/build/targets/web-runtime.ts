@@ -14,6 +14,7 @@ import { assertEdgeCapabilities, collectEdgeDependencyNotice } from "./edge-capa
 import { edgeAppNamespace, emitEdgeModulesFile } from "./edge-modules-emitter.js"
 import type { BuildEmitContext } from "./index.js"
 import { collectRouteStaticDiscovery, type RouteStaticDiscovery } from "./modules-emitter.js"
+import { assertNoThreadAccessPolicy } from "./thread-access-probe.js"
 
 export interface WebRuntimeEmitOptions {
   readonly outputDir: string
@@ -42,6 +43,14 @@ export async function emitWebRuntimeArtifacts(
   // Complete every capability, provider, and config preflight before creating
   // the target directory. A failed staged build must leave no deployable-looking
   // partial output behind.
+  //
+  // The thread-access probe sits HERE, not at each target's `emit`, because
+  // every target routed through this emitter is bundled: none of them can
+  // perform the boot-time filesystem probe the policy loader needs. Enumerating
+  // the call sites is how `vercel` shipped able to emit a policy-carrying app
+  // with every thread endpoint ungated — the guard belongs on the shared path
+  // so a future web target inherits it instead of having to remember it.
+  assertNoThreadAccessPolicy(appRoot, targetName)
   const config = await loadBuildConfig(appRoot)
   assertEdgeCapabilities({ appRoot, config, manifest }, targetName)
   const providerImports = await resolveProviderImports(manifest, config, targetName)

@@ -1,5 +1,6 @@
 import { createRuntimeFetchHandler } from "@dawn-ai/cli/runtime"
 import { __clearDawnConfigCacheForTests } from "@dawn-ai/core"
+import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
 
 export interface InjectResult {
   readonly statusCode: number
@@ -20,8 +21,13 @@ export interface AgentProtocolInjector {
 
 export async function createAgentProtocolInjector(options: {
   appRoot: string
+  /** Injected rather than probed from disk, so a test needs no policy file. */
+  threadAccess?: ThreadAccessPolicy
 }): Promise<AgentProtocolInjector> {
-  const core = await createRuntimeFetchHandler({ appRoot: options.appRoot })
+  const core = await createRuntimeFetchHandler({
+    appRoot: options.appRoot,
+    ...(options.threadAccess ? { threadAccess: options.threadAccess } : {}),
+  })
 
   const injector: AgentProtocolInjector = {
     async inject(opts) {

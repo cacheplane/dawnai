@@ -11,7 +11,7 @@ import {
   type RouteKind,
   resolveStateFields,
 } from "@dawn-ai/core"
-import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { DawnMiddleware, ThreadAccessPolicy } from "@dawn-ai/sdk"
 
 import { selectMiddlewareExport } from "../dev/middleware.js"
 import { pureDirname, pureJoin } from "./pure-path.js"
@@ -95,6 +95,15 @@ export interface DawnStaticModules {
    * no usable export — the dynamic probe ignores such a file too.
    */
   readonly middleware?: DawnMiddleware
+  /**
+   * App-level thread access policy bound from the manifest's static import,
+   * when the app has a policy file.
+   *
+   * The channel is declared now so the boot resolution never has to be
+   * rewritten; nothing emits into it yet, so today only a hand-rolled edge
+   * embed that constructs `DawnStaticModules` itself can use it.
+   */
+  readonly threadAccess?: ThreadAccessPolicy
   readonly routes: readonly StaticRouteModule[]
 }
 
