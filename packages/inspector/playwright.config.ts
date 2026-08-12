@@ -10,6 +10,21 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
+  // 0 on CI too, deliberately — a retry here would report a FALSE failure, not paper over
+  // a real one. The fixture is seeded exactly once, by `serve.ts` at webServer start, and
+  // Playwright does not restart the webServer between retries; no spec re-seeds. So a
+  // retry re-runs a mutating spec against the store that spec already mutated. Concretely:
+  // 09-concurrent-write asserts `total == BROWSE_SEED_COUNT` at its top, then forgets a
+  // row, then asserts `BROWSE_SEED_COUNT - 1`. A failure after the forget would retry into
+  // the first assertion against a store now holding one row fewer — failing at a different
+  // line, for a reason that is an artifact of the retry. That trades one honest red for a
+  // misleading one.
+  //
+  // The cost is understood: these specs carry ~19 s of wall-clock sampling tuned on an
+  // M1 Max and have never run on a 2-vCPU runner. `trace: "retain-on-failure"` below is
+  // what pays for that instead — the first red ships a trace and gets diagnosed. If this
+  // lane proves flaky on CI hardware, the fix is a per-spec fixture reset (or dynamic
+  // count expectations), not a retry budget.
   retries: 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
