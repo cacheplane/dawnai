@@ -42,7 +42,7 @@
     "access": "public"
   },
   "scripts": {
-    "bench:budgets": "node bench/browse-budgets.mts",
+    "bench:budgets": "pnpm build && node bench/browse-budgets.mts",
     "build": "tsc -b tsconfig.json",
     "lint": "biome check --config-path ../config-biome/biome.json package.json bench src test tsconfig.json tsconfig.test.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
