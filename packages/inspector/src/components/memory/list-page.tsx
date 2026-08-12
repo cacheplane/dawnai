@@ -293,7 +293,12 @@ export function ListPage() {
     refreshBrowse()
   }, [refreshRequested, browsePhase, refreshBrowse])
 
-  const stats = usePolling(statsFn, 2000, live)
+  // Suspended for the run on the same flag as the browse above, so the two cadences stay
+  // in step: the counts and the rows are two readings of one store, and a stats tick
+  // landing between two per-id writes would quote a half-applied batch beside a grid that
+  // is deliberately holding still. `usePolling` runs one immediate tick whenever `enabled`
+  // changes, so this costs one extra stats read at each edge of the run and none inside it.
+  const stats = usePolling(statsFn, 2000, live && !bulkRunning)
 
   // Search is fetched once per (debounced) query change, never polled — a
   // hybrid store would call the embedder on every search request.

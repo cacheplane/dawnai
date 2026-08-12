@@ -199,3 +199,104 @@ describe("bulk partial failure", () => {
     await waitFor(() => expect(listed).toBeGreaterThan(listedWhilePaused))
   })
 })
+
+describe("bulk run isolation", () => {
+  /**
+   * The suspension above is read through the status bar; this reads it through the WIRE.
+   * The stub serves its own `order` log rather than the shared one because the property
+   * is an ORDERING — where the browse requests sit relative to the run's writes — and
+   * the shared stub counts them without recording when they happened.
+   */
+  it("issues no browse request between the first and last per-id write", async () => {
+    const order: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (init?.method === "POST") {
+          order.push(`POST ${url}`)
+          // Long enough that a 2 s poll tick would certainly land inside the run if
+          // polling were still armed.
+          await new Promise((resolve) => setTimeout(resolve, 900))
+          return Response.json({ ok: true })
+        }
+        if (url.includes("/api/memory/list")) {
+          order.push("LIST")
+          return Response.json({ records: RECORDS, total: RECORDS.length, continuation: null })
+        }
+        if (url.includes("/api/memory/stats"))
+          return Response.json({
+            total: RECORDS.length,
+            byStatus: {},
+            byKind: {},
+            byNamespace: {},
+            bySourceType: {},
+          })
+        return Response.json({})
+      }),
+    )
+
+    render(<ListPage />)
+    // The shared helper, not a wait on `order`: "LIST" is logged when the request is
+    // ISSUED, and select-all spans the rows the engine can see — ticking on the request
+    // rather than on the answer would tick nothing and raise no bar.
+    await tickEveryLoadedRow()
+    await screen.findByTestId(TEST_IDS.bulkBar)
+    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
+
+    await waitFor(
+      () => expect(order.filter((entry) => entry.startsWith("POST"))).toHaveLength(RECORDS.length),
+      { timeout: 20_000 },
+    )
+    const firstPost = order.findIndex((entry) => entry.startsWith("POST"))
+    const lastPost = order.length - 1 - [...order].reverse().findIndex((e) => e.startsWith("POST"))
+    expect(order.slice(firstPost, lastPost)).not.toContain("LIST")
+  }, 30_000)
+
+  /**
+   * Driven through `BulkBar` directly: the property is that the run holds the ids the
+   * CONFIRMATION named, and only a caller that can swap `ticked` mid-flight can tell that
+   * apart from re-reading the prop. `ListPage` cannot be made to do that on demand.
+   */
+  it("runs against the ids confirmed, not the ids currently ticked", async () => {
+    const { BulkBar } = await import("../../src/components/memory/bulk-bar")
+    const posted: string[] = []
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        posted.push(String(input))
+        if (posted.length === 1) await gate
+        return Response.json({ ok: true })
+      }),
+    )
+    const ids = RECORDS.map((record) => record.id)
+    const { rerender } = render(
+      <BulkBar
+        ticked={ids}
+        records={RECORDS}
+        onDone={() => {}}
+        onStart={() => {}}
+        onClear={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: /^Forget/ }))
+    // The grid changes underneath, mid-run: only one row is ticked now.
+    rerender(
+      <BulkBar
+        ticked={[ids[0] as string]}
+        records={RECORDS}
+        onDone={() => {}}
+        onStart={() => {}}
+        onClear={() => {}}
+      />,
+    )
+    release?.()
+    // The run still targets the CONFIRMED four.
+    await waitFor(() => expect(posted).toHaveLength(ids.length), { timeout: 20_000 })
+    for (const id of ids) expect(posted.some((url) => url.includes(id))).toBe(true)
+  }, 30_000)
+})
