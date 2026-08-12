@@ -20,6 +20,33 @@ export type ApiReferenceAudience =
 export type RuntimePurity = "dependency-free" | "not-claimed"
 export type ApiReferenceStability = "supported" | "low-level" | "internal"
 
+export interface SourceAstBehaviorAuthority {
+  readonly kind: "source-ast"
+  readonly file: string
+  readonly selector: string
+  readonly expected: string
+}
+
+export interface TestAssertionBehaviorAuthority {
+  readonly kind: "test-assertion"
+  readonly file: string
+  readonly testNames: readonly [string, ...string[]]
+  readonly assertionFingerprint: string
+}
+
+export type ApiBehaviorAuthority = SourceAstBehaviorAuthority | TestAssertionBehaviorAuthority
+
+export interface ApiBehaviorContract {
+  readonly id: string
+  readonly ownerHref: string
+  readonly claim: string
+  readonly authorities: readonly [ApiBehaviorAuthority, ...ApiBehaviorAuthority[]]
+}
+
+// Behavior entries land with the authored API pages. Keeping the typed registry here lets
+// the isolated analyzer and those pages share one contract without enabling global coverage.
+export const API_BEHAVIOR_CONTRACTS = [] as const satisfies readonly ApiBehaviorContract[]
+
 interface ArtifactPolicy {
   readonly coverage: ApiReferenceCoverage
   readonly audience: ApiReferenceAudience

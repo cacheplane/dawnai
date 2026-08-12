@@ -25,6 +25,7 @@ import {
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
+import { analyzeApiInventoryBatch, manifestArtifactEntries } from "./lib/docs-api-inventory.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
 const { default: GithubSlugger } = await import(
@@ -629,45 +630,6 @@ function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
   return { failures: analysisFailures }
 }
 
-function manifestExportSubpaths(exportsField) {
-  if (exportsField === undefined || exportsField === null) return []
-  if (typeof exportsField !== "object") return ["."]
-  const keys = Object.keys(exportsField)
-  const subpaths = keys.filter((key) => key === "." || key.startsWith("./"))
-  return subpaths.length > 0 ? subpaths : ["."]
-}
-
-function manifestArtifactEntries(manifests) {
-  return manifests.flatMap((manifest) => {
-    const entries = manifestExportSubpaths(manifest.exports).map((subpath) => ({
-      address: `import:${manifest.name}:${subpath}`,
-    }))
-
-    if (typeof manifest.bin === "string") {
-      const binName = manifest.name.replace(/^@[^/]+\//, "")
-      entries.push({
-        address: `operated:${manifest.name}:bin.${binName}`,
-        manifestTarget: manifest.bin,
-      })
-    } else {
-      for (const [binName, manifestTarget] of Object.entries(manifest.bin ?? {})) {
-        entries.push({
-          address: `operated:${manifest.name}:bin.${binName}`,
-          manifestTarget,
-        })
-      }
-    }
-
-    if (typeof manifest.dawnInspector?.server === "string") {
-      entries.push({
-        address: `operated:${manifest.name}:dawnInspector.server`,
-        manifestTarget: manifest.dawnInspector.server,
-      })
-    }
-    return entries
-  })
-}
-
 function analyzeApiReferenceManifests({ manifests = [], artifacts = [] }) {
   const analysisFailures = []
   const manifestEntries = manifestArtifactEntries(manifests)
@@ -740,6 +702,17 @@ if (process.argv[2] === "--analyze-api-reference-registry") {
 if (process.argv[2] === "--analyze-api-reference-manifests") {
   const fixture = JSON.parse(process.argv[3] ?? "{}")
   process.stdout.write(`${JSON.stringify(analyzeApiReferenceManifests(fixture))}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-api-inventory") {
+  const fixtures = JSON.parse(readFileSync(0, "utf8"))
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(`${JSON.stringify(analyzeApiInventoryBatch(fixtures))}\n`, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
   process.exit(0)
 }
 
