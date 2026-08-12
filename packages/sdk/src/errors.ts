@@ -73,9 +73,11 @@ export const DAWN_ERRORS = {
     title: "Subagent dispatch denied",
     docsPath: "/docs/subagents#delegation-policy",
   },
-  // 3003 is deliberately skipped: it is claimed by the in-flight thread-access
-  // loader on another branch. A gap in the registry costs nothing; two branches
-  // shipping two different meanings for one code costs a lot.
+  DAWN_E3003: {
+    code: "DAWN_E3003",
+    title: "Thread access policy failed to load",
+    docsPath: "/docs/thread-access#load-failures",
+  },
   DAWN_E3004: {
     code: "DAWN_E3004",
     title: "Middleware failed to load",

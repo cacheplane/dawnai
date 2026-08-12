@@ -29,6 +29,7 @@ import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { loadMiddleware } from "../dev/middleware-node.js"
+import { loadThreadAccess } from "../dev/thread-access-node.js"
 import { loadDawnConfig } from "../node-config.js"
 import {
   __resetDescriptorRouteIndexCacheForTests,
@@ -350,6 +351,7 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   loadMiddleware,
   loadRouteModules: loadPreparedRouteModules,
   loadSubagentDescription,
+  loadThreadAccess,
   markerFs: nodeMarkerFs,
   resolveIdentityKeys,
   resolveCheckpointer,

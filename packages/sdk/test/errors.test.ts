@@ -58,6 +58,15 @@ describe("DAWN_ERRORS registry", () => {
     expect(errorDocsUrl("DAWN_E3002")).toBe("https://dawnai.org/docs/subagents#delegation-policy")
     expect(errorDocsUrl("DAWN_E5003")).toBe("https://dawnai.org/docs/subagents#dispatch-failures")
   })
+
+  it("registers the thread access load failure in the permissions band", () => {
+    expect(DAWN_ERRORS.DAWN_E3003).toEqual({
+      code: "DAWN_E3003",
+      title: "Thread access policy failed to load",
+      docsPath: "/docs/thread-access#load-failures",
+    })
+    expect(errorDocsUrl("DAWN_E3003")).toBe("https://dawnai.org/docs/thread-access#load-failures")
+  })
 })
 
 describe("describeError", () => {

@@ -1,0 +1,151 @@
+# Thread Access
+
+`src/thread-access.ts` answers one question: **may this caller create, read, mutate, or destroy this thread?**
+
+That is a different question from the one [middleware](/docs/middleware) answers ("may this caller run this route"), and it is keyed on a different thing. A thread has no owning route: every endpoint that starts a turn overwrites the thread's `route` metadata, so any caller allowed to run any route on a thread can move that identity onto a route of their choosing. Thread authorization is therefore keyed on the thread object, and lives in its own file with its own failure policy.
+
+Without a policy file, every thread endpoint is open to anyone who can name a thread id — and ids are neither secret nor collision-proof (`t-` plus four random bytes). This page is how you close that.
+
+## The shape
+
+```ts title="src/thread-access.ts"
+import { defineThreadAccess, deny, permit, type ThreadAccessRequest } from "@dawn-ai/sdk"
+import { principalOf } from "./auth.js" // shared with src/middleware.ts
+
+const owned = async (req: ThreadAccessRequest) => {
+  const user = await principalOf(req.headers)
+  if (!user) return deny()
+  // `thread: undefined` reaches `delete` too. Denying it FIRST, ahead of the
+  // admin branch, is what keeps "not yours" and "does not exist" the same
+  // answer; an admin allowed to delete a row that never existed reopens the
+  // existence oracle this default closes.
+  if (req.thread === undefined) return deny()
+  const owner = req.thread.access?.ownerId
+  if (owner === undefined) return user.isAdmin ? permit() : deny() // legacy thread
+  if (owner === user.id) return permit()
+  if (req.action === "read" && user.isAdmin) return permit()
+  return deny()
+}
+
+export default defineThreadAccess({
+  create: async (req) => {
+    const user = await principalOf(req.headers)
+    return user ? permit({ ownerId: user.id, org: user.org }) : deny()
+  },
+  // Also handles the post-create `update` recheck: the row just stamped has
+  // `ownerId === user.id`, so `owned` permits it; a row the store handed back on
+  // an id collision carries someone else's, so `owned` denies and the caller
+  // never receives a thread they do not own.
+  fallback: owned,
+})
+```
+
+Dawn probes four paths, in order: `src/thread-access.ts`, `src/thread-access.js`, `thread-access.ts`, `thread-access.js`. The `default` export wins; a named `threadAccess` export is the fallback.
+
+`fallback` is required. "I forgot to handle delete" is a compile error rather than a silent allow — or a silent deny — on every request of that action.
+
+## What the policy receives
+
+| Field | Notes |
+|---|---|
+| `action` | `"create"`, `"read"`, `"update"` or `"delete"` — which handler was selected. |
+| `operation` | The specific endpoint, e.g. `"thread.state"`, for policies that need finer grain than `action`. |
+| `threadId` | `undefined` only on `POST /threads`, whose id is server-generated. |
+| `thread` | The stored row, or `undefined` when no row exists. |
+| `headers` | Lowercase keys, repeated headers joined with `", "`. |
+| `method`, `url` | The originating request's method, and its path plus query. |
+| `requestedMetadata` | Client-supplied metadata on a create, already stripped of Dawn's reserved key. `undefined` everywhere else. |
+
+`thread.metadata` is client-supplied and untrusted — anyone who can create a thread can write anything into it. **Authorize against `thread.access`**, which is the stamp your own `create` decision returned. Dawn stores it under a reserved key (`dawn:access`) that it strips from client input on every create path, so a client cannot forge one, and it is lifted out of `metadata` before your policy sees the row.
+
+`thread.access` is `undefined` for a thread created before you adopted a policy. Dawn does not guess what that should mean — decide it explicitly. The two sane answers are admin-only (the `owned` example above) or a one-time backfill (below).
+
+### Comparing headers
+
+Repeated headers arrive joined. `X-User-Id: victim` plus `X-User-Id: attacker` is the single string `"victim, attacker"`. That is safe under `===` and unsafe under `includes`, `startsWith` or `split(",")` — which is exactly what a hand-rolled parser reaches for. Compare with strict equality, and prefer a signed token over a trusted header wherever the deployment allows it.
+
+## Denials
+
+`deny()` produces **404 for a `read`, 403 for everything else**.
+
+| Endpoint | Default deny |
+|---|---|
+| `POST /threads` | 403 `thread_access_denied` |
+| `GET /threads/:thread_id` | 404, the same body a genuine miss returns |
+| `GET /threads/:thread_id/state` | 404, the same body a missing checkpoint returns |
+| `DELETE /threads/:thread_id` | 403 `thread_access_denied` |
+| `POST /threads/:thread_id/cancel` | 403 `thread_access_denied` |
+
+The read default is 404 so a denial cannot be told apart from a miss, which is what stops anyone enumerating thread ids. The 403s sit on endpoints where the caller has already named a specific thread and asked to change it.
+
+`deny({ status, body })` overrides both. `status` accepts only `403` or `404` — a policy cannot mint a 200, a 500 or a redirect — and anything else falls back to the per-action default.
+
+<Callout type="warn">
+**A `read` handler that returns 403 tells the caller the thread exists.** `deny({ status: 403 })` on a read is legal, and it reopens the enumeration channel the 404 default closes: `GET /threads/<guessed>` becomes an existence oracle over a 32-bit id space. Dawn does not forbid it — an app that authenticates every caller and wants honest diagnostics is entitled to it — but make it a choice, not something you reach by copying the `update` branch.
+</Callout>
+
+<Callout type="warn">
+**Your `delete` handler must deny when `thread` is `undefined`.** `DELETE /threads/:thread_id` returns 204 today even for a thread that never existed, so a 403 would ordinarily mean "this exists and is not yours" — a bit DELETE does not leak. Dawn keeps it that way by invoking the policy with `thread: undefined` instead of short-circuiting, so an ownership policy denies both cases identically. A policy that allows deleting unknown threads puts the oracle back.
+</Callout>
+
+The policy runs on **every** gated request, including when the row is missing. On `/state` that matters for a second reason: the checkpointer is a separate store from the threads store, so a transcript can exist for a thread whose row is gone, and skipping the gate would serve it ungated.
+
+## Failure modes
+
+A policy that **throws** becomes a 500 and the endpoint's real work never runs. That is fail-closed and honest — a 403 would hide a broken policy behind what looks like a working one.
+
+A policy that returns something that is neither a well-formed allow nor a well-formed deny (a missing `return` on one branch, a copy-pasted `{ action: "continue" }`) **denies at the per-action default** and logs a warning naming the operation, the thread id and the value. It is deliberately not pinned to 403: forcing 403 on a read would make a broken policy answer differently from a working one and hand back the enumeration oracle.
+
+A policy that **hangs** is not defended. Dawn imposes no timeout on a policy call, so a slow identity provider degrades into stuck requests. Put your own timeout around any network call in a policy and fail closed on it.
+
+## Load failures
+
+Route middleware that fails to import degrades to "no middleware". An authorization policy must not: a syntax error, a missing dependency or a thrown environment assertion would boot the app with every thread world-writable and no log line. So the loader decides existence with a filesystem check **before** the import, and an import failure can then only mean "the policy is broken".
+
+- No policy file on disk — no gate, exactly today's behavior.
+- A policy file that fails to import — the boot fails with `DAWN_E3003`.
+- A policy file that imports but binds no usable policy — the boot fails with `DAWN_E3003`.
+
+Four cases are distinguishable at a glance in the message: no `default` or `threadAccess` export; the bound value is not an object; `fallback` is missing or is not a function; a per-action key is present but is not a function.
+
+There is no path on which a policy you wrote resolves to "allow everything". See [Error codes](/docs/errors).
+
+Every boot logs which layer the policy came from, or that there is none — it is the one signal that says a policy vanished:
+
+```
+Dawn: thread access policy bound from src/thread-access.ts
+Dawn: no thread access policy (all thread endpoints are open)
+```
+
+## Build targets
+
+`dawn build --target hono` and `--target langsmith` **fail** with `DAWN_E1005` while a policy file exists. Neither runtime can carry the hook today, and a build that silently dropped it would deploy every thread endpoint ungated. The `node` target needs nothing special — its emitted server reaches the same disk probe `dawn dev` does. An app with no policy file builds for every target exactly as before. See [Deployment](/docs/deployment).
+
+## Adopting a policy on an existing app
+
+Threads created before the policy have `access === undefined`. Either handle that branch (admin-only is the usual answer) or backfill.
+
+Backfill is an **operator script** that constructs the threads store directly. Every in-runtime path to the reserved key is deliberately shut: there is no HTTP endpoint for metadata updates, and the runtime asserts that none of its own metadata patches carry the key.
+
+```ts title="scripts/backfill-thread-access.ts"
+import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
+import { createThreadsStore } from "@dawn-ai/sqlite-storage"
+
+const store = createThreadsStore({ path: ".dawn/threads.sqlite" })
+for (const thread of await store.listThreads()) {
+  if (thread.metadata[THREAD_ACCESS_METADATA_KEY] !== undefined) continue
+  await store.updateMetadata(thread.thread_id, {
+    [THREAD_ACCESS_METADATA_KEY]: { ownerId: "operator-assigned-owner" },
+  })
+}
+```
+
+This is in the same class as `dawn inspect` and `dawn memory`: a local operator with filesystem or database access, documented rather than defended.
+
+## Identifiers, never secrets
+
+`GET /threads/:thread_id` returns the raw thread, reserved key included. That is deliberate — hiding it would break round-tripping and make the stamp undebuggable, and that endpoint is gated by the very policy the stamp feeds. Put identifiers in a stamp. Do not put anything in it whose disclosure to a caller your `read` policy admits would matter.
+
+## What this does not cover yet
+
+The run endpoints — `POST /threads/:thread_id/runs/stream`, `/runs/wait`, `/resume` and `POST /agui/{routeId}` — are gated by [route middleware](/docs/middleware) only. They are not yet on this policy, and a caller who can run a route on a thread can still create the row for an id of their choosing. Keep middleware doing real per-caller authorization until they are.

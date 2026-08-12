@@ -32,11 +32,30 @@ export interface RunHandle {
   release(): void
 }
 
+export interface RunClaim {
+  /** Aborts the exact run this claim bound to. False when a later run replaced it. */
+  cancel(reason?: string): boolean
+}
+
 export interface RunRegistry {
   /** Claims the thread's run slot. Returns undefined when a run is already in flight. */
   begin(threadId: string, shutdownSignal: AbortSignal): RunHandle | undefined
   /** Aborts the in-flight run. Returns false when there is nothing to cancel. */
   cancel(threadId: string, reason?: string): boolean
+  /**
+   * Bind to whatever run holds this thread's slot right now, synchronously.
+   *
+   * `cancel(threadId)` resolves the entry at CALL time, so a caller that awaits
+   * anything between observing a run and cancelling it can abort a later run of
+   * the same thread. A claim resolves the entry up front and carries an
+   * identity guard, which is what lets `POST /threads/:id/cancel` authorize —
+   * and therefore await — before it aborts.
+   *
+   * REQUIRED, not optional: `getRunRegistry`'s per-request wrapper is a
+   * hand-written object literal, and a required member makes that literal fail
+   * typecheck until a passthrough is added.
+   */
+  claim(threadId: string): RunClaim | undefined
   has(threadId: string): boolean
   /**
    * How many runs still hold a slot.
@@ -94,6 +113,19 @@ export function createRunRegistry(): RunRegistry {
           shutdownSignal.removeEventListener("abort", onShutdown)
           // Identity guard: never clear a slot a later run has claimed.
           if (entries.get(threadId) === entry) entries.delete(threadId)
+        },
+      }
+    },
+    claim(threadId) {
+      const entry = entries.get(threadId)
+      if (!entry) return undefined
+      return {
+        cancel(reason = "Run cancelled") {
+          // Identity guard, the direct sibling of release()'s: never abort a
+          // run that replaced the one this claim bound to.
+          if (entries.get(threadId) !== entry) return false
+          entry.cancel(reason)
+          return true
         },
       }
     },

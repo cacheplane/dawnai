@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve } from "node:path"
 import { extractDeploymentConfig } from "../deployment-config.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
+import { assertNoThreadAccessPolicy } from "./thread-access-probe.js"
 
 /**
  * The LangSmith deploy target. Emits the per-route materialized graph entry
@@ -11,6 +12,9 @@ import type { BuildEmitContext, BuildTarget } from "./index.js"
 export const langsmithTarget: BuildTarget = {
   name: "langsmith",
   async emit({ appRoot, buildDir, manifest }: BuildEmitContext) {
+    // Permanent for this target: LangSmith materializes no app middleware
+    // either, so there is nowhere for the policy to run.
+    assertNoThreadAccessPolicy(appRoot, "langsmith")
     const artifacts: string[] = []
     const graphs: Record<string, string> = {}
 
