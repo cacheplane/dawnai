@@ -170,6 +170,12 @@ loadDawnConfig memoizes per app root. A failed in-flight load is evicted only wh
 
 This low-level helper turns state defaults and optional reducer overrides into the normalized fields consumed by type generation and runtime state assembly.
 
+```ts api-contract="@dawn-ai/core#.:resolveStateFields"
+export declare function resolveStateFields(
+  options: ResolveStateFieldsOptions,
+): readonly ResolvedStateField[]
+```
+
 #### Behavior contract `core.state.reducer-resolution`
 {/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/core/test/resolve-state-fields.test.ts","testNames":["infers append reducer for array defaults","infers replace reducer for scalar defaults","reducer overrides take precedence","sorts fields alphabetically by name"]}] */}
 resolveStateFields infers append for array defaults and replace for scalar defaults, honors explicit reducer overrides, and sorts fields by name.

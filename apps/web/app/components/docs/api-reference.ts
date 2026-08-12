@@ -15,6 +15,7 @@ export type ApiReferenceAudience =
   | "internal"
 export type RuntimePurity = "dependency-free" | "not-claimed"
 export type ApiReferenceStability = "supported" | "low-level" | "internal"
+export type ApiContractKey = `${string}#${"." | `./${string}`}:${string}`
 
 export const API_REFERENCE_GUARD_IDS = [
   "edge-import-bundle",
@@ -595,6 +596,72 @@ export interface PackageCatalogEntry {
   readonly stability: ApiReferenceStability
 }
 
+// Authored signatures are intentionally selective, but selection itself must
+// fail closed: removing a tag cannot silently turn a high-value contract into
+// an ordinary example. The inventory analyzer resolves every key back to the
+// public source export and its canonical owner page.
+export const API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:RunContext",
+  "@dawn-ai/ag-ui#.:ToAguiOptions",
+  "@dawn-ai/ag-ui#.:fromRunAgentInput",
+  "@dawn-ai/ag-ui#.:toAguiEvents",
+  "@dawn-ai/cli#.:ServeRuntimeOptions",
+  "@dawn-ai/cli#.:serveRuntime",
+  "@dawn-ai/core#.:loadDawnConfig",
+  "@dawn-ai/core#.:resolveStateFields",
+  "@dawn-ai/evals#.:EvalCase",
+  "@dawn-ai/evals#.:EvalDefinition",
+  "@dawn-ai/evals#.:EvalReport",
+  "@dawn-ai/evals#.:RunEvalOptions",
+  "@dawn-ai/evals#.:Scorer",
+  "@dawn-ai/evals#.:defineEval",
+  "@dawn-ai/evals#.:runEval",
+  "@dawn-ai/memory#./namespace:MemoryScopeTuple",
+  "@dawn-ai/memory#./namespace:serializeNamespace",
+  "@dawn-ai/memory#./reconcile:approveWithReconcile",
+  "@dawn-ai/memory#.:BrowsePage",
+  "@dawn-ai/memory#.:BrowseQuery",
+  "@dawn-ai/memory#.:MemoryQuery",
+  "@dawn-ai/memory#.:MemoryRecord",
+  "@dawn-ai/memory#.:MemoryStore",
+  "@dawn-ai/memory-pgvector#.:PgvectorMemoryStore",
+  "@dawn-ai/memory-pgvector#.:pgvectorMemoryStore",
+  "@dawn-ai/postgres-storage#./node:NodePostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#./node:NodePostgresStoreOptions",
+  "@dawn-ai/postgres-storage#./node:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#./node:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#./node:postgresCheckpointer",
+  "@dawn-ai/postgres-storage#.:PostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#.:PostgresStoreOptions",
+  "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sdk#.:AgentConfig",
+  "@dawn-ai/sdk#.:ReasoningConfig",
+  "@dawn-ai/sdk#.:RetryConfig",
+  "@dawn-ai/sdk#.:RouteConfig",
+  "@dawn-ai/sdk#.:agent",
+  "@dawn-ai/sdk#.:allow",
+  "@dawn-ai/sdk#.:defineMemory",
+  "@dawn-ai/sdk#.:defineMiddleware",
+  "@dawn-ai/sdk#.:isDawnAgent",
+  "@dawn-ai/sdk#.:reject",
+  "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/testing#.:AgentHarness",
+  "@dawn-ai/testing#.:AgentHarnessOptions",
+  "@dawn-ai/testing#.:ScriptBuilder",
+  "@dawn-ai/testing#.:createAgentHarness",
+  "@dawn-ai/testing#.:fakeEmbedder",
+  "@dawn-ai/testing#.:loadFixtures",
+  "@dawn-ai/testing#.:runCheckpointerConformance",
+  "@dawn-ai/testing#.:runMemoryStoreConformance",
+  "@dawn-ai/testing#.:runPermissionsStoreConformance",
+  "@dawn-ai/testing#.:runThreadsStoreConformance",
+  "@dawn-ai/testing#.:writeFixtures",
+] as const satisfies readonly ApiContractKey[]
+
 function runtimeImport(
   packageName: string,
   subpath: string,
@@ -841,6 +908,35 @@ export function artifactAddressFor(artifact: ApiReferenceArtifact): string {
   if (artifact.kind === "import") return `import:${artifact.packageName}:${artifact.subpath}`
   if (artifact.kind === "operated") return `operated:${artifact.packageName}:${artifact.selector}`
   return `generated:${artifact.moduleName}`
+}
+
+export function artifactBoundaryFor(artifact: ApiReferenceArtifact): string {
+  const documentation =
+    artifact.coverage === "detailed"
+      ? "focused reference"
+      : artifact.coverage === "internal"
+        ? "internal only"
+        : "catalog summary"
+  if (artifact.kind === "generated") {
+    return `${documentation} · generated types; compile-time only, no runtime import · purity n/a`
+  }
+  if (artifact.kind === "operated") {
+    const operation =
+      artifact.operatedKind === "executable"
+        ? "executable command"
+        : "separately operated application"
+    return `${documentation} · \`${artifact.runtime}\` ${operation} · purity n/a`
+  }
+  if (artifact.surfaceKind === "typescript-runtime") {
+    return `${documentation} · \`${artifact.runtime}\` runtime · \`${artifact.purity}\` purity`
+  }
+  if (artifact.surfaceKind === "config-artifact") {
+    return `${documentation} · static configuration; no runtime import · purity n/a`
+  }
+  if (artifact.surfaceKind === "metadata") {
+    return `${documentation} · package metadata; read as data, not runtime code · purity n/a`
+  }
+  return `${documentation} · package metadata; read as data, not runtime code · purity n/a`
 }
 
 const importAddress = (packageName: string, subpath: string) =>

@@ -6,7 +6,13 @@ import GithubSlugger from "github-slugger"
 import { describe, expect, it } from "vitest"
 
 import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
-import { ARTIFACT_REGISTRY, artifactAddressFor, PACKAGE_CATALOG } from "./api-reference"
+import {
+  ARTIFACT_REGISTRY,
+  artifactAddressFor,
+  artifactBoundaryFor,
+  GENERATED_ROUTES_ARTIFACT,
+  PACKAGE_CATALOG,
+} from "./api-reference"
 import { DOCS_INDEX } from "./search-index"
 
 const DOCS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../../content/docs")
@@ -518,10 +524,19 @@ function catalogRow(entry: (typeof PACKAGE_CATALOG)[number]): string {
   const artifacts = entry.artifactAddresses
     .map((address) => `\`${artifactLabel(address)}\``)
     .join("<br />")
+  const boundaries = entry.artifactAddresses
+    .map((address) => {
+      const artifact = ARTIFACT_REGISTRY.find(
+        (candidate) => artifactAddressFor(candidate) === address,
+      )
+      if (!artifact) throw new Error(`unknown artifact address: ${address}`)
+      return artifactBoundaryFor(artifact)
+    })
+    .join("<br />")
   const catalogAnchor = entry.canonicalReferenceDestination.startsWith("/docs/api#")
     ? `<span id="${entry.canonicalReferenceDestination.slice("/docs/api#".length)}"></span>`
     : ""
-  return `| ${catalogAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
+  return `| ${catalogAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | ${boundaries} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
 }
 
 function visibleTableLines(source: string): string[] {
@@ -920,6 +935,9 @@ describe("docs links and in-page anchors", () => {
     const actualRows = visibleCatalogRows(catalog)
 
     expect(actualRows).toEqual(PACKAGE_CATALOG.map(catalogRow))
+    expect(catalog).toContain(
+      `Generated surface: \`dawn:routes\` — ${artifactBoundaryFor(GENERATED_ROUTES_ARTIFACT)}.`,
+    )
     expect(catalogMarkupFailures(catalog)).toEqual([])
     expect(applicationShortcutFailures(catalog)).toEqual([])
   })

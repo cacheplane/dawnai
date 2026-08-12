@@ -2109,6 +2109,44 @@ export function analyzeApiInventoryFixture(fixture) {
     }
   }
 
+  const requiredContractKeys = fixture.requiredContractKeys ?? []
+  const requiredContractKeyCounts = new Map()
+  for (const key of requiredContractKeys) {
+    requiredContractKeyCounts.set(key, (requiredContractKeyCounts.get(key) ?? 0) + 1)
+  }
+  for (const [key, count] of requiredContractKeyCounts) {
+    if (count > 1) {
+      failures.push(`duplicate required api-contract key ${String(key)}`)
+      continue
+    }
+    const parsed = parseContractKey(key)
+    if (!parsed) {
+      failures.push(`malformed required api-contract key ${JSON.stringify(key)}`)
+      continue
+    }
+    const context = detailedSurfaces.get(`${parsed.packageName}#${parsed.subpath}`)
+    if (!context?.inventory.exports.has(parsed.symbol)) {
+      failures.push(
+        `required api-contract ${key} is unknown or stale because it does not map to a detailed source export`,
+      )
+      continue
+    }
+    const matchingContracts = contractsByKey.get(key) ?? []
+    if (matchingContracts.length === 0) {
+      failures.push(
+        `${surfaceDiagnostic(context.surface, parsed.symbol, context.owner, context.sourcePath, context.target)} is missing its required api-contract tag`,
+      )
+    }
+  }
+  const requiredContractKeySet = new Set(requiredContractKeys)
+  for (const [key] of contractsByKey) {
+    if (!requiredContractKeySet.has(key)) {
+      failures.push(
+        `unregistered api-contract ${key} is not present in the required contract registry`,
+      )
+    }
+  }
+
   for (const contract of contracts) {
     if (contract.invalidTag) {
       failures.push(

@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest"
 import * as apiReferenceExports from "./api-reference"
 import {
   API_REFERENCE_GUARD_IDS,
+  API_REQUIRED_CONTRACT_KEYS,
   type ApiReferenceArtifact,
   ARTIFACT_REGISTRY,
   artifactAddressFor,
+  artifactBoundaryFor,
   GENERATED_ROUTES_ARTIFACT,
   PACKAGE_CATALOG,
   validateApiReferenceRegistries,
@@ -101,6 +103,68 @@ const EXPECTED_OPERATED_ARTIFACTS = [
     "operated-application",
     ".next/standalone/packages/inspector/server.js",
   ],
+] as const
+
+const EXPECTED_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:RunContext",
+  "@dawn-ai/ag-ui#.:ToAguiOptions",
+  "@dawn-ai/ag-ui#.:fromRunAgentInput",
+  "@dawn-ai/ag-ui#.:toAguiEvents",
+  "@dawn-ai/cli#.:ServeRuntimeOptions",
+  "@dawn-ai/cli#.:serveRuntime",
+  "@dawn-ai/core#.:loadDawnConfig",
+  "@dawn-ai/core#.:resolveStateFields",
+  "@dawn-ai/evals#.:EvalCase",
+  "@dawn-ai/evals#.:EvalDefinition",
+  "@dawn-ai/evals#.:EvalReport",
+  "@dawn-ai/evals#.:RunEvalOptions",
+  "@dawn-ai/evals#.:Scorer",
+  "@dawn-ai/evals#.:defineEval",
+  "@dawn-ai/evals#.:runEval",
+  "@dawn-ai/memory#./namespace:MemoryScopeTuple",
+  "@dawn-ai/memory#./namespace:serializeNamespace",
+  "@dawn-ai/memory#./reconcile:approveWithReconcile",
+  "@dawn-ai/memory#.:BrowsePage",
+  "@dawn-ai/memory#.:BrowseQuery",
+  "@dawn-ai/memory#.:MemoryQuery",
+  "@dawn-ai/memory#.:MemoryRecord",
+  "@dawn-ai/memory#.:MemoryStore",
+  "@dawn-ai/memory-pgvector#.:PgvectorMemoryStore",
+  "@dawn-ai/memory-pgvector#.:pgvectorMemoryStore",
+  "@dawn-ai/postgres-storage#./node:NodePostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#./node:NodePostgresStoreOptions",
+  "@dawn-ai/postgres-storage#./node:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#./node:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#./node:postgresCheckpointer",
+  "@dawn-ai/postgres-storage#.:PostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#.:PostgresStoreOptions",
+  "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sdk#.:AgentConfig",
+  "@dawn-ai/sdk#.:ReasoningConfig",
+  "@dawn-ai/sdk#.:RetryConfig",
+  "@dawn-ai/sdk#.:RouteConfig",
+  "@dawn-ai/sdk#.:agent",
+  "@dawn-ai/sdk#.:allow",
+  "@dawn-ai/sdk#.:defineMemory",
+  "@dawn-ai/sdk#.:defineMiddleware",
+  "@dawn-ai/sdk#.:isDawnAgent",
+  "@dawn-ai/sdk#.:reject",
+  "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/testing#.:AgentHarness",
+  "@dawn-ai/testing#.:AgentHarnessOptions",
+  "@dawn-ai/testing#.:ScriptBuilder",
+  "@dawn-ai/testing#.:createAgentHarness",
+  "@dawn-ai/testing#.:fakeEmbedder",
+  "@dawn-ai/testing#.:loadFixtures",
+  "@dawn-ai/testing#.:runCheckpointerConformance",
+  "@dawn-ai/testing#.:runMemoryStoreConformance",
+  "@dawn-ai/testing#.:runPermissionsStoreConformance",
+  "@dawn-ai/testing#.:runThreadsStoreConformance",
+  "@dawn-ai/testing#.:writeFixtures",
 ] as const
 
 interface ManifestFixture {
@@ -276,6 +340,31 @@ describe("client navigation dependency boundary", () => {
 })
 
 describe("artifact registry", () => {
+  it("renders stable public documentation labels without delivery-state coverage names", () => {
+    const forbidden = /\b(?:detailed|catalog-only|deferred-to-pr2)\b/
+    for (const artifact of ARTIFACT_REGISTRY) {
+      expect(artifactBoundaryFor(artifact)).not.toMatch(forbidden)
+    }
+    expect(artifactBoundaryFor(ARTIFACT_REGISTRY[0])).toContain("focused reference")
+    expect(
+      artifactBoundaryFor(
+        ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "catalog-only") ??
+          ARTIFACT_REGISTRY[0],
+      ),
+    ).toContain("catalog summary")
+    expect(
+      artifactBoundaryFor(
+        ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "deferred-to-pr2") ??
+          ARTIFACT_REGISTRY[0],
+      ),
+    ).toContain("catalog summary")
+    expect(
+      artifactBoundaryFor(
+        ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "internal") ?? ARTIFACT_REGISTRY[0],
+      ),
+    ).toContain("internal only")
+  })
+
   it("assigns executable compatibility guards to every runtime claim", () => {
     const knownGuardIds = new Set(API_REFERENCE_GUARD_IDS)
     const usedGuardIds = new Set<string>()
@@ -725,6 +814,15 @@ describe("published manifest address inventory", () => {
 })
 
 describe("package catalog", () => {
+  it("registers every authored high-value signature contract exactly once", () => {
+    expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(59)
+    expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
+    expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
+    expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")
+    expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/evals#.:runEval")
+  })
+
   it("matches readPublicPackages bidirectionally", () => {
     const catalogNames = PACKAGE_CATALOG.map(({ packageName }) => packageName).sort()
     expect(catalogNames).toHaveLength(21)

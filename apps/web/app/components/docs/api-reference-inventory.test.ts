@@ -9,6 +9,7 @@ import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render
 import {
   API_BEHAVIOR_CONTRACTS,
   API_REFERENCE_PAGES,
+  API_REQUIRED_CONTRACT_KEYS,
   ARTIFACT_REGISTRY,
   artifactAddressFor,
   GENERATED_ROUTES_ARTIFACT,
@@ -159,6 +160,7 @@ interface InventoryFixture {
     source: string
   }[]
   readonly behaviorContracts: BehaviorContractFixture[]
+  requiredContractKeys?: string[]
   readonly generatedAuthorities?: GeneratedAuthorityFixture[]
   readonly files: Record<string, string>
 }
@@ -473,6 +475,19 @@ ${ownershipTable([["fencedExport", "A fence decoy."]])}
 \`${ownershipTable([["inlineExport", "An inline decoy."]]).replaceAll("\n", " ")}\`
 `,
       },
+    ],
+    requiredContractKeys: [
+      "@dawn-ai/sdk#.:agent",
+      "@dawn-ai/sdk#.:AgentConfig",
+      "@dawn-ai/sdk#.:PublicShape",
+      "@dawn-ai/sdk#.:mode",
+      "@dawn-ai/sdk#.:Worker",
+      "@dawn-ai/sdk#.:MergedOptions",
+      "@dawn-ai/sdk#.:sameParamProbe",
+      "@dawn-ai/sdk#.:specializedProbe",
+      "@dawn-ai/sdk#.:makeResult",
+      "@dawn-ai/sdk#.:wildcardExport",
+      "@dawn-ai/sdk#.:defaultExport",
     ],
     behaviorContracts: [
       {
@@ -1364,6 +1379,25 @@ console.log(route)
   mutated("contract-tag-removed", (fixture) => {
     replaceDoc(fixture, '```ts api-contract="@dawn-ai/sdk#.:mode"', "```ts")
   }),
+  mutated("required-contract-key-removed", (fixture) => {
+    fixture.requiredContractKeys = [...(fixture.requiredContractKeys ?? []).slice(1)]
+  }),
+  mutated("required-contract-key-duplicated", (fixture) => {
+    fixture.requiredContractKeys = [...(fixture.requiredContractKeys ?? []), "@dawn-ai/sdk#.:agent"]
+  }),
+  mutated("required-contract-key-stale", (fixture) => {
+    fixture.requiredContractKeys = [...(fixture.requiredContractKeys ?? []), "@dawn-ai/sdk#.:Ghost"]
+  }),
+  mutated("required-contract-key-substituted-with-fence", (fixture) => {
+    fixture.requiredContractKeys = (fixture.requiredContractKeys ?? []).map((key) =>
+      key === "@dawn-ai/sdk#.:mode" ? "@dawn-ai/sdk#.:wildcardExport" : key,
+    )
+    replaceDoc(
+      fixture,
+      '```ts api-contract="@dawn-ai/sdk#.:mode"',
+      '```ts api-contract="@dawn-ai/sdk#.:wildcardExport"',
+    )
+  }),
   mutated("api-contract-substring-metadata", (fixture) => {
     appendToPrimaryDoc(
       fixture,
@@ -2007,6 +2041,7 @@ ${packageExample("memory-pgvector").replace(
       readonly ownerHrefs: readonly string[]
       readonly artifactAddresses: readonly string[]
       readonly behaviorIds: readonly string[]
+      readonly contractKeys: readonly string[]
     }
     expect(analysis.failures).toEqual([])
     expect(analysis.ownerHrefs).toEqual(API_REFERENCE_PAGES.map(({ href }) => href))
@@ -2018,6 +2053,7 @@ ${packageExample("memory-pgvector").replace(
       ).map(artifactAddressFor),
     )
     expect(analysis.behaviorIds).toEqual(API_BEHAVIOR_CONTRACTS.map(({ id }) => id))
+    expect(analysis.contractKeys).toEqual(API_REQUIRED_CONTRACT_KEYS)
   }, 30_000)
 
   it("registers the package defaults, errors, and lifecycle behavior", () => {
@@ -2052,7 +2088,7 @@ ${packageExample("memory-pgvector").replace(
 
 describe("source-derived API inventory", () => {
   it("runs every isolated fixture through one compact stdin-fed process", () => {
-    expect(fixtures).toHaveLength(157)
+    expect(fixtures).toHaveLength(161)
     expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)
     expect(Buffer.byteLength(fixtureInput)).toBeLessThan(2 * 1024 * 1024)
     expect(subprocesses).toHaveLength(1)
@@ -2120,7 +2156,6 @@ describe("source-derived API inventory", () => {
     "unescaped-code-span-pipe",
     "class-private-details-ignored",
     "executable-typescript-example",
-    "contract-tag-removed",
     "api-contract-substring-metadata",
     "api-contract-bare-metadata-values",
     "ordinary-untagged-table",
@@ -2173,6 +2208,11 @@ describe("source-derived API inventory", () => {
     ["contract-tag-braces", /malformed.*api-contract/i],
     ["contract-tag-comma", /malformed.*api-contract/i],
     ["contract-tag-standalone", /malformed.*api-contract/i],
+    ["contract-tag-removed", /mode.*required.*api-contract/i],
+    ["required-contract-key-removed", /unregistered.*api-contract.*agent/i],
+    ["required-contract-key-duplicated", /duplicate.*required.*api-contract.*agent/i],
+    ["required-contract-key-stale", /required.*api-contract.*Ghost.*source|unknown/i],
+    ["required-contract-key-substituted-with-fence", /duplicate.*required.*wildcardExport/i],
     ["unresolved-workspace-reexport", /agent.*source|undocumented.*agent/i],
   ])("rejects %s", (name, diagnostic) => {
     expect(byName.get(name)?.failures).toEqual(

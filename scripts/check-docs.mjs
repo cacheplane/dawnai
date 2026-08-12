@@ -702,6 +702,68 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["generated:dawn:routes", "detailed", "surfaceKind", "generated-types"],
 ]
 
+const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:RunContext",
+  "@dawn-ai/ag-ui#.:ToAguiOptions",
+  "@dawn-ai/ag-ui#.:fromRunAgentInput",
+  "@dawn-ai/ag-ui#.:toAguiEvents",
+  "@dawn-ai/cli#.:ServeRuntimeOptions",
+  "@dawn-ai/cli#.:serveRuntime",
+  "@dawn-ai/core#.:loadDawnConfig",
+  "@dawn-ai/core#.:resolveStateFields",
+  "@dawn-ai/evals#.:EvalCase",
+  "@dawn-ai/evals#.:EvalDefinition",
+  "@dawn-ai/evals#.:EvalReport",
+  "@dawn-ai/evals#.:RunEvalOptions",
+  "@dawn-ai/evals#.:Scorer",
+  "@dawn-ai/evals#.:defineEval",
+  "@dawn-ai/evals#.:runEval",
+  "@dawn-ai/memory#./namespace:MemoryScopeTuple",
+  "@dawn-ai/memory#./namespace:serializeNamespace",
+  "@dawn-ai/memory#./reconcile:approveWithReconcile",
+  "@dawn-ai/memory#.:BrowsePage",
+  "@dawn-ai/memory#.:BrowseQuery",
+  "@dawn-ai/memory#.:MemoryQuery",
+  "@dawn-ai/memory#.:MemoryRecord",
+  "@dawn-ai/memory#.:MemoryStore",
+  "@dawn-ai/memory-pgvector#.:PgvectorMemoryStore",
+  "@dawn-ai/memory-pgvector#.:pgvectorMemoryStore",
+  "@dawn-ai/postgres-storage#./node:NodePostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#./node:NodePostgresStoreOptions",
+  "@dawn-ai/postgres-storage#./node:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#./node:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#./node:postgresCheckpointer",
+  "@dawn-ai/postgres-storage#.:PostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#.:PostgresStoreOptions",
+  "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sdk#.:AgentConfig",
+  "@dawn-ai/sdk#.:ReasoningConfig",
+  "@dawn-ai/sdk#.:RetryConfig",
+  "@dawn-ai/sdk#.:RouteConfig",
+  "@dawn-ai/sdk#.:agent",
+  "@dawn-ai/sdk#.:allow",
+  "@dawn-ai/sdk#.:defineMemory",
+  "@dawn-ai/sdk#.:defineMiddleware",
+  "@dawn-ai/sdk#.:isDawnAgent",
+  "@dawn-ai/sdk#.:reject",
+  "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/testing#.:AgentHarness",
+  "@dawn-ai/testing#.:AgentHarnessOptions",
+  "@dawn-ai/testing#.:ScriptBuilder",
+  "@dawn-ai/testing#.:createAgentHarness",
+  "@dawn-ai/testing#.:fakeEmbedder",
+  "@dawn-ai/testing#.:loadFixtures",
+  "@dawn-ai/testing#.:runCheckpointerConformance",
+  "@dawn-ai/testing#.:runMemoryStoreConformance",
+  "@dawn-ai/testing#.:runPermissionsStoreConformance",
+  "@dawn-ai/testing#.:runThreadsStoreConformance",
+  "@dawn-ai/testing#.:writeFixtures",
+]
+
 function apiArtifactAddress(artifact) {
   if (artifact.kind === "import") return `import:${artifact.packageName}:${artifact.subpath}`
   if (artifact.kind === "operated") return `operated:${artifact.packageName}:${artifact.selector}`
@@ -1012,6 +1074,7 @@ async function analyzeDetailedApiReferences() {
       artifacts,
       documents,
       behaviorContracts: detailedRegistry.API_BEHAVIOR_CONTRACTS,
+      requiredContractKeys: detailedRegistry.API_REQUIRED_CONTRACT_KEYS,
       files: sourceInventory.files,
       generatedAuthorities: [{ moduleName: "dawn:routes", declarations: generatedDeclarations }],
     },
@@ -1021,6 +1084,7 @@ async function analyzeDetailedApiReferences() {
     ownerHrefs: registeredOwnerPages.map(({ href }) => href),
     artifactAddresses: artifacts.map(detailedRegistry.artifactAddressFor),
     behaviorIds: detailedRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id),
+    contractKeys: detailedRegistry.API_REQUIRED_CONTRACT_KEYS,
   }
 }
 
@@ -3504,14 +3568,21 @@ if (apiReferenceRegistry) {
       (artifact.kind === "import" && artifact.coverage === "detailed"),
   ).map(apiReferenceRegistry.artifactAddressFor)
   const expectedBehaviorIds = apiReferenceRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id)
+  const expectedContractKeys = apiReferenceRegistry.API_REQUIRED_CONTRACT_KEYS
+  if (
+    JSON.stringify(expectedContractKeys) !== JSON.stringify(EXPECTED_API_REQUIRED_CONTRACT_KEYS)
+  ) {
+    failures.push("API_REQUIRED_CONTRACT_KEYS must match the frozen high-value contract baseline")
+  }
   if (
     JSON.stringify(detailedApiAnalysis.ownerHrefs) !== JSON.stringify(expectedDetailedOwnerHrefs) ||
     JSON.stringify(detailedApiAnalysis.artifactAddresses) !==
       JSON.stringify(expectedDetailedArtifactAddresses) ||
-    JSON.stringify(detailedApiAnalysis.behaviorIds) !== JSON.stringify(expectedBehaviorIds)
+    JSON.stringify(detailedApiAnalysis.behaviorIds) !== JSON.stringify(expectedBehaviorIds) ||
+    JSON.stringify(detailedApiAnalysis.contractKeys) !== JSON.stringify(expectedContractKeys)
   ) {
     failures.push(
-      "Detailed API analysis must cover every exact owner, detailed import artifact, generated surface, and behavior contract",
+      "Detailed API analysis must cover every exact owner, detailed import artifact, generated surface, behavior contract, and required signature contract",
     )
   }
 
@@ -3643,6 +3714,14 @@ if (apiReferenceRegistry) {
       artifact,
     ]),
   )
+  for (const artifact of ARTIFACT_REGISTRY) {
+    const boundary = apiReferenceRegistry.artifactBoundaryFor(artifact)
+    if (/\b(?:detailed|catalog-only|deferred-to-pr2)\b/.test(boundary)) {
+      failures.push(
+        `${apiReferenceRegistry.artifactAddressFor(artifact)} exposes an internal coverage label in its public artifact boundary`,
+      )
+    }
+  }
   const artifactLabel = (address) => {
     const artifact = artifactByAddress.get(address)
     if (!artifact) return `<unknown:${address}>`
@@ -3660,7 +3739,10 @@ if (apiReferenceRegistry) {
     const artifacts = entry.artifactAddresses
       .map((address) => `\`${artifactLabel(address)}\``)
       .join("<br />")
-    return `| ${explicitAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
+    const boundaries = entry.artifactAddresses
+      .map((address) => apiReferenceRegistry.artifactBoundaryFor(artifactByAddress.get(address)))
+      .join("<br />")
+    return `| ${explicitAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | ${boundaries} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
   })
   const catalogSource = catalogRange ? apiHubSource.slice(catalogRange.start, catalogRange.end) : ""
   const catalogLines = catalogSource.split(/\r?\n/)
@@ -3669,8 +3751,8 @@ if (apiReferenceRegistry) {
     (line, index) => line.startsWith("|") && maskedCatalogLines[index]?.trim() !== "",
   )
   const expectedCatalogHeader =
-    "| Package | Purpose | Audience | Stability | Surfaces | README | Reference | Guide |"
-  const expectedCatalogSeparator = "|---|---|---|---|---|---|---|---|"
+    "| Package | Purpose | Audience | Stability | Surfaces | Artifact boundaries | README | Reference | Guide |"
+  const expectedCatalogSeparator = "|---|---|---|---|---|---|---|---|---|"
   const actualCatalogRows = activeCatalogTableLines.slice(2)
   const maskedCatalogSource = maskMarkdownCodeAndComments(catalogSource)
   const markdownCatalogTables =
@@ -3712,6 +3794,15 @@ if (apiReferenceRegistry) {
   if (activeCatalogMdxConstructs.length > 0) {
     failures.push(
       "apps/web/content/docs/api.mdx package catalog must not contain active MDX components, declarations, or expressions beyond registered anchors and table line breaks",
+    )
+  }
+  const expectedGeneratedBoundary = `Generated surface: \`dawn:routes\` — ${apiReferenceRegistry.artifactBoundaryFor(apiReferenceRegistry.GENERATED_ROUTES_ARTIFACT)}.`
+  if (
+    catalogLines.filter((line) => line === expectedGeneratedBoundary).length !== 1 ||
+    maskedCatalogSource.includes("Generated surface:") !== true
+  ) {
+    failures.push(
+      "apps/web/content/docs/api.mdx must visibly render the exact generated dawn:routes boundary",
     )
   }
   const applicationShortcutDestinations = [
