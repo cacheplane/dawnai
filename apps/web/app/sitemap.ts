@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next"
 import { getAllPosts, getAllTags } from "./components/blog/post-index"
-import { DOCS_PAGES } from "./components/docs/nav"
+import { ALL_DOCS_PAGES } from "./components/docs/nav"
 
 const SITE_URL = "https://dawnai.org"
 
@@ -9,7 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const staticEntries: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "weekly", priority: 1 },
     { url: `${SITE_URL}/blog`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
-    ...DOCS_PAGES.map((p) => ({
+    ...ALL_DOCS_PAGES.map((p) => ({
       url: `${SITE_URL}${p.href}`,
       lastModified: now,
       changeFrequency: "monthly" as const,

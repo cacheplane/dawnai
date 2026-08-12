@@ -5,7 +5,7 @@ import { NextResponse } from "next/server"
 import { PROMPTS } from "../../content/prompts"
 import { webContentRoot } from "../../lib/content-root"
 import { getAllPosts } from "../components/blog/post-index"
-import { DOCS_PAGES } from "../components/docs/nav"
+import { ALL_DOCS_PAGES } from "../components/docs/nav"
 
 const CONTENT_ROOT = webContentRoot()
 
@@ -40,7 +40,7 @@ async function buildLlmsFull(): Promise<string> {
     "",
   ]
 
-  for (const page of DOCS_PAGES) {
+  for (const page of ALL_DOCS_PAGES) {
     sections.push(
       `### ${page.label}`,
       "",

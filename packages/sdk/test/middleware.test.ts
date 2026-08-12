@@ -17,13 +17,10 @@ describe("reject()", () => {
     })
   })
 
-  test("body defaults to undefined", () => {
+  test("omits body when not provided", () => {
     const result = reject(403)
-    expect(result).toEqual({
-      action: "reject",
-      status: 403,
-      body: undefined,
-    })
+    expect(result).toStrictEqual({ action: "reject", status: 403 })
+    expect(Object.hasOwn(result, "body")).toBe(false)
   })
 })
 
@@ -36,12 +33,10 @@ describe("allow()", () => {
     })
   })
 
-  test("context defaults to undefined", () => {
+  test("omits context when not provided", () => {
     const result = allow()
-    expect(result).toEqual({
-      action: "continue",
-      context: undefined,
-    })
+    expect(result).toStrictEqual({ action: "continue" })
+    expect(Object.hasOwn(result, "context")).toBe(false)
   })
 })
 

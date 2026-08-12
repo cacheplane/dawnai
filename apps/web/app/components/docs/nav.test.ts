@@ -1,9 +1,17 @@
 import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
-import { dirname, join, relative } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { breadcrumbsFor, DOCS_NAV, DOCS_PAGES, siblingsFor } from "./nav"
+import { API_REFERENCE_PAGES } from "./api-reference-pages"
+import {
+  ALL_DOCS_PAGES,
+  breadcrumbsFor,
+  DOCS_NAV,
+  DOCS_PAGES,
+  type DocsNavSection,
+  siblingsFor,
+} from "./nav"
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..")
 const CONTENT_ROOT = join(WEB_ROOT, "content/docs")
@@ -140,6 +148,9 @@ interface CompatibilityStubAnalysis {
 interface DocTitleAnalysis {
   readonly firstH1: string | null
   readonly metadataTitle: string | null
+  readonly contentImportTarget: string | null
+  readonly docsPageImportTarget: string | null
+  readonly docsPageHref: string | null
 }
 
 interface DocTitleFixture {
@@ -247,9 +258,65 @@ function wrapperHref(file: string): string {
   return `/docs/${slug}`
 }
 
+function topologyFailures(
+  journeyHrefs: readonly string[],
+  apiHrefs: readonly string[],
+  contentHrefs: readonly string[],
+  wrapperHrefs: readonly string[],
+): string[] {
+  const journey = new Set(journeyHrefs)
+  const allowedApi = new Set(apiHrefs)
+  const content = new Set(contentHrefs)
+  const wrappers = new Set(wrapperHrefs)
+  const failures: string[] = []
+  for (const href of new Set(contentHrefs)) {
+    if (contentHrefs.filter((candidate) => candidate === href).length > 1) {
+      failures.push(`duplicate docs content: ${href}`)
+    }
+  }
+  for (const href of new Set(wrapperHrefs)) {
+    if (wrapperHrefs.filter((candidate) => candidate === href).length > 1) {
+      failures.push(`duplicate docs wrapper: ${href}`)
+    }
+  }
+  for (const href of journey) {
+    if (!content.has(href)) failures.push(`missing journey content: ${href}`)
+    if (!wrappers.has(href)) failures.push(`missing journey wrapper: ${href}`)
+  }
+  for (const href of allowedApi) {
+    if (!content.has(href)) failures.push(`missing API content: ${href}`)
+    if (!wrappers.has(href)) failures.push(`missing API wrapper: ${href}`)
+  }
+  for (const href of new Set([...content, ...wrappers])) {
+    if (journey.has(href)) continue
+    if (!allowedApi.has(href)) failures.push(`unregistered docs leaf: ${href}`)
+    if (content.has(href) !== wrappers.has(href)) failures.push(`unpaired API leaf: ${href}`)
+  }
+  return failures
+}
+
 describe("documentation registry invariants", () => {
   it("uses the exact eight-section foundation", () => {
     expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
+  })
+
+  it("pins the exact 58-page reading order", () => {
+    const expectedPages = (FOUNDATION_DOCS_NAV as readonly DocsNavSection[]).flatMap(
+      (section) => section.items,
+    )
+
+    expect(expectedPages).toHaveLength(58)
+    expect(DOCS_PAGES).toEqual(expectedPages)
+  })
+
+  it("adds ten hidden API leaves immediately after the hub", () => {
+    expect(DOCS_NAV.reduce((count, section) => count + section.items.length, 0)).toBe(58)
+    expect(DOCS_PAGES).toHaveLength(58)
+    expect(ALL_DOCS_PAGES).toHaveLength(68)
+
+    const hubIndex = ALL_DOCS_PAGES.findIndex(({ href }) => href === "/docs/api")
+    expect(ALL_DOCS_PAGES.slice(hubIndex + 1, hubIndex + 11)).toEqual(API_REFERENCE_PAGES)
+    expect(ALL_DOCS_PAGES[hubIndex + 11]?.href).toBe("/docs/errors")
   })
 
   it("uses unique section labels, page labels, and hrefs", () => {
@@ -271,8 +338,19 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/dev-server/agent-protocol").next?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").prev?.href).toBe("/docs/middleware")
     expect(siblingsFor("/docs/ag-ui").next?.href).toBe("/docs/embedding")
-    expect(DOCS_PAGES).toHaveLength(58)
     expect(siblingsFor("/docs/faq").next).toBeNull()
+  })
+
+  it("gives hidden API leaves a four-part breadcrumb and no journey siblings", () => {
+    for (const leaf of API_REFERENCE_PAGES) {
+      expect(breadcrumbsFor(leaf.href)).toEqual([
+        { label: "Docs", href: "/docs/getting-started" },
+        { label: "Reference" },
+        { label: "API Reference", href: "/docs/api" },
+        { label: leaf.label },
+      ])
+      expect(siblingsFor(leaf.href)).toEqual({ prev: null, next: null })
+    }
   })
 
   it("keeps every nav item on one line with label before href", () => {
@@ -286,7 +364,7 @@ describe("documentation registry invariants", () => {
     }
   })
 
-  it("registers exactly the authored content and route wrappers", () => {
+  it("matches authored content and wrappers to the exact exhaustive registry", () => {
     const navHrefs = DOCS_PAGES.map((page) => page.href)
     const contentHrefs = filesUnder(CONTENT_ROOT, (file) => file.endsWith(".mdx"))
       .map(contentHref)
@@ -296,13 +374,63 @@ describe("documentation registry invariants", () => {
       .filter((href) => href !== "/docs")
       .sort()
 
-    expect([...navHrefs].sort()).toEqual(contentHrefs)
-    expect([...navHrefs].sort()).toEqual(wrapperHrefs)
+    expect(
+      topologyFailures(
+        navHrefs,
+        API_REFERENCE_PAGES.map(({ href }) => href),
+        contentHrefs,
+        wrapperHrefs,
+      ),
+    ).toEqual([])
+  })
+
+  it("rejects missing, unregistered, and unpaired API leaves", () => {
+    const journey = ["/docs/api"]
+    const registered = ["/docs/api/sdk"]
+
+    expect(
+      topologyFailures(
+        journey,
+        registered,
+        [...journey, ...registered, "/docs/api/foreign"],
+        [...journey, ...registered, "/docs/api/foreign"],
+      ),
+    ).toContain("unregistered docs leaf: /docs/api/foreign")
+    expect(topologyFailures(journey, registered, [...journey, ...registered], journey)).toContain(
+      "unpaired API leaf: /docs/api/sdk",
+    )
+    expect(topologyFailures(journey, registered, journey, journey)).toEqual(
+      expect.arrayContaining([
+        "missing API content: /docs/api/sdk",
+        "missing API wrapper: /docs/api/sdk",
+      ]),
+    )
+    expect(
+      topologyFailures(
+        journey,
+        registered,
+        [...journey, ...registered, ...registered],
+        [...journey, ...registered],
+      ),
+    ).toContain("duplicate docs content: /docs/api/sdk")
   })
 
   it("keeps nav labels, first MDX headings, and wrapper titles identical", () => {
     const processCountBefore = docTitleAnalysisProcessCount
-    const fixtures = DOCS_PAGES.map((item) => {
+    const contentHrefSet = new Set(
+      filesUnder(CONTENT_ROOT, (file) => file.endsWith(".mdx")).map(contentHref),
+    )
+    const wrapperHrefSet = new Set(
+      filesUnder(WRAPPERS_ROOT, (file) => file === "page.tsx").map(wrapperHref),
+    )
+    expect([...contentHrefSet].filter((href) => href.startsWith("/docs/api/"))).toEqual(
+      expect.arrayContaining(API_REFERENCE_PAGES.map(({ href }) => href)),
+    )
+    expect([...wrapperHrefSet].filter((href) => href.startsWith("/docs/api/"))).toEqual(
+      expect.arrayContaining(API_REFERENCE_PAGES.map(({ href }) => href)),
+    )
+    const authoredPages = ALL_DOCS_PAGES
+    const fixtures = authoredPages.map((item) => {
       const slug = item.href.replace(/^\/docs\//, "")
       const contentPath = join(
         CONTENT_ROOT,
@@ -317,12 +445,28 @@ describe("documentation registry invariants", () => {
     const analyses = analyzeDocTitlesBatch(fixtures)
 
     expect(docTitleAnalysisProcessCount - processCountBefore).toBe(1)
-    expect(analyses).toHaveLength(DOCS_PAGES.length)
-    for (const [index, item] of DOCS_PAGES.entries()) {
-      const { firstH1, metadataTitle } = analyses[index] ?? {}
+    expect(analyses).toHaveLength(authoredPages.length)
+    for (const [index, item] of authoredPages.entries()) {
+      const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
+        analyses[index] ?? {}
+      const slug = item.href.replace(/^\/docs\//, "")
+      const wrapperPath = join(WRAPPERS_ROOT, slug, "page.tsx")
+      const contentPath = join(
+        CONTENT_ROOT,
+        slug === "recipes" ? "recipes/index.mdx" : `${slug}.mdx`,
+      )
 
       expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
       expect(metadataTitle, `${item.href} metadata.title`).toBe(item.label)
+      expect(
+        resolve(dirname(wrapperPath), contentImportTarget ?? ""),
+        `${item.href} MDX import`,
+      ).toBe(contentPath)
+      expect(
+        `${resolve(dirname(wrapperPath), docsPageImportTarget ?? "")}.tsx`,
+        `${item.href} DocsPage import`,
+      ).toBe(join(WEB_ROOT, "app/components/docs/DocsPage.tsx"))
+      expect(docsPageHref, `${item.href} DocsPage href`).toBe(item.href)
     }
   })
 
@@ -335,7 +479,7 @@ describe("documentation registry invariants", () => {
   )
 
   it("uses registered labels for every visible RelatedCards destination", () => {
-    const labels = new Map(DOCS_PAGES.map((item) => [item.href, item.label]))
+    const labels = new Map(ALL_DOCS_PAGES.map((item) => [item.href, item.label]))
     const mismatches: string[] = []
 
     for (const file of filesUnder(CONTENT_ROOT, (name) => name.endsWith(".mdx"))) {
@@ -420,6 +564,9 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(JSON.parse(result.stdout)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      contentImportTarget: null,
+      docsPageImportTarget: null,
+      docsPageHref: null,
     })
   })
 
@@ -428,6 +575,30 @@ export const metadata: Metadata = { title: "Real Title" }
       `\`\`\`md
 # Fake
 \`\`\`
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("does not open a backtick fence whose info string contains a backtick", () => {
+    const analysis = analyzeDocTitles(
+      `\`\`\`md \`invalid\`
+# Real Title
+`,
+      wrapper,
+    )
+
+    expect(analysis.firstH1).toBe("Real Title")
+  })
+
+  it("allows backticks in tilde-fence info strings", () => {
+    const analysis = analyzeDocTitles(
+      `~~~md \`valid\`
+# Fake
+~~~
 # Real Title
 `,
       wrapper,
@@ -541,7 +712,120 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(analyzeDocTitles("## Lead-in\n# `Real` Title\n# Later Title\n", wrapper)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      contentImportTarget: null,
+      docsPageImportTarget: null,
+      docsPageHref: null,
     })
+  })
+
+  it("structurally resolves the MDX import and literal DocsPage href with aliases", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+export default function Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    )
+
+    expect(analysis).toEqual({
+      firstH1: "Real Title",
+      metadataTitle: "Real Title",
+      contentImportTarget: "../../../content/docs/real.mdx",
+      docsPageImportTarget: "../../components/docs/DocsPage",
+      docsPageHref: "/docs/real",
+    })
+  })
+
+  it("rejects a wrong MDX import despite a correct decoy string and comment", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/wrong.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+// import Content from "../../../content/docs/real.mdx"
+const decoy = 'import Content from "../../../content/docs/real.mdx"'
+export const metadata = { title: "Real Title" }
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+void decoy`,
+    )
+
+    expect(analysis.contentImportTarget).toBe("../../../content/docs/wrong.mdx")
+  })
+
+  it("rejects a wrong DocsPage href despite correct decoy text", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+// <DocsPage href="/docs/real" Content={Content} />
+const decoy = '<DocsPage href="/docs/real" Content={Content} />'
+export const metadata = { title: "Real Title" }
+export default function Page() {
+  return <DocsPage href="/docs/wrong" Content={Content} />
+}
+void decoy`,
+    )
+
+    expect(analysis.docsPageHref).toBe("/docs/wrong")
+  })
+
+  it("rejects wrong metadata despite correct decoy text", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+// export const metadata = { title: "Real Title" }
+const decoy = 'export const metadata = { title: "Real Title" }'
+export const metadata = { title: "Wrong Title" }
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+void decoy`,
+    )
+
+    expect(analysis.metadataTitle).toBe("Wrong Title")
+  })
+
+  it.each([
+    [
+      "Content parameter",
+      `export default function Page(Content: unknown) {
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+    ],
+    [
+      "function-local DocsPage",
+      `export default function Page() {
+  const DocsPage = () => null
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+    ],
+    [
+      "nested Content binding",
+      `export default function Page() {
+  {
+    const Content = WrongContent
+    return <DocsPage href="/docs/real" Content={Content} />
+  }
+}`,
+    ],
+  ])("rejects import shadowing at the JSX use site: %s", (_name, pageSource) => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import WrongContent from "../../../content/docs/wrong.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+${pageSource}`,
+    )
+
+    expect(
+      analysis.contentImportTarget === "../../../content/docs/real.mdx" &&
+        analysis.docsPageImportTarget === "../../components/docs/DocsPage",
+    ).toBe(false)
   })
 })
 

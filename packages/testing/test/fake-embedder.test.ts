@@ -10,6 +10,18 @@ describe("fakeEmbedder", () => {
     const norm = Math.sqrt([...a1!].reduce((s, x) => s + x * x, 0))
     expect(norm).toBeCloseTo(1, 6) // normalized
   })
+  it("returns a zero vector when the input has no supported tokens", async () => {
+    const e = fakeEmbedder({ dims: 8 })
+    const [empty, punctuation, oneCharacterTokens] = await e.embed(["", "---", "a i"])
+    expect([...empty!]).toEqual(Array.from({ length: 8 }, () => 0))
+    expect([...punctuation!]).toEqual([...empty!])
+    expect([...oneCharacterTokens!]).toEqual([...empty!])
+  })
+  it("returns an empty vector when dimensions are zero", async () => {
+    const e = fakeEmbedder({ dims: 0 })
+    const [vector] = await e.embed(["hello world"])
+    expect(vector).toEqual(new Float32Array())
+  })
   it("similar strings are nearer than dissimilar ones (cosine)", async () => {
     const e = fakeEmbedder({ dims: 64 })
     const [a] = await e.embed(["faster shipping"])

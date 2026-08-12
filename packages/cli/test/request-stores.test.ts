@@ -200,9 +200,7 @@ describe("per-request stores", () => {
   }, 120_000)
 
   it("close() does not return while a store disposal is still in flight", async () => {
-    // "close() returned" must imply "the pool is closed": an edge host awaiting
-    // shutdown has no other signal, and sandbox release happens on the far side
-    // of the drain.
+    // Within the configured drain deadline, close waits for store disposal.
     const appRoot = await chatFixtureApp()
     const modules = await buildStaticModulesForFixture(appRoot)
     const gate = deferred()

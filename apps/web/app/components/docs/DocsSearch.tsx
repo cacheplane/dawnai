@@ -3,67 +3,11 @@
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import type { DocsSearchEntry, DocsSearchHeading } from "./search-index"
+import { filterDocsSearchResults, flattenDocsSearchIndex } from "./docs-search-results"
+import type { DocsSearchEntry } from "./search-index"
 
 interface Props {
   readonly index: readonly DocsSearchEntry[]
-}
-
-interface Result {
-  readonly href: string
-  readonly title: string
-  readonly section: string
-  readonly heading?: DocsSearchHeading
-  readonly key: string
-}
-
-function flatten(index: readonly DocsSearchEntry[]): readonly Result[] {
-  const results: Result[] = []
-  for (const entry of index) {
-    results.push({
-      href: entry.href,
-      title: entry.title,
-      section: entry.section,
-      key: entry.href,
-    })
-    for (const heading of entry.headings) {
-      if (heading.level === 1) continue
-      results.push({
-        href: `${entry.href}#${heading.anchor}`,
-        title: entry.title,
-        section: entry.section,
-        heading,
-        key: `${entry.href}#${heading.anchor}`,
-      })
-    }
-  }
-  return results
-}
-
-function scoreMatch(query: string, target: string): number {
-  if (!query) return 1
-  const q = query.toLowerCase()
-  const t = target.toLowerCase()
-  if (t === q) return 100
-  if (t.startsWith(q)) return 80
-  if (t.includes(` ${q}`)) return 60
-  if (t.includes(q)) return 40
-  return 0
-}
-
-function filterResults(query: string, all: readonly Result[]): readonly Result[] {
-  if (!query.trim()) return all.slice(0, 20)
-  const scored = all
-    .map((r) => {
-      const titleScore = scoreMatch(query, r.title)
-      const headingScore = r.heading ? scoreMatch(query, r.heading.text) : 0
-      const sectionScore = scoreMatch(query, r.section) * 0.3
-      return { result: r, score: Math.max(titleScore, headingScore) + sectionScore }
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 20)
-  return scored.map((x) => x.result)
 }
 
 export function DocsSearch({ index }: Props) {
@@ -80,8 +24,8 @@ export function DocsSearch({ index }: Props) {
     setMounted(true)
   }, [])
 
-  const flat = useMemo(() => flatten(index), [index])
-  const results = useMemo(() => filterResults(query, flat), [query, flat])
+  const flat = useMemo(() => flattenDocsSearchIndex(index), [index])
+  const results = useMemo(() => filterDocsSearchResults(query, flat), [query, flat])
 
   const close = useCallback(() => {
     setOpen(false)

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { runDocsCommand } from "../src/commands/docs.js"
+import { loadDocsPages } from "../src/lib/docs-bundle.js"
 import { CliError } from "../src/lib/output.js"
 
 function fixtureDocs(): string {
@@ -34,6 +35,23 @@ function fakeIo() {
 }
 
 describe("runDocsCommand()", () => {
+  it("lists every generated API reference topic", async () => {
+    const docsDir = join(import.meta.dirname, "../docs")
+    const pages = await loadDocsPages(
+      join(import.meta.dirname, "../../../apps/web/app/components/docs/nav.ts"),
+    )
+    const { io, out } = fakeIo()
+
+    await runDocsCommand({ docsDir }, io)
+
+    const listed = out.join("\n")
+    const apiPages = pages.filter(({ slug }) => slug.startsWith("api/"))
+    expect(apiPages).toHaveLength(10)
+    for (const page of apiPages) {
+      expect(listed).toContain(page.slug)
+    }
+  })
+
   it("lists topics and prints the docs path when no topic is given", async () => {
     const dir = fixtureDocs()
     const { io, out } = fakeIo()

@@ -1,3 +1,5 @@
+import { API_REFERENCE_PAGES } from "./api-reference-pages"
+
 export interface DocsNavItem {
   readonly label: string
   readonly href: string
@@ -114,13 +116,30 @@ export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap(
   (section) => section.items as readonly DocsNavItem[],
 )
 
+export const ALL_DOCS_PAGES: readonly DocsNavItem[] = DOCS_PAGES.flatMap((page) =>
+  page.href === "/docs/api" ? [page, ...API_REFERENCE_PAGES] : [page],
+)
+
 export interface DocsCrumb {
   readonly label: string
   readonly href?: string
 }
 
-// Build breadcrumbs for a given href. Always starts with "Docs" → <section> → <page>.
+// Build breadcrumbs for a given href. Reference leaves include their parent API hub.
 export function breadcrumbsFor(href: string): readonly DocsCrumb[] {
+  const referencePage = API_REFERENCE_PAGES.find((page) => page.href === href)
+  if (referencePage) {
+    return [
+      {
+        label: "Docs",
+        href: "/docs/getting-started",
+      },
+      { label: "Reference" },
+      { label: referencePage.parent.label, href: referencePage.parent.href },
+      { label: referencePage.label },
+    ]
+  }
+
   const section = DOCS_NAV.find((s) => s.items.some((i) => i.href === href))
   const page = section?.items.find((i) => i.href === href)
   const crumbs: DocsCrumb[] = [{ label: "Docs", href: "/docs/getting-started" }]

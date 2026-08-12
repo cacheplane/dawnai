@@ -1,29 +1,30 @@
+import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { basename, join, relative, resolve } from "node:path"
+import { basename, dirname, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { NodeFlags, SyntaxKind } from "typescript/unstable/ast"
+import { tsImport } from "tsx/esm/api"
 import {
-  isAssertionExpression,
   isExpressionWithTypeArguments,
   isIdentifier,
   isIndexedAccessTypeNode,
   isInterfaceDeclaration,
   isIntersectionTypeNode,
   isLiteralTypeNode,
-  isObjectLiteralExpression,
-  isParenthesizedExpression,
   isParenthesizedTypeNode,
-  isPropertyAssignment,
   isPropertySignatureDeclaration,
-  isSatisfiesExpression,
   isStringLiteral,
   isTypeLiteralNode,
   isTypeReferenceNode,
   isUnionTypeNode,
-  isVariableStatement,
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
+import tsCompiler from "../packages/core/node_modules/typescript/lib/typescript.js"
+import {
+  analyzeApiInventoryBatch,
+  manifestArtifactEntries,
+  readPublicSourceInventory,
+} from "./lib/docs-api-inventory.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
 const { default: GithubSlugger } = await import(
@@ -51,8 +52,9 @@ function maskFencedCode(source) {
         return maskText(line)
       }
 
-      const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(content)?.[1]
-      if (!opening) return line
+      const openingMatch = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(content)
+      const opening = openingMatch?.[1]
+      if (!opening || (opening[0] === "`" && openingMatch?.[2]?.includes("`"))) return line
       fence = { character: opening[0], length: opening.length }
       return maskText(line)
     })
@@ -195,9 +197,9 @@ function firstRenderedMdxH1(source) {
 function unwrapExpression(expression) {
   let current = expression
   while (
-    isParenthesizedExpression(current) ||
-    isAssertionExpression(current) ||
-    isSatisfiesExpression(current)
+    tsCompiler.isParenthesizedExpression(current) ||
+    tsCompiler.isAssertionExpression(current) ||
+    tsCompiler.isSatisfiesExpression(current)
   ) {
     current = current.expression
   }
@@ -206,61 +208,165 @@ function unwrapExpression(expression) {
 
 function exportedMetadataTitle(sourceFile) {
   for (const statement of sourceFile.statements) {
-    if (!isVariableStatement(statement)) continue
-    if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword))
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    if (
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === tsCompiler.SyntaxKind.ExportKeyword,
+      )
+    )
       continue
-    if (!(statement.declarationList.flags & NodeFlags.Const)) continue
+    if (!(statement.declarationList.flags & tsCompiler.NodeFlags.Const)) continue
 
     for (const declaration of statement.declarationList.declarations) {
-      if (!isIdentifier(declaration.name) || declaration.name.text !== "metadata") continue
+      if (!tsCompiler.isIdentifier(declaration.name) || declaration.name.text !== "metadata")
+        continue
       if (!declaration.initializer) return null
       const initializer = unwrapExpression(declaration.initializer)
-      if (!isObjectLiteralExpression(initializer)) return null
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) return null
 
+      const titles = []
       for (const property of initializer.properties) {
-        if (!isPropertyAssignment(property)) continue
+        if (tsCompiler.isSpreadAssignment(property)) return null
         const name = property.name
-        if ((!isIdentifier(name) && !isStringLiteral(name)) || name.text !== "title") continue
+        if (
+          (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
+          name.text !== "title"
+        )
+          continue
+        if (!tsCompiler.isPropertyAssignment(property)) return null
         const title = unwrapExpression(property.initializer)
-        return isStringLiteral(title) ? title.text : null
+        if (!tsCompiler.isStringLiteral(title)) return null
+        titles.push(title.text)
       }
-      return null
+      return titles.length === 1 ? titles[0] : null
     }
   }
   return null
 }
 
-function exportedMetadataTitles(sources) {
-  const wrapperPaths = sources.map((_, index) => `/wrapper-${index}.tsx`)
-  const virtualFiles = Object.fromEntries(
-    wrapperPaths.map((wrapperPath, index) => [wrapperPath, sources[index]]),
-  )
-  virtualFiles["/tsconfig.json"] = JSON.stringify({
-    compilerOptions: { jsx: "preserve", noLib: true },
-    files: wrapperPaths,
-  })
+function importTargetForSymbol(checker, identifier, expectedImportedName) {
+  const symbol = checker.getSymbolAtLocation(identifier)
+  const declaration = symbol?.declarations?.[0]
+  if (!declaration) return null
 
-  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
-  let snapshot
-  try {
-    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
-    return wrapperPaths.map((wrapperPath) => {
-      const project = snapshot.getDefaultProjectForFile(wrapperPath)
-      const sourceFile = project?.program.getSourceFile(wrapperPath)
-      return sourceFile ? exportedMetadataTitle(sourceFile) : null
-    })
-  } finally {
-    snapshot?.dispose()
-    api.close()
+  let importDeclaration = null
+  if (tsCompiler.isImportClause(declaration)) {
+    if (
+      expectedImportedName !== "default" ||
+      !declaration.name ||
+      declaration.name.text !== identifier.text
+    ) {
+      return null
+    }
+    importDeclaration = declaration.parent
+  } else if (tsCompiler.isImportSpecifier(declaration)) {
+    const importedName = declaration.propertyName?.text ?? declaration.name.text
+    if (importedName !== expectedImportedName) return null
+    importDeclaration = declaration.parent.parent.parent
   }
+
+  return importDeclaration &&
+    tsCompiler.isImportDeclaration(importDeclaration) &&
+    tsCompiler.isStringLiteral(importDeclaration.moduleSpecifier)
+    ? importDeclaration.moduleSpecifier.text
+    : null
+}
+
+function wrapperContract(sourceFile, checker) {
+  const matches = []
+  function visit(node) {
+    if (tsCompiler.isJsxSelfClosingElement(node) && tsCompiler.isIdentifier(node.tagName)) {
+      let href = null
+      let contentExpression = null
+      let validAttributes = true
+      let hrefCount = 0
+      let contentCount = 0
+      for (const property of node.attributes.properties) {
+        if (tsCompiler.isJsxSpreadAttribute(property)) {
+          validAttributes = false
+          continue
+        }
+        if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name))
+          continue
+        if (property.name.text === "href") {
+          hrefCount++
+          if (property.initializer && tsCompiler.isStringLiteral(property.initializer))
+            href = property.initializer.text
+        }
+        if (property.name.text === "Content") {
+          contentCount++
+          if (
+            property.initializer &&
+            tsCompiler.isJsxExpression(property.initializer) &&
+            property.initializer.expression &&
+            tsCompiler.isIdentifier(property.initializer.expression)
+          ) {
+            contentExpression = property.initializer.expression
+          }
+        }
+      }
+      validAttributes &&= hrefCount === 1 && contentCount === 1
+      matches.push({
+        contentImportTarget:
+          !validAttributes || contentExpression === null
+            ? null
+            : importTargetForSymbol(checker, contentExpression, "default"),
+        docsPageImportTarget: validAttributes
+          ? importTargetForSymbol(checker, node.tagName, "DocsPage")
+          : null,
+        docsPageHref: validAttributes ? href : null,
+      })
+    }
+    node.forEachChild(visit)
+  }
+  sourceFile.forEachChild(visit)
+
+  return matches.length === 1
+    ? matches[0]
+    : { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
 }
 
 function analyzeDocTitlesBatch(fixtures) {
-  const metadataTitles = exportedMetadataTitles(fixtures.map(({ wrapperSource }) => wrapperSource))
-  return fixtures.map(({ mdxSource }, index) => ({
-    firstH1: firstRenderedMdxH1(mdxSource),
-    metadataTitle: metadataTitles[index] ?? null,
-  }))
+  const sourceByPath = new Map(
+    fixtures.map(({ wrapperSource }, index) => [`/wrapper-${index}.tsx`, wrapperSource]),
+  )
+  const compilerHost = {
+    ...tsCompiler.createCompilerHost({ jsx: tsCompiler.JsxEmit.Preserve, noLib: true }),
+    getSourceFile: (fileName, languageVersion) => {
+      const source = sourceByPath.get(fileName)
+      return source === undefined
+        ? undefined
+        : tsCompiler.createSourceFile(
+            fileName,
+            source,
+            languageVersion,
+            true,
+            tsCompiler.ScriptKind.TSX,
+          )
+    },
+    fileExists: (fileName) => sourceByPath.has(fileName),
+    readFile: (fileName) => sourceByPath.get(fileName),
+  }
+  const program = tsCompiler.createProgram({
+    rootNames: [...sourceByPath.keys()],
+    options: { jsx: tsCompiler.JsxEmit.Preserve, noLib: true },
+    host: compilerHost,
+  })
+  const checker = program.getTypeChecker()
+  return fixtures.map(({ mdxSource }, index) => {
+    const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
+    return {
+      firstH1: firstRenderedMdxH1(mdxSource),
+      metadataTitle: sourceFile ? exportedMetadataTitle(sourceFile) : null,
+      ...(sourceFile
+        ? wrapperContract(sourceFile, checker)
+        : {
+            contentImportTarget: null,
+            docsPageImportTarget: null,
+            docsPageHref: null,
+          }),
+    }
+  })
 }
 
 function analyzeDocTitles(fixture) {
@@ -361,10 +467,53 @@ function markdownHeadings(source) {
         .trim(),
     )
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/<[^>]+>/g, "")
       .trim()
     return [{ id: slugger.slug(text), index: match.index, level: match[1].length, text }]
   })
+}
+
+function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
+  const masked = maskFencedCode(source)
+    .replace(/<!--[\s\S]*?-->/g, (comment) => maskText(comment))
+    .replace(/{\/\*[\s\S]*?\*\/}/g, (comment) => maskText(comment))
+  const blocks = masked.split(/\n[ \t]*\n/).filter((block) => block.trim() !== "")
+  for (const block of blocks) {
+    const mentioned = new Set()
+    for (const symbol of knownSymbols) {
+      if (block.includes(`\`${symbol}\``)) mentioned.add(symbol)
+    }
+    const isDense =
+      mentioned.size >= threshold &&
+      knownSymbols.size > 0 &&
+      mentioned.size / knownSymbols.size >= 0.6
+    if (!isDense) continue
+
+    const blockLines = block.split(/\r?\n/)
+    const symbolFirst = new Set()
+    for (const line of blockLines) {
+      const content = line
+        .trimStart()
+        .replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, "")
+        .replace(/^\|\s*/, "")
+      for (const symbol of mentioned) {
+        if (content.startsWith(`\`${symbol}\``)) symbolFirst.add(symbol)
+      }
+    }
+    if (symbolFirst.size >= threshold) return true
+
+    const symbolBearingLines = blockLines.flatMap((line) => {
+      const symbols = [...mentioned].filter((symbol) => line.includes(`\`${symbol}\``))
+      return symbols.length === 0 ? [] : [{ line, symbolCount: symbols.length }]
+    })
+    const isDescriptiveWorkflowList =
+      symbolBearingLines.length >= 2 &&
+      symbolBearingLines.every(
+        ({ line, symbolCount }) =>
+          /^(?:[-*+]\s+|\d+[.)]\s+)/.test(line.trimStart()) && symbolCount <= 1,
+      )
+    if (!isDescriptiveWorkflowList) return true
+  }
+  return false
 }
 
 function markdownSectionRange(source, predicate) {
@@ -415,6 +564,384 @@ function canonicalOwnerGuardViolations(source, contracts) {
   })
 }
 
+const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
+  ["@dawn-ai/sdk", "/docs/api/sdk", "@dawn-ai/sdk", ["@dawn-ai/sdk"], "API Reference", "/docs/api"],
+  ["@dawn-ai/cli", "/docs/api/cli", "@dawn-ai/cli", ["@dawn-ai/cli"], "API Reference", "/docs/api"],
+  [
+    "@dawn-ai/core",
+    "/docs/api/core",
+    "@dawn-ai/core",
+    ["@dawn-ai/core"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/ag-ui",
+    "/docs/api/ag-ui",
+    "@dawn-ai/ag-ui",
+    ["@dawn-ai/ag-ui"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/memory",
+    "/docs/api/memory",
+    "@dawn-ai/memory",
+    ["@dawn-ai/memory"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/memory-pgvector",
+    "/docs/api/memory-pgvector",
+    "@dawn-ai/memory-pgvector",
+    ["@dawn-ai/memory-pgvector"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/postgres-storage",
+    "/docs/api/postgres-storage",
+    "@dawn-ai/postgres-storage",
+    ["@dawn-ai/postgres-storage"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/testing",
+    "/docs/api/testing",
+    "@dawn-ai/testing",
+    ["@dawn-ai/testing"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/evals",
+    "/docs/api/evals",
+    "@dawn-ai/evals",
+    ["@dawn-ai/evals"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "dawn:routes",
+    "/docs/api/generated-routes",
+    "dawn:routes",
+    ["@dawn-ai/cli", "@dawn-ai/core"],
+    "API Reference",
+    "/docs/api",
+  ],
+]
+
+const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
+  ["import:@dawn-ai/sdk:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sdk:./pure", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sdk:./testing", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./fetch", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./runtime", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/cli:./testing", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/core:./internal/compiler", "internal", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/ag-ui:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/ag-ui:./sse", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./browse", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./namespace", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory:./reconcile", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/memory-pgvector:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/postgres-storage:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/postgres-storage:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/testing:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/evals:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:./testing", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  [
+    "import:@dawn-ai/langgraph:./define-entry",
+    "deferred-to-pr2",
+    "surfaceKind",
+    "typescript-runtime",
+  ],
+  [
+    "import:@dawn-ai/langgraph:./route-module",
+    "deferred-to-pr2",
+    "surfaceKind",
+    "typescript-runtime",
+  ],
+  ["import:@dawn-ai/langchain:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langchain:./package.json", "deferred-to-pr2", "surfaceKind", "metadata"],
+  ["import:@dawn-ai/sqlite-storage:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/config-biome:.", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-biome:./biome", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:.", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./base", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./library", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./node", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./nextjs", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/devkit:.", "internal", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/vite-plugin:.", "internal", "surfaceKind", "typescript-runtime"],
+  ["operated:@dawn-ai/cli:bin.dawn", "detailed", "operatedKind", "executable"],
+  [
+    "operated:create-dawn-ai-app:bin.create-dawn-ai-app",
+    "catalog-only",
+    "operatedKind",
+    "executable",
+  ],
+  [
+    "operated:@dawn-ai/inspector:dawnInspector.server",
+    "catalog-only",
+    "operatedKind",
+    "operated-application",
+  ],
+  ["generated:dawn:routes", "detailed", "surfaceKind", "generated-types"],
+]
+
+const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
+  "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
+  "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
+  "@dawn-ai/ag-ui#.:DawnRunInput",
+  "@dawn-ai/ag-ui#.:DawnPlanActivityContent",
+  "@dawn-ai/ag-ui#.:DawnSubagentActivityContent",
+  "@dawn-ai/ag-ui#.:RunContext",
+  "@dawn-ai/ag-ui#.:ToAguiOptions",
+  "@dawn-ai/ag-ui#.:fromRunAgentInput",
+  "@dawn-ai/ag-ui#.:toAguiEvents",
+  "@dawn-ai/cli#.:ServeRuntimeOptions",
+  "@dawn-ai/cli#.:serveRuntime",
+  "@dawn-ai/core#.:loadDawnConfig",
+  "@dawn-ai/core#.:resolveStateFields",
+  "@dawn-ai/evals#.:EvalCase",
+  "@dawn-ai/evals#.:EvalDefinition",
+  "@dawn-ai/evals#.:EvalReport",
+  "@dawn-ai/evals#.:RunEvalOptions",
+  "@dawn-ai/evals#.:Scorer",
+  "@dawn-ai/evals#.:defineEval",
+  "@dawn-ai/evals#.:runEval",
+  "@dawn-ai/memory#./namespace:MemoryScopeTuple",
+  "@dawn-ai/memory#./namespace:serializeNamespace",
+  "@dawn-ai/memory#./reconcile:approveWithReconcile",
+  "@dawn-ai/memory#.:BrowsePage",
+  "@dawn-ai/memory#.:BrowseQuery",
+  "@dawn-ai/memory#.:MemoryQuery",
+  "@dawn-ai/memory#.:MemoryRecord",
+  "@dawn-ai/memory#.:MemoryStore",
+  "@dawn-ai/memory-pgvector#.:PgvectorMemoryStore",
+  "@dawn-ai/memory-pgvector#.:pgvectorMemoryStore",
+  "@dawn-ai/postgres-storage#./node:NodePostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#./node:NodePostgresStoreOptions",
+  "@dawn-ai/postgres-storage#./node:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#./node:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#./node:postgresCheckpointer",
+  "@dawn-ai/postgres-storage#.:PostgresPermissionsStoreOptions",
+  "@dawn-ai/postgres-storage#.:PostgresStoreOptions",
+  "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
+  "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
+  "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sdk#.:AgentConfig",
+  "@dawn-ai/sdk#.:ReasoningConfig",
+  "@dawn-ai/sdk#.:RetryConfig",
+  "@dawn-ai/sdk#.:RouteConfig",
+  "@dawn-ai/sdk#.:agent",
+  "@dawn-ai/sdk#.:allow",
+  "@dawn-ai/sdk#.:defineMemory",
+  "@dawn-ai/sdk#.:defineMiddleware",
+  "@dawn-ai/sdk#.:isDawnAgent",
+  "@dawn-ai/sdk#.:reject",
+  "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/testing#.:AgentHarness",
+  "@dawn-ai/testing#.:AgentHarnessOptions",
+  "@dawn-ai/testing#.:ScriptBuilder",
+  "@dawn-ai/testing#.:createAgentHarness",
+  "@dawn-ai/testing#.:fakeEmbedder",
+  "@dawn-ai/testing#.:loadFixtures",
+  "@dawn-ai/testing#.:runCheckpointerConformance",
+  "@dawn-ai/testing#.:runMemoryStoreConformance",
+  "@dawn-ai/testing#.:runPermissionsStoreConformance",
+  "@dawn-ai/testing#.:runThreadsStoreConformance",
+  "@dawn-ai/testing#.:writeFixtures",
+]
+
+function apiArtifactAddress(artifact) {
+  if (artifact.kind === "import") return `import:${artifact.packageName}:${artifact.subpath}`
+  if (artifact.kind === "operated") return `operated:${artifact.packageName}:${artifact.selector}`
+  return `generated:${artifact.moduleName}`
+}
+
+const DEPENDENCY_FREE_API_ADDRESSES = new Set([
+  "import:@dawn-ai/sdk:./pure",
+  "import:@dawn-ai/memory:./browse",
+])
+const EDGE_SAFE_API_ADDRESSES = new Set([
+  "import:@dawn-ai/sdk:.",
+  "import:@dawn-ai/sdk:./pure",
+  "import:@dawn-ai/cli:./fetch",
+  "import:@dawn-ai/core:.",
+  "import:@dawn-ai/ag-ui:.",
+  "import:@dawn-ai/ag-ui:./sse",
+  "import:@dawn-ai/memory:./browse",
+  "import:@dawn-ai/memory:./namespace",
+  "import:@dawn-ai/memory:./reconcile",
+  "import:@dawn-ai/postgres-storage:.",
+  "import:@dawn-ai/permissions:.",
+  "import:@dawn-ai/workspace:.",
+  "import:@dawn-ai/langgraph:.",
+  "import:@dawn-ai/langgraph:./define-entry",
+  "import:@dawn-ai/langgraph:./route-module",
+  "import:@dawn-ai/langchain:.",
+])
+
+function expectedApiGuardIds(address) {
+  if (address.startsWith("operated:")) {
+    return ["node-operated-bundle", "browser-operated-negative-control"]
+  }
+  const expectedTuple = EXPECTED_API_ARTIFACT_POLICY_TUPLES.find(
+    ([candidate]) => candidate === address,
+  )
+  if (!address.startsWith("import:") || expectedTuple?.[3] !== "typescript-runtime") {
+    return undefined
+  }
+  if (EDGE_SAFE_API_ADDRESSES.has(address)) {
+    return [
+      "edge-import-bundle",
+      ...(DEPENDENCY_FREE_API_ADDRESSES.has(address) ? ["dependency-free-import-graph"] : []),
+    ]
+  }
+  return ["node-import-bundle", "browser-import-negative-control"]
+}
+
+function tupleMismatchFields(actual, expected, fields) {
+  return fields.filter(
+    (_, index) => JSON.stringify(actual?.[index]) !== JSON.stringify(expected?.[index]),
+  )
+}
+
+function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
+  const analysisFailures = []
+  const pageTuples = pages.map(({ label, href, surfaceName, ownerPackageNames, parent }) => [
+    label,
+    href,
+    surfaceName,
+    ownerPackageNames,
+    parent?.label,
+    parent?.href,
+  ])
+  const pageFields = [
+    "label",
+    "href",
+    "surfaceName",
+    "ownerPackageNames",
+    "parent.label",
+    "parent.href",
+  ]
+  for (
+    let index = 0;
+    index < Math.max(pageTuples.length, EXPECTED_API_REFERENCE_PAGE_TUPLES.length);
+    index++
+  ) {
+    const actual = pageTuples[index]
+    const expected = EXPECTED_API_REFERENCE_PAGE_TUPLES[index]
+    const mismatches = tupleMismatchFields(actual, expected, pageFields)
+    if (mismatches.length > 0) {
+      analysisFailures.push(
+        `API reference page tuple ${index + 1} (${expected?.[0] ?? actual?.[0] ?? "missing"}) mismatches ${mismatches.join(", ")}: expected ${JSON.stringify(expected ?? null)}, received ${JSON.stringify(actual ?? null)}`,
+      )
+    }
+  }
+
+  const labels = pages.map(({ label }) => label)
+  const duplicateLabels = [...new Set(labels)].filter(
+    (label) => labels.filter((candidate) => candidate === label).length > 1,
+  )
+  if (duplicateLabels.length > 0) {
+    analysisFailures.push(`duplicate API reference page labels: ${duplicateLabels.join(", ")}`)
+  }
+
+  const artifactPolicyTuples = artifacts.map((artifact) => {
+    const base =
+      artifact.kind === "operated"
+        ? [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind]
+        : [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind]
+    return [...base, artifact.runtime ?? null, artifact.purity ?? null, artifact.guardIds ?? null]
+  })
+  const expectedArtifactPolicyTuples = EXPECTED_API_ARTIFACT_POLICY_TUPLES.map((expected) => {
+    const guardIds = expectedApiGuardIds(expected[0])
+    return [
+      ...expected,
+      guardIds ? (EDGE_SAFE_API_ADDRESSES.has(expected[0]) ? "edge-safe" : "node-only") : null,
+      DEPENDENCY_FREE_API_ADDRESSES.has(expected[0])
+        ? "dependency-free"
+        : guardIds && expected[0].startsWith("import:")
+          ? "not-claimed"
+          : null,
+      guardIds ?? null,
+    ]
+  })
+  const artifactFields = [
+    "address",
+    "coverage",
+    "kind field",
+    "surfaceKind/operatedKind",
+    "runtime",
+    "purity",
+    "guardIds",
+  ]
+  for (
+    let index = 0;
+    index < Math.max(artifactPolicyTuples.length, expectedArtifactPolicyTuples.length);
+    index++
+  ) {
+    const actual = artifactPolicyTuples[index]
+    const expected = expectedArtifactPolicyTuples[index]
+    const mismatches = tupleMismatchFields(actual, expected, artifactFields)
+    if (mismatches.length > 0) {
+      analysisFailures.push(
+        `API artifact policy tuple ${index + 1} (${expected?.[0] ?? actual?.[0] ?? "missing"}) mismatches ${mismatches.join(", ")}: expected ${JSON.stringify(expected ?? null)}, received ${JSON.stringify(actual ?? null)}`,
+      )
+    }
+  }
+
+  return { failures: analysisFailures }
+}
+
+function analyzeApiReferenceManifests({ manifests = [], artifacts = [] }) {
+  const analysisFailures = []
+  const manifestEntries = manifestArtifactEntries(manifests)
+  const manifestByAddress = new Map(manifestEntries.map((entry) => [entry.address, entry]))
+  const registryByAddress = new Map(
+    artifacts
+      .filter(({ kind }) => kind !== "generated")
+      .map((artifact) => [apiArtifactAddress(artifact), artifact]),
+  )
+
+  for (const entry of manifestEntries) {
+    const artifact = registryByAddress.get(entry.address)
+    if (!artifact) {
+      analysisFailures.push(`manifest address ${entry.address} is missing from ARTIFACT_REGISTRY`)
+      continue
+    }
+    if (artifact.kind === "operated" && entry.manifestTarget !== artifact.manifestTarget) {
+      analysisFailures.push(
+        `manifest target for ${entry.address} is ${JSON.stringify(entry.manifestTarget)}; ARTIFACT_REGISTRY expects ${JSON.stringify(artifact.manifestTarget)}`,
+      )
+    }
+  }
+
+  for (const [address] of registryByAddress) {
+    if (!manifestByAddress.has(address)) {
+      analysisFailures.push(`manifest is missing ARTIFACT_REGISTRY address ${address}`)
+    }
+  }
+
+  return { failures: analysisFailures }
+}
+
 if (process.argv[2] === "--analyze-doc-link-guards") {
   const fixture = JSON.parse(process.argv[3] ?? "{}")
   process.stdout.write(
@@ -448,7 +975,162 @@ if (process.argv[2] === "--analyze-doc-titles") {
   process.exit(0)
 }
 
+if (process.argv[2] === "--analyze-api-reference-registry") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify(analyzeApiReferenceRegistry(fixture))}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-api-reference-manifests") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify(analyzeApiReferenceManifests(fixture))}\n`)
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-api-inventory") {
+  const fixtures = JSON.parse(readFileSync(0, "utf8"))
+  if (!Array.isArray(fixtures)) {
+    throw new Error("--analyze-api-inventory expects one JSON fixture batch on stdin")
+  }
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(`${JSON.stringify(analyzeApiInventoryBatch(fixtures))}\n`, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
+  process.exit(0)
+}
+
+async function analyzeDetailedApiReferences() {
+  const detailedRegistry = await tsImport(
+    pathToFileURL(resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")).href,
+    import.meta.url,
+  )
+  const sourceInventory = await readPublicSourceInventory(repoRoot)
+  const registeredOwnerPages = [...detailedRegistry.API_REFERENCE_PAGES]
+  const ownerByPackage = new Map(
+    registeredOwnerPages.flatMap((page) =>
+      page.surfaceName === "dawn:routes"
+        ? []
+        : page.ownerPackageNames.map((name) => [name, page.href]),
+    ),
+  )
+  const artifacts = detailedRegistry.ARTIFACT_REGISTRY.flatMap((artifact) => {
+    if (artifact.kind === "generated") return [artifact]
+    if (
+      artifact.kind !== "import" ||
+      artifact.coverage !== "detailed" ||
+      !ownerByPackage.has(artifact.packageName)
+    ) {
+      return []
+    }
+    return [{ ...artifact, ownerHref: ownerByPackage.get(artifact.packageName) }]
+  })
+  const documents = registeredOwnerPages.map(({ href }) => ({
+    href,
+    path: docHrefToContentPath(href),
+    source: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
+  }))
+  const authorityFiles = new Set(
+    detailedRegistry.API_BEHAVIOR_CONTRACTS.flatMap(({ authorities }) =>
+      authorities.map(({ file }) => file),
+    ),
+  )
+  for (const file of authorityFiles) {
+    if (!Object.hasOwn(sourceInventory.files, file)) {
+      sourceInventory.files[file] = readFileSync(resolve(repoRoot, file), "utf8")
+    }
+  }
+  const generatedManifest = {
+    appRoot: "/fixture/app",
+    routes: [
+      {
+        id: "/hello/[tenant]",
+        pathname: "/hello/[tenant]",
+        kind: "workflow",
+        entryFile: "/fixture/app/hello/[tenant].ts",
+        routeDir: "/fixture/app/hello/[tenant]",
+        segments: [
+          { kind: "static", raw: "hello" },
+          { kind: "dynamic", name: "tenant", raw: "[tenant]" },
+        ],
+      },
+    ],
+  }
+  const { renderDawnTypes } = await tsImport(
+    pathToFileURL(resolve(repoRoot, "packages/core/src/typegen/render-route-types.ts")).href,
+    import.meta.url,
+  )
+  const generatedDeclarations = renderDawnTypes(
+    generatedManifest,
+    [
+      {
+        pathname: "/hello/[tenant]",
+        tools: [{ name: "greet", description: "Greet", inputType: "void", outputType: "string" }],
+      },
+    ],
+    [{ pathname: "/hello/[tenant]", fields: [{ name: "status", type: '"ready"' }] }],
+  )
+  const [analysis] = analyzeApiInventoryBatch([
+    {
+      name: "foundational-api-references",
+      packages: sourceInventory.packages,
+      artifacts,
+      documents,
+      behaviorContracts: detailedRegistry.API_BEHAVIOR_CONTRACTS,
+      requiredContractKeys: detailedRegistry.API_REQUIRED_CONTRACT_KEYS,
+      files: sourceInventory.files,
+      generatedAuthorities: [{ moduleName: "dawn:routes", declarations: generatedDeclarations }],
+    },
+  ])
+  return {
+    failures: analysis.failures,
+    ownerHrefs: registeredOwnerPages.map(({ href }) => href),
+    artifactAddresses: artifacts.map(detailedRegistry.artifactAddressFor),
+    behaviorIds: detailedRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id),
+    contractKeys: detailedRegistry.API_REQUIRED_CONTRACT_KEYS,
+  }
+}
+
+if (process.argv[2] === "--analyze-detailed-api-references") {
+  process.stdout.write(`${JSON.stringify(await analyzeDetailedApiReferences())}\n`)
+  process.exit(0)
+}
+
 const checks = [
+  {
+    file: "apps/web/content/docs/api/memory.mdx",
+    patterns: [
+      "SQLite stores memory rows—including content, data, source, and tags—as plaintext",
+      "Low-level `MemoryStore` implementations can store typed procedural records",
+      "the generated `remember` tool returns a not-yet-wired rejection",
+      "namespace organizes records; it is not a security boundary",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/memory-pgvector.mdx",
+    patterns: [
+      "Content or data updates do not recompute that embedding",
+      "Both `queryEmbedding` and `embedderId` are required",
+      "if (!connectionString)",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/testing.mdx",
+    patterns: [
+      "With positive dimensions, inputs containing supported tokens are unit-length",
+      "Empty or tokenless inputs produce a zero vector",
+      "`fakeEmbedder({ dims: 0 })` produces an empty vector",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/evals.mdx",
+    patterns: [
+      "counts collected stream chunks or deltas, not model-tokenizer tokens",
+      "`gate.perScorer()` ignores scorers without an explicit threshold",
+      "separate default bar of `0.5`",
+    ],
+  },
   {
     file: "apps/web/content/docs/getting-started.mdx",
     patterns: ["dawn.config.ts"],
@@ -464,6 +1146,27 @@ const checks = [
 ]
 
 const failures = []
+
+const detailedApiProcess = spawnSync(
+  process.execPath,
+  [import.meta.filename, "--analyze-detailed-api-references"],
+  { cwd: repoRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+)
+let detailedApiAnalysis
+try {
+  if (detailedApiProcess.status !== 0) {
+    throw new Error(detailedApiProcess.stderr || detailedApiProcess.stdout || "subprocess failed")
+  }
+  detailedApiAnalysis = JSON.parse(detailedApiProcess.stdout)
+} catch (error) {
+  detailedApiAnalysis = {
+    failures: [`Detailed API reference analysis could not run (${error.message})`],
+    ownerHrefs: [],
+    artifactAddresses: [],
+    behaviorIds: [],
+  }
+}
+failures.push(...detailedApiAnalysis.failures)
 
 function walkFiles(dir, predicate, output = []) {
   for (const entry of readdirSync(dir)) {
@@ -923,51 +1626,12 @@ const accuracyContracts = [
   {
     file: "apps/web/content/docs/api.mdx",
     required: [
+      "## Package and surface index",
+      "## Reference conventions",
       "## @dawn-ai/cli",
       "### @dawn-ai/cli/fetch",
       "## @dawn-ai/memory",
       "### @dawn-ai/memory/browse",
-      "lower-level tooling",
-      "serveRuntime",
-      "ServeRuntimeHandle",
-      "ServeRuntimeOptions",
-      "loadStaticModules",
-      "DawnStaticModules",
-      "createRuntimeFetchHandler",
-      "RuntimeFetchHandler",
-      "buildStaticRouteModule",
-      "requestStores",
-      "partial allocation",
-      "does not own or close injected boot stores",
-      "requires `modules` during handler construction",
-      "boot `threadsStore` and `checkpointer` must be instances",
-      "boot `permissionsStore` may be an instance or an async factory",
-      "Only the boot `memoryStore` thunk is lazy",
-      "`requestStores` runs before route dispatch",
-      "may eagerly create its per-request memory store",
-      "falls through to the corresponding boot store",
-      "at least one query token",
-      "query-less branch runs first",
-      "BROWSE_DEFAULT_LIMIT = 50",
-      "BROWSE_MAX_LIMIT = 1000",
-      "1,024 UTF-8 bytes",
-      "4,096 characters",
-      "full millisecond UTC instants",
-      "at most eight filters and three sort entries",
-      "nonzero offset",
-      "excludes `limit`, `offset`, and `cursor`",
-      "readonly key: readonly BrowseCursorValue[]",
-      "readonly field: BrowseSortField",
-      "readonly column: string",
-      'readonly field: "status"',
-      'field: "updatedAt"',
-      'column: "updated_at"',
-      "inclusive UTC-day lower bound",
-      "exclusive upper bound",
-      "all-maximal prefix has no finite upper bound",
-      "empty prefix",
-      '"invalid-query"',
-      '"continuation-invalid"',
     ],
     forbidden: [
       "@dawn-ai/cli/runtime is the application embedding",
@@ -2629,7 +3293,7 @@ const maintainedDocsPages = new Map(
     const source = readFileSync(file, "utf8")
     const masked = maskMarkdownCodeAndComments(source)
     const slugger = new GithubSlugger()
-    const headings = new Set(
+    const ids = new Set(
       [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
         if (match.index === undefined) return []
         const lineEnd = source.indexOf("\n", match.index)
@@ -2646,7 +3310,13 @@ const maintainedDocsPages = new Map(
         return [slugger.slug(text)]
       }),
     )
-    return [route, headings]
+    for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
+      const id = match[1]
+      if (!id) continue
+      if (ids.has(id)) failures.push(`${relativeToRoot(file)} has duplicate id ${id}`)
+      ids.add(id)
+    }
+    return [route, ids]
   }),
 )
 
@@ -2659,10 +3329,10 @@ for (const filePath of maintainedReadmeFiles) {
     const normalized = normalizeMaintainedDocsDestination(destination)
     if (!normalized) continue
     const [path, fragment] = normalized.split("#")
-    const headings = maintainedDocsPages.get(path)
-    if (!headings) {
+    const ids = maintainedDocsPages.get(path)
+    if (!ids) {
       failures.push(`${relativeToRoot(filePath)} links missing docs page ${normalized}`)
-    } else if (fragment && !headings.has(fragment)) {
+    } else if (fragment && !ids.has(fragment)) {
       failures.push(`${relativeToRoot(filePath)} links missing docs heading ${normalized}`)
     }
   }
@@ -2729,6 +3399,22 @@ for (const filePath of normativeScenarioFiles) {
 // same route set. Link targets and fragments are validated by the web MDX tests.
 const docsNavPath = resolve(repoRoot, "apps/web/app/components/docs/nav.ts")
 const docsNav = readFileSync(docsNavPath, "utf8")
+const apiReferenceRegistryPath = resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")
+const apiReferencePagesPath = resolve(
+  repoRoot,
+  "apps/web/app/components/docs/api-reference-pages.ts",
+)
+const apiReferenceRegistry = await Promise.all([
+  tsImport(pathToFileURL(apiReferenceRegistryPath).href, import.meta.url),
+  tsImport(pathToFileURL(apiReferencePagesPath).href, import.meta.url),
+])
+  .then(([registry, pages]) => ({ ...registry, ...pages }))
+  .catch((error) => {
+    failures.push(
+      `API reference registries could not be loaded from apps/web/app/components/docs (${error.message})`,
+    )
+    return null
+  })
 const navDocEntries = [
   ...docsNav.matchAll(/^\s*\{\s*label:\s*"([^"]+)",\s*href:\s*"((?:\/docs\/)[^"]+)"\s*\},?\s*$/gm),
 ].map((match) => ({ label: match[1], href: match[2] }))
@@ -2802,6 +3488,16 @@ if (/\bhref:\s*"\/docs"/.test(docsNav)) {
 if (!/export const DOCS_PAGES[^=]*=\s*DOCS_NAV\.flatMap\(/s.test(docsNav)) {
   failures.push("DOCS_PAGES must derive its reading order directly from DOCS_NAV")
 }
+if (!/export const ALL_DOCS_PAGES[^=]*=\s*DOCS_PAGES\.flatMap\(/s.test(docsNav)) {
+  failures.push("ALL_DOCS_PAGES must derive from DOCS_PAGES and insert hidden reference leaves")
+}
+if (
+  !/page\.href\s*===\s*"\/docs\/api"\s*\?\s*\[page,\s*\.\.\.API_REFERENCE_PAGES\]\s*:\s*\[page\]/s.test(
+    docsNav,
+  )
+) {
+  failures.push("ALL_DOCS_PAGES must insert API_REFERENCE_PAGES immediately after /docs/api")
+}
 
 if (navDocEntries.length !== expectedNavDocEntries.length) {
   failures.push(
@@ -2822,6 +3518,380 @@ if (firstNavRegistryMismatch !== undefined) {
   failures.push(
     `DOCS_NAV registry row ${firstNavRegistryMismatch + 1} mismatch: expected ${JSON.stringify(expectedNavDocEntries[firstNavRegistryMismatch] ?? null)}, received ${JSON.stringify(navDocEntries[firstNavRegistryMismatch] ?? null)}`,
   )
+}
+
+if (apiReferenceRegistry) {
+  const { API_REFERENCE_PAGES, ARTIFACT_REGISTRY, PACKAGE_CATALOG } = apiReferenceRegistry
+  failures.push(
+    ...analyzeApiReferenceRegistry({
+      pages: API_REFERENCE_PAGES,
+      artifacts: ARTIFACT_REGISTRY,
+    }).failures,
+  )
+
+  const apiHubIndex = navDocEntries.findIndex(({ href }) => href === "/docs/api")
+  const expectedAllDocsPages = [
+    ...navDocEntries.slice(0, apiHubIndex + 1),
+    ...API_REFERENCE_PAGES,
+    ...navDocEntries.slice(apiHubIndex + 1),
+  ]
+  const expectedAllDocsPageCount = navDocEntries.length + API_REFERENCE_PAGES.length
+  if (navDocEntries.length !== 58 || expectedAllDocsPages.length !== expectedAllDocsPageCount) {
+    failures.push(
+      `Docs page registries must retain 58 journey pages plus every registered API reference leaf; received ${navDocEntries.length} journey pages, ${API_REFERENCE_PAGES.length} reference leaves, and ${expectedAllDocsPages.length} total pages`,
+    )
+  }
+  const navModule = await tsImport(pathToFileURL(docsNavPath).href, import.meta.url).catch(
+    (error) => {
+      failures.push(`Docs registries could not be runtime-loaded (${error.message})`)
+      return null
+    },
+  )
+  const runtimeAllDocsPages = navModule?.ALL_DOCS_PAGES
+  const runtimeAllDocsPageRows = Array.isArray(runtimeAllDocsPages)
+    ? runtimeAllDocsPages.map((page) =>
+        page && typeof page === "object"
+          ? { label: page.label, href: page.href }
+          : { label: undefined, href: undefined },
+      )
+    : null
+  if (
+    runtimeAllDocsPageRows === null ||
+    JSON.stringify(runtimeAllDocsPageRows) !==
+      JSON.stringify(expectedAllDocsPages.map(({ label, href }) => ({ label, href })))
+  ) {
+    failures.push(
+      "ALL_DOCS_PAGES must exactly equal journey pages plus API leaves in registry order",
+    )
+  }
+
+  const expectedDetailedOwnerHrefs = API_REFERENCE_PAGES.map(({ href }) => href)
+  const expectedDetailedArtifactAddresses = ARTIFACT_REGISTRY.filter(
+    (artifact) =>
+      artifact.kind === "generated" ||
+      (artifact.kind === "import" && artifact.coverage === "detailed"),
+  ).map(apiReferenceRegistry.artifactAddressFor)
+  const expectedBehaviorIds = apiReferenceRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id)
+  const expectedContractKeys = apiReferenceRegistry.API_REQUIRED_CONTRACT_KEYS
+  if (
+    JSON.stringify(expectedContractKeys) !== JSON.stringify(EXPECTED_API_REQUIRED_CONTRACT_KEYS)
+  ) {
+    failures.push("API_REQUIRED_CONTRACT_KEYS must match the frozen high-value contract baseline")
+  }
+  if (
+    JSON.stringify(detailedApiAnalysis.ownerHrefs) !== JSON.stringify(expectedDetailedOwnerHrefs) ||
+    JSON.stringify(detailedApiAnalysis.artifactAddresses) !==
+      JSON.stringify(expectedDetailedArtifactAddresses) ||
+    JSON.stringify(detailedApiAnalysis.behaviorIds) !== JSON.stringify(expectedBehaviorIds) ||
+    JSON.stringify(detailedApiAnalysis.contractKeys) !== JSON.stringify(expectedContractKeys)
+  ) {
+    failures.push(
+      "Detailed API analysis must cover every exact owner, detailed import artifact, generated surface, behavior contract, and required signature contract",
+    )
+  }
+
+  const unpairedApiReferencePages = API_REFERENCE_PAGES.filter(({ href }) => {
+    const slug = href.slice("/docs/".length)
+    return (
+      !existsSync(resolve(repoRoot, "apps/web/content/docs", `${slug}.mdx`)) ||
+      !existsSync(resolve(repoRoot, "apps/web/app/docs", slug, "page.tsx"))
+    )
+  })
+  if (unpairedApiReferencePages.length > 0) {
+    failures.push(
+      `Every registered API reference leaf must have paired MDX and wrapper sources: ${unpairedApiReferencePages.map(({ href }) => href).join(", ")}`,
+    )
+  }
+
+  const artifactAddresses = ARTIFACT_REGISTRY.map(apiReferenceRegistry.artifactAddressFor)
+  if (ARTIFACT_REGISTRY.length !== 46 || new Set(artifactAddresses).size !== 46) {
+    failures.push("ARTIFACT_REGISTRY must contain exactly 46 unique artifact addresses")
+  }
+  const importCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import").length
+  const operatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated").length
+  const generatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated").length
+  if (importCount !== 42 || operatedCount !== 3 || generatedCount !== 1) {
+    failures.push(
+      `ARTIFACT_REGISTRY must contain 42 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
+    )
+  }
+  const expectedDeferredImports = [
+    ["@dawn-ai/permissions", "."],
+    ["@dawn-ai/permissions", "./node"],
+    ["@dawn-ai/workspace", "."],
+    ["@dawn-ai/workspace", "./node"],
+    ["@dawn-ai/sandbox", "."],
+    ["@dawn-ai/sandbox", "./testing"],
+    ["@dawn-ai/langgraph", "."],
+    ["@dawn-ai/langgraph", "./define-entry"],
+    ["@dawn-ai/langgraph", "./route-module"],
+    ["@dawn-ai/langchain", "."],
+    ["@dawn-ai/langchain", "./package.json"],
+    ["@dawn-ai/sqlite-storage", "."],
+  ]
+  const deferredImports = ARTIFACT_REGISTRY.filter(
+    (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
+  ).map(({ packageName, subpath }) => [packageName, subpath])
+  if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
+    failures.push("ARTIFACT_REGISTRY does not match the exact 12-import deferred-to-pr2 allowlist")
+  }
+
+  const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(
+    ({ coverage, audience }) =>
+      (coverage === "catalog-only" || coverage === "internal") && audience === "application",
+  )
+  if (invalidApplicationRecommendations.length > 0) {
+    failures.push("Catalog-only and internal artifacts cannot recommend an application audience")
+  }
+
+  try {
+    apiReferenceRegistry.validateApiReferenceRegistries({
+      pages: API_REFERENCE_PAGES,
+      artifacts: ARTIFACT_REGISTRY,
+      packages: PACKAGE_CATALOG,
+    })
+  } catch (error) {
+    failures.push(`API reference registries violate their closed schemas (${error.message})`)
+  }
+
+  const { readPublicPackages } = await import("./lib/published-artifacts.mjs")
+  const publicPackages = await readPublicPackages(repoRoot)
+  failures.push(
+    ...analyzeApiReferenceManifests({
+      manifests: publicPackages.map(({ packageJson }) => packageJson),
+      artifacts: ARTIFACT_REGISTRY,
+    }).failures,
+  )
+  const publicPackageNames = publicPackages.map(({ packageJson }) => packageJson.name)
+  const catalogPackageNames = PACKAGE_CATALOG.map(({ packageName }) => packageName)
+  if (
+    catalogPackageNames.length !== 21 ||
+    JSON.stringify([...catalogPackageNames].sort()) !==
+      JSON.stringify([...publicPackageNames].sort())
+  ) {
+    failures.push("PACKAGE_CATALOG must match readPublicPackages() bidirectionally with 21 records")
+  }
+
+  const artifactAddressesByPackage = new Map()
+  for (const artifact of ARTIFACT_REGISTRY) {
+    if (artifact.kind === "generated") continue
+    const addresses = artifactAddressesByPackage.get(artifact.packageName) ?? []
+    addresses.push(apiReferenceRegistry.artifactAddressFor(artifact))
+    artifactAddressesByPackage.set(artifact.packageName, addresses)
+  }
+  for (const entry of PACKAGE_CATALOG) {
+    const expectedAddresses = artifactAddressesByPackage.get(entry.packageName) ?? []
+    if (
+      JSON.stringify([...entry.artifactAddresses].sort()) !==
+      JSON.stringify([...expectedAddresses].sort())
+    ) {
+      failures.push(`${entry.packageName} has incomplete or foreign artifactAddresses`)
+    }
+  }
+
+  const referenceDestinationByPackage = new Map(
+    API_REFERENCE_PAGES.flatMap((page) =>
+      page.surfaceName === "dawn:routes"
+        ? []
+        : page.ownerPackageNames.map((packageName) => [packageName, page.href]),
+    ),
+  )
+  for (const entry of PACKAGE_CATALOG) {
+    const expectedDestination =
+      referenceDestinationByPackage.get(entry.packageName) ??
+      `/docs/api#${entry.packageName.replace(/^@/, "").replaceAll("/", "-")}`
+    if (entry.canonicalReferenceDestination !== expectedDestination) {
+      failures.push(
+        `${entry.packageName} canonical reference destination must be ${expectedDestination}`,
+      )
+    }
+  }
+
+  const apiHubSource = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+  const catalogRange = markdownSectionRange(
+    apiHubSource,
+    ({ text }) => text === "Package and surface index",
+  )
+  const artifactByAddress = new Map(
+    ARTIFACT_REGISTRY.map((artifact) => [
+      apiReferenceRegistry.artifactAddressFor(artifact),
+      artifact,
+    ]),
+  )
+  for (const artifact of ARTIFACT_REGISTRY) {
+    const boundary = apiReferenceRegistry.artifactBoundaryFor(artifact)
+    if (/\b(?:detailed|catalog-only|deferred-to-pr2)\b/.test(boundary)) {
+      failures.push(
+        `${apiReferenceRegistry.artifactAddressFor(artifact)} exposes an internal coverage label in its public artifact boundary`,
+      )
+    }
+  }
+  const artifactLabel = (address) => {
+    const artifact = artifactByAddress.get(address)
+    if (!artifact) return `<unknown:${address}>`
+    if (artifact.kind === "import") {
+      return artifact.subpath === "."
+        ? artifact.packageName
+        : `${artifact.packageName}/${artifact.subpath.slice(2)}`
+    }
+    return artifact.kind === "operated" ? artifact.selector : artifact.moduleName
+  }
+  const expectedCatalogRows = PACKAGE_CATALOG.map((entry) => {
+    const explicitAnchor = entry.canonicalReferenceDestination.startsWith("/docs/api#")
+      ? `<span id="${entry.canonicalReferenceDestination.slice("/docs/api#".length)}"></span>`
+      : ""
+    const artifacts = entry.artifactAddresses
+      .map((address) => `\`${artifactLabel(address)}\``)
+      .join("<br />")
+    const boundaries = entry.artifactAddresses
+      .map((address) => apiReferenceRegistry.artifactBoundaryFor(artifactByAddress.get(address)))
+      .join("<br />")
+    return `| ${explicitAnchor}\`${entry.packageName}\` | ${entry.purpose} | \`${entry.audience}\` | \`${entry.stability}\` | ${artifacts} | ${boundaries} | [README](https://github.com/cacheplane/dawnai/blob/main/${entry.readmePath}) | [Reference](${entry.canonicalReferenceDestination}) | [Guide](${entry.conceptualGuideDestination}) |`
+  })
+  const catalogSource = catalogRange ? apiHubSource.slice(catalogRange.start, catalogRange.end) : ""
+  const catalogLines = catalogSource.split(/\r?\n/)
+  const maskedCatalogLines = maskMarkdownCodeAndComments(catalogSource).split(/\r?\n/)
+  const activeCatalogTableLines = catalogLines.filter(
+    (line, index) => line.startsWith("|") && maskedCatalogLines[index]?.trim() !== "",
+  )
+  const expectedCatalogHeader =
+    "| Package | Purpose | Audience | Stability | Surfaces | Artifact boundaries | README | Reference | Guide |"
+  const expectedCatalogSeparator = "|---|---|---|---|---|---|---|---|---|"
+  const actualCatalogRows = activeCatalogTableLines.slice(2)
+  const maskedCatalogSource = maskMarkdownCodeAndComments(catalogSource)
+  const markdownCatalogTables =
+    maskedCatalogSource.match(
+      /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/gm,
+    ) ?? []
+  const rawCatalogTableElements =
+    maskedCatalogSource.match(/<\/?(?:table|thead|tbody|tfoot|tr|th|td)\b/gi) ?? []
+  let remainingCatalogMarkup = maskedCatalogSource.replaceAll("<br />", "")
+  for (const entry of PACKAGE_CATALOG) {
+    if (!entry.canonicalReferenceDestination.startsWith("/docs/api#")) continue
+    const id = entry.canonicalReferenceDestination.slice("/docs/api#".length)
+    remainingCatalogMarkup = remainingCatalogMarkup.replaceAll(`<span id="${id}"></span>`, "")
+  }
+  const activeCatalogMdxConstructs = [
+    ...(remainingCatalogMarkup.match(/<\/?[A-Za-z][^>]*>/g) ?? []),
+    ...(remainingCatalogMarkup.match(/^\s*(?:import|export)\b.*$/gm) ?? []),
+    ...(remainingCatalogMarkup.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) ?? []),
+  ]
+  if (JSON.stringify(actualCatalogRows) !== JSON.stringify(expectedCatalogRows)) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must visibly match PACKAGE_CATALOG bidirectionally and in registry order",
+    )
+  }
+  if (
+    activeCatalogTableLines[0] !== expectedCatalogHeader ||
+    activeCatalogTableLines[1] !== expectedCatalogSeparator
+  ) {
+    failures.push("apps/web/content/docs/api.mdx package catalog header is malformed")
+  }
+  if (markdownCatalogTables.length !== 1) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must use exactly one Markdown table",
+    )
+  }
+  if (rawCatalogTableElements.length > 0) {
+    failures.push("apps/web/content/docs/api.mdx package catalog must not use raw table markup")
+  }
+  if (activeCatalogMdxConstructs.length > 0) {
+    failures.push(
+      "apps/web/content/docs/api.mdx package catalog must not contain active MDX components, declarations, or expressions beyond registered anchors and table line breaks",
+    )
+  }
+  const expectedGeneratedBoundary = `Generated surface: \`dawn:routes\` — ${apiReferenceRegistry.artifactBoundaryFor(apiReferenceRegistry.GENERATED_ROUTES_ARTIFACT)}.`
+  if (
+    catalogLines.filter((line) => line === expectedGeneratedBoundary).length !== 1 ||
+    maskedCatalogSource.includes("Generated surface:") !== true
+  ) {
+    failures.push(
+      "apps/web/content/docs/api.mdx must visibly render the exact generated dawn:routes boundary",
+    )
+  }
+  const applicationShortcutDestinations = [
+    "/docs/api/sdk",
+    "/docs/api/cli",
+    "/docs/api/testing",
+    "/docs/api/evals",
+    "/docs/api/generated-routes",
+  ]
+  const tableIndex = maskMarkdownCodeAndComments(catalogSource).search(/^\| Package \|/m)
+  const sectionHeadingEnd = catalogSource.indexOf("\n")
+  const shortcutSource =
+    tableIndex === -1
+      ? ""
+      : catalogSource.slice(sectionHeadingEnd === -1 ? 0 : sectionHeadingEnd + 1, tableIndex)
+  const shortcutDestinations = linkDestinations(shortcutSource).filter((destination) =>
+    destination.startsWith("/docs/api/"),
+  )
+  if (
+    !/Application shortcuts:/i.test(maskMarkdownCodeAndComments(shortcutSource)) ||
+    markdownHeadings(shortcutSource).length !== 0 ||
+    JSON.stringify(shortcutDestinations) !== JSON.stringify(applicationShortcutDestinations)
+  ) {
+    failures.push(
+      "apps/web/content/docs/api.mdx application shortcuts must contain exactly SDK, CLI, Testing, Evals, and generated-routes links before the catalog table with no heading",
+    )
+  }
+
+  const detailedPackages = PACKAGE_CATALOG.filter(({ canonicalReferenceDestination }) =>
+    /^\/docs\/api\/[^#]+$/.test(canonicalReferenceDestination),
+  )
+  for (const entry of detailedPackages) {
+    const readme = readFileSync(resolve(repoRoot, entry.readmePath), "utf8")
+    const readmeDestinations = linkDestinations(readme)
+    for (const required of [
+      `https://dawnai.org${entry.canonicalReferenceDestination}`,
+      `https://dawnai.org${entry.conceptualGuideDestination}`,
+    ]) {
+      if (!readmeDestinations.includes(required)) {
+        failures.push(
+          `${entry.readmePath} is missing registry-derived README contract: ${required}`,
+        )
+      }
+    }
+    if (!readme.includes(`from "${entry.packageName}"`)) {
+      failures.push(`${entry.readmePath} is missing its primary package import`)
+    }
+    const ownerMdx = readFileSync(
+      resolve(
+        repoRoot,
+        "apps/web/content/docs",
+        `${entry.canonicalReferenceDestination.slice("/docs/".length)}.mdx`,
+      ),
+      "utf8",
+    )
+    const knownSymbols = new Set(
+      [...maskMarkdownCodeAndComments(ownerMdx).matchAll(/^\| `([^`]+)` \|/gm)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      ),
+    )
+    if (hasExhaustiveApiSymbolInventory(readme, knownSymbols)) {
+      failures.push(`${entry.readmePath} duplicates the exhaustive API inventory`)
+    }
+    for (const address of entry.artifactAddresses) {
+      const artifact = artifactByAddress.get(address)
+      if (artifact?.kind !== "import" || artifact.surfaceKind !== "typescript-runtime") {
+        continue
+      }
+      const surface = artifactLabel(address)
+      const readmeLines = readme.split(/\r?\n/)
+      const maskedReadmeLines = maskMarkdownCodeAndComments(readme).split(/\r?\n/)
+      const boundaryLine = readmeLines.find(
+        (line, index) =>
+          line.includes(`\`${surface}\``) &&
+          line.toLowerCase().includes(artifact.runtime) &&
+          line.toLowerCase().includes(artifact.stability) &&
+          maskedReadmeLines[index]?.trim() !== "",
+      )
+      if (!boundaryLine) {
+        failures.push(
+          `${entry.readmePath} must bind ${surface} to ${artifact.runtime} and ${artifact.stability} on one visible line`,
+        )
+      }
+    }
+  }
 }
 const navDocHrefs = navDocEntries.map(({ href }) => href)
 const uniqueNavDocHrefs = [...new Set(navDocHrefs)].sort()
@@ -2854,6 +3924,26 @@ const wrapperDocHrefs = walkFiles(docsWrapperRoot, (file) => basename(file) === 
 const navDocHrefSet = new Set(uniqueNavDocHrefs)
 const contentDocHrefSet = new Set(contentDocHrefs)
 const wrapperDocHrefSet = new Set(wrapperDocHrefs)
+const apiReferencePageByHref = new Map(
+  (apiReferenceRegistry?.API_REFERENCE_PAGES ?? []).map((page) => [page.href, page]),
+)
+for (const [kind, hrefs] of [
+  ["content", contentDocHrefs],
+  ["wrapper", wrapperDocHrefs],
+]) {
+  for (const href of new Set(hrefs)) {
+    if (hrefs.filter((candidate) => candidate === href).length > 1) {
+      failures.push(`Docs ${kind} contains duplicate normalized route ${href}`)
+    }
+  }
+}
+const exactRegisteredDocHrefs = [...uniqueNavDocHrefs, ...apiReferencePageByHref.keys()].sort()
+if (JSON.stringify(contentDocHrefs) !== JSON.stringify(exactRegisteredDocHrefs)) {
+  failures.push("Authored docs content must exactly match ALL_DOCS_PAGES")
+}
+if (JSON.stringify(wrapperDocHrefs) !== JSON.stringify(exactRegisteredDocHrefs)) {
+  failures.push("Docs wrappers must exactly match ALL_DOCS_PAGES")
+}
 
 for (const href of uniqueNavDocHrefs) {
   if (!contentDocHrefSet.has(href)) {
@@ -2864,15 +3954,28 @@ for (const href of uniqueNavDocHrefs) {
   }
 }
 
-for (const { label, href } of navDocEntries) {
-  if (!contentDocHrefSet.has(href) || !wrapperDocHrefSet.has(href)) continue
+const authoredRegisteredDocs = [
+  ...navDocEntries,
+  ...[...apiReferencePageByHref.values()].filter(
+    ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
+  ),
+]
 
+const analyzableRegisteredDocs = authoredRegisteredDocs.filter(
+  ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
+)
+const registeredDocAnalyses = analyzeDocTitlesBatch(
+  analyzableRegisteredDocs.map(({ href }) => ({
+    mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
+    wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
+  })),
+)
+
+for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   const contentPath = resolve(repoRoot, docHrefToContentPath(href))
   const wrapperPath = resolve(repoRoot, docHrefToPagePath(href))
-  const { firstH1, metadataTitle } = analyzeDocTitles({
-    mdxSource: readFileSync(contentPath, "utf8"),
-    wrapperSource: readFileSync(wrapperPath, "utf8"),
-  })
+  const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
+    registeredDocAnalyses[index] ?? {}
 
   if (firstH1 !== label) {
     failures.push(
@@ -2884,17 +3987,45 @@ for (const { label, href } of navDocEntries) {
       `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
     )
   }
+  const importedContentPath =
+    typeof contentImportTarget === "string"
+      ? resolve(dirname(wrapperPath), contentImportTarget)
+      : null
+  if (importedContentPath !== contentPath) {
+    failures.push(
+      `${docHrefToPagePath(href)} must default-import its route-derived MDX source ${docHrefToContentPath(href)}; received ${JSON.stringify(contentImportTarget ?? null)}`,
+    )
+  }
+  const importedDocsPagePath =
+    typeof docsPageImportTarget === "string"
+      ? `${resolve(dirname(wrapperPath), docsPageImportTarget)}.tsx`
+      : null
+  const canonicalDocsPagePath = resolve(repoRoot, "apps/web/app/components/docs/DocsPage.tsx")
+  if (importedDocsPagePath !== canonicalDocsPagePath) {
+    failures.push(
+      `${docHrefToPagePath(href)} must import the canonical DocsPage component; received ${JSON.stringify(docsPageImportTarget ?? null)}`,
+    )
+  }
+  if (docsPageHref !== href) {
+    failures.push(
+      `${docHrefToPagePath(href)} DocsPage href ${JSON.stringify(docsPageHref ?? null)} does not match canonical route ${JSON.stringify(href)}`,
+    )
+  }
 }
 
 for (const href of contentDocHrefs) {
-  if (!navDocHrefSet.has(href)) {
+  if (!navDocHrefSet.has(href) && !apiReferencePageByHref.has(href)) {
     failures.push(`Authored docs content for ${href} is not registered in DOCS_NAV`)
+  } else if (apiReferencePageByHref.has(href) && !wrapperDocHrefSet.has(href)) {
+    failures.push(`Authored API reference content for ${href} is missing its paired wrapper`)
   }
 }
 
 for (const href of wrapperDocHrefs) {
-  if (!navDocHrefSet.has(href)) {
+  if (!navDocHrefSet.has(href) && !apiReferencePageByHref.has(href)) {
     failures.push(`Docs wrapper for ${href} is not registered in DOCS_NAV`)
+  } else if (apiReferencePageByHref.has(href) && !contentDocHrefSet.has(href)) {
+    failures.push(`API reference wrapper for ${href} is missing its paired content`)
   }
 }
 
@@ -2916,11 +4047,11 @@ const docsBundle = await import(docsBundleUrl).catch((error) => {
   return null
 })
 
-if (sdkEntry?.DAWN_ERRORS && docsBundle?.loadNav) {
+if (sdkEntry?.DAWN_ERRORS && docsBundle?.loadDocsPages) {
   const registry = sdkEntry.DAWN_ERRORS
   const codes = Object.keys(registry)
   const navSlugs = new Set(
-    (await docsBundle.loadNav(resolve(repoRoot, "apps/web/app/components/docs/nav.ts"))).map(
+    (await docsBundle.loadDocsPages(resolve(repoRoot, "apps/web/app/components/docs/nav.ts"))).map(
       (entry) => entry.slug,
     ),
   )
@@ -3033,6 +4164,126 @@ if (cliEntry?.createProgram) {
 // a sibling README, and packages with source exports must be findable from
 // either the API reference or their own README.
 const apiMdx = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+const frozenApiHeadingIds = [
+  "api-reference",
+  "package-and-surface-index",
+  "reference-conventions",
+  "dawn-aisdk",
+  "agent",
+  "agentconfig",
+  "agentconfig-1",
+  "reasoningconfig",
+  "retryconfig",
+  "dawnagent",
+  "subagent-delegation-types",
+  "isdawnagentvalue",
+  "middleware",
+  "definemiddlewarefn",
+  "allowcontext",
+  "rejectstatus-body",
+  "dawnmiddleware",
+  "middlewarerequest",
+  "middlewareresult",
+  "continueresult",
+  "rejectresult",
+  "memory",
+  "definememorydef",
+  "definedmemory",
+  "memoryscopedimension",
+  "route-configuration",
+  "routeconfig",
+  "routekind",
+  "route-types",
+  "routestatemap",
+  "routetoolmap",
+  "runtime",
+  "runtimecontexttools",
+  "runtimetool",
+  "toolregistry",
+  "dawntoolcontext",
+  "workspacefs",
+  "models",
+  "knownmodelid",
+  "modelproviderid",
+  "openaimodelid",
+  "googlemodelid",
+  "anthropicmodelid",
+  "xaimodelid",
+  "inferprovidermodel",
+  "supported_agent_providers",
+  "validatemodelidopts",
+  "modelidvalidation",
+  "model-id-constants",
+  "backend-adapter",
+  "backendadapter",
+  "utilities",
+  "prettifyt",
+  "dawn-aicli",
+  "serveruntimeoptions",
+  "loadstaticmodulesmanifesturl",
+  "dawnstaticmodules-and-staticroutemodule",
+  "dawn-aiclifetch",
+  "dawn-aicliruntime",
+  "dawn-aicore",
+  "capability-exports",
+  "createcapabilityregistrymarkers-and-applycapabilities",
+  "gatetoolop-and-wraptoolwithapproval",
+  "createworkspacefsoptions",
+  "loaddawnconfigoptions-and-configvalue",
+  "discoverroutesoptions-finddawnappoptions-and-route-segments",
+  "state-and-typegen-helpers",
+  "tool-scope",
+  "storage-type-re-export",
+  "dawn-aiag-ui",
+  "id-factories",
+  "toaguieventschunks-context",
+  "fromrunagentinputinput",
+  "sse-subpath-encodeaguisseevent-accept",
+  "dawn-aimemory",
+  "memorystore",
+  "memoryrecord",
+  "memoryquery",
+  "browsequery-browsepage-and-memorystats",
+  "dawn-aimemorybrowse",
+  "dawn-aimemory-pgvector",
+  "pgvectormemorystoreoptions",
+  "pgvectormemorystore",
+  "vectorcolumndefdimensions",
+  "initschemaclient-options",
+  "assertidentifiername-value",
+  "dawn-aipostgres-storage",
+  "postgresstoreoptions",
+  "dawn-aipostgres-storagenode",
+  "postgrescheckpointeroptions",
+  "createpostgresthreadsstoreoptions",
+  "createpostgrespermissionsstoreoptions",
+  "assertidentifiername-value-1",
+  "default_schema--default_table_prefix",
+  "dawn-aitesting",
+  "harnesses",
+  "aimock-fixtures-and-recording",
+  "matchers",
+  "run-result-utilities",
+  "memory-protocol-and-subprocess-helpers",
+  "example",
+  "dawn-aievals",
+  "eval-definition-and-execution",
+  "scores-and-gates",
+  "built-in-scorers",
+  "memory-scorers",
+  "example-1",
+  "dawnroutes-generated",
+  "routetoolsp",
+  "routestatep",
+  "where-to-read-more",
+  "related",
+]
+const apiHeadingIds = markdownHeadings(apiMdx).map(({ id }) => id)
+if (JSON.stringify(apiHeadingIds) !== JSON.stringify(frozenApiHeadingIds)) {
+  failures.push(
+    `apps/web/content/docs/api.mdx must retain exactly ${frozenApiHeadingIds.length} frozen heading ids in order with no additions`,
+  )
+}
 const requiredApiPackageHeadings = [
   "@dawn-ai/sdk",
   "@dawn-ai/cli",
@@ -3050,325 +4301,6 @@ for (const packageName of requiredApiPackageHeadings) {
   }
 }
 
-function collectExportedBindings(source) {
-  const sourcePath = "/api-barrel.ts"
-  const virtualFiles = {
-    [sourcePath]: source,
-    "/tsconfig.json": JSON.stringify({
-      compilerOptions: { noLib: true },
-      files: [sourcePath],
-    }),
-  }
-  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
-  let snapshot
-  try {
-    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
-    const project = snapshot.getDefaultProjectForFile(sourcePath)
-    const sourceFile = project?.program.getSourceFile(sourcePath)
-    const bindings = new Set()
-
-    for (const statement of sourceFile?.statements ?? []) {
-      if (statement.kind === SyntaxKind.ExportDeclaration) {
-        const clause = statement.exportClause
-        if (clause?.kind === SyntaxKind.NamedExports) {
-          for (const element of clause.elements) bindings.add(element.name.text)
-        } else if (clause?.kind === SyntaxKind.NamespaceExport) {
-          bindings.add(clause.name.text)
-        }
-        continue
-      }
-
-      if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword)) {
-        continue
-      }
-      if (isVariableStatement(statement)) {
-        for (const declaration of statement.declarationList.declarations) {
-          if (isIdentifier(declaration.name)) bindings.add(declaration.name.text)
-        }
-        continue
-      }
-      if (statement.name && isIdentifier(statement.name)) bindings.add(statement.name.text)
-    }
-    return bindings
-  } finally {
-    snapshot?.dispose()
-    api.close()
-  }
-}
-
-function typescriptCodeBlocks(markdown) {
-  return [...markdown.matchAll(/```(?:ts|tsx|typescript)\b[^\r\n]*\r?\n([\s\S]*?)```/g)]
-    .map((match) => match[1] ?? "")
-    .join("\n")
-}
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function referenceSection(markdown, heading, stopBeforeHeading) {
-  const analysis = analyzeCompatibilityStub({
-    source: markdown,
-    retainedHeading: heading,
-    canonicalHref: "",
-    maxChars: Number.POSITIVE_INFINITY,
-  })
-  if (!analysis.found) return ""
-  if (!stopBeforeHeading) return analysis.stub
-
-  const masked = maskMarkdownCodeAndComments(analysis.stub)
-  const boundary = new RegExp(`^#{1,6}\\s+${escapeRegex(stopBeforeHeading)}[ \\t]*$`, "m").exec(
-    masked,
-  )
-  return boundary?.index === undefined ? analysis.stub : analysis.stub.slice(0, boundary.index)
-}
-
-function apiReferenceSection(heading, stopBeforeHeading) {
-  return referenceSection(apiMdx, heading, stopBeforeHeading)
-}
-
-function documentedSectionBindings(markdown, heading, stopBeforeHeading) {
-  return collectExportedBindings(
-    typescriptCodeBlocks(referenceSection(markdown, heading, stopBeforeHeading)),
-  )
-}
-
-// Mutation probes: comments, imports, and private declarations must not become
-// false exported bindings; a named re-export (including an alias) must.
-const exportBindingProbe = collectExportedBindings(`
-// export const commentOnly = true
-import { importOnly } from "./dependency.js"
-const privateOnly = true
-export const publicValue = true
-export { sourceValue as aliasedValue } from "./dependency.js"
-`)
-for (const nonExport of ["commentOnly", "importOnly", "privateOnly", "sourceValue"]) {
-  if (exportBindingProbe.has(nonExport)) {
-    failures.push(`API export AST mutation probe false-positive: ${nonExport}`)
-  }
-}
-for (const actualExport of ["publicValue", "aliasedValue"]) {
-  if (!exportBindingProbe.has(actualExport)) {
-    failures.push(`API export AST mutation probe missed export: ${actualExport}`)
-  }
-}
-
-const rootScopeFixtures = [
-  {
-    heading: "@dawn-ai/cli",
-    stopBeforeHeading: "@dawn-ai/cli/fetch",
-    symbol: "ServeRuntimeHandle",
-    rootDeclaration: "export interface ServeRuntimeHandle {}",
-    markdown: `
-## @dawn-ai/cli
-
-\`\`\`ts
-export interface ServeRuntimeHandle {}
-\`\`\`
-
-### @dawn-ai/cli/fetch
-
-\`\`\`ts
-export type { ServeRuntimeHandle } from "./nested.js"
-\`\`\`
-`,
-  },
-  {
-    heading: "@dawn-ai/memory",
-    stopBeforeHeading: "@dawn-ai/memory/browse",
-    symbol: "MemoryStore",
-    rootDeclaration: "export interface MemoryStore {}",
-    markdown: `
-## @dawn-ai/memory
-
-\`\`\`ts
-export interface MemoryStore {}
-\`\`\`
-
-### @dawn-ai/memory/browse
-
-\`\`\`ts
-export type { MemoryStore } from "./nested.js"
-\`\`\`
-`,
-  },
-]
-
-for (const fixture of rootScopeFixtures) {
-  const baseline = documentedSectionBindings(
-    fixture.markdown,
-    fixture.heading,
-    fixture.stopBeforeHeading,
-  )
-  if (!baseline.has(fixture.symbol)) {
-    failures.push(`API root-scope mutation probe baseline missed: ${fixture.symbol}`)
-  }
-  const rootDeleted = fixture.markdown.replace(fixture.rootDeclaration, "")
-  const mutated = documentedSectionBindings(rootDeleted, fixture.heading, fixture.stopBeforeHeading)
-  if (mutated.has(fixture.symbol)) {
-    failures.push(
-      `API root-scope mutation probe accepted nested-only declaration: ${fixture.symbol}`,
-    )
-  }
-}
-
-// Application-facing API reference ↔ public barrel authority. Each symbol must
-// be an actual exported binding in its barrel and an exported declaration or
-// re-export inside the owning API section's TypeScript blocks.
-const apiSurfaceAuthorities = [
-  {
-    file: "packages/cli/src/index.ts",
-    heading: "@dawn-ai/cli",
-    stopBeforeHeading: "@dawn-ai/cli/fetch",
-    symbols: [
-      "serveRuntime",
-      "ServeRuntimeHandle",
-      "ServeRuntimeOptions",
-      "loadStaticModules",
-      "DawnStaticModules",
-      "StaticRouteModule",
-    ],
-  },
-  {
-    file: "packages/cli/src/fetch-exports.ts",
-    heading: "@dawn-ai/cli/fetch",
-    symbols: [
-      "createRuntimeFetchHandler",
-      "RuntimeFetchHandler",
-      "buildStaticRouteModule",
-      "normalizeMiddlewareModule",
-      "DawnStaticModules",
-      "StaticRouteModule",
-      "StaticRouteModuleInput",
-      "StaticToolModuleInput",
-      "RequestStores",
-      "StartRuntimeServerOptions",
-      "RuntimeEnv",
-      "readRuntimeEnv",
-      "seedDawnConfig",
-      "seedRuntimeEnv",
-      "seedModelImporter",
-      "BootResolvedInstances",
-      "RuntimeBootFallbacks",
-      "StreamChunk",
-    ],
-  },
-  {
-    file: "packages/memory/src/index.ts",
-    heading: "@dawn-ai/memory",
-    stopBeforeHeading: "@dawn-ai/memory/browse",
-    symbols: [
-      "MemoryStore",
-      "MemoryQuery",
-      "MemoryRecord",
-      "BrowseQuery",
-      "BrowsePage",
-      "MemoryStats",
-    ],
-  },
-  {
-    file: "packages/memory/src/browse.ts",
-    heading: "@dawn-ai/memory/browse",
-    symbols: [
-      "BROWSE_CURSOR_VERSION",
-      "browseCursorKey",
-      "browseQueryFingerprint",
-      "decodeBrowseCursor",
-      "encodeBrowseCursor",
-      "normalizeSetFilter",
-      "DEFAULT_BROWSE_ORDER",
-      "resolveBrowseOrder",
-      "namespacePrefixUpperBound",
-      "utcDayAfter",
-      "utcDayStart",
-      "BROWSE_DEFAULT_LIMIT",
-      "BROWSE_MAX_LIMIT",
-      "BROWSE_SORT_FIELDS",
-      "BrowseQueryError",
-      "validateBrowseQuery",
-      "BrowseCursorPayload",
-      "BrowseCursorValue",
-      "ResolvedBrowseSort",
-      "BrowseFilter",
-      "BrowsePage",
-      "BrowseQuery",
-      "BrowseSortEntry",
-      "BrowseSortField",
-      "MemoryKind",
-      "MemoryRecord",
-      "MemorySource",
-      "MemoryStatus",
-    ],
-  },
-]
-
-for (const authority of apiSurfaceAuthorities) {
-  const source = readFileSync(resolve(repoRoot, authority.file), "utf8")
-  const exportedBindings = collectExportedBindings(source)
-  const section = apiReferenceSection(authority.heading, authority.stopBeforeHeading)
-  const documentedBindings = collectExportedBindings(typescriptCodeBlocks(section))
-  for (const symbol of authority.symbols) {
-    if (!exportedBindings.has(symbol)) {
-      failures.push(`${authority.file} no longer exports documented API symbol: ${symbol}`)
-    }
-    if (!documentedBindings.has(symbol)) {
-      failures.push(
-        `apps/web/content/docs/api.mdx section ${authority.heading} is missing an exported signature or definition for: ${symbol}`,
-      )
-    }
-  }
-}
-
-function hasExactSubpathExport(manifest, subpath, expected) {
-  const actual = manifest?.exports?.[subpath]
-  return actual?.types === expected.types && actual?.default === expected.default
-}
-
-const apiSubpathAuthorities = [
-  {
-    manifest: "packages/cli/package.json",
-    subpath: "./fetch",
-    expected: {
-      types: "./dist/fetch-exports.d.ts",
-      default: "./dist/fetch-exports.js",
-    },
-  },
-  {
-    manifest: "packages/memory/package.json",
-    subpath: "./browse",
-    expected: { types: "./dist/browse.d.ts", default: "./dist/browse.js" },
-  },
-]
-
-for (const authority of apiSubpathAuthorities) {
-  const manifestPath = resolve(repoRoot, authority.manifest)
-  const packageDir = manifestPath.replace(/\/package\.json$/, "")
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
-  if (!hasExactSubpathExport(manifest, authority.subpath, authority.expected)) {
-    failures.push(
-      `${authority.manifest} ${authority.subpath} must point to ${JSON.stringify(authority.expected)}`,
-    )
-  }
-  for (const target of Object.values(authority.expected)) {
-    if (!existsSync(resolve(packageDir, target))) {
-      failures.push(`${authority.manifest} ${authority.subpath} target is missing: ${target}`)
-    }
-  }
-
-  const removed = JSON.parse(JSON.stringify(manifest))
-  delete removed.exports[authority.subpath]
-  if (hasExactSubpathExport(removed, authority.subpath, authority.expected)) {
-    failures.push(`${authority.manifest} ${authority.subpath} removal mutation was not detected`)
-  }
-  const redirected = JSON.parse(JSON.stringify(manifest))
-  redirected.exports[authority.subpath] = {
-    ...authority.expected,
-    default: "./dist/wrong.js",
-  }
-  if (hasExactSubpathExport(redirected, authority.subpath, authority.expected)) {
-    failures.push(`${authority.manifest} ${authority.subpath} redirect mutation was not detected`)
-  }
-}
 for (const manifestPath of packageManifests()) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
   const packageDir = manifestPath.replace(/\/package\.json$/, "")
@@ -3535,7 +4467,10 @@ for (const root of userFacingRoots) {
   }
 }
 
-const knownDocHrefs = new Set(uniqueNavDocHrefs)
+const knownDocHrefs = new Set([
+  ...uniqueNavDocHrefs,
+  ...(apiReferenceRegistry?.API_REFERENCE_PAGES.map(({ href }) => href) ?? []),
+])
 for (const filePath of userFacingFiles) {
   const source = readFileSync(filePath, "utf8")
   const links = source.matchAll(/(?:href:\s*|]\()["']?(\/docs\/[^"',)\s#}]+)/g)

@@ -1,0 +1,71 @@
+# dawn:routes
+
+## Use this when
+
+Import from `dawn:routes` when application code needs route paths, dynamic parameters, tools, or state keyed by a route path. These are generated types, not runtime values. Run `dawn typegen`, `dawn dev`, or `dawn build` before type-checking code that imports them.
+
+## Install and import
+
+The module is generated with your Dawn app; it is not a package to install.
+
+```ts
+import type { DawnRouteParams, DawnRoutePath, DawnRouteTools, RouteTools } from "dawn:routes"
+```
+
+Do not hand-edit `.dawn/dawn.generated.d.ts`. Change routes, tools, or `state.ts`, then regenerate it.
+
+## Compatibility and audience
+
+| Surface | Kind | Audience | Stability |
+|---|---|---|---|
+| `dawn:routes` | generated types | application | supported |
+
+The module has no runtime or purity classification because every export is erased by TypeScript.
+
+## Public exports
+
+### `dawn:routes`
+
+| Generated export | Responsibility |
+|---|---|
+| `DawnRoutePath` | Union of discovered route pathnames. |
+| `DawnRouteParams` | Map each route to its dynamic path parameters. |
+| `DawnRouteTools` | Map each route to its generated async tool call signatures. |
+| `RouteTools` | Select generated tools for one `DawnRoutePath`. |
+| `DawnRouteState` | Conditionally map routes that declare state to their state fields. |
+| `RouteState` | Conditionally select state for one `DawnRoutePath`. |
+
+`DawnRoutePath`, `DawnRouteParams`, `DawnRouteTools`, and `RouteTools` are always generated. `DawnRouteState` and `RouteState` are generated only when at least one discovered route declares `state.ts` and contributes a route-state entry.
+
+## Key contracts
+
+### Route paths and parameters
+
+With no routes, `DawnRoutePath` is `never` and the parameter map is empty. A dynamic segment becomes `string`, a catch-all becomes `string[]`, and an optional catch-all becomes an optional `string[]` property. `DawnRouteParams` tells callers which dynamic-segment fields to include in invocation input; Dawn derives the names, not the values, from the route path. For ordinary `[param]` agent routes, Dawn separates those fields from message input and exposes them to middleware and tool context instead of merging them into `DawnRouteState`.
+
+### Tools
+
+`DawnRouteTools` includes routes with discovered or capability-contributed tools and omits routes with none. Members are `readonly` and return `Promise<output>`. A no-input tool renders as `() => Promise<output>`, not `(input: void) => Promise<output>`.
+
+#### Behavior contract `generated-routes.tool-signatures`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/core/test/render-tool-types.test.ts","testNames":["omits zero-tool routes and renders void-input tools as zero-argument promises"]}] */}
+DawnRouteTools omits routes with no tools and renders void-input tools as zero-argument functions returning promises.
+
+### State
+
+State types come only from fields discovered in a route's `state.ts`. When state exports are present, `RouteState<P>` indexes `DawnRouteState[P]` for a route in that map; it does not merge dynamic route parameters into state.
+
+#### Behavior contract `generated-routes.state-conditional`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/core/test/render-route-types.test.ts","testNames":["adds only the state exports when generated route state is present","does NOT include DawnRouteState when stateTypes is omitted"]}] */}
+DawnRouteState and RouteState are generated when route state is present and omitted when state types are not supplied.
+
+## Examples and related guides
+
+```ts
+import type { DawnRouteParams, RouteTools } from "dawn:routes"
+
+type TenantParams = DawnRouteParams["/support/[tenant]"]
+type SupportTools = RouteTools<"/support/[tenant]">
+```
+
+Continue with [State](/docs/state), [Tools](/docs/tools), [Routes](/docs/routes), and [CLI Reference](/docs/cli).

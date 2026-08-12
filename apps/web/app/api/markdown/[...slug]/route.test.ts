@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { API_REFERENCE_PAGES } from "../../../components/docs/api-reference-pages"
 import { GET } from "./route"
 
 async function getMarkdown(slug: readonly string[]): Promise<Response> {
@@ -25,6 +26,13 @@ describe("markdown route", () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toContain("# Add a Tool")
+  })
+
+  it.each(API_REFERENCE_PAGES)("serves nested API reference $href", async (page) => {
+    const response = await getMarkdown(page.href.slice("/docs/".length).split("/"))
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain(`# ${page.label}`)
   })
 
   it("rejects an empty slug", async () => {

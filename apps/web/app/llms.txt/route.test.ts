@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { API_REFERENCE_PAGES } from "../components/docs/api-reference-pages"
 import { GET } from "./route"
 
 const EXPECTED_MAP_LINKS = [
@@ -37,5 +38,13 @@ describe("compact LLM documentation route", () => {
     )
     expect(body).toContain("POST /threads/:thread_id/cancel")
     expect(body).toContain("its run/cancel registry is isolate-local")
+  })
+
+  it("keeps the API hub compact instead of listing detailed reference leaves", async () => {
+    const body = await (await GET()).text()
+    expect(body).toContain("https://dawnai.org/docs/api")
+    for (const page of API_REFERENCE_PAGES) {
+      expect(body).not.toContain(`https://dawnai.org${page.href}`)
+    }
   })
 })

@@ -1,15 +1,15 @@
 // Generates packages/cli/docs/ from the website MDX so the docs ship with the
 // installed CLI, version-matched. Run during the CLI build (after tsc emits
 // dist/, which this script imports). Reads only static source files.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { dirname, join, relative, resolve } from "node:path"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
   buildReadme,
   extractSummary,
   extractTitle,
-  loadNav,
+  loadDocsPages,
   mdxToMarkdown,
 } from "../dist/lib/docs-bundle.js"
 
@@ -25,60 +25,33 @@ if (!existsSync(docsSrc)) {
   process.exit(1)
 }
 
-function walk(dir) {
-  const found = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const abs = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      found.push(...walk(abs))
-    } else if (entry.name.endsWith(".mdx")) {
-      found.push(abs)
-    }
-  }
-  return found
-}
-
-const mdxFiles = walk(docsSrc)
+const pages = await loadDocsPages(navFile)
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(outDir, { recursive: true })
 
-const bySlug = new Map()
-for (const abs of mdxFiles) {
-  const outRel = relative(docsSrc, abs).replace(/\.mdx$/, ".md")
-  const raw = readFileSync(abs, "utf8")
+const topics = pages.map(({ slug, label }) => {
+  const sourceRel = slug === "recipes" ? "recipes/index.mdx" : `${slug}.mdx`
+  const alternateRel = slug === "recipes" ? "recipes.mdx" : `${slug}/index.mdx`
+  const sourcePath = join(docsSrc, sourceRel)
+  if (!existsSync(sourcePath)) {
+    throw new Error(`[generate-docs] registered source missing at ${sourcePath}`)
+  }
+  if (existsSync(join(docsSrc, alternateRel))) {
+    throw new Error(`[generate-docs] ambiguous authored sources for /docs/${slug}`)
+  }
+  const outRel = sourceRel.replace(/\.mdx$/, ".md")
+  const raw = readFileSync(sourcePath, "utf8")
   const md = mdxToMarkdown(raw)
   const outPath = join(outDir, outRel)
   mkdirSync(dirname(outPath), { recursive: true })
   writeFileSync(outPath, md)
-  const slug = outRel.replace(/\.md$/, "").replace(/\/index$/, "")
-  bySlug.set(slug, {
+  return {
     slug,
     file: outRel,
-    h1: extractTitle(md),
+    title: extractTitle(md) ?? label,
     description: extractSummary(md),
-  })
-}
-
-const nav = await loadNav(navFile)
-const labelOf = new Map(nav.map((entry) => [entry.slug, entry.label]))
-const finalize = (info) => ({
-  slug: info.slug,
-  file: info.file,
-  title: info.h1 ?? labelOf.get(info.slug) ?? info.slug,
-  description: info.description,
+  }
 })
-const ordered = []
-const seen = new Set()
-for (const entry of nav) {
-  if (bySlug.has(entry.slug)) {
-    ordered.push(finalize(bySlug.get(entry.slug)))
-    seen.add(entry.slug)
-  }
-}
-for (const [slug, info] of bySlug) {
-  if (!seen.has(slug)) {
-    ordered.push(finalize(info))
-  }
-}
-writeFileSync(join(outDir, "README.md"), buildReadme(ordered))
-console.log(`[generate-docs] wrote ${mdxFiles.length} topic(s) + README.md to ${outDir}`)
+
+writeFileSync(join(outDir, "README.md"), buildReadme(topics))
+console.log(`[generate-docs] wrote ${topics.length} topic(s) + README.md to ${outDir}`)
