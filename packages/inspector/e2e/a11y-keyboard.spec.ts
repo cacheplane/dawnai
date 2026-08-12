@@ -317,7 +317,7 @@ test.describe("keyboard-only walkthrough", () => {
     await page.keyboard.press("Enter")
     await expect
       .poll(() => confirmed)
-      .toBe(`confirm|Permanently forget ${BROWSE_PAGE_SIZE} memor(ies)?`)
+      .toBe(`confirm|Permanently forget ${BROWSE_PAGE_SIZE} selected memor(ies)?`)
     // Dismissed means nothing was written: no bulk error, the selection intact, the
     // population untouched — and the control kept focus, so step 5 continues from here.
     await expect(page.getByTestId(TEST_IDS.bulkError)).toHaveCount(0)

@@ -14,7 +14,7 @@ import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
-import { type GridRow, MemoryGrid } from "./memory-grid"
+import { buildRowSelection, type GridRow, MemoryGrid } from "./memory-grid"
 import { TEST_IDS } from "./test-ids"
 import { TimelineView } from "./timeline-view"
 import {
@@ -110,6 +110,8 @@ export function ListPage() {
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [ticked, setTicked] = useState<readonly string[]>([])
+  /** A bulk run is between its first and last per-id POST. */
+  const [bulkRunning, setBulkRunning] = useState(false)
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({})
   const [search, setSearch] = useState<SearchResponse>()
 
@@ -254,8 +256,11 @@ export function ListPage() {
     })
   }, [filters, sort, namespace, view, timelineSince])
 
-  // Search replaces the browse view entirely, so browse stops polling behind it.
-  const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
+  // Search replaces the browse view entirely, so browse stops polling behind it. A bulk
+  // run suspends it too: the writes go one at a time, and a tick landing between two of
+  // them would swap the rows the run is still working through — and with them the
+  // `records` the bar reads to decide which ids are candidates.
+  const browse = useMemoryBrowse({ query: browseQuery, live: live && !query && !bulkRunning })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
   // The hook's own `total`, not a second derivation out of `resultMeta` — both gate
@@ -337,14 +342,28 @@ export function ListPage() {
     gridRef.current?.setSelection({ ranges: [], anchor: null })
     setTicked([])
   }, [])
+  const handleBulkStart = useCallback(() => setBulkRunning(true), [])
   const handleBulkDone = useCallback(
-    ({ failed }: { failed: number }) => {
-      // Keep the selection when anything failed: clearing it unmounts the bar, and the
-      // bar is the only channel carrying WHICH ids failed and why.
-      if (failed === 0) clearTicked()
+    ({ failed }: { succeeded: string[]; failed: string[] }) => {
+      // Succeeded ids leave the selection; failures stay, with their per-id errors, so
+      // the obvious next action retries exactly what did not happen.
+      // The DRAWN columns, read at completion: grouping and the checkbox column both
+      // change what a whole-row range has to span.
+      const grid = gridRef.current
+      grid?.setSelection(
+        buildRowSelection(
+          failed,
+          grid.getColumns().map((column) => column.id),
+        ),
+      )
+      setTicked(failed)
+      setBulkRunning(false)
+      // One refresh on completion reconciles the grid: deleted rows leave, approved
+      // rows change status in place. The datasetKey is unchanged, so the surviving
+      // selection is preserved deliberately.
       requestRefresh()
     },
-    [clearTicked, requestRefresh],
+    [requestRefresh],
   )
 
   const byStatus = stats?.byStatus ?? {}
@@ -693,6 +712,7 @@ export function ListPage() {
           ticked={ticked}
           records={browse.rows}
           onDone={handleBulkDone}
+          onStart={handleBulkStart}
           onClear={clearTicked}
         />
       ) : null}

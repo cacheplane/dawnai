@@ -11,6 +11,7 @@ import {
   PretableSurface,
   type PretableSurfaceMessages,
   type PretableSurfaceProps,
+  type PretableSurfaceState,
   type PretableTelemetry,
 } from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
@@ -232,6 +233,39 @@ function toRow(record: MemoryRecord): GridRow {
     kind: record.kind,
     confidence: record.confidence,
     updatedAt: record.updatedAt,
+  }
+}
+
+/**
+ * Row ids → the engine's cell-range selection. Used to PRUNE a selection after a bulk
+ * run. Applied imperatively through `grid.setSelection` rather than through controlled
+ * `state.selection` on purpose: `usePretable` latches a controlled selection across a
+ * `datasetKey` pivot, and the prune has to land whether or not the dataset moved.
+ *
+ * A TICKED row is a range spanning the first and last DRAWN columns — `getColumns()`,
+ * which is what `toggleRowSelection` and the header checkbox both span, and the only
+ * span the surface counts as a whole row. Hard-coding the first and last columns of
+ * `COLUMNS` instead produces an INDETERMINATE row: the drawn set is not that list.
+ * The checkbox column is prepended to it, the derived group column joins it whenever
+ * the page groups by namespace, and `hideGroupedColumns` takes `namespace` back out
+ * again — so a short span leaves the box `mixed`, the row absent from
+ * `onRowSelectionChange`, and the bulk bar gone with it.
+ */
+export function buildRowSelection(
+  rowIds: readonly string[],
+  drawnColumnIds: readonly string[],
+): NonNullable<PretableSurfaceState["selection"]> {
+  const first = drawnColumnIds[0]
+  const last = drawnColumnIds[drawnColumnIds.length - 1]
+  if (first === undefined || last === undefined) return { ranges: [], anchor: null }
+  return {
+    ranges: rowIds.map((rowId) => ({
+      startRowId: rowId,
+      endRowId: rowId,
+      startColumnId: first,
+      endColumnId: last,
+    })),
+    anchor: rowIds.length > 0 ? { rowId: rowIds[0] as string, columnId: first } : null,
   }
 }
 

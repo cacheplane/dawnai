@@ -14,14 +14,19 @@ export function BulkBar({
   ticked,
   records,
   onDone,
+  onStart,
   onClear,
 }: {
   ticked: readonly string[]
   /** The rows currently on screen, to tell candidates from the rest. */
   records: readonly MemoryRecord[]
-  /** `failed` is how many of the attempted ids errored — the selection is kept
-   *  when any did, so the failures stay on screen to be read and retried. */
-  onDone: (outcome: { failed: number }) => void
+  /** The ids that SUCCEEDED and the ids that FAILED, separately. The caller prunes the
+   *  succeeded ones from the selection so a re-run retries failures only — a retry can
+   *  never repeat a completed destructive action (D1-SELECT-04). */
+  onDone: (outcome: { succeeded: string[]; failed: string[] }) => void
+  /** Fired before the first per-id POST. The caller suspends polling for the duration
+   *  of the run so a refresh cannot land between two writes of the same batch. */
+  onStart: () => void
   onClear: () => void
 }) {
   const [busy, setBusy] = useState(false)
@@ -32,15 +37,22 @@ export function BulkBar({
   )
 
   const run = async (ids: readonly string[], verb: MemoryVerb) => {
+    // Snapshot AT CONFIRMATION. `ids` is a fresh array on every render, so freezing it
+    // here is what makes the run proceed against exactly the confirmed set even as the
+    // grid updates beneath it.
+    const targets = [...ids]
     setBusy(true)
     setFailures(undefined)
-    const results = await mutateMemories(ids, verb)
+    onStart()
+    const results = await mutateMemories(targets, verb)
     setBusy(false)
+    const failed = results.flatMap((r) => (r.error ? [r.id] : []))
+    const succeeded = results.flatMap((r) => (r.error ? [] : [r.id]))
     const errors = results.flatMap((r) => (r.error ? [`${r.id}: ${r.error}`] : []))
     // Some may still have succeeded, so refresh either way — but say plainly
     // how many did not, rather than reporting a clean sweep.
-    if (errors.length > 0) setFailures({ attempted: ids.length, errors })
-    onDone({ failed: errors.length })
+    if (errors.length > 0) setFailures({ attempted: targets.length, errors })
+    onDone({ succeeded, failed })
   }
 
   return (
@@ -76,7 +88,7 @@ export function BulkBar({
           variant="destructive"
           disabled={busy}
           onClick={() => {
-            if (window.confirm(`Permanently forget ${ticked.length} memor(ies)?`)) {
+            if (window.confirm(`Permanently forget ${ticked.length} selected memor(ies)?`)) {
               void run(ticked, "forget")
             }
           }}
