@@ -18,7 +18,9 @@ const WRITE_LATENCY_MS = 900
 const RUN_WINDOW_MS = (RECORDS.length - 1) * WRITE_LATENCY_MS
 
 let posted: string[] = []
-/** Browse responses served, to wait for the reconciling refresh rather than guess at it. */
+/** Browse answers the caller has READ, counted as the body is parsed rather than as the
+ *  request goes out. The waits below stand in for "a reconciling answer has landed", and
+ *  a request-time count opens that gate a whole round trip early — on the asking. */
 let listed = 0
 /** Set to hold every POST mid-flight, so a run can be observed while it is running. */
 let postGate: Promise<void> | undefined
@@ -54,8 +56,22 @@ function stubFetch(): void {
           bySourceType: {},
         })
       if (url.includes("/api/memory/list")) {
-        listed += 1
-        return Response.json({ records: RECORDS, total: RECORDS.length, continuation: null })
+        // The count moves as the caller PARSES the body, not as the request arrives here:
+        // the browse fetcher awaits `response.json()` before it has any records to hand
+        // back, so a count taken at the top of this branch would say "landed" while the
+        // grid still held the pre-run answer.
+        const answer = Response.json({
+          records: RECORDS,
+          total: RECORDS.length,
+          continuation: null,
+        })
+        const readBody = answer.json.bind(answer)
+        answer.json = async (): Promise<unknown> => {
+          const body: unknown = await readBody()
+          listed += 1
+          return body
+        }
+        return answer
       }
       return Response.json({})
     }),
@@ -123,9 +139,17 @@ describe("bulk partial failure", () => {
         ?.getAttribute("aria-checked"),
     ).toBe("false")
 
-    // And it HOLDS through the reconciling refresh. `onTickedChange` mirrors the grid's
-    // selection back into the bar's count, so an unpruned engine would re-arm the bar at
-    // four the moment the next answer landed — after the assertions above had passed.
+    // And it HOLDS through the reconciling refresh — the point at which the two sides
+    // could come apart with nothing on screen saying so. The refresh does NOT re-arm the
+    // bar: `onTickedChange` hears from the engine only when the engine's selection
+    // CHANGES, and an answer at an unchanged `datasetKey` re-emits nothing, so an
+    // unpruned engine never hands its four ids back. The bar reads "1 selected"
+    // permanently while the grid paints three already-forgotten rows as ticked. That
+    // silent DIVERGENCE is the hazard, the count below passes under it either way, and
+    // the checkbox is the only side that reports it — which is why it is re-read here,
+    // once the answer that repaints the rows has landed. It is not cosmetic: those
+    // checkboxes are what a user reads before deciding what to retry, and under an
+    // unpruned engine they show three rows this run already forgot.
     await waitFor(() => expect(listed).toBeGreaterThan(listedBeforeRun))
     expect(screen.getByTestId(TEST_IDS.bulkBar).textContent).toContain("1 selected")
     expect(
