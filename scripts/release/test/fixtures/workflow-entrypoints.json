@@ -493,6 +493,13 @@
                 "name": "Real-Postgres storage tests",
                 "run": "DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test"
               }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Real-Postgres Agent Protocol pending-interrupts tests",
+                "run": "DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint"
+              }
             }
           ]
         },

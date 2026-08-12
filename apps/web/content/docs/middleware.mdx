@@ -38,10 +38,10 @@ The argument every middleware receives. All values are pre-parsed:
 | Field | Shape | Notes |
 |---|---|---|
 | `headers` | `Readonly<Record<string, string>>` | Lowercase keys (Node convention). Multi-value headers joined with `, `. |
-| `params` | `Readonly<Record<string, string>>` | Dynamic-segment values extracted from the request input, e.g. `{ tenant: "acme" }` for `/hello/[tenant]`. |
+| `params` | `Readonly<Record<string, string>>` | Dynamic-segment values extracted from the request input, e.g. `{ tenant: "acme" }` for `/hello/[tenant]`. Always `{}` on `/resume` and `/pending_interrupts` — see [Where middleware runs](#where-middleware-runs). |
 | `routeId` | `string` | E.g. `"/hello/[tenant]"`. |
 | `assistantId` | `string` | E.g. `"/hello/[tenant]#agent"`. |
-| `method` | `string` | HTTP method. |
+| `method` | `string` | HTTP method. `"POST"` on every gated endpoint except `/pending_interrupts`, which is a `"GET"`. |
 | `url` | `string` | Path + query, e.g. `"/threads/t-1/runs/wait"`. |
 
 ### `reject(status, body?)`
@@ -104,7 +104,21 @@ This keeps the request lifecycle predictable and avoids ordering questions about
 
 ## Where middleware runs
 
-Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served by `dawn start` or the generated `server.mjs`, and Hono builds. Agent Protocol `/threads/:id/runs/wait`, `/threads/:id/runs/stream`, and `/threads/:id/resume` requests invoke it before route execution, as does the AG-UI route. Health, thread-management, state, and memory-candidate endpoints bypass it.
+Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served by `dawn start` or the generated `server.mjs`, and Hono builds. These endpoints invoke it before any route executes:
+
+| Endpoint | `req.method` | `req.params` |
+|---|---|---|
+| `/threads/:id/runs/wait` | `"POST"` | Dynamic segments read from the request input. |
+| `/threads/:id/runs/stream` | `"POST"` | Dynamic segments read from the request input. |
+| `/threads/:id/resume` | `"POST"` | Always `{}` — a resume body carries decisions, not route input. |
+| `/threads/:id/pending_interrupts` | `"GET"` | Always `{}` — a `GET` has no body to read them from. |
+| `/agui/:routeId` | `"POST"` | Dynamic segments read from the AG-UI run input. |
+
+Every other endpoint the runtime serves is ungated: `/healthz` (a liveness probe), thread create, read and delete, `GET /threads/:id/state`, `POST /threads/:id/cancel`, and the memory-candidate endpoints.
+
+<Callout type="warn" title="Middleware can now see a GET">
+`GET /threads/:id/pending_interrupts` hands back the human-in-the-loop prompts parked on a thread, so it is gated like a run — and it is the first gated endpoint whose `req.method` is not `"POST"`. Middleware that branches on `req.method === "POST"`, or that reads `req.params` to decide access, falls through on it. See [the endpoint reference](/docs/dev-server/agent-protocol#recovering-prompts-without-a-live-stream) for how its route identity is resolved.
+</Callout>
 
 The `langsmith` build target is different: its generated graph entries do not include Dawn HTTP middleware. Put equivalent authentication at the LangSmith/platform boundary when you deploy those entries.
 

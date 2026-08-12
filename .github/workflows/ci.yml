@@ -210,9 +210,10 @@ jobs:
 
   postgres-storage-docker:
     runs-on: ubuntu-latest
-    # Three test files each start their own postgres:16 container, and a cold
-    # runner also pulls the image. 30 minutes leaves headroom for a slow pull
-    # plus the per-container startup timeout without masking a hung suite.
+    # Five test files (four in @dawn-ai/postgres-storage, one in @dawn-ai/cli)
+    # each start their own postgres:16 container, and a cold runner also pulls
+    # the image. 30 minutes leaves headroom for a slow pull plus the
+    # per-container startup timeout without masking a hung suite.
     timeout-minutes: 30
 
     steps:
@@ -243,6 +244,25 @@ jobs:
 
       - name: Real-Postgres storage tests
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
+
+      - name: Real-Postgres Agent Protocol pending-interrupts tests
+        # GET /threads/:id/pending_interrupts is purely checkpoint-backed, so the
+        # spec asks for it against both checkpointer fixtures. This job already
+        # has Docker and a built workspace, so the gated @dawn-ai/cli lane rides
+        # here rather than paying for a fourth Postgres job.
+        #
+        # A filename filter passed to the package's OWN test script, not a
+        # spelled-out `exec vitest`: nobody runs this lane locally, so a config
+        # move or a new setupFiles in that script must not leave this one lane
+        # silently running a different vitest from every other lane.
+        #
+        # Green here means the Postgres assertions RAN, not merely that nothing
+        # failed. Two different mistakes are covered by two different
+        # mechanisms: a filter that matches no file exits 1 on its own
+        # (`passWithNoTests` is false by default in vitest 4), and a suite that
+        # matches but skips is caught by the "gated Postgres lane" self-check in
+        # the test file — vitest has no fail-on-skipped flag to do it from here.
+        run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint
 
   edge-workerd:
     runs-on: ubuntu-latest

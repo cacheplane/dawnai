@@ -17,7 +17,8 @@ such as `/research#agent`.
 
 <Callout type="warn" title="Authenticate the entire production service">
   Dawn execution middleware is not blanket server authentication. It covers
-  Agent Protocol `runs/wait`, `runs/stream`, and `resume`. AG-UI route execution
+  Agent Protocol `runs/wait`, `runs/stream`, and `resume`, plus the
+  `pending_interrupts` read. AG-UI route execution
   passes through the same middleware. Thread management, state, cancellation,
   memory-candidate management, and health routes bypass it. Put outer authentication and network
   restrictions around the entire service for any non-local exposure; exempt
@@ -32,6 +33,7 @@ such as `/research#agent`.
 | `GET /threads/:thread_id` | — | `200` thread object; `404` when absent |
 | `DELETE /threads/:thread_id` | — | `204`; deletes thread metadata, supported checkpoints, and its sandbox sequentially |
 | `GET /threads/:thread_id/state` | — | `200 { config, created_at, metadata, next, parent_config, values }`; `404` without a checkpoint |
+| `GET /threads/:thread_id/pending_interrupts` | — | `200 { "interrupts": [...] }`; `404` `thread_not_found`; `409` `thread_route_unknown` without a usable route identity |
 | `POST /threads/:thread_id/runs/wait` | `{ "route": "<routeId>#<kind>", "input": { ... } }` | `200` final state JSON |
 | `POST /threads/:thread_id/runs/stream` | Same run body | `200 text/event-stream` |
 | `POST /threads/:thread_id/resume` | Exact `{ "resume": [...], "route": "<routeId>#<kind>" }` body | `200 text/event-stream` continuation |
@@ -140,6 +142,51 @@ thread-route map first, then persisted thread metadata. The body route is the
 last fallback. Changing it does not redirect a parked thread while either
 recorded route exists.
 
+### Recovering prompts without a live stream
+
+A client that reloaded has no stream left to read the `interrupt` event from.
+`GET /threads/:thread_id/pending_interrupts` returns the prompts still parked on
+a thread, which is enough to put the permission UI back on screen:
+
+```bash
+curl -sS "$BASE_URL/threads/$THREAD_ID/pending_interrupts"
+# {"interrupts":[{"interruptId":"perm-abc123","resumeKey":"...","value":{...}}]}
+```
+
+`value` is the interrupt payload as stored in the checkpoint—for a permission
+prompt, `{ interruptId, type, kind, detail }`. It is the same payload the
+`interrupt` event carries, minus what the stream projection adds on the way out:
+a prompt raised inside a subagent picks up a `callId` on the wire naming the
+parent's subagent tool call, and the stored copy has no such field. `resumeKey`
+is the checkpoint write's own key, or `null` when the write carries no usable
+one; clients address prompts by `interruptId`.
+
+A thread with nothing parked answers `200` with an empty array. Responses are
+sent `cache-control: no-store`, because checkpoint state moves under the client.
+
+Answer the prompts with the same `POST /threads/:thread_id/resume` body shown
+above: exactly `{ resume, route }`, with `route` required even though the server
+prefers its own recorded route. A reloaded client that no longer knows the route
+reads it from `GET /threads/:thread_id`, whose `metadata.route` is the route key
+recorded at the start of every run on the thread.
+
+Unlike every other gated endpoint, this one is gated on an identity the caller
+cannot repoint: the route that *parked* the interrupts, recorded as
+`metadata.parked_route` when a turn parks and retired once the last prompt is
+answered. Gating on the last-run route alone would let a caller allowed to run
+some cheaper route start a run, move the thread's route identity, and read a
+prompt that route never raised. Only when no parking route is recorded does
+resolution fall back to the last-run chain—the in-process map, then
+`metadata.route`.
+
+A thread carrying none of those has no identity to gate on, so it is refused
+rather than served: this endpoint hands back the same interrupt payloads a run
+stream does. That is the ordinary state of a thread created but never run, and
+it returns `409` with `error.details.code` set to `thread_route_unknown`. The
+same code answers a thread whose recorded route is no longer registered, and the
+response deliberately does not name that route. An unknown thread returns `404`
+with `thread_not_found`.
+
 ## One run at a time per thread
 
 Dawn admits one active run per thread. An ordinary run-slot collision—such as a
@@ -171,6 +218,20 @@ data: {"output":{"cancelled":true}}
 A cancelled blocking `runs/wait` has not committed a response, so it returns
 `409` with `error.details.code` set to `run_cancelled`. A route failure instead
 ends a stream with a `done` payload containing `output.error`.
+
+### `interrupted` covers cancelled and parked
+
+`GET /threads/:thread_id` reports `status: "interrupted"` for a run stopped by
+`POST /threads/:thread_id/cancel` and for a turn parked on a human-in-the-loop
+interrupt alike. `pending_interrupts` is the discriminator: a non-empty
+`interrupts` array means the thread is waiting on a human, and an empty one means
+it is not—the run was cancelled, or the prompts have already been answered.
+
+Parked turns previously reported `"idle"`, which a reloaded client could not tell
+from a finished run. The streaming endpoints `runs/stream` and `resume` report
+the parked status. `runs/wait` is a blocking JSON call and still returns its
+thread to `"idle"` when its turn parks, so check `pending_interrupts` there
+rather than the thread status.
 
 ## Client disconnect
 

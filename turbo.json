@@ -35,7 +35,7 @@
       "dependsOn": ["build", "^test"]
     },
     "@dawn-ai/cli#test": {
-      "dependsOn": ["build", "^test", "@dawn-ai/testing#build"],
+      "dependsOn": ["build", "^test", "@dawn-ai/testing#build", "@dawn-ai/postgres-storage#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/web/content/docs/**",
