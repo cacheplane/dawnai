@@ -259,6 +259,280 @@ export const API_BEHAVIOR_CONTRACTS = [
       },
     ],
   },
+  {
+    id: "ag-ui.outbound.errors-as-events",
+    ownerHref: "/docs/api/ag-ui",
+    claim:
+      "toAguiEvents turns an upstream throw into a final RUN_ERROR event and closes an open text frame instead of throwing to the consumer.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/ag-ui/test/outbound.test.ts",
+        testNames: ["upstream throw is emitted as RUN_ERROR, not thrown to the consumer"],
+        assertionFingerprint:
+          'expect(out.at(-1)).toEqual({ type: EventType.RUN_ERROR, message: "kaboom" })\nexpect(out.some((e) => e.type === EventType.TEXT_MESSAGE_END)).toBe(true)',
+      },
+    ],
+  },
+  {
+    id: "ag-ui.inbound.lossless-input",
+    ownerHref: "/docs/api/ag-ui",
+    claim:
+      "fromRunAgentInput maps supported messages and resume entries into Dawn shapes, omits resume for an empty array, and preserves the untouched AG-UI input under raw for tools, state, and context.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/ag-ui/test/inbound.test.ts",
+        testNames: [
+          "maps user and assistant messages to Dawn messages",
+          "maps a resume array to Dawn resume requests",
+          "omits the resume property for an empty resume array",
+          "raw preserves the original input for tools/state/context access",
+        ],
+        assertionFingerprint:
+          'expect ( result . messages ) . toEqual ( [ { role : "user" , content : "hi" , id : "m1" } , { role : "assistant" , content : "hello" , id : "m2" } , ] )\nexpect ( result . resume ) . toBeUndefined ( )\nexpect ( result . raw ) . toBe ( input )\nexpect ( fromRunAgentInput ( input ) . resume ) . toEqual ( [ { interruptId : "perm-1" , status : "resolved" , payload : "once" } , ] )\nexpect ( Object . hasOwn ( result , "resume" ) ) . toBe ( false )\nexpect ( result . resume ) . toBeUndefined ( )\nexpect ( fromRunAgentInput ( input ) . raw ) . toBe ( input )',
+      },
+    ],
+  },
+  {
+    id: "memory.namespace.stable-encoding",
+    ownerHref: "/docs/api/memory",
+    claim:
+      "serializeNamespace emits dimensions in a stable order, escapes reserved delimiters reversibly, and rejects an empty scope.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory/test/namespace.test.ts",
+        testNames: [
+          "serializes a scope tuple with stable key order",
+          "throws on an empty tuple (fail-closed)",
+          "round-trips encoded values containing | = %",
+        ],
+        assertionFingerprint:
+          'expect ( serializeNamespace ( { route : "/support" , workspace : "acme" } ) ) . toBe ( "workspace=acme|route=/support" , )\nexpect ( ( ) => serializeNamespace ( { } ) ) . toThrow ( /at least one/i )\nexpect ( parseNamespace ( serializeNamespace ( tuple ) ) ) . toEqual ( tuple )',
+      },
+    ],
+  },
+  {
+    id: "memory.browse.pure-subpath",
+    ownerHref: "/docs/api/memory",
+    claim:
+      "The /browse entry reaches only the pure browse modules and no external package, so it does not pull node:sqlite into edge or browser bundles.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory/test/browse-contract.test.ts",
+        testNames: ["reaches nothing outside the pure browse sources"],
+        assertionFingerprint:
+          'expect ( [ ... graph . keys ( ) ] . sort ( ) ) . toEqual ( [ "./browse-cursor.ts" , "./browse-filter.ts" , "./browse-order.ts" , "./browse-range.ts" , "./browse-validate.ts" , "./browse.ts" , "./types.ts" , ] )\nexpect ( [ ... graph . values ( ) ] . flat ( ) . filter ( ( specifier ) => ! specifier . startsWith ( "." ) ) ) . toEqual ( [ ] )',
+      },
+    ],
+  },
+  {
+    id: "memory.write-policy",
+    ownerHref: "/docs/api/memory",
+    claim:
+      "writePolicyFor() selects reconciliation for semantic memory and append behavior for episodic and reflection memory; it throws for procedural memory because that reconciliation policy is not implemented. Low-level MemoryStore implementations can store typed procedural records, while the generated remember tool returns a not-yet-wired rejection without throwing or writing.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory/test/write-policy.test.ts",
+        testNames: [
+          "semantic reconciles",
+          "episodic appends",
+          "reflection appends (insights accumulate)",
+          "procedural still throws a not-yet-wired error",
+          "the low-level store accepts a typed procedural record",
+        ],
+        assertionFingerprint:
+          'expect ( writePolicyFor ( "semantic" ) ) . toEqual ( { mode : "reconcile" } )\nexpect ( writePolicyFor ( "episodic" ) ) . toEqual ( { mode : "append" } )\nexpect ( writePolicyFor ( "reflection" ) ) . toEqual ( { mode : "append" } )\nexpect ( ( ) => writePolicyFor ( "procedural" ) ) . toThrow ( /not yet wired/ )\nexpect ( await store . get ( record . id ) ) . toMatchObject ( { id : record . id , kind : "procedural" } )',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/memory-capability-episodic.test.ts",
+        testNames: ["procedural kind returns a not-yet-wired tool error with zero store writes"],
+        assertionFingerprint:
+          'expect ( out . result ) . toContain ( "not yet wired" )\nexpect ( log . puts . length ) . toBe ( 0 )\nexpect ( log . updates ) . toBe ( 0 )\nexpect ( log . supersedes ) . toBe ( 0 )\nexpect ( log . searches . length ) . toBe ( 1 )',
+      },
+    ],
+  },
+  {
+    id: "memory-pgvector.schema.identifier-validation",
+    ownerHref: "/docs/api/memory-pgvector",
+    claim:
+      "pgvector schema and table-prefix identifiers reject unsafe characters before Dawn interpolates them into DDL.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory-pgvector/test/schema.test.ts",
+        testNames: ["rejects identifiers with unsafe characters"],
+        assertionFingerprint:
+          'expect(() => assertIdentifier("prefix", "bad-name")).toThrow(/prefix/)\nexpect(() => assertIdentifier("schema", "public; DROP TABLE x")).toThrow(/schema/)\nexpect(() => assertIdentifier("prefix", "1leading")).toThrow(/prefix/)\nexpect(() => assertIdentifier("schema", "")).toThrow(/schema/)',
+      },
+    ],
+  },
+  {
+    id: "memory-pgvector.dimension-branches",
+    ownerHref: "/docs/api/memory-pgvector",
+    claim:
+      "The store rejects invalid dimensions at construction: 1–2000 use vector cosine indexes, 2001–4000 use halfvec cosine indexes, and larger, nonpositive, or noninteger values throw.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory-pgvector/test/schema.test.ts",
+        testNames: [
+          "dims ≤ 2000 → plain vector + vector_cosine_ops",
+          "2000 < dims ≤ 4000 → halfvec + halfvec_cosine_ops (text-embedding-3-large)",
+          "dims > 4000 → throws a clear error naming the ceiling",
+          "non-positive/non-integer dims throw",
+          "validates dimensions at construction time",
+        ],
+        assertionFingerprint:
+          'expect ( vectorColumnDef ( 1536 ) ) . toEqual ( { type : "vector(1536)" , ops : "vector_cosine_ops" } )\nexpect ( vectorColumnDef ( 3072 ) ) . toEqual ( { type : "halfvec(3072)" , ops : "halfvec_cosine_ops" } )\nexpect ( ( ) => vectorColumnDef ( 5000 ) ) . toThrow ( /4000/ )\nexpect ( ( ) => vectorColumnDef ( 0 ) ) . toThrow ( )\nexpect ( ( ) => vectorColumnDef ( 1.5 ) ) . toThrow ( )\nexpect ( ( ) => pgvectorMemoryStore ( { dimensions : 4001 } ) ) . toThrow ( /4000 halfvec index ceiling/ )',
+      },
+    ],
+  },
+  {
+    id: "memory-pgvector.update-preserves-embedding",
+    ownerHref: "/docs/api/memory-pgvector",
+    claim:
+      "update() preserves the row's stored embedding. Content or data updates do not recompute that embedding, so after changing semantic content, compute a replacement and call put(updatedRecord, { embedding, embeddingModel }) to avoid stale vector results.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/memory-pgvector/test/pgvector-integration.test.ts",
+        testNames: [
+          "halfvec update preserves the stored embedding without recomputing changed content",
+        ],
+        assertionFingerprint:
+          'expect ( out . map ( ( r ) => r . id ) ) . toContain ( "h" )\nexpect ( await store . get ( "h" ) ) . toMatchObject ( { content : "quarterly tax filing" , data : { topic : "tax" } , confidence : 0.5 , } )',
+      },
+    ],
+  },
+  {
+    id: "postgres-storage.migration.instance-scoped",
+    ownerHref: "/docs/api/postgres-storage",
+    claim:
+      "Migration memoization belongs to each store instance; assumeMigrated skips that instance's migration pass, while an unflagged instance begins a locked transaction.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/postgres-storage/test/assume-migrated.test.ts",
+        testNames: [
+          "skips the threads migration pass entirely",
+          "still migrates — under the advisory lock — when unset",
+        ],
+        assertionFingerprint:
+          'expect(sql).toEqual([])\nexpect(sql[0]).toBe("BEGIN")\nexpect(sql[1]).toContain("pg_advisory_xact_lock")\nexpect(sql.at(-1)).toBe("COMMIT")',
+      },
+    ],
+  },
+  {
+    id: "postgres-storage.entry-split",
+    ownerHref: "/docs/api/postgres-storage",
+    claim:
+      "The main entry links without Node built-ins for edge pools, while /node deliberately fails an edge bundle because it imports pg for connectionString convenience.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/postgres-storage/test/edge-bundle.test.ts",
+        testNames: [
+          "links the main entry with no node builtins",
+          "negative control: the node entry does NOT link",
+        ],
+        assertionFingerprint:
+          'await expect ( linkForEdge ( "index.ts" ) ) . resolves . toBeUndefined ( )\nawait expect ( linkForEdge ( "node.ts" ) ) . rejects . toThrow ( /Could not resolve/ )',
+      },
+    ],
+  },
+  {
+    id: "testing.fake-embedder.deterministic",
+    ownerHref: "/docs/api/testing",
+    claim:
+      "With positive dimensions, inputs containing supported tokens are unit-length and deterministic. Empty or tokenless inputs produce a zero vector; fakeEmbedder({ dims: 0 }) produces an empty vector.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/testing/test/fake-embedder.test.ts",
+        testNames: [
+          "is deterministic and unit-length per text",
+          "returns a zero vector when the input has no supported tokens",
+          "returns an empty vector when dimensions are zero",
+        ],
+        assertionFingerprint:
+          "expect ( [ ... a1 ! ] ) . toEqual ( [ ... a2 ! ] )\nexpect ( norm ) . toBeCloseTo ( 1 , 6 )\nexpect ( [ ... empty ! ] ) . toEqual ( Array . from ( { length : 8 } , ( ) => 0 ) )\nexpect ( [ ... punctuation ! ] ) . toEqual ( [ ... empty ! ] )\nexpect ( [ ... oneCharacterTokens ! ] ) . toEqual ( [ ... empty ! ] )\nexpect ( vector ) . toEqual ( new Float32Array ( ) )",
+      },
+    ],
+  },
+  {
+    id: "testing.harness-isolation",
+    ownerHref: "/docs/api/testing",
+    claim:
+      "AgentHarness reset starts a fresh scenario and clears prior fixtures; close is idempotent and async disposal delegates to it.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/testing/test/harness-fixtures.test.ts",
+        testNames: [
+          "reset() isolates fixtures across scenarios — a wildcard fixture does not leak",
+        ],
+        assertionFingerprint:
+          'expect ( run1 . finalMessage ) . toBe ( "RUN_1_WILDCARD" )\nexpect ( run2 . finalMessage ) . toBe ( "RUN_2_OWN" )',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/testing/test/harness-construct.test.ts",
+        testNames: ["disposes via `await using` (no-throw, idempotent close)"],
+        assertionFingerprint:
+          "expect ( disposable . baseUrl ) . toMatch ( /\\/v1$/ )\nawait expect ( harness . close ( ) ) . resolves . toBeUndefined ( )",
+      },
+    ],
+  },
+  {
+    id: "evals.scorer-errors.zero-score",
+    ownerHref: "/docs/api/evals",
+    claim:
+      "runEval records a thrown scorer as a zero with its error reason and continues evaluating the report.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/evals/test/run-eval.test.ts",
+        testNames: ["a thrown scorer scores 0 with the error in reason and does not abort"],
+        assertionFingerprint:
+          "expect(boom.score).toBe(0)\nexpect(boom.reason).toMatch(/kaboom/)\nexpect(report.passed).toBe(true)",
+      },
+    ],
+  },
+  {
+    id: "evals.run-and-gate",
+    ownerHref: "/docs/api/evals",
+    claim:
+      "runEval scores every case with every scorer; a scorer exception becomes zero without aborting; an explicit gate wins over threshold, and no gate or threshold is informational and passes. gate.perScorer() checks only scorers with explicit thresholds and ignores scorers without one.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/evals/test/run-eval.test.ts",
+        testNames: [
+          "scores every case×scorer, aggregates, and applies the gate",
+          "a thrown scorer scores 0 with the error in reason and does not abort",
+          "is informational (passes) when no gate or threshold is set",
+        ],
+        assertionFingerprint:
+          'expect ( report . cases ) . toHaveLength ( 2 )\nexpect ( report . byScorer . find ( ( s ) => s . scorer . startsWith ( "contains" ) ) ?. mean ) . toBe ( 0.5 )\nexpect ( report . passed ) . toBe ( false )\nexpect ( report . gated ) . toBe ( true )\nexpect ( boom . score ) . toBe ( 0 )\nexpect ( boom . reason ) . toMatch ( /kaboom/ )\nexpect ( report . passed ) . toBe ( true )\nexpect ( report . mean ) . toBe ( 0 )\nexpect ( report . gated ) . toBe ( false )\nexpect ( report . passed ) . toBe ( true )',
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/evals/test/gate.test.ts",
+        testNames: [
+          "perScorer() requires each scorer with a threshold to meet it",
+          "perScorer() ignores scorer aggregates without an explicit threshold",
+          "resolveGate prefers gate, then threshold sugar, then informational",
+        ],
+        assertionFingerprint:
+          'expect ( gate . perScorer ( ) ( report ) . passed ) . toBe ( false )\nexpect ( gate . perScorer ( ) ( { ... report , byScorer : [ { scorer : "informational" , mean : 0 } ] , } ) . passed , ) . toBe ( true )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] , gate : gate . mean ( 0.9 ) } ) ( report ) . passed , ) . toBe ( false )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] , threshold : 0.7 } ) ( report ) . passed , ) . toBe ( true )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] } ) ( report ) . passed ) . toBe ( true )',
+      },
+    ],
+  },
 ] as const satisfies readonly ApiBehaviorContract[]
 
 interface ArtifactPolicy {

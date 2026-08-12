@@ -1,0 +1,203 @@
+# @dawn-ai/postgres-storage
+
+## Use this when
+
+Use this package when a deployed Dawn application needs shared durable checkpoints, Agent Protocol threads, and permission grants across instances. Each permissions-store instance caches grants and observes another instance's writes after its next `load()`. The root accepts a structural pool for Node or edge hosts; `/node` adds `pg` connection-string convenience.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/postgres-storage pg
+```
+
+```ts
+import { createPostgresThreadsStore } from "@dawn-ai/postgres-storage"
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/postgres-storage` | edge-safe | not-claimed | application | supported |
+| `@dawn-ai/postgres-storage/node` | node-only | not-claimed | application | supported |
+
+The root's edge-safe classification covers its import graph. Local workerd plus a Neon WebSocket pool is tested; it is not a claim about every edge provider or a live Cloudflare deployment.
+
+## Public exports
+
+### `@dawn-ai/postgres-storage`
+
+| Export | Responsibility |
+|---|---|
+| `PostgresCheckpointerOptions` | Configure the checkpointer. |
+| `DawnPostgresSaver` | Implement LangGraph checkpoint persistence. |
+| `postgresCheckpointer` | Create a Postgres checkpointer. |
+| `PostgresStoreOptions` | Configure shared connection and table naming. |
+| `PostgresPermissionsStore` | Define the durable permissions store. |
+| `PostgresPermissionsStoreOptions` | Configure permissions storage and policy. |
+| `createPostgresPermissionsStore` | Create a permissions store. |
+| `assertIdentifier` | Reject unsafe SQL identifiers. |
+| `DEFAULT_SCHEMA` | Expose the default schema. |
+| `DEFAULT_TABLE_PREFIX` | Expose the default table prefix. |
+| `SqlClient` | Define the structural SQL client. |
+| `SqlPool` | Define the structural SQL pool. |
+| `SqlResult` | Describe a structural query result. |
+| `CreateThreadInput` | Describe thread creation. |
+| `PostgresThreadsStore` | Define a durable threads store. |
+| `PostgresThreadsStoreOptions` | Configure thread storage. |
+| `Thread` | Describe an Agent Protocol thread. |
+| `ThreadStatus` | Name thread runtime status. |
+| `ThreadsStore` | Define the threads-store contract. |
+| `createPostgresThreadsStore` | Create a threads store. |
+
+### `@dawn-ai/postgres-storage/node`
+
+The `/node` entry also re-exports every root export. The repeated rows below establish that subpath's ownership; its three factories use the local connection-string-aware implementations.
+
+| Export | Responsibility |
+|---|---|
+| `NodePostgresStoreOptions` | Add connection-string convenience. |
+| `NodePostgresPermissionsStoreOptions` | Add connection-string convenience for permissions. |
+| `PostgresCheckpointerOptions` | Re-export root checkpointer options. |
+| `DawnPostgresSaver` | Re-export the saver class. |
+| `postgresCheckpointer` | Create a Node checkpointer. |
+| `PostgresStoreOptions` | Re-export root store options. |
+| `PostgresPermissionsStore` | Re-export the permissions store type. |
+| `PostgresPermissionsStoreOptions` | Re-export permissions options. |
+| `createPostgresPermissionsStore` | Create a Node permissions store. |
+| `assertIdentifier` | Re-export identifier validation. |
+| `DEFAULT_SCHEMA` | Re-export the default schema. |
+| `DEFAULT_TABLE_PREFIX` | Re-export the default table prefix. |
+| `SqlClient` | Re-export the SQL client contract. |
+| `SqlPool` | Re-export the SQL pool contract. |
+| `SqlResult` | Re-export the SQL result contract. |
+| `CreateThreadInput` | Re-export thread creation input. |
+| `PostgresThreadsStore` | Re-export the threads store type. |
+| `PostgresThreadsStoreOptions` | Re-export thread options. |
+| `Thread` | Re-export the thread type. |
+| `ThreadStatus` | Re-export thread status. |
+| `ThreadsStore` | Re-export the threads-store contract. |
+| `createPostgresThreadsStore` | Create a Node threads store. |
+
+## Key contracts
+
+### `PostgresStoreOptions`
+
+```ts api-contract="@dawn-ai/postgres-storage#.:PostgresStoreOptions"
+export interface PostgresStoreOptions {
+  readonly pool?: SqlPool
+  readonly ownsPool?: boolean
+  readonly assumeMigrated?: boolean
+  readonly schema?: string
+  readonly tablePrefix?: string
+}
+```
+
+**Fields: `@dawn-ai/postgres-storage#.:PostgresStoreOptions`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly pool` | `SqlPool` | no | Supply the pool used by every store call. |
+| `readonly ownsPool` | `boolean` | no | End the supplied pool when this store closes. |
+| `readonly assumeMigrated` | `boolean` | no | Skip this instance's migration pass. |
+| `readonly schema` | `string` | no | Select the Postgres schema. |
+| `readonly tablePrefix` | `string` | no | Prefix this application's tables. |
+
+Although `pool` is optional in the shared type, root factories fail without one. Use `/node` when `connectionString` or standard `pg` environment defaults should create an owned pool.
+
+```ts api-contract="@dawn-ai/postgres-storage#.:PostgresPermissionsStoreOptions"
+export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
+  readonly config?: PermissionsFile
+  readonly mode?: PermissionMode
+}
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#.:postgresCheckpointer"
+export declare function postgresCheckpointer(
+  options?: PostgresCheckpointerOptions,
+): DawnPostgresSaver
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#.:createPostgresThreadsStore"
+export declare function createPostgresThreadsStore(
+  options?: PostgresThreadsStoreOptions,
+): PostgresThreadsStore
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#.:createPostgresPermissionsStore"
+export declare function createPostgresPermissionsStore(
+  options?: PostgresPermissionsStoreOptions,
+): PostgresPermissionsStore
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#./node:NodePostgresStoreOptions"
+export interface NodePostgresStoreOptions extends PostgresStoreOptions {
+  readonly connectionString?: string
+}
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#./node:NodePostgresPermissionsStoreOptions"
+export interface NodePostgresPermissionsStoreOptions extends PostgresPermissionsStoreOptions {
+  readonly connectionString?: string
+}
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#./node:postgresCheckpointer"
+export declare function postgresCheckpointer(
+  options?: NodePostgresStoreOptions,
+): DawnPostgresSaver
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#./node:createPostgresThreadsStore"
+export declare function createPostgresThreadsStore(
+  options?: NodePostgresStoreOptions,
+): PostgresThreadsStore
+```
+
+```ts api-contract="@dawn-ai/postgres-storage#./node:createPostgresPermissionsStore"
+export declare function createPostgresPermissionsStore(
+  options?: NodePostgresPermissionsStoreOptions,
+): PostgresPermissionsStore
+```
+
+#### Behavior contract `postgres-storage.migration.instance-scoped`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/postgres-storage/test/assume-migrated.test.ts","testNames":["skips the threads migration pass entirely","still migrates — under the advisory lock — when unset"]}] */}
+Migration memoization belongs to each store instance; assumeMigrated skips that instance's migration pass, while an unflagged instance begins a locked transaction.
+
+#### Behavior contract `postgres-storage.entry-split`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/postgres-storage/test/edge-bundle.test.ts","testNames":["links the main entry with no node builtins","negative control: the node entry does NOT link"]}] */}
+The main entry links without Node built-ins for edge pools, while /node deliberately fails an edge bundle because it imports pg for connectionString convenience.
+
+### Migration and pool ownership
+
+Migration state is instance-scoped. In a per-request host, migrate an unflagged cold set of all three components, then set `assumeMigrated` only for the same database, schema, prefix, component, and current package schema. A wrong assertion fails on the first query. Checkpoint, thread, and permission migrations are separate.
+
+Another process sees a durable permission grant only after that store calls `load()`. When you construct a custom permissions store, pass the resolved `mode` and config explicitly; Dawn does not overlay sibling configuration onto an already-created store.
+
+Do not mark every store as owning one shared pool. An injected pool defaults to caller-owned and receives no error listener from Dawn; setting `ownsPool: true` makes that store end it. A `/node` factory-created pool is owned, monitored, and closed by that store.
+
+Schemas, table prefixes, and thread IDs organize data; they are not tenant authorization boundaries. Rows are plaintext unless your database and infrastructure provide encryption.
+
+## Examples and related guides
+
+```ts
+import { Pool } from "pg"
+import {
+  createPostgresPermissionsStore,
+  createPostgresThreadsStore,
+  postgresCheckpointer,
+} from "@dawn-ai/postgres-storage"
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+pool.on("error", (error) => console.warn("Postgres pool error", error))
+const checkpointer = postgresCheckpointer({ pool })
+const threadsStore = createPostgresThreadsStore({ pool })
+const permissionsStore = createPostgresPermissionsStore({ pool })
+await Promise.all([checkpointer.ready(), threadsStore.ready(), permissionsStore.ready()])
+
+// During application shutdown:
+await Promise.all([checkpointer.close(), threadsStore.close(), permissionsStore.close()])
+await pool.end()
+```
+
+Continue with [Persistence and Tenancy](/docs/persistence), [Production Topology](/docs/production-topology), and [Edge and Hono](/docs/deployment/edge).

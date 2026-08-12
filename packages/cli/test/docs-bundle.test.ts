@@ -11,7 +11,8 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, extname, join, relative, sep } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { tsImport } from "tsx/esm/api"
 import { describe, expect, it } from "vitest"
 import {
   buildReadme,
@@ -85,16 +86,38 @@ const EXPECTED_DOCS_NAV = [
   { slug: "errors", label: "Error Codes" },
   { slug: "faq", label: "FAQ" },
 ] as const
-const LANDED_API_REFERENCE_PAGES = [
-  { slug: "api/sdk", label: "@dawn-ai/sdk" },
-  { slug: "api/cli", label: "@dawn-ai/cli" },
-  { slug: "api/core", label: "@dawn-ai/core" },
-  { slug: "api/generated-routes", label: "dawn:routes" },
-] as const
+interface RegistryPage {
+  readonly label: string
+  readonly href: string
+}
+
+const apiReferenceRegistry = (await tsImport(
+  pathToFileURL(join(repoRoot, "apps/web/app/components/docs/api-reference-pages.ts")).href,
+  import.meta.url,
+)) as { readonly API_REFERENCE_PAGES: readonly RegistryPage[] }
+const API_REFERENCE_PAGES = apiReferenceRegistry.API_REFERENCE_PAGES
+
+function pairedApiReferencePages(pages: readonly RegistryPage[]) {
+  const paired = [] as Array<{ slug: string; label: string }>
+  const missing = [] as string[]
+  for (const page of pages) {
+    const slug = page.href.slice("/docs/".length)
+    const content = join(repoRoot, "apps/web/content/docs", `${slug}.mdx`)
+    const wrapper = join(repoRoot, "apps/web/app/docs", slug, "page.tsx")
+    if (!existsSync(content) || !existsSync(wrapper)) {
+      missing.push(page.href)
+      continue
+    }
+    paired.push({ slug, label: page.label })
+  }
+  return { paired, missing }
+}
+
+const registeredApiReferencePages = pairedApiReferencePages(API_REFERENCE_PAGES)
 const apiHubIndex = EXPECTED_DOCS_NAV.findIndex(({ slug }) => slug === "api")
 const EXPECTED_TRANSITIONAL_DOCS = [
   ...EXPECTED_DOCS_NAV.slice(0, apiHubIndex + 1),
-  ...LANDED_API_REFERENCE_PAGES,
+  ...registeredApiReferencePages.paired,
   ...EXPECTED_DOCS_NAV.slice(apiHubIndex + 1),
 ] as const
 const scannedTextExtensions = new Set([
@@ -361,6 +384,29 @@ describe("mdxToMarkdown()", () => {
 })
 
 describe("parseNavOrder()", () => {
+  it("derives exhaustive API leaves from the canonical registry instead of a hand-maintained list", () => {
+    expect(registeredApiReferencePages.missing).toEqual([])
+    expect(registeredApiReferencePages.paired).toEqual(
+      API_REFERENCE_PAGES.map((page) => ({
+        slug: page.href.slice("/docs/".length),
+        label: page.label,
+      })),
+    )
+  })
+
+  it("reports a newly registered API leaf until both authored sources land", () => {
+    const futureHref = ["/docs/api", "future"].join("/")
+    const mutation = pairedApiReferencePages([
+      ...API_REFERENCE_PAGES,
+      {
+        ...API_REFERENCE_PAGES[0],
+        label: "@dawn-ai/future",
+        href: futureHref,
+      },
+    ])
+    expect(mutation.missing).toEqual([futureHref])
+  })
+
   it("returns nested doc slugs in source order without duplicates", () => {
     const nav = [
       {
@@ -467,12 +513,18 @@ describe("generated documentation bundle", () => {
       title: "Recipes Overview",
       file: "recipes/index.md",
     })
-    expect(topics).toHaveLength(62)
-    expect(topics.slice(apiHubIndex, apiHubIndex + 5).map(({ title }) => title)).toEqual([
+    expect(topics).toHaveLength(EXPECTED_TRANSITIONAL_DOCS.length)
+    expect(topics.slice(apiHubIndex, apiHubIndex + 11).map(({ title }) => title)).toEqual([
       "API Reference",
       "@dawn-ai/sdk",
       "@dawn-ai/cli",
       "@dawn-ai/core",
+      "@dawn-ai/ag-ui",
+      "@dawn-ai/memory",
+      "@dawn-ai/memory-pgvector",
+      "@dawn-ai/postgres-storage",
+      "@dawn-ai/testing",
+      "@dawn-ai/evals",
       "dawn:routes",
     ])
     expect(topics).toContainEqual({

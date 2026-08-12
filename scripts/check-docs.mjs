@@ -793,28 +793,29 @@ if (process.argv[2] === "--analyze-api-inventory") {
 }
 
 if (process.argv[2] === "--analyze-foundational-api-references") {
-  const foundationalRegistry = await tsImport(
+  const detailedRegistry = await tsImport(
     pathToFileURL(resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")).href,
     import.meta.url,
   )
   const sourceInventory = await readPublicSourceInventory(repoRoot)
-  const foundationalHrefs = new Set([
-    "/docs/api/sdk",
-    "/docs/api/cli",
-    "/docs/api/core",
-    "/docs/api/generated-routes",
-  ])
-  const pages = foundationalRegistry.API_REFERENCE_PAGES.filter(({ href }) =>
-    foundationalHrefs.has(href),
+  const detailedPackageNames = new Set(
+    detailedRegistry.ARTIFACT_REGISTRY.flatMap((artifact) =>
+      artifact.kind === "import" && artifact.coverage === "detailed" ? [artifact.packageName] : [],
+    ),
+  )
+  const registeredOwnerPages = detailedRegistry.API_REFERENCE_PAGES.filter(
+    (page) =>
+      page.surfaceName === "dawn:routes" ||
+      page.ownerPackageNames.some((name) => detailedPackageNames.has(name)),
   )
   const ownerByPackage = new Map(
-    pages.flatMap((page) =>
+    registeredOwnerPages.flatMap((page) =>
       page.surfaceName === "dawn:routes"
         ? []
         : page.ownerPackageNames.map((name) => [name, page.href]),
     ),
   )
-  const artifacts = foundationalRegistry.ARTIFACT_REGISTRY.flatMap((artifact) => {
+  const artifacts = detailedRegistry.ARTIFACT_REGISTRY.flatMap((artifact) => {
     if (artifact.kind === "generated") return [artifact]
     if (
       artifact.kind !== "import" ||
@@ -825,13 +826,13 @@ if (process.argv[2] === "--analyze-foundational-api-references") {
     }
     return [{ ...artifact, ownerHref: ownerByPackage.get(artifact.packageName) }]
   })
-  const documents = pages.map(({ href }) => ({
+  const documents = registeredOwnerPages.map(({ href }) => ({
     href,
     path: docHrefToContentPath(href),
     source: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
   }))
   const authorityFiles = new Set(
-    foundationalRegistry.API_BEHAVIOR_CONTRACTS.flatMap(({ authorities }) =>
+    detailedRegistry.API_BEHAVIOR_CONTRACTS.flatMap(({ authorities }) =>
       authorities.map(({ file }) => file),
     ),
   )
@@ -876,7 +877,7 @@ if (process.argv[2] === "--analyze-foundational-api-references") {
       packages: sourceInventory.packages,
       artifacts,
       documents,
-      behaviorContracts: foundationalRegistry.API_BEHAVIOR_CONTRACTS,
+      behaviorContracts: detailedRegistry.API_BEHAVIOR_CONTRACTS,
       files: sourceInventory.files,
       generatedAuthorities: [{ moduleName: "dawn:routes", declarations: generatedDeclarations }],
     },
@@ -886,6 +887,39 @@ if (process.argv[2] === "--analyze-foundational-api-references") {
 }
 
 const checks = [
+  {
+    file: "apps/web/content/docs/api/memory.mdx",
+    patterns: [
+      "SQLite stores memory rows—including content, data, source, and tags—as plaintext",
+      "Low-level `MemoryStore` implementations can store typed procedural records",
+      "the generated `remember` tool returns a not-yet-wired rejection",
+      "namespace organizes records; it is not a security boundary",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/memory-pgvector.mdx",
+    patterns: [
+      "Content or data updates do not recompute that embedding",
+      "Both `queryEmbedding` and `embedderId` are required",
+      "if (!connectionString)",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/testing.mdx",
+    patterns: [
+      "With positive dimensions, inputs containing supported tokens are unit-length",
+      "Empty or tokenless inputs produce a zero vector",
+      "`fakeEmbedder({ dims: 0 })` produces an empty vector",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/evals.mdx",
+    patterns: [
+      "counts collected stream chunks or deltas, not model-tokenizer tokens",
+      "`gate.perScorer()` ignores scorers without an explicit threshold",
+      "separate default bar of `0.5`",
+    ],
+  },
   {
     file: "apps/web/content/docs/getting-started.mdx",
     patterns: ["dawn.config.ts"],
@@ -3302,9 +3336,23 @@ if (apiReferenceRegistry) {
     ...API_REFERENCE_PAGES,
     ...navDocEntries.slice(apiHubIndex + 1),
   ]
-  if (navDocEntries.length !== 58 || expectedAllDocsPages.length !== 68) {
+  const expectedAllDocsPageCount = navDocEntries.length + API_REFERENCE_PAGES.length
+  if (navDocEntries.length !== 58 || expectedAllDocsPages.length !== expectedAllDocsPageCount) {
     failures.push(
-      `Docs page registries must retain 58 journey pages and 68 total pages; received ${navDocEntries.length} and ${expectedAllDocsPages.length}`,
+      `Docs page registries must retain 58 journey pages plus every registered API reference leaf; received ${navDocEntries.length} journey pages, ${API_REFERENCE_PAGES.length} reference leaves, and ${expectedAllDocsPages.length} total pages`,
+    )
+  }
+
+  const unpairedApiReferencePages = API_REFERENCE_PAGES.filter(({ href }) => {
+    const slug = href.slice("/docs/".length)
+    return (
+      !existsSync(resolve(repoRoot, "apps/web/content/docs", `${slug}.mdx`)) ||
+      !existsSync(resolve(repoRoot, "apps/web/app/docs", slug, "page.tsx"))
+    )
+  })
+  if (unpairedApiReferencePages.length > 0) {
+    failures.push(
+      `Every registered API reference leaf must have paired MDX and wrapper sources: ${unpairedApiReferencePages.map(({ href }) => href).join(", ")}`,
     )
   }
 

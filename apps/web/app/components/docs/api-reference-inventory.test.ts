@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
@@ -19,6 +20,23 @@ const foundationalPages = [
   { slug: "cli", label: "@dawn-ai/cli", href: "/docs/api/cli" },
   { slug: "core", label: "@dawn-ai/core", href: "/docs/api/core" },
   { slug: "generated-routes", label: "dawn:routes", href: "/docs/api/generated-routes" },
+] as const
+
+const packagePages = [
+  { slug: "ag-ui", label: "@dawn-ai/ag-ui", href: "/docs/api/ag-ui" },
+  { slug: "memory", label: "@dawn-ai/memory", href: "/docs/api/memory" },
+  {
+    slug: "memory-pgvector",
+    label: "@dawn-ai/memory-pgvector",
+    href: "/docs/api/memory-pgvector",
+  },
+  {
+    slug: "postgres-storage",
+    label: "@dawn-ai/postgres-storage",
+    href: "/docs/api/postgres-storage",
+  },
+  { slug: "testing", label: "@dawn-ai/testing", href: "/docs/api/testing" },
+  { slug: "evals", label: "@dawn-ai/evals", href: "/docs/api/evals" },
 ] as const
 
 const foundationalSections = [
@@ -99,6 +117,13 @@ function foundationalContent(slug: string): string {
 function foundationalWrapper(slug: string): string {
   const path = join(REPO_ROOT, "apps/web/app/docs/api", slug, "page.tsx")
   return existsSync(path) ? readFileSync(path, "utf8") : ""
+}
+
+function packageExample(slug: string): string {
+  const section = foundationalContent(slug).split("## Examples and related guides")[1] ?? ""
+  const match = /```ts\n([\s\S]*?)\n```/.exec(section)
+  if (!match?.[1]) throw new Error(`missing TypeScript example for ${slug}`)
+  return match[1]
 }
 
 interface InventoryFixture {
@@ -1729,7 +1754,7 @@ describe("foundational API reference pages", () => {
     )
     expect(result.status, result.stderr || result.stdout).toBe(0)
     expect(JSON.parse(result.stdout)).toEqual({ failures: [] })
-  })
+  }, 30_000)
 
   it("registers source-coupled defaults, errors, and lifecycle behavior", () => {
     expect(API_BEHAVIOR_CONTRACTS.map(({ id }) => id)).toEqual([
@@ -1743,6 +1768,218 @@ describe("foundational API reference pages", () => {
       "core.state.reducer-resolution",
       "generated-routes.state-conditional",
       "generated-routes.tool-signatures",
+      "ag-ui.outbound.errors-as-events",
+      "ag-ui.inbound.lossless-input",
+      "memory.namespace.stable-encoding",
+      "memory.browse.pure-subpath",
+      "memory.write-policy",
+      "memory-pgvector.schema.identifier-validation",
+      "memory-pgvector.dimension-branches",
+      "memory-pgvector.update-preserves-embedding",
+      "postgres-storage.migration.instance-scoped",
+      "postgres-storage.entry-split",
+      "testing.fake-embedder.deterministic",
+      "testing.harness-isolation",
+      "evals.scorer-errors.zero-score",
+      "evals.run-and-gate",
+    ])
+  })
+})
+
+describe("package API reference pages", () => {
+  it.each(packagePages)("uses the exact title, H1, and wrapper href for $href", (page) => {
+    const content = foundationalContent(page.slug)
+    const wrapper = foundationalWrapper(page.slug)
+
+    expect(content.match(/^# (.+)$/m)?.[1]).toBe(page.label)
+    expect(wrapper).toContain(`export const metadata: Metadata = { title: "${page.label}" }`)
+    expect(wrapper).toContain(`<DocsPage href="${page.href}" Content={Content} />`)
+  })
+
+  it.each(packagePages)("uses the six-section reference template for $href", (page) => {
+    const headings = [...foundationalContent(page.slug).matchAll(/^## (.+)$/gm)].map(
+      (match) => match[1],
+    )
+    expect(headings).toEqual(foundationalSections)
+  })
+
+  it("owns every explicit detailed subpath separately", () => {
+    expect(foundationalContent("ag-ui")).toContain("### `@dawn-ai/ag-ui/sse`")
+    for (const subpath of ["browse", "namespace", "reconcile"]) {
+      expect(foundationalContent("memory")).toContain(`### \`@dawn-ai/memory/${subpath}\``)
+    }
+    expect(foundationalContent("postgres-storage")).toContain(
+      "### `@dawn-ai/postgres-storage/node`",
+    )
+  })
+
+  it("documents Testing's fake embedder and all four conformance runners", () => {
+    const content = foundationalContent("testing")
+    for (const exportName of [
+      "fakeEmbedder",
+      "runCheckpointerConformance",
+      "runMemoryStoreConformance",
+      "runPermissionsStoreConformance",
+      "runThreadsStoreConformance",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+  })
+
+  it("documents Postgres node wildcard ownership and instance-scoped migration", () => {
+    const content = foundationalContent("postgres-storage")
+    expect(content).toContain("The `/node` entry also re-exports every root export")
+    expect(content).toContain("Migration state is instance-scoped")
+  })
+
+  it("keeps application-critical lifecycle and trust-boundary guidance explicit", () => {
+    expect(foundationalContent("testing")).toContain(
+      "temporarily changes process-wide `OPENAI_BASE_URL` and `OPENAI_API_KEY`",
+    )
+    expect(foundationalContent("testing")).toContain("restores them on awaited close")
+    expect(foundationalContent("postgres-storage")).toContain(
+      "same database, schema, prefix, component, and current package schema",
+    )
+    expect(foundationalContent("postgres-storage")).toContain(
+      "sees a durable permission grant only after that store calls `load()`",
+    )
+    expect(foundationalContent("memory-pgvector")).toContain("needed DDL and extension privileges")
+    expect(foundationalContent("memory-pgvector")).toContain(
+      "does not migrate an existing vector dimension or HNSW tuning",
+    )
+    expect(foundationalContent("memory")).toContain(
+      "Browse cursors detect query mismatches but are not authenticated tokens",
+    )
+    expect(foundationalContent("memory")).toContain(
+      "validateBrowseQuery(query, { maxLimit: BROWSE_MAX_LIMIT })",
+    )
+    expect(foundationalContent("memory")).toContain(
+      "SQLite stores memory rows—including content, data, source, and tags—as plaintext",
+    )
+    expect(foundationalContent("memory")).toContain(
+      "Low-level `MemoryStore` implementations can store typed procedural records",
+    )
+    expect(foundationalContent("memory")).toContain(
+      "the generated `remember` tool returns a not-yet-wired rejection",
+    )
+    expect(foundationalContent("memory-pgvector")).toContain(
+      "Content or data updates do not recompute that embedding",
+    )
+    expect(foundationalContent("memory-pgvector")).toContain(
+      "Both `queryEmbedding` and `embedderId` are required",
+    )
+    expect(foundationalContent("testing")).toContain(
+      "Empty or tokenless inputs produce a zero vector",
+    )
+    expect(foundationalContent("testing")).toContain(
+      "With positive dimensions, inputs containing supported tokens are unit-length",
+    )
+    expect(foundationalContent("testing")).toContain(
+      "`fakeEmbedder({ dims: 0 })` produces an empty vector",
+    )
+    expect(foundationalContent("evals")).toContain(
+      "informational with `gated: false` and `passed: true`",
+    )
+    expect(foundationalContent("evals")).toContain(
+      "counts collected stream chunks or deltas, not model-tokenizer tokens",
+    )
+    expect(foundationalContent("evals")).toContain(
+      "`gate.perScorer()` ignores scorers without an explicit threshold",
+    )
+  })
+
+  it("keeps the pgvector example exact-optional safe", () => {
+    const content = foundationalContent("memory-pgvector")
+    expect(content).toContain("if (!connectionString)")
+    expect(content).not.toContain("connectionString: process.env.DATABASE_URL")
+  })
+
+  it("type-checks the pgvector example with exact optional properties", () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-pgvector-doc-example-"))
+    const fileName = join(fixtureRoot, "pgvector-example.ts")
+    const source = `
+export {}
+declare const process: { readonly env: Record<string, string | undefined> }
+declare function pgvectorMemoryStore(options: {
+  readonly connectionString?: string
+  readonly dimensions: number
+  readonly tablePrefix?: string
+}): {
+  search(query: { readonly namespace: string; readonly query?: string }): Promise<unknown>
+  close(): Promise<void>
+}
+${packageExample("memory-pgvector").replace(
+  'import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"',
+  "",
+)}
+`
+    const configPath = join(fixtureRoot, "tsconfig.json")
+    try {
+      writeFileSync(fileName, source)
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          compilerOptions: {
+            exactOptionalPropertyTypes: true,
+            module: "ESNext",
+            noEmit: true,
+            strict: true,
+            target: "ES2022",
+            types: [],
+          },
+          files: [fileName],
+        }),
+      )
+      const result = spawnSync(
+        join(REPO_ROOT, "node_modules/typescript/bin/tsc"),
+        ["-p", configPath],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+        },
+      )
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("passes the source-derived inventory and behavior contracts for all ten owners", () => {
+    const result = spawnSync(
+      process.execPath,
+      [CHECK_DOCS_PATH, "--analyze-foundational-api-references"],
+      { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    )
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ failures: [] })
+  }, 30_000)
+
+  it("registers the package defaults, errors, and lifecycle behavior", () => {
+    expect(API_BEHAVIOR_CONTRACTS.map(({ id }) => id)).toEqual([
+      "sdk.agent.descriptor-shape",
+      "sdk.middleware.result-shapes",
+      "sdk.validate-model-id.advisory",
+      "cli.serve.production-boot",
+      "cli.serve-runtime.port-precedence",
+      "cli.fetch.request-store-lifecycle",
+      "core.load-config.failed-load-eviction",
+      "core.state.reducer-resolution",
+      "generated-routes.state-conditional",
+      "generated-routes.tool-signatures",
+      "ag-ui.outbound.errors-as-events",
+      "ag-ui.inbound.lossless-input",
+      "memory.namespace.stable-encoding",
+      "memory.browse.pure-subpath",
+      "memory.write-policy",
+      "memory-pgvector.schema.identifier-validation",
+      "memory-pgvector.dimension-branches",
+      "memory-pgvector.update-preserves-embedding",
+      "postgres-storage.migration.instance-scoped",
+      "postgres-storage.entry-split",
+      "testing.fake-embedder.deterministic",
+      "testing.harness-isolation",
+      "evals.scorer-errors.zero-score",
+      "evals.run-and-gate",
     ])
   })
 })
