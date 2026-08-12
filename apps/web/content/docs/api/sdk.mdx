@@ -77,6 +77,19 @@ import { scenarios } from "@dawn-ai/sdk/testing"
 | `allow` | Continue middleware execution. |
 | `defineMiddleware` | Preserve types for a middleware function. |
 | `reject` | Stop middleware execution. |
+| `DawnThreadAccess` | Define one thread-access action handler. |
+| `ThreadAccessAllow` | Express an allow decision, optionally stamping a thread on create. |
+| `ThreadAccessDeny` | Express a deny decision with an optional status and body. |
+| `ThreadAccessPolicy` | Declare per-action thread authorization handlers. |
+| `ThreadAccessRequest` | Describe the thread request being authorized. |
+| `ThreadAccessResult` | Express a thread authorization decision. |
+| `ThreadAction` | Name the coarse thread action being authorized. |
+| `ThreadOperation` | Name the specific endpoint operation being authorized. |
+| `ThreadSubject` | Describe the thread a decision is made about. |
+| `THREAD_ACCESS_METADATA_KEY` | Name the reserved metadata key holding the server-issued access stamp. |
+| `defineThreadAccess` | Preserve types for a thread access policy. |
+| `deny` | Refuse a thread request. |
+| `permit` | Allow a thread request, optionally stamping it on create. |
 | `BuiltInModelProviderId` | Name a built-in model provider. |
 | `ModelProviderId` | Name a built-in or custom model provider. |
 | `inferProvider` | Infer a provider from a model ID. |
