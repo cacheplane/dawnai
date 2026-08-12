@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "incremental": true },
+  "include": ["e2e/**/*.ts", "playwright.config.ts"]
+}

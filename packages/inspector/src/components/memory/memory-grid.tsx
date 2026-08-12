@@ -11,6 +11,7 @@ import {
   PretableSurface,
   type PretableSurfaceMessages,
   type PretableSurfaceProps,
+  type PretableSurfaceState,
   type PretableTelemetry,
 } from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
@@ -18,6 +19,7 @@ import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
 import { KINDS, STATUSES } from "./memory-domain"
+import { TEST_IDS } from "./test-ids"
 
 /** Row projection handed to pretable — a plain bag so it satisfies `PretableRow`
  *  (MemoryRecord is an interface, so it has no implicit index signature). Each
@@ -234,6 +236,45 @@ function toRow(record: MemoryRecord): GridRow {
   }
 }
 
+/**
+ * Row ids → the engine's cell-range selection. Used to PRUNE a selection after a bulk
+ * run. Applied imperatively through `grid.setSelection` rather than through controlled
+ * `state.selection` on purpose: `usePretable` latches a controlled selection across a
+ * `datasetKey` pivot, and the prune has to land whether or not the dataset moved.
+ *
+ * A TICKED row is a range spanning the first and last DRAWN columns — `getColumns()`,
+ * which is what `toggleRowSelection` and the header checkbox both span, and the only
+ * span the surface counts as a whole row. Hard-coding the first and last columns of
+ * `COLUMNS` instead produces an INDETERMINATE row: the drawn set is not that list.
+ * The checkbox column is prepended to it, the derived group column joins it whenever
+ * the page groups by namespace, and `hideGroupedColumns` takes `namespace` back out
+ * again — so a short span leaves the box `mixed`, the row absent from
+ * `onRowSelectionChange`, and the bulk bar gone with it.
+ *
+ * Which makes `first` the whole of the correctness here, and `last` inert: the surface
+ * widens a range to every data column as soon as EITHER end is the checkbox column, and
+ * the checkbox column always leads `getColumns()`. A wrong `last` therefore cannot be
+ * caught by any test. Read it from the same list anyway — the day the checkbox column
+ * stops leading, `last` is what has to be right.
+ */
+export function buildRowSelection(
+  rowIds: readonly string[],
+  drawnColumnIds: readonly string[],
+): NonNullable<PretableSurfaceState["selection"]> {
+  const first = drawnColumnIds[0]
+  const last = drawnColumnIds[drawnColumnIds.length - 1]
+  if (first === undefined || last === undefined) return { ranges: [], anchor: null }
+  return {
+    ranges: rowIds.map((rowId) => ({
+      startRowId: rowId,
+      endRowId: rowId,
+      startColumnId: first,
+      endColumnId: last,
+    })),
+    anchor: rowIds.length > 0 ? { rowId: rowIds[0] as string, columnId: first } : null,
+  }
+}
+
 export function MemoryGrid({
   records,
   onSelect,
@@ -348,8 +389,15 @@ export function MemoryGrid({
       )
     }
     const message = errorMessage ?? "Could not load memories."
+    // One node, reused by both blocks below — they are mutually exclusive kinds, so
+    // the id is never ambiguous in a rendered tree.
     const retry = onRetry ? (
-      <Button variant="outline" className="h-7 px-2" onClick={onRetry}>
+      <Button
+        variant="outline"
+        className="h-7 px-2"
+        data-testid={TEST_IDS.retryInitial}
+        onClick={onRetry}
+      >
         Retry
       </Button>
     ) : null

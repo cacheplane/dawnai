@@ -409,7 +409,10 @@ jobs:
 
   inspector-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20: the browser lane below adds a chromium download, a second
+    # standalone boot and 19 single-worker spec files (44 tests) on top of the
+    # vitest lane.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -440,6 +443,27 @@ jobs:
 
       - name: Inspector standalone e2e
         run: DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test
+
+      - name: Install Playwright browsers
+        # `--filter` is required, not stylistic: @playwright/test is a dependency of
+        # packages/inspector only, so a bare root `pnpm exec playwright` fails with
+        # ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL / Command "playwright" not found.
+        run: pnpm --filter @dawn-ai/inspector exec playwright install --with-deps chromium
+
+      - name: Inspector browser verification
+        # Boots the same .next/standalone artifact the vitest lane above uses (`Inspector
+        # standalone e2e`, not the browser-install step immediately above), against a
+        # seeded 1250-record store. `workers: 1` in playwright.config.ts is load-bearing:
+        # the specs share one store and several mutate it.
+        run: pnpm --filter @dawn-ai/inspector test:e2e
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: inspector-playwright-traces
+          path: packages/inspector/test-results
+          retention-days: 7
 
   chart-validate:
     runs-on: ubuntu-latest

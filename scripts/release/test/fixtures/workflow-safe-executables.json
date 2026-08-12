@@ -574,6 +574,30 @@
       },
       {
         "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 6,
+        "step": "Install Playwright browsers",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/inspector exec playwright install --with-deps chromium"
+      },
+      {
+        "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 7,
+        "step": "Inspector browser verification",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/inspector test:e2e"
+      },
+      {
+        "classification": "safe",
+        "job": "inspector-e2e",
+        "stepIndex": 8,
+        "step": "Upload Playwright traces",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
         "job": "chart-validate",
         "stepIndex": 0,
         "step": "Checkout",

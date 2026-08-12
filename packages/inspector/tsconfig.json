@@ -3,6 +3,7 @@
   "extends": "../config-typescript/nextjs.json",
   "compilerOptions": {
     "incremental": true,
+    "allowImportingTsExtensions": true,
     "paths": { "@/*": ["./*"] }
   },
   "include": [

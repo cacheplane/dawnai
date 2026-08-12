@@ -3,6 +3,7 @@ import { useId } from "react"
 import { BROWSE_RESIDENT_CAP } from "../../browse/browse-machine"
 import { Button } from "../ui/button"
 import type { LoadMoreState } from "./browse-window"
+import { TEST_IDS } from "./test-ids"
 
 const NUMBER = new Intl.NumberFormat()
 
@@ -94,6 +95,10 @@ export function LoadMoreFooter({
       <Button
         type="button"
         variant="outline"
+        // On the control, not on the wrapper: the wrapper is also on screen in the
+        // states where the button is inactive, and a reader that clicked the wrapper
+        // would see nothing happen for a reason the DOM never stated.
+        data-testid={TEST_IDS.loadMore}
         // `Button`'s base class dims and blocks pointer events on `disabled:` only.
         // This control is deliberately never natively `disabled`, so without an
         // `aria-disabled`-keyed rule every inactive state renders identically to the

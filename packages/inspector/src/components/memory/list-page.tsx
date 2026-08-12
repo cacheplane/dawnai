@@ -9,12 +9,13 @@ import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BrowseErrorBanners, type BrowseErrorEntry, BrowseStatusBar } from "./browse-chrome"
 import { loadMoreState } from "./browse-window"
-import { BulkBar } from "./bulk-bar"
+import { BulkBar, type BulkOutcome } from "./bulk-bar"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { LoadMoreFooter } from "./load-more-footer"
 import { STATUSES } from "./memory-domain"
-import { type GridRow, MemoryGrid } from "./memory-grid"
+import { buildRowSelection, type GridRow, MemoryGrid } from "./memory-grid"
+import { TEST_IDS } from "./test-ids"
 import { TimelineView } from "./timeline-view"
 import {
   capSortEntries,
@@ -36,6 +37,11 @@ interface SearchResponse {
  *  slots inside `useMemoryBrowse`, and a bulk mutation's failures stay with the bar
  *  that lists which ids failed and why. */
 type ErrorSource = "stats" | "search"
+
+/** The counts' cadence. Exported because the suspension around a bulk run is timed
+ *  against it: a test that bounds a run's window has to outlast this to mean anything,
+ *  and a poll that merely had no time to tick reads exactly like a suspended one. */
+export const STATS_POLL_INTERVAL_MS = 2000
 
 /** Timeline window presets → milliseconds back from now ("all" = unbounded). */
 const WINDOWS = {
@@ -109,6 +115,8 @@ export function ListPage() {
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [ticked, setTicked] = useState<readonly string[]>([])
+  /** A bulk run is between its first and last per-id POST. */
+  const [bulkRunning, setBulkRunning] = useState(false)
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({})
   const [search, setSearch] = useState<SearchResponse>()
 
@@ -253,8 +261,15 @@ export function ListPage() {
     })
   }, [filters, sort, namespace, view, timelineSince])
 
-  // Search replaces the browse view entirely, so browse stops polling behind it.
-  const browse = useMemoryBrowse({ query: browseQuery, live: live && !query })
+  // Search replaces the browse view entirely, so browse stops polling behind it. A bulk
+  // run suspends it too, for a narrower reason than "the rows must hold still": the bar
+  // below is unmounted at `ticked.length === 0`, and the per-id failure list lives in
+  // ITS state. A tick landing between two of the run's writes can drop every ticked row
+  // from the answer — forgetting the whole loaded page does exactly that — which empties
+  // `ticked` through `onTickedChange` and destroys the only channel that would have said
+  // what failed. This does NOT make the run atomic: a request already in flight when the
+  // run starts still lands. It bounds the window to one that is already open.
+  const browse = useMemoryBrowse({ query: browseQuery, live: live && !query && !bulkRunning })
   const { refresh: refreshBrowse, retry: retryBrowse } = browse
   const browsePhase = browse.dataState.phase
   // The hook's own `total`, not a second derivation out of `resultMeta` — both gate
@@ -283,7 +298,15 @@ export function ListPage() {
     refreshBrowse()
   }, [refreshRequested, browsePhase, refreshBrowse])
 
-  const stats = usePolling(statsFn, 2000, live)
+  // Suspended for the run on the same flag as the browse above: the counts and the rows
+  // are two readings of one store, and a stats tick landing between two per-id writes
+  // would quote a half-applied batch beside a grid that is deliberately holding still.
+  // The flag is raised from the same event that issues the first write, so this only
+  // holds because `usePolling` suspends SILENTLY — a hook that took a parting tick on the
+  // way down would take it concurrently with that write, which is the reading this is
+  // here to prevent. Resuming ticks at once, so the run costs one stats read at its
+  // trailing edge and none inside it.
+  const stats = usePolling(statsFn, STATS_POLL_INTERVAL_MS, live && !bulkRunning)
 
   // Search is fetched once per (debounced) query change, never polled — a
   // hybrid store would call the embedder on every search request.
@@ -336,14 +359,37 @@ export function ListPage() {
     gridRef.current?.setSelection({ ranges: [], anchor: null })
     setTicked([])
   }, [])
+  const handleBulkStart = useCallback(() => setBulkRunning(true), [])
   const handleBulkDone = useCallback(
-    ({ failed }: { failed: number }) => {
-      // Keep the selection when anything failed: clearing it unmounts the bar, and the
-      // bar is the only channel carrying WHICH ids failed and why.
-      if (failed === 0) clearTicked()
+    ({ failed }: BulkOutcome) => {
+      // Succeeded ids leave the selection; failures stay, with their per-id errors, so
+      // the obvious next action retries exactly what did not happen.
+      // The DRAWN columns, read at completion: grouping and the checkbox column both
+      // change what a whole-row range has to span.
+      const grid = gridRef.current
+      grid?.setSelection(
+        buildRowSelection(
+          failed,
+          grid.getColumns().map((column) => column.id),
+        ),
+      )
+      // Both writers, on purpose. The line above already reaches `ticked` the long way
+      // round — the engine emits its new row selection and `onTickedChange` mirrors it
+      // back — so this one is normally redundant, and no test can tell it apart. It is
+      // here so the prune does not RIDE on that emit: this is the one write that says
+      // what the RUN concluded rather than what the grid happens to be drawing.
+      setTicked(failed)
+      setBulkRunning(false)
+      // Reconcile the grid: deleted rows leave, approved rows change status in place.
+      // The datasetKey is unchanged, so the surviving selection is preserved
+      // deliberately. This exists for the LIVE-OFF case, which `setBulkRunning(false)`
+      // cannot cover: clearing that flag only resumes polling when `live` is also on,
+      // and with it off nothing else would ever fetch the post-write answer. With live
+      // on the resume tick beats this call and single flight drops it — the refresh
+      // still happens, just not because of this line.
       requestRefresh()
     },
-    [clearTicked, requestRefresh],
+    [requestRefresh],
   )
 
   const byStatus = stats?.byStatus ?? {}
@@ -519,7 +565,12 @@ export function ListPage() {
             className="w-64"
           />
           <label className="flex items-center gap-1.5 text-sm text-zinc-600">
-            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+            <input
+              type="checkbox"
+              data-testid={TEST_IDS.liveToggle}
+              checked={live}
+              onChange={(e) => setLive(e.target.checked)}
+            />
             live
           </label>
         </div>
@@ -556,7 +607,7 @@ export function ListPage() {
             id="browse-scope-note"
             hidden={!searching}
             className="mb-2 text-xs text-zinc-500"
-            data-testid="browse-scope-note"
+            data-testid={TEST_IDS.searchScopeNote}
           >
             Search ranks active memories, and the namespace facet applies to it. Column filters, the
             view toggle
@@ -613,7 +664,11 @@ export function ListPage() {
               construction. Invisible and outside the a11y tree, but NOT outside a
               document-wide text query: anything asserting on row text has to scope
               itself to the surface it means, or the hidden copy will answer. */}
-          <div data-testid="browse-region" hidden={browseSurfaceHidden} ref={browseRegionRef}>
+          <div
+            data-testid={TEST_IDS.browseRegion}
+            hidden={browseSurfaceHidden}
+            ref={browseRegionRef}
+          >
             {sortCapped ? (
               <p role="status" className="mb-2 text-xs text-zinc-500" data-testid="sort-cap-notice">
                 {`Sorting is limited to ${MAX_BROWSE_SORT_ENTRIES} columns. The extra column was not added.`}
@@ -683,6 +738,7 @@ export function ListPage() {
           ticked={ticked}
           records={browse.rows}
           onDone={handleBulkDone}
+          onStart={handleBulkStart}
           onClear={clearTicked}
         />
       ) : null}
