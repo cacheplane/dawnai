@@ -89,81 +89,52 @@ export function mdxToMarkdown(raw: string): string {
   return `${result}\n`
 }
 
-export interface NavEntry {
+export interface DocsPageEntry {
   readonly slug: string
   readonly label: string
-}
-
-interface DocsNavSectionValue {
-  readonly items: readonly unknown[]
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null
 }
 
-/** Validate and flatten an evaluated `DOCS_NAV` export, deduped by slug. */
-export function parseNav(navValue: unknown): NavEntry[] {
-  if (!Array.isArray(navValue)) {
-    throw new TypeError("DOCS_NAV must be an array")
+/** Validate an evaluated `ALL_DOCS_PAGES` export without changing its order or membership. */
+export function parseDocsPages(pagesValue: unknown): DocsPageEntry[] {
+  if (!Array.isArray(pagesValue)) {
+    throw new TypeError("ALL_DOCS_PAGES must be an array")
   }
 
-  const entries: NavEntry[] = []
+  const entries: DocsPageEntry[] = []
   const seen = new Set<string>()
-  for (const [sectionIndex, section] of navValue.entries()) {
-    if (!isRecord(section) || !Array.isArray(section.items)) {
-      throw new TypeError(`DOCS_NAV[${sectionIndex}] must contain an items array`)
+  for (const [index, item] of pagesValue.entries()) {
+    if (!isRecord(item) || typeof item.label !== "string" || typeof item.href !== "string") {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}] must contain string label and href fields`)
     }
-    for (const [itemIndex, item] of (section as unknown as DocsNavSectionValue).items.entries()) {
-      if (!isRecord(item) || typeof item.label !== "string" || typeof item.href !== "string") {
-        throw new TypeError(
-          `DOCS_NAV[${sectionIndex}].items[${itemIndex}] must contain string label and href fields`,
-        )
-      }
-      if (!item.href.startsWith("/docs/") || item.href.includes("#") || item.href.includes("?")) {
-        throw new TypeError(
-          `DOCS_NAV[${sectionIndex}].items[${itemIndex}].href must be an unfragmented /docs/<slug> path`,
-        )
-      }
-      const slug = item.href.slice("/docs/".length)
-      if (slug !== "" && !seen.has(slug)) {
-        const label = item.label
-        seen.add(slug)
-        entries.push({ slug, label })
-      }
+    if (item.label.length === 0 || item.label.trim() !== item.label || /[\r\n]/.test(item.label)) {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}].label must be a non-empty single-line label`)
     }
+    const hrefMatch = /^\/docs\/([a-z0-9-]+(?:\/[a-z0-9-]+)*)$/.exec(item.href)
+    if (!hrefMatch?.[1]) {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}].href must be an unfragmented /docs/<slug> path`)
+    }
+    const slug = hrefMatch[1]
+    if (seen.has(slug)) throw new TypeError(`ALL_DOCS_PAGES contains duplicate slug: ${slug}`)
+    seen.add(slug)
+    entries.push({ slug, label: item.label })
   }
   return entries
 }
 
-/** Load journey navigation, or the authored subset of exhaustive API navigation. */
-type LoadNavOptions =
-  | { readonly exhaustive?: false }
-  | { readonly exhaustive: true; readonly existingSlugs: ReadonlySet<string> }
-
-export async function loadNav(navFile: string, options: LoadNavOptions = {}): Promise<NavEntry[]> {
+/** Runtime-import the exact exhaustive registry and ignore every other binding. */
+export async function loadDocsPages(navFile: string): Promise<DocsPageEntry[]> {
   const loaded = (await tsImport(pathToFileURL(navFile).href, import.meta.url)) as Record<
     string,
     unknown
   >
-  if (options.exhaustive) {
-    if (!("ALL_DOCS_PAGES" in loaded) || !Array.isArray(loaded.ALL_DOCS_PAGES)) {
-      throw new TypeError(`${navFile} does not export ALL_DOCS_PAGES`)
-    }
-    const entries = parsePages(loaded.ALL_DOCS_PAGES)
-    return entries.filter(({ slug }) => options.existingSlugs.has(slug))
+  if (!("ALL_DOCS_PAGES" in loaded)) {
+    throw new TypeError(`${navFile} does not export ALL_DOCS_PAGES`)
   }
-  if (!("DOCS_NAV" in loaded)) throw new TypeError(`${navFile} does not export DOCS_NAV`)
-  return parseNav(loaded.DOCS_NAV)
-}
-
-function parsePages(value: readonly unknown[]): NavEntry[] {
-  return parseNav([{ items: value }])
-}
-
-/** Flatten an evaluated `DOCS_NAV` value to doc slugs in reading order. */
-export function parseNavOrder(navValue: unknown): string[] {
-  return parseNav(navValue).map((entry) => entry.slug)
+  return parseDocsPages(loaded.ALL_DOCS_PAGES)
 }
 
 /** The text of the first `# ` heading in a markdown document, if any. */

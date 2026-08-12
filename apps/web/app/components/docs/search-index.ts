@@ -9,7 +9,8 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import GithubSlugger from "github-slugger"
 import { webContentRoot } from "../../../lib/content-root"
-import { DOCS_NAV, type DocsNavItem } from "./nav"
+import { API_REFERENCE_PAGES } from "./api-reference-pages"
+import { ALL_DOCS_PAGES, DOCS_NAV, type DocsNavItem } from "./nav"
 
 export interface DocsSearchHeading {
   readonly text: string
@@ -77,13 +78,17 @@ function buildEntry(item: DocsNavItem, section: string): DocsSearchEntry {
 }
 
 function buildIndex(): readonly DocsSearchEntry[] {
-  const entries: DocsSearchEntry[] = []
-  for (const section of DOCS_NAV) {
-    for (const item of section.items) {
-      entries.push(buildEntry(item, section.label))
-    }
-  }
-  return entries
+  const sectionByHref = new Map<string, string>(
+    DOCS_NAV.flatMap((section) => section.items.map((item) => [item.href, section.label])),
+  )
+  const apiReferenceSectionByHref = new Map<string, string>(
+    API_REFERENCE_PAGES.map(({ href, parent }) => [href, parent.label]),
+  )
+  return ALL_DOCS_PAGES.map((item) => {
+    const section = apiReferenceSectionByHref.get(item.href) ?? sectionByHref.get(item.href)
+    if (!section) throw new Error(`Documentation page ${item.href} has no search section`)
+    return buildEntry(item, section)
+  })
 }
 
 export const DOCS_INDEX: readonly DocsSearchEntry[] = buildIndex()

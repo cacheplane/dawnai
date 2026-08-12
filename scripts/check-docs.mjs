@@ -1,30 +1,25 @@
+import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { basename, join, relative, resolve } from "node:path"
+import { basename, dirname, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { tsImport } from "tsx/esm/api"
-import { NodeFlags, SyntaxKind } from "typescript/unstable/ast"
 import {
-  isAssertionExpression,
   isExpressionWithTypeArguments,
   isIdentifier,
   isIndexedAccessTypeNode,
   isInterfaceDeclaration,
   isIntersectionTypeNode,
   isLiteralTypeNode,
-  isObjectLiteralExpression,
-  isParenthesizedExpression,
   isParenthesizedTypeNode,
-  isPropertyAssignment,
   isPropertySignatureDeclaration,
-  isSatisfiesExpression,
   isStringLiteral,
   isTypeLiteralNode,
   isTypeReferenceNode,
   isUnionTypeNode,
-  isVariableStatement,
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
+import tsCompiler from "../packages/core/node_modules/typescript/lib/typescript.js"
 import {
   analyzeApiInventoryBatch,
   manifestArtifactEntries,
@@ -202,9 +197,9 @@ function firstRenderedMdxH1(source) {
 function unwrapExpression(expression) {
   let current = expression
   while (
-    isParenthesizedExpression(current) ||
-    isAssertionExpression(current) ||
-    isSatisfiesExpression(current)
+    tsCompiler.isParenthesizedExpression(current) ||
+    tsCompiler.isAssertionExpression(current) ||
+    tsCompiler.isSatisfiesExpression(current)
   ) {
     current = current.expression
   }
@@ -213,61 +208,165 @@ function unwrapExpression(expression) {
 
 function exportedMetadataTitle(sourceFile) {
   for (const statement of sourceFile.statements) {
-    if (!isVariableStatement(statement)) continue
-    if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword))
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    if (
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === tsCompiler.SyntaxKind.ExportKeyword,
+      )
+    )
       continue
-    if (!(statement.declarationList.flags & NodeFlags.Const)) continue
+    if (!(statement.declarationList.flags & tsCompiler.NodeFlags.Const)) continue
 
     for (const declaration of statement.declarationList.declarations) {
-      if (!isIdentifier(declaration.name) || declaration.name.text !== "metadata") continue
+      if (!tsCompiler.isIdentifier(declaration.name) || declaration.name.text !== "metadata")
+        continue
       if (!declaration.initializer) return null
       const initializer = unwrapExpression(declaration.initializer)
-      if (!isObjectLiteralExpression(initializer)) return null
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) return null
 
+      const titles = []
       for (const property of initializer.properties) {
-        if (!isPropertyAssignment(property)) continue
+        if (tsCompiler.isSpreadAssignment(property)) return null
         const name = property.name
-        if ((!isIdentifier(name) && !isStringLiteral(name)) || name.text !== "title") continue
+        if (
+          (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
+          name.text !== "title"
+        )
+          continue
+        if (!tsCompiler.isPropertyAssignment(property)) return null
         const title = unwrapExpression(property.initializer)
-        return isStringLiteral(title) ? title.text : null
+        if (!tsCompiler.isStringLiteral(title)) return null
+        titles.push(title.text)
       }
-      return null
+      return titles.length === 1 ? titles[0] : null
     }
   }
   return null
 }
 
-function exportedMetadataTitles(sources) {
-  const wrapperPaths = sources.map((_, index) => `/wrapper-${index}.tsx`)
-  const virtualFiles = Object.fromEntries(
-    wrapperPaths.map((wrapperPath, index) => [wrapperPath, sources[index]]),
-  )
-  virtualFiles["/tsconfig.json"] = JSON.stringify({
-    compilerOptions: { jsx: "preserve", noLib: true },
-    files: wrapperPaths,
-  })
+function importTargetForSymbol(checker, identifier, expectedImportedName) {
+  const symbol = checker.getSymbolAtLocation(identifier)
+  const declaration = symbol?.declarations?.[0]
+  if (!declaration) return null
 
-  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
-  let snapshot
-  try {
-    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
-    return wrapperPaths.map((wrapperPath) => {
-      const project = snapshot.getDefaultProjectForFile(wrapperPath)
-      const sourceFile = project?.program.getSourceFile(wrapperPath)
-      return sourceFile ? exportedMetadataTitle(sourceFile) : null
-    })
-  } finally {
-    snapshot?.dispose()
-    api.close()
+  let importDeclaration = null
+  if (tsCompiler.isImportClause(declaration)) {
+    if (
+      expectedImportedName !== "default" ||
+      !declaration.name ||
+      declaration.name.text !== identifier.text
+    ) {
+      return null
+    }
+    importDeclaration = declaration.parent
+  } else if (tsCompiler.isImportSpecifier(declaration)) {
+    const importedName = declaration.propertyName?.text ?? declaration.name.text
+    if (importedName !== expectedImportedName) return null
+    importDeclaration = declaration.parent.parent.parent
   }
+
+  return importDeclaration &&
+    tsCompiler.isImportDeclaration(importDeclaration) &&
+    tsCompiler.isStringLiteral(importDeclaration.moduleSpecifier)
+    ? importDeclaration.moduleSpecifier.text
+    : null
+}
+
+function wrapperContract(sourceFile, checker) {
+  const matches = []
+  function visit(node) {
+    if (tsCompiler.isJsxSelfClosingElement(node) && tsCompiler.isIdentifier(node.tagName)) {
+      let href = null
+      let contentExpression = null
+      let validAttributes = true
+      let hrefCount = 0
+      let contentCount = 0
+      for (const property of node.attributes.properties) {
+        if (tsCompiler.isJsxSpreadAttribute(property)) {
+          validAttributes = false
+          continue
+        }
+        if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name))
+          continue
+        if (property.name.text === "href") {
+          hrefCount++
+          if (property.initializer && tsCompiler.isStringLiteral(property.initializer))
+            href = property.initializer.text
+        }
+        if (property.name.text === "Content") {
+          contentCount++
+          if (
+            property.initializer &&
+            tsCompiler.isJsxExpression(property.initializer) &&
+            property.initializer.expression &&
+            tsCompiler.isIdentifier(property.initializer.expression)
+          ) {
+            contentExpression = property.initializer.expression
+          }
+        }
+      }
+      validAttributes &&= hrefCount === 1 && contentCount === 1
+      matches.push({
+        contentImportTarget:
+          !validAttributes || contentExpression === null
+            ? null
+            : importTargetForSymbol(checker, contentExpression, "default"),
+        docsPageImportTarget: validAttributes
+          ? importTargetForSymbol(checker, node.tagName, "DocsPage")
+          : null,
+        docsPageHref: validAttributes ? href : null,
+      })
+    }
+    node.forEachChild(visit)
+  }
+  sourceFile.forEachChild(visit)
+
+  return matches.length === 1
+    ? matches[0]
+    : { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
 }
 
 function analyzeDocTitlesBatch(fixtures) {
-  const metadataTitles = exportedMetadataTitles(fixtures.map(({ wrapperSource }) => wrapperSource))
-  return fixtures.map(({ mdxSource }, index) => ({
-    firstH1: firstRenderedMdxH1(mdxSource),
-    metadataTitle: metadataTitles[index] ?? null,
-  }))
+  const sourceByPath = new Map(
+    fixtures.map(({ wrapperSource }, index) => [`/wrapper-${index}.tsx`, wrapperSource]),
+  )
+  const compilerHost = {
+    ...tsCompiler.createCompilerHost({ jsx: tsCompiler.JsxEmit.Preserve, noLib: true }),
+    getSourceFile: (fileName, languageVersion) => {
+      const source = sourceByPath.get(fileName)
+      return source === undefined
+        ? undefined
+        : tsCompiler.createSourceFile(
+            fileName,
+            source,
+            languageVersion,
+            true,
+            tsCompiler.ScriptKind.TSX,
+          )
+    },
+    fileExists: (fileName) => sourceByPath.has(fileName),
+    readFile: (fileName) => sourceByPath.get(fileName),
+  }
+  const program = tsCompiler.createProgram({
+    rootNames: [...sourceByPath.keys()],
+    options: { jsx: tsCompiler.JsxEmit.Preserve, noLib: true },
+    host: compilerHost,
+  })
+  const checker = program.getTypeChecker()
+  return fixtures.map(({ mdxSource }, index) => {
+    const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
+    return {
+      firstH1: firstRenderedMdxH1(mdxSource),
+      metadataTitle: sourceFile ? exportedMetadataTitle(sourceFile) : null,
+      ...(sourceFile
+        ? wrapperContract(sourceFile, checker)
+        : {
+            contentImportTarget: null,
+            docsPageImportTarget: null,
+            docsPageHref: null,
+          }),
+    }
+  })
 }
 
 function analyzeDocTitles(fixture) {
@@ -792,22 +891,13 @@ if (process.argv[2] === "--analyze-api-inventory") {
   process.exit(0)
 }
 
-if (process.argv[2] === "--analyze-foundational-api-references") {
+async function analyzeDetailedApiReferences() {
   const detailedRegistry = await tsImport(
     pathToFileURL(resolve(repoRoot, "apps/web/app/components/docs/api-reference.ts")).href,
     import.meta.url,
   )
   const sourceInventory = await readPublicSourceInventory(repoRoot)
-  const detailedPackageNames = new Set(
-    detailedRegistry.ARTIFACT_REGISTRY.flatMap((artifact) =>
-      artifact.kind === "import" && artifact.coverage === "detailed" ? [artifact.packageName] : [],
-    ),
-  )
-  const registeredOwnerPages = detailedRegistry.API_REFERENCE_PAGES.filter(
-    (page) =>
-      page.surfaceName === "dawn:routes" ||
-      page.ownerPackageNames.some((name) => detailedPackageNames.has(name)),
-  )
+  const registeredOwnerPages = [...detailedRegistry.API_REFERENCE_PAGES]
   const ownerByPackage = new Map(
     registeredOwnerPages.flatMap((page) =>
       page.surfaceName === "dawn:routes"
@@ -882,7 +972,16 @@ if (process.argv[2] === "--analyze-foundational-api-references") {
       generatedAuthorities: [{ moduleName: "dawn:routes", declarations: generatedDeclarations }],
     },
   ])
-  process.stdout.write(`${JSON.stringify({ failures: analysis.failures })}\n`)
+  return {
+    failures: analysis.failures,
+    ownerHrefs: registeredOwnerPages.map(({ href }) => href),
+    artifactAddresses: artifacts.map(detailedRegistry.artifactAddressFor),
+    behaviorIds: detailedRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id),
+  }
+}
+
+if (process.argv[2] === "--analyze-detailed-api-references") {
+  process.stdout.write(`${JSON.stringify(await analyzeDetailedApiReferences())}\n`)
   process.exit(0)
 }
 
@@ -935,6 +1034,27 @@ const checks = [
 ]
 
 const failures = []
+
+const detailedApiProcess = spawnSync(
+  process.execPath,
+  [import.meta.filename, "--analyze-detailed-api-references"],
+  { cwd: repoRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+)
+let detailedApiAnalysis
+try {
+  if (detailedApiProcess.status !== 0) {
+    throw new Error(detailedApiProcess.stderr || detailedApiProcess.stdout || "subprocess failed")
+  }
+  detailedApiAnalysis = JSON.parse(detailedApiProcess.stdout)
+} catch (error) {
+  detailedApiAnalysis = {
+    failures: [`Detailed API reference analysis could not run (${error.message})`],
+    ownerHrefs: [],
+    artifactAddresses: [],
+    behaviorIds: [],
+  }
+}
+failures.push(...detailedApiAnalysis.failures)
 
 function walkFiles(dir, predicate, output = []) {
   for (const entry of readdirSync(dir)) {
@@ -3342,6 +3462,47 @@ if (apiReferenceRegistry) {
       `Docs page registries must retain 58 journey pages plus every registered API reference leaf; received ${navDocEntries.length} journey pages, ${API_REFERENCE_PAGES.length} reference leaves, and ${expectedAllDocsPages.length} total pages`,
     )
   }
+  const navModule = await tsImport(pathToFileURL(docsNavPath).href, import.meta.url).catch(
+    (error) => {
+      failures.push(`Docs registries could not be runtime-loaded (${error.message})`)
+      return null
+    },
+  )
+  const runtimeAllDocsPages = navModule?.ALL_DOCS_PAGES
+  const runtimeAllDocsPageRows = Array.isArray(runtimeAllDocsPages)
+    ? runtimeAllDocsPages.map((page) =>
+        page && typeof page === "object"
+          ? { label: page.label, href: page.href }
+          : { label: undefined, href: undefined },
+      )
+    : null
+  if (
+    runtimeAllDocsPageRows === null ||
+    JSON.stringify(runtimeAllDocsPageRows) !==
+      JSON.stringify(expectedAllDocsPages.map(({ label, href }) => ({ label, href })))
+  ) {
+    failures.push(
+      "ALL_DOCS_PAGES must exactly equal journey pages plus API leaves in registry order",
+    )
+  }
+
+  const expectedDetailedOwnerHrefs = API_REFERENCE_PAGES.map(({ href }) => href)
+  const expectedDetailedArtifactAddresses = ARTIFACT_REGISTRY.filter(
+    (artifact) =>
+      artifact.kind === "generated" ||
+      (artifact.kind === "import" && artifact.coverage === "detailed"),
+  ).map(apiReferenceRegistry.artifactAddressFor)
+  const expectedBehaviorIds = apiReferenceRegistry.API_BEHAVIOR_CONTRACTS.map(({ id }) => id)
+  if (
+    JSON.stringify(detailedApiAnalysis.ownerHrefs) !== JSON.stringify(expectedDetailedOwnerHrefs) ||
+    JSON.stringify(detailedApiAnalysis.artifactAddresses) !==
+      JSON.stringify(expectedDetailedArtifactAddresses) ||
+    JSON.stringify(detailedApiAnalysis.behaviorIds) !== JSON.stringify(expectedBehaviorIds)
+  ) {
+    failures.push(
+      "Detailed API analysis must cover every exact owner, detailed import artifact, generated surface, and behavior contract",
+    )
+  }
 
   const unpairedApiReferencePages = API_REFERENCE_PAGES.filter(({ href }) => {
     const slug = href.slice("/docs/".length)
@@ -3494,6 +3655,23 @@ const wrapperDocHrefSet = new Set(wrapperDocHrefs)
 const apiReferencePageByHref = new Map(
   (apiReferenceRegistry?.API_REFERENCE_PAGES ?? []).map((page) => [page.href, page]),
 )
+for (const [kind, hrefs] of [
+  ["content", contentDocHrefs],
+  ["wrapper", wrapperDocHrefs],
+]) {
+  for (const href of new Set(hrefs)) {
+    if (hrefs.filter((candidate) => candidate === href).length > 1) {
+      failures.push(`Docs ${kind} contains duplicate normalized route ${href}`)
+    }
+  }
+}
+const exactRegisteredDocHrefs = [...uniqueNavDocHrefs, ...apiReferencePageByHref.keys()].sort()
+if (JSON.stringify(contentDocHrefs) !== JSON.stringify(exactRegisteredDocHrefs)) {
+  failures.push("Authored docs content must exactly match ALL_DOCS_PAGES")
+}
+if (JSON.stringify(wrapperDocHrefs) !== JSON.stringify(exactRegisteredDocHrefs)) {
+  failures.push("Docs wrappers must exactly match ALL_DOCS_PAGES")
+}
 
 for (const href of uniqueNavDocHrefs) {
   if (!contentDocHrefSet.has(href)) {
@@ -3511,15 +3689,21 @@ const authoredRegisteredDocs = [
   ),
 ]
 
-for (const { label, href } of authoredRegisteredDocs) {
-  if (!contentDocHrefSet.has(href) || !wrapperDocHrefSet.has(href)) continue
+const analyzableRegisteredDocs = authoredRegisteredDocs.filter(
+  ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
+)
+const registeredDocAnalyses = analyzeDocTitlesBatch(
+  analyzableRegisteredDocs.map(({ href }) => ({
+    mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
+    wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
+  })),
+)
 
+for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   const contentPath = resolve(repoRoot, docHrefToContentPath(href))
   const wrapperPath = resolve(repoRoot, docHrefToPagePath(href))
-  const { firstH1, metadataTitle } = analyzeDocTitles({
-    mdxSource: readFileSync(contentPath, "utf8"),
-    wrapperSource: readFileSync(wrapperPath, "utf8"),
-  })
+  const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
+    registeredDocAnalyses[index] ?? {}
 
   if (firstH1 !== label) {
     failures.push(
@@ -3529,6 +3713,30 @@ for (const { label, href } of authoredRegisteredDocs) {
   if (metadataTitle !== label) {
     failures.push(
       `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
+    )
+  }
+  const importedContentPath =
+    typeof contentImportTarget === "string"
+      ? resolve(dirname(wrapperPath), contentImportTarget)
+      : null
+  if (importedContentPath !== contentPath) {
+    failures.push(
+      `${docHrefToPagePath(href)} must default-import its route-derived MDX source ${docHrefToContentPath(href)}; received ${JSON.stringify(contentImportTarget ?? null)}`,
+    )
+  }
+  const importedDocsPagePath =
+    typeof docsPageImportTarget === "string"
+      ? `${resolve(dirname(wrapperPath), docsPageImportTarget)}.tsx`
+      : null
+  const canonicalDocsPagePath = resolve(repoRoot, "apps/web/app/components/docs/DocsPage.tsx")
+  if (importedDocsPagePath !== canonicalDocsPagePath) {
+    failures.push(
+      `${docHrefToPagePath(href)} must import the canonical DocsPage component; received ${JSON.stringify(docsPageImportTarget ?? null)}`,
+    )
+  }
+  if (docsPageHref !== href) {
+    failures.push(
+      `${docHrefToPagePath(href)} DocsPage href ${JSON.stringify(docsPageHref ?? null)} does not match canonical route ${JSON.stringify(href)}`,
     )
   }
 }
@@ -3567,11 +3775,11 @@ const docsBundle = await import(docsBundleUrl).catch((error) => {
   return null
 })
 
-if (sdkEntry?.DAWN_ERRORS && docsBundle?.loadNav) {
+if (sdkEntry?.DAWN_ERRORS && docsBundle?.loadDocsPages) {
   const registry = sdkEntry.DAWN_ERRORS
   const codes = Object.keys(registry)
   const navSlugs = new Set(
-    (await docsBundle.loadNav(resolve(repoRoot, "apps/web/app/components/docs/nav.ts"))).map(
+    (await docsBundle.loadDocsPages(resolve(repoRoot, "apps/web/app/components/docs/nav.ts"))).map(
       (entry) => entry.slug,
     ),
   )
@@ -3826,325 +4034,6 @@ for (const packageName of requiredApiPackageHeadings) {
   }
 }
 
-function collectExportedBindings(source) {
-  const sourcePath = "/api-barrel.ts"
-  const virtualFiles = {
-    [sourcePath]: source,
-    "/tsconfig.json": JSON.stringify({
-      compilerOptions: { noLib: true },
-      files: [sourcePath],
-    }),
-  }
-  const api = new API({ cwd: "/", fs: createVirtualFileSystem(virtualFiles) })
-  let snapshot
-  try {
-    snapshot = api.updateSnapshot({ openProjects: ["/tsconfig.json"] })
-    const project = snapshot.getDefaultProjectForFile(sourcePath)
-    const sourceFile = project?.program.getSourceFile(sourcePath)
-    const bindings = new Set()
-
-    for (const statement of sourceFile?.statements ?? []) {
-      if (statement.kind === SyntaxKind.ExportDeclaration) {
-        const clause = statement.exportClause
-        if (clause?.kind === SyntaxKind.NamedExports) {
-          for (const element of clause.elements) bindings.add(element.name.text)
-        } else if (clause?.kind === SyntaxKind.NamespaceExport) {
-          bindings.add(clause.name.text)
-        }
-        continue
-      }
-
-      if (!statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword)) {
-        continue
-      }
-      if (isVariableStatement(statement)) {
-        for (const declaration of statement.declarationList.declarations) {
-          if (isIdentifier(declaration.name)) bindings.add(declaration.name.text)
-        }
-        continue
-      }
-      if (statement.name && isIdentifier(statement.name)) bindings.add(statement.name.text)
-    }
-    return bindings
-  } finally {
-    snapshot?.dispose()
-    api.close()
-  }
-}
-
-function typescriptCodeBlocks(markdown) {
-  return [...markdown.matchAll(/```(?:ts|tsx|typescript)\b[^\r\n]*\r?\n([\s\S]*?)```/g)]
-    .map((match) => match[1] ?? "")
-    .join("\n")
-}
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function referenceSection(markdown, heading, stopBeforeHeading) {
-  const analysis = analyzeCompatibilityStub({
-    source: markdown,
-    retainedHeading: heading,
-    canonicalHref: "",
-    maxChars: Number.POSITIVE_INFINITY,
-  })
-  if (!analysis.found) return ""
-  if (!stopBeforeHeading) return analysis.stub
-
-  const masked = maskMarkdownCodeAndComments(analysis.stub)
-  const boundary = new RegExp(`^#{1,6}\\s+${escapeRegex(stopBeforeHeading)}[ \\t]*$`, "m").exec(
-    masked,
-  )
-  return boundary?.index === undefined ? analysis.stub : analysis.stub.slice(0, boundary.index)
-}
-
-function apiReferenceSection(heading, stopBeforeHeading) {
-  return referenceSection(apiMdx, heading, stopBeforeHeading)
-}
-
-function documentedSectionBindings(markdown, heading, stopBeforeHeading) {
-  return collectExportedBindings(
-    typescriptCodeBlocks(referenceSection(markdown, heading, stopBeforeHeading)),
-  )
-}
-
-// Mutation probes: comments, imports, and private declarations must not become
-// false exported bindings; a named re-export (including an alias) must.
-const exportBindingProbe = collectExportedBindings(`
-// export const commentOnly = true
-import { importOnly } from "./dependency.js"
-const privateOnly = true
-export const publicValue = true
-export { sourceValue as aliasedValue } from "./dependency.js"
-`)
-for (const nonExport of ["commentOnly", "importOnly", "privateOnly", "sourceValue"]) {
-  if (exportBindingProbe.has(nonExport)) {
-    failures.push(`API export AST mutation probe false-positive: ${nonExport}`)
-  }
-}
-for (const actualExport of ["publicValue", "aliasedValue"]) {
-  if (!exportBindingProbe.has(actualExport)) {
-    failures.push(`API export AST mutation probe missed export: ${actualExport}`)
-  }
-}
-
-const rootScopeFixtures = [
-  {
-    heading: "@dawn-ai/cli",
-    stopBeforeHeading: "@dawn-ai/cli/fetch",
-    symbol: "ServeRuntimeHandle",
-    rootDeclaration: "export interface ServeRuntimeHandle {}",
-    markdown: `
-## @dawn-ai/cli
-
-\`\`\`ts
-export interface ServeRuntimeHandle {}
-\`\`\`
-
-### @dawn-ai/cli/fetch
-
-\`\`\`ts
-export type { ServeRuntimeHandle } from "./nested.js"
-\`\`\`
-`,
-  },
-  {
-    heading: "@dawn-ai/memory",
-    stopBeforeHeading: "@dawn-ai/memory/browse",
-    symbol: "MemoryStore",
-    rootDeclaration: "export interface MemoryStore {}",
-    markdown: `
-## @dawn-ai/memory
-
-\`\`\`ts
-export interface MemoryStore {}
-\`\`\`
-
-### @dawn-ai/memory/browse
-
-\`\`\`ts
-export type { MemoryStore } from "./nested.js"
-\`\`\`
-`,
-  },
-]
-
-for (const fixture of rootScopeFixtures) {
-  const baseline = documentedSectionBindings(
-    fixture.markdown,
-    fixture.heading,
-    fixture.stopBeforeHeading,
-  )
-  if (!baseline.has(fixture.symbol)) {
-    failures.push(`API root-scope mutation probe baseline missed: ${fixture.symbol}`)
-  }
-  const rootDeleted = fixture.markdown.replace(fixture.rootDeclaration, "")
-  const mutated = documentedSectionBindings(rootDeleted, fixture.heading, fixture.stopBeforeHeading)
-  if (mutated.has(fixture.symbol)) {
-    failures.push(
-      `API root-scope mutation probe accepted nested-only declaration: ${fixture.symbol}`,
-    )
-  }
-}
-
-// Application-facing API reference ↔ public barrel authority. Each symbol must
-// be an actual exported binding in its barrel and an exported declaration or
-// re-export inside the owning API section's TypeScript blocks.
-const apiSurfaceAuthorities = [
-  {
-    file: "packages/cli/src/index.ts",
-    heading: "@dawn-ai/cli",
-    stopBeforeHeading: "@dawn-ai/cli/fetch",
-    symbols: [
-      "serveRuntime",
-      "ServeRuntimeHandle",
-      "ServeRuntimeOptions",
-      "loadStaticModules",
-      "DawnStaticModules",
-      "StaticRouteModule",
-    ],
-  },
-  {
-    file: "packages/cli/src/fetch-exports.ts",
-    heading: "@dawn-ai/cli/fetch",
-    symbols: [
-      "createRuntimeFetchHandler",
-      "RuntimeFetchHandler",
-      "buildStaticRouteModule",
-      "normalizeMiddlewareModule",
-      "DawnStaticModules",
-      "StaticRouteModule",
-      "StaticRouteModuleInput",
-      "StaticToolModuleInput",
-      "RequestStores",
-      "StartRuntimeServerOptions",
-      "RuntimeEnv",
-      "readRuntimeEnv",
-      "seedDawnConfig",
-      "seedRuntimeEnv",
-      "seedModelImporter",
-      "BootResolvedInstances",
-      "RuntimeBootFallbacks",
-      "StreamChunk",
-    ],
-  },
-  {
-    file: "packages/memory/src/index.ts",
-    heading: "@dawn-ai/memory",
-    stopBeforeHeading: "@dawn-ai/memory/browse",
-    symbols: [
-      "MemoryStore",
-      "MemoryQuery",
-      "MemoryRecord",
-      "BrowseQuery",
-      "BrowsePage",
-      "MemoryStats",
-    ],
-  },
-  {
-    file: "packages/memory/src/browse.ts",
-    heading: "@dawn-ai/memory/browse",
-    symbols: [
-      "BROWSE_CURSOR_VERSION",
-      "browseCursorKey",
-      "browseQueryFingerprint",
-      "decodeBrowseCursor",
-      "encodeBrowseCursor",
-      "normalizeSetFilter",
-      "DEFAULT_BROWSE_ORDER",
-      "resolveBrowseOrder",
-      "namespacePrefixUpperBound",
-      "utcDayAfter",
-      "utcDayStart",
-      "BROWSE_DEFAULT_LIMIT",
-      "BROWSE_MAX_LIMIT",
-      "BROWSE_SORT_FIELDS",
-      "BrowseQueryError",
-      "validateBrowseQuery",
-      "BrowseCursorPayload",
-      "BrowseCursorValue",
-      "ResolvedBrowseSort",
-      "BrowseFilter",
-      "BrowsePage",
-      "BrowseQuery",
-      "BrowseSortEntry",
-      "BrowseSortField",
-      "MemoryKind",
-      "MemoryRecord",
-      "MemorySource",
-      "MemoryStatus",
-    ],
-  },
-]
-
-for (const authority of apiSurfaceAuthorities) {
-  const source = readFileSync(resolve(repoRoot, authority.file), "utf8")
-  const exportedBindings = collectExportedBindings(source)
-  const section = apiReferenceSection(authority.heading, authority.stopBeforeHeading)
-  const documentedBindings = collectExportedBindings(typescriptCodeBlocks(section))
-  for (const symbol of authority.symbols) {
-    if (!exportedBindings.has(symbol)) {
-      failures.push(`${authority.file} no longer exports documented API symbol: ${symbol}`)
-    }
-    if (!documentedBindings.has(symbol)) {
-      failures.push(
-        `apps/web/content/docs/api.mdx section ${authority.heading} is missing an exported signature or definition for: ${symbol}`,
-      )
-    }
-  }
-}
-
-function hasExactSubpathExport(manifest, subpath, expected) {
-  const actual = manifest?.exports?.[subpath]
-  return actual?.types === expected.types && actual?.default === expected.default
-}
-
-const apiSubpathAuthorities = [
-  {
-    manifest: "packages/cli/package.json",
-    subpath: "./fetch",
-    expected: {
-      types: "./dist/fetch-exports.d.ts",
-      default: "./dist/fetch-exports.js",
-    },
-  },
-  {
-    manifest: "packages/memory/package.json",
-    subpath: "./browse",
-    expected: { types: "./dist/browse.d.ts", default: "./dist/browse.js" },
-  },
-]
-
-for (const authority of apiSubpathAuthorities) {
-  const manifestPath = resolve(repoRoot, authority.manifest)
-  const packageDir = manifestPath.replace(/\/package\.json$/, "")
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
-  if (!hasExactSubpathExport(manifest, authority.subpath, authority.expected)) {
-    failures.push(
-      `${authority.manifest} ${authority.subpath} must point to ${JSON.stringify(authority.expected)}`,
-    )
-  }
-  for (const target of Object.values(authority.expected)) {
-    if (!existsSync(resolve(packageDir, target))) {
-      failures.push(`${authority.manifest} ${authority.subpath} target is missing: ${target}`)
-    }
-  }
-
-  const removed = JSON.parse(JSON.stringify(manifest))
-  delete removed.exports[authority.subpath]
-  if (hasExactSubpathExport(removed, authority.subpath, authority.expected)) {
-    failures.push(`${authority.manifest} ${authority.subpath} removal mutation was not detected`)
-  }
-  const redirected = JSON.parse(JSON.stringify(manifest))
-  redirected.exports[authority.subpath] = {
-    ...authority.expected,
-    default: "./dist/wrong.js",
-  }
-  if (hasExactSubpathExport(redirected, authority.subpath, authority.expected)) {
-    failures.push(`${authority.manifest} ${authority.subpath} redirect mutation was not detected`)
-  }
-}
 for (const manifestPath of packageManifests()) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
   const packageDir = manifestPath.replace(/\/package\.json$/, "")

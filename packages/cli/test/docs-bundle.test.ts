@@ -18,108 +18,27 @@ import {
   buildReadme,
   extractSummary,
   extractTitle,
-  loadNav,
+  loadDocsPages,
   mdxToMarkdown,
+  parseDocsPages,
   parseFrontmatter,
-  parseNav,
-  parseNavOrder,
 } from "../src/lib/docs-bundle.js"
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..")
-const EXPECTED_DOCS_NAV = [
-  { slug: "getting-started", label: "Getting Started" },
-  { slug: "mental-model", label: "Mental Model" },
-  { slug: "migrating-from-langgraph", label: "Migrating from LangGraph" },
-  { slug: "routes", label: "Routes" },
-  { slug: "agents", label: "Agents" },
-  { slug: "tools", label: "Tools" },
-  { slug: "state", label: "State" },
-  { slug: "workspace", label: "Workspace Filesystem" },
-  { slug: "memory", label: "Memory" },
-  { slug: "memory/long-term", label: "Long-term Memory" },
-  { slug: "memory/retrieval", label: "Recall and Retrieval" },
-  { slug: "memory/episodes", label: "Episodes" },
-  { slug: "memory/distillation", label: "Distillation" },
-  { slug: "planning", label: "Planning" },
-  { slug: "skills", label: "Skills" },
-  { slug: "subagents", label: "Subagents" },
-  { slug: "context-management", label: "Context Management" },
-  { slug: "reasoning-effort", label: "Reasoning Effort" },
-  { slug: "dev-server", label: "Dev Server" },
-  { slug: "dev-server/agent-protocol", label: "Agent Protocol" },
-  { slug: "middleware", label: "Middleware" },
-  { slug: "ag-ui", label: "AG-UI and Web Clients" },
-  { slug: "embedding", label: "Embed the Runtime" },
-  { slug: "blueprints", label: "Blueprints" },
-  { slug: "testing", label: "Scenario Testing" },
-  { slug: "testing-agents", label: "Agent Test Harness" },
-  { slug: "testing-agents/fixtures", label: "Fixtures and Recording" },
-  { slug: "evals", label: "Evals" },
-  { slug: "persistence", label: "Persistence and Tenancy" },
-  { slug: "production-topology", label: "Production Topology" },
-  { slug: "security-architecture", label: "Security Architecture" },
-  { slug: "access-control", label: "Access Control" },
-  { slug: "permissions", label: "Permissions" },
-  { slug: "retry", label: "Retry" },
-  { slug: "observability", label: "Observability" },
-  { slug: "inspector", label: "Inspector" },
-  { slug: "memory/browse", label: "Browse and Manage Memory" },
-  { slug: "upgrading", label: "Upgrading" },
-  { slug: "deployment", label: "Deployment Options" },
-  { slug: "deployment/node", label: "Node and Docker" },
-  { slug: "deployment/kubernetes", label: "Kubernetes" },
-  { slug: "deployment/langsmith", label: "LangSmith" },
-  { slug: "deployment/edge", label: "Edge and Hono" },
-  { slug: "sandbox", label: "Execution Sandbox" },
-  { slug: "sandbox/kubernetes", label: "Kubernetes Sandbox" },
-  { slug: "recipes", label: "Recipes Overview" },
-  { slug: "recipes/add-a-tool", label: "Add a Tool" },
-  { slug: "recipes/typed-state", label: "Typed State" },
-  { slug: "recipes/auth-middleware", label: "Auth Middleware" },
-  { slug: "recipes/stream-output", label: "Stream Output" },
-  { slug: "recipes/retry-flaky-tools", label: "Retry Transient Model Calls" },
-  { slug: "recipes/dispatch-from-route", label: "Dispatch from a Route" },
-  { slug: "recipes/research-web-ui", label: "Research Assistant Web UI" },
-  { slug: "configuration", label: "Configuration Reference" },
-  { slug: "cli", label: "CLI Reference" },
-  { slug: "api", label: "API Reference" },
-  { slug: "errors", label: "Error Codes" },
-  { slug: "faq", label: "FAQ" },
-] as const
 interface RegistryPage {
   readonly label: string
   readonly href: string
 }
 
-const apiReferenceRegistry = (await tsImport(
-  pathToFileURL(join(repoRoot, "apps/web/app/components/docs/api-reference-pages.ts")).href,
+const navModule = (await tsImport(
+  pathToFileURL(join(repoRoot, "apps/web/app/components/docs/nav.ts")).href,
   import.meta.url,
-)) as { readonly API_REFERENCE_PAGES: readonly RegistryPage[] }
-const API_REFERENCE_PAGES = apiReferenceRegistry.API_REFERENCE_PAGES
-
-function pairedApiReferencePages(pages: readonly RegistryPage[]) {
-  const paired = [] as Array<{ slug: string; label: string }>
-  const missing = [] as string[]
-  for (const page of pages) {
-    const slug = page.href.slice("/docs/".length)
-    const content = join(repoRoot, "apps/web/content/docs", `${slug}.mdx`)
-    const wrapper = join(repoRoot, "apps/web/app/docs", slug, "page.tsx")
-    if (!existsSync(content) || !existsSync(wrapper)) {
-      missing.push(page.href)
-      continue
-    }
-    paired.push({ slug, label: page.label })
-  }
-  return { paired, missing }
-}
-
-const registeredApiReferencePages = pairedApiReferencePages(API_REFERENCE_PAGES)
-const apiHubIndex = EXPECTED_DOCS_NAV.findIndex(({ slug }) => slug === "api")
-const EXPECTED_TRANSITIONAL_DOCS = [
-  ...EXPECTED_DOCS_NAV.slice(0, apiHubIndex + 1),
-  ...registeredApiReferencePages.paired,
-  ...EXPECTED_DOCS_NAV.slice(apiHubIndex + 1),
-] as const
+)) as { readonly ALL_DOCS_PAGES: readonly RegistryPage[] }
+const EXPECTED_DOCS = navModule.ALL_DOCS_PAGES.map(({ href, label }) => ({
+  slug: href.slice("/docs/".length),
+  label,
+}))
+const apiHubIndex = EXPECTED_DOCS.findIndex(({ slug }) => slug === "api")
 const scannedTextExtensions = new Set([
   ".cjs",
   ".css",
@@ -383,113 +302,94 @@ describe("mdxToMarkdown()", () => {
   })
 })
 
-describe("parseNavOrder()", () => {
-  it("derives exhaustive API leaves from the canonical registry instead of a hand-maintained list", () => {
-    expect(registeredApiReferencePages.missing).toEqual([])
-    expect(registeredApiReferencePages.paired).toEqual(
-      API_REFERENCE_PAGES.map((page) => ({
-        slug: page.href.slice("/docs/".length),
-        label: page.label,
-      })),
+describe("loadDocsPages()", () => {
+  it("loads every exhaustive page in canonical registry order", async () => {
+    expect(await loadDocsPages(join(repoRoot, "apps/web/app/components/docs/nav.ts"))).toEqual(
+      EXPECTED_DOCS,
     )
   })
 
-  it("reports a newly registered API leaf until both authored sources land", () => {
-    const futureHref = ["/docs/api", "future"].join("/")
-    const mutation = pairedApiReferencePages([
-      ...API_REFERENCE_PAGES,
-      {
-        ...API_REFERENCE_PAGES[0],
-        label: "@dawn-ai/future",
-        href: futureHref,
-      },
-    ])
-    expect(mutation.missing).toEqual([futureHref])
-  })
-
-  it("returns nested doc slugs in source order without duplicates", () => {
-    const nav = [
-      {
-        items: [
-          { label: "Getting Started", href: "/docs/getting-started" },
-          { label: "Routes", href: "/docs/routes" },
-          { label: "Long-term Memory", href: "/docs/memory/long-term" },
-          { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-          { label: "Routes again", href: "/docs/routes" },
-        ],
-      },
-    ]
-    expect(parseNavOrder(nav)).toEqual([
-      "getting-started",
-      "routes",
-      "memory/long-term",
-      "recipes/add-a-tool",
-    ])
-  })
-
-  it("loads only the journey registry for callers that explicitly request DOCS_NAV", async () => {
-    expect(await loadNav(join(repoRoot, "apps/web/app/components/docs/nav.ts"))).toEqual(
-      EXPECTED_DOCS_NAV,
-    )
-  })
-
-  it("loads landed paired API leaves in exhaustive registry order", async () => {
-    expect(
-      await loadNav(join(repoRoot, "apps/web/app/components/docs/nav.ts"), {
-        exhaustive: true,
-        existingSlugs: new Set(EXPECTED_TRANSITIONAL_DOCS.map(({ slug }) => slug)),
-      }),
-    ).toEqual(EXPECTED_TRANSITIONAL_DOCS)
-  })
-
-  it("loads only exported DOCS_NAV, ignoring comments, strings, and non-exported lookalikes", async () => {
+  it("loads only exported ALL_DOCS_PAGES, ignoring comments, strings, and non-exported lookalikes", async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-docs-nav-"))
     const navFile = join(fixtureRoot, "nav.ts")
     try {
       writeFileSync(
         navFile,
         `
-// { label: "Comment decoy", href: "/docs/faq" },
-const text = '{ label: "String decoy", href: "/docs/errors" }'
-const OTHER_NAV = [{
-  label: "Other",
-  items: [{ label: "Non-exported decoy", href: "/docs/api" }],
-}]
-export const DOCS_NAV = [{
-  label: "Build",
-  items: [{ label: "Routes", href: "/docs/routes" }],
-}]
+// export const ALL_DOCS_PAGES = [{ label: "Comment decoy", href: "/docs/faq" }]
+const text = 'export const ALL_DOCS_PAGES = [{ label: "String decoy", href: "/docs/errors" }]'
+const OTHER_PAGES = [{ label: "Non-exported decoy", href: "/docs/api" }]
+export const DOCS_NAV = [{ items: [{ label: "Journey decoy", href: "/docs/faq" }] }]
+export const ALL_DOCS_PAGES = [{ label: "Routes", href: "/docs/routes" }]
 void text
-void OTHER_NAV
+void OTHER_PAGES
 `,
       )
 
-      expect(await loadNav(navFile)).toEqual([{ slug: "routes", label: "Routes" }])
+      expect(await loadDocsPages(navFile)).toEqual([{ slug: "routes", label: "Routes" }])
+    } finally {
+      rmSync(fixtureRoot, { recursive: true })
+    }
+  })
+
+  it("rejects modules without the named exhaustive export", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "dawn-docs-pages-"))
+    const navFile = join(fixtureRoot, "nav.ts")
+    try {
+      writeFileSync(
+        navFile,
+        'export const DOCS_NAV = [{ items: [{ label: "Routes", href: "/docs/routes" }] }]\n',
+      )
+      await expect(loadDocsPages(navFile)).rejects.toThrow(/ALL_DOCS_PAGES/)
     } finally {
       rmSync(fixtureRoot, { recursive: true })
     }
   })
 })
 
-describe("parseNav()", () => {
-  it("returns ordered nested slug/label pairs, deduped by slug", () => {
-    const nav = [
-      {
-        items: [
-          { label: "Getting Started", href: "/docs/getting-started" },
-          { label: "Tools", href: "/docs/tools" },
-          { label: "Long-term Memory", href: "/docs/memory/long-term" },
-          { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-          { label: "Tools again", href: "/docs/tools" },
-        ],
-      },
-    ]
-    expect(parseNav(nav)).toEqual([
+describe("parseDocsPages()", () => {
+  it("returns ordered nested slug/label pairs", () => {
+    expect(
+      parseDocsPages([
+        { label: "Getting Started", href: "/docs/getting-started" },
+        { label: "Tools", href: "/docs/tools" },
+        { label: "Long-term Memory", href: "/docs/memory/long-term" },
+        { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
+      ]),
+    ).toEqual([
       { slug: "getting-started", label: "Getting Started" },
       { slug: "tools", label: "Tools" },
       { slug: "memory/long-term", label: "Long-term Memory" },
       { slug: "recipes/add-a-tool", label: "Add a tool" },
     ])
+  })
+
+  it("rejects duplicate slugs instead of silently changing the registry", () => {
+    expect(() =>
+      parseDocsPages([
+        { label: "Tools", href: "/docs/tools" },
+        { label: "Tools again", href: "/docs/tools" },
+      ]),
+    ).toThrow(/duplicate.*tools/i)
+  })
+
+  it.each([
+    ["non-array", null],
+    ["non-object item", ["routes"]],
+    ["missing label", [{ href: "/docs/routes" }]],
+    ["empty label", [{ label: "", href: "/docs/routes" }]],
+    ["whitespace label", [{ label: " Routes ", href: "/docs/routes" }]],
+    ["multiline label", [{ label: "Routes\nInjected", href: "/docs/routes" }]],
+    ["missing href", [{ label: "Routes" }]],
+    ["docs root", [{ label: "Docs", href: "/docs/" }]],
+    ["fragment", [{ label: "Routes", href: "/docs/routes#agent" }]],
+    ["query", [{ label: "Routes", href: ["/docs/routes", "mode=all"].join("?") }]],
+    ["outside docs", [{ label: "Routes", href: "/routes" }]],
+    ["traversal", [{ label: "Routes", href: ["/docs", "..", "routes"].join("/") }]],
+    ["backslash", [{ label: "Routes", href: ["/docs/api", "routes"].join("\\") }]],
+    ["double separator", [{ label: "Routes", href: ["/docs/api", "routes"].join("//") }]],
+  ])("rejects malformed exhaustive pages: %s", (_name, value) => {
+    expect(() => parseDocsPages(value)).toThrow()
   })
 })
 
@@ -499,12 +399,23 @@ describe("generated documentation bundle", () => {
     const topics = [...readme.matchAll(/^- \[([^\]]+)\]\(\.\/([^)]+)\)/gm)].flatMap((match) =>
       match[1] && match[2] ? [{ title: match[1], file: match[2] }] : [],
     )
-    const expectedFiles = EXPECTED_TRANSITIONAL_DOCS.map((entry) =>
+    const expectedFiles = EXPECTED_DOCS.map((entry) =>
       entry.slug === "recipes" ? "recipes/index.md" : `${entry.slug}.md`,
     )
+    const actualFiles = readdirSync(join(repoRoot, "packages/cli/docs"), {
+      recursive: true,
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "README.md")
+      .map((entry) =>
+        relative(join(repoRoot, "packages/cli/docs"), join(entry.parentPath, entry.name)),
+      )
+      .sort()
+
+    expect(actualFiles).toEqual([...expectedFiles].sort())
 
     expect(topics).toEqual(
-      EXPECTED_TRANSITIONAL_DOCS.map((entry, index) => ({
+      EXPECTED_DOCS.map((entry, index) => ({
         title: entry.label,
         file: expectedFiles[index] ?? "",
       })),
@@ -513,7 +424,7 @@ describe("generated documentation bundle", () => {
       title: "Recipes Overview",
       file: "recipes/index.md",
     })
-    expect(topics).toHaveLength(EXPECTED_TRANSITIONAL_DOCS.length)
+    expect(topics).toHaveLength(EXPECTED_DOCS.length)
     expect(topics.slice(apiHubIndex, apiHubIndex + 11).map(({ title }) => title)).toEqual([
       "API Reference",
       "@dawn-ai/sdk",

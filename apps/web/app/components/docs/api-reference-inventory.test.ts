@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render-route-types"
 import {
   API_BEHAVIOR_CONTRACTS,
+  API_REFERENCE_PAGES,
   ARTIFACT_REGISTRY,
+  artifactAddressFor,
   GENERATED_ROUTES_ARTIFACT,
 } from "./api-reference"
 
@@ -38,6 +40,24 @@ const packagePages = [
   { slug: "testing", label: "@dawn-ai/testing", href: "/docs/api/testing" },
   { slug: "evals", label: "@dawn-ai/evals", href: "/docs/api/evals" },
 ] as const
+const allReferencePages = [...foundationalPages, ...packagePages] as const
+
+interface WrapperContractAnalysis {
+  readonly metadataTitle: string | null
+  readonly contentImportTarget: string | null
+  readonly docsPageImportTarget: string | null
+  readonly docsPageHref: string | null
+}
+
+function analyzeWrapperContracts(sources: readonly string[]): readonly WrapperContractAnalysis[] {
+  const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    input: JSON.stringify(sources.map((wrapperSource) => ({ mdxSource: "", wrapperSource }))),
+  })
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  return JSON.parse(result.stdout) as readonly WrapperContractAnalysis[]
+}
 
 const foundationalSections = [
   "Use this when",
@@ -1657,14 +1677,58 @@ const analyses = subprocesses.flatMap((subprocess) =>
 )
 const byName = new Map(analyses.map((analysis) => [analysis.name, analysis]))
 
+describe("API reference wrapper contracts", () => {
+  it("structurally pairs every API wrapper with its canonical content, route, and title", () => {
+    const wrapperSources = allReferencePages.map((page) => foundationalWrapper(page.slug))
+    const wrapperAnalyses = analyzeWrapperContracts(wrapperSources)
+
+    expect(wrapperAnalyses).toHaveLength(allReferencePages.length)
+    for (const [index, page] of allReferencePages.entries()) {
+      const analysis = wrapperAnalyses[index]
+      const wrapperPath = join(REPO_ROOT, "apps/web/app/docs/api", page.slug, "page.tsx")
+      expect(analysis?.metadataTitle, `${page.href} metadata title`).toBe(page.label)
+      expect(analysis?.docsPageHref, `${page.href} DocsPage href`).toBe(page.href)
+      expect(
+        resolve(dirname(wrapperPath), analysis?.contentImportTarget ?? ""),
+        `${page.href} content import`,
+      ).toBe(join(REPO_ROOT, "apps/web/content/docs/api", `${page.slug}.mdx`))
+      expect(
+        `${resolve(dirname(wrapperPath), analysis?.docsPageImportTarget ?? "")}.tsx`,
+        `${page.href} DocsPage import`,
+      ).toBe(join(REPO_ROOT, "apps/web/app/components/docs/DocsPage.tsx"))
+    }
+  })
+
+  it("rejects wrong structural values even when comments and strings contain canonical decoys", () => {
+    const source = foundationalWrapper("sdk")
+    const [wrongImport, wrongHref, wrongMetadata] = analyzeWrapperContracts([
+      `// import Content from "../../../../content/docs/api/sdk.mdx"\nconst decoy = '../../../../content/docs/api/sdk.mdx'\n${source.replace("../../../../content/docs/api/sdk.mdx", "../../../../content/docs/api/cli.mdx")}\nvoid decoy`,
+      `// <DocsPage href="/docs/api/sdk" Content={Content} />\nconst decoy = '/docs/api/sdk'\n${source.replace('href="/docs/api/sdk"', 'href="/docs/api/cli"')}\nvoid decoy`,
+      `// export const metadata = { title: "@dawn-ai/sdk" }\nconst decoy = '@dawn-ai/sdk'\n${source.replace('title: "@dawn-ai/sdk"', 'title: "Wrong"')}\nvoid decoy`,
+    ])
+
+    expect(wrongImport?.contentImportTarget).toBe("../../../../content/docs/api/cli.mdx")
+    expect(wrongHref?.docsPageHref).toBe("/docs/api/cli")
+    expect(wrongMetadata?.metadataTitle).toBe("Wrong")
+  })
+
+  it("rejects JSX bindings that shadow the canonical imports", () => {
+    const source = foundationalWrapper("sdk")
+    const [shadowedContent, shadowedDocsPage] = analyzeWrapperContracts([
+      source.replace("function Page()", "function Page(Content: unknown)"),
+      source.replace("function Page() {", "function Page() {\n  const DocsPage = () => null"),
+    ])
+
+    expect(shadowedContent?.contentImportTarget).not.toBe("../../../../content/docs/api/sdk.mdx")
+    expect(shadowedDocsPage?.docsPageImportTarget).not.toBe("../../../components/docs/DocsPage")
+  })
+})
+
 describe("foundational API reference pages", () => {
-  it.each(foundationalPages)("uses the exact title, H1, and wrapper href for $href", (page) => {
+  it.each(foundationalPages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
-    const wrapper = foundationalWrapper(page.slug)
 
     expect(content.match(/^# (.+)$/m)?.[1]).toBe(page.label)
-    expect(wrapper).toContain(`export const metadata: Metadata = { title: "${page.label}" }`)
-    expect(wrapper).toContain(`<DocsPage href="${page.href}" Content={Content} />`)
   })
 
   it.each(foundationalPages)("uses the six-section reference template for $href", (page) => {
@@ -1746,16 +1810,6 @@ describe("foundational API reference pages", () => {
     },
   )
 
-  it("passes the source-derived foundational inventory and behavior contracts", () => {
-    const result = spawnSync(
-      process.execPath,
-      [CHECK_DOCS_PATH, "--analyze-foundational-api-references"],
-      { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-    )
-    expect(result.status, result.stderr || result.stdout).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual({ failures: [] })
-  }, 30_000)
-
   it("registers source-coupled defaults, errors, and lifecycle behavior", () => {
     expect(API_BEHAVIOR_CONTRACTS.map(({ id }) => id)).toEqual([
       "sdk.agent.descriptor-shape",
@@ -1787,13 +1841,10 @@ describe("foundational API reference pages", () => {
 })
 
 describe("package API reference pages", () => {
-  it.each(packagePages)("uses the exact title, H1, and wrapper href for $href", (page) => {
+  it.each(packagePages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
-    const wrapper = foundationalWrapper(page.slug)
 
     expect(content.match(/^# (.+)$/m)?.[1]).toBe(page.label)
-    expect(wrapper).toContain(`export const metadata: Metadata = { title: "${page.label}" }`)
-    expect(wrapper).toContain(`<DocsPage href="${page.href}" Content={Content} />`)
   })
 
   it.each(packagePages)("uses the six-section reference template for $href", (page) => {
@@ -1947,11 +1998,26 @@ ${packageExample("memory-pgvector").replace(
   it("passes the source-derived inventory and behavior contracts for all ten owners", () => {
     const result = spawnSync(
       process.execPath,
-      [CHECK_DOCS_PATH, "--analyze-foundational-api-references"],
+      [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
       { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
     )
     expect(result.status, result.stderr || result.stdout).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual({ failures: [] })
+    const analysis = JSON.parse(result.stdout) as {
+      readonly failures: readonly string[]
+      readonly ownerHrefs: readonly string[]
+      readonly artifactAddresses: readonly string[]
+      readonly behaviorIds: readonly string[]
+    }
+    expect(analysis.failures).toEqual([])
+    expect(analysis.ownerHrefs).toEqual(API_REFERENCE_PAGES.map(({ href }) => href))
+    expect(analysis.artifactAddresses).toEqual(
+      ARTIFACT_REGISTRY.filter(
+        (artifact) =>
+          artifact.kind === "generated" ||
+          (artifact.kind === "import" && artifact.coverage === "detailed"),
+      ).map(artifactAddressFor),
+    )
+    expect(analysis.behaviorIds).toEqual(API_BEHAVIOR_CONTRACTS.map(({ id }) => id))
   }, 30_000)
 
   it("registers the package defaults, errors, and lifecycle behavior", () => {
