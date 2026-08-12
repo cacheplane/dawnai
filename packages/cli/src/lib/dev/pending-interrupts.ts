@@ -1,4 +1,4 @@
-import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
+import type { BaseCheckpointSaver, CheckpointTuple } from "@langchain/langgraph-checkpoint"
 
 export type PermissionDecision = "once" | "always" | "deny"
 
@@ -12,6 +12,25 @@ export interface PendingInterrupt {
   readonly aliases: readonly string[]
   readonly interruptId: string
   readonly resumeKey: string | null
+  /**
+   * The `__interrupt__` write's own `value` payload, verbatim — for a
+   * permission prompt, `{ interruptId, type, kind, detail }`. This is the
+   * renderable content a client that reloaded needs to put the prompt back on
+   * screen from durable state alone; parsing it for ids and then discarding it
+   * is what made a parked prompt undisplayable after a reconnect. `undefined`
+   * when the write carries no `value` key at all.
+   *
+   * Not narrowed to a record: a payload that is not one (`null`, a string, an
+   * array) is still listed here verbatim, and only sets the snapshot's
+   * `malformed` flag. Since a malformed set is still listed and `malformed` is
+   * not on the wire, such a payload does reach the client — dropping it would
+   * be a wire change, so it is pinned by test rather than left incidental.
+   *
+   * Optional because this interface is public API (`@dawn-ai/cli/runtime`): a
+   * required field would stop external code from constructing the literal. The
+   * parse always sets the key, so `Object.hasOwn(i, "value")` is always true.
+   */
+  readonly value?: unknown
 }
 
 export interface PendingInterruptSnapshot {
@@ -42,15 +61,15 @@ export type ResumeResolution =
       readonly message: string
     }
 
-export async function readPendingInterrupts(
-  checkpointer: BaseCheckpointSaver,
-  threadId: string,
-): Promise<PendingInterruptSnapshot | null> {
-  const tuple = await checkpointer.getTuple({
-    configurable: { thread_id: threadId, checkpoint_ns: "" },
-  })
-  if (!tuple) return null
-
+/**
+ * Parse the `__interrupt__` pending writes out of a checkpoint tuple the
+ * caller already holds.
+ *
+ * Split out of `readPendingInterrupts` so a caller that needs the tuple for
+ * something else too — channel values *and* pending interrupts — pays for one
+ * `getTuple` instead of two. Pure: no I/O, no checkpointer.
+ */
+export function parsePendingInterrupts(tuple: CheckpointTuple): PendingInterruptSnapshot {
   const interrupts: PendingInterrupt[] = []
   let malformed = false
   for (const write of tuple.pendingWrites ?? []) {
@@ -62,7 +81,10 @@ export async function readPendingInterrupts(
 
     const value = write[2]
     const hasInnerValue = Object.hasOwn(value, "value")
-    const innerValue = isRecord(value.value) ? value.value : undefined
+    // Kept verbatim for GET /threads/:id/pending_interrupts: this is the
+    // permission prompt a reconnecting client re-renders.
+    const payload = value.value
+    const innerValue = isRecord(payload) ? payload : undefined
     if (hasInnerValue && !innerValue) malformed = true
 
     const rawInnerId = innerValue?.interruptId
@@ -80,7 +102,7 @@ export async function readPendingInterrupts(
     if (!resumeKey) malformed = true
 
     const aliases = innerId && outerId && innerId !== outerId ? [innerId, outerId] : [interruptId]
-    interrupts.push({ aliases, interruptId, resumeKey })
+    interrupts.push({ aliases, interruptId, resumeKey, value: payload })
   }
 
   const interruptIds = new Set<string>()
@@ -100,6 +122,17 @@ export async function readPendingInterrupts(
   }
 
   return { interrupts, malformed }
+}
+
+export async function readPendingInterrupts(
+  checkpointer: BaseCheckpointSaver,
+  threadId: string,
+): Promise<PendingInterruptSnapshot | null> {
+  const tuple = await checkpointer.getTuple({
+    configurable: { thread_id: threadId, checkpoint_ns: "" },
+  })
+  if (!tuple) return null
+  return parsePendingInterrupts(tuple)
 }
 
 export function createPendingResumeClaims(): PendingResumeClaims {

@@ -26,6 +26,7 @@ export default defineConfig({
       "./packages/workspace/vitest.config.ts",
       "./examples/chat/server/vitest.config.ts",
       "./examples/research/server/vitest.config.ts",
+      "./examples/research/web/vitest.config.ts",
     ],
   },
 })

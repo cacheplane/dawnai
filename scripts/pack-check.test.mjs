@@ -62,7 +62,12 @@ describe("pack manifest validation", () => {
     const agUiPackage = packages.find(({ dir }) => dir === "packages/ag-ui")
 
     assert.ok(agUiPackage, "Pack manifest is missing packages/ag-ui")
-    for (const expectedFile of ["dist/sse.js", "dist/sse.d.ts"]) {
+    for (const expectedFile of [
+      "dist/activities.js",
+      "dist/activities.d.ts",
+      "dist/sse.js",
+      "dist/sse.d.ts",
+    ]) {
       assert.ok(
         agUiPackage.expectedFiles.includes(expectedFile),
         `AG-UI must expect ${expectedFile}`,

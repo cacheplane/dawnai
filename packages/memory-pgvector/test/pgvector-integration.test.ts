@@ -189,7 +189,7 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     }
   })
 
-  test("halfvec update round-trip: an embedding survives update() on a 3072-dim store", async () => {
+  test("halfvec update preserves the stored embedding without recomputing changed content", async () => {
     const store = pgvectorMemoryStore({
       connectionString: url,
       dimensions: 3072,
@@ -203,9 +203,13 @@ describe.skipIf(!enabled)("pgvector integration", () => {
         embedding,
         embeddingModel: "fake:halfvec",
       })
-      // Update an unrelated field — putRecord rewrites the full row, so this
-      // exercises getEmbeddingRow's `embedding::text` parse for halfvec.
-      await store.update("h", { confidence: 0.5 })
+      // Updating semantic content does not call an embedder. putRecord rewrites
+      // the row while getEmbeddingRow preserves the previously supplied vector.
+      await store.update("h", {
+        content: "quarterly tax filing",
+        data: { topic: "tax" },
+        confidence: 0.5,
+      })
       const out = await store.search({
         namespace: "ns",
         query: "expedite delivery",
@@ -214,7 +218,11 @@ describe.skipIf(!enabled)("pgvector integration", () => {
         now: "2026-07-05T00:00:00.000Z",
       })
       expect(out.map((r) => r.id)).toContain("h")
-      expect((await store.get("h"))?.confidence).toBe(0.5)
+      expect(await store.get("h")).toMatchObject({
+        content: "quarterly tax filing",
+        data: { topic: "tax" },
+        confidence: 0.5,
+      })
     } finally {
       await store.close()
     }

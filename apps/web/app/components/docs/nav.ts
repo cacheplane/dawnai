@@ -1,3 +1,5 @@
+import { API_REFERENCE_PAGES } from "./api-reference-pages"
+
 export interface DocsNavItem {
   readonly label: string
   readonly href: string
@@ -8,7 +10,7 @@ export interface DocsNavSection {
   readonly items: readonly DocsNavItem[]
 }
 
-export const DOCS_NAV: readonly DocsNavSection[] = [
+export const DOCS_NAV = [
   {
     label: "Get Started",
     items: [
@@ -18,76 +20,126 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     ],
   },
   {
-    label: "Concepts",
+    label: "Build",
     items: [
       { label: "Routes", href: "/docs/routes" },
       { label: "Agents", href: "/docs/agents" },
       { label: "Tools", href: "/docs/tools" },
       { label: "State", href: "/docs/state" },
+      { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Memory", href: "/docs/memory" },
-      { label: "Inspector", href: "/docs/inspector" },
+      { label: "Long-term Memory", href: "/docs/memory/long-term" },
+      { label: "Recall and Retrieval", href: "/docs/memory/retrieval" },
+      { label: "Episodes", href: "/docs/memory/episodes" },
+      { label: "Distillation", href: "/docs/memory/distillation" },
       { label: "Planning", href: "/docs/planning" },
       { label: "Skills", href: "/docs/skills" },
       { label: "Subagents", href: "/docs/subagents" },
-      { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
-      { label: "Middleware", href: "/docs/middleware" },
-      { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Context Management", href: "/docs/context-management" },
-      { label: "Access Control", href: "/docs/access-control" },
-      { label: "Permissions", href: "/docs/permissions" },
-      { label: "Sandbox", href: "/docs/sandbox" },
-      { label: "Retry", href: "/docs/retry" },
+      { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
     ],
   },
   {
-    label: "Tooling",
+    label: "Integrate",
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
-      { label: "AG-UI & Web Clients", href: "/docs/ag-ui" },
+      { label: "Agent Protocol", href: "/docs/dev-server/agent-protocol" },
+      { label: "Middleware", href: "/docs/middleware" },
+      { label: "AG-UI and Web Clients", href: "/docs/ag-ui" },
+      { label: "Embed the Runtime", href: "/docs/embedding" },
       { label: "Blueprints", href: "/docs/blueprints" },
-      { label: "Testing", href: "/docs/testing" },
-      { label: "Testing Agents", href: "/docs/testing-agents" },
+    ],
+  },
+  {
+    label: "Test",
+    items: [
+      { label: "Scenario Testing", href: "/docs/testing" },
+      { label: "Agent Test Harness", href: "/docs/testing-agents" },
+      { label: "Fixtures and Recording", href: "/docs/testing-agents/fixtures" },
       { label: "Evals", href: "/docs/evals" },
-      { label: "Deployment", href: "/docs/deployment" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { label: "Persistence and Tenancy", href: "/docs/persistence" },
+      { label: "Production Topology", href: "/docs/production-topology" },
+      { label: "Security Architecture", href: "/docs/security-architecture" },
+      { label: "Access Control", href: "/docs/access-control" },
+      { label: "Permissions", href: "/docs/permissions" },
+      { label: "Retry", href: "/docs/retry" },
+      { label: "Observability", href: "/docs/observability" },
+      { label: "Inspector", href: "/docs/inspector" },
+      { label: "Browse and Manage Memory", href: "/docs/memory/browse" },
+      { label: "Upgrading", href: "/docs/upgrading" },
+    ],
+  },
+  {
+    label: "Deploy",
+    items: [
+      { label: "Deployment Options", href: "/docs/deployment" },
+      { label: "Node and Docker", href: "/docs/deployment/node" },
+      { label: "Kubernetes", href: "/docs/deployment/kubernetes" },
+      { label: "LangSmith", href: "/docs/deployment/langsmith" },
+      { label: "Edge and Hono", href: "/docs/deployment/edge" },
+      { label: "Execution Sandbox", href: "/docs/sandbox" },
+      { label: "Kubernetes Sandbox", href: "/docs/sandbox/kubernetes" },
     ],
   },
   {
     label: "Recipes",
     items: [
-      { label: "Overview", href: "/docs/recipes" },
-      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
-      { label: "Typed state", href: "/docs/recipes/typed-state" },
-      { label: "Auth middleware", href: "/docs/recipes/auth-middleware" },
-      { label: "Stream output", href: "/docs/recipes/stream-output" },
-      { label: "Retry flaky tools", href: "/docs/recipes/retry-flaky-tools" },
-      { label: "Dispatch from a route", href: "/docs/recipes/dispatch-from-route" },
-      { label: "Research web UI", href: "/docs/recipes/research-web-ui" },
+      { label: "Recipes Overview", href: "/docs/recipes" },
+      { label: "Add a Tool", href: "/docs/recipes/add-a-tool" },
+      { label: "Typed State", href: "/docs/recipes/typed-state" },
+      { label: "Auth Middleware", href: "/docs/recipes/auth-middleware" },
+      { label: "Stream Output", href: "/docs/recipes/stream-output" },
+      { label: "Retry Transient Model Calls", href: "/docs/recipes/retry-flaky-tools" },
+      { label: "Dispatch from a Route", href: "/docs/recipes/dispatch-from-route" },
+      { label: "Research Assistant Web UI", href: "/docs/recipes/research-web-ui" },
     ],
   },
   {
     label: "Reference",
     items: [
-      { label: "API", href: "/docs/api" },
-      { label: "CLI", href: "/docs/cli" },
-      { label: "Configuration", href: "/docs/configuration" },
+      { label: "Configuration Reference", href: "/docs/configuration" },
+      { label: "CLI Reference", href: "/docs/cli" },
+      { label: "API Reference", href: "/docs/api" },
       { label: "Error Codes", href: "/docs/errors" },
-      { label: "Observability", href: "/docs/observability" },
-      { label: "Upgrading", href: "/docs/upgrading" },
       { label: "FAQ", href: "/docs/faq" },
     ],
   },
-]
+] as const
 
 // Flat ordered list of pages — used for prev/next navigation.
-export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap((s) => s.items)
+export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap(
+  (section) => section.items as readonly DocsNavItem[],
+)
+
+export const ALL_DOCS_PAGES: readonly DocsNavItem[] = DOCS_PAGES.flatMap((page) =>
+  page.href === "/docs/api" ? [page, ...API_REFERENCE_PAGES] : [page],
+)
 
 export interface DocsCrumb {
   readonly label: string
   readonly href?: string
 }
 
-// Build breadcrumbs for a given href. Always starts with "Docs" → <section> → <page>.
+// Build breadcrumbs for a given href. Reference leaves include their parent API hub.
 export function breadcrumbsFor(href: string): readonly DocsCrumb[] {
+  const referencePage = API_REFERENCE_PAGES.find((page) => page.href === href)
+  if (referencePage) {
+    return [
+      {
+        label: "Docs",
+        href: "/docs/getting-started",
+      },
+      { label: "Reference" },
+      { label: referencePage.parent.label, href: referencePage.parent.href },
+      { label: referencePage.label },
+    ]
+  }
+
   const section = DOCS_NAV.find((s) => s.items.some((i) => i.href === href))
   const page = section?.items.find((i) => i.href === href)
   const crumbs: DocsCrumb[] = [{ label: "Docs", href: "/docs/getting-started" }]

@@ -1,3 +1,6 @@
+import { pathToFileURL } from "node:url"
+import { tsImport } from "tsx/esm/api"
+
 export interface DocFrontmatter {
   title?: string
   description?: string
@@ -41,24 +44,36 @@ export function parseFrontmatter(raw: string): { data: DocFrontmatter; body: str
 /**
  * Convert an MDX doc page to plain markdown suitable for the bundled tree.
  * Minimal transform: strip frontmatter (promoting `title` to an H1 when the
- * body has none), drop module `import`/`export` lines OUTSIDE fenced code, and
- * remove `<RelatedCards … />` navigation components. Code fences are untouched.
+ * body has none), drop module `import`/`export` lines and API behavior authority
+ * metadata OUTSIDE fenced code, and remove `<RelatedCards … />` navigation
+ * components. Code fences are untouched.
  */
 export function mdxToMarkdown(raw: string): string {
   const { data, body } = parseFrontmatter(raw)
   const out: string[] = []
-  let inFence = false
+  let fence: { readonly character: "`" | "~"; readonly length: number } | undefined
   for (const line of body.split("\n")) {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence
+    const fenceMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!fence && fenceMatch?.[2] && (fenceMatch[2][0] === "~" || !fenceMatch[3]?.includes("`"))) {
+      fence = { character: fenceMatch[2][0] as "`" | "~", length: fenceMatch[2].length }
       out.push(line)
       continue
     }
-    if (inFence) {
+    if (fence) {
       out.push(line)
+      if (
+        fenceMatch?.[2]?.[0] === fence.character &&
+        fenceMatch[2].length >= fence.length &&
+        fenceMatch[3]?.trim() === ""
+      ) {
+        fence = undefined
+      }
       continue
     }
     if (/^(import|export)\s/.test(line)) {
+      continue
+    }
+    if (/^\{\/\* api-behavior-authorities: \[[\s\S]*\] \*\/\}$/.test(line.trim())) {
       continue
     }
     out.push(line)
@@ -74,32 +89,52 @@ export function mdxToMarkdown(raw: string): string {
   return `${result}\n`
 }
 
-export interface NavEntry {
+export interface DocsPageEntry {
   readonly slug: string
   readonly label: string
 }
 
-/** Extract ordered `{ slug, label }` pairs from the website nav source, deduped by slug. */
-export function parseNav(navSource: string): NavEntry[] {
-  const entries: NavEntry[] = []
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null
+}
+
+/** Validate an evaluated `ALL_DOCS_PAGES` export without changing its order or membership. */
+export function parseDocsPages(pagesValue: unknown): DocsPageEntry[] {
+  if (!Array.isArray(pagesValue)) {
+    throw new TypeError("ALL_DOCS_PAGES must be an array")
+  }
+
+  const entries: DocsPageEntry[] = []
   const seen = new Set<string>()
-  const re = /label:\s*["']([^"']+)["'],\s*href:\s*["']\/docs\/([^"']+)["']/g
-  let m: RegExpExecArray | null = re.exec(navSource)
-  while (m !== null) {
-    const label = m[1] ?? ""
-    const slug = m[2] ?? ""
-    if (slug !== "" && !seen.has(slug)) {
-      seen.add(slug)
-      entries.push({ slug, label })
+  for (const [index, item] of pagesValue.entries()) {
+    if (!isRecord(item) || typeof item.label !== "string" || typeof item.href !== "string") {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}] must contain string label and href fields`)
     }
-    m = re.exec(navSource)
+    if (item.label.length === 0 || item.label.trim() !== item.label || /[\r\n]/.test(item.label)) {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}].label must be a non-empty single-line label`)
+    }
+    const hrefMatch = /^\/docs\/([a-z0-9-]+(?:\/[a-z0-9-]+)*)$/.exec(item.href)
+    if (!hrefMatch?.[1]) {
+      throw new TypeError(`ALL_DOCS_PAGES[${index}].href must be an unfragmented /docs/<slug> path`)
+    }
+    const slug = hrefMatch[1]
+    if (seen.has(slug)) throw new TypeError(`ALL_DOCS_PAGES contains duplicate slug: ${slug}`)
+    seen.add(slug)
+    entries.push({ slug, label: item.label })
   }
   return entries
 }
 
-/** Extract `/docs/<slug>` hrefs from the website nav source, in order, deduped. */
-export function parseNavOrder(navSource: string): string[] {
-  return parseNav(navSource).map((entry) => entry.slug)
+/** Runtime-import the exact exhaustive registry and ignore every other binding. */
+export async function loadDocsPages(navFile: string): Promise<DocsPageEntry[]> {
+  const loaded = (await tsImport(pathToFileURL(navFile).href, import.meta.url)) as Record<
+    string,
+    unknown
+  >
+  if (!("ALL_DOCS_PAGES" in loaded)) {
+    throw new TypeError(`${navFile} does not export ALL_DOCS_PAGES`)
+  }
+  return parseDocsPages(loaded.ALL_DOCS_PAGES)
 }
 
 /** The text of the first `# ` heading in a markdown document, if any. */

@@ -14,6 +14,7 @@ import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
+import { readParkedRoute, settleParkedRoute } from "./parked-route.js"
 import {
   type PendingResumeClaims,
   readPendingInterrupts,
@@ -65,6 +66,24 @@ export interface AgUiFetchRequestOptions {
 interface AgUiRequestOptions extends Omit<AgUiFetchRequestOptions, "request"> {
   readonly request: IncomingMessage
   readonly response: ServerResponse
+}
+
+/**
+ * Pass-through tap that records whether the turn parked.
+ *
+ * Separate from `normalizeDawnStream` because that one has already translated
+ * chunks into AG-UI's vocabulary by the time anything downstream sees them,
+ * while the gate has to key off Dawn's own `interrupt` chunk — the same signal
+ * `handleApStreamRequest` watches for inline.
+ */
+async function* observeInterrupts(
+  chunks: AsyncIterable<StreamChunk>,
+  onInterrupt: () => void,
+): AsyncGenerator<StreamChunk> {
+  for await (const chunk of chunks) {
+    if (chunk.type === "interrupt") onInterrupt()
+    yield chunk
+  }
 }
 
 async function* normalizeDawnStream(
@@ -248,9 +267,18 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     }
     releaseRunBeforeStream = run.release
 
-    if (!(await threadsStore.getThread(threadId))) {
+    // Read before the turn, for the same reason and with the same staleness
+    // caveat as the Agent Protocol handlers: only the CLEAR consults it.
+    const existingThread = await threadsStore.getThread(threadId)
+    const previousParkedRoute = readParkedRoute(existingThread)
+    if (!existingThread) {
       await threadsStore.createThread({ thread_id: threadId })
     }
+    // The last-run route, and therefore NOT the identity
+    // GET /threads/:id/pending_interrupts gates on — any run the caller is
+    // allowed to start overwrites it. See PARKED_ROUTE_KEY. This endpoint is the
+    // one the CopilotKit UIs drive, so it is where most parks are born; a park
+    // it failed to record would be a park that endpoint could not protect.
     await threadsStore.updateMetadata(threadId, { route: routeKey })
     await threadsStore.updateStatus(threadId, "busy")
 
@@ -258,6 +286,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     const encoder = new TextEncoder()
     const releaseClaimWhenSettled = releaseResumeClaim
     let sourceCleanup: Promise<void> | undefined
+    // A parked turn takes the NORMAL completion path here too — the adapter
+    // yields the interrupt chunk and then `done` — so a drained loop is not
+    // evidence the turn finished. Only the gate below reads this; the "idle"
+    // status write is deliberately left alone (tracked separately).
+    let sawInterrupt = false
     // From here on, the stream owns both the request listeners and any resume
     // claim. Its execution-finally path releases the claim only after the
     // interrupted route has actually unwound.
@@ -295,13 +328,31 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
                 sourceCleanup = cleanup
               },
             )
-            for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
+            const observedRouteStream = observeInterrupts(abortableRouteStream, () => {
+              sawInterrupt = true
+            })
+            for await (const event of toAguiEvents(normalizeDawnStream(observedRouteStream), {
               threadId,
               runId: input.runId,
             })) {
               safeEnqueue(controller, encoder.encode(encodeAgUiSse(event, accept)))
             }
           } finally {
+            // This finally covers BOTH the drained and the failed turn, which is
+            // exactly the pair the Agent Protocol handlers cover with a
+            // success-path call plus a catch-path retry: a turn that parked
+            // before failing is still parked. Errors are swallowed rather than
+            // propagated because throwing from here would replace whatever
+            // error brought us into the finally, masking the real failure.
+            await settleParkedRoute({
+              canPark: route.mode === "agent",
+              checkpointer,
+              parked: sawInterrupt,
+              previousParkedRoute,
+              routeKey,
+              threadId,
+              threadsStore,
+            }).catch(() => undefined)
             await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
             releaseSignalListeners()
           }

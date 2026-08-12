@@ -42,7 +42,8 @@ function stubApi() {
   const mock = vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url)
     if (u.includes("/api/memory/stats")) return jsonResponse(stats)
-    if (u.includes("/api/memory/list")) return jsonResponse({ records: [candidate], total: 1 })
+    if (u.includes("/api/memory/list"))
+      return jsonResponse({ records: [candidate], total: 1, continuation: null })
     if (u.includes("/api/memory/search")) {
       return jsonResponse({
         groups: [{ namespace: "route=/notes", records: [candidate] }],
@@ -55,11 +56,26 @@ function stubApi() {
   return mock
 }
 
-function callsTo(mock: ReturnType<typeof stubApi>, path: string): URL[] {
+/** Structural on purpose: the mutation stubs below take an `init` the read-only
+ *  stub does not, so a `ReturnType<typeof stubApi>` parameter would reject them. */
+function callsTo(mock: { mock: { calls: readonly (readonly unknown[])[] } }, path: string): URL[] {
   return mock.mock.calls
     .map((call) => String(call[0]))
     .filter((u) => u.includes(path))
     .map((u) => new URL(u, "http://localhost"))
+}
+
+function rowCheckbox(container: HTMLElement, rowId: string): HTMLElement {
+  const box = container.querySelector(
+    `[data-pretable-row-id="${rowId}"] button[data-pretable-row-select]`,
+  )
+  if (!box) throw new Error(`no checkbox for ${rowId}`)
+  return box as HTMLElement
+}
+
+function postCount(mock: { mock: { calls: readonly (readonly unknown[])[] } }): number {
+  return mock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === "POST")
+    .length
 }
 
 describe("ListPage", () => {
@@ -70,7 +86,7 @@ describe("ListPage", () => {
         const u = String(url)
         if (u.includes("/api/memory/stats")) return jsonResponse(stats)
         if (u.includes("/api/memory/list")) {
-          return jsonResponse({ records: [candidate], total: 1 })
+          return jsonResponse({ records: [candidate], total: 1, continuation: null })
         }
         return jsonResponse({ groups: [] })
       }),
@@ -80,7 +96,7 @@ describe("ListPage", () => {
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
   })
 
-  it("clicking a namespace facet scopes the next list fetch", async () => {
+  it("a namespace facet sends the EXACT namespace, never a prefix", async () => {
     const mock = stubApi()
     render(<ListPage />)
     const rail = await screen.findByRole("navigation")
@@ -88,52 +104,98 @@ describe("ListPage", () => {
     fireEvent.click(facet)
     await vi.waitFor(() => {
       const scoped = callsTo(mock, "/api/memory/list").filter(
-        (u) => u.searchParams.get("namespacePrefix") === "route=/notes",
+        (u) => u.searchParams.get("namespace") === "route=/notes",
       )
       expect(scoped.length).toBeGreaterThan(0)
     })
+    expect(
+      callsTo(mock, "/api/memory/list").every(
+        (u) => u.searchParams.get("namespacePrefix") === null,
+      ),
+    ).toBe(true)
   })
 
-  it("a selected facet filters the page to the exact namespace, not the prefix", async () => {
+  it("renders every row the server returned for a facet — no client narrowing", async () => {
+    // The old code fetched by PREFIX and then narrowed to equality on the
+    // client, so the rows on screen and the `total` beside them answered
+    // different questions. The server answers the exact question now, and the
+    // page must not second-guess it.
     const sibling: MemoryRecord = {
       ...candidate,
       id: "cand2",
       namespace: "route=/notes2",
       content: "sibling prefix record",
     }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL) => {
-        const u = String(url)
-        if (u.includes("/api/memory/stats")) {
-          return jsonResponse({
-            ...stats,
-            total: 2,
-            byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
-          })
-        }
-        if (u.includes("/api/memory/list")) {
-          // The server narrows by PREFIX, so a route=/notes selection still
-          // returns the route=/notes2 sibling — the client must filter exactly.
-          return jsonResponse({ records: [candidate, sibling], total: 2 })
-        }
-        return jsonResponse({ groups: [] })
-      }),
-    )
+    const mock = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url)
+      if (u.includes("/api/memory/stats")) {
+        return jsonResponse({
+          ...stats,
+          total: 2,
+          byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
+        })
+      }
+      if (u.includes("/api/memory/list"))
+        return jsonResponse({ records: [candidate, sibling], total: 2, continuation: null })
+      return jsonResponse({ groups: [] })
+    })
+    vi.stubGlobal("fetch", mock)
     render(<ListPage />)
     expect(await screen.findByText("acme threshold is 750")).toBeDefined()
-    expect(await screen.findByText("sibling prefix record")).toBeDefined()
-
-    // Exact-text lookup scoped to the facet rail: "route=/notes" must not
-    // match the "route=/notes2" facet (or the grid's namespace cells).
     const facetLabel = within(screen.getByRole("navigation")).getByText("route=/notes")
     const facetButton = facetLabel.closest("button")
     if (!facetButton) throw new Error("facet button not found")
     fireEvent.click(facetButton)
+    // The stub answers every window with both rows, so the sibling is already on
+    // screen before the click. Without waiting for the scoped request the click
+    // must send, this passes against a facet control that does nothing at all.
     await vi.waitFor(() => {
-      expect(screen.queryByText("sibling prefix record")).toBeNull()
+      const scoped = callsTo(mock, "/api/memory/list").filter(
+        (u) => u.searchParams.get("namespace") === "route=/notes",
+      )
+      expect(scoped.length).toBeGreaterThan(0)
     })
-    expect(screen.getByText("acme threshold is 750")).toBeDefined()
+    // Whatever the (stubbed) server hands back is what shows. Nothing is hidden.
+    expect(await screen.findByText("sibling prefix record")).toBeDefined()
+  })
+
+  it("labels the facet counts as global, on the rail AND on every count", async () => {
+    stubApi()
+    render(<ListPage />)
+    const rail = await screen.findByRole("navigation")
+    const scopeId = rail.getAttribute("aria-describedby")
+    expect(scopeId).toBeTruthy()
+    // Resolving the reference, not just comparing the attribute to a literal: a
+    // dangling `aria-describedby` is the failure mode of a hand-written id, and
+    // it announces nothing.
+    expect(document.getElementById(scopeId ?? "")?.textContent).toMatch(/across all memories/i)
+    // A description on the landmark does not reach its descendants, and the
+    // counts are read off the buttons — someone who tabs straight to a facet
+    // would otherwise hear the number with no scope attached to it.
+    const facets = within(rail).getAllByRole("button")
+    expect(facets.length).toBeGreaterThan(1)
+    for (const facet of facets) {
+      expect(facet.getAttribute("aria-describedby")).toBe(scopeId)
+    }
+  })
+
+  it("reports no count when the stats request has not answered", async () => {
+    // A `0` sitting under a label that promises a census of every memory reads as
+    // that census. A failed (or merely pending) /stats has not delivered one.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse({ error: "no store" }, 500)
+        if (u.includes("/api/memory/list"))
+          return jsonResponse({ records: [candidate], total: 1, continuation: null })
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    const rail = await screen.findByRole("navigation")
+    const all = within(rail).getByRole("button", { name: /all/i })
+    expect(all.textContent).toBe("all—")
   })
 
   it("typing a query fires a debounced search and renders grouped results", async () => {
@@ -154,5 +216,166 @@ describe("ListPage", () => {
     render(<ListPage />)
     const banner = await screen.findByRole("alert")
     expect(banner.textContent).toContain("no memory store configured")
+  })
+
+  it("surfaces a browse failure in the timeline view, with a way out", async () => {
+    let fail = true
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          return fail
+            ? jsonResponse({ error: "no memory store configured" }, 500)
+            : jsonResponse({ records: [candidate], total: 1, continuation: null })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+
+    const entry = await screen.findByTestId("error-browse")
+    expect(entry.textContent).toContain("no memory store configured")
+    // The error phase suspends polling, so without a control here the timeline never
+    // asks again and the failure reads as an empty window for the rest of the session.
+    fail = false
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    // Scoped to the timeline: the browse grid stays MOUNTED behind it (Flow 10)
+    // and draws the same rows, so a document-wide text query matches the hidden
+    // copy as well. The claim — this row is on the timeline after the retry — is
+    // unchanged, and asserting it on the whole document would let the hidden copy
+    // satisfy it.
+    expect(
+      await within(screen.getByTestId("timeline-region")).findByText("acme threshold is 750"),
+    ).toBeDefined()
+    expect(screen.queryByTestId("error-browse")).toBeNull()
+  })
+
+  it("puts exactly one retry on screen for a failed browse", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          return jsonResponse({ error: "no memory store configured" }, 500)
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    const block = await screen.findByTestId("browse-error")
+    expect(block.textContent).toContain("no memory store configured")
+    // The grid's body-state block owns the error PHASE wherever the grid is mounted;
+    // a banner for the same failure would put a second retry on screen for one failure.
+    expect(screen.queryByTestId("error-browse")).toBeNull()
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1)
+  })
+
+  it("leaves a failed bulk action to the bar that reports it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url)
+        if (init?.method === "POST") return jsonResponse({ error: "would supersede" }, 409)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list"))
+          return jsonResponse({ records: [candidate], total: 1, continuation: null })
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    const { container } = render(<ListPage />)
+    await screen.findByText("acme threshold is 750")
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
+
+    const report = await screen.findByTestId("bulk-error")
+    expect(report.textContent).toContain("1 of 1 failed")
+    // One failure, one channel. A banner repeating it announces the same event a second
+    // time, and — cleared by nothing the bar does — outlives the bar it points at.
+    expect(screen.queryByTestId("error-mutation")).toBeNull()
+    expect(screen.queryByText(/bulk action\(s\) failed/)).toBeNull()
+  })
+
+  it("a mutation still refetches when a request was already in flight", async () => {
+    let release: (() => void) | undefined
+    let hold = false
+    const mock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (init?.method === "POST") return jsonResponse({ ok: true })
+      if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+      if (u.includes("/api/memory/list")) {
+        if (hold) {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        return jsonResponse({ records: [candidate], total: 1, continuation: null })
+      }
+      return jsonResponse({ groups: [] })
+    })
+    vi.stubGlobal("fetch", mock)
+    const { container } = render(<ListPage />)
+    await screen.findByText("acme threshold is 750")
+
+    // Live off: a mutation's own refresh is the only thing that will ever ask again —
+    // which is what makes the FIRST one the request in flight that the second has to
+    // survive. A query change would put a request in flight too, but the bulk bar is
+    // withheld for the whole of `stale`, so that route is not a gesture a user has.
+    fireEvent.click(screen.getByLabelText("live"))
+    hold = true
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
+    await vi.waitFor(() => {
+      expect(release).toBeDefined()
+    })
+
+    fireEvent.click(rowCheckbox(container, "cand1"))
+    fireEvent.click(await screen.findByRole("button", { name: /approve 1/i }))
+    await vi.waitFor(() => {
+      expect(postCount(mock)).toBe(2)
+    })
+
+    hold = false
+    const before = callsTo(mock, "/api/memory/list").length
+    release?.()
+    await vi.waitFor(() => {
+      expect(callsTo(mock, "/api/memory/list").length).toBeGreaterThan(before)
+    })
+  })
+
+  it("does not call an unanswered timeline window empty", async () => {
+    let release: (() => void) | undefined
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) return jsonResponse(stats)
+        if (u.includes("/api/memory/list")) {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return jsonResponse({ records: [candidate], total: 1, continuation: null })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    fireEvent.click(screen.getByRole("button", { name: "timeline" }))
+
+    // Scoped to the timeline: the mounted-but-hidden browse grid renders its own
+    // lifecycle block under the same test id, and the same rows. The subject is the
+    // block the timeline shows, so the query has to name that surface.
+    const timeline = () => within(screen.getByTestId("timeline-region"))
+    expect(await timeline().findByTestId("browse-loading")).toBeDefined()
+    // "No episodes in this window." is an ANSWER, and the server has not given one.
+    expect(screen.queryByText("No episodes in this window.")).toBeNull()
+
+    release?.()
+    expect(await timeline().findByText("acme threshold is 750")).toBeDefined()
+    // Counts and freshness describe the browse, not the grid — both surfaces get them.
+    expect(screen.getByTestId("browse-status").textContent).toContain("1 loaded of 1 matching")
   })
 })

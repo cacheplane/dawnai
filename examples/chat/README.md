@@ -16,22 +16,27 @@
 - `AGENTS.md` memory autoload — Dawn auto-injects `workspace/AGENTS.md` into the system prompt on every turn; the agent updates it via `writeFile`
 - **Planning** — `plan.md` in the route directory opts the agent into the built-in
   `writeTodos` tool, a `todos` state channel, and a `plan_update` Agent Protocol stream
-  event. AG-UI v1 intentionally ignores planning capability events.
+  event. The AG-UI adapter maps valid root updates to standard replacement
+  `dawn.plan` activity snapshots.
 - **Skills** — `src/app/chat/skills/<name>/SKILL.md` files are auto-listed in
   the agent's system prompt (name + description). The agent calls
   `readSkill({ name })` to load a skill's full body on demand. Two example
   skills ship with the demo: `workspace-conventions` and `recover-from-failure`.
 - **Subagents** — `/coordinator` dispatches to specialist subagents (`research`,
   `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
-  bubble `subagent.*` Agent Protocol stream events with `call_id` correlation. The basic
-  web client does not expose `/coordinator`; drive it through Agent Protocol instead.
+  bubble `subagent.*` Agent Protocol stream events with `call_id` correlation, and the
+  AG-UI adapter maps matching lifecycles to bounded replacement `dawn.subagent`
+  snapshots. The basic web client drives only `/chat`; it does not expose
+  `/coordinator` or register activity renderers, so drive coordinator runs through
+  Agent Protocol instead.
 - **HITL permissions** — `dawn.config.ts` seeds allow/deny lists for `runBash`. Unknown
   commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
   or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
   for the interrupt/resume flow.
 - End-to-end streaming to a [CopilotKit](https://docs.copilotkit.ai) web client over Dawn's
   AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) for basic `/chat` messages.
-  The web example deliberately has no planning, subagent, or permission compatibility UI.
+  The web example deliberately has no planning or subagent activity presentation and no
+  permission decision control.
 
 ## Model choice
 
@@ -109,4 +114,5 @@ The remaining limitations are scoped to this example's surface, not missing runt
 capabilities:
 
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
-- The web client only drives `/chat`; `/coordinator` (subagents) has no web UI yet (fast-follow)
+- The web client only drives `/chat` and registers no activity renderers;
+  `/coordinator` is outside this basic client's UI.

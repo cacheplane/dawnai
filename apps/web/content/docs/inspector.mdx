@@ -3,7 +3,7 @@
 The Dawn Inspector is a browser-based UI for inspecting a running Dawn app's
 runtime state. It ships as its own package, `@dawn-ai/inspector`, and opens with
 `dawn inspect`. The first panel is **Memory** — browse, search, and govern the
-app's [long-term memory](/docs/memory) records — and the shell is panel-based,
+app's [long-term memory](/docs/memory/browse) records — and the shell is panel-based,
 so future panels (threads, runs, sandbox) slot in alongside it.
 
 ## Launching
@@ -34,7 +34,7 @@ missing, the command prints the install hint and exits.
 
 The inspector serves the app's **live** memory store — it loads your
 `dawn.config.ts` and uses `config.memory.store` exactly as the dev server does.
-The default SQLite store, the [pgvector backend](/docs/memory#postgres-backend-pgvector),
+The default SQLite store, the [pgvector backend](/docs/memory/retrieval#postgres-backend-pgvector),
 and custom `MemoryStore` implementations all work unchanged.
 
 Two caveats follow from the inspector running as a separate process:
@@ -52,7 +52,7 @@ Two caveats follow from the inspector running as a separate process:
   candidates), with facet counts by status, kind, namespace, and source type.
 - **Search** — recall-equivalent ranked search, not a substring filter. It runs
   the same IDF-weighted keyword ranking the agent's `recall` tool uses, and when
-  your config declares a [vector embedder](/docs/memory#semantic-recall-opt-in)
+  your config declares a [vector embedder](/docs/memory/retrieval#semantic-recall-opt-in)
   (and the provider key is available, e.g. via `--env-file`), the same hybrid
   keyword + vector fusion.
 - **Live refresh** — lists and facet counts poll every 2 seconds while the tab
@@ -70,7 +70,7 @@ Two caveats follow from the inspector running as a separate process:
 
 ### Timeline view
 
-With [episodic memory](/docs/memory#episodic-memory) enabled, the panel's
+With [episodic memory](/docs/memory/episodes#episodic-memory) enabled, the panel's
 list/timeline toggle switches to a **timeline** of what the agent did: records
 grouped by day, each row showing the time it happened, an outcome badge
 (`ok`/`error` for auto-recorded runs, `authored` for agent-written episodes),
@@ -102,7 +102,7 @@ The inspector is a local development tool:
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/memory", title: "Memory", subtitle: "the store, recall ranking, and write governance" },
-  { href: "/docs/cli", title: "CLI", subtitle: "dawn inspect flags and the dawn memory workflow" },
-  { href: "/docs/configuration", title: "Configuration", subtitle: "the dawn.config.ts memory block" },
+  { href: "/docs/memory/browse", title: "Browse and Manage Memory", subtitle: "administrative filtering, ranking, and governance" },
+  { href: "/docs/cli", title: "CLI Reference", subtitle: "dawn inspect flags and the dawn memory workflow" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "the dawn.config.ts memory block" },
 ]} />

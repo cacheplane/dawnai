@@ -1,1367 +1,479 @@
 # API Reference
 
-This page lists public symbols exported from `@dawn-ai/sdk`, selected runtime packages, and the generated `dawn:routes` module. It is reference documentation — for concepts and examples, see the individual concept pages. Symbols are grouped by category and linked back to the page that explains them in depth.
+Use this catalog to choose the Dawn package, subpath, or executable that owns a contract. Application developers should start with `@dawn-ai/sdk`; use the focused references for exact exports, defaults, errors, and lifecycle rules.
+
+## Package and surface index
+
+Application shortcuts: author routes with the [`@dawn-ai/sdk` reference](/docs/api/sdk); use the [`dawn` command or runtime entries](/docs/api/cli), including `/fetch` for supported edge integrations; test programmatically with [`@dawn-ai/testing`](/docs/api/testing); score behavior with [`@dawn-ai/evals`](/docs/api/evals); and import app-specific tool and state types from [`dawn:routes`](/docs/api/generated-routes).
+
+| Package | Purpose | Audience | Stability | Surfaces | Artifact boundaries | README | Reference | Guide |
+|---|---|---|---|---|---|---|---|---|
+| `@dawn-ai/ag-ui` | AG-UI protocol translation for Dawn runtimes and web clients. | `integration` | `supported` | `@dawn-ai/ag-ui`<br />`@dawn-ai/ag-ui/sse` | focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md) | [Reference](/docs/api/ag-ui) | [Guide](/docs/ag-ui) |
+| `@dawn-ai/cli` | Dawn development, build, type generation, and runtime commands. | `tooling` | `supported` | `@dawn-ai/cli`<br />`@dawn-ai/cli/fetch`<br />`@dawn-ai/cli/runtime`<br />`@dawn-ai/cli/testing`<br />`bin.dawn` | focused reference · `node-only` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `node-only` runtime · `not-claimed` purity<br />focused reference · `node-only` runtime · `not-claimed` purity<br />focused reference · `node-only` executable command · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/cli/README.md) | [Reference](/docs/api/cli) | [Guide](/docs/cli) |
+| <span id="dawn-ai-config-biome"></span>`@dawn-ai/config-biome` | Shared Biome configuration for Dawn projects. | `tooling` | `supported` | `@dawn-ai/config-biome`<br />`@dawn-ai/config-biome/biome` | catalog summary · static configuration; no runtime import · purity n/a<br />catalog summary · static configuration; no runtime import · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/config-biome/README.md) | [Reference](/docs/api#dawn-ai-config-biome) | [Guide](/docs/getting-started) |
+| <span id="dawn-ai-config-typescript"></span>`@dawn-ai/config-typescript` | Shared TypeScript configurations for Dawn projects. | `tooling` | `supported` | `@dawn-ai/config-typescript`<br />`@dawn-ai/config-typescript/base`<br />`@dawn-ai/config-typescript/library`<br />`@dawn-ai/config-typescript/node`<br />`@dawn-ai/config-typescript/nextjs` | catalog summary · static configuration; no runtime import · purity n/a<br />catalog summary · static configuration; no runtime import · purity n/a<br />catalog summary · static configuration; no runtime import · purity n/a<br />catalog summary · static configuration; no runtime import · purity n/a<br />catalog summary · static configuration; no runtime import · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/config-typescript/README.md) | [Reference](/docs/api#dawn-ai-config-typescript) | [Guide](/docs/getting-started) |
+| `@dawn-ai/core` | Route discovery, app configuration, capabilities, and type generation. | `integration` | `low-level` | `@dawn-ai/core`<br />`@dawn-ai/core/node`<br />`@dawn-ai/core/internal/compiler` | focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `node-only` runtime · `not-claimed` purity<br />internal only · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/core/README.md) | [Reference](/docs/api/core) | [Guide](/docs/routes) |
+| <span id="dawn-ai-devkit"></span>`@dawn-ai/devkit` | Internal scaffold templates and generated-app test utilities. | `internal` | `internal` | `@dawn-ai/devkit` | internal only · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/devkit/README.md) | [Reference](/docs/api#dawn-ai-devkit) | [Guide](/docs/getting-started) |
+| `@dawn-ai/evals` | Evaluation definitions, scorers, datasets, and runners. | `testing` | `supported` | `@dawn-ai/evals` | focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/evals/README.md) | [Reference](/docs/api/evals) | [Guide](/docs/evals) |
+| <span id="dawn-ai-inspector"></span>`@dawn-ai/inspector` | Browser application for inspecting a running Dawn app. | `tooling` | `supported` | `dawnInspector.server` | catalog summary · `node-only` separately operated application · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/inspector/README.md) | [Reference](/docs/api#dawn-ai-inspector) | [Guide](/docs/inspector) |
+| <span id="dawn-ai-langchain"></span>`@dawn-ai/langchain` | LangChain backend adapters for Dawn agents and chains. | `integration` | `supported` | `@dawn-ai/langchain`<br />`@dawn-ai/langchain/package.json` | catalog summary · `edge-safe` runtime · `not-claimed` purity<br />catalog summary · package metadata; read as data, not runtime code · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/langchain/README.md) | [Reference](/docs/api#dawn-ai-langchain) | [Guide](/docs/agents) |
+| <span id="dawn-ai-langgraph"></span>`@dawn-ai/langgraph` | LangGraph runtime adapters and route contracts. | `integration` | `supported` | `@dawn-ai/langgraph`<br />`@dawn-ai/langgraph/define-entry`<br />`@dawn-ai/langgraph/route-module` | catalog summary · `edge-safe` runtime · `not-claimed` purity<br />catalog summary · `edge-safe` runtime · `not-claimed` purity<br />catalog summary · `edge-safe` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/langgraph/README.md) | [Reference](/docs/api#dawn-ai-langgraph) | [Guide](/docs/routes) |
+| `@dawn-ai/memory` | Long-term memory storage, ranking, browsing, and reconciliation. | `application` | `supported` | `@dawn-ai/memory`<br />`@dawn-ai/memory/browse`<br />`@dawn-ai/memory/namespace`<br />`@dawn-ai/memory/reconcile` | focused reference · `node-only` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `dependency-free` purity<br />focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/memory/README.md) | [Reference](/docs/api/memory) | [Guide](/docs/memory/long-term) |
+| `@dawn-ai/memory-pgvector` | Postgres and pgvector storage for shared long-term memory. | `application` | `supported` | `@dawn-ai/memory-pgvector` | focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/memory-pgvector/README.md) | [Reference](/docs/api/memory-pgvector) | [Guide](/docs/memory/long-term) |
+| <span id="dawn-ai-permissions"></span>`@dawn-ai/permissions` | Permission matching and Node-backed approval stores. | `integration` | `supported` | `@dawn-ai/permissions`<br />`@dawn-ai/permissions/node` | catalog summary · `edge-safe` runtime · `not-claimed` purity<br />catalog summary · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/permissions/README.md) | [Reference](/docs/api#dawn-ai-permissions) | [Guide](/docs/permissions) |
+| `@dawn-ai/postgres-storage` | Postgres persistence for checkpoints, threads, and permissions. | `application` | `supported` | `@dawn-ai/postgres-storage`<br />`@dawn-ai/postgres-storage/node` | focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/postgres-storage/README.md) | [Reference](/docs/api/postgres-storage) | [Guide](/docs/persistence) |
+| <span id="dawn-ai-sandbox"></span>`@dawn-ai/sandbox` | Docker-backed isolated workspace execution for Dawn agents. | `application` | `supported` | `@dawn-ai/sandbox`<br />`@dawn-ai/sandbox/testing` | catalog summary · `node-only` runtime · `not-claimed` purity<br />catalog summary · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/sandbox/README.md) | [Reference](/docs/api#dawn-ai-sandbox) | [Guide](/docs/sandbox) |
+| `@dawn-ai/sdk` | Author-facing declarations for agents, tools, middleware, and routes. | `application` | `supported` | `@dawn-ai/sdk`<br />`@dawn-ai/sdk/pure`<br />`@dawn-ai/sdk/testing` | focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `dependency-free` purity<br />focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/sdk/README.md) | [Reference](/docs/api/sdk) | [Guide](/docs/agents) |
+| <span id="dawn-ai-sqlite-storage"></span>`@dawn-ai/sqlite-storage` | Local SQLite persistence for Dawn runtime state. | `application` | `supported` | `@dawn-ai/sqlite-storage` | catalog summary · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/sqlite-storage/README.md) | [Reference](/docs/api#dawn-ai-sqlite-storage) | [Guide](/docs/persistence) |
+| `@dawn-ai/testing` | Harnesses, fixtures, matchers, and runtime test utilities. | `testing` | `supported` | `@dawn-ai/testing` | focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/testing/README.md) | [Reference](/docs/api/testing) | [Guide](/docs/testing-agents) |
+| <span id="dawn-ai-vite-plugin"></span>`@dawn-ai/vite-plugin` | Internal Vite integration for Dawn type generation. | `internal` | `internal` | `@dawn-ai/vite-plugin` | internal only · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/vite-plugin/README.md) | [Reference](/docs/api#dawn-ai-vite-plugin) | [Guide](/docs/routes) |
+| <span id="dawn-ai-workspace"></span>`@dawn-ai/workspace` | Filesystem and shell tools for agent workspaces. | `application` | `supported` | `@dawn-ai/workspace`<br />`@dawn-ai/workspace/node` | catalog summary · `edge-safe` runtime · `not-claimed` purity<br />catalog summary · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/workspace/README.md) | [Reference](/docs/api#dawn-ai-workspace) | [Guide](/docs/workspace) |
+| <span id="create-dawn-ai-app"></span>`create-dawn-ai-app` | Scaffolder for new Dawn applications. | `tooling` | `supported` | `bin.create-dawn-ai-app` | catalog summary · `node-only` executable command · purity n/a | [README](https://github.com/cacheplane/dawnai/blob/main/packages/create-dawn-app/README.md) | [Reference](/docs/api#create-dawn-ai-app) | [Guide](/docs/getting-started) |
+
+Generated surface: `dawn:routes` — focused reference · generated types; compile-time only, no runtime import · purity n/a.
+
+## Reference conventions
+
+**Audience** says who should import a surface: application code, integration code, tests, tooling, or Dawn internals. **Stability** distinguishes supported APIs from low-level or internal contracts. **Documentation** says whether this release provides a focused reference, a catalog summary, or an internal-only boundary. Each artifact boundary also states whether a surface is runtime code, static configuration, metadata, generated types, a command, or a separately operated application; runtime imports state their purity claim.
+
+The headings below preserve links from the former single-page reference. They point to the canonical package page and section; use the canonical destination for new links.
 
 ## @dawn-ai/sdk
 
+The application authoring surface now lives at [`@dawn-ai/sdk`](/docs/api/sdk#use-this-when).
+
 ### Agent
 
-Functions and types for declaring an LLM-driven agent route. See [Agents](/docs/agents).
+See the canonical [`agent()` and `AgentConfig` contract](/docs/api/sdk#agent-and-agentconfig).
 
 ### `agent(config)`
 
-```ts
-export function agent<const Subagents extends SubagentMap = {}>(
-  config: AgentConfig<Subagents>,
-): DawnAgent<Subagents>
-```
-
-Creates an agent route entry from a config object. The return value is the default export of a route's `index.ts`. Dawn discovers tool files found in the sibling `tools/` directory and wires them into generated agent graphs.
-
-```ts
-import { agent } from "@dawn-ai/sdk"
-
-export default agent({
-  model: "gpt-5-mini",
-  systemPrompt: "You are a helpful assistant.",
-})
-```
-
-See [Agents](/docs/agents).
+See the canonical [`agent()` signature](/docs/api/sdk#agent-and-agentconfig).
 
 ### `AgentConfig`
 
-```ts
-export interface AgentConfig<Subagents extends SubagentMap = {}> {
-  readonly delegation?: DelegationConfig<NoInfer<Extract<keyof Subagents, string>>>
-  readonly description?: string
-  readonly model: KnownModelId
-  readonly provider?: ModelProviderId
-  readonly reasoning?: ReasoningConfig
-  readonly retry?: RetryConfig
-  readonly recursionLimit?: number
-  readonly subagents?: Subagents
-  readonly tools?: ToolScope
-  readonly systemPrompt: string
-}
-```
-
-Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `recursionLimit` caps LangGraph super-steps. `subagents` is a keyed registry of child descriptors; arrays are not accepted. `delegation` controls dispatch to those children and narrows named rules to the registry keys. `tools` scopes public route-level tools with `allow`, `deny`, `approve`, and `constrain`; the internal `task` mechanism is invalid in every tool-policy field. `systemPrompt` is sent as the system message on every invocation.
-
-The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
-
-See [Agents](/docs/agents), [Reasoning Effort](/docs/reasoning-effort), and [Subagents](/docs/subagents).
+See the canonical [`AgentConfig` fields](/docs/api/sdk#agent-and-agentconfig).
 
 ### `ReasoningConfig`
 
-```ts
-export interface ReasoningConfig {
-  readonly effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-}
-```
-
-Optional reasoning-effort tuning for `agent()` routes. OpenAI reasoning models receive the matching reasoning-effort option; non-reasoning models ignore it.
-
-See [Reasoning Effort](/docs/reasoning-effort).
+See the canonical [agent configuration contract](/docs/api/sdk#agent-and-agentconfig).
 
 ### `RetryConfig`
 
-```ts
-export interface RetryConfig {
-  readonly maxAttempts?: number
-  readonly baseDelay?: number  // milliseconds
-}
-```
-
-Controls how the runtime retries a failed invocation. `maxAttempts` caps total attempts (default: 3). `baseDelay` sets the initial backoff in milliseconds before exponential growth.
-
-See [Retry](/docs/retry).
+See the canonical [agent configuration contract](/docs/api/sdk#agent-and-agentconfig).
 
 ### `DawnAgent`
 
-```ts
-export interface DawnAgent<Subagents extends SubagentMap = SubagentMap> {
-  readonly delegation?: DelegationConfig<Extract<keyof Subagents, string>>
-  readonly description?: string
-  readonly model: string
-  readonly provider?: ModelProviderId
-  readonly reasoning?: ReasoningConfig
-  readonly retry?: RetryConfig
-  readonly recursionLimit?: number
-  readonly subagents?: Subagents
-  readonly tools?: ToolScope
-  readonly systemPrompt: string
-}
-```
-
-Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand, including route-level tool policy. Use `isDawnAgent()` to check values at runtime.
-
-See [Agents](/docs/agents) and [Subagents](/docs/subagents).
+See the canonical [agent descriptor contract](/docs/api/sdk#agent-and-agentconfig).
 
 ### Subagent delegation types
 
-```ts
-export type SubagentMap = Readonly<Record<string, DawnAgent>>
-
-export interface DelegationRequest {
-  readonly input: string
-}
-
-export interface DelegationContext {
-  readonly parentRouteId: string
-  readonly subagentName: string
-  readonly subagentRouteId: string
-  readonly threadId?: string
-  readonly params?: Readonly<Record<string, string>>
-  readonly signal: AbortSignal
-}
-
-export type DelegationVerdict =
-  | true
-  | string
-  | { readonly approve: true; readonly reason?: string }
-
-export type DelegationConstraintPredicate = (
-  request: DelegationRequest,
-  context: DelegationContext,
-) => DelegationVerdict | Promise<DelegationVerdict>
-
-export type DelegationRule =
-  | { readonly action: "allow" }
-  | { readonly action: "deny"; readonly reason?: string }
-  | { readonly action: "approve"; readonly reason?: string }
-  | {
-      readonly action: "constrain"
-      readonly predicate: DelegationConstraintPredicate
-    }
-
-export type DelegationRules<Name extends string> = [Name] extends [never]
-  ? Readonly<Record<string, never>>
-  : Partial<Record<Name, DelegationRule>>
-
-export interface DelegationConfig<Name extends string> {
-  readonly default?: "allow" | "deny" | "approve"
-  readonly rules?: DelegationRules<Name>
-}
-```
-
-`SubagentMap` is the keyed registry accepted by `agent()`. The key is the parent-local dispatch and permission identity. `DelegationRules` permits named rules only for explicit registry keys; with no registry, it rejects all named rules. Convention-only children are outside the compile-time key set and receive only `DelegationConfig.default`, which defaults to `"allow"`.
-
-`DelegationConstraintPredicate` receives the requested input and live dispatch context. Return `true` to allow, a string to deny with that reason, or `{ approve: true, reason? }` to enter the subagent permission gate. A throw or any other verdict fails closed. The predicate can inspect input but cannot rewrite it.
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `isDawnAgent(value)`
 
-```ts
-export function isDawnAgent(value: unknown): value is DawnAgent
-```
-
-Type guard that returns `true` when `value` was created by `agent()`. Checks the internal brand symbol — plain objects with matching keys return `false`.
-
----
+See the canonical [agent descriptor contract](/docs/api/sdk#agent-and-agentconfig).
 
 ### Middleware
 
-Functions and types for writing global request middleware. See [Middleware](/docs/middleware).
+See the canonical [middleware result contract](/docs/api/sdk#allow-and-reject).
 
 ### `defineMiddleware(fn)`
 
-```ts
-export function defineMiddleware(fn: DawnMiddleware): DawnMiddleware
-```
-
-Identity helper that types `fn` as `DawnMiddleware` so editors infer the argument and return types. Use it as the default export wrapper in `src/middleware.ts`.
-
-```ts
-import { defineMiddleware, allow, reject } from "@dawn-ai/sdk"
-
-export default defineMiddleware(async (req) => {
-  if (!req.headers["x-api-key"]) return reject(401)
-  return allow()
-})
-```
-
-See [Middleware](/docs/middleware).
+See the canonical [middleware export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `allow(context?)`
 
-```ts
-export function allow(context?: Record<string, unknown>): ContinueResult
-```
-
-Returns a `ContinueResult` that lets the request proceed. Pass an optional `context` record to inject arbitrary values into every tool invocation for this request.
-
-See [Middleware](/docs/middleware).
+See the canonical [`allow()` and `reject()` contract](/docs/api/sdk#allow-and-reject).
 
 ### `reject(status, body?)`
 
-```ts
-export function reject(status: number, body?: unknown): RejectResult
-```
-
-Returns a `RejectResult` that stops execution and responds with the given HTTP status. When `body` is provided it is JSON-encoded into the response.
-
-See [Middleware](/docs/middleware).
+See the canonical [`allow()` and `reject()` contract](/docs/api/sdk#allow-and-reject).
 
 ### `DawnMiddleware`
 
-```ts
-export type DawnMiddleware = (
-  req: MiddlewareRequest,
-) => Promise<MiddlewareResult> | MiddlewareResult
-```
-
-The function signature for middleware. Either synchronous or async. Must return `allow(...)` or `reject(...)`.
-
-See [Middleware](/docs/middleware).
+See the canonical [middleware export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `MiddlewareRequest`
 
-```ts
-export interface MiddlewareRequest {
-  readonly assistantId: string              // e.g. "/research#agent"
-  readonly headers: Readonly<Record<string, string>>  // lowercase keys
-  readonly method: string                   // HTTP method
-  readonly params: Readonly<Record<string, string>>   // dynamic-segment values
-  readonly routeId: string                  // e.g. "/research"
-  readonly url: string                      // path + query
-}
-```
-
-The request object passed to every middleware invocation. Header keys follow Node convention (lowercase). `params` contains dynamic-segment values extracted from the route path.
-
-See [Middleware](/docs/middleware).
+See the canonical [middleware export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `MiddlewareResult`
 
-```ts
-export type MiddlewareResult = ContinueResult | RejectResult
-```
-
-The union type that middleware must return. Resolved to either `ContinueResult` (allow) or `RejectResult` (reject).
-
-See [Middleware](/docs/middleware).
+See the canonical [middleware result contract](/docs/api/sdk#allow-and-reject).
 
 ### `ContinueResult`
 
-```ts
-export interface ContinueResult {
-  readonly action: "continue"
-  readonly context?: Record<string, unknown>
-}
-```
-
-Returned by `allow()`. The optional `context` field carries arbitrary data into tool invocations for the current request.
-
-See [Middleware](/docs/middleware).
+See the canonical [middleware result contract](/docs/api/sdk#allow-and-reject).
 
 ### `RejectResult`
 
-```ts
-export interface RejectResult {
-  readonly action: "reject"
-  readonly status: number
-  readonly body?: unknown
-}
-```
-
-Returned by `reject()`. `status` becomes the HTTP response status code. `body` is JSON-serialized when present.
-
-See [Middleware](/docs/middleware).
-
----
+See the canonical [middleware result contract](/docs/api/sdk#allow-and-reject).
 
 ### Memory
 
-Functions and types for declaring a route's typed long-term memory. See [Memory](/docs/memory).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1) and the [long-term memory guide](/docs/memory/long-term).
 
 ### `defineMemory(def)`
 
-```ts
-export function defineMemory<S extends z.ZodTypeAny>(def: {
-  kind: "semantic" | "episodic" | "procedural" | "reflection"
-  scope: readonly MemoryScopeDimension[]
-  schema: S
-  identity?: readonly string[]
-}): DefinedMemory<S>
-```
-
-Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence activates the memory capability, contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`. Semantic, episodic, and reflection kinds are wired; procedural remains deferred. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for semantic write reconciliation; it defaults to `["subject", "predicate"]`. The model-facing `remember` call requires both schema-valid `data` and a human-readable `content` string. Semantic IDs hash namespace plus serialized data; append-only episodic and reflection IDs hash that basis plus the write timestamp sampled when `remember` executes. Repeated appends normally receive distinct IDs, but identical namespace/data writes in the same millisecond can share an ID and collide through the store's ID-keyed upsert.
-
-```ts
-import { defineMemory } from "@dawn-ai/sdk"
-import { z } from "zod"
-
-export default defineMemory({
-  kind: "semantic",
-  scope: ["workspace", "user"],
-  schema: z.object({
-    subject: z.string(),
-    predicate: z.string(),
-    object: z.string(),
-  }),
-})
-```
-
-See [Memory](/docs/memory) and the [`memory`](/docs/configuration#memory) config key.
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `DefinedMemory`
 
-```ts
-export interface DefinedMemory<S extends z.ZodTypeAny = z.ZodTypeAny> {
-  readonly kind: "semantic" | "episodic" | "procedural" | "reflection"
-  readonly scope: readonly MemoryScopeDimension[]
-  readonly schema: S
-  readonly identity?: readonly string[]
-}
-```
-
-The descriptor returned by `defineMemory()`. Carry it as a route's `memory.ts` default export; do not construct it manually.
-
-See [Memory](/docs/memory).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `MemoryScopeDimension`
 
-```ts
-export type MemoryScopeDimension =
-  | "workspace"
-  | "route"
-  | "tenant"
-  | "user"
-  | "agent"
-```
-
-The namespace dimensions a memory can be partitioned by, used in `DefinedMemory.scope`. `workspace` and `route` are derived automatically; `tenant`, `user`, and `agent` come from the config-level `memory.resolveScope` callback.
-
-See [Memory](/docs/memory).
-
----
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### Route configuration
 
-Types that shape route-level behaviour. See [Routes](/docs/routes).
+See the canonical [`RouteConfig` contract](/docs/api/sdk#routeconfig).
 
 ### `RouteConfig`
 
-```ts
-export interface RouteConfig {
-  readonly runtime?: "node" | "edge"
-  readonly streaming?: boolean
-  readonly tags?: readonly string[]
-}
-```
-
-Optional metadata that a route's `index.ts` may export as `config` alongside its entry.
-
-<Callout type="warn" title="Reserved — Dawn reads none of these fields today">
-  All three are accepted, type-checked, normalized onto the route module and carried into the static build manifest, and then nothing branches on them. Exporting a `config` is inert.
-
-  In particular: `runtime` does **not** pin a route to an execution environment — the node/edge split comes from `build.targets` in `dawn.config.ts` and is never decided per route. `streaming` does not switch anything on; whether a run streams depends on the endpoint the caller hits (`/threads/:id/runs/stream` versus `/threads/:id/runs/wait`). `tags` are not displayed anywhere, including the Dev Server UI.
-
-  The interface is kept rather than removed because deleting a published field breaks every app that set one for no gain. If these gain behavior it will be additive and announced.
-</Callout>
-
-See [Routes](/docs/routes).
+See the canonical [`RouteConfig` contract](/docs/api/sdk#routeconfig).
 
 ### `RouteKind`
 
-```ts
-export type RouteKind = "agent" | "chain" | "graph" | "workflow"
-```
-
-Discriminant for the four entry shapes Dawn supports. Determined at build time from the default export of a route's `index.ts`.
-
-See [Routes](/docs/routes).
-
----
+See the canonical [`RouteConfig` contract](/docs/api/sdk#routeconfig).
 
 ### Route types
 
-Open interfaces for module augmentation. Dawn's codegen populates them. See [Routes](/docs/routes).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `RouteStateMap`
 
-```ts
-export interface RouteStateMap {}
-```
-
-Open interface that `dawn typegen` augments with per-route state shapes. Keyed by route path string (e.g. `"/research"`). Access via `RouteState<P>` from `dawn:routes`.
-
-See [Routes](/docs/routes).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `RouteToolMap`
 
-```ts
-export interface RouteToolMap {}
-```
-
-Open interface that `dawn typegen` augments with per-route tool type information. Keyed by route path string. Access via `RouteTools<P>` from `dawn:routes`.
-
-See [Agents](/docs/agents), [Tools](/docs/tools).
-
----
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### Runtime
 
-Types available inside a running route handler. See [Tools](/docs/tools).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `RuntimeContext<Tools>`
 
-```ts
-export interface RuntimeContext<TTools extends ToolRegistry = ToolRegistry> {
-  readonly signal: AbortSignal
-  readonly tools: TTools
-  readonly fs: WorkspaceFs
-}
-```
-
-The context passed to an authored route entry: a `workflow` function, or a callable/custom `graph` entry that accepts Dawn's second argument. It is not the context for a tool function. `tools` is the registry of tools bound to the current route, typed as `TTools`; `fs` is the workspace filesystem handle.
-
-`signal` follows the run transport. An Agent Protocol viewer disconnect leaves the durable run executing. An AG-UI disconnect, explicit Agent Protocol `POST /threads/:id/cancel`, or server shutdown aborts it. Providers, tools, and other awaited work must cooperate with the signal for cancellation to stop their work promptly.
-
-See [Tools](/docs/tools).
+See the canonical [`RuntimeContext` export](/docs/api/sdk#dawn-aisdk-1).
 
 ### `RuntimeTool`
 
-```ts
-export type RuntimeTool<TInput = unknown, TOutput = unknown> = (
-  input: TInput,
-) => Promise<TOutput> | TOutput
-```
-
-The shape of a single tool function. A tool receives typed input and returns a value or a promise. Dawn infers `TInput` and `TOutput` from the function signature at build time.
-
-See [Tools](/docs/tools).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `ToolRegistry`
 
-```ts
-export type ToolRegistry = Record<string, RuntimeTool<never, unknown>>
-```
-
-A map of tool name to `RuntimeTool`. Used as the constraint on `RuntimeContext`'s `TTools` type parameter. The generated `dawn:routes` module provides a concrete `RouteTools<P>` that satisfies this constraint.
-
-See [Tools](/docs/tools).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `DawnToolContext`
 
-```ts
-export interface DawnToolContext {
-  readonly signal: AbortSignal
-  readonly middleware?: Readonly<Record<string, unknown>>
-  readonly fs: WorkspaceFs
-}
-```
-
-The context Dawn passes to a route tool function, distinct from the route-entry [`RuntimeContext`](#runtimecontexttools). `middleware` carries any context injected by `allow(...)` for the current request. `fs` is a sandboxed [`WorkspaceFs`](#workspacefs) handle scoped to the route's `workspace/` directory.
-
-The tool's `signal` follows its run transport. An Agent Protocol viewer disconnect leaves the durable run executing. An AG-UI disconnect, explicit Agent Protocol `POST /threads/:id/cancel`, or server shutdown aborts it. The tool and any provider or subprocess it calls must cooperate with the signal for cancellation to stop work promptly.
-
-See [Tools](/docs/tools) and [Workspace Filesystem](/docs/workspace).
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `WorkspaceFs`
 
-```ts
-export interface WorkspaceFs {
-  readFile(path: string, opts?: { readonly maxBytes?: number }): Promise<string>
-  readBinaryFile(path: string, opts?: { readonly maxBytes?: number }): Promise<Uint8Array>
-  writeFile(path: string, content: string): Promise<{ readonly bytesWritten: number }>
-  listDir(path?: string): Promise<readonly string[]>
-}
-```
-
-A sandboxed filesystem handle scoped to the route's `workspace/` directory, available as `ctx.fs` on `DawnToolContext`. Relative paths resolve against the workspace root; paths inside `workspace/` are always allowed, while paths outside consult the permissions store. `readBinaryFile` throws when the configured filesystem backend does not implement binary reads.
-
-See [Workspace Filesystem](/docs/workspace).
-
----
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### Models
 
-String literal types for model identifiers. See [Agents](/docs/agents).
+See the canonical [model validation contract](/docs/api/sdk#validatemodelid).
 
 ### `KnownModelId`
 
-```ts
-export type KnownModelId =
-  | OpenAiModelId
-  | GoogleModelId
-  | AnthropicModelId
-  | XaiModelId
-  | (string & {})
-```
-
-The accepted type for `AgentConfig.model`. Includes named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values; it does not imply every provider has an adapter in the built-in `agent()` path.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `ModelProviderId`
 
-```ts
-export type ModelProviderId = BuiltInModelProviderId | (string & {})
-```
-
-The accepted type for `AgentConfig.provider`. Built-in values are `openai`, `anthropic`, `google`, `mistral`, `groq`, `ollama`, `xai`, and `openrouter`. The type includes a custom-string escape hatch for future and downstream typing, but built-in `agent()` materialization currently accepts only the built-in provider ids.
-
-Use `provider` when `model` is an alias, an ambiguous local model name, or a provider-routed identifier. Set it to one of the supported built-in provider ids. Without an explicit provider, Dawn conservatively infers OpenAI `gpt-*`, `o3*`, and `o4*`; Anthropic `claude-*`; Google `gemini-*`; Mistral `mistral-*`, `mixtral-*`, and `codestral-*`; and xAI `grok-*`.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `OpenAiModelId`
 
-```ts
-export type OpenAiModelId =
-  | "gpt-5.5" | "gpt-5.5-pro" | "gpt-5.4" | "gpt-5.4-pro" | "gpt-5-mini"
-  | "gpt-4.1" | "gpt-4.1-mini" | "gpt-4.1-nano"
-  | "gpt-4o" | "gpt-4o-mini"
-  | "o3" | "o3-mini" | "o4-mini"
-```
-
-String literals for supported OpenAI models.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `GoogleModelId`
 
-```ts
-export type GoogleModelId =
-  | "gemini-3.1-pro-preview"
-  | "gemini-3-flash-preview"
-  | "gemini-2.5-pro"
-  | "gemini-2.5-flash"
-  | "gemini-2.5-flash-lite"
-```
-
-String literals accepted by the `KnownModelId` type for autocomplete. The built-in `agent()` route infers the Google provider for `gemini-*` model IDs; raw `graph` and `chain` routes can still instantiate Google or any other provider directly.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `AnthropicModelId`
 
-```ts
-export type AnthropicModelId =
-  | "claude-fable-5"
-  | "claude-opus-4-8"
-  | "claude-sonnet-4-6"
-  | "claude-haiku-4-5"
-  | "claude-haiku-4-5-20251001"
-```
-
-String literals for supported Anthropic models. The built-in `agent()` route infers the Anthropic provider for `claude-*` model IDs.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `XaiModelId`
 
-```ts
-export type XaiModelId = "grok-4.3"
-```
-
-String literals for supported xAI models. The built-in `agent()` route infers the xAI provider for `grok-*` model IDs.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `inferProvider(model)`
 
-```ts
-export function inferProvider(model: string): BuiltInModelProviderId | undefined
-```
-
-Infers a built-in provider id from a model string for the known families, returning `undefined` when none match. Matches OpenAI (`gpt-*`, `o3*`, `o4*`), Anthropic (`claude-*`), Google (`gemini-*`), Mistral (`mistral-*`, `mixtral-*`, `codestral-*`), and xAI (`grok-*`). This is the same inference the built-in `agent()` path uses when `AgentConfig.provider` is omitted.
+See the canonical [model validation contract](/docs/api/sdk#validatemodelid).
 
 ### `SUPPORTED_AGENT_PROVIDERS`
 
-```ts
-export const SUPPORTED_AGENT_PROVIDERS: readonly BuiltInModelProviderId[]
-// ["openai", "anthropic", "google", "mistral", "groq", "ollama", "xai", "openrouter"]
-```
-
-The runtime array of built-in provider ids the `agent()` path can materialize. The corresponding type is `BuiltInModelProviderId`.
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `validateModelId(opts)`
 
-```ts
-export function validateModelId(opts: {
-  readonly model: string
-  readonly provider?: string
-}): ModelIdValidation
-```
-
-Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#model-id-constants)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
+See the canonical [`validateModelId()` contract](/docs/api/sdk#validatemodelid).
 
 ### `ModelIdValidation`
 
-```ts
-export type ModelIdValidation =
-  | { readonly ok: true }
-  | {
-      readonly ok: false
-      readonly provider: string
-      readonly suggestions: readonly string[]
-    }
-```
-
-The result of `validateModelId`. The `ok: false` branch carries the resolved `provider` and the nearest curated id `suggestions` (closest first, max 3).
+See the canonical [`validateModelId()` contract](/docs/api/sdk#validatemodelid).
 
 ### Model id constants
 
-```ts
-export const CURATED_MODEL_IDS: Readonly<
-  Partial<Record<BuiltInModelProviderId, readonly string[]>>
->
-export const OPENAI_MODEL_IDS: readonly string[]
-export const GOOGLE_MODEL_IDS: readonly string[]
-export const ANTHROPIC_MODEL_IDS: readonly string[]
-export const XAI_MODEL_IDS: readonly string[]
-```
-
-The runtime arrays backing the model-id literal types. Each per-provider constant (`OPENAI_MODEL_IDS`, `GOOGLE_MODEL_IDS`, `ANTHROPIC_MODEL_IDS`, `XAI_MODEL_IDS`) holds the same ids as its corresponding `*ModelId` type. `CURATED_MODEL_IDS` maps each curated provider id to its list and is consumed by `validateModelId`.
-
----
+See the canonical [SDK model export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### Backend adapter
 
-Low-level interface for custom backend integrations.
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### `BackendAdapter`
 
-```ts
-export interface BackendAdapter {
-  readonly kind: RouteKind
-  execute(
-    entry: unknown,
-    input: unknown,
-    context: { readonly signal: AbortSignal },
-  ): Promise<unknown>
-  stream(
-    entry: unknown,
-    input: unknown,
-    context: { readonly signal: AbortSignal },
-  ): AsyncIterable<unknown>
-}
-```
-
-Interface implemented by Dawn's built-in backends (LangChain, LangGraph). `execute` handles non-streaming invocations; `stream` handles token-streaming. Most projects never implement this directly — it is an extension point for custom runtimes.
-
----
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
 ### Utilities
 
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
+
 ### `Prettify<T>`
 
-```ts
-export type Prettify<T> = { [K in keyof T]: T[K] } & {}
-```
+See the canonical [SDK public export inventory](/docs/api/sdk#dawn-aisdk-1).
 
-Resolves intersection and mapped types into a flat object shape. Makes IDE hover tooltips show the actual resolved type instead of unexpanded type algebra. Used internally by codegen; also available for project code.
+## @dawn-ai/cli
 
----
+The command and embedding surfaces now live at [`@dawn-ai/cli`](/docs/api/cli#use-this-when).
+
+### `serveRuntime(options)`
+
+See the canonical [`serveRuntime()` contract](/docs/api/cli#serveruntime).
+
+### `loadStaticModules(manifestUrl)`
+
+See the canonical [CLI public export inventory](/docs/api/cli#dawn-aicli-1).
+
+### `DawnStaticModules` and `StaticRouteModule`
+
+See the canonical [CLI root export inventory](/docs/api/cli#dawn-aicli-1).
+
+### @dawn-ai/cli/fetch
+
+See the canonical [edge-safe fetch subpath](/docs/api/cli#dawn-aiclifetch).
+
+### @dawn-ai/cli/runtime
+
+See the canonical [low-level runtime subpath](/docs/api/cli#dawn-aicliruntime).
 
 ## @dawn-ai/core
 
-Low-level config, discovery, capability, workspace, and typegen primitives used by the Dawn CLI and runtime integrations. Route code usually imports author-facing helpers from `@dawn-ai/sdk`; use `@dawn-ai/core` when building tooling, tests, or adapters.
-
-```ts
-import { createWorkspaceFs, loadDawnConfig, renderDawnTypes, type DawnConfig } from "@dawn-ai/core"
-import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
-```
-
-Route discovery and tool typegen read the filesystem and load the TypeScript
-compiler, so they live on the node-only `@dawn-ai/core/node` subpath rather
-than the package root — importing them cannot pull `node:fs` into a bundle
-built for a runtime that has no `node:` shim.
-
-See [Configuration](/docs/configuration), [Routes](/docs/routes), [Workspace Filesystem](/docs/workspace), [Memory](/docs/memory), and [Tools](/docs/tools).
+The integration surface now lives at [`@dawn-ai/core`](/docs/api/core#use-this-when).
 
 ### Capability exports
 
-```ts
-export {
-  createAgentsMdMarker,
-  createMemoryMarker,
-  createMemoryMdMarker,
-  createPlanningMarker,
-  createSkillsMarker,
-  createSubagentsMarker,
-  createWorkspaceMarker,
-  BUILT_IN_TOOL_NAMES,
-}
-```
-
-Built-in capability markers detect route/app files and contribute prompt fragments, tools, or stream transformers. `createWorkspaceMarker()` activates when a `workspace/` directory exists or a runtime `workspaceRoot` is supplied; `createMemoryMarker()` contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`.
-
-Types in this group include `CapabilityMarker`, `CapabilityMarkerContext`, `CapabilityContribution`, `DawnToolDefinition`, `PromptFragment`, `StreamTransformer`, `MemoryContext`, `MemoryStoreLike`, `MemoryRecordLike`, `CapabilityRegistry`, `AppliedContribution`, `ApplyResult`, and `CapabilityError`.
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### `createCapabilityRegistry(markers)` and `applyCapabilities()`
 
-```ts
-export function createCapabilityRegistry(markers: readonly CapabilityMarker[]): CapabilityRegistry
-export function applyCapabilities(...): Promise<ApplyResult>
-```
-
-Build and apply a marker registry for a route. Runtime integrations pass the built-in and custom `CapabilityMarker` list, then collect contributions before materializing an agent route.
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### `gateToolOp()` and `wrapToolWithApproval()`
 
-```ts
-export function gateToolOp(...)
-export function wrapToolWithApproval(...)
-```
-
-Apply tool-level permission checks before a tool executes. See [Permissions](/docs/permissions).
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### `createWorkspaceFs(options)`
 
-```ts
-export function createWorkspaceFs(options: CreateWorkspaceFsOptions): WorkspaceFs
-```
-
-Builds the `WorkspaceFs` handle used as `ctx.fs`. `CreateWorkspaceFsOptions` includes a `workspaceRoot`, a `FilesystemBackend`, optional permissions, an `AbortSignal`, and `interruptCapable`. The handle resolves paths relative to `workspaceRoot`, canonicalizes them with the backend's `realPath`, and uses the same permission gate as the agent-facing workspace tools.
-
-See [Workspace Filesystem](/docs/workspace) and [Execution Sandbox](/docs/sandbox).
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### `loadDawnConfig(options)` and `config(value)`
 
-```ts
-export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig>
-export function config(c: DawnConfig): DawnConfig
-```
-
-`loadDawnConfig()` loads `dawn.config.ts` for an app root. `config()` is a typed identity helper for authoring config files.
-
-Types in this group include `DawnConfig`, `LoadDawnConfigOptions`, and `LoadedDawnConfig`.
+See the canonical [`loadDawnConfig()` contract](/docs/api/core#loaddawnconfig).
 
 ### `discoverRoutes(options)`, `findDawnApp(options)`, and route segments
 
-```ts
-// @dawn-ai/core/node
-export function discoverRoutes(options?: DiscoverRoutesOptions): Promise<RouteManifest>
-export function findDawnApp(options?: FindDawnAppOptions): Promise<DiscoveredDawnApp>
-export function assertDawnRoutesDir(appRoot: string, routesDir?: string): Promise<void>
-
-// @dawn-ai/core
-export function toRouteSegments(routeSegments: readonly string[]): RouteSegment[]
-export function isPrivateSegment(segment: string): boolean
-export function isRouteGroupSegment(segment: string): boolean
-```
-
-Discovery helpers find the Dawn app root, validate the routes directory, scan route files, and parse filesystem route segment names.
-
-Types in this group include `DiscoveredDawnApp`, `DiscoverRoutesOptions`, `FindDawnAppOptions`, `NormalizedRouteModule`, `RouteDefinition`, `RouteKind`, `RouteManifest`, and `RouteSegment`.
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### State and typegen helpers
 
-```ts
-// @dawn-ai/core
-export function resolveStateFields(...)
-export function renderDawnTypes(...)
-export function renderRouteTypes(...)
-export function renderStateTypes(...)
-export function renderToolTypes(...)
-
-// @dawn-ai/core/node
-export function extractToolSchemasForRoute(...)
-export function extractToolTypesForRoute(...)
-```
-
-`resolveStateFields()` resolves route state field reducers and defaults. The extraction helpers inspect route tools for JSON schemas and TypeScript signatures. The render helpers produce the generated `dawn:routes` declaration. Some audits call this group `renderTypeDefinitions`; the public exports are the four render functions above, not a single `renderTypeDefinitions` symbol.
-
-Types in this group include `ResolveStateFieldsOptions`, `RouteStateFields`, `RouteToolSchemas`, `RouteToolTypes`, `ExtractedToolSchema`, `ExtractedToolType`, `JsonSchemaProperty`, `ResolvedStateField`, and `StateFieldReducer` (`ExtractToolSchemasOptions` and `ExtractToolTypesOptions` ship from `@dawn-ai/core/node` alongside their functions).
+See the canonical [`resolveStateFields()` contract](/docs/api/core#resolvestatefields).
 
 ### Tool scope
 
-```ts
-export function resolveToolScope(
-  tools: readonly ScopeInput[],
-  scope: ToolScope | undefined,
-  context: { readonly isSubagent: boolean; readonly routeId: string },
-): ReadonlySet<string>
-export function toolOrigin(...): ToolOrigin
-```
-
-Resolve which discovered tools are visible to a route and where each tool came from. Types in this group include `ScopeInput` and `ToolOrigin`.
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ### Storage type re-export
 
-```ts
-export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
-```
-
-`ThreadsStore` is re-exported for config typing.
-
----
+See the canonical [Core public export inventory](/docs/api/core#dawn-aicore-1).
 
 ## @dawn-ai/ag-ui
 
-Pure, transport-agnostic AG-UI translation utilities. The CLI uses the same adapter when `dawn dev` or `dawn start` serves `POST /agui/{routeId}`; generated production entrypoints invoke the exported `serveRuntime()` function directly. The `{routeId}` URL segment is the URL-encoded Dawn assistant id, such as `%2Fchat%23agent` for `/chat#agent`.
-
-```ts
-import {
-  createCounterIdFactory,
-  createDefaultIdFactory,
-  fromRunAgentInput,
-  toAguiEvents,
-  type AguiOutboundEvent,
-  type DawnAgentStreamChunk,
-  type DawnInterruptEnvelope,
-  type DawnMessage,
-  type DawnResumeRequest,
-  type DawnRunInput,
-  type IdFactory,
-  type RunContext,
-  type ToAguiOptions,
-} from "@dawn-ai/ag-ui"
-```
-
-See [Dev Server](/docs/dev-server#ag-ui-endpoint).
+The AG-UI adapter surface now lives at [`@dawn-ai/ag-ui`](/docs/api/ag-ui#use-this-when).
 
 ### ID factories
 
-`toAguiEvents` uses `createDefaultIdFactory()` to generate prefixed UUID-based message, tool-call, and tool-result ids when it must synthesize them. `createCounterIdFactory()` produces deterministic counters for tests. Inject either factory, or a custom `IdFactory`, through `options.idFactory`:
-
-```ts
-const events = toAguiEvents(chunks, context, {
-  idFactory: createCounterIdFactory(),
-})
-```
-
-```ts
-export type IdFactory = (kind: "message" | "toolCall" | "toolResult") => string
-
-export interface ToAguiOptions {
-  readonly idFactory?: IdFactory
-}
-```
+See the canonical [AG-UI public export inventory](/docs/api/ag-ui#dawn-aiag-ui-1).
 
 ### `toAguiEvents(chunks, context)`
 
-```ts
-export function toAguiEvents(
-  chunks: AsyncIterable<DawnAgentStreamChunk>,
-  context: RunContext,
-  options?: ToAguiOptions,
-): AsyncGenerator<AguiOutboundEvent>
-```
-
-Maps Dawn `token`, `tool_call`, `tool_result`, `interrupt`, and `done` chunks to canonical AG-UI lifecycle, text, and tool events. Upstream tool invocation ids are preserved. Interrupts produce a standard `RUN_FINISHED` interrupt outcome, successful runs produce a success outcome, and upstream failures produce one `RUN_ERROR`.
-
-Planning updates, subagent capability events, and other unknown chunk types have no v1 mapping and are ignored.
+See the canonical [inbound and outbound contracts](/docs/api/ag-ui#inbound-and-outbound-calls).
 
 ### `fromRunAgentInput(input)`
 
-```ts
-export function fromRunAgentInput(input: RunAgentInput): DawnRunInput
-```
-
-Maps every AG-UI message structurally and preserves the original input as `raw`. A non-empty top-level `RunAgentInput.resume` array becomes `DawnRunInput.resume` with the same `interruptId`, `status`, and optional `payload` fields:
-
-```ts
-export interface DawnRunInput {
-  readonly messages: DawnMessage[]
-  readonly resume?: Array<{
-    readonly interruptId: string
-    readonly status: "resolved" | "cancelled"
-    readonly payload?: unknown
-  }>
-  readonly raw: RunAgentInput
-}
-```
-
-The adapter leaves AG-UI `tools`, `state`, and `context` uninterpreted in v1; consumers can read them from `raw`.
+See the canonical [inbound and outbound contracts](/docs/api/ag-ui#inbound-and-outbound-calls).
 
 ### SSE subpath: `encodeAgUiSse(event, accept?)`
 
-```ts
-import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
-```
+See the canonical [SSE subpath inventory](/docs/api/ag-ui#dawn-aiag-uisse).
 
-```ts
-export function encodeAgUiSse(event: BaseEvent, accept?: string): string
-```
+## @dawn-ai/memory
 
-Encodes one AG-UI event as an SSE frame using `@ag-ui/encoder`. This transport helper is available only from `@dawn-ai/ag-ui/sse`; the root package remains transport-agnostic.
+The long-term memory package surface now lives at [`@dawn-ai/memory`](/docs/api/memory#use-this-when).
 
----
+### `MemoryStore`
+
+See the canonical [store and query shapes](/docs/api/memory#store-and-query-shapes).
+
+### `MemoryRecord`
+
+See the canonical [store and query shapes](/docs/api/memory#store-and-query-shapes).
+
+### `MemoryQuery`
+
+See the canonical [store and query shapes](/docs/api/memory#store-and-query-shapes).
+
+### `BrowseQuery`, `BrowsePage`, and `MemoryStats`
+
+See the canonical [browse subpath inventory](/docs/api/memory#dawn-aimemorybrowse).
+
+### @dawn-ai/memory/browse
+
+See the canonical [browse subpath inventory](/docs/api/memory#dawn-aimemorybrowse).
 
 ## @dawn-ai/memory-pgvector
 
-Postgres + pgvector backend for Dawn's typed long-term memory store. Use it through `DawnConfig.memory.store` when an app needs a shared production store, multiple app instances, or indexed vector retrieval.
-
-```ts
-import {
-  assertIdentifier,
-  initSchema,
-  pgvectorMemoryStore,
-  vectorColumnDef,
-  type PgvectorMemoryStore,
-} from "@dawn-ai/memory-pgvector"
-```
-
-See [Memory](/docs/memory#postgres-backend-pgvector).
+The shared memory backend now lives at [`@dawn-ai/memory-pgvector`](/docs/api/memory-pgvector#use-this-when).
 
 ### `pgvectorMemoryStore(options)`
 
-```ts
-export function pgvectorMemoryStore(opts: {
-  connectionString?: string
-  pool?: Pool
-  dimensions: number
-  index?: { m?: number; efConstruction?: number; efSearch?: number }
-  schema?: string
-  tablePrefix?: string
-  recall?: RecallRankingOptions
-  vector?: VectorRankingOptions
-}): PgvectorMemoryStore
-```
-
-Creates a `MemoryStore` backed by Postgres tables and pgvector indexes. Schema initialization is lazy and idempotent: the first store operation creates the extension, schema, tables, token indexes, and HNSW index if needed.
-
-`dimensions` is validated during construction. Dimensions up to 2000 use `vector(n)`; dimensions from 2001 through 4000 use `halfvec(n)`; larger values throw a config error naming the 4000 halfvec index ceiling.
-
-```ts
-import { config } from "@dawn-ai/core"
-import { openaiEmbedder } from "@dawn-ai/langchain"
-import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
-
-export default config({
-  memory: {
-    store: pgvectorMemoryStore({
-      connectionString: process.env.DATABASE_URL,
-      dimensions: 1536,
-    }),
-    vector: { embedder: openaiEmbedder() },
-  },
-})
-```
+See the canonical [`PgvectorMemoryStore` contract](/docs/api/memory-pgvector#pgvectormemorystore).
 
 ### `PgvectorMemoryStore`
 
-```ts
-export interface PgvectorMemoryStore extends MemoryStore {
-  close(): Promise<void>
-}
-```
-
-Implements the full `MemoryStore` method inventory from `@dawn-ai/memory`: `put`, `get`, `search`, `update`, `supersede`, `delete`, `listCandidates`, `browse`, `stats`, and `prune`. `browse` provides filtered cross-namespace pagination, `stats` returns aggregate facet counts, and `prune` deletes expired rows plus episodic rows beyond an optional per-namespace cap. `close()` ends the owned `pg.Pool`; it is a no-op when the store was constructed with an injected pool.
-
-Hybrid search runs when the query includes both `queryEmbedding` and `embedderId`. The store retrieves a keyword list and an approximate pgvector HNSW nearest-neighbor list, then applies the same Dawn fusion and final-scoring semantics used by SQLite. SQLite scans eligible vectors exactly; pgvector may therefore supply different candidates, rows, or ordering. Scoring is deterministic for fixed candidates, timestamps, tuning, and embeddings.
+See the canonical [`PgvectorMemoryStore` contract](/docs/api/memory-pgvector#pgvectormemorystore).
 
 ### `vectorColumnDef(dimensions)`
 
-```ts
-export function vectorColumnDef(dimensions: number): { type: string; ops: string }
-```
-
-Returns the pgvector column definition and cosine operator class for a dimension count. Throws for non-positive, non-integer, or greater-than-4000 dimensions.
+See the canonical [dimension branches contract](/docs/api/memory-pgvector#behavior-contract-memory-pgvectordimension-branches).
 
 ### `initSchema(client, options)`
 
-```ts
-export async function initSchema(
-  client: PoolClient,
-  opts: { prefix: string; schema: string; dimensions: number; m: number; efConstruction: number },
-): Promise<void>
-```
-
-Low-level DDL helper used by the store. Most apps should not call it directly.
+See the canonical [initialization contract](/docs/api/memory-pgvector#initialization-and-retrieval).
 
 ### `assertIdentifier(name, value)`
 
-```ts
-export function assertIdentifier(name: string, value: string): void
-```
-
-Rejects malformed schema and table-prefix identifiers before they are interpolated into DDL.
-
----
+See the canonical [schema identifier contract](/docs/api/memory-pgvector#behavior-contract-memory-pgvectorschemaidentifier-validation).
 
 ## @dawn-ai/postgres-storage
 
-Postgres backend for Dawn's durable runtime state. Use it when the default SQLite/file stores are too local for your deployment: multiple app instances, a shared production database, or a host with no writable filesystem.
-
-```ts
-import {
-  assertIdentifier,
-  createPostgresPermissionsStore,
-  createPostgresThreadsStore,
-  DEFAULT_SCHEMA,
-  DEFAULT_TABLE_PREFIX,
-  postgresCheckpointer,
-  type PostgresStoreOptions,
-} from "@dawn-ai/postgres-storage"
-```
-
-The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
-
-See [Configuration](/docs/configuration#postgres-backend) for the shared-pool setup, teardown ownership, and the storage-shape limits.
+The durable runtime storage surface now lives at [`@dawn-ai/postgres-storage`](/docs/api/postgres-storage#use-this-when).
 
 ### `PostgresStoreOptions`
 
-```ts
-export interface PostgresStoreOptions {
-  pool?: SqlPool
-  ownsPool?: boolean
-  schema?: string
-  tablePrefix?: string
-}
-
-export interface SqlPool {
-  query<R = unknown>(sql: string, values?: readonly unknown[]): Promise<{ rows: R[] }>
-  connect(): Promise<SqlClient>
-  end(): Promise<void>
-}
-```
-
-Connection and table-naming options shared by all three stores. `pool` is required in practice — the stores throw a pointed error without one. It is typed structurally rather than as `pg.Pool`, so a `pg` pool and a `@neondatabase/serverless` WebSocket pool both satisfy it with no driver abstraction here. The narrowness is deliberate: `neon()`'s HTTP query function exposes no `connect()`, so it fails to satisfy `SqlPool` at compile time — correctly, because it has no session and cannot run the checkpointer's `BEGIN`/`COMMIT`.
-
-`ownsPool` (default `false`) decides whether `close()` ends the pool. An injected pool belongs to the app that made it, so `close()` leaves it alone.
-
-`schema` defaults to `DEFAULT_SCHEMA` and `tablePrefix` to `DEFAULT_TABLE_PREFIX`.
-
-`PostgresCheckpointerOptions` and `PostgresThreadsStoreOptions` are aliases of this type; `PostgresPermissionsStoreOptions` extends it.
+See the canonical [`PostgresStoreOptions` fields](/docs/api/postgres-storage#postgresstoreoptions).
 
 ### `@dawn-ai/postgres-storage/node`
 
-```ts
-import {
-  createPostgresPermissionsStore,
-  createPostgresThreadsStore,
-  postgresCheckpointer,
-  type NodePostgresStoreOptions,
-} from "@dawn-ai/postgres-storage/node"
-
-export interface NodePostgresStoreOptions extends PostgresStoreOptions {
-  connectionString?: string
-}
-```
-
-The same three factories with a `connectionString` convenience, plus everything the main entry exports. A store built from a connection string builds and owns its pool, so `close()` ends it.
-
-This entry imports `pg` as a *value*, which pulls `net`/`tls`/`dns` into the module graph — that is why it is a separate subpath. The main entry does not reference `pg` at all, and links on a runtime with no TCP sockets.
+See the canonical [Node subpath inventory](/docs/api/postgres-storage#dawn-aipostgres-storagenode).
 
 ### `postgresCheckpointer(options)`
 
-```ts
-export function postgresCheckpointer(options?: PostgresCheckpointerOptions): DawnPostgresSaver
-
-export class DawnPostgresSaver extends BaseCheckpointSaver {
-  ready(): Promise<void>
-  close(): Promise<void>
-}
-```
-
-A LangGraph `BaseCheckpointSaver` for `DawnConfig.checkpointer`. The serialized checkpoint, its metadata, and pending-write values are stored as opaque `bytea`, matching the SQLite backend's BLOB — `jsonb` is deliberately not used, because it rejects a NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which reach checkpoints through normal tool output. Checkpoint ordering uses `COLLATE "C"`, so it does not depend on the database's locale.
-
-Migrations run lazily on first use, memoized per process, under a `pg_advisory_xact_lock`. `ready()` migrates eagerly at boot.
+See the canonical [Postgres root export inventory](/docs/api/postgres-storage#dawn-aipostgres-storage-1).
 
 ### `createPostgresThreadsStore(options)`
 
-```ts
-export function createPostgresThreadsStore(
-  options?: PostgresThreadsStoreOptions,
-): PostgresThreadsStore
-
-export interface PostgresThreadsStore extends ThreadsStore {
-  ready(): Promise<void>
-  close(): Promise<void>
-}
-```
-
-An Agent Protocol threads store for `DawnConfig.threadsStore`, exporting the `ThreadsStore`, `Thread`, `ThreadStatus`, and `CreateThreadInput` types structurally (so a published consumer's types never point at a Node-only SQLite package). Its migrations are tracked separately from the checkpointer's, so a threads-only deployment never creates checkpoint tables.
-
-Two behaviors differ from the SQLite store, because Postgres has several concurrent writers: `createThread` upserts (`ON CONFLICT DO NOTHING`, then reads back) instead of throwing on a duplicate id, and `updateMetadata` merges in one statement (`metadata || $1::jsonb`) so a concurrent patch cannot be lost. The merge is shallow — a nested object is replaced wholesale — matching SQLite.
+See the canonical [Postgres root export inventory](/docs/api/postgres-storage#dawn-aipostgres-storage-1).
 
 ### `createPostgresPermissionsStore(options)`
 
-```ts
-export function createPostgresPermissionsStore(
-  options?: PostgresPermissionsStoreOptions,
-): PostgresPermissionsStore
-
-export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
-  config?: PermissionsFile
-  mode?: PermissionMode
-}
-
-export interface PostgresPermissionsStore extends PermissionsStore {
-  ready(): Promise<void>
-  close(): Promise<void>
-}
-```
-
-A `PermissionsStore` for `DawnConfig.permissions.store`, sharing runtime grants across instances instead of writing a per-process `.dawn/permissions.json`.
-
-`PermissionsStore.match()` is synchronous — it is called from inside tool execution and cannot await a query — so the store is a cache with async hydration: `load()` pulls runtime grants into memory, `match()` reads memory and delegates the decision to the same `matchPermission` the file store uses (so deny-wins and prefix-except-`tool` semantics cannot drift), and `addAllow` inserts the row and updates the map in one call. Because the insert is atomic, the file store's in-process write queue is not needed.
-
-`config` (the `allow`/`deny` lists from `dawn.config.ts`) is applied in memory on every construction and is never persisted — config remains the source of truth for itself. `mode` defaults to `"interactive"`; pass it explicitly, because Dawn does not re-apply the sibling `permissions.mode` field or the `DAWN_PERMISSIONS_MODE` env override on top of a custom store.
+See the canonical [Postgres root export inventory](/docs/api/postgres-storage#dawn-aipostgres-storage-1).
 
 ### `assertIdentifier(name, value)`
 
-```ts
-export function assertIdentifier(name: string, value: string): void
-```
-
-Rejects malformed schema and table-prefix identifiers before they are interpolated into DDL. Postgres cannot bind identifiers as `$1` placeholders, so anything that is not a plain `/^[a-z_][a-z0-9_]*$/i` identifier throws.
+See the canonical [Postgres root export inventory](/docs/api/postgres-storage#dawn-aipostgres-storage-1).
 
 ### `DEFAULT_SCHEMA` / `DEFAULT_TABLE_PREFIX`
 
-```ts
-export const DEFAULT_SCHEMA: string
-export const DEFAULT_TABLE_PREFIX: string
-```
-
-The Postgres schema (`public`) and table/index prefix (`dawn`) used when a store option is omitted. Vary the prefix to run two Dawn apps against one database.
-
----
+See the canonical [Postgres root export inventory](/docs/api/postgres-storage#dawn-aipostgres-storage-1).
 
 ## @dawn-ai/testing
 
-Deterministic testing utilities for Dawn apps. The package replaces live model calls with aimock fixtures while running tools, prompts, capabilities, state, and workspace behavior normally.
-
-```ts
-import {
-  createAgentHarness,
-  expectFinalMessage,
-  expectNoToolErrors,
-  expectToolCalled,
-  script,
-} from "@dawn-ai/testing"
-```
-
-See [Testing your Dawn agent](/docs/testing-agents), [Memory](/docs/memory#testing), and [Evals](/docs/evals).
+The programmatic test surface now lives at [`@dawn-ai/testing`](/docs/api/testing#use-this-when). For fixture workflows, see [Fixtures and Recording](/docs/testing-agents/fixtures).
 
 ### Harnesses
 
-```ts
-export function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness>
-export function createToolHarness(...): Promise<ToolHarness>
-export function createWorkspaceHarness(options?: WorkspaceHarnessOptions): Promise<WorkspaceHarness>
-export function createMiddlewareHarness(...): Promise<MiddlewareHarness>
-```
-
-`createAgentHarness()` is the primary route-level test harness. It starts aimock, runs typegen, resolves a route, and returns a harness whose `run()` method produces an `AgentRunResult`. Tool, workspace, and middleware harnesses provide narrower unit-test surfaces.
-
-Types in this group include `AgentHarness`, `AgentHarnessOptions`, `ToolHarness`, `ToolHarnessOptions`, `WorkspaceHarness`, `WorkspaceHarnessOptions`, and `MiddlewareHarness`.
+See the canonical [harness options contract](/docs/api/testing#agentharnessoptions).
 
 ### Aimock fixtures and recording
 
-```ts
-export function script(): ScriptBuilder
-export function loadFixtures(path: string): FixtureSet
-export function writeFixtures(path: string, fixtures: FixtureSet | ScriptBuilder): void
-export function record(options: RecordOptions): void
-export function createAimock(...): Promise<Aimock>
-```
-
-`script()` builds deterministic fixture conversations. `loadFixtures()` and `writeFixtures()` manage committed fixture files. `record()` is a local authoring helper for capturing live model traffic into fixtures.
-
-Types in this group include `Aimock`, `AimockFixture`, `AimockResponse`, `AimockToolCall`, `FixtureSet`, `ScriptBuilder`, and `RecordOptions`.
+See the canonical [harness and fixture lifecycle](/docs/api/testing#harness-and-fixture-lifecycle).
 
 ### Matchers
 
-```ts
-export {
-  expectFinalMessage,
-  expectInterrupt,
-  expectNoInterrupt,
-  expectNoToolErrors,
-  expectOffloaded,
-  expectPlan,
-  expectState,
-  expectStreamedTokens,
-  expectSubagent,
-  expectSystemPrompt,
-  expectToolCalled,
-  expectToolSequence,
-}
-```
-
-Matchers assert final messages, tool calls, tool order, streamed tokens, offloaded outputs, state, subagent runs, plans, system prompts, and permission interrupts. `expectNoToolErrors(run)` verifies that tool results did not fail; permission interrupts are not counted as tool errors.
-
-Supporting types include `InterruptInfo`, `SubagentEvent`, `SubagentRun`, and `Todo`.
+See the canonical [testing public export inventory](/docs/api/testing#dawn-aitesting-1).
 
 ### Run-result utilities
 
-```ts
-export function collectRunResult(...): Promise<AgentRunResult>
-export function deriveToolResults(...): readonly ObservedToolResult[]
-```
-
-Normalize runtime output into `AgentRunResult`, `ObservedToolCall`, and `ObservedToolResult` structures for assertions and eval scoring.
+See the canonical [testing public export inventory](/docs/api/testing#dawn-aitesting-1).
 
 ### Memory, protocol, and subprocess helpers
 
-```ts
-export function seedMemory(...): Promise<MemoryStore>
-export function createAgentProtocolInjector(...): Promise<AgentProtocolInjector>
-export function createSubprocessApp(...): Promise<SubprocessApp>
-```
-
-`seedMemory()` populates a Dawn memory store for deterministic memory tests. The protocol injector and subprocess app helpers are lower-level orchestration surfaces for custom test runners.
-
-Types in this group include `AgentProtocolInjector`, `InjectResult`, and `SubprocessApp`.
+See the canonical [harness and fixture lifecycle](/docs/api/testing#harness-and-fixture-lifecycle).
 
 ### Example
 
-```ts
-const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
-
-const run = await h.run({
-  input: "Filter open items",
-  fixtures: script()
-    .user("Filter open items")
-    .callsTool("applyFilter", { status: "open" })
-    .replies("Found 2 open items."),
-})
-
-expectToolCalled(run, "applyFilter").withArgs({ status: "open" })
-expectNoToolErrors(run)
-expectFinalMessage(run).toContain("Found 2")
-```
-
----
+See the canonical [testing examples](/docs/api/testing#examples-and-related-guides).
 
 ## @dawn-ai/evals
 
-Programmatic evaluation primitives for running Dawn agents over datasets, scoring each case, and gating aggregate quality.
-
-```ts
-import {
-  contains,
-  defineEval,
-  gate,
-  memoryFresh,
-  memoryIsolated,
-  memoryRecalled,
-  runEval,
-  toolCalled,
-} from "@dawn-ai/evals"
-```
-
-See [Evaluating your Dawn agent](/docs/evals) and [Testing your Dawn agent](/docs/testing-agents).
+The evaluation surface now lives at [`@dawn-ai/evals`](/docs/api/evals#use-this-when).
 
 ### Eval definition and execution
 
-```ts
-export function defineEval(def: EvalDefinition): EvalDefinition
-export function resolveDataset(dataset: Dataset, baseDir: string): Promise<EvalCase[]>
-export function runEval(def: EvalDefinition, options: RunEvalOptions): Promise<EvalReport>
-```
-
-`defineEval()` types an eval module. `resolveDataset()` supports inline cases, `.json`, `.jsonl`, and function datasets relative to a required base directory. `runEval()` drives a definition with a caller-provided `runCase` function and returns an aggregate report.
-
-Types in this group include `Dataset`, `EvalCase`, `EvalDefinition`, `RunEvalOptions`, `EvalReport`, `CaseResult`, and `ScoredReport`.
+See the canonical [`EvalDefinition` contract](/docs/api/evals#evaldefinition).
 
 ### Scores and gates
 
-```ts
-export function normalizeScore(score: Score): NormalizedScore
-export const gate: {
-  mean(...)
-  passRate(...)
-  everyCase(...)
-  perScorer(...)
-  all(...)
-  any(...)
-}
-export function resolveGate(...): GatePolicy
-```
-
-Scores can be numbers, booleans, or rich verdicts with a reason. Gates turn case and scorer aggregates into pass/fail decisions for CI.
-
-Types in this group include `Score`, `NormalizedScore`, `CaseScore`, `Scorer`, `ScorerAggregate`, `GatePolicy`, and `GateResult`.
+See the canonical [evaluation semantics](/docs/api/evals#evaluation-semantics).
 
 ### Built-in scorers
 
-```ts
-export function exactMatch(options?): Scorer
-export function contains(substring: string, options?): Scorer
-export function regex(re: RegExp, options?): Scorer
-export function jsonEquals(options?): Scorer
-export function toolCalled(name: string, options?): Scorer
-export function tokensUnder(budget: number, options?): Scorer
-export function custom(fn, options?): Scorer
-export function llmJudge(options: LlmJudgeOptions): Scorer
-```
-
-General scorers inspect the final message, parsed JSON, tool calls, token count, or arbitrary custom logic. `llmJudge()` asks a real model to grade quality and requires model credentials when it runs.
+See the canonical [eval public export inventory](/docs/api/evals#dawn-aievals-1).
 
 ### Memory scorers
 
-```ts
-export function memoryRecalled(expectedIds: string[], options?): Scorer
-export function memoryFresh(expectedValue: string, options?): Scorer
-export function memoryIsolated(forbidden: string, options?): Scorer
-```
-
-`memoryRecalled()` checks recall tool output for expected memory ids. `memoryFresh()` checks that a newer value appears in the final response. `memoryIsolated()` checks that forbidden content did not leak through recall output or the final message.
+See the canonical [eval public export inventory](/docs/api/evals#dawn-aievals-1).
 
 ### Example
 
-```ts
-import { contains, defineEval, gate, toolCalled } from "@dawn-ai/evals"
-import { script } from "@dawn-ai/testing"
-
-export default defineEval({
-  name: "chat quality",
-  dataset: [
-    {
-      input: "Filter open items",
-      fixtures: script()
-        .user("Filter open items")
-        .callsTool("applyFilter", { status: "open" })
-        .replies("Found 2 open items."),
-    },
-  ],
-  scorers: [
-    contains("Found", { threshold: 1 }),
-    toolCalled("applyFilter", { threshold: 1 }),
-  ],
-  gate: gate.perScorer(),
-})
-```
-
----
+See the canonical [eval examples](/docs/api/evals#examples-and-related-guides).
 
 ## dawn:routes (generated)
 
-The `dawn:routes` module is emitted by `dawn typegen` (and implicitly by `dawn build`). It is never written by hand — the CLI writes `.dawn/dawn.generated.d.ts`, which declares the `dawn:routes` module for your app. Import from it to get per-route types narrowed to your project's actual routes and tools.
+The generated application types now live at [`dawn:routes`](/docs/api/generated-routes#use-this-when).
 
 ### `RouteTools<P>`
 
-```ts
-import type { RouteTools } from "dawn:routes"
-
-// P is the route path string, e.g. "/research"
-type Tools = RouteTools<"/research">
-// resolves to the ToolRegistry for that route
-```
-
-Mapped type that resolves to the `ToolRegistry` for route `P`. The keys are the tool names found in that route's `tools/` directory; the values are `RuntimeTool` instances with inferred input and output types. Pass as the `TTools` argument to `RuntimeContext<TTools>`.
-
-See [Tools](/docs/tools).
+See the canonical [generated tool contract](/docs/api/generated-routes#tools).
 
 ### `RouteState<P>`
 
-```ts
-import type { RouteState } from "dawn:routes"
-
-// P is the route path string, e.g. "/research"
-type State = RouteState<"/research">
-// resolves to the state shape for that route
-```
-
-Mapped type that resolves to the typed state shape for route `P`. Populated from the route's `state.ts` schema and any dynamic-segment fields extracted from the path. Use it to type workflow and graph handler arguments.
-
-See [Routes](/docs/routes), [State](/docs/state).
-
----
+See the canonical [generated state contract](/docs/api/generated-routes#state).
 
 ## Where to read more
 
-1. [Mental Model](/docs/mental-model) — how requests, routes, and tools fit together
-2. [Routes](/docs/routes) — route kinds, pathname conventions, and `RouteConfig`
-3. [Agents](/docs/agents) — `agent()`, tool auto-binding, model selection
-4. [Tools](/docs/tools) — writing tools, `RuntimeContext`, type inference
-5. [Memory](/docs/memory), [Planning](/docs/planning), [Skills](/docs/skills), [Subagents](/docs/subagents), and [Reasoning Effort](/docs/reasoning-effort) — route-level agent behavior
-6. [Middleware](/docs/middleware) — request gating, `allow()`, `reject()`, context flow
-7. [CLI](/docs/cli) — `dawn dev`, `dawn build`, `dawn typegen`, and other commands
-8. [Dev Server](/docs/dev-server) — local development, hot reload, route playground
+Start with [Agents](/docs/agents), [Routes](/docs/routes), and [Tools](/docs/tools). Use the focused package references above when you need an exact import, field, default, error, or lifecycle rule.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/getting-started", title: "Getting Started", subtitle: "install Dawn and run your first route" },
-  { href: "/docs/retry", title: "Retry", subtitle: "configuring RetryConfig on an agent" },
-  { href: "/docs/reasoning-effort", title: "Reasoning Effort", subtitle: "configuring ReasoningConfig on an agent" },
-  { href: "/docs/subagents", title: "Subagents", subtitle: "using AgentConfig.subagents" },
-  { href: "/docs/state", title: "State", subtitle: "per-route typed state and RouteState<P>" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "building and deploying a Dawn project" },
+  { href: "/docs/getting-started", title: "Getting Started", subtitle: "build your first Dawn application" },
+  { href: "/docs/configuration", title: "Configuration Reference", subtitle: "configure application runtime behavior" },
+  { href: "/docs/cli", title: "CLI Reference", subtitle: "develop, check, test, and build" },
 ]} />
