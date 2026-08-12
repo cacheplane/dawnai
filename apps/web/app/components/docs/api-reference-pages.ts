@@ -26,6 +26,8 @@ export const API_REFERENCE_PAGES = [
   referencePage("@dawn-ai/testing", "/docs/api/testing", ["@dawn-ai/testing"]),
   referencePage("@dawn-ai/evals", "/docs/api/evals", ["@dawn-ai/evals"]),
   referencePage("dawn:routes", "/docs/api/generated-routes", ["@dawn-ai/cli", "@dawn-ai/core"]),
+  referencePage("@dawn-ai/permissions", "/docs/api/permissions", ["@dawn-ai/permissions"]),
+  referencePage("@dawn-ai/workspace", "/docs/api/workspace", ["@dawn-ai/workspace"]),
 ] as const satisfies readonly ApiReferencePage[]
 
 function referencePage(

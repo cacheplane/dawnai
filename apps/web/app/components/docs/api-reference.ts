@@ -569,6 +569,121 @@ export const API_BEHAVIOR_CONTRACTS = [
       },
     ],
   },
+  {
+    id: "permissions.match.prefix",
+    ownerHref: "/docs/api/permissions",
+    claim:
+      "Non-reserved command, path, and memory candidates use prefix matching, and deny wins over allow.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: [
+          "commands keep prefix matching",
+          "treats path candidates with absolute prefixes",
+          "allows deeper namespaces under the route",
+          "deny wins over allow when both match",
+          "deny wins over allow for the memory key",
+        ],
+        assertionFingerprint:
+          'expect ( matchPermission ( "bash" , "ls -la" , { bash : [ "ls" ] } , { } ) ) . toBe ( "allow" )\nexpect ( matchPermission ( "readFile" , "/Users/blove/.zshrc" , { readFile : [ "/Users/blove/" ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "memory" , "workspace=app|route=/a|tenant=acme|" , allow , { } ) ) . toBe ( "allow" , )\nexpect ( matchPermission ( "bash" , "rm -rf /tmp" , { bash : [ "rm -rf" ] } , { bash : [ "rm -rf" ] } ) ) . toBe ( "deny" , )\nexpect ( matchPermission ( "memory" , "workspace=app|route=/a|" , allow , deny ) ) . toBe ( "deny" )',
+      },
+    ],
+  },
+  {
+    id: "permissions.tool.exact",
+    ownerHref: "/docs/api/permissions",
+    claim: "Reserved tool names match exactly rather than by prefix.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: ["does not prefix-match tool names", "matches an exact tool name"],
+        assertionFingerprint:
+          'expect(matchPermission("tool", "deployProd", { tool: ["deploy"] }, {})).toBe("unknown")\nexpect(matchPermission("tool", "deployProd", { tool: ["deployProd"] }, {})).toBe("allow")',
+      },
+    ],
+  },
+  {
+    id: "permissions.subagent.exact",
+    ownerHref: "/docs/api/permissions",
+    claim: "Reserved subagent identities match exactly rather than by prefix.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: [
+          "matches an exact parent route and subagent name tuple",
+          "does not prefix-match a serialized tuple identity",
+        ],
+        assertionFingerprint:
+          'expect ( matchPermission ( "subagent" , supportResearcher , { subagent : [ supportResearcher ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "subagent" , `\u0024{ supportResearcher }:extended` , { subagent : [ supportResearcher ] } , { } , ) , ) . toBe ( "unknown" )',
+      },
+    ],
+  },
+  {
+    id: "permissions.store.noninteractive",
+    ownerHref: "/docs/api/permissions",
+    claim: "Non-interactive mode ignores the runtime permissions file.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/permissions-store.test.ts",
+        testNames: ["ignores the runtime file in non-interactive mode"],
+        assertionFingerprint:
+          'expect(store.match("bash", "npm install react")).toBe("unknown")\nexpect(store.match("bash", "ls -la")).toBe("allow")',
+      },
+    ],
+  },
+  {
+    id: "workspace.compose.order",
+    ownerHref: "/docs/api/workspace",
+    claim: "Backend middleware composes right-to-left, with the first listed middleware outermost.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/compose.test.ts",
+        testNames: ["applies middlewares right-to-left (outermost first)"],
+        assertionFingerprint:
+          'expect(trace).toEqual(["a:before", "b:before", "b:after", "a:after"])',
+      },
+    ],
+  },
+  {
+    id: "workspace.exec.timeout",
+    ownerHref: "/docs/api/workspace",
+    claim: "The local exec backend enforces its configured timeout.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/local-exec.test.ts",
+        testNames: ["runCommand enforces timeout"],
+        assertionFingerprint:
+          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) , ) . rejects . toThrow ( /timeout/i )',
+      },
+    ],
+  },
+  {
+    id: "workspace.filesystem.symlink",
+    ownerHref: "/docs/api/workspace",
+    claim:
+      "localFilesystem.realPath resolves an escaping symlink to its outside real path; Core owns any path-jail enforcement.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/local-filesystem.test.ts",
+        testNames: ["realPath resolves an escaping symlink to the outside real path"],
+        assertionFingerprint:
+          "expect(await fs.realPath(link, ctx(root))).toBe(realpathSync(target))",
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/capabilities/workspace-fs.test.ts",
+        testNames: ["gates a symlink that escapes the workspace (caught, not silently allowed)"],
+        assertionFingerprint: 'await expect(fs.readFile("escape")).rejects.toThrow(/fail-closed/)',
+      },
+    ],
+  },
 ] as const satisfies readonly ApiBehaviorContract[]
 
 interface ArtifactPolicy {
@@ -677,6 +792,10 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -699,6 +818,19 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ] as const satisfies readonly ApiContractKey[]
 
 function runtimeImport(
@@ -825,10 +957,18 @@ export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/testing", ".", "detailed", "node-only", "testing"),
   runtimeImport("@dawn-ai/evals", ".", "detailed", "node-only", "testing"),
 
-  runtimeImport("@dawn-ai/permissions", ".", "deferred-to-pr2", "edge-safe", "integration"),
-  runtimeImport("@dawn-ai/permissions", "./node", "deferred-to-pr2", "node-only", "integration"),
-  runtimeImport("@dawn-ai/workspace", ".", "deferred-to-pr2", "edge-safe", "application"),
-  runtimeImport("@dawn-ai/workspace", "./node", "deferred-to-pr2", "node-only", "application"),
+  runtimeImport("@dawn-ai/permissions", ".", "detailed", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/permissions", "./node", "detailed", "node-only", "integration"),
+  runtimeImport(
+    "@dawn-ai/workspace",
+    ".",
+    "detailed",
+    "edge-safe",
+    "application",
+    "supported",
+    "dependency-free",
+  ),
+  runtimeImport("@dawn-ai/workspace", "./node", "detailed", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", ".", "deferred-to-pr2", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", "./testing", "deferred-to-pr2", "node-only", "testing"),
   runtimeImport("@dawn-ai/langgraph", ".", "deferred-to-pr2", "edge-safe", "integration"),
@@ -1139,7 +1279,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/permissions",
     "Permission matching and Node-backed approval stores.",
     "packages/permissions/README.md",
-    "/docs/api#dawn-ai-permissions",
+    "/docs/api/permissions",
     "/docs/permissions",
     [importAddress("@dawn-ai/permissions", "."), importAddress("@dawn-ai/permissions", "./node")],
     "integration",
@@ -1216,7 +1356,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/workspace",
     "Filesystem and shell tools for agent workspaces.",
     "packages/workspace/README.md",
-    "/docs/api#dawn-ai-workspace",
+    "/docs/api/workspace",
     "/docs/workspace",
     [importAddress("@dawn-ai/workspace", "."), importAddress("@dawn-ai/workspace", "./node")],
     "application",

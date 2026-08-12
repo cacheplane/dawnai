@@ -40,6 +40,12 @@ const packagePages = [
   },
   { slug: "testing", label: "@dawn-ai/testing", href: "/docs/api/testing" },
   { slug: "evals", label: "@dawn-ai/evals", href: "/docs/api/evals" },
+  {
+    slug: "permissions",
+    label: "@dawn-ai/permissions",
+    href: "/docs/api/permissions",
+  },
+  { slug: "workspace", label: "@dawn-ai/workspace", href: "/docs/api/workspace" },
 ] as const
 const allReferencePages = [...foundationalPages, ...packagePages] as const
 
@@ -1872,6 +1878,13 @@ describe("foundational API reference pages", () => {
       "testing.harness-isolation",
       "evals.scorer-errors.zero-score",
       "evals.run-and-gate",
+      "permissions.match.prefix",
+      "permissions.tool.exact",
+      "permissions.subagent.exact",
+      "permissions.store.noninteractive",
+      "workspace.compose.order",
+      "workspace.exec.timeout",
+      "workspace.filesystem.symlink",
     ])
   })
 
@@ -1913,6 +1926,111 @@ describe("package API reference pages", () => {
     expect(foundationalContent("postgres-storage")).toContain(
       "### `@dawn-ai/postgres-storage/node`",
     )
+    expect(foundationalContent("permissions")).toContain("### `@dawn-ai/permissions/node`")
+    expect(foundationalContent("workspace")).toContain("### `@dawn-ai/workspace/node`")
+  })
+
+  it("documents the exact Permissions root and node ownership", () => {
+    const content = foundationalContent("permissions")
+    for (const exportName of [
+      "matchPermission",
+      "subagentPermissionPattern",
+      "suggestedCommandPattern",
+      "suggestedMemoryPattern",
+      "suggestedPathPattern",
+      "CommandDetail",
+      "MemoryDetail",
+      "PathDetail",
+      "PermissionDecision",
+      "PermissionMode",
+      "PermissionRequest",
+      "PermissionsFile",
+      "PermissionsStore",
+      "SubagentDetail",
+      "ToolDetail",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    expect(content).toContain("### `@dawn-ai/permissions/node`")
+    expect(content).toContain("| `createPermissionsStore` |")
+    expect(content).not.toContain("| `CreateOptions` |")
+  })
+
+  it("documents the exact Workspace root and node ownership", () => {
+    const content = foundationalContent("workspace")
+    for (const exportName of [
+      "compose",
+      "LocalExecOptions",
+      "LocalFilesystemOptions",
+      "SandboxConfig",
+      "SandboxHandle",
+      "SandboxPolicy",
+      "SandboxProvider",
+      "SandboxSecurityPolicy",
+      "BackendContext",
+      "ExecBackend",
+      "ExecMiddleware",
+      "FilesystemBackend",
+      "FilesystemMiddleware",
+      "LoggingOptions",
+      "withExecLogging",
+      "withFilesystemLogging",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    expect(content).toContain("### `@dawn-ai/workspace/node`")
+    for (const exportName of [
+      "LocalExecOptions",
+      "LocalFilesystemOptions",
+      "localExec",
+      "localFilesystem",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+  })
+
+  it("keeps Permissions and Workspace lifecycle and trust boundaries explicit", () => {
+    const permissions = foundationalContent("permissions")
+    expect(permissions).toContain("Reserved `tool` and `subagent` keys use exact matching")
+    expect(permissions).toContain("await `store.load()` before any store use")
+    expect(permissions).toContain("especially before `addAllow()`")
+    expect(permissions).not.toContain("Call `load()` before matching")
+    expect(permissions).toContain("Only `addAllow()` persists a runtime decision")
+    expect(permissions).toContain("inline input object is public; `CreateOptions` is not exported")
+
+    const workspace = foundationalContent("workspace")
+    expect(workspace).toContain("Core owns the path jail")
+    expect(workspace).toContain("does not enforce that boundary")
+    expect(workspace).toContain("does not inherit the host environment")
+    for (const contractName of [
+      "SandboxPolicy",
+      "SandboxSecurityPolicy",
+      "SandboxHandle",
+      "SandboxProvider",
+      "SandboxConfig",
+    ]) {
+      expect(workspace).toContain(`**Fields: \`@dawn-ai/workspace#.:${contractName}\`**`)
+    }
+  })
+
+  it("couples reserved subagent exactness to exact and non-prefix assertions", () => {
+    expect(API_BEHAVIOR_CONTRACTS.find(({ id }) => id === "permissions.subagent.exact")).toEqual({
+      id: "permissions.subagent.exact",
+      ownerHref: "/docs/api/permissions",
+      claim: "Reserved subagent identities match exactly rather than by prefix.",
+      authorities: [
+        {
+          kind: "test-assertion",
+          file: "packages/permissions/test/pattern-matching.test.ts",
+          testNames: [
+            "matches an exact parent route and subagent name tuple",
+            "does not prefix-match a serialized tuple identity",
+          ],
+          assertionFingerprint:
+            'expect ( matchPermission ( "subagent" , supportResearcher , { subagent : [ supportResearcher ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "subagent" , `\u0024{ supportResearcher }:extended` , { subagent : [ supportResearcher ] } , { } , ) , ) . toBe ( "unknown" )',
+        },
+      ],
+    })
   })
 
   it("documents Testing's fake embedder and all four conformance runners", () => {
@@ -2046,7 +2164,7 @@ ${packageExample("memory-pgvector").replace(
     }
   })
 
-  it("passes the source-derived inventory and behavior contracts for all ten owners", () => {
+  it("passes the source-derived inventory and behavior contracts for all twelve owners", () => {
     const result = spawnSync(
       process.execPath,
       [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
@@ -2101,6 +2219,13 @@ ${packageExample("memory-pgvector").replace(
       "testing.harness-isolation",
       "evals.scorer-errors.zero-score",
       "evals.run-and-gate",
+      "permissions.match.prefix",
+      "permissions.tool.exact",
+      "permissions.subagent.exact",
+      "permissions.store.noninteractive",
+      "workspace.compose.order",
+      "workspace.exec.timeout",
+      "workspace.filesystem.symlink",
     ])
   })
 })

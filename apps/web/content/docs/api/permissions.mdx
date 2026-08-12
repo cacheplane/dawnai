@@ -1,0 +1,166 @@
+# @dawn-ai/permissions
+
+## Use this when
+
+Use this package to evaluate Dawn permission patterns or inject a `PermissionsStore` into an integration. The root is the portable matching and contract surface. Import `/node` only when the application itself owns the local `.dawn/permissions.json` store.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/permissions
+```
+
+```ts
+import { matchPermission, type PermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/permissions` | edge-safe | not-claimed | integration | supported |
+| `@dawn-ai/permissions/node` | node-only | not-claimed | integration | supported |
+
+The root keeps Node filesystem APIs out of its import graph. The `/node` store reads and writes application-local files and therefore requires Node.
+
+## Public exports
+
+### `@dawn-ai/permissions`
+
+| Export | Responsibility |
+|---|---|
+| `matchPermission` | Match one candidate against allow and deny pattern maps. |
+| `subagentPermissionPattern` | Serialize a parent-route and subagent-name identity. |
+| `suggestedCommandPattern` | Suggest the first two command tokens. |
+| `suggestedMemoryPattern` | Suggest a terminated workspace-and-route namespace prefix. |
+| `suggestedPathPattern` | Suggest a path's parent directory prefix. |
+| `CommandDetail` | Describe a command permission request. |
+| `MemoryDetail` | Describe a memory supersede request. |
+| `PathDetail` | Describe a filesystem permission request. |
+| `PermissionDecision` | Name an interrupt resume decision. |
+| `PermissionMode` | Name the active permission mode. |
+| `PermissionRequest` | Describe the discriminated interrupt payload. |
+| `PermissionsFile` | Describe config and runtime permission maps. |
+| `PermissionsStore` | Define permission loading, matching, and persistence. |
+| `SubagentDetail` | Describe a subagent dispatch request. |
+| `ToolDetail` | Describe an arbitrary tool request. |
+
+### `@dawn-ai/permissions/node`
+
+The `/node` entry does not re-export the root. Import shared types and matching helpers from `@dawn-ai/permissions` independently.
+
+| Export | Responsibility |
+|---|---|
+| `createPermissionsStore` | Create the application-local disk-backed store. |
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/permissions#.:PermissionMode"
+export type PermissionMode = "interactive" | "non-interactive" | "bypass"
+```
+
+```ts api-contract="@dawn-ai/permissions#.:PermissionDecision"
+export type PermissionDecision = "once" | "always" | "deny"
+```
+
+```ts api-contract="@dawn-ai/permissions#.:PermissionsFile"
+export interface PermissionsFile {
+  readonly version: 1
+  readonly allow: Readonly<Record<string, readonly string[]>>
+  readonly deny: Readonly<Record<string, readonly string[]>>
+}
+```
+
+**Fields: `@dawn-ai/permissions#.:PermissionsFile`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly version` | `1` | yes | Identify the current file format. |
+| `readonly allow` | `Readonly<Record<string, readonly string[]>>` | yes | Map operation keys to allow patterns. |
+| `readonly deny` | `Readonly<Record<string, readonly string[]>>` | yes | Map operation keys to deny patterns. |
+
+```ts
+export type PermissionRequest = PermissionRequestBase &
+  (
+    | { readonly kind: "command"; readonly detail: CommandDetail }
+    | { readonly kind: "path"; readonly detail: PathDetail }
+    | { readonly kind: "tool"; readonly detail: ToolDetail }
+    | { readonly kind: "memory"; readonly detail: MemoryDetail }
+    | { readonly kind: "subagent"; readonly detail: SubagentDetail }
+  )
+```
+
+```ts api-contract="@dawn-ai/permissions#.:PermissionsStore"
+export interface PermissionsStore {
+  load(): Promise<void>
+  match(tool: string, candidate: string): "allow" | "deny" | "unknown"
+  addAllow(tool: string, pattern: string): Promise<void>
+  readonly mode: PermissionMode
+}
+```
+
+```ts
+export declare function matchPermission(
+  tool: string,
+  candidate: string,
+  allow: Readonly<Record<string, readonly string[]>>,
+  deny: Readonly<Record<string, readonly string[]>>,
+): "allow" | "deny" | "unknown"
+```
+
+```ts
+export declare function createPermissionsStore(opts: {
+  readonly appRoot: string
+  readonly config: PermissionsFile | undefined
+  readonly mode: PermissionMode
+}): PermissionsStore
+```
+
+The inline input object is public; `CreateOptions` is not exported.
+
+#### Behavior contract `permissions.match.prefix`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/permissions/test/pattern-matching.test.ts","testNames":["commands keep prefix matching","treats path candidates with absolute prefixes","allows deeper namespaces under the route","deny wins over allow when both match","deny wins over allow for the memory key"]}] */}
+Non-reserved command, path, and memory candidates use prefix matching, and deny wins over allow.
+
+#### Behavior contract `permissions.tool.exact`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/permissions/test/pattern-matching.test.ts","testNames":["does not prefix-match tool names","matches an exact tool name"]}] */}
+Reserved tool names match exactly rather than by prefix.
+
+#### Behavior contract `permissions.subagent.exact`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/permissions/test/pattern-matching.test.ts","testNames":["matches an exact parent route and subagent name tuple","does not prefix-match a serialized tuple identity"]}] */}
+Reserved subagent identities match exactly rather than by prefix.
+
+#### Pattern boundaries
+
+Reserved `tool` and `subagent` keys use exact matching. Other keys use `candidate.startsWith(pattern)`, so callers must choose boundary-safe patterns: paths normally end in `/`, and memory namespaces use the terminating `|` returned by `suggestedMemoryPattern()`.
+
+#### Behavior contract `permissions.store.noninteractive`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/permissions/test/permissions-store.test.ts","testNames":["ignores the runtime file in non-interactive mode"]}] */}
+Non-interactive mode ignores the runtime permissions file.
+
+### Store lifecycle and trust boundary
+
+Call and await `store.load()` before any store use, especially before `addAllow()` or other persistence. Calling `addAllow()` first can overwrite grants already present in the runtime file. In interactive mode `load()` reads `.dawn/permissions.json`; non-interactive mode uses config maps but intentionally ignores that runtime file; bypass mode returns `unknown` for every match. A malformed interactive runtime file rejects `load()`.
+
+Only `addAllow()` persists a runtime decision. It serializes concurrent writes, creates `.dawn/permissions.json`, updates the in-memory allow map, and adds `.dawn/` to `.gitignore`. The store has no deny-write or close method. Configuration ownership remains with the caller: pass the resolved `config` and `mode` when constructing it.
+
+Patterns are policy inputs, not authentication or filesystem containment. Prefixes can be broad, and permission-map keys are open strings except for the reserved exact-match behavior described above.
+
+## Examples and related guides
+
+```ts
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
+
+const store = createPermissionsStore({
+  appRoot: process.cwd(),
+  config: { version: 1, allow: { bash: ["pnpm test"] }, deny: {} },
+  mode: "non-interactive",
+})
+await store.load()
+
+if (store.match("bash", "pnpm test packages/sdk") !== "allow") {
+  throw new Error("Command is not allowed")
+}
+```
+
+Continue with [Permissions](/docs/permissions), [Access Control](/docs/access-control), and [Workspace API](/docs/api/workspace).

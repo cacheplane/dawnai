@@ -6,7 +6,14 @@
 
 Permission and access-control primitives for Dawn agents — gating tool and resource access at runtime.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
+This is part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). See the [API reference](https://dawnai.org/docs/api/permissions) and [Permissions guide](https://dawnai.org/docs/permissions).
+
+```ts
+import { matchPermission } from "@dawn-ai/permissions"
+```
+
+- `@dawn-ai/permissions` is edge-safe and supported.
+- `@dawn-ai/permissions/node` is node-only and supported.
 
 ## License
 

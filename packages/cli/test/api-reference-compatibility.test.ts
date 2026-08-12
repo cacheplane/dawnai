@@ -1458,6 +1458,41 @@ describe("API reference compatibility guards", () => {
     ).toEqual(["import(d)", "import(z)", "require(n)"])
   })
 
+  it("pins the Permissions and Workspace runtime boundaries from their emitted graphs", async () => {
+    const artifacts = await loadRuntimeArtifacts()
+    const byAddress = new Map(artifacts.map((artifact) => [addressFor(artifact), artifact]))
+
+    expect(byAddress.get("import:@dawn-ai/permissions:.")).toMatchObject({
+      runtime: "edge-safe",
+      purity: "not-claimed",
+      guardIds: ["edge-import-bundle"],
+    })
+    expect(byAddress.get("import:@dawn-ai/permissions:./node")).toMatchObject({
+      runtime: "node-only",
+      guardIds: ["node-import-bundle", "browser-import-negative-control"],
+    })
+    const workspaceRoot = byAddress.get("import:@dawn-ai/workspace:.")
+    expect(workspaceRoot).toMatchObject({
+      runtime: "edge-safe",
+      purity: "dependency-free",
+      guardIds: ["edge-import-bundle", "dependency-free-import-graph"],
+    })
+    expect(byAddress.get("import:@dawn-ai/workspace:./node")).toMatchObject({
+      runtime: "node-only",
+      guardIds: ["node-import-bundle", "browser-import-negative-control"],
+    })
+
+    const graph = await browserGraph(workspaceRoot as ImportArtifact)
+    expect(runtimeDependencyEdges(graph)).toEqual([])
+    const workspaceRootDirectory = `${await packageDirectory("@dawn-ai/workspace")}/`
+    expect(
+      Object.keys(graph.inputs)
+        .filter((input) => !input.endsWith("api-reference-boundary.mjs"))
+        .map((input) => resolve(packageFixtureRoot, input))
+        .filter((input) => !input.startsWith(workspaceRootDirectory)),
+    ).toEqual([])
+  })
+
   it("executes every known guard against every exact registry address", async () => {
     const artifacts = await loadRuntimeArtifacts()
     const usedGuardIds = new Set<GuardId>()

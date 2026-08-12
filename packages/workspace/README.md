@@ -10,6 +10,10 @@ This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://git
 Conceptual docs: [Workspace Filesystem](https://dawnai.org/docs/workspace),
 [Execution Sandbox](https://dawnai.org/docs/sandbox), and
 [Configuration](https://dawnai.org/docs/configuration#backends).
+API reference: [@dawn-ai/workspace](https://dawnai.org/docs/api/workspace).
+
+- `@dawn-ai/workspace` is edge-safe and supported.
+- `@dawn-ai/workspace/node` is node-only and supported.
 
 ## Install
 

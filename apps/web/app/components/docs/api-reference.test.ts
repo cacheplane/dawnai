@@ -41,13 +41,16 @@ const EXPECTED_REFERENCE_PAGES = [
   ["@dawn-ai/testing", "/docs/api/testing", "@dawn-ai/testing", ["@dawn-ai/testing"]],
   ["@dawn-ai/evals", "/docs/api/evals", "@dawn-ai/evals", ["@dawn-ai/evals"]],
   ["dawn:routes", "/docs/api/generated-routes", "dawn:routes", ["@dawn-ai/cli", "@dawn-ai/core"]],
+  [
+    "@dawn-ai/permissions",
+    "/docs/api/permissions",
+    "@dawn-ai/permissions",
+    ["@dawn-ai/permissions"],
+  ],
+  ["@dawn-ai/workspace", "/docs/api/workspace", "@dawn-ai/workspace", ["@dawn-ai/workspace"]],
 ] as const
 
 const EXPECTED_DEFERRED_IMPORTS = [
-  ["@dawn-ai/permissions", "."],
-  ["@dawn-ai/permissions", "./node"],
-  ["@dawn-ai/workspace", "."],
-  ["@dawn-ai/workspace", "./node"],
   ["@dawn-ai/sandbox", "."],
   ["@dawn-ai/sandbox", "./testing"],
   ["@dawn-ai/langgraph", "."],
@@ -79,6 +82,10 @@ const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/postgres-storage", "./node"],
   ["@dawn-ai/testing", "."],
   ["@dawn-ai/evals", "."],
+  ["@dawn-ai/permissions", "."],
+  ["@dawn-ai/permissions", "./node"],
+  ["@dawn-ai/workspace", "."],
+  ["@dawn-ai/workspace", "./node"],
 ] as const
 
 const EXPECTED_CATALOG_AND_INTERNAL_IMPORTS = [
@@ -147,6 +154,10 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -169,6 +180,19 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ] as const
 
 interface ManifestFixture {
@@ -274,7 +298,7 @@ describe("API reference page registry", () => {
         ownerPackageNames,
       ]),
     ).toEqual(EXPECTED_REFERENCE_PAGES)
-    expect(API_REFERENCE_PAGES).toHaveLength(10)
+    expect(API_REFERENCE_PAGES).toHaveLength(12)
     for (const page of API_REFERENCE_PAGES) {
       expect(page.parent).toEqual({ label: "API Reference", href: "/docs/api" })
     }
@@ -820,7 +844,7 @@ describe("published manifest address inventory", () => {
 describe("package catalog", () => {
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(63)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(80)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")

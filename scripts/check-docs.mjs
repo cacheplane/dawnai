@@ -631,6 +631,22 @@ const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
     "API Reference",
     "/docs/api",
   ],
+  [
+    "@dawn-ai/permissions",
+    "/docs/api/permissions",
+    "@dawn-ai/permissions",
+    ["@dawn-ai/permissions"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/workspace",
+    "/docs/api/workspace",
+    "@dawn-ai/workspace",
+    ["@dawn-ai/workspace"],
+    "API Reference",
+    "/docs/api",
+  ],
 ]
 
 const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
@@ -655,10 +671,10 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["import:@dawn-ai/postgres-storage:./node", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/testing:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/evals:.", "detailed", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/permissions:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/permissions:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/workspace:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/workspace:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:./node", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/sandbox:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/sandbox:./testing", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
@@ -744,6 +760,10 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -766,6 +786,19 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ]
 
 function apiArtifactAddress(artifact) {
@@ -777,6 +810,7 @@ function apiArtifactAddress(artifact) {
 const DEPENDENCY_FREE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:./pure",
   "import:@dawn-ai/memory:./browse",
+  "import:@dawn-ai/workspace:.",
 ])
 const EDGE_SAFE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:.",
@@ -1093,7 +1127,13 @@ async function analyzeDetailedApiReferences() {
 }
 
 if (process.argv[2] === "--analyze-detailed-api-references") {
-  process.stdout.write(`${JSON.stringify(await analyzeDetailedApiReferences())}\n`)
+  const analysis = await analyzeDetailedApiReferences()
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(`${JSON.stringify(analysis)}\n`, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
   process.exit(0)
 }
 
@@ -1129,6 +1169,14 @@ const checks = [
       "counts collected stream chunks or deltas, not model-tokenizer tokens",
       "`gate.perScorer()` ignores scorers without an explicit threshold",
       "separate default bar of `0.5`",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/permissions.mdx",
+    patterns: [
+      "Call and await `store.load()` before any store use, especially before `addAllow()` or other persistence",
+      "Calling `addAllow()` first can overwrite grants already present in the runtime file",
+      "Reserved subagent identities match exactly rather than by prefix",
     ],
   },
   {
@@ -1224,6 +1272,16 @@ for (const check of checks) {
       failures.push(`${check.file} is missing required docs text: ${pattern}`)
     }
   }
+}
+
+const permissionsApiSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/api/permissions.mdx"),
+  "utf8",
+)
+if (/\b(?:load|load\(\)|`load\(\)`)\b[^.\n]{0,80}\bbefore matching\b/i.test(permissionsApiSource)) {
+  failures.push(
+    "apps/web/content/docs/api/permissions.mdx must require load before every store use, not only before matching",
+  )
 }
 
 const gettingStartedSource = readFileSync(
@@ -3617,10 +3675,6 @@ if (apiReferenceRegistry) {
     )
   }
   const expectedDeferredImports = [
-    ["@dawn-ai/permissions", "."],
-    ["@dawn-ai/permissions", "./node"],
-    ["@dawn-ai/workspace", "."],
-    ["@dawn-ai/workspace", "./node"],
     ["@dawn-ai/sandbox", "."],
     ["@dawn-ai/sandbox", "./testing"],
     ["@dawn-ai/langgraph", "."],
@@ -3634,7 +3688,7 @@ if (apiReferenceRegistry) {
     (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
   ).map(({ packageName, subpath }) => [packageName, subpath])
   if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
-    failures.push("ARTIFACT_REGISTRY does not match the exact 12-import deferred-to-pr2 allowlist")
+    failures.push("ARTIFACT_REGISTRY does not match the exact 8-import deferred-to-pr2 allowlist")
   }
 
   const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(
