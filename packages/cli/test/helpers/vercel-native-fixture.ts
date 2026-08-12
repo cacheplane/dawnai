@@ -4445,6 +4445,12 @@ export async function pollNativeVercelRuntimeLogs(options: {
   const queryStartIso = queryStartDate.toISOString()
   const overallStartMs = nativeClockNow(options.clock, "native Vercel log polling clock")
   const seenVersions = new Set<string>()
+  // Keyed by row id, NOT by row version. Vercel rewrites a request row after the
+  // invocation returns -- responseStatusCode 0 -> 200, cache "" -> "MISS" -- so the
+  // same log event arrives again under a new fingerprint. Summing across versions
+  // counted that one event twice and failed a healthy deployment purely on whether a
+  // poll landed before the row settled.
+  const markerOccurrencesByRow = new Map<string, number>()
   let markerOccurrences = 0
   let quietSinceMs: number | undefined
 
@@ -4491,9 +4497,19 @@ export async function pollNativeVercelRuntimeLogs(options: {
       const identity = `${version.id}\0${version.fingerprint}`
       if (seenVersions.has(identity)) continue
       seenVersions.add(identity)
-      markerOccurrences += version.markerOccurrences
+      // Max, not sum: a later version of the same row reports the same occurrence.
+      // A row that genuinely carries the marker twice still reports 2, and a second
+      // marker-bearing row has its own id, so both real violations still trip below.
+      markerOccurrencesByRow.set(
+        version.id,
+        Math.max(markerOccurrencesByRow.get(version.id) ?? 0, version.markerOccurrences),
+      )
       newVersions += 1
     }
+    markerOccurrences = [...markerOccurrencesByRow.values()].reduce(
+      (total, count) => total + count,
+      0,
+    )
     if (markerOccurrences > 1) {
       throw new Error("native Vercel logs contain more than one benign marker occurrence")
     }
