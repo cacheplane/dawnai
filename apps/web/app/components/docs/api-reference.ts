@@ -16,6 +16,16 @@ export type ApiReferenceAudience =
 export type RuntimePurity = "dependency-free" | "not-claimed"
 export type ApiReferenceStability = "supported" | "low-level" | "internal"
 
+export const API_REFERENCE_GUARD_IDS = [
+  "edge-import-bundle",
+  "dependency-free-import-graph",
+  "node-import-bundle",
+  "browser-import-negative-control",
+  "node-operated-bundle",
+  "browser-operated-negative-control",
+] as const
+export type ApiReferenceGuardId = (typeof API_REFERENCE_GUARD_IDS)[number]
+
 export interface SourceAstBehaviorAuthority {
   readonly kind: "source-ast"
   readonly file: string
@@ -56,6 +66,7 @@ export interface RuntimeImportArtifact extends ArtifactPolicy {
   readonly surfaceKind: "typescript-runtime"
   readonly runtime: RuntimeCompatibility
   readonly purity: RuntimePurity
+  readonly guardIds: readonly ApiReferenceGuardId[]
 }
 
 export interface StaticImportArtifact extends ArtifactPolicy {
@@ -82,6 +93,7 @@ export interface OperatedArtifact extends ArtifactPolicy {
   readonly operatedKind: OperatedArtifactKind
   readonly manifestTarget: string
   readonly runtime: RuntimeCompatibility
+  readonly guardIds: readonly ApiReferenceGuardId[]
 }
 
 export type ApiReferenceArtifact =
@@ -110,6 +122,17 @@ function runtimeImport(
   stability: ApiReferenceStability = "supported",
   purity: RuntimePurity = "not-claimed",
 ): RuntimeImportArtifact {
+  const guardIds: readonly ApiReferenceGuardId[] =
+    runtime === "edge-safe"
+      ? [
+          "edge-import-bundle",
+          ...(purity === "dependency-free" ? (["dependency-free-import-graph"] as const) : []),
+        ]
+      : [
+          "node-import-bundle",
+          "browser-import-negative-control",
+          ...(purity === "dependency-free" ? (["dependency-free-import-graph"] as const) : []),
+        ]
   return {
     kind: "import",
     packageName,
@@ -120,6 +143,7 @@ function runtimeImport(
     audience,
     purity,
     stability,
+    guardIds,
   }
 }
 
@@ -151,6 +175,7 @@ function operatedArtifact(
     manifestTarget,
     coverage,
     runtime: "node-only",
+    guardIds: ["node-operated-bundle", "browser-operated-negative-control"],
     audience,
     stability,
   }
@@ -182,7 +207,7 @@ export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/cli", "./fetch", "detailed", "edge-safe", "integration"),
   runtimeImport("@dawn-ai/cli", "./runtime", "detailed", "node-only", "tooling", "low-level"),
   runtimeImport("@dawn-ai/cli", "./testing", "detailed", "node-only", "testing"),
-  runtimeImport("@dawn-ai/core", ".", "detailed", "node-only", "integration", "low-level"),
+  runtimeImport("@dawn-ai/core", ".", "detailed", "edge-safe", "integration", "low-level"),
   runtimeImport("@dawn-ai/core", "./node", "detailed", "node-only", "integration", "low-level"),
   runtimeImport(
     "@dawn-ai/core",
@@ -214,7 +239,7 @@ export const ARTIFACT_REGISTRY = [
 
   runtimeImport("@dawn-ai/permissions", ".", "deferred-to-pr2", "edge-safe", "integration"),
   runtimeImport("@dawn-ai/permissions", "./node", "deferred-to-pr2", "node-only", "integration"),
-  runtimeImport("@dawn-ai/workspace", ".", "deferred-to-pr2", "node-only", "application"),
+  runtimeImport("@dawn-ai/workspace", ".", "deferred-to-pr2", "edge-safe", "application"),
   runtimeImport("@dawn-ai/workspace", "./node", "deferred-to-pr2", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", ".", "deferred-to-pr2", "node-only", "application"),
   runtimeImport("@dawn-ai/sandbox", "./testing", "deferred-to-pr2", "node-only", "testing"),
@@ -636,6 +661,7 @@ const AUDIENCES = new Set<ApiReferenceAudience>([
 const STABILITIES = new Set<ApiReferenceStability>(["supported", "low-level", "internal"])
 const RUNTIMES = new Set<RuntimeCompatibility>(["node-only", "edge-safe"])
 const PURITIES = new Set<RuntimePurity>(["dependency-free", "not-claimed"])
+const GUARD_IDS = new Set<ApiReferenceGuardId>(API_REFERENCE_GUARD_IDS)
 const STATIC_SURFACES = new Set<StaticImportArtifact["surfaceKind"]>([
   "config-artifact",
   "metadata",
@@ -713,9 +739,11 @@ function validateArtifact(artifact: ApiReferenceArtifact): void {
         "audience",
         "purity",
         "stability",
+        "guardIds",
       ])
       if (!RUNTIMES.has(artifact.runtime)) throw new Error(`invalid runtime: ${artifact.runtime}`)
       if (!PURITIES.has(artifact.purity)) throw new Error(`invalid purity: ${artifact.purity}`)
+      validateGuardIds(artifact)
       return
     }
     if (!STATIC_SURFACES.has(artifact.surfaceKind)) {
@@ -744,8 +772,12 @@ function validateArtifact(artifact: ApiReferenceArtifact): void {
     "runtime",
     "audience",
     "stability",
+    "guardIds",
   ])
-  if (!RUNTIMES.has(artifact.runtime)) throw new Error(`invalid runtime: ${artifact.runtime}`)
+  if (artifact.runtime !== "node-only") {
+    throw new Error(`operated artifacts must use the node-only runtime`)
+  }
+  validateGuardIds(artifact)
   if (artifact.manifestTarget.length === 0) {
     throw new Error(`empty manifest target for ${artifactAddressFor(artifact)}`)
   }
@@ -758,6 +790,44 @@ function validateArtifact(artifact: ApiReferenceArtifact): void {
       artifact.operatedKind !== "operated-application")
   ) {
     throw new Error(`invalid operated kind for ${artifact.selector}`)
+  }
+}
+
+function validateGuardIds(artifact: RuntimeImportArtifact | OperatedArtifact): void {
+  if (!Array.isArray(artifact.guardIds) || artifact.guardIds.length === 0) {
+    throw new Error(`missing compatibility guard for ${artifactAddressFor(artifact)}`)
+  }
+  for (const guardId of artifact.guardIds) {
+    if (!GUARD_IDS.has(guardId)) {
+      throw new Error(
+        `unknown compatibility guard ${String(guardId)} for ${artifactAddressFor(artifact)}`,
+      )
+    }
+  }
+  if (new Set(artifact.guardIds).size !== artifact.guardIds.length) {
+    throw new Error(`duplicate compatibility guard for ${artifactAddressFor(artifact)}`)
+  }
+
+  const allowedGuardIds: readonly ApiReferenceGuardId[] =
+    artifact.kind === "operated"
+      ? ["node-operated-bundle", "browser-operated-negative-control"]
+      : artifact.runtime === "edge-safe"
+        ? ["edge-import-bundle"]
+        : ["node-import-bundle", "browser-import-negative-control"]
+  const applicableGuardIds =
+    artifact.kind === "import" && artifact.purity === "dependency-free"
+      ? ([...allowedGuardIds, "dependency-free-import-graph"] as const)
+      : allowedGuardIds
+  for (const guardId of artifact.guardIds) {
+    if (!applicableGuardIds.includes(guardId)) {
+      throw new Error(
+        `inapplicable compatibility guard ${guardId} for ${artifactAddressFor(artifact)}`,
+      )
+    }
+  }
+  for (const guardId of applicableGuardIds) {
+    if (artifact.guardIds.includes(guardId)) continue
+    throw new Error(`missing compatibility guard ${guardId} for ${artifactAddressFor(artifact)}`)
   }
 }
 

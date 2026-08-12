@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import * as apiReferenceExports from "./api-reference"
 import {
+  API_REFERENCE_GUARD_IDS,
   type ApiReferenceArtifact,
   ARTIFACT_REGISTRY,
   artifactAddressFor,
@@ -275,6 +276,158 @@ describe("client navigation dependency boundary", () => {
 })
 
 describe("artifact registry", () => {
+  it("assigns executable compatibility guards to every runtime claim", () => {
+    const knownGuardIds = new Set(API_REFERENCE_GUARD_IDS)
+    const usedGuardIds = new Set<string>()
+
+    for (const artifact of ARTIFACT_REGISTRY) {
+      if (
+        (artifact.kind === "import" && artifact.surfaceKind === "typescript-runtime") ||
+        artifact.kind === "operated"
+      ) {
+        expect(artifact.guardIds, artifactAddressFor(artifact)).not.toHaveLength(0)
+        for (const guardId of artifact.guardIds) {
+          expect(knownGuardIds, `${artifactAddressFor(artifact)} uses ${guardId}`).toContain(
+            guardId,
+          )
+          usedGuardIds.add(guardId)
+        }
+
+        if (artifact.runtime === "edge-safe") {
+          expect(artifact.guardIds).toContain("edge-import-bundle")
+        } else if (artifact.kind === "import") {
+          expect(artifact.guardIds).toContain("node-import-bundle")
+        } else {
+          expect(artifact.guardIds).toContain("node-operated-bundle")
+        }
+        if (artifact.kind === "import" && artifact.purity === "dependency-free") {
+          expect(artifact.guardIds).toContain("dependency-free-import-graph")
+        }
+      } else {
+        expect("runtime" in artifact).toBe(false)
+        expect("purity" in artifact).toBe(false)
+        expect("guardIds" in artifact).toBe(false)
+      }
+    }
+
+    expect(usedGuardIds).toEqual(knownGuardIds)
+    const sandboxTesting = ARTIFACT_REGISTRY.find(
+      (artifact) =>
+        artifact.kind === "import" &&
+        artifact.surfaceKind === "typescript-runtime" &&
+        artifact.packageName === "@dawn-ai/sandbox" &&
+        artifact.subpath === "./testing",
+    )
+    expect(
+      sandboxTesting && "guardIds" in sandboxTesting ? sandboxTesting.guardIds : undefined,
+    ).toContain("browser-import-negative-control")
+  })
+
+  it("rejects missing and unknown compatibility guard IDs", () => {
+    const runtimeArtifact = ARTIFACT_REGISTRY.find(
+      (artifact) => artifact.kind === "import" && artifact.surfaceKind === "typescript-runtime",
+    )
+    expect(runtimeArtifact).toBeDefined()
+
+    expectRegistryRejection(
+      {
+        ...runtimeArtifact,
+        packageName: "@dawn-ai/cli",
+        subpath: "./missing-guards",
+        guardIds: [],
+      },
+      /compatibility guard/i,
+    )
+    expectRegistryRejection(
+      {
+        ...runtimeArtifact,
+        packageName: "@dawn-ai/cli",
+        subpath: "./unknown-guard",
+        guardIds: ["stale-guard-id"],
+      },
+      /unknown compatibility guard/i,
+    )
+    expectRegistryRejection(
+      {
+        ...runtimeArtifact,
+        packageName: "@dawn-ai/cli",
+        subpath: "./wrong-guard-kind",
+        runtime: "edge-safe",
+        guardIds: ["edge-import-bundle", "node-import-bundle"],
+      },
+      /inapplicable compatibility guard/i,
+    )
+    expectRegistryRejection(
+      {
+        ...runtimeArtifact,
+        packageName: "@dawn-ai/cli",
+        subpath: "./duplicate-guard",
+        guardIds: ["node-import-bundle", "node-import-bundle"],
+      },
+      /duplicate compatibility guard/i,
+    )
+    expectRegistryRejection(
+      {
+        kind: "import",
+        packageName: "@dawn-ai/config-biome",
+        subpath: "./guarded-config",
+        coverage: "catalog-only",
+        surfaceKind: "config-artifact",
+        audience: "tooling",
+        stability: "supported",
+        guardIds: ["edge-import-bundle"],
+      },
+      /invalid artifact fields.*guardIds/i,
+    )
+    expect(() =>
+      validateApiReferenceRegistries({
+        pages: API_REFERENCE_PAGES,
+        artifacts: ARTIFACT_REGISTRY.map((artifact) =>
+          artifact.kind === "generated"
+            ? ({ ...artifact, guardIds: ["edge-import-bundle"] } as unknown as ApiReferenceArtifact)
+            : artifact,
+        ),
+        packages: PACKAGE_CATALOG,
+      }),
+    ).toThrow(/invalid artifact fields.*guardIds/i)
+    expectRegistryRejection(
+      {
+        ...runtimeArtifact,
+        packageName: "@dawn-ai/cli",
+        subpath: "./audience-is-not-runtime",
+        runtime: "testing",
+      },
+      /invalid runtime/i,
+    )
+    expect(() =>
+      validateApiReferenceRegistries({
+        pages: API_REFERENCE_PAGES,
+        artifacts: ARTIFACT_REGISTRY.map((artifact) =>
+          artifactAddressFor(artifact) === "import:@dawn-ai/sdk:./testing"
+            ? ({
+                ...artifact,
+                runtime: "node-only",
+                purity: "dependency-free",
+                guardIds: ["node-import-bundle", "browser-import-negative-control"],
+              } as ApiReferenceArtifact)
+            : artifact,
+        ),
+        packages: PACKAGE_CATALOG,
+      }),
+    ).toThrow(/dependency-free-import-graph/i)
+    const operatedArtifact = ARTIFACT_REGISTRY.find((artifact) => artifact.kind === "operated")
+    expect(operatedArtifact).toBeDefined()
+    expectRegistryRejection(
+      {
+        ...operatedArtifact,
+        packageName: "@dawn-ai/cli",
+        selector: "bin.edge-dawn",
+        runtime: "edge-safe",
+      },
+      /operated.*node-only|node-only.*operated/i,
+    )
+  })
+
   it("uses unique keys in separate import and operated address spaces", () => {
     const addresses = ARTIFACT_REGISTRY.map(artifactAddressFor)
     expect(new Set(addresses).size).toBe(addresses.length)
@@ -361,12 +514,36 @@ describe("artifact registry", () => {
         ? { ...artifact, surfaceKind: "metadata" }
         : artifact,
     )
+    const guardMutation = ARTIFACT_REGISTRY.map((artifact) =>
+      artifactAddressFor(artifact) === "import:@dawn-ai/sdk:./pure"
+        ? { ...artifact, guardIds: ["edge-import-bundle"] }
+        : artifact,
+    )
+    const runtimeMutation = ARTIFACT_REGISTRY.map((artifact) =>
+      artifactAddressFor(artifact) === "import:@dawn-ai/sdk:./testing"
+        ? { ...artifact, runtime: "testing" }
+        : artifact,
+    )
+    const staticGuardMutation = ARTIFACT_REGISTRY.map((artifact) =>
+      artifactAddressFor(artifact) === "import:@dawn-ai/config-biome:."
+        ? { ...artifact, guardIds: ["edge-import-bundle"] }
+        : artifact,
+    )
 
     expect(analyzeApiReferenceRegistry(API_REFERENCE_PAGES, coverageMutation).failures).toEqual([
       expect.stringMatching(/artifact policy tuple.*internal\/compiler.*coverage/),
     ])
     expect(analyzeApiReferenceRegistry(API_REFERENCE_PAGES, kindMutation).failures).toEqual([
       expect.stringMatching(/artifact policy tuple.*internal\/compiler.*surfaceKind/),
+    ])
+    expect(analyzeApiReferenceRegistry(API_REFERENCE_PAGES, guardMutation).failures).toEqual([
+      expect.stringMatching(/artifact policy tuple.*sdk.*pure.*guardIds/),
+    ])
+    expect(analyzeApiReferenceRegistry(API_REFERENCE_PAGES, runtimeMutation).failures).toEqual([
+      expect.stringMatching(/artifact policy tuple.*sdk.*testing.*runtime/),
+    ])
+    expect(analyzeApiReferenceRegistry(API_REFERENCE_PAGES, staticGuardMutation).failures).toEqual([
+      expect.stringMatching(/artifact policy tuple.*config-biome.*guardIds/),
     ])
   })
 

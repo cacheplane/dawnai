@@ -560,6 +560,48 @@ function apiArtifactAddress(artifact) {
   return `generated:${artifact.moduleName}`
 }
 
+const DEPENDENCY_FREE_API_ADDRESSES = new Set([
+  "import:@dawn-ai/sdk:./pure",
+  "import:@dawn-ai/memory:./browse",
+])
+const EDGE_SAFE_API_ADDRESSES = new Set([
+  "import:@dawn-ai/sdk:.",
+  "import:@dawn-ai/sdk:./pure",
+  "import:@dawn-ai/cli:./fetch",
+  "import:@dawn-ai/core:.",
+  "import:@dawn-ai/ag-ui:.",
+  "import:@dawn-ai/ag-ui:./sse",
+  "import:@dawn-ai/memory:./browse",
+  "import:@dawn-ai/memory:./namespace",
+  "import:@dawn-ai/memory:./reconcile",
+  "import:@dawn-ai/postgres-storage:.",
+  "import:@dawn-ai/permissions:.",
+  "import:@dawn-ai/workspace:.",
+  "import:@dawn-ai/langgraph:.",
+  "import:@dawn-ai/langgraph:./define-entry",
+  "import:@dawn-ai/langgraph:./route-module",
+  "import:@dawn-ai/langchain:.",
+])
+
+function expectedApiGuardIds(address) {
+  if (address.startsWith("operated:")) {
+    return ["node-operated-bundle", "browser-operated-negative-control"]
+  }
+  const expectedTuple = EXPECTED_API_ARTIFACT_POLICY_TUPLES.find(
+    ([candidate]) => candidate === address,
+  )
+  if (!address.startsWith("import:") || expectedTuple?.[3] !== "typescript-runtime") {
+    return undefined
+  }
+  if (EDGE_SAFE_API_ADDRESSES.has(address)) {
+    return [
+      "edge-import-bundle",
+      ...(DEPENDENCY_FREE_API_ADDRESSES.has(address) ? ["dependency-free-import-graph"] : []),
+    ]
+  }
+  return ["node-import-bundle", "browser-import-negative-control"]
+}
+
 function tupleMismatchFields(actual, expected, fields) {
   return fields.filter(
     (_, index) => JSON.stringify(actual?.[index]) !== JSON.stringify(expected?.[index]),
@@ -607,19 +649,42 @@ function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
     analysisFailures.push(`duplicate API reference page labels: ${duplicateLabels.join(", ")}`)
   }
 
-  const artifactPolicyTuples = artifacts.map((artifact) =>
-    artifact.kind === "operated"
-      ? [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind]
-      : [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind],
-  )
-  const artifactFields = ["address", "coverage", "kind field", "surfaceKind/operatedKind"]
+  const artifactPolicyTuples = artifacts.map((artifact) => {
+    const base =
+      artifact.kind === "operated"
+        ? [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind]
+        : [apiArtifactAddress(artifact), artifact.coverage, "surfaceKind", artifact.surfaceKind]
+    return [...base, artifact.runtime ?? null, artifact.purity ?? null, artifact.guardIds ?? null]
+  })
+  const expectedArtifactPolicyTuples = EXPECTED_API_ARTIFACT_POLICY_TUPLES.map((expected) => {
+    const guardIds = expectedApiGuardIds(expected[0])
+    return [
+      ...expected,
+      guardIds ? (EDGE_SAFE_API_ADDRESSES.has(expected[0]) ? "edge-safe" : "node-only") : null,
+      DEPENDENCY_FREE_API_ADDRESSES.has(expected[0])
+        ? "dependency-free"
+        : guardIds && expected[0].startsWith("import:")
+          ? "not-claimed"
+          : null,
+      guardIds ?? null,
+    ]
+  })
+  const artifactFields = [
+    "address",
+    "coverage",
+    "kind field",
+    "surfaceKind/operatedKind",
+    "runtime",
+    "purity",
+    "guardIds",
+  ]
   for (
     let index = 0;
-    index < Math.max(artifactPolicyTuples.length, EXPECTED_API_ARTIFACT_POLICY_TUPLES.length);
+    index < Math.max(artifactPolicyTuples.length, expectedArtifactPolicyTuples.length);
     index++
   ) {
     const actual = artifactPolicyTuples[index]
-    const expected = EXPECTED_API_ARTIFACT_POLICY_TUPLES[index]
+    const expected = expectedArtifactPolicyTuples[index]
     const mismatches = tupleMismatchFields(actual, expected, artifactFields)
     if (mismatches.length > 0) {
       analysisFailures.push(
