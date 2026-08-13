@@ -41,6 +41,14 @@ export type ThreadOperation =
   | "thread.state"
   | "thread.delete"
   | "thread.cancel"
+  /**
+   * `GET /threads/:id/pending_interrupts`. Gated on this axis IN ADDITION to
+   * the route that parked the interrupts — the two compose as AND. The parked
+   * prompt's `interruptId`/`resumeKey` pair is the credential an attacker needs
+   * to resume someone else's turn, so it answers to the same policy as every
+   * other read of the thread.
+   */
+  | "thread.pending_interrupts"
   | "run.stream"
   | "run.wait"
   | "run.resume"
