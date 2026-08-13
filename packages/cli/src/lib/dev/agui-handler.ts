@@ -4,7 +4,7 @@ import { type DawnAgentStreamChunk, fromRunAgentInput, toAguiEvents } from "@daw
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 import type { MemoryStoreLike } from "@dawn-ai/core"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
+import type { DawnMiddleware, MiddlewareRequest, ThreadAccessPolicy } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { type BootResolvedInstances, streamResolvedRoute } from "../runtime/execute-route-core.js"
@@ -26,6 +26,7 @@ import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 import { terminalStatus } from "./terminal-status.js"
+import { isThenable, makeThreadGate } from "./thread-gate.js"
 import { assertNoReservedKey } from "./thread-metadata.js"
 
 export interface AgUiFetchRequestOptions {
@@ -50,6 +51,11 @@ export interface AgUiFetchRequestOptions {
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
   readonly runRegistry: RunRegistry
+  /**
+   * The boot-resolved policy. `undefined` means the app has no policy — the
+   * gate below is then a no-op, exactly like every other gated endpoint.
+   */
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
@@ -152,6 +158,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     registry,
     resumeClaims,
     runRegistry,
+    threadAccess,
     threadsStore,
     sandboxManager,
     signal: shutdownSignal,
@@ -229,6 +236,26 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     const middlewareResult = await runMiddleware(middleware, middlewareRequest)
     if (middlewareResult.action === "reject") {
       return statusResponse(middlewareResult.status, middlewareResult.body)
+    }
+
+    // Unconditionally `update`, like every other `run.*` operation — see
+    // ThreadOperation. AFTER the middleware reject above and BEFORE every
+    // side effect below (`resumeClaims.tryClaim`, `runRegistry.begin`,
+    // `threadsStore.createThread`): a denial must take no claim, no run
+    // slot, and create no row. This route has no `threads` segment — the
+    // client-supplied `input.threadId` is the only thread identity a caller
+    // controls here, and it names any thread id it likes.
+    if (threadAccess) {
+      const existing = await threadsStore.getThread(input.threadId)
+      const gate = makeThreadGate(threadAccess, request)
+      const g = gate({
+        action: "update",
+        operation: "run.agui",
+        threadId: input.threadId,
+        ...(existing ? { thread: existing } : {}),
+      })
+      const settled = isThenable(g) ? await g : g
+      if (!settled.ok) return settled.response
     }
 
     if (dawnInput.resume !== undefined) {

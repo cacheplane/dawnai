@@ -24,16 +24,15 @@ export type ThreadAction = "create" | "read" | "update" | "delete"
  * - `thread.state` — `GET /threads/:id/state` — `read`
  * - `thread.delete` — `DELETE /threads/:id` — `delete`
  * - `thread.cancel` — `POST /threads/:id/cancel` — `update`
+ * - `thread.pending_interrupts` — `GET /threads/:id/pending_interrupts` — `read`
  * - `run.stream` — `POST /threads/:id/runs/stream` — `update`
  * - `run.wait` — `POST /threads/:id/runs/wait` — `update`
  * - `run.resume` — `POST /threads/:id/resume` — `update`
  * - `run.agui` — `POST /agui/:routeId` — `update`
  *
- * The union ships whole, but the four `run.*` members are not gated yet: a
- * policy may match them today and simply will not be invoked for them until the
- * run endpoints are wired. They are here so that wiring adds no published type
- * change, and so nobody writes an exhaustive `switch` that a later release
- * breaks.
+ * Every `run.*` operation arrives under `update`, without exception. Starting a
+ * turn on a thread mutates it; none of them is a `create`, including the ones
+ * whose endpoint will create the row when it is missing.
  */
 export type ThreadOperation =
   | "thread.create"
@@ -41,6 +40,14 @@ export type ThreadOperation =
   | "thread.state"
   | "thread.delete"
   | "thread.cancel"
+  /**
+   * `GET /threads/:id/pending_interrupts`. Gated on this axis IN ADDITION to
+   * the route that parked the interrupts — the two compose as AND. The parked
+   * prompt's `interruptId`/`resumeKey` pair is the credential an attacker needs
+   * to resume someone else's turn, so it answers to the same policy as every
+   * other read of the thread.
+   */
+  | "thread.pending_interrupts"
   | "run.stream"
   | "run.wait"
   | "run.resume"

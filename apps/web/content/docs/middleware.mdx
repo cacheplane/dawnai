@@ -118,7 +118,25 @@ Middleware runs in every Dawn HTTP runtime: `dawn dev`, the Node runtime served 
 | `/threads/:id/pending_interrupts` | `"GET"` | Always `{}` — a `GET` has no body to read them from. |
 | `/agui/:routeId` | `"POST"` | Dynamic segments read from the AG-UI run input. |
 
-Every other endpoint the runtime serves is ungated: `/healthz` (a liveness probe), thread create, read and delete, `GET /threads/:id/state`, `POST /threads/:id/cancel`, and the memory-candidate endpoints.
+Middleware is not the only gate on those five. An app that has a
+[thread-access policy](/docs/thread-access) also authorizes each of them against
+the thread they name, and the two compose as AND: middleware answers "may this
+caller run this route", the policy answers "may this caller touch this thread",
+and a request needs both to pass. An app with no policy file is gated by
+middleware alone, exactly as before.
+
+The endpoints middleware does **not** see are `/healthz` (a liveness probe),
+thread create, read and delete, `GET /threads/:id/state`,
+`POST /threads/:id/cancel`, and the memory-candidate endpoints. Of those, every
+thread endpoint is on the thread-access policy — so "no middleware" no longer
+means "ungated". `/healthz` and the memory-candidate endpoints have no gate of
+either kind; put an outer boundary around them.
+
+Two of the five resolve their route identity from the thread itself, so their
+thread-access check runs **before** middleware and answers first: `/resume` and
+`/pending_interrupts`. On those, a caller middleware would have refused with a
+`401` receives the policy's deny instead. See
+[the run endpoints and middleware](/docs/thread-access#the-run-endpoints-and-middleware).
 
 <Callout type="warn" title="Middleware can now see a GET">
 `GET /threads/:id/pending_interrupts` hands back the human-in-the-loop prompts parked on a thread, so it is gated like a run — and it is the first gated endpoint whose `req.method` is not `"POST"`. Middleware that branches on `req.method === "POST"`, or that reads `req.params` to decide access, falls through on it. See [the endpoint reference](/docs/dev-server/agent-protocol#recovering-prompts-without-a-live-stream) for how its route identity is resolved.
@@ -133,7 +151,7 @@ start gating requests.
 The `langsmith` build target is different: its generated graph entries do not include Dawn HTTP middleware. Put equivalent authentication at the LangSmith/platform boundary when you deploy those entries.
 
 <Callout type="warn" title="Middleware is execution-only">
-  Do not use this hook as blanket service authentication. Create/read/delete, state, cancellation, health, and memory-candidate routes bypass it. Put an outer boundary around the complete runtime surface as described in [Security Architecture](/docs/security-architecture).
+  Do not use this hook as blanket service authentication. Create/read/delete, state, cancellation, health, and memory-candidate routes bypass it. Thread authorization is a [separate file on a separate axis](/docs/thread-access) and covers the thread endpoints; health and memory-candidate routes are covered by neither. Put an outer boundary around the complete runtime surface as described in [Security Architecture](/docs/security-architecture).
 </Callout>
 
 ## When middleware fails to load

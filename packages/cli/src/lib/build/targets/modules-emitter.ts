@@ -138,6 +138,14 @@ export interface ModulesEmitOptions {
   readonly discoveries: readonly RouteStaticDiscovery[]
   /** App middleware file (absolute), when the build probe found one. */
   readonly middlewareFile?: string
+  /**
+   * App thread-access policy file (absolute), when the build probe found one.
+   *
+   * Carried the same way middleware is — a namespace import plus a runtime
+   * normalization call — so a bundled target, which has no filesystem to probe
+   * at boot, still binds the app's policy instead of booting ungated.
+   */
+  readonly threadAccessFile?: string
 }
 
 /**
@@ -160,7 +168,11 @@ export interface ModulesEmitFlavor {
   readonly appRootSection: (appRoot: string) => readonly string[]
   /** Imports emitted above the runtime-helper import (none on edge). */
   readonly preludeImports: readonly string[]
-  /** Where `buildStaticRouteModule`/`normalizeMiddlewareModule` come from. */
+  /**
+   * Where `buildStaticRouteModule` / `normalizeMiddlewareModule` /
+   * `normalizeThreadAccessModule` come from. Every one of them must be exported
+   * from BOTH barrels, since this specifier is the only thing that differs.
+   */
   readonly runtimeSpecifier: string
 }
 
@@ -239,6 +251,16 @@ export function emitModulesFileWithFlavor(
     // silently miss the named form.
     moduleImports.push(
       `import * as middlewareModule from ${JSON.stringify(importSpecifier(buildDir, options.middlewareFile))}`,
+    )
+  }
+
+  if (options.threadAccessFile) {
+    // Namespace import for the same reason middleware uses one: the dynamic
+    // probe accepts a default OR a named `threadAccess` export, and the shared
+    // selection rule runs at runtime so the built app can never bind a
+    // different export than dev would.
+    moduleImports.push(
+      `import * as threadAccessModule from ${JSON.stringify(importSpecifier(buildDir, options.threadAccessFile))}`,
     )
   }
 
@@ -339,13 +361,21 @@ export function emitModulesFileWithFlavor(
   })
 
   const runtimeSpecifier = JSON.stringify(flavor.runtimeSpecifier)
+  // Composed from a list rather than branched per combination: with two
+  // optional helpers a ternary tree has four arms, and the arm a middleware-only
+  // app takes must emit exactly the same bytes it emitted before thread access
+  // existed. The order is fixed here — `buildStaticRouteModule` first, then the
+  // normalizers in the order their entries appear in the default export below.
+  const runtimeImports = [
+    `buildStaticRouteModule`,
+    ...(options.middlewareFile ? [`normalizeMiddlewareModule`] : []),
+    ...(options.threadAccessFile ? [`normalizeThreadAccessModule`] : []),
+  ]
   return [
     ...flavor.header,
     ...flavor.preludeImports,
     ``,
-    options.middlewareFile
-      ? `import { buildStaticRouteModule, normalizeMiddlewareModule } from ${runtimeSpecifier}`
-      : `import { buildStaticRouteModule } from ${runtimeSpecifier}`,
+    `import { ${runtimeImports.join(", ")} } from ${runtimeSpecifier}`,
     ``,
     ...moduleImports,
     ``,
@@ -354,6 +384,12 @@ export function emitModulesFileWithFlavor(
     `export default {`,
     ...(options.middlewareFile
       ? [`  middleware: normalizeMiddlewareModule(middlewareModule),`]
+      : []),
+    // AFTER middleware and BEFORE routes: `middleware` keeps the position the
+    // manifest assertions pin it to, and both hooks stay above the payload they
+    // gate.
+    ...(options.threadAccessFile
+      ? [`  threadAccess: normalizeThreadAccessModule(threadAccessModule),`]
       : []),
     `  routes: [`,
     ...routeCalls,

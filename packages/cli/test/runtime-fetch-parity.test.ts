@@ -133,6 +133,7 @@ describe("AG-UI middleware reject", () => {
       }),
       routeKey: "/chat#agent",
       signal: new AbortController().signal,
+      threadAccess: undefined,
       threadsStore: {} as unknown as ThreadsStore, // never reached on reject
     })
 

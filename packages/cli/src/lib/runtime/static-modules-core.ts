@@ -14,6 +14,7 @@ import {
 import type { DawnMiddleware, ThreadAccessPolicy } from "@dawn-ai/sdk"
 
 import { selectMiddlewareExport } from "../dev/middleware.js"
+import { selectThreadAccessExport, validateThreadAccessPolicy } from "../dev/thread-access.js"
 import { pureDirname, pureJoin } from "./pure-path.js"
 import { createRouteAssistantId } from "./route-identity.js"
 import { type LoadedRouteMemory, normalizeRouteMemoryExport } from "./route-memory-shape.js"
@@ -229,4 +230,56 @@ export function buildStaticRouteModule(input: StaticRouteModuleInput): StaticRou
  */
 export function normalizeMiddlewareModule(mod: unknown): DawnMiddleware | undefined {
   return selectMiddlewareExport(mod)
+}
+
+/**
+ * A manifest whose thread-access entry bound nothing usable.
+ *
+ * A local class rather than `CliError`: `../output.js` is node-only and this
+ * module is in the `@dawn-ai/cli/fetch` graph — the same reason
+ * `runtime-fetch-core.ts` rolls its own. `dawnErrorCodeOf` reads the code back.
+ */
+class ManifestThreadAccessError extends Error {
+  /** Registry code, the same one the dynamic loader raises. */
+  readonly code = "DAWN_E3003"
+  constructor(reason: string) {
+    super(
+      `The thread access policy in this app's static module manifest is not usable: ${reason}. ` +
+        "The manifest carries a policy only for an app that HAS a policy file, so Dawn will not " +
+        "boot with every thread endpoint ungated — fix the policy file and re-run `dawn build`.",
+    )
+    this.name = "ManifestThreadAccessError"
+  }
+}
+
+/**
+ * Runtime companion for the manifest's thread-access entry: pick the policy out
+ * of the statically-imported `import * as` namespace using the SAME selection
+ * rule the dynamic probe (`loadThreadAccess`) applies — `default` first, then
+ * the named `threadAccess` export — and validate it with the same shape check.
+ *
+ * Deliberately NOT `normalizeMiddlewareModule`'s ending: that one returns
+ * undefined when a middleware file binds nothing, because dev ignores such a
+ * file too. Here, "binds nothing" THROWS, for the reason `loadThreadAccess`
+ * throws on it: the emitter only ever writes this call for an app that has a
+ * policy file, so a selection that comes back empty means the built app would
+ * serve every thread endpoint ungated while logging that it has no policy —
+ * degrading to `undefined` would make that failure indistinguishable from an
+ * app that never had a policy at all.
+ *
+ * Throwing here also runs at manifest LINK time, on both targets: the edge
+ * flavor is imported directly by the generated `app.mjs`, never through
+ * `loadStaticModules`, so this is the only seam a bundled deploy passes.
+ */
+export function normalizeThreadAccessModule(mod: unknown): ThreadAccessPolicy {
+  const selected = selectThreadAccessExport(mod)
+  if (selected === undefined || selected === null) {
+    throw new ManifestThreadAccessError(
+      "the built module has no `default` or `threadAccess` export " +
+        "(export the policy with `export default defineThreadAccess({ … })`)",
+    )
+  }
+  const reason = validateThreadAccessPolicy(selected)
+  if (reason) throw new ManifestThreadAccessError(reason)
+  return selected as ThreadAccessPolicy
 }

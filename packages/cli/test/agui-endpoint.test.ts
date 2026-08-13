@@ -187,6 +187,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
       routeKey: "/chat#agent",
       signal: controlled.shutdownSignal ?? new AbortController().signal,
       streamRoute: controlled.streamRoute,
+      threadAccess: undefined,
       threadsStore: {
         createThread: async ({ thread_id }: { thread_id?: string }) => {
           const threadId = thread_id ?? "generated"

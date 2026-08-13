@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { MemorySaver } from "@langchain/langgraph"
 import {
@@ -147,13 +148,20 @@ async function withAimock(fixtures: ReturnType<ReturnType<typeof script>["build"
 /** drainDeadlineMs keeps afterEach from waiting the 30s default when a test
  * deliberately abandons a still-running route; the long heartbeat interval
  * keeps asserted SSE text free of `: ping` frames. `checkpointer` is the seam
- * the malformed-write and postgres cases inject through. */
-async function createHandler(appRoot: string, checkpointer?: BaseCheckpointSaver) {
+ * the malformed-write and postgres cases inject through. `threadAccess` is the
+ * seam the resume-gate cases inject through; every other case leaves it unset,
+ * which is the hook-less app. */
+async function createHandler(
+  appRoot: string,
+  checkpointer?: BaseCheckpointSaver,
+  threadAccess?: ThreadAccessPolicy,
+) {
   const handler = await createRuntimeFetchHandler({
     appRoot,
     apSseHeartbeatIntervalMs: 60_000,
     drainDeadlineMs: 250,
     ...(checkpointer ? { checkpointer } : {}),
+    ...(threadAccess ? { threadAccess } : {}),
   })
   cleanup.push(() => handler.close())
   return handler
@@ -296,8 +304,9 @@ async function waitForParkedWrite(
 async function readPendingInterruptsBody(
   handler: Handler,
   threadId: string,
+  headers: Record<string, string> = {},
 ): Promise<PendingInterruptsBody> {
-  const response = await handler.fetch(pendingInterruptsRequest(threadId))
+  const response = await handler.fetch(pendingInterruptsRequest(threadId, headers))
   expect(response.status).toBe(200)
   return (await response.json()) as PendingInterruptsBody
 }
@@ -462,6 +471,17 @@ const ADMIN_PARK_MIDDLEWARE = [
   "",
 ].join("\n")
 
+/**
+ * The ROUTE-IDENTITY axis of this endpoint's gating: which route's middleware
+ * authorizes the read, and the parking route being pinned as that identity so a
+ * run on a weaker route cannot repoint it.
+ *
+ * It is one of two axes, not the whole gate. Thread access is the other, and
+ * they compose as AND — see the `pending_interrupts thread access` block below
+ * for that half and for why one axis was not enough. Every case here installs
+ * no policy, which is the hook-less app: route identity is then the only thing
+ * refusing, so these assertions stay about it alone.
+ */
 describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
   it("refuses a thread that has never run with 409 thread_route_unknown", async () => {
     const handler = await createHandler(await fixtureApp())
@@ -560,8 +580,13 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const body = (await response.json()) as ErrorBody
     // Same code as the never-ran arm: both mean "no usable route identity".
     expect(body.error.details?.code).toBe("thread_route_unknown")
-    // The caller is still UNGATED here, so the server-derived key must not come
-    // back — it would tell anyone who can name a thread id which route it ran.
+    // Route middleware has NOT run at this point — it cannot, since resolving
+    // the identity it gates on is what just failed — so on a hook-less app like
+    // this one the caller is entirely ungated here. The server-derived key must
+    // therefore not come back: it would tell anyone who can name a thread id
+    // which route it ran. (With a policy installed, thread access has already
+    // allowed this caller by now; that is a second axis, not a substitute, and
+    // an app with no policy is exactly the case this has to hold for.)
     // The sibling `Unknown route: ...` sites may echo because there the key came
     // from the caller's own request body.
     expect(body.error.message).not.toContain("/retired-route")
@@ -1056,6 +1081,301 @@ describe("thread status after a resumed turn", () => {
     // does not re-render a decision the human already made.
     const after = await readPendingInterruptsBody(handler, threadId)
     expect(after.interrupts).toEqual([])
+  }, 60_000)
+})
+
+// ---------------------------------------------------------------------------
+// POST /threads/:thread_id/resume, gated on thread access.
+//
+// These live here rather than in thread-access-run-endpoints.test.ts because
+// both need a REAL parked turn — a genuine interruptId/resumeKey pair written
+// by a genuine HITL interrupt — and this file is where that is already driven.
+// ---------------------------------------------------------------------------
+
+const OWNER: Record<string, string> = { "x-actor": "owner" }
+
+/** Allows the thread's owner and denies everyone else, on every action. */
+function ownerOnlyPolicy(): ThreadAccessPolicy {
+  return {
+    fallback: (request) =>
+      request.headers["x-actor"] === "owner" ? { decision: "allow" } : { decision: "deny" },
+  }
+}
+
+interface RecordingPolicy {
+  readonly policy: ThreadAccessPolicy
+  /** Every operation the policy was asked about, in order. */
+  readonly operations: string[]
+}
+
+/**
+ * `ownerOnlyPolicy`, except a denied READ answers 403 rather than the 404
+ * default — the override `ThreadAccessDeny.status` exists for, and the shape
+ * that makes the gate's ordering observable.
+ *
+ * Under the 404 default a handler that short-circuits its own miss BEFORE the
+ * gate is indistinguishable from one that does not: both answer 404. Override
+ * the deny to 403 and the two separate — a pre-gate 404 for a missing thread
+ * against a 403 for one that exists is exactly the enumeration oracle the
+ * shared response exists to close. It also records what it was asked, because a
+ * policy that audits denials must SEE the denial: never being invoked at all is
+ * its own failure, distinct from the status the caller receives.
+ */
+function forbiddenReadOwnerOnlyPolicy(): RecordingPolicy {
+  const operations: string[] = []
+  return {
+    operations,
+    policy: {
+      fallback: (request) => {
+        operations.push(request.operation)
+        if (request.headers["x-actor"] === "owner") return { decision: "allow" }
+        return request.action === "read" ? { decision: "deny", status: 403 } : { decision: "deny" }
+      },
+    },
+  }
+}
+
+interface HeldDenyPolicy {
+  readonly policy: ThreadAccessPolicy
+  /** Resolves once a denied caller is inside the policy and cannot advance. */
+  readonly denyEntered: Promise<void>
+  readonly releaseDeny: () => void
+}
+
+/**
+ * `ownerOnlyPolicy`, except the DENY is held open until the test releases it —
+ * an async policy is the normal case (a real one looks the caller up), and
+ * holding it is what pins a denied caller mid-flight, so the test can ask what
+ * it has already taken. A gate placed anywhere after `tryClaim` is holding the
+ * victim's resume claim across this await.
+ */
+function heldDenyOwnerOnlyPolicy(): HeldDenyPolicy {
+  let markEntered: () => void = () => undefined
+  const denyEntered = new Promise<void>((resolve) => {
+    markEntered = () => resolve()
+  })
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = () => resolve()
+  })
+  return {
+    denyEntered,
+    policy: {
+      fallback: async (request) => {
+        if (request.headers["x-actor"] === "owner") return { decision: "allow" }
+        markEntered()
+        await held
+        return { decision: "deny" }
+      },
+    },
+    releaseDeny: () => release(),
+  }
+}
+
+/** Allows every action for every caller. The point of it is to be uninteresting:
+ * it proves that installing a policy does not switch the route-identity check
+ * off. */
+function allowEverythingPolicy(): ThreadAccessPolicy {
+  return { fallback: () => ({ decision: "allow" }) }
+}
+
+/**
+ * Rejects with 401 unless `x-allow` is present. 401 SPECIFICALLY, and not the
+ * 403 the sibling fixtures use: the thread-access gate answers 404 for a denied
+ * read and 403 for everything else, and never 401 — so a 401 out of this
+ * endpoint can only have come from route middleware. That is what makes the
+ * composition assertion below unambiguous rather than a coincidence of codes.
+ */
+const UNAUTHENTICATED_MIDDLEWARE = [
+  'import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"',
+  "export default defineMiddleware((req) =>",
+  '  req.headers["x-allow"] ? allow() : reject(401, { code: "unauthenticated" }),',
+  ")",
+  "",
+].join("\n")
+
+const ALLOW: Record<string, string> = { "x-allow": "1" }
+
+// ---------------------------------------------------------------------------
+// GET /threads/:thread_id/pending_interrupts, gated on thread access.
+//
+// Option A: this endpoint gates on route identity AND thread access, composed
+// as AND. Route identity alone is not enough, because the common middleware
+// shape AUTHENTICATES rather than authorizes per user — a shared API key, or
+// any-valid-user. Under that shape every caller satisfies the parking route's
+// middleware, so a low-privilege one could read another user's parked
+// `interruptId`/`resumeKey` pair: the credential POST /resume takes, and the
+// thing /resume itself is now gated on (see the block below). The weaker gate
+// must not be the one guarding the more sensitive thing.
+// ---------------------------------------------------------------------------
+
+describe("GET /threads/:thread_id/pending_interrupts thread access", () => {
+  it("denies a read the policy rejects, in the same bytes as a genuine miss", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    // No middleware fixture, deliberately: this app AUTHENTICATES nobody, so
+    // route identity admits every caller and thread access is the only thing
+    // that can refuse. That is the shape the disclosure lives in.
+    const handler = await createHandler(await fixtureApp(), undefined, ownerOnlyPolicy())
+    const threadId = "t-victim"
+
+    const parkText = await readSseText(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", OWNER)),
+    )
+    expect(parkText).toContain("event: interrupt")
+    // Pins the premise rather than assuming it: there is a real credential
+    // parked on this thread for a denied caller to walk off with.
+    const parked = (await readPendingInterruptsBody(handler, threadId, OWNER)).interrupts[0]
+    expect(parked?.resumeKey).toMatch(/^[0-9a-f]{32}$/)
+
+    const denied = await handler.fetch(pendingInterruptsRequest(threadId))
+    const missing = await handler.fetch(pendingInterruptsRequest("t-never-existed"))
+
+    // A denied read must be indistinguishable from a thread that never existed,
+    // or the 404/403 split becomes an enumeration oracle for thread ids.
+    // Asserted before the status below, as in the /resume oracle test: the
+    // indistinguishability IS the property.
+    expect(denied.status).toBe(missing.status)
+    expect(await denied.text()).toBe(await missing.text())
+    expect(missing.status).toBe(404)
+  }, 60_000)
+
+  it("invokes the policy for a missing thread, so a 403-overriding app keeps no oracle", async () => {
+    const gate = forbiddenReadOwnerOnlyPolicy()
+    const handler = await createHandler(await fixtureApp(), undefined, gate.policy)
+    const threadId = "t-403-existing"
+
+    // Seeds a real row for the id below to differ from. `/echo` is a plain
+    // graph, so this needs no model at all — the property under test is the
+    // gate's ORDER, not anything about a parked turn.
+    const seeded = await handler.fetch(runStreamRequest(threadId, "/echo#graph", {}, OWNER))
+    expect(seeded.status).toBe(200)
+    await drain(seeded)
+
+    gate.operations.length = 0
+    const existing = await handler.fetch(pendingInterruptsRequest(threadId))
+    const askedAboutExisting = [...gate.operations]
+    gate.operations.length = 0
+    const missing = await handler.fetch(pendingInterruptsRequest("t-403-never-existed"))
+    const askedAboutMissing = [...gate.operations]
+
+    // The oracle assertion, ahead of the status: what matters is that the two
+    // answers are the SAME, whatever the app chose them to be.
+    expect(existing.status).toBe(missing.status)
+    expect(await existing.text()).toBe(await missing.text())
+    expect(existing.status).toBe(403)
+
+    // And the audit assertion. A policy that logs denials is blind on any
+    // endpoint that answers before asking it, however the status came out.
+    expect(askedAboutExisting).toContain("thread.pending_interrupts")
+    expect(askedAboutMissing).toContain("thread.pending_interrupts")
+  }, 30_000)
+
+  it("still enforces the parking route's middleware — the checks compose as AND", async () => {
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": UNAUTHENTICATED_MIDDLEWARE }),
+      undefined,
+      allowEverythingPolicy(),
+    )
+    const threadId = "t-and-composed"
+
+    // Seeds the thread and its route identity, so the GET below reaches
+    // middleware rather than short-circuiting on 409 thread_route_unknown.
+    const seeded = await handler.fetch(runStreamRequest(threadId, "/echo#graph", {}, ALLOW))
+    expect(seeded.status).toBe(200)
+    await drain(seeded)
+
+    // A policy that allows everything must NOT make the route-identity check
+    // vanish.
+    const response = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(response.status).toBe(401)
+
+    // The other half of the AND, so the 401 above cannot be a fixture that
+    // refuses everything: the same caller with credentials gets served.
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, ALLOW))
+    expect(allowed.status).toBe(200)
+    expect(await allowed.json()).toEqual({ interrupts: [] })
+  }, 30_000)
+})
+
+describe("POST /threads/:thread_id/resume thread access", () => {
+  it("denies before taking the resume claim, so a legitimate resume is not DoSed", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const gate = heldDenyOwnerOnlyPolicy()
+    const handler = await createHandler(await fixtureApp(), undefined, gate.policy)
+    const threadId = "t-resume-claim"
+
+    const parkText = await readSseText(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", OWNER)),
+    )
+    expect(parkText).toContain("event: interrupt")
+    const parkedId = (await readPendingInterruptsBody(handler, threadId, OWNER)).interrupts[0]
+      ?.interruptId
+    expect(parkedId).toBeTruthy()
+
+    // Fired and deliberately not awaited: this caller is now pinned inside the
+    // policy and cannot advance, so whatever it has already taken it is still
+    // holding while the owner's resume below runs to completion. That is the
+    // whole design — the claim is released in a `finally`, so a denied caller
+    // that has already returned can never be caught holding anything.
+    const attacker = handler.fetch(resumeRequest(threadId, "perm-guessed"))
+    await Promise.race([
+      gate.denyEntered,
+      // A gate placed after `runMiddleware` never reaches the policy for this
+      // caller at all — `resolvePendingResume` rejects the wrong guess first.
+      // Fall through rather than hang; the 403 at the bottom catches it.
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+
+    const allowed = await handler.fetch(resumeRequest(threadId, parkedId ?? "", OWNER))
+    // The claim assertion. 409 resume_in_progress here means the denied caller
+    // still parked in the policy above had already taken the victim's claim.
+    expect(allowed.status).not.toBe(409)
+    expect(allowed.status).toBe(200)
+    await drain(allowed)
+
+    gate.releaseDeny()
+    expect((await attacker).status).toBe(403)
+  }, 60_000)
+
+  it("does not leak whether a guessed interruptId is valid", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const handler = await createHandler(await fixtureApp(), undefined, ownerOnlyPolicy())
+    const threadId = "t-resume-oracle"
+
+    const parkText = await readSseText(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", OWNER)),
+    )
+    expect(parkText).toContain("event: interrupt")
+    const parkedId = (await readPendingInterruptsBody(handler, threadId, OWNER)).interrupts[0]
+      ?.interruptId
+    expect(parkedId).toBeTruthy()
+
+    // Both denied, so the 400/409 codes `resolvePendingResume` derives from the
+    // victim's parked interrupts must be unreachable: a wrong guess and the
+    // real credential have to be indistinguishable, byte for byte.
+    const wrong = await handler.fetch(resumeRequest(threadId, "perm-guessed"))
+    const right = await handler.fetch(resumeRequest(threadId, parkedId ?? ""))
+
+    // Asserted BEFORE the 403 below on purpose: the indistinguishability IS the
+    // property, and asserting the status first would fail this test on the deny
+    // code without ever showing that the two answers differ.
+    expect(right.status).toBe(wrong.status)
+    expect(await right.text()).toBe(await wrong.text())
+    expect(wrong.status).toBe(403)
   }, 60_000)
 })
 

@@ -1,0 +1,49 @@
+/**
+ * The one place this app turns a request into a principal.
+ *
+ * Rename to `src/auth.ts` — drop the `.example` — to activate it, together with
+ * `src/thread-access.ts.example`.
+ *
+ * Dawn has two authorization files with two different jobs. `src/middleware.ts`
+ * answers "may this caller run this route"; `src/thread-access.ts` answers "may
+ * this caller create, read, mutate or destroy this thread". Nothing makes them
+ * agree, and two independent header parsers is a confused deputy waiting to
+ * happen — middleware admits the caller as org A while the policy derives org
+ * B. So both import this module, and neither parses a header of its own.
+ *
+ * Replace the body. A trusted header is only as trustworthy as the proxy in
+ * front of it; verify a signed token wherever the deployment allows one.
+ */
+
+export interface Principal {
+  readonly id: string
+  readonly isAdmin: boolean
+  readonly org: string
+}
+
+/**
+ * Resolve the caller, or `undefined` when there is no principal.
+ *
+ * `undefined` means "no principal", and every caller must read it as a denial —
+ * never as an anonymous allow. Returning a principal here is the only thing
+ * that opens any thread endpoint.
+ *
+ * `headers` arrives with lowercase keys and repeated headers joined with ", ",
+ * so `X-User-Id: victim` plus `X-User-Id: attacker` is the single string
+ * `"victim, attacker"`. That is safe under `===` and quietly wrong under
+ * `includes`, `startsWith` or `split(",")`. Compare with strict equality.
+ *
+ * It is `async` because a real implementation calls out to verify a token; a
+ * synchronous implementation is equally fine, and Dawn awaits either.
+ */
+export async function principalOf(
+  headers: Readonly<Record<string, string>>,
+): Promise<Principal | undefined> {
+  // REPLACE THIS. It trusts two raw headers, which is only correct behind a
+  // proxy that strips and re-sets them on every inbound request.
+  const id = headers["x-user-id"]
+  const org = headers["x-user-org"]
+  if (id === undefined || org === undefined) return undefined
+
+  return await Promise.resolve({ id, isAdmin: false, org })
+}

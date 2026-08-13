@@ -22,9 +22,10 @@ fails the boot with `DAWN_E3003` rather than degrading to "no gate". An app with
 no policy file behaves exactly as before, and every boot logs which layer the
 policy came from, or that there is none.
 
-`dawn build` now fails with `DAWN_E1005` for the `hono` and `langsmith` targets
-while a policy file exists, because neither runtime can carry the hook yet. The
-`node` target is unaffected: its emitted server probes the policy at boot.
+`dawn build` now fails with `DAWN_E1005` for the `langsmith` target while a
+policy file exists, because that runtime cannot carry the hook. The `node`,
+`hono` and `vercel` targets are unaffected: `node`'s emitted server probes the
+policy at boot, and the bundled web targets carry it in their static manifest.
 
 One behavior change applies with or without a policy: `POST /threads` drops the
 reserved `dawn:access` key from client-supplied `metadata`. That key holds the
@@ -40,5 +41,7 @@ the observed run has already finished it answers the existing
 without booting a server, and `createAgentProtocolInjector` accepts a
 `threadAccess` policy.
 
-The run endpoints — `/runs/stream`, `/runs/wait`, `/resume` and `/agui` — are
-not on this policy yet and remain gated by route middleware only.
+The run endpoints — `/runs/stream`, `/runs/wait`, `/resume` and `/agui` — plus
+`GET /threads/:thread_id/pending_interrupts` are gated on this policy too; see
+the entry covering them for the ordering consequences and the `ThreadOperation`
+addition.

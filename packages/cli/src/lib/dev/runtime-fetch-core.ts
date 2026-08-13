@@ -1,16 +1,7 @@
 import { seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type {
-  DawnMiddleware,
-  MiddlewareRequest,
-  ThreadAccessDeny,
-  ThreadAccessPolicy,
-  ThreadAccessRequest,
-  ThreadAction,
-  ThreadOperation,
-  ThreadSubject,
-} from "@dawn-ai/sdk"
+import type { DawnMiddleware, MiddlewareRequest, ThreadAccessPolicy } from "@dawn-ai/sdk"
 import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
 import type { Thread, ThreadStatus, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
@@ -60,11 +51,8 @@ import {
 } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 import { terminalStatus } from "./terminal-status.js"
-import {
-  normalizeThreadAccessResult,
-  threadAccessBootLine,
-  validateThreadAccessPolicy,
-} from "./thread-access.js"
+import { threadAccessBootLine, validateThreadAccessPolicy } from "./thread-access.js"
+import { isThenable, makeThreadGate } from "./thread-gate.js"
 import { assertNoReservedKey, stripReservedThreadMetadata } from "./thread-metadata.js"
 
 // ---------------------------------------------------------------------------
@@ -143,6 +131,31 @@ class ThreadAccessPolicyError extends Error {
         "Dawn will not boot with a policy it cannot apply, because every thread endpoint would be ungated.",
     )
     this.name = "ThreadAccessPolicyError"
+  }
+}
+
+/**
+ * The entry point says this build saw a policy file; the manifest beside it
+ * carries no thread-access entry at all. Those two artifacts did not come from
+ * the same build, and on a runtime with no filesystem the difference is not
+ * recoverable — so this fails the boot rather than serving every thread
+ * endpoint open while logging that the app has no policy.
+ *
+ * A local class for the same reason `ThreadAccessPolicyError` is one:
+ * `../output.js` is node-only and this module is in the `@dawn-ai/cli/fetch`
+ * graph. Same registry code, because from an operator's seat this IS the policy
+ * failing to load — it just failed at the build boundary rather than at import.
+ */
+class StaleThreadAccessManifestError extends Error {
+  readonly code = "DAWN_E3003"
+  constructor() {
+    super(
+      "This app was built with a thread access policy, but the static module manifest it " +
+        "booted with carries no thread access entry — the manifest is older than the build " +
+        "that stamped the policy. Dawn will not boot with every thread endpoint ungated: " +
+        "re-run `dawn build` and deploy the whole build output together.",
+    )
+    this.name = "StaleThreadAccessManifestError"
   }
 }
 
@@ -323,6 +336,19 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // BEFORE the resolution below, because the resolution cannot tell the
+  // difference this catches: a stale manifest resolves to `undefined` exactly
+  // like an app that never had a policy. `in`, not truthiness — a key present
+  // and bound to undefined is a build that considered the policy and bound
+  // nothing, which is a legitimate (if unusual) hand-rolled embed, whereas a
+  // key that was never emitted means the manifest predates the policy.
+  //
+  // Scoped to a manifest boot on purpose: without `modules` the policy comes
+  // from the disk probe, which reads the app's CURRENT state and so cannot be
+  // stale in this way.
+  if (options.threadAccessExpected && options.modules && !("threadAccess" in options.modules)) {
+    throw new StaleThreadAccessManifestError()
+  }
   // Authorization, unlike middleware, must never resolve to "allow all" by
   // accident: `loadThreadAccess` throws DAWN_E3003 rather than degrading when a
   // policy file exists but cannot be bound. An absent file resolves to
@@ -892,86 +918,11 @@ function trackStreamSettled(
 }
 
 // ---------------------------------------------------------------------------
-// Thread access gate
+// Create-thread collision detection
+//
+// The gate itself (`makeThreadGate`, `isThenable`, `GateSpec`) lives in
+// `thread-gate.ts`, not here — see that module's header for why.
 // ---------------------------------------------------------------------------
-
-type GateOk = { readonly ok: true; readonly stamp?: Record<string, unknown> }
-type GateDenied = { readonly ok: false; readonly response: Response }
-type Gate = GateOk | GateDenied
-
-interface GateSpec {
-  readonly action: ThreadAction
-  readonly operation: ThreadOperation
-  readonly threadId?: string
-  readonly thread?: Thread
-  readonly requestedMetadata?: Record<string, unknown>
-  /** The response a denied READ must be indistinguishable from. Supply it whenever action is "read". */
-  readonly notFound?: () => Response
-}
-
-/** Allocated once: every no-op gate and every stamp-less allow returns this. */
-const GATE_OK: Gate = { ok: true }
-
-/**
- * A stamp is honored on `create` ONLY. Carrying one on any other allow is a
- * policy-authoring mistake rather than a request failure, so it is reported
- * once per process rather than once per request — unlike the malformed-return
- * warn, which is a bug that should stay noisy.
- */
-let warnedIgnoredStamp = false
-
-/**
- * Narrowing rather than a boolean, so the `await` branch typechecks. Nothing in
- * `packages/cli/src` had one before this.
- */
-function isThenable<T>(value: T | Promise<T>): value is Promise<T> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  )
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-/**
- * Split the stored metadata: `access` is the server stamp, `metadata` is
- * everything else. A policy therefore never sees the reserved key inside
- * `metadata` and is never tempted to authorize against the untrusted sibling.
- *
- * Own properties only, both ways. The reserved key is read with `hasOwn` rather
- * than off the object, and each survivor is DEFINED rather than assigned: the
- * stored metadata is client-authored JSON, so it can carry `__proto__` as an
- * own data property, and `copy[key] = value` for that key runs the inherited
- * setter and swaps the copy's prototype instead of adding a property. Either
- * shortcut would let a forged stamp resolve through the chain on an object that
- * reports it stripped.
- */
-function toThreadSubject(thread: Thread): ThreadSubject {
-  const reserved = Object.hasOwn(thread.metadata, THREAD_ACCESS_METADATA_KEY)
-    ? thread.metadata[THREAD_ACCESS_METADATA_KEY]
-    : undefined
-  const metadata: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(thread.metadata)) {
-    if (key === THREAD_ACCESS_METADATA_KEY) continue
-    Object.defineProperty(metadata, key, {
-      configurable: true,
-      enumerable: true,
-      value,
-      writable: true,
-    })
-  }
-  return {
-    access: isPlainRecord(reserved) ? reserved : undefined,
-    created_at: thread.created_at,
-    metadata,
-    status: thread.status,
-    thread_id: thread.thread_id,
-    updated_at: thread.updated_at,
-  }
-}
 
 /** Structural equality over JSON-shaped values (no Dates, no Maps, no cycles). */
 function jsonDeepEqual(a: unknown, b: unknown): boolean {
@@ -999,93 +950,6 @@ function jsonDeepEqual(a: unknown, b: unknown): boolean {
  */
 function isRowWeJustWrote(thread: Thread, stored: Record<string, unknown> | undefined): boolean {
   return thread.created_at === thread.updated_at && jsonDeepEqual(thread.metadata, stored ?? {})
-}
-
-/**
- * Every deny becomes bytes here.
- *
- * `{ code: … }` is the SECOND positional argument — `details`, not `options` —
- * so it lands at `error.details.code` with no `error.code` / `docsUrl`, exactly
- * as `run_in_flight` and `thread_not_found` do. Deliberately no registry code
- * on the deny path: `DAWN_E3003` is for load failures, and a docs URL on a 403
- * is noise.
- *
- * Every branch supplies a literal body, and the guard is on
- * `result.body !== undefined` rather than on key presence, because
- * `Response.json(undefined)` throws and `statusResponse` would turn that into a
- * 500. A deny must never be able to 500.
- */
-function denyResponse(
-  action: ThreadAction,
-  result: ThreadAccessDeny,
-  notFound: (() => Response) | undefined,
-): Response {
-  const status = result.status ?? (action === "read" ? 404 : 403)
-  if (result.body !== undefined) return statusResponse(status, result.body)
-  if (status === 404 && notFound) return notFound()
-  if (status === 404) {
-    return Response.json(createRequestErrorBody("Thread not found"), { status: 404 })
-  }
-  return Response.json(createRequestErrorBody("Forbidden", { code: "thread_access_denied" }), {
-    status: 403,
-  })
-}
-
-/**
- * Build this request's gate.
- *
- * Returns a no-op gate when the app has no policy — the ONLY thing a hook-less
- * app pays is this closure allocation. No store read, no reordering, nothing.
- *
- * `Gate | Promise<Gate>`, never `Promise<Gate>`: a policy handler that returns a
- * plain object (the header-only case) is resolved with ZERO microtask
- * boundaries, which is what keeps the `/cancel` claim binding meaningful.
- * Callers do `const settled = isThenable(g) ? await g : g`.
- */
-function makeThreadGate(
-  policy: ThreadAccessPolicy | undefined,
-  request: Request,
-): (spec: GateSpec) => Gate | Promise<Gate> {
-  if (!policy) return () => GATE_OK
-  const headers = headersToRecord(request.headers)
-  const method = request.method
-  const parsed = new URL(request.url)
-  const url = `${parsed.pathname}${parsed.search}`
-  return (spec) => {
-    const handler = policy[spec.action] ?? policy.fallback
-    const accessRequest: ThreadAccessRequest = {
-      action: spec.action,
-      headers,
-      method,
-      operation: spec.operation,
-      requestedMetadata: spec.requestedMetadata,
-      thread: spec.thread ? toThreadSubject(spec.thread) : undefined,
-      threadId: spec.threadId,
-      url,
-    }
-    const settle = (value: unknown): Gate => {
-      const result = normalizeThreadAccessResult(value, spec.operation, spec.threadId)
-      if (result.decision === "allow") {
-        if (!result.stamp) return GATE_OK
-        if (spec.action === "create") return { ok: true, stamp: result.stamp }
-        // Dropped, not merged: the stamp is the server's answer to "who created
-        // this thread", and honoring it here would let any later allow rewrite
-        // it through the store's shallow merge.
-        if (!warnedIgnoredStamp) {
-          warnedIgnoredStamp = true
-          console.warn(
-            `Dawn thread access: the policy returned a stamp on a ${spec.action} allow ` +
-              `(${spec.operation}). Stamps are honored on create only, so it was ignored. ` +
-              "This warning is emitted once per process.",
-          )
-        }
-        return GATE_OK
-      }
-      return { ok: false, response: denyResponse(spec.action, result, spec.notFound) }
-    }
-    const returned = handler(accessRequest) as unknown
-    return isThenable(returned) ? returned.then(settle) : settle(returned)
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1302,7 @@ export function buildRouteTable(ctx: {
           runRegistry: getRunRegistry(request),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1461,6 +1326,7 @@ export function buildRouteTable(ctx: {
           registry,
           resumeClaims,
           runRegistry: getRunRegistry(request),
+          threadAccess,
           threadsStore: getThreadsStore(request),
           ...(sandboxManager ? { sandboxManager } : {}),
           signal: getShutdownSignal(request),
@@ -1532,6 +1398,7 @@ export function buildRouteTable(ctx: {
           ...(sandboxManager ? { sandboxManager } : {}),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1595,6 +1462,7 @@ export function buildRouteTable(ctx: {
           middleware,
           registry,
           request,
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1623,6 +1491,7 @@ export function buildRouteTable(ctx: {
           ...(sandboxManager ? { sandboxManager } : {}),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1680,6 +1549,7 @@ async function handleApStreamRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -1698,6 +1568,7 @@ async function handleApStreamRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -1745,6 +1616,26 @@ async function handleApStreamRequest(options: {
 
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
+
+  // Gated as "update" unconditionally — never "create", even for a thread
+  // this call is about to create. See ThreadOperation's `run.stream` doc:
+  // the client picks this thread id (unlike POST /threads' server-generated
+  // one), so starting a run is authorized the same way whether or not the
+  // row exists yet. AFTER the middleware reject above and BEFORE both
+  // `createThread` and `runRegistry.begin` below — a denial must create no
+  // row and take no run slot.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.stream",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
@@ -1963,6 +1854,7 @@ async function handleApWaitRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -1980,6 +1872,7 @@ async function handleApWaitRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -2027,6 +1920,23 @@ async function handleApWaitRequest(options: {
 
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
+
+  // Gated as "update" unconditionally, same reasoning as handleApStreamRequest:
+  // this endpoint picks the thread id the same way /runs/stream does, so a
+  // denial must create no row and take no run slot. AFTER the middleware
+  // reject above and BEFORE both `createThread` and `runRegistry.begin` below.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.wait",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
@@ -2297,12 +2207,21 @@ async function handleApPendingInterruptsRequest(options: {
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: Request
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
 }): Promise<Response> {
-  const { checkpointer, middleware, registry, request, threadId, threadRouteMap, threadsStore } =
-    options
+  const {
+    checkpointer,
+    middleware,
+    registry,
+    request,
+    threadAccess,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   // Thread first, with the same code POST /cancel and POST /resume use for an
   // unknown thread, so a client branches on one code across the AP surface.
@@ -2310,12 +2229,63 @@ async function handleApPendingInterruptsRequest(options: {
   // same as POST /resume, which answers 404 long before it calls
   // runMiddleware. Deliberate, and mandated by §1 of the spec; the interrupt
   // payloads themselves stay behind the middleware gate below.
-  const thread = await threadsStore.getThread(threadId)
-  if (!thread) {
-    return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
+  const notFound = () =>
+    Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
       status: 404,
     })
+  const thread = await threadsStore.getThread(threadId)
+
+  // Thread access, IN ADDITION to the route identity resolved below — the two
+  // compose as AND, and neither replaces the other.
+  //
+  // Route identity alone is not enough here, and the reason is what middleware
+  // usually IS in practice: it AUTHENTICATES rather than authorizes per user. A
+  // shared API key, or any-valid-user, satisfies the parking route's middleware
+  // for every caller alike — so under the common shape, route identity admits
+  // anyone holding the app's key to the parked prompt's `interruptId`/
+  // `resumeKey` pair. That pair is the credential POST /resume takes, and
+  // /resume is now gated on this axis; leaving the read on capability-only
+  // gating would put the weaker gate in front of the more sensitive thing.
+  //
+  // `read`, not `update` — unlike the four run.* operations, this endpoint
+  // changes nothing. So a deny defaults to 404 rather than 403, and it is
+  // `notFound` above, the handler's OWN literal, that it must be
+  // indistinguishable from: a distinct 404 shape here would itself be the
+  // enumeration oracle the shared response exists to close.
+  //
+  // BEFORE the route identity below, not after it — the same ordering exception
+  // POST /resume makes, for the same reason and at the same stated cost. The
+  // route the middleware would authorize against is read off this thread's own
+  // metadata, so "after middleware" would mean resolving an identity from a
+  // thread the caller has not been authorized to read, and it would hand a
+  // denied caller the 409 thread_route_unknown branch — which answers whether
+  // the thread has ever run. The cost: on an app carrying BOTH a policy and
+  // authenticating middleware, a caller who would have received a middleware
+  // 401 receives the 404 instead. The two checks still compose as AND; only
+  // which one answers first is decided here.
+  //
+  // ABOVE the missing-row 404, and invoked with `thread: undefined` when there
+  // is no row — same as GET /threads/:id and GET /threads/:id/state, and what
+  // `ThreadAccessRequest.thread` promises: the policy is invoked on every gated
+  // request, never short-circuited to the endpoint's natural 404. Ordering it
+  // the other way is only invisible while the deny keeps its 404 default. An
+  // app that overrides a read deny to 403 would get 403 for a thread that
+  // exists and 404 for one that does not — the enumeration oracle, reopened by
+  // the one endpoint that answered before asking. And a policy that audits
+  // denials would never see the miss at all.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "read",
+      notFound,
+      operation: "thread.pending_interrupts",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
   }
+  if (!thread) return notFound()
 
   // Route identity for middleware. The PARKING route wins — the route whose own
   // turn left these interrupts in the checkpoint (see PARKED_ROUTE_KEY) — and
@@ -2481,6 +2451,7 @@ async function handleResumeRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -2500,6 +2471,7 @@ async function handleResumeRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -2518,6 +2490,47 @@ async function handleResumeRequest(options: {
   }
 
   const body = parsedBody.value
+
+  // The ordering exception. Every other run endpoint gates AFTER `runMiddleware`
+  // so that an existing 401 never silently becomes a 403; here the gate runs
+  // before `tryClaim`, and therefore before the middleware. Two holes make the
+  // usual ordering unsatisfiable on this endpoint:
+  //
+  //   1. `tryClaim` is a side effect a denied caller must not be able to cause.
+  //      A caller the policy would deny still takes the victim's resume claim,
+  //      so a legitimate resume racing it gets 409 resume_in_progress — a
+  //      targeted denial of service against a parked turn, needing no
+  //      credential at all.
+  //   2. `resolvePendingResume` answers questions about the victim's parked
+  //      interrupts: distinct 400/409 codes tell a denied caller whether the
+  //      thread has anything parked and whether a guessed
+  //      `interruptId`/`resumeKey` is valid. That pair is the credential for
+  //      resuming someone else's turn, and it is exactly what the
+  //      `/pending_interrupts` gate exists to protect — leaking it here would
+  //      make that gate pointless.
+  //
+  // The cost, stated rather than hidden: on THIS endpoint alone, a caller who
+  // would have received a middleware 401 receives a thread-access deny instead.
+  // That is not a preference. `runMiddleware` needs `routeKey`, and `routeKey`
+  // is read from the resuming thread's own metadata — so the route identity the
+  // middleware would authorize against is itself derived from the thread this
+  // caller has not yet been authorized to read. "After middleware" and "before
+  // any side effect" cannot both hold, and the two holes above decide it.
+  //
+  // `update`, like every other `run.*` operation — see ThreadOperation.
+  if (threadAccess) {
+    const existing = await threadsStore.getThread(threadId)
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.resume",
+      threadId,
+      ...(existing ? { thread: existing } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   const releaseResumeClaim = resumeClaims.tryClaim(threadId)
   if (!releaseResumeClaim) {
     return Response.json(

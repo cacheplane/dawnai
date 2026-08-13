@@ -6,6 +6,7 @@ import { providerPackages } from "@dawn-ai/langchain"
 import { type BuiltInModelProviderId, inferProvider } from "@dawn-ai/sdk"
 
 import { findMiddlewareFile } from "../../dev/middleware-node.js"
+import { findThreadAccessFile } from "../../dev/thread-access-node.js"
 import { loadDawnConfig } from "../../node-config.js"
 import { CliError, writeLine } from "../../output.js"
 import { scanRouteProviders } from "../../runtime/collect-route-providers.js"
@@ -13,7 +14,6 @@ import { assertEdgeCapabilities, collectEdgeDependencyNotice } from "./edge-capa
 import { edgeAppNamespace, emitEdgeModulesFile } from "./edge-modules-emitter.js"
 import type { BuildEmitContext } from "./index.js"
 import { collectRouteStaticDiscovery, type RouteStaticDiscovery } from "./modules-emitter.js"
-import { assertNoThreadAccessPolicy } from "./thread-access-probe.js"
 
 export interface WebRuntimeEmitOptions {
   readonly outputDir: string
@@ -43,18 +43,26 @@ export async function emitWebRuntimeArtifacts(
   // the target directory. A failed staged build must leave no deployable-looking
   // partial output behind.
   //
-  // The thread-access probe sits HERE, not at each target's `emit`, because
-  // every target routed through this emitter is bundled: none of them can
-  // perform the boot-time filesystem probe the policy loader needs. Enumerating
-  // the call sites is how `vercel` shipped able to emit a policy-carrying app
-  // with every thread endpoint ungated — the guard belongs on the shared path
-  // so a future web target inherits it instead of having to remember it.
-  assertNoThreadAccessPolicy(appRoot, targetName)
+  // The policy probe runs HERE, before anything is written, for the same reason
+  // the refusal it replaces did: every target routed through this emitter is
+  // bundled and can perform no boot-time filesystem probe, so whatever this
+  // resolves is the ONLY thing the deployed app will ever see. It throws rather
+  // than shrugging when a candidate cannot be probed — see `findThreadAccessFile`.
+  const threadAccessFile = findThreadAccessFile(appRoot)
   const config = await loadBuildConfig(appRoot)
   assertEdgeCapabilities({ appRoot, config, manifest }, targetName)
   const providerImports = await resolveProviderImports(manifest, config, targetName)
   const storesEntry = STORES_ENTRY(targetName)
-  const appEntry = emitAppEntry({ appRoot, config, providerImports, targetName })
+  // The entry point records WHAT THE BUILD SAW; the manifest carries the policy
+  // itself. Two artifacts, on purpose: a manifest older than the policy pairs a
+  // set record with a missing entry, which is what the boot guard reads.
+  const appEntry = emitAppEntry({
+    appRoot,
+    config,
+    providerImports,
+    targetName,
+    threadAccessExpected: threadAccessFile !== undefined,
+  })
 
   // The runtime's own discovery functions, run once here at build time —
   // identical to what the node target does, so the two manifests can only
@@ -78,6 +86,7 @@ export async function emitWebRuntimeArtifacts(
       buildDir: outputDir,
       discoveries,
       ...(middlewareFile ? { middlewareFile } : {}),
+      ...(threadAccessFile ? { threadAccessFile } : {}),
     },
     targetName,
   )
@@ -372,6 +381,8 @@ function emitAppEntry(options: {
   readonly config: DawnConfig
   readonly providerImports: readonly string[]
   readonly targetName: WebRuntimeEmitOptions["targetName"]
+  /** Did this build find a thread-access policy file? See `threadAccessRecord`. */
+  readonly threadAccessExpected: boolean
 }): string {
   const namespace = edgeAppNamespace(options.appRoot)
   const serializable = toSerializableConfig(options.config)
@@ -533,7 +544,7 @@ app.all("*", async (c) => {
     appRoot: APP_ROOT,
     config,
     modules,
-    requestStores,
+    requestStores,${threadAccessRecord(options.threadAccessExpected)}
   }).catch((error) => {
     handlerPromise = undefined
     throw error
@@ -544,6 +555,25 @@ app.all("*", async (c) => {
 
 export default app
 `
+}
+
+/**
+ * The build's record of having seen a policy file, emitted into the ENTRY
+ * POINT — which is a different artifact from the manifest that carries the
+ * policy itself, and that separation is the whole mechanism.
+ *
+ * A manifest generated before the app grew a policy, shipped beside a newer
+ * entry, otherwise boots with every thread endpoint open and logs that the app
+ * has no policy: there is no filesystem here to notice the difference. With
+ * this flag set, a manifest carrying no thread-access entry fails the boot
+ * instead (see `StaleThreadAccessManifestError`).
+ *
+ * Emitted only when true, so a policy-less app's entry is unchanged by this
+ * existing — and so the flag can never read as "expected: false" for an app
+ * whose build did find one.
+ */
+function threadAccessRecord(expected: boolean): string {
+  return expected ? `\n    threadAccessExpected: true,` : ""
 }
 
 /**

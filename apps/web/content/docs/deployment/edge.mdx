@@ -145,6 +145,8 @@ Sharing a database is supported only with hand-composed request stores that pass
 
 Filesystem marker capabilities such as route `memory.md` and `plan.md` do not activate without a marker filesystem. The explicit build gates above cover surfaces that would otherwise be silently replaced, dropped, or fail only on first use.
 
+A [thread-access policy](/docs/thread-access) is not one of these gates: `src/thread-access.ts` is bundled into the manifest as a static import and runs on the edge like it does under `dawn dev`. Nothing in it is filesystem-dependent — the disk probe happens at build time, not at request time. If a manifest built before the app grew a policy is deployed beside a newer entry point, the boot fails rather than serving every thread endpoint ungated, because a bundled runtime has no disk to fall back to. The `langsmith` target still refuses to build while a policy file exists; it materializes graphs with no Dawn HTTP layer to run the policy in.
+
 ## Configuration is in the artifact
 
 The Hono emitter serializes the JSON-representable portion of `dawn.config.ts` into `.dawn/build/app.mjs`. Functions, class instances, and store handles are stripped; ordinary strings remain. Do not put secret literals in build-time config fields, because those values can become readable bundle content. Use host environment variables, Wrangler secrets, or provider bindings instead.
