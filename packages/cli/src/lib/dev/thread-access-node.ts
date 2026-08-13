@@ -72,6 +72,26 @@ function candidateExists(path: string, statPath: StatPath): boolean {
 }
 
 /**
+ * The first policy candidate that EXISTS, or undefined when every one of them
+ * is definitively absent.
+ *
+ * Shared with the build (`emitWebRuntimeArtifacts`) so a bundled target binds
+ * the same file, by the same rule, that the dynamic probe would. It is this
+ * function rather than an `existsSync` scan for the reason `candidateExists`
+ * exists at all: `existsSync` answers false for EVERY error, so an app whose
+ * policy file is present but unprobeable would fail `dawn dev` and still build
+ * an artifact with no policy in it — the fail-open moved rather than fixed.
+ */
+export function findThreadAccessFile(
+  appRoot: string,
+  statPath: StatPath = lstatSync,
+): string | undefined {
+  return threadAccessCandidatePaths(appRoot).find((candidate) =>
+    candidateExists(candidate, statPath),
+  )
+}
+
+/**
  * Load the app's thread-access policy.
  *
  * This deliberately does NOT copy `loadMiddleware` (`./middleware.ts`), which
@@ -97,10 +117,7 @@ export async function loadThreadAccess(
   appRoot: string,
   options?: LoadThreadAccessOptions,
 ): Promise<ThreadAccessPolicy | undefined> {
-  const statPath = options?.statPath ?? lstatSync
-  const path = threadAccessCandidatePaths(appRoot).find((candidate) =>
-    candidateExists(candidate, statPath),
-  )
+  const path = findThreadAccessFile(appRoot, options?.statPath ?? lstatSync)
   if (!path) return undefined
 
   let mod: unknown
