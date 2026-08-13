@@ -473,7 +473,11 @@ if (threadAccess) {
 }
 ```
 
-`makeThreadGate`, `isThenable` and `GateSpec` live in `runtime-fetch-core.ts` and are not exported today. Export them from there and import here rather than duplicating — a second copy of the gate is exactly the drift the shared `terminal-status.ts` extraction removed from this same file pair in #462.
+`makeThreadGate`, `isThenable` and `GateSpec` live in `runtime-fetch-core.ts` and are not exported today.
+
+> **Corrected during execution.** This step originally said to export them from `runtime-fetch-core.ts` and import them here. That creates a genuine module cycle — `runtime-fetch-core.ts` already imports `handleAgUiFetchRequest` from `agui-handler.ts`. It is safe at runtime (both symbols are referenced only inside function bodies) but it is the wrong shape, and it contradicts the very precedent the step cites: `terminal-status.ts` exists because #462 extracted a helper shared by **this exact file pair** rather than having one file import the other.
+>
+> **Extract to `packages/cli/src/lib/dev/thread-gate.ts`** and have both files import from it, leaving `runtime-fetch-core.ts`'s public surface unchanged. Move the gate's private helpers (`denyResponse`, `toThreadSubject`, `GATE_OK`, `warnedIgnoredStamp`) only if nothing else in `runtime-fetch-core.ts` uses them — check first. Model the new file on `terminal-status.ts`, and say in its module doc why it is separate.
 
 - [ ] **Step 4: Verify green** — `EXIT=0`.
 
