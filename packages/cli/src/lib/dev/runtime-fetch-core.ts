@@ -1625,6 +1625,7 @@ export function buildRouteTable(ctx: {
           ...(sandboxManager ? { sandboxManager } : {}),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -2524,6 +2525,7 @@ async function handleResumeRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -2543,6 +2545,7 @@ async function handleResumeRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -2561,6 +2564,47 @@ async function handleResumeRequest(options: {
   }
 
   const body = parsedBody.value
+
+  // The ordering exception. Every other run endpoint gates AFTER `runMiddleware`
+  // so that an existing 401 never silently becomes a 403; here the gate runs
+  // before `tryClaim`, and therefore before the middleware. Two holes make the
+  // usual ordering unsatisfiable on this endpoint:
+  //
+  //   1. `tryClaim` is a side effect a denied caller must not be able to cause.
+  //      A caller the policy would deny still takes the victim's resume claim,
+  //      so a legitimate resume racing it gets 409 resume_in_progress — a
+  //      targeted denial of service against a parked turn, needing no
+  //      credential at all.
+  //   2. `resolvePendingResume` answers questions about the victim's parked
+  //      interrupts: distinct 400/409 codes tell a denied caller whether the
+  //      thread has anything parked and whether a guessed
+  //      `interruptId`/`resumeKey` is valid. That pair is the credential for
+  //      resuming someone else's turn, and it is exactly what the
+  //      `/pending_interrupts` gate exists to protect — leaking it here would
+  //      make that gate pointless.
+  //
+  // The cost, stated rather than hidden: on THIS endpoint alone, a caller who
+  // would have received a middleware 401 receives a thread-access deny instead.
+  // That is not a preference. `runMiddleware` needs `routeKey`, and `routeKey`
+  // is read from the resuming thread's own metadata — so the route identity the
+  // middleware would authorize against is itself derived from the thread this
+  // caller has not yet been authorized to read. "After middleware" and "before
+  // any side effect" cannot both hold, and the two holes above decide it.
+  //
+  // `update`, like every other `run.*` operation — see ThreadOperation.
+  if (threadAccess) {
+    const existing = await threadsStore.getThread(threadId)
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.resume",
+      threadId,
+      ...(existing ? { thread: existing } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   const releaseResumeClaim = resumeClaims.tryClaim(threadId)
   if (!releaseResumeClaim) {
     return Response.json(

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { MemorySaver } from "@langchain/langgraph"
 import {
@@ -147,13 +148,20 @@ async function withAimock(fixtures: ReturnType<ReturnType<typeof script>["build"
 /** drainDeadlineMs keeps afterEach from waiting the 30s default when a test
  * deliberately abandons a still-running route; the long heartbeat interval
  * keeps asserted SSE text free of `: ping` frames. `checkpointer` is the seam
- * the malformed-write and postgres cases inject through. */
-async function createHandler(appRoot: string, checkpointer?: BaseCheckpointSaver) {
+ * the malformed-write and postgres cases inject through. `threadAccess` is the
+ * seam the resume-gate cases inject through; every other case leaves it unset,
+ * which is the hook-less app. */
+async function createHandler(
+  appRoot: string,
+  checkpointer?: BaseCheckpointSaver,
+  threadAccess?: ThreadAccessPolicy,
+) {
   const handler = await createRuntimeFetchHandler({
     appRoot,
     apSseHeartbeatIntervalMs: 60_000,
     drainDeadlineMs: 250,
     ...(checkpointer ? { checkpointer } : {}),
+    ...(threadAccess ? { threadAccess } : {}),
   })
   cleanup.push(() => handler.close())
   return handler
@@ -296,8 +304,9 @@ async function waitForParkedWrite(
 async function readPendingInterruptsBody(
   handler: Handler,
   threadId: string,
+  headers: Record<string, string> = {},
 ): Promise<PendingInterruptsBody> {
-  const response = await handler.fetch(pendingInterruptsRequest(threadId))
+  const response = await handler.fetch(pendingInterruptsRequest(threadId, headers))
   expect(response.status).toBe(200)
   return (await response.json()) as PendingInterruptsBody
 }
@@ -1056,6 +1065,141 @@ describe("thread status after a resumed turn", () => {
     // does not re-render a decision the human already made.
     const after = await readPendingInterruptsBody(handler, threadId)
     expect(after.interrupts).toEqual([])
+  }, 60_000)
+})
+
+// ---------------------------------------------------------------------------
+// POST /threads/:thread_id/resume, gated on thread access.
+//
+// These live here rather than in thread-access-run-endpoints.test.ts because
+// both need a REAL parked turn — a genuine interruptId/resumeKey pair written
+// by a genuine HITL interrupt — and this file is where that is already driven.
+// ---------------------------------------------------------------------------
+
+const OWNER: Record<string, string> = { "x-actor": "owner" }
+
+/** Allows the thread's owner and denies everyone else, on every action. */
+function ownerOnlyPolicy(): ThreadAccessPolicy {
+  return {
+    fallback: (request) =>
+      request.headers["x-actor"] === "owner" ? { decision: "allow" } : { decision: "deny" },
+  }
+}
+
+interface HeldDenyPolicy {
+  readonly policy: ThreadAccessPolicy
+  /** Resolves once a denied caller is inside the policy and cannot advance. */
+  readonly denyEntered: Promise<void>
+  readonly releaseDeny: () => void
+}
+
+/**
+ * `ownerOnlyPolicy`, except the DENY is held open until the test releases it —
+ * an async policy is the normal case (a real one looks the caller up), and
+ * holding it is what pins a denied caller mid-flight, so the test can ask what
+ * it has already taken. A gate placed anywhere after `tryClaim` is holding the
+ * victim's resume claim across this await.
+ */
+function heldDenyOwnerOnlyPolicy(): HeldDenyPolicy {
+  let markEntered: () => void = () => undefined
+  const denyEntered = new Promise<void>((resolve) => {
+    markEntered = () => resolve()
+  })
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = () => resolve()
+  })
+  return {
+    denyEntered,
+    policy: {
+      fallback: async (request) => {
+        if (request.headers["x-actor"] === "owner") return { decision: "allow" }
+        markEntered()
+        await held
+        return { decision: "deny" }
+      },
+    },
+    releaseDeny: () => release(),
+  }
+}
+
+describe("POST /threads/:thread_id/resume thread access", () => {
+  it("denies before taking the resume claim, so a legitimate resume is not DoSed", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const gate = heldDenyOwnerOnlyPolicy()
+    const handler = await createHandler(await fixtureApp(), undefined, gate.policy)
+    const threadId = "t-resume-claim"
+
+    const parkText = await readSseText(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", OWNER)),
+    )
+    expect(parkText).toContain("event: interrupt")
+    const parkedId = (await readPendingInterruptsBody(handler, threadId, OWNER)).interrupts[0]
+      ?.interruptId
+    expect(parkedId).toBeTruthy()
+
+    // Fired and deliberately not awaited: this caller is now pinned inside the
+    // policy and cannot advance, so whatever it has already taken it is still
+    // holding while the owner's resume below runs to completion. That is the
+    // whole design — the claim is released in a `finally`, so a denied caller
+    // that has already returned can never be caught holding anything.
+    const attacker = handler.fetch(resumeRequest(threadId, "perm-guessed"))
+    await Promise.race([
+      gate.denyEntered,
+      // A gate placed after `runMiddleware` never reaches the policy for this
+      // caller at all — `resolvePendingResume` rejects the wrong guess first.
+      // Fall through rather than hang; the 403 at the bottom catches it.
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+
+    const allowed = await handler.fetch(resumeRequest(threadId, parkedId ?? "", OWNER))
+    // The claim assertion. 409 resume_in_progress here means the denied caller
+    // still parked in the policy above had already taken the victim's claim.
+    expect(allowed.status).not.toBe(409)
+    expect(allowed.status).toBe(200)
+    await drain(allowed)
+
+    gate.releaseDeny()
+    expect((await attacker).status).toBe(403)
+  }, 60_000)
+
+  it("does not leak whether a guessed interruptId is valid", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const handler = await createHandler(await fixtureApp(), undefined, ownerOnlyPolicy())
+    const threadId = "t-resume-oracle"
+
+    const parkText = await readSseText(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", OWNER)),
+    )
+    expect(parkText).toContain("event: interrupt")
+    const parkedId = (await readPendingInterruptsBody(handler, threadId, OWNER)).interrupts[0]
+      ?.interruptId
+    expect(parkedId).toBeTruthy()
+
+    // Both denied, so the 400/409 codes `resolvePendingResume` derives from the
+    // victim's parked interrupts must be unreachable: a wrong guess and the
+    // real credential have to be indistinguishable, byte for byte.
+    const wrong = await handler.fetch(resumeRequest(threadId, "perm-guessed"))
+    const right = await handler.fetch(resumeRequest(threadId, parkedId ?? ""))
+
+    // Asserted BEFORE the 403 below on purpose: the indistinguishability IS the
+    // property, and asserting the status first would fail this test on the deny
+    // code without ever showing that the two answers differ.
+    expect(right.status).toBe(wrong.status)
+    expect(await right.text()).toBe(await wrong.text())
+    expect(wrong.status).toBe(403)
   }, 60_000)
 })
 
