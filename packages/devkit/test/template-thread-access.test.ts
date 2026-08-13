@@ -1,8 +1,18 @@
 import { existsSync, readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 const templates = ["app-basic", "app-research"] as const
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
+
+/** Every place the same two authorization files are shipped from. */
+const copies = [
+  fileURLToPath(new URL("../templates/app-basic/src/", import.meta.url)),
+  fileURLToPath(new URL("../templates/app-research/src/", import.meta.url)),
+  `${resolve(repoRoot, "examples/research/server/src")}/`,
+] as const
 
 const read = (name: string, file: string): string =>
   readFileSync(fileURLToPath(new URL(`../templates/${name}/${file}`, import.meta.url)), "utf8")
@@ -65,5 +75,33 @@ describe("scaffolded thread-access policy", () => {
         "Rename to `src/thread-access.ts`",
       )
     })
+
+    it(`${name} tells the reader what the missing-row deny costs them`, () => {
+      const policy = read(name, "src/thread-access.ts.example")
+
+      // The deny on `req.thread === undefined` is justified in this file on
+      // DELETE-existence-oracle grounds. It ALSO refuses every `run.*`
+      // operation on a thread id whose row does not exist yet — which is every
+      // AG-UI turn, because CopilotKit picks its `threadId` in the browser and
+      // never calls `POST /threads`. A scaffold that refuses a first-class flow
+      // and does not say so gets copied, then cursed.
+      expect(policy).toContain("run.*")
+      expect(policy).toContain("/agui/")
+      // And the supported way through it, which is not "relax this line": the
+      // implicit create those endpoints do writes no access stamp, so a
+      // relaxed line authorizes one turn and denies the next. Minting the id
+      // through POST /threads is the only path that stamps an owner.
+      expect(policy).toContain("POST /threads")
+      expect(policy).toContain("no access stamp")
+    })
   }
+
+  it("keeps every shipped copy in byte-for-byte parity", () => {
+    for (const file of ["thread-access.ts.example", "auth.ts.example"]) {
+      const [first, ...rest] = copies.map((dir) => readFileSync(`${dir}${file}`, "utf8"))
+      // Three copies of an authorization scaffold that drift are three
+      // different security postures, only one of which anybody reviewed.
+      for (const other of rest) expect(other).toBe(first)
+    }
+  })
 })

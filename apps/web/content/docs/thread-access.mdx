@@ -163,6 +163,14 @@ The run endpoints — `POST /threads/:thread_id/runs/stream`, `/runs/wait`, `/re
 
 All four `run.*` operations arrive under `action: "update"` — including on an id with no row yet, which those endpoints create. Starting a turn on a thread mutates it; none of them is a `create`.
 
+<Callout type="warn" title="A policy that denies a missing row denies every AG-UI turn">
+The scaffolded `src/thread-access.ts` denies when `req.thread === undefined`, which is correct for `delete` and `read` and is what keeps the existence oracle shut. It also refuses every `run.*` operation on a thread id that has no row yet — and `POST /agui/{routeId}` is exactly that case, because CopilotKit picks its `threadId` in the browser and never calls `POST /threads`. An app that activates the scaffold unchanged answers `403` to every AG-UI turn.
+
+**Relaxing that line for `update` is not the fix.** The implicit create the run endpoints do writes the row with **no access stamp** — only `POST /threads` stamps — so the next turn on the same thread reaches the `access === undefined` branch and is denied anyway. A relaxed policy authorizes the first turn and refuses the second.
+
+Mint the thread with `POST /threads` and pass the returned `thread_id` to the client as its thread id. That is the path that records an owner, so every later turn matches it. If client-chosen ids are non-negotiable, record the id-to-owner mapping yourself, from inside the policy, and consult it on `update`. Do not relax `delete` or `read` to get there.
+</Callout>
+
 `GET /threads/:thread_id/pending_interrupts` composes both checks as AND — the route that parked the interrupts must admit the caller *and* this policy must permit the read — and which one refused is deliberately not visible in the response: a thread-access deny returns the handler's own `404 thread_not_found`, the same bytes a genuine miss returns, while a route-identity refusal returns whatever your middleware returns. Dawn logs neither, so log the denial inside your own policy if you need to tell them apart.
 
 <Callout type="warn" title="On /resume, a thread-access deny replaces a middleware 401">

@@ -31,6 +31,29 @@ const owned = async (req: ThreadAccessRequest) => {
   // branch, is what keeps "not yours" and "never existed" the same answer. An
   // admin allowed to delete a row that never existed reopens the existence
   // oracle this default closes.
+  //
+  // READ THIS BEFORE YOU SHIP AN AG-UI APP. This line also refuses every
+  // `run.*` operation on a thread id whose row does not exist yet, and those
+  // endpoints are the ones that would have created it: `POST /agui/{routeId}`,
+  // `/runs/stream`, `/runs/wait` and `/resume` all arrive here under
+  // `action: "update"` with `req.thread === undefined`. CopilotKit picks its
+  // `threadId` in the browser and never calls `POST /threads`, so under this
+  // policy every AG-UI turn on a fresh id is denied with a 403.
+  //
+  // Relaxing this line for `update` is NOT the fix, however obvious it looks.
+  // The implicit create those endpoints do writes the row with no access stamp,
+  // so the next turn on the same thread reaches the `owner === undefined`
+  // branch below and is denied anyway: you would authorize turn one and refuse
+  // turn two, which is worse than refusing honestly.
+  //
+  // Mint the thread with `POST /threads` and hand the returned `thread_id` to
+  // the client as its thread id. That is the only path that stamps an owner, so
+  // every later turn matches `owner === user.id` and is served. If you must
+  // authorize client-chosen ids instead, record the id-to-owner mapping
+  // yourself — in your own store, from this policy — and consult it here.
+  // Whatever you do, do not relax `delete` or `read`: those endpoints answer
+  // 204/404 for a row that never existed, and permitting them on a missing row
+  // is exactly what reopens the existence oracle.
   if (req.thread === undefined) return deny()
 
   // `req.thread.access`, never `req.thread.metadata`. Metadata is
