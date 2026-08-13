@@ -1438,6 +1438,7 @@ export function buildRouteTable(ctx: {
           runRegistry: getRunRegistry(request),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1680,6 +1681,7 @@ async function handleApStreamRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -1698,6 +1700,7 @@ async function handleApStreamRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -1745,6 +1748,26 @@ async function handleApStreamRequest(options: {
 
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
+
+  // Gated as "update" unconditionally — never "create", even for a thread
+  // this call is about to create. See ThreadOperation's `run.stream` doc:
+  // the client picks this thread id (unlike POST /threads' server-generated
+  // one), so starting a run is authorized the same way whether or not the
+  // row exists yet. AFTER the middleware reject above and BEFORE both
+  // `createThread` and `runRegistry.begin` below — a denial must create no
+  // row and take no run slot.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.stream",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
