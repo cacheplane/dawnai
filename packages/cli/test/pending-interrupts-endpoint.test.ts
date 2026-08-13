@@ -1102,6 +1102,39 @@ function ownerOnlyPolicy(): ThreadAccessPolicy {
   }
 }
 
+interface RecordingPolicy {
+  readonly policy: ThreadAccessPolicy
+  /** Every operation the policy was asked about, in order. */
+  readonly operations: string[]
+}
+
+/**
+ * `ownerOnlyPolicy`, except a denied READ answers 403 rather than the 404
+ * default — the override `ThreadAccessDeny.status` exists for, and the shape
+ * that makes the gate's ordering observable.
+ *
+ * Under the 404 default a handler that short-circuits its own miss BEFORE the
+ * gate is indistinguishable from one that does not: both answer 404. Override
+ * the deny to 403 and the two separate — a pre-gate 404 for a missing thread
+ * against a 403 for one that exists is exactly the enumeration oracle the
+ * shared response exists to close. It also records what it was asked, because a
+ * policy that audits denials must SEE the denial: never being invoked at all is
+ * its own failure, distinct from the status the caller receives.
+ */
+function forbiddenReadOwnerOnlyPolicy(): RecordingPolicy {
+  const operations: string[] = []
+  return {
+    operations,
+    policy: {
+      fallback: (request) => {
+        operations.push(request.operation)
+        if (request.headers["x-actor"] === "owner") return { decision: "allow" }
+        return request.action === "read" ? { decision: "deny", status: 403 } : { decision: "deny" }
+      },
+    },
+  }
+}
+
 interface HeldDenyPolicy {
   readonly policy: ThreadAccessPolicy
   /** Resolves once a denied caller is inside the policy and cannot advance. */
@@ -1207,6 +1240,37 @@ describe("GET /threads/:thread_id/pending_interrupts thread access", () => {
     expect(await denied.text()).toBe(await missing.text())
     expect(missing.status).toBe(404)
   }, 60_000)
+
+  it("invokes the policy for a missing thread, so a 403-overriding app keeps no oracle", async () => {
+    const gate = forbiddenReadOwnerOnlyPolicy()
+    const handler = await createHandler(await fixtureApp(), undefined, gate.policy)
+    const threadId = "t-403-existing"
+
+    // Seeds a real row for the id below to differ from. `/echo` is a plain
+    // graph, so this needs no model at all — the property under test is the
+    // gate's ORDER, not anything about a parked turn.
+    const seeded = await handler.fetch(runStreamRequest(threadId, "/echo#graph", {}, OWNER))
+    expect(seeded.status).toBe(200)
+    await drain(seeded)
+
+    gate.operations.length = 0
+    const existing = await handler.fetch(pendingInterruptsRequest(threadId))
+    const askedAboutExisting = [...gate.operations]
+    gate.operations.length = 0
+    const missing = await handler.fetch(pendingInterruptsRequest("t-403-never-existed"))
+    const askedAboutMissing = [...gate.operations]
+
+    // The oracle assertion, ahead of the status: what matters is that the two
+    // answers are the SAME, whatever the app chose them to be.
+    expect(existing.status).toBe(missing.status)
+    expect(await existing.text()).toBe(await missing.text())
+    expect(existing.status).toBe(403)
+
+    // And the audit assertion. A policy that logs denials is blind on any
+    // endpoint that answers before asking it, however the status came out.
+    expect(askedAboutExisting).toContain("thread.pending_interrupts")
+    expect(askedAboutMissing).toContain("thread.pending_interrupts")
+  }, 30_000)
 
   it("still enforces the parking route's middleware — the checks compose as AND", async () => {
     const handler = await createHandler(

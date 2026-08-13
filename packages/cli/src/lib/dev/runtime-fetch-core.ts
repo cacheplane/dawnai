@@ -2234,7 +2234,6 @@ async function handleApPendingInterruptsRequest(options: {
       status: 404,
     })
   const thread = await threadsStore.getThread(threadId)
-  if (!thread) return notFound()
 
   // Thread access, IN ADDITION to the route identity resolved below — the two
   // compose as AND, and neither replaces the other.
@@ -2264,6 +2263,16 @@ async function handleApPendingInterruptsRequest(options: {
   // authenticating middleware, a caller who would have received a middleware
   // 401 receives the 404 instead. The two checks still compose as AND; only
   // which one answers first is decided here.
+  //
+  // ABOVE the missing-row 404, and invoked with `thread: undefined` when there
+  // is no row — same as GET /threads/:id and GET /threads/:id/state, and what
+  // `ThreadAccessRequest.thread` promises: the policy is invoked on every gated
+  // request, never short-circuited to the endpoint's natural 404. Ordering it
+  // the other way is only invisible while the deny keeps its 404 default. An
+  // app that overrides a read deny to 403 would get 403 for a thread that
+  // exists and 404 for one that does not — the enumeration oracle, reopened by
+  // the one endpoint that answered before asking. And a policy that audits
+  // denials would never see the miss at all.
   if (threadAccess) {
     const gate = makeThreadGate(threadAccess, request)
     const g = gate({
@@ -2271,11 +2280,12 @@ async function handleApPendingInterruptsRequest(options: {
       notFound,
       operation: "thread.pending_interrupts",
       threadId,
-      thread,
+      ...(thread ? { thread } : {}),
     })
     const settled = isThenable(g) ? await g : g
     if (!settled.ok) return settled.response
   }
+  if (!thread) return notFound()
 
   // Route identity for middleware. The PARKING route wins — the route whose own
   // turn left these interrupts in the checkpoint (see PARKED_ROUTE_KEY) — and
