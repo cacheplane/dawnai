@@ -261,7 +261,7 @@ if (threadAccess) {
   const existing = await threadsStore.getThread(threadId)
   const gate = makeThreadGate(threadAccess, request)
   const g = gate({
-    action: existing ? "update" : "create",
+    action: "update",  // fixed, per the SDK contract — see note below
     operation: "run.stream",
     threadId,
     ...(existing ? { thread: existing } : {}),
@@ -463,7 +463,7 @@ if (threadAccess) {
   const existing = await threadsStore.getThread(input.threadId)
   const gate = makeThreadGate(threadAccess, request)
   const g = gate({
-    action: existing ? "update" : "create",
+    action: "update",  // fixed, per the SDK contract — see note below
     operation: "run.agui",
     threadId: input.threadId,
     ...(existing ? { thread: existing } : {}),
@@ -701,6 +701,8 @@ git commit -am "feat(cli): scaffold a deny-by-default thread-access policy"
 - Modify: `apps/web/content/docs/thread-access.mdx` — the recipe, and the `/resume` ordering consequence from Task 5
 - Modify: `apps/web/content/docs/middleware.mdx` — the "Where middleware runs" table and the ungated-endpoint sentence after it, both wrong the moment PR A shipped
 - Modify: `apps/web/content/docs/dev-server.mdx`
+
+- [ ] **Step 0: Fix the SDK doc comment PR B makes false.** `packages/sdk/src/thread-access.ts:16-37` documents each operation and the action it arrives under, then closes with: *"the four `run.*` members are not gated yet: a policy may match them today and simply will not be invoked for them until the run endpoints are wired."* PR B **is** that wiring. Delete that paragraph and add `thread.pending_interrupts` — `GET /threads/:id/pending_interrupts` — `read` to the list. That comment is also the authoritative statement that all four `run.*` operations arrive under **`update`**, which is what corrected this plan's own gate snippets mid-execution — do not weaken it.
 
 - [ ] **Step 1:** Rewrite the middleware "Where middleware runs" table and the sentence after it. The claim that the run endpoints are gated by middleware alone is now false.
 - [ ] **Step 2:** Document, in one clear sentence each: that `/pending_interrupts` composes both checks as AND and which one produced a given denial; and that `/resume` alone answers a thread-access deny where a middleware 401 would otherwise have been returned, with the reason.
