@@ -1424,6 +1424,7 @@ export function buildRouteTable(ctx: {
           middleware,
           registry,
           request,
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -2168,12 +2169,21 @@ async function handleApPendingInterruptsRequest(options: {
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: Request
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
 }): Promise<Response> {
-  const { checkpointer, middleware, registry, request, threadId, threadRouteMap, threadsStore } =
-    options
+  const {
+    checkpointer,
+    middleware,
+    registry,
+    request,
+    threadAccess,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   // Thread first, with the same code POST /cancel and POST /resume use for an
   // unknown thread, so a client branches on one code across the AP surface.
@@ -2181,11 +2191,52 @@ async function handleApPendingInterruptsRequest(options: {
   // same as POST /resume, which answers 404 long before it calls
   // runMiddleware. Deliberate, and mandated by §1 of the spec; the interrupt
   // payloads themselves stay behind the middleware gate below.
-  const thread = await threadsStore.getThread(threadId)
-  if (!thread) {
-    return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
+  const notFound = () =>
+    Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
       status: 404,
     })
+  const thread = await threadsStore.getThread(threadId)
+  if (!thread) return notFound()
+
+  // Thread access, IN ADDITION to the route identity resolved below — the two
+  // compose as AND, and neither replaces the other.
+  //
+  // Route identity alone is not enough here, and the reason is what middleware
+  // usually IS in practice: it AUTHENTICATES rather than authorizes per user. A
+  // shared API key, or any-valid-user, satisfies the parking route's middleware
+  // for every caller alike — so under the common shape, route identity admits
+  // anyone holding the app's key to the parked prompt's `interruptId`/
+  // `resumeKey` pair. That pair is the credential POST /resume takes, and
+  // /resume is now gated on this axis; leaving the read on capability-only
+  // gating would put the weaker gate in front of the more sensitive thing.
+  //
+  // `read`, not `update` — unlike the four run.* operations, this endpoint
+  // changes nothing. So a deny defaults to 404 rather than 403, and it is
+  // `notFound` above, the handler's OWN literal, that it must be
+  // indistinguishable from: a distinct 404 shape here would itself be the
+  // enumeration oracle the shared response exists to close.
+  //
+  // BEFORE the route identity below, not after it — the same ordering exception
+  // POST /resume makes, for the same reason and at the same stated cost. The
+  // route the middleware would authorize against is read off this thread's own
+  // metadata, so "after middleware" would mean resolving an identity from a
+  // thread the caller has not been authorized to read, and it would hand a
+  // denied caller the 409 thread_route_unknown branch — which answers whether
+  // the thread has ever run. The cost: on an app carrying BOTH a policy and
+  // authenticating middleware, a caller who would have received a middleware
+  // 401 receives the 404 instead. The two checks still compose as AND; only
+  // which one answers first is decided here.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "read",
+      notFound,
+      operation: "thread.pending_interrupts",
+      threadId,
+      thread,
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
   }
 
   // Route identity for middleware. The PARKING route wins — the route whose own

@@ -33,11 +33,13 @@ const GATED: readonly string[] = [
  * a client-supplied thread id, creates the row and writes its metadata.
  *
  * `GET /pending_interrupts` arrived with PR #443, which gates it on ROUTE
- * IDENTITY. Whether it also moves onto the thread-access axis in PR B is the
- * spec's open question and is still undecided; it sits here either way, because
- * under both answers this PR leaves it gated by route middleware alone. If the
- * answer is "one axis" it joins GATED in PR B; if it is "two axes" it moves to
- * its own documented list rather than staying here.
+ * IDENTITY. Whether it ALSO moves onto the thread-access axis was the spec's
+ * open question, and it has now been answered: it does, in addition to the
+ * route-identity check, with the two composing as AND. The endpoint reads back
+ * the parked prompt's `interruptId`/`resumeKey` pair — the credential for
+ * resuming someone else's turn — and middleware that merely authenticates
+ * admits every caller alike, so the weaker gate cannot be the one in front of
+ * it. Its gate is in place; this list entry is what moves next.
  */
 const DEFERRED: readonly string[] = [
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/),
