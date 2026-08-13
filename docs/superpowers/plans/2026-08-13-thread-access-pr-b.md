@@ -29,6 +29,7 @@ The six items in the spec's **"PR B — the run surface, edge, and defaults"** s
 - **Node 24 or the suite lies.** `export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"` before any test command.
 - **Capture exit codes explicitly.** `cmd > /tmp/x.log 2>&1; echo "EXIT=$?"` — piping to `grep`/`tail` reports the *pipe's* status and has already produced a false green in this repo's history.
 - **Strip ANSI before grepping CI logs.** `perl -pe 's/\e\[[0-9;]*[a-zA-Z]//g'` — `grep -c "FAIL"` silently returns 0 against coloured output.
+- **`pnpm typecheck` on `@dawn-ai/sdk` is meaningless until you `pnpm build` first.** Found the hard way in Task 2. `packages/sdk/test/thread-access.contract.ts` imports from `"@dawn-ai/sdk"` — the package name — which resolves through `package.json`'s `types` to `dist/*.d.ts`, not `src/`. Edit a type in `src/`, run `typecheck` without rebuilding, and it silently checks the **old** types and reports success. It does not error; it lies. Build after every source edit, before every typecheck, or your green is stale. This is a different trap from the plan's other stale-`dist` warning: that one is about an unbuilt tree, this one is about ordering within an edit-test loop.
 - **Changesets gate:** a changeset is required because `packages/*/src/` changes. `@dawn-ai/sdk`, `@dawn-ai/cli` and `@dawn-ai/testing` all move.
 - **Patch versions only.** Never bump a minor.
 - **`git worktree` + `perl -pi` with a glob:** quote or expand carefully. A collapsed glob has already produced a half-applied edit in this repo — always `git status` after a bulk rewrite.
@@ -102,6 +103,12 @@ Expected: `EXIT=0`. Record the counts — every later task compares against them
 **Files:**
 - Modify: `packages/sdk/src/thread-access.ts:38-47`
 - Test: `packages/sdk/test/thread-access.test.ts`
+
+> **Corrected during execution.** The steps below originally put the guard in `packages/sdk/test/thread-access.test.ts` and expected `vitest` to report the type error. It does not: vitest transforms with esbuild and never type-checks, and `packages/sdk/tsconfig.json` includes only `src/**/*.ts`, so that file is type-checked by **nothing**. A `ThreadOperation[]` literal there is just strings at runtime — the test would keep passing if the union member were deleted, which makes it a guard that cannot fail.
+>
+> **The guard belongs in `packages/sdk/test/thread-access.contract.ts`**, which `tsconfig.contracts.json` does include and `pnpm --filter @dawn-ai/sdk run typecheck` does run. Follow that file's existing idiom. Prove it by deleting the member and watching `typecheck` fail.
+>
+> **This applies only to Task 2.** Tasks 3-7 assert HTTP status codes, which vitest checks at runtime — "run it and watch it fail" is a real red step there.
 
 - [ ] **Step 1: Write the failing test**
 
