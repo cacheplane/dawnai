@@ -17,37 +17,39 @@ function routeKey(method: string, pattern: RegExp): string {
   return `${method} ${pattern.source}`
 }
 
-/** Gated in PR A: the five endpoints that ran no middleware at all. */
+/**
+ * Gated in PR A: the five endpoints that ran no middleware at all.
+ *
+ * Gated in PR B: the four run endpoints (`runs/stream`, `runs/wait`,
+ * `resume`, and `POST /agui/:routeId`, which carries no "threads" in its
+ * pattern but still resolves a client-supplied thread id) plus
+ * `GET /pending_interrupts`. That last one is the exception whose gating is
+ * not the whole story: it arrived with PR #443 already gated on ROUTE
+ * IDENTITY, and PR B adds the thread-access axis on top, the two composing as
+ * AND rather than one replacing the other. The endpoint reads back the parked
+ * prompt's `interruptId`/`resumeKey` pair — the credential for resuming
+ * someone else's turn — and middleware that merely authenticates admits every
+ * caller alike, so the weaker gate cannot be the one in front of it.
+ */
 const GATED: readonly string[] = [
   routeKey("POST", /^\/threads(?:\?.*)?$/),
   routeKey("GET", /^\/threads\/(?<thread_id>[^/?#]+)(?:\?.*)?$/),
   routeKey("DELETE", /^\/threads\/(?<thread_id>[^/?#]+)(?:\?.*)?$/),
   routeKey("GET", /^\/threads\/(?<thread_id>[^/?#]+)\/state(?:\?.*)?$/),
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/cancel(?:\?.*)?$/),
-]
-
-/**
- * Thread-scoped and NOT gated by this PR — they are gated by route middleware
- * only. PR B moves the first four onto GATED. `POST /agui/:routeId` is on this
- * list precisely because its pattern contains no "threads" — it still resolves
- * a client-supplied thread id, creates the row and writes its metadata.
- *
- * `GET /pending_interrupts` arrived with PR #443, which gates it on ROUTE
- * IDENTITY. Whether it ALSO moves onto the thread-access axis was the spec's
- * open question, and it has now been answered: it does, in addition to the
- * route-identity check, with the two composing as AND. The endpoint reads back
- * the parked prompt's `interruptId`/`resumeKey` pair — the credential for
- * resuming someone else's turn — and middleware that merely authenticates
- * admits every caller alike, so the weaker gate cannot be the one in front of
- * it. Its gate is in place; this list entry is what moves next.
- */
-const DEFERRED: readonly string[] = [
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/),
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/wait(?:\?.*)?$/),
   routeKey("POST", /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/),
   routeKey("POST", /^\/agui\/(?<routeId>[^/?#]+)(?:\?.*)?$/),
   routeKey("GET", /^\/threads\/(?<thread_id>[^/?#]+)\/pending_interrupts(?:\?.*)?$/),
 ]
+
+/**
+ * Empty since PR B. Every thread-scoped route is now gated on the thread-access
+ * axis. A new thread endpoint belongs on GATED; putting it here again needs a
+ * reason written down, because "deferred" was a slice boundary, not a category.
+ */
+const DEFERRED: readonly string[] = []
 
 /**
  * Not thread-scoped, so there is no thread subject to authorize against. A
@@ -72,7 +74,7 @@ describe("route-table coverage", () => {
   it("has 14 entries on this branch", () => {
     // 14 since PR #443 merged and this branch took `main` in, adding
     // `GET /threads/:thread_id/pending_interrupts`. It is CLASSIFIED (see
-    // DEFERRED) rather than counted, which is the whole point of this pair of
+    // GATED) rather than counted, which is the whole point of this pair of
     // assertions: bumping the number without adding the route to a list would
     // let a new thread endpoint ship ungated and silent.
     expect(actual).toHaveLength(14)
