@@ -1533,6 +1533,7 @@ export function buildRouteTable(ctx: {
           ...(sandboxManager ? { sandboxManager } : {}),
           signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
+          threadAccess,
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore: getThreadsStore(request),
@@ -1986,6 +1987,7 @@ async function handleApWaitRequest(options: {
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
+  readonly threadAccess: ThreadAccessPolicy | undefined
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -2003,6 +2005,7 @@ async function handleApWaitRequest(options: {
     sandboxManager,
     signal,
     staticModules,
+    threadAccess,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -2050,6 +2053,23 @@ async function handleApWaitRequest(options: {
 
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
+
+  // Gated as "update" unconditionally, same reasoning as handleApStreamRequest:
+  // this endpoint picks the thread id the same way /runs/stream does, so a
+  // denial must create no row and take no run slot. AFTER the middleware
+  // reject above and BEFORE both `createThread` and `runRegistry.begin` below.
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "update",
+      operation: "run.wait",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }

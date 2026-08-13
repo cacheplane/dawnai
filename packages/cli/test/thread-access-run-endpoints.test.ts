@@ -169,3 +169,65 @@ describe("POST /threads/:id/runs/stream", () => {
     await drain(allowed)
   })
 })
+
+describe("POST /threads/:id/runs/wait", () => {
+  it("denies an unauthorized run without creating the row or taking a run slot", async () => {
+    const seen: ThreadAccessRequest["operation"][] = []
+    const created: string[] = []
+    const threadsStore = recordingThreadsStore((id) => created.push(id))
+    const { handler } = await setup({
+      threadAccess: {
+        fallback: () => {
+          throw new Error("fallback should not be reached for run.wait")
+        },
+        update: (request) => {
+          seen.push(request.operation)
+          return { decision: "deny" }
+        },
+      },
+      threadsStore,
+    })
+
+    const response = await handler.fetch(
+      post("/threads/t-victim/runs/wait", { input: {}, route: HELLO_ROUTE }),
+    )
+
+    expect(response.status).toBe(403)
+    expect(seen).toEqual(["run.wait"])
+    expect(created).toEqual([])
+    expect(await threadsStore.getThread("t-victim")).toBeUndefined()
+  })
+
+  it("allows an authorized run", async () => {
+    const { handler } = await setup({ threadAccess: { fallback: () => ({ decision: "allow" }) } })
+    const response = await handler.fetch(
+      post("/threads/t-mine/runs/wait", { input: {}, route: HELLO_ROUTE }),
+    )
+    expect(response.status).toBe(200)
+  })
+
+  it("does not take the run slot on a denied request: a second, authorized run on the same thread still succeeds", async () => {
+    // If the denied request had reached `runRegistry.begin` before the gate
+    // rejected it, the slot would still be held (nothing ever releases a slot
+    // it never legitimately finished with), and this second call would 409
+    // with run_in_flight instead of completing normally.
+    let calls = 0
+    const threadAccess: ThreadAccessPolicy = {
+      fallback: () => {
+        calls += 1
+        return calls === 1 ? { decision: "deny" } : { decision: "allow" }
+      },
+    }
+    const { handler } = await setup({ threadAccess })
+
+    const denied = await handler.fetch(
+      post("/threads/t-retry/runs/wait", { input: {}, route: HELLO_ROUTE }),
+    )
+    expect(denied.status).toBe(403)
+
+    const allowed = await handler.fetch(
+      post("/threads/t-retry/runs/wait", { input: {}, route: HELLO_ROUTE }),
+    )
+    expect(allowed.status).not.toBe(409)
+  })
+})
