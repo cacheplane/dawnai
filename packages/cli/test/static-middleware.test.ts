@@ -140,6 +140,10 @@ describe("emitModulesFile — middleware", () => {
     })
     expect(text).not.toContain("normalizeMiddlewareModule")
     expect(text).not.toContain("middlewareModule")
+    // The thread-access twin: this fixture has no policy file either, and the
+    // named-import line is now composed from a list — a hook entry appearing
+    // for an app that never asked for one would otherwise go unnoticed.
+    expect(text).not.toContain("normalizeThreadAccessModule")
     expect(text).toContain('import { buildStaticRouteModule } from "@dawn-ai/cli/runtime"')
   })
 })
@@ -424,5 +428,8 @@ describe("node target — middleware probe", () => {
     const text = await emitFixture(appRoot)
     expect(text).not.toContain("middlewareModule")
     expect(text).not.toContain("normalizeMiddlewareModule")
+    // Same twin as the emitter-level case above: the node target's fixture has
+    // no `thread-access.ts`, so no hook entry may appear in its manifest.
+    expect(text).not.toContain("normalizeThreadAccessModule")
   })
 })

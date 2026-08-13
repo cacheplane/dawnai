@@ -257,6 +257,36 @@ describe("emitEdgeModulesFile — golden", () => {
     expect(text).not.toContain("node:")
     expect(text).not.toContain(appRoot)
   })
+
+  it("imports normalizeThreadAccessModule from the fetch entry too", async () => {
+    const appRoot = await fixtureApp()
+    const discoveries = await collectFixtureDiscoveries(appRoot)
+    const text = emitEdgeModulesFile({
+      appRoot,
+      buildDir: join(appRoot, ".dawn", "build"),
+      discoveries,
+      middlewareFile: join(appRoot, "src", "middleware.ts"),
+      threadAccessFile: join(appRoot, "src", "thread-access.ts"),
+    })
+
+    // One import line, composed from a list — the edge manifest links against
+    // `@dawn-ai/cli/fetch`, so the fetch barrel must export this too or the
+    // deployed bundle fails at link time rather than at boot.
+    expect(text).toContain(
+      'import { buildStaticRouteModule, normalizeMiddlewareModule, normalizeThreadAccessModule } from "@dawn-ai/cli/fetch"',
+    )
+    expect(text).toContain('import * as threadAccessModule from "../../src/thread-access.ts"')
+    expect(text).toContain("  threadAccess: normalizeThreadAccessModule(threadAccessModule),")
+    // middleware → threadAccess → routes, matching the node manifest.
+    expect(text.indexOf("middleware: normalizeMiddlewareModule")).toBeLessThan(
+      text.indexOf("threadAccess: normalizeThreadAccessModule"),
+    )
+    expect(text.indexOf("threadAccess: normalizeThreadAccessModule")).toBeLessThan(
+      text.indexOf("routes: ["),
+    )
+    expect(text).not.toContain("node:")
+    expect(text).not.toContain(appRoot)
+  })
 })
 
 // ---------------------------------------------------------------------------

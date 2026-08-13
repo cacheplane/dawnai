@@ -53,6 +53,7 @@ export {
   buildStaticRouteModule,
   type DawnStaticModules,
   normalizeMiddlewareModule,
+  normalizeThreadAccessModule,
   type StaticRouteModule,
   type StaticRouteModuleInput,
   type StaticToolModuleInput,
