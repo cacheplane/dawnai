@@ -42,6 +42,10 @@ When a run endpoint finds the row absent **and a policy is installed**:
 
 A backend whose `createThread` throws on a duplicate id (sqlite's bare `INSERT`; the conformance kit deliberately admits both outcomes) surfaces exactly as it does today. That path never reaches the recheck because it never gets a row.
 
+### The AG-UI window
+
+On `/runs/stream` and `/runs/wait` the create is the statement after the gate. On `/agui/:routeId` it cannot be: it has always sat after `resumeClaims.tryClaim`, `runRegistry.begin` and a checkpointer read, and moving it would move side effects a denial must not take. So the `create` decision is carried down in two locals, and that handler additionally re-reads the row before creating: if one has appeared in the meantime, the turn is authorized under `update` against **that** row rather than proceeding on a decision made about a thread that did not exist. Same principle as the post-create recheck, applied to a window that is several statements wide instead of one.
+
 ## Published contract change
 
 `packages/sdk/src/thread-access.ts`'s `ThreadOperation` doc says every `run.*` operation arrives under `update`, "without exception". That becomes false: `run.stream`, `run.wait` and `run.agui` now arrive under `create`, **then** `update`, when the row is absent — the same two-step shape `thread.create` already documents. Update those lines in the same style. Weaken nothing else in the comment.

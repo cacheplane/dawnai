@@ -20,17 +20,13 @@ gated on the thread-access axis. The migration hazard is a policy whose
 `fallback` returns a bare `{ allow: false }`, or denies any operation it does
 not recognize: it will start denying traffic it permitted before, on endpoints
 that previously answered to route middleware alone. Read your `fallback` before
-upgrading. Every `run.*` operation arrives under `action: "update"` — including
-on a thread id with no row yet, which those endpoints create, and which reaches
-the policy as `thread: undefined`. A policy that permits `update` for the
-thread's owner therefore needs one more decision than it did before: what to
-answer when there is no row to own yet. A policy that denies a missing row —
-correct for `delete` and `read`, and what closes the existence oracle there —
-now refuses every AG-UI turn, because `POST /agui/{routeId}` runs on a thread id
-the client picked and never created. Only `POST /threads` writes an access
-stamp, so relaxing `update` for a missing row authorizes the first turn and
-denies the second; mint the id through `POST /threads` instead, or keep your own
-id-to-owner record.
+upgrading. A `run.*` operation on a thread that exists arrives under
+`action: "update"`; on a thread id with no row yet, `run.stream`, `run.wait` and
+`run.agui` arrive under `action: "create"` — see the companion note on stamping
+the implicit create, which lands in the same release. A policy that permits
+`update` for the thread's owner therefore needs one more decision than it did
+before: what its `create` handler should answer for a thread id the client
+picked. `run.resume` never creates and is always an `update`.
 
 These gates compose with route middleware as AND rather than replacing it;
 middleware still answers "may this caller run this route" and keeps doing the

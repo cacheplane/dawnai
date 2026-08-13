@@ -52,7 +52,7 @@ import {
 import { statusResponse } from "./status-response.js"
 import { terminalStatus } from "./terminal-status.js"
 import { threadAccessBootLine, validateThreadAccessPolicy } from "./thread-access.js"
-import { isThenable, makeThreadGate } from "./thread-gate.js"
+import { createGatedThreadForRun, isThenable, makeThreadGate } from "./thread-gate.js"
 import { assertNoReservedKey, stripReservedThreadMetadata } from "./thread-metadata.js"
 
 // ---------------------------------------------------------------------------
@@ -1617,25 +1617,40 @@ async function handleApStreamRequest(options: {
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
 
-  // Gated as "update" unconditionally — never "create", even for a thread
-  // this call is about to create. See ThreadOperation's `run.stream` doc:
-  // the client picks this thread id (unlike POST /threads' server-generated
-  // one), so starting a run is authorized the same way whether or not the
-  // row exists yet. AFTER the middleware reject above and BEFORE both
-  // `createThread` and `runRegistry.begin` below — a denial must create no
-  // row and take no run slot.
+  // Gated as "update" on a thread that exists, and as "create" — then "update"
+  // again, on the row that came back — when this call is the one that brings it
+  // into being. The operation stays `run.stream` throughout: it names the
+  // endpoint, not the action. See ThreadOperation.
+  //
+  // AFTER the middleware reject above and BEFORE both `createThread` and
+  // `runRegistry.begin` below — a denial must create no row and take no run
+  // slot.
   if (threadAccess) {
     const gate = makeThreadGate(threadAccess, request)
     const g = gate({
-      action: "update",
+      action: thread ? "update" : "create",
       operation: "run.stream",
       threadId,
       ...(thread ? { thread } : {}),
     })
     const settled = isThenable(g) ? await g : g
     if (!settled.ok) return settled.response
+    if (!thread) {
+      const created = await createGatedThreadForRun({
+        gate,
+        operation: "run.stream",
+        stamp: settled.stamp,
+        store: threadsStore,
+        threadId,
+      })
+      if (!created.ok) return created.response
+      thread = created.thread
+    }
   }
 
+  // Hook-less only: the policied path created its row above, stamped and
+  // re-authorized. PR A's contract is that an app with no policy file behaves
+  // exactly as it did, and this line is what that means here.
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
@@ -1921,22 +1936,36 @@ async function handleApWaitRequest(options: {
   // Idempotently ensure the thread exists
   let thread: Thread | undefined = await threadsStore.getThread(threadId)
 
-  // Gated as "update" unconditionally, same reasoning as handleApStreamRequest:
-  // this endpoint picks the thread id the same way /runs/stream does, so a
-  // denial must create no row and take no run slot. AFTER the middleware
-  // reject above and BEFORE both `createThread` and `runRegistry.begin` below.
+  // "update" on an existing row, "create" then an "update" recheck on the one
+  // this call brings into being — same reasoning, and the same two-step, as
+  // handleApStreamRequest: this endpoint picks the thread id the same way
+  // /runs/stream does. A denial must create no row and take no run slot. AFTER
+  // the middleware reject above and BEFORE both `createThread` and
+  // `runRegistry.begin` below.
   if (threadAccess) {
     const gate = makeThreadGate(threadAccess, request)
     const g = gate({
-      action: "update",
+      action: thread ? "update" : "create",
       operation: "run.wait",
       threadId,
       ...(thread ? { thread } : {}),
     })
     const settled = isThenable(g) ? await g : g
     if (!settled.ok) return settled.response
+    if (!thread) {
+      const created = await createGatedThreadForRun({
+        gate,
+        operation: "run.wait",
+        stamp: settled.stamp,
+        store: threadsStore,
+        threadId,
+      })
+      if (!created.ok) return created.response
+      thread = created.thread
+    }
   }
 
+  // Hook-less only — see the same line in handleApStreamRequest.
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }

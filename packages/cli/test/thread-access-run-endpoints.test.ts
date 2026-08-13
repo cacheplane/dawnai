@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import type { ThreadAccessPolicy, ThreadAccessRequest } from "@dawn-ai/sdk"
-import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { ThreadAccessPolicy, ThreadAccessRequest, ThreadOperation } from "@dawn-ai/sdk"
+import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
+import type { CreateThreadInput, Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
@@ -172,12 +173,19 @@ describe("POST /threads/:id/runs/stream", () => {
     const threadsStore = recordingThreadsStore((id) => created.push(id))
     const { handler } = await setup({
       threadAccess: {
+        // The row does not exist, so this run's own create is the decision
+        // being asked for — `update` would be asking about a thread that is
+        // not there. Both other handlers throw rather than record: a denial
+        // that arrived on the wrong axis is not the denial this test claims.
+        create: (request) => {
+          seen.push(request.operation)
+          return { decision: "deny" }
+        },
         fallback: () => {
           throw new Error("fallback should not be reached for run.stream")
         },
-        update: (request) => {
-          seen.push(request.operation)
-          return { decision: "deny" }
+        update: () => {
+          throw new Error("a missing row is a create, not an update, for run.stream")
         },
       },
       threadsStore,
@@ -236,12 +244,19 @@ describe("POST /threads/:id/runs/wait", () => {
     const threadsStore = recordingThreadsStore((id) => created.push(id))
     const { handler } = await setup({
       threadAccess: {
+        // The row does not exist, so this run's own create is the decision
+        // being asked for — `update` would be asking about a thread that is
+        // not there. Both other handlers throw rather than record: a denial
+        // that arrived on the wrong axis is not the denial this test claims.
+        create: (request) => {
+          seen.push(request.operation)
+          return { decision: "deny" }
+        },
         fallback: () => {
           throw new Error("fallback should not be reached for run.wait")
         },
-        update: (request) => {
-          seen.push(request.operation)
-          return { decision: "deny" }
+        update: () => {
+          throw new Error("a missing row is a create, not an update, for run.wait")
         },
       },
       threadsStore,
@@ -298,12 +313,19 @@ describe("POST /agui/:routeId", () => {
     const threadsStore = recordingThreadsStore((id) => created.push(id))
     const { handler } = await setup({
       threadAccess: {
+        // The row does not exist, so this run's own create is the decision
+        // being asked for — `update` would be asking about a thread that is
+        // not there. Both other handlers throw rather than record: a denial
+        // that arrived on the wrong axis is not the denial this test claims.
+        create: (request) => {
+          seen.push(request.operation)
+          return { decision: "deny" }
+        },
         fallback: () => {
           throw new Error("fallback should not be reached for run.agui")
         },
-        update: (request) => {
-          seen.push(request.operation)
-          return { decision: "deny" }
+        update: () => {
+          throw new Error("a missing row is a create, not an update, for run.agui")
         },
       },
       threadsStore,
@@ -415,4 +437,328 @@ describe("POST /agui/:routeId", () => {
     gate.releaseDeny()
     expect((await attacker).status).toBe(403)
   }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// The implicit create
+//
+// All three endpoints below create the thread row when it is missing, on an id
+// the CLIENT picked. Until this PR that create passed no metadata, so the row
+// carried no access stamp and `thread.access === undefined` stopped meaning
+// "created before the policy existed".
+// ---------------------------------------------------------------------------
+
+interface RunEndpoint {
+  readonly name: string
+  readonly operation: ThreadOperation
+  readonly request: (threadId: string, headers: Record<string, string>) => Request
+}
+
+let runSeq = 0
+
+/** The three endpoints that perform an implicit create, driven identically. */
+const RUN_ENDPOINTS: readonly RunEndpoint[] = [
+  {
+    name: "POST /threads/:id/runs/stream",
+    operation: "run.stream",
+    request: (threadId, headers) =>
+      post(`/threads/${threadId}/runs/stream`, { input: {}, route: HELLO_ROUTE }, headers),
+  },
+  {
+    name: "POST /threads/:id/runs/wait",
+    operation: "run.wait",
+    request: (threadId, headers) =>
+      post(`/threads/${threadId}/runs/wait`, { input: {}, route: HELLO_ROUTE }, headers),
+  },
+  {
+    name: "POST /agui/:routeId",
+    operation: "run.agui",
+    request: (threadId, headers) =>
+      aguiPost(HELLO_ROUTE, { threadId, runId: `run-${++runSeq}`, messages: [] }, headers),
+  },
+]
+
+/**
+ * The policy shape the docs teach and the scaffold ships: `create` stamps the
+ * caller, everything else authorizes against the stamp the row carries.
+ *
+ * `legacyUnstamped` is the branch an app writes for a thread that predates the
+ * policy, and it is the whole reason this PR exists — both answers are in the
+ * docs and both are wrong in a different way while the implicit create writes
+ * no stamp. `"deny"` (the conservative one the scaffold ships, modulo its
+ * admin escape hatch) locks the creating caller out of its own thread on turn
+ * two. `"allow"` keeps the conversation working and hands every later caller
+ * the same row, because an attacker can manufacture an unstamped row on demand
+ * by naming an id at a run endpoint.
+ */
+function stampingOwnerPolicy(legacyUnstamped: "allow" | "deny"): ThreadAccessPolicy {
+  return {
+    create: (request) => {
+      const actor = request.headers["x-actor"]
+      return actor ? { decision: "allow", stamp: { ownerId: actor } } : { decision: "deny" }
+    },
+    fallback: (request) => {
+      const actor = request.headers["x-actor"]
+      if (!actor) return { decision: "deny" }
+      // No row yet: the endpoint is about to make one, and only the `create`
+      // handler above decides who owns it. Denying here instead would refuse
+      // the first turn outright, which is the other half of the same bind.
+      if (request.thread === undefined) return { decision: "allow" }
+      const owner = request.thread.access?.ownerId
+      if (owner === undefined) return { decision: legacyUnstamped } // legacy thread
+      return owner === actor ? { decision: "allow" } : { decision: "deny" }
+    },
+  }
+}
+
+/** Records the whole `createThread` input, not just the id — metadata is the point here. */
+function capturingThreadsStore(captured: CreateThreadInput[]): ThreadsStore {
+  const threads = new Map<string, Thread>()
+  let seq = 0
+  return {
+    createThread: async (input) => {
+      captured.push(input)
+      const now = new Date().toISOString()
+      const thread: Thread = {
+        created_at: now,
+        metadata: input.metadata ?? {},
+        status: "idle",
+        thread_id: input.thread_id ?? `t-cap-${++seq}`,
+        updated_at: now,
+      }
+      threads.set(thread.thread_id, thread)
+      return thread
+    },
+    deleteThread: async (threadId) => {
+      threads.delete(threadId)
+    },
+    getThread: async (threadId) => threads.get(threadId),
+    listThreads: async () => [...threads.values()],
+    updateMetadata: async (threadId, patch) => {
+      const thread = threads.get(threadId)
+      if (thread) threads.set(threadId, { ...thread, metadata: { ...thread.metadata, ...patch } })
+    },
+    updateStatus: async (threadId, status) => {
+      const thread = threads.get(threadId)
+      if (thread) threads.set(threadId, { ...thread, status })
+    },
+  }
+}
+
+/**
+ * The lost side of a create race, made deterministic: `getThread` reports the
+ * row absent, so the endpoint takes the create path, and `createThread` hands
+ * back a row that belongs to somebody else — what an upsert backend does when
+ * two callers both saw an absent row and one of them got there first.
+ *
+ * Not hypothetical on these endpoints in the way it is on `POST /threads`: the
+ * id is client-chosen, so a caller can address any row in the store by name.
+ */
+function collidingThreadsStore(foreign: Thread): ThreadsStore {
+  return {
+    createThread: async () => foreign,
+    deleteThread: async () => undefined,
+    getThread: async () => undefined,
+    listThreads: async () => [foreign],
+    updateMetadata: async () => undefined,
+    updateStatus: async () => undefined,
+  }
+}
+
+/**
+ * `getThread` reports the row absent on the FIRST read and present, owned by a
+ * stranger, on every read after it. Reproduces a row appearing between the gate
+ * and the create — a window that is a couple of statements wide on the Agent
+ * Protocol handlers and much wider on AG-UI, which claims a resume and reads
+ * the checkpointer's pending interrupts in between.
+ */
+function rowAppearsAfterTheGate(foreign: Thread): ThreadsStore {
+  let reads = 0
+  return {
+    createThread: async () => foreign,
+    deleteThread: async () => undefined,
+    getThread: async () => (++reads === 1 ? undefined : foreign),
+    listThreads: async () => [foreign],
+    updateMetadata: async () => undefined,
+    updateStatus: async () => undefined,
+  }
+}
+
+describe("a row that appears between the gate and the create", () => {
+  it("POST /agui/:routeId: re-authorizes it as an update, and denies a stranger", async () => {
+    const now = new Date().toISOString()
+    const foreign: Thread = {
+      created_at: now,
+      metadata: { [THREAD_ACCESS_METADATA_KEY]: { ownerId: "victim" } },
+      status: "idle",
+      thread_id: "t-appeared",
+      updated_at: now,
+    }
+    const { handler } = await setup({
+      threadAccess: stampingOwnerPolicy("deny"),
+      threadsStore: rowAppearsAfterTheGate(foreign),
+    })
+
+    // The `create` decision permitted mallory, for a thread that did not exist
+    // when it was asked. By the time the run reaches the create, one does — and
+    // it is the victim's. Proceeding on the strength of the earlier decision
+    // would be running on a thread nothing authorized this caller to touch.
+    const response = await handler.fetch(
+      aguiPost(
+        HELLO_ROUTE,
+        { threadId: "t-appeared", runId: "run-appeared", messages: [] },
+        {
+          "x-actor": "mallory",
+        },
+      ),
+    )
+    expect(response.status).toBe(403)
+    await drain(response)
+  }, 30_000)
+})
+
+describe("the implicit create a run endpoint performs", () => {
+  for (const endpoint of RUN_ENDPOINTS) {
+    it(`${endpoint.name}: the creating caller can take a SECOND turn on the thread it created`, async () => {
+      // The conservative legacy branch: an unstamped row is nobody's. Until
+      // the implicit create was stamped, this policy served turn one and then
+      // refused its own author on turn two, because the row it had just made
+      // read back as a thread that predated the policy.
+      const { handler } = await setup({ threadAccess: stampingOwnerPolicy("deny") })
+      const threadId = "t-implicit-second-turn"
+      const actor = { "x-actor": "alice" }
+
+      const first = await handler.fetch(endpoint.request(threadId, actor))
+      expect(first.status).toBe(200)
+      await drain(first)
+
+      // The turn that was broken: the row exists now, and until this PR it
+      // carried no stamp, so its own creator arrived as a stranger.
+      const second = await handler.fetch(endpoint.request(threadId, actor))
+      expect(second.status).toBe(200)
+      await drain(second)
+    }, 30_000)
+
+    it(`${endpoint.name}: stamps the creating caller into the row`, async () => {
+      const captured: CreateThreadInput[] = []
+      const { handler } = await setup({
+        threadAccess: stampingOwnerPolicy("deny"),
+        threadsStore: capturingThreadsStore(captured),
+      })
+
+      const response = await handler.fetch(endpoint.request("t-stamped", { "x-actor": "alice" }))
+      expect(response.status).toBe(200)
+      await drain(response)
+
+      expect(captured).toEqual([
+        {
+          metadata: { [THREAD_ACCESS_METADATA_KEY]: { ownerId: "alice" } },
+          thread_id: "t-stamped",
+        },
+      ])
+    }, 30_000)
+
+    it(`${endpoint.name}: an intruder is denied on a thread another caller's run created`, async () => {
+      // The migration hazard in one test. `fallback` admits an unstamped row as
+      // a legacy thread, which is the common shape mid-rollout. Before the
+      // implicit create was stamped, alice's turn manufactured exactly such a
+      // row on demand and bob walked straight into it.
+      const { handler } = await setup({ threadAccess: stampingOwnerPolicy("allow") })
+      const threadId = "t-implicit-intruder"
+
+      const mine = await handler.fetch(endpoint.request(threadId, { "x-actor": "alice" }))
+      expect(mine.status).toBe(200)
+      await drain(mine)
+
+      const theirs = await handler.fetch(endpoint.request(threadId, { "x-actor": "bob" }))
+      expect(theirs.status).toBe(403)
+      await drain(theirs)
+    }, 30_000)
+
+    it(`${endpoint.name}: denies when the store hands back a row that belongs to someone else`, async () => {
+      const now = new Date().toISOString()
+      const foreign: Thread = {
+        created_at: now,
+        metadata: { [THREAD_ACCESS_METADATA_KEY]: { ownerId: "victim" } },
+        status: "idle",
+        thread_id: "t-collided",
+        updated_at: now,
+      }
+      const { handler } = await setup({
+        threadAccess: stampingOwnerPolicy("deny"),
+        threadsStore: collidingThreadsStore(foreign),
+      })
+
+      // The `create` decision permits mallory and mints a stamp — and is
+      // irrelevant, because the row that came back is the victim's. Only a
+      // recheck against the ROW catches that; comparing the returned row's
+      // stamp with the minted one would not, since a `permit()` with no stamp
+      // makes both sides `undefined`.
+      const response = await handler.fetch(endpoint.request("t-collided", { "x-actor": "mallory" }))
+      expect(response.status).toBe(403)
+      await drain(response)
+    }, 30_000)
+
+    it(`${endpoint.name}: asks under create, then rechecks the row under update`, async () => {
+      const seen: ThreadAccessRequest[] = []
+      const { handler } = await setup({
+        threadAccess: {
+          create: (request) => {
+            seen.push(request)
+            return { decision: "allow", stamp: { ownerId: "alice" } }
+          },
+          fallback: (request) => {
+            seen.push(request)
+            return { decision: "allow" }
+          },
+        },
+      })
+
+      const response = await handler.fetch(endpoint.request("t-two-step", { "x-actor": "alice" }))
+      expect(response.status).toBe(200)
+      await drain(response)
+
+      expect(seen.map((request) => request.action)).toEqual(["create", "update"])
+      // The endpoint's own operation throughout — never rewritten to
+      // `thread.create`, which names a different endpoint.
+      expect(seen.map((request) => request.operation)).toEqual([
+        endpoint.operation,
+        endpoint.operation,
+      ])
+      // No client metadata reaches these paths at all.
+      expect(seen[0]?.requestedMetadata).toBeUndefined()
+      expect(seen[0]?.thread).toBeUndefined()
+      expect(seen[0]?.threadId).toBe("t-two-step")
+      // The recheck authorizes the row that actually came back.
+      expect(seen[1]?.thread?.access).toEqual({ ownerId: "alice" })
+      expect(seen[1]?.threadId).toBe("t-two-step")
+    }, 30_000)
+
+    it(`${endpoint.name}: writes no metadata on the implicit create when the app has no policy`, async () => {
+      // PR A's contract: no policy file means today's behavior, exactly. Not
+      // `metadata: {}` either — the store distinguishes them.
+      const captured: CreateThreadInput[] = []
+      const { handler } = await setup({ threadsStore: capturingThreadsStore(captured) })
+
+      const response = await handler.fetch(endpoint.request("t-hookless", {}))
+      expect(response.status).toBe(200)
+      await drain(response)
+
+      expect(captured).toEqual([{ thread_id: "t-hookless" }])
+    }, 30_000)
+
+    it(`${endpoint.name}: writes no metadata when the policy allows the create without a stamp`, async () => {
+      const captured: CreateThreadInput[] = []
+      const { handler } = await setup({
+        threadAccess: { fallback: () => ({ decision: "allow" }) },
+        threadsStore: capturingThreadsStore(captured),
+      })
+
+      const response = await handler.fetch(endpoint.request("t-unstamped", {}))
+      expect(response.status).toBe(200)
+      await drain(response)
+
+      expect(captured).toEqual([{ thread_id: "t-unstamped" }])
+    }, 30_000)
+  }
 })
