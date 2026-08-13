@@ -76,23 +76,24 @@ describe("scaffolded thread-access policy", () => {
       )
     })
 
-    it(`${name} tells the reader what the missing-row deny costs them`, () => {
+    it(`${name} says what the missing-row deny does and does not reach`, () => {
       const policy = read(name, "src/thread-access.ts.example")
 
       // The deny on `req.thread === undefined` is justified in this file on
-      // DELETE-existence-oracle grounds. It ALSO refuses every `run.*`
-      // operation on a thread id whose row does not exist yet — which is every
-      // AG-UI turn, because CopilotKit picks its `threadId` in the browser and
-      // never calls `POST /threads`. A scaffold that refuses a first-class flow
-      // and does not say so gets copied, then cursed.
-      expect(policy).toContain("run.*")
+      // DELETE-existence-oracle grounds, and the obvious misreading of it is
+      // that it also refuses every AG-UI turn on a browser-chosen `threadId`.
+      // It does not: a run endpoint that finds no row asks under `create`, and
+      // the row it writes carries that decision's stamp. A scaffold whose
+      // commentary describes a first-class flow wrongly gets copied, then
+      // cursed.
       expect(policy).toContain("/agui/")
-      // And the supported way through it, which is not "relax this line": the
-      // implicit create those endpoints do writes no access stamp, so a
-      // relaxed line authorizes one turn and denies the next. Minting the id
-      // through POST /threads is the only path that stamps an owner.
+      expect(policy).toContain('`action: "create"`')
+      // And the cost that comes with it, which is the one thing a reader
+      // cannot infer from the code: the ids are client-chosen, so whoever
+      // names an unused one owns it, and can deny it to the caller who meant
+      // to use it. `POST /threads` mints ids nobody can call first.
+      expect(policy).toContain("first come, first served")
       expect(policy).toContain("POST /threads")
-      expect(policy).toContain("no access stamp")
     })
   }
 

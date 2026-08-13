@@ -161,14 +161,16 @@ This is in the same class as `dawn inspect` and `dawn memory`: a local operator 
 
 The run endpoints — `POST /threads/:thread_id/runs/stream`, `/runs/wait`, `/resume` and `POST /agui/{routeId}` — plus `GET /threads/:thread_id/pending_interrupts` are on this policy **as well as** [route middleware](/docs/middleware). The two compose as AND: middleware answers "may this caller run this route", the policy answers "may this caller touch this thread", and a request needs both. Neither replaces the other, so keep middleware doing the per-caller work it does today.
 
-All four `run.*` operations arrive under `action: "update"` — including on an id with no row yet, which those endpoints create. Starting a turn on a thread mutates it; none of them is a `create`.
+A `run.*` operation on a thread that exists arrives under `action: "update"` — starting a turn mutates the thread. Three of these endpoints (`/runs/stream`, `/runs/wait`, `POST /agui/{routeId}`) also **create** the thread when the id names no row, and Dawn asks about that under `action: "create"`, then again as the `update` recheck that follows every create — the same two-step `POST /threads` uses. `/resume` is the exception: it needs an already-parked thread, creates nothing, and is only ever an `update`.
 
-<Callout type="warn" title="A policy that denies a missing row denies every AG-UI turn">
-The scaffolded `src/thread-access.ts` denies when `req.thread === undefined`, which is correct for `delete` and `read` and is what keeps the existence oracle shut. It also refuses every `run.*` operation on a thread id that has no row yet — and `POST /agui/{routeId}` is exactly that case, because CopilotKit picks its `threadId` in the browser and never calls `POST /threads`. An app that activates the scaffold unchanged answers `403` to every AG-UI turn.
+The stamp your `create` handler returns is written into the row, exactly as it is on `POST /threads`. So a thread born on a run endpoint has an owner from its first turn, and `access === undefined` keeps its one meaning: **created before you adopted a policy**.
 
-**Relaxing that line for `update` is not the fix.** The implicit create the run endpoints do writes the row with **no access stamp** — only `POST /threads` stamps — so the next turn on the same thread reaches the `access === undefined` branch and is denied anyway. A relaxed policy authorizes the first turn and refuses the second.
+<Callout type="warn" title="On a client-chosen id, ownership is first come, first served">
+`POST /threads` mints the id itself. The run endpoints take the one the caller sent — `POST /agui/{routeId}` especially, because CopilotKit picks its `threadId` in the browser and never calls `POST /threads`. Whoever names an unused id gets stamped as its owner, which also means anyone your `create` handler admits can claim an id **before** the user who meant to use it, and hold it against them.
 
-Mint the thread with `POST /threads` and pass the returned `thread_id` to the client as its thread id. That is the path that records an owner, so every later turn matches it. If client-chosen ids are non-negotiable, record the id-to-owner mapping yourself, from inside the policy, and consult it on `update`. Do not relax `delete` or `read` to get there.
+If that matters, mint ids with `POST /threads` and hand the returned `thread_id` to the client. Those ids are server-generated, so nobody can call them first.
+
+The recheck is what makes the race safe rather than merely unlikely: two callers can both find the row absent, and a store that upserts hands the loser the winner's row. Dawn re-authorizes the row that actually came back, under `update`, before the run proceeds — it never compares stamps, because a `permit()` with no stamp leaves both sides `undefined` and the comparison would pass.
 </Callout>
 
 `GET /threads/:thread_id/pending_interrupts` composes both checks as AND — the route that parked the interrupts must admit the caller *and* this policy must permit the read — and which one refused is deliberately not visible in the response: a thread-access deny returns the handler's own `404 thread_not_found`, the same bytes a genuine miss returns, while a route-identity refusal returns whatever your middleware returns. Dawn logs neither, so log the denial inside your own policy if you need to tell them apart.

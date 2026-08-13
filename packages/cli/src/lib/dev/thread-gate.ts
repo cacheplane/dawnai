@@ -7,7 +7,7 @@ import type {
   ThreadSubject,
 } from "@dawn-ai/sdk"
 import { THREAD_ACCESS_METADATA_KEY } from "@dawn-ai/sdk"
-import type { Thread } from "@dawn-ai/sqlite-storage"
+import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import { headersToRecord } from "./middleware.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
@@ -193,4 +193,46 @@ export function makeThreadGate(
     const returned = handler(accessRequest) as unknown
     return isThenable(returned) ? returned.then(settle) : settle(returned)
   }
+}
+
+/**
+ * The implicit thread create a run endpoint performs when the row is missing,
+ * with the policy's stamp applied and the resulting ROW re-authorized.
+ *
+ * Called ONLY when a policy is installed — a hook-less app keeps its bare
+ * `createThread({ thread_id })` at the call site and pays nothing for this.
+ *
+ * Mirrors `POST /threads` (`runtime-fetch-core.ts`), with two differences that
+ * both come from the id being CLIENT-chosen here rather than server-generated:
+ *
+ * - **No retry.** `POST /threads` retries a create that collided, because it
+ *   can draw a fresh 32-bit id and very likely win. A caller named this id, so
+ *   every retry collides identically. Adoption of an existing row is permanent
+ *   on this path.
+ * - **The recheck is therefore the only boundary.** Unconditional, and never a
+ *   stamp comparison: a `permit()` with no stamp leaves both sides `undefined`,
+ *   the comparison passes, and the loser of a race proceeds on the winner's row
+ *   with nothing having authorized it. Authorize the ROW.
+ *
+ * A store whose `createThread` throws on a duplicate id (sqlite's bare INSERT;
+ * the conformance kit admits that and the upsert-and-return-the-existing-row
+ * shape alike) propagates exactly as it does today — that path never obtains a
+ * row, so there is nothing to re-authorize and nothing to hand back.
+ */
+export async function createGatedThreadForRun(args: {
+  readonly gate: (spec: GateSpec) => Gate | Promise<Gate>
+  readonly operation: ThreadOperation
+  readonly stamp: Record<string, unknown> | undefined
+  readonly store: ThreadsStore
+  readonly threadId: string
+}): Promise<{ readonly ok: true; readonly thread: Thread } | GateDenied> {
+  const { gate, operation, stamp, store, threadId } = args
+  const thread = await store.createThread({
+    thread_id: threadId,
+    ...(stamp ? { metadata: { [THREAD_ACCESS_METADATA_KEY]: stamp } } : {}),
+  })
+  const recheck = gate({ action: "update", operation, thread, threadId: thread.thread_id })
+  const settled = isThenable(recheck) ? await recheck : recheck
+  if (!settled.ok) return settled
+  return { ok: true, thread }
 }

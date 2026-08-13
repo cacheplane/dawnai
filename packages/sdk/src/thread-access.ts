@@ -25,14 +25,21 @@ export type ThreadAction = "create" | "read" | "update" | "delete"
  * - `thread.delete` — `DELETE /threads/:id` — `delete`
  * - `thread.cancel` — `POST /threads/:id/cancel` — `update`
  * - `thread.pending_interrupts` — `GET /threads/:id/pending_interrupts` — `read`
- * - `run.stream` — `POST /threads/:id/runs/stream` — `update`
- * - `run.wait` — `POST /threads/:id/runs/wait` — `update`
+ * - `run.stream` — `POST /threads/:id/runs/stream` — `update`; on a thread id
+ *   with no row yet, `create`, then again as the `update` recheck that follows
+ *   every create
+ * - `run.wait` — `POST /threads/:id/runs/wait` — `update`, or the same
+ *   `create`-then-`update` pair on a thread id with no row yet
  * - `run.resume` — `POST /threads/:id/resume` — `update`
- * - `run.agui` — `POST /agui/:routeId` — `update`
+ * - `run.agui` — `POST /agui/:routeId` — `update`, or the same
+ *   `create`-then-`update` pair on a thread id with no row yet
  *
- * Every `run.*` operation arrives under `update`, without exception. Starting a
- * turn on a thread mutates it; none of them is a `create`, including the ones
- * whose endpoint will create the row when it is missing.
+ * Starting a turn on a thread that exists mutates it, so it is an `update`.
+ * Three of these endpoints also CREATE the thread when the id names no row, and
+ * that create is a create: it decides who owns a thread that did not exist a
+ * moment ago, and the stamp it returns is what every later turn authorizes
+ * against. `run.resume` is the exception — it requires an already-parked thread
+ * and creates nothing, so it is only ever an `update`.
  */
 export type ThreadOperation =
   | "thread.create"
@@ -83,7 +90,9 @@ export interface ThreadAccessRequest {
   /**
    * `undefined` only when the runtime has no id yet: `action: "create"` on
    * `POST /threads`, whose id is server-generated. Present everywhere else,
-   * INCLUDING the `action: "update"` recheck that follows every create.
+   * INCLUDING the `action: "update"` recheck that follows every create — and
+   * including a `create` on a run endpoint, where the id is the one the client
+   * named.
    */
   readonly threadId: string | undefined
   /**
@@ -108,7 +117,8 @@ export interface ThreadAccessRequest {
   /**
    * Client-supplied `metadata` on a create, already stripped of the reserved
    * key. `undefined` on every non-create — and on the create recheck, whose
-   * metadata was already adjudicated by the create call.
+   * metadata was already adjudicated by the create call. Also `undefined` on a
+   * `run.*` create: those endpoints accept no thread metadata at all.
    */
   readonly requestedMetadata: Readonly<Record<string, unknown>> | undefined
 }

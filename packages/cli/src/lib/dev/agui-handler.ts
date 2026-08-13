@@ -26,7 +26,8 @@ import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 import { terminalStatus } from "./terminal-status.js"
-import { isThenable, makeThreadGate } from "./thread-gate.js"
+import type { Gate, GateSpec } from "./thread-gate.js"
+import { createGatedThreadForRun, isThenable, makeThreadGate } from "./thread-gate.js"
 import { assertNoReservedKey } from "./thread-metadata.js"
 
 export interface AgUiFetchRequestOptions {
@@ -238,24 +239,35 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       return statusResponse(middlewareResult.status, middlewareResult.body)
     }
 
-    // Unconditionally `update`, like every other `run.*` operation — see
-    // ThreadOperation. AFTER the middleware reject above and BEFORE every
-    // side effect below (`resumeClaims.tryClaim`, `runRegistry.begin`,
-    // `threadsStore.createThread`): a denial must take no claim, no run
-    // slot, and create no row. This route has no `threads` segment — the
+    // `update` on a row that exists, `create` on one this turn is about to
+    // make — see ThreadOperation. AFTER the middleware reject above and BEFORE
+    // every side effect below (`resumeClaims.tryClaim`, `runRegistry.begin`,
+    // `threadsStore.createThread`): a denial must take no claim, no run slot,
+    // and create no row. This route has no `threads` segment — the
     // client-supplied `input.threadId` is the only thread identity a caller
     // controls here, and it names any thread id it likes.
+    //
+    // The create itself cannot happen here: it must land after the run slot is
+    // claimed, where it has always been. These two carry the `create` decision
+    // down to it. Both stay `undefined` on a row that already exists and on a
+    // hook-less app, which is what the create site branches on.
+    let createGate: ((spec: GateSpec) => Gate | Promise<Gate>) | undefined
+    let createStamp: Record<string, unknown> | undefined
     if (threadAccess) {
       const existing = await threadsStore.getThread(input.threadId)
       const gate = makeThreadGate(threadAccess, request)
       const g = gate({
-        action: "update",
+        action: existing ? "update" : "create",
         operation: "run.agui",
         threadId: input.threadId,
         ...(existing ? { thread: existing } : {}),
       })
       const settled = isThenable(g) ? await g : g
       if (!settled.ok) return settled.response
+      if (!existing) {
+        createGate = gate
+        createStamp = settled.stamp
+      }
     }
 
     if (dawnInput.resume !== undefined) {
@@ -303,7 +315,33 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // caveat as the Agent Protocol handlers: only the CLEAR consults it.
     const existingThread = await threadsStore.getThread(threadId)
     const previousParkedRoute = readParkedRoute(existingThread)
-    if (!existingThread) {
+    if (createGate && existingThread) {
+      // A row appeared between the gate and here. The window is wide on this
+      // endpoint — a resume claim, a run slot and a checkpointer read sit
+      // inside it — and the id is client-chosen, so the row that turned up may
+      // be anybody's. The `create` decision authorized a thread that did not
+      // exist; this one does, so it is authorized as what it now is. Skipping
+      // this on the strength of the earlier decision would run the turn on a
+      // thread nothing admitted this caller to.
+      const recheck = createGate({
+        action: "update",
+        operation: "run.agui",
+        thread: existingThread,
+        threadId,
+      })
+      const settled = isThenable(recheck) ? await recheck : recheck
+      if (!settled.ok) return settled.response
+    } else if (createGate) {
+      const created = await createGatedThreadForRun({
+        gate: createGate,
+        operation: "run.agui",
+        stamp: createStamp,
+        store: threadsStore,
+        threadId,
+      })
+      if (!created.ok) return created.response
+    } else if (!existingThread) {
+      // Hook-less: unchanged.
       await threadsStore.createThread({ thread_id: threadId })
     }
     // The last-run route, and therefore NOT the identity

@@ -30,30 +30,23 @@ const owned = async (req: ThreadAccessRequest) => {
   // the endpoint's natural 404 or 204. Denying it FIRST, ahead of any admin
   // branch, is what keeps "not yours" and "never existed" the same answer. An
   // admin allowed to delete a row that never existed reopens the existence
-  // oracle this default closes.
+  // oracle this default closes. Do not relax this line for `delete` or `read`.
   //
-  // READ THIS BEFORE YOU SHIP AN AG-UI APP. This line also refuses every
-  // `run.*` operation on a thread id whose row does not exist yet, and those
-  // endpoints are the ones that would have created it: `POST /agui/{routeId}`,
-  // `/runs/stream`, `/runs/wait` and `/resume` all arrive here under
-  // `action: "update"` with `req.thread === undefined`. CopilotKit picks its
-  // `threadId` in the browser and never calls `POST /threads`, so under this
-  // policy every AG-UI turn on a fresh id is denied with a 403.
+  // It does NOT refuse a first AG-UI turn, which is the thing people expect it
+  // to. `POST /agui/{routeId}`, `/runs/stream` and `/runs/wait` create the row
+  // when the id names none, and Dawn asks about that create under
+  // `action: "create"` — the handler below, not this one. CopilotKit picking
+  // its `threadId` in the browser is therefore served, and the row it writes
+  // carries the stamp that create returned, so every later turn matches
+  // `owner === user.id`. Only `/resume` arrives here with no row, because it
+  // needs an already-parked thread and creates nothing.
   //
-  // Relaxing this line for `update` is NOT the fix, however obvious it looks.
-  // The implicit create those endpoints do writes the row with no access stamp,
-  // so the next turn on the same thread reaches the `owner === undefined`
-  // branch below and is denied anyway: you would authorize turn one and refuse
-  // turn two, which is worse than refusing honestly.
-  //
-  // Mint the thread with `POST /threads` and hand the returned `thread_id` to
-  // the client as its thread id. That is the only path that stamps an owner, so
-  // every later turn matches `owner === user.id` and is served. If you must
-  // authorize client-chosen ids instead, record the id-to-owner mapping
-  // yourself — in your own store, from this policy — and consult it here.
-  // Whatever you do, do not relax `delete` or `read`: those endpoints answer
-  // 204/404 for a row that never existed, and permitting them on a missing row
-  // is exactly what reopens the existence oracle.
+  // What that costs, and it is a real cost: ownership of a client-chosen id is
+  // first come, first served. Any authenticated caller can claim an unused id
+  // by naming it — including claiming one your user was about to use, which
+  // then denies it to them for good. Mint ids with `POST /threads` and hand the
+  // returned `thread_id` to the client if that matters to you; those ids are
+  // server-generated, so nobody can call them first.
   if (req.thread === undefined) return deny()
 
   // `req.thread.access`, never `req.thread.metadata`. Metadata is
@@ -74,6 +67,10 @@ const owned = async (req: ThreadAccessRequest) => {
 }
 
 export default defineThreadAccess({
+  // `POST /threads`, and every run endpoint that finds no row for the thread id
+  // it was given. The stamp this returns is the thread's owner record: Dawn
+  // stores it under a reserved key no client can write, and it is what `owned`
+  // above authorizes against for the whole life of the thread.
   create: async (req) => {
     const user = await principalOf(req.headers)
     return user ? permit({ ownerId: user.id, org: user.org }) : deny()
@@ -81,9 +78,10 @@ export default defineThreadAccess({
   // `fallback` is required, and it is the deny-by-default floor: an action with
   // no handler of its own lands here rather than falling through to an allow.
   //
-  // It also handles the `update` recheck Dawn runs after every create. The row
-  // just stamped has `ownerId === user.id`, so `owned` permits it; a row the
-  // store handed back on an id collision carries someone else's, so `owned`
-  // denies and the caller never receives a thread they do not own.
+  // It also handles the `update` recheck Dawn runs after every create, on
+  // `POST /threads` and on a run endpoint's implicit create alike. The row just
+  // stamped has `ownerId === user.id`, so `owned` permits it; a row the store
+  // handed back on an id collision carries someone else's, so `owned` denies
+  // and the caller never receives a thread they do not own.
   fallback: owned,
 })

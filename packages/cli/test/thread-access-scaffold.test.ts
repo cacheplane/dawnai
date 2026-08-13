@@ -177,33 +177,68 @@ describe("the scaffolded thread-access policy, driven end to end", () => {
     await drain(intruder)
   }, 30_000)
 
-  it("denies a run on an unminted id, identically for every caller", async () => {
+  it("serves a run on a client-chosen id, and gives that id to the caller who named it first", async () => {
     const handler = await setup()
     const threadId = "t-client-chosen"
 
-    // The scaffold's documented limitation, pinned so it stays a decision. The
-    // run endpoints create the row they are given, and that implicit create
-    // writes NO access stamp — so there is no owner for a later turn to match,
-    // and permitting the first turn here would authorize a thread that nothing
-    // can own afterwards. The scaffold denies instead, and says so.
-    const authenticated = await handler.fetch(aguiTurn(threadId, ALICE))
+    // The flow CopilotKit actually drives: an id picked in the browser, never
+    // minted through POST /threads. The run endpoint creates the row, and Dawn
+    // asks the scaffold's `create` handler about it — which stamps the caller,
+    // so the thread has an owner from its first breath.
+    const first = await handler.fetch(aguiTurn(threadId, ALICE))
+    expect(first.status).toBe(200)
+    await drain(first)
+
+    // Turn two, on the row turn one created. This is what the missing stamp
+    // used to break: alice arrived at her own thread as a stranger.
+    const second = await handler.fetch(aguiTurn(threadId, ALICE))
+    expect(second.status).toBe(200)
+    await drain(second)
+
+    // First come, first served — and everyone who comes later is a stranger,
+    // on both run endpoints.
     const other = await handler.fetch(aguiTurn(threadId, BOB))
-    const anonymous = await handler.fetch(aguiTurn(threadId, ANONYMOUS))
-
-    expect(authenticated.status).toBe(403)
     expect(other.status).toBe(403)
-    expect(anonymous.status).toBe(403)
+    await drain(other)
+    const streamed = await handler.fetch(runStream(threadId, BOB))
+    expect(streamed.status).toBe(403)
+    await drain(streamed)
 
-    // And no row was created by the denial, so a denied caller cannot squat an
-    // id the way an allowed one would.
+    // The thread is alice's on every axis, not just the run endpoints.
+    expect(
+      (await handler.fetch(new Request(`http://localhost/threads/${threadId}`, { headers: ALICE })))
+        .status,
+    ).toBe(200)
+    expect(
+      (await handler.fetch(new Request(`http://localhost/threads/${threadId}`, { headers: BOB })))
+        .status,
+    ).toBe(404)
+  }, 30_000)
+
+  it("denies an unauthenticated run on a client-chosen id, and creates no row for it", async () => {
+    const handler = await setup()
+    const threadId = "t-anonymous-chosen"
+
+    // The scaffold is deny-by-default and `principalOf` is the only thing that
+    // opens it — on the implicit create as much as anywhere else.
+    const anonymous = await handler.fetch(aguiTurn(threadId, ANONYMOUS))
+    expect(anonymous.status).toBe(403)
+    await drain(anonymous)
+
+    const streamed = await handler.fetch(runStream(threadId, ANONYMOUS))
+    expect(streamed.status).toBe(403)
+    await drain(streamed)
+
+    // A denied caller must not be able to squat an id the way an allowed one
+    // does: the gate runs before the create, so nothing was written.
     const probe = await handler.fetch(
       new Request(`http://localhost/threads/${threadId}`, { headers: ALICE }),
     )
     expect(probe.status).toBe(404)
-
-    const streamed = await handler.fetch(runStream(threadId, ALICE))
-    expect(streamed.status).toBe(403)
-    await drain(streamed)
+    // And the id is still free for a caller who can authenticate.
+    const claimed = await handler.fetch(aguiTurn(threadId, ALICE))
+    expect(claimed.status).toBe(200)
+    await drain(claimed)
   }, 30_000)
 
   it("keeps the missing-row oracle shut on read and delete", async () => {
