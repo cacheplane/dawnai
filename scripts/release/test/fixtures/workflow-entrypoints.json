@@ -117,7 +117,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0"
+                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
               }
             },
             {
@@ -127,6 +127,7 @@
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
                   "version": "v0.31.0",
+                  "kubectl_version": "v1.35.0",
                   "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
                 }
               }
@@ -722,7 +723,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0"
+                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
               }
             },
             {
@@ -732,6 +733,7 @@
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
                   "version": "v0.31.0",
+                  "kubectl_version": "v1.35.0",
                   "config": ".github/kind/kind-calico.yaml",
                   "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
                 }
@@ -849,7 +851,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Prime kind tool cache",
-                "run": "scripts/prime-kind-cache.sh v0.31.0"
+                "run": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
               }
             },
             {
@@ -859,6 +861,7 @@
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
                   "version": "v0.31.0",
+                  "kubectl_version": "v1.35.0",
                   "config": ".github/kind/kind-calico.yaml",
                   "cluster_name": "dawn-smoke",
                   "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"

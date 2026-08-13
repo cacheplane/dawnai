@@ -754,7 +754,7 @@
         "stepIndex": 6,
         "step": "Prime kind tool cache",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0"
+        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
       },
       {
         "classification": "safe",
@@ -866,7 +866,7 @@
         "stepIndex": 6,
         "step": "Prime kind tool cache",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0"
+        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
       },
       {
         "classification": "safe",
@@ -1050,7 +1050,7 @@
         "stepIndex": 2,
         "step": "Prime kind tool cache",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0"
+        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
       },
       {
         "classification": "safe",
