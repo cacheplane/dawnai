@@ -626,7 +626,7 @@
         "stepIndex": 2,
         "step": "Install kubeconform",
         "kind": "run",
-        "value": "curl -sSL -o /tmp/kubeconform.tar.gz \\\n  https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz\ntar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform\nsudo install /tmp/kubeconform /usr/local/bin/kubeconform\nkubeconform -v\n"
+        "value": "set -euo pipefail\nexpected=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883\ncurl --fail --retry 5 --retry-all-errors --retry-delay 2 -sSL -o /tmp/kubeconform.tar.gz \\\n  https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz\nactual=\"$(sha256sum /tmp/kubeconform.tar.gz | cut -d' ' -f1)\"\nif [ \"$actual\" != \"$expected\" ]; then\n  echo \"kubeconform-linux-amd64.tar.gz checksum mismatch\" >&2\n  echo \"  expected $expected\" >&2\n  echo \"  actual   $actual\" >&2\n  exit 1\nfi\ntar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform\nsudo install /tmp/kubeconform /usr/local/bin/kubeconform\nkubeconform -v\n"
       },
       {
         "classification": "safe",
@@ -752,6 +752,14 @@
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 6,
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.31.0"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s",
+        "stepIndex": 7,
         "step": "Create kind cluster (no default CNI)",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
@@ -759,7 +767,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 7,
+        "stepIndex": 8,
         "step": "Install Calico (enforces NetworkPolicy)",
         "kind": "run",
         "value": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
@@ -767,7 +775,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 8,
+        "stepIndex": 9,
         "step": "Install sandbox-infra chart",
         "kind": "run",
         "value": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait\nkubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount\n"
@@ -775,7 +783,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 9,
+        "stepIndex": 10,
         "step": "Prepare chart NetworkPolicy control",
         "kind": "run",
         "value": "sh test/k8s-smoke/setup-network-policy-control.sh"
@@ -783,7 +791,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 10,
+        "stepIndex": 11,
         "step": "Assert orchestrator RBAC (least privilege)",
         "kind": "run",
         "value": "SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator\nkubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\n# WebSocket exec (@kubernetes/client-node) authorizes as `get pods/exec`\nkubectl auth can-i get pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no\n"
@@ -791,7 +799,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 11,
+        "stepIndex": 12,
         "step": "Real-cluster sandbox conformance + e2e",
         "kind": "run",
         "value": "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration"
@@ -799,7 +807,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
-        "stepIndex": 12,
+        "stepIndex": 13,
         "step": "Exercise PVC reaper",
         "kind": "run",
         "value": "sh test/k8s-smoke/assert-reaper.sh"
@@ -856,6 +864,14 @@
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 6,
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.31.0"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 7,
         "step": "Create kind cluster (no default CNI)",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
@@ -863,7 +879,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 7,
+        "stepIndex": 8,
         "step": "Install Calico (enforces NetworkPolicy)",
         "kind": "run",
         "value": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
@@ -871,7 +887,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 8,
+        "stepIndex": 9,
         "step": "Preload sandbox workload image into kind",
         "kind": "run",
         "value": "docker pull node:22-slim\nkind load docker-image node:22-slim --name \"$KIND_CLUSTER\"\n"
@@ -879,7 +895,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 9,
+        "stepIndex": 10,
         "step": "Build and load smoke app image (Verdaccio)",
         "kind": "run",
         "value": "set -eu\nURLFILE=\"$(mktemp)\"\npnpm exec tsx test/k8s-smoke/serve-registry.ts \"$URLFILE\" &\nREG_PID=$!\nfor _ in $(seq 1 180); do\n  [ -s \"$URLFILE\" ] && break\n  kill -0 \"$REG_PID\" 2>/dev/null || { echo \"serve-registry exited before publishing\"; exit 1; }\n  sleep 1\ndone\n[ -s \"$URLFILE\" ] || { echo \"registry URL never became ready\"; kill \"$REG_PID\" 2>/dev/null || true; exit 1; }\nREG_URL=\"$(cat \"$URLFILE\")\"\necho \"registry ready at $REG_URL\"\nsh test/k8s-smoke/build-image.sh k8s \"$REG_URL\"\nkill \"$REG_PID\" 2>/dev/null || true\nkind load docker-image dawn-smoke-app:k8s --name \"$KIND_CLUSTER\"\n"
@@ -887,7 +903,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 10,
+        "stepIndex": 11,
         "step": "Build and load aimock image",
         "kind": "run",
         "value": "docker build -t dawn-smoke-aimock:latest -f test/k8s-smoke/aimock/Dockerfile test/k8s-smoke\nkind load docker-image dawn-smoke-aimock:latest --name \"$KIND_CLUSTER\"\n"
@@ -895,7 +911,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 11,
+        "stepIndex": 12,
         "step": "Create app namespace",
         "kind": "run",
         "value": "kubectl create namespace dawn-app"
@@ -903,7 +919,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 12,
+        "stepIndex": 13,
         "step": "Install sandbox-infra chart",
         "kind": "run",
         "value": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra \\\n  -n dawn-sandboxes --create-namespace \\\n  -f test/k8s-smoke/values-sandbox-infra.yaml --wait\n"
@@ -911,7 +927,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 13,
+        "stepIndex": 14,
         "step": "Deploy aimock",
         "kind": "run",
         "value": "kubectl apply -f test/k8s-smoke/aimock.k8s.yaml\nkubectl -n dawn-app rollout status deploy/aimock --timeout=120s\n"
@@ -919,7 +935,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 14,
+        "stepIndex": 15,
         "step": "Install dawn-app chart",
         "kind": "run",
         "value": "helm install dawn-app charts/dawn-app \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-dawn-app.yaml --wait\n"
@@ -927,7 +943,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 15,
+        "stepIndex": 16,
         "step": "Run full-arc assertions",
         "kind": "run",
         "value": "sh test/k8s-smoke/assert-k8s.sh"
@@ -935,7 +951,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 16,
+        "stepIndex": 17,
         "step": "Diagnostics + cleanup",
         "kind": "run",
         "value": "echo \"----- app -----\"\nkubectl -n dawn-app get pods,svc -o wide || true\nkubectl -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm uninstall dawn-app -n dawn-app || true\nhelm uninstall dawn-sandbox-infra -n dawn-sandboxes || true\nkubectl delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
@@ -1032,6 +1048,14 @@
         "classification": "safe",
         "job": "chart-apply-smoke",
         "stepIndex": 2,
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.31.0"
+      },
+      {
+        "classification": "safe",
+        "job": "chart-apply-smoke",
+        "stepIndex": 3,
         "step": "Create kind cluster",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
@@ -1039,7 +1063,7 @@
       {
         "classification": "safe",
         "job": "chart-apply-smoke",
-        "stepIndex": 3,
+        "stepIndex": 4,
         "step": "Install dawn-app (placeholder image) and verify it serves",
         "kind": "run",
         "value": "helm install dawn-app charts/dawn-app \\\n  --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl rollout status deploy/dawn-app --timeout=120s\nkubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
