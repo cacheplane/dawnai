@@ -14,6 +14,7 @@ import {
   focusReport,
   GROUP_ROW_ID_PREFIX,
   grid,
+  headAndFocusReport,
   liveRegionText,
   loadMore,
   MIN_RENDERED_ROWS,
@@ -78,10 +79,32 @@ test.describe("focus continuity", () => {
     await sortByHeader(page, FOCUS_COLUMN)
     await expectPhase(page, "idle")
 
-    const after = await rowIds(page)
-    // The pivot also resets scroll, so the drawn head IS the model head — `after[0]` is
-    // an address, not merely "whatever is on screen".
-    const head = after[0] as string
+    // POLLED, and both halves read in ONE evaluation. `rowIds` is documented one-shot —
+    // the rendered set can still change a frame after the phase reads `idle` — so a head
+    // pinned from it here can name a row the result no longer leads with. That is how
+    // this failed in CI: the head read as `route=/chat` while focus sat, correctly, on
+    // `route=/notes`, and the poll below then waited out its timeout against an address
+    // that had already stopped being the head.
+    //
+    // `headAndFocusReport` closes that by sampling the head and the focus address
+    // together, so no re-render, second fetch or re-group can land between them. The
+    // whole address in one sample, for the reason the old comment here gave: `columnId`
+    // is what says the focused node is a cell rather than the row wrapper or the
+    // row-select control, and a second sample for a second field could straddle a commit.
+    //
+    // The re-seat happens in a layout effect and DOM focus follows it from a second one,
+    // so the phase attribute lands first and this genuinely needs to poll.
+    await expect
+      .poll(() => headAndFocusReport(page))
+      .toMatchObject({
+        focusIsHead: true,
+        columnId: GROUP_COLUMN_ID,
+        inGrid: true,
+        onBody: false,
+      })
+
+    // Settled: re-read for the two claims about WHICH row the head is.
+    const head = (await headAndFocusReport(page)).head
     // The one place this lane pins a divergence from its own design, so the message says
     // what to do about it rather than leaving that in a comment the failure never prints.
     expect(
@@ -97,15 +120,6 @@ test.describe("focus continuity", () => {
     // re-renders the same coordinates over new rows, so "focus is on the head" and "focus
     // did not move" are the same sentence unless the two rows differ.
     expect(head).not.toBe(anchored)
-
-    // POLLED: the re-seat happens in a layout effect and DOM focus follows it from a
-    // second effect, so the phase attribute lands first. The WHOLE address, in ONE sample:
-    // `columnId` is what says the focused node is a cell rather than the row wrapper or
-    // the row-select control, and a second sample of the same helper for a second field
-    // could straddle a commit.
-    await expect
-      .poll(() => focusReport(page))
-      .toEqual({ rowId: head, columnId: GROUP_COLUMN_ID, inGrid: true, onBody: false })
   })
 
   test("an append leaves focus exactly where it was", async ({ page, consoleErrors }) => {
