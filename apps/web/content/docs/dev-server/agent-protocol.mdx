@@ -23,6 +23,11 @@ such as `/research#agent`.
   memory-candidate management, and health routes bypass it. Put outer authentication and network
   restrictions around the entire service for any non-local exposure; exempt
   only the health probe you intend to expose.
+
+  An app that adds a [thread-access policy](/docs/thread-access) authorizes
+  every thread endpoint in the table below on a second, independent axis — the
+  thread rather than the route — and the two gates compose as AND. That still
+  leaves the memory-candidate and health routes covered by neither.
 </Callout>
 
 ## Agent Protocol endpoints

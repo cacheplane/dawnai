@@ -1177,7 +1177,7 @@ const ALLOW: Record<string, string> = { "x-allow": "1" }
 // ---------------------------------------------------------------------------
 
 describe("GET /threads/:thread_id/pending_interrupts thread access", () => {
-  it("denies a read the policy rejects, byte-identically to a genuine miss", async () => {
+  it("denies a read the policy rejects, in the same bytes as a genuine miss", async () => {
     await withAimock(
       script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
     )

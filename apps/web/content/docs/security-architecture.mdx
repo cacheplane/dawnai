@@ -24,6 +24,8 @@ Dawn middleware runs only when a request is about to execute a route. Management
 
 Apply authorization before dispatch so create, read, delete, state, cancel, memory candidates, and health cannot reach their narrower Dawn handlers unauthenticated.
 
+The "Dawn middleware" column is about route execution only. Every thread row above — management, state, cancellation, Agent Protocol execution and AG-UI execution — is additionally covered in-runtime by a [thread-access policy](/docs/thread-access) when the app has one, on the per-thread ownership axis this table asks the outer boundary to supply. It is a second gate, not a replacement for the outer one, and health and memory-candidate routes are outside it.
+
 ## Authorize the tenant, not the identifier
 
 Verified claims answer *who the caller is*. Route parameters, `thread_id`, AG-UI `threadId`, tenant strings in route input, and memory namespaces answer *which resource was requested*. Compare the two using application-owned records.

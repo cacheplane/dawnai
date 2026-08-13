@@ -100,6 +100,11 @@ See [Middleware](/docs/middleware) for execution-route behavior and
 [Security Architecture](/docs/security-architecture) for the management routes
 that require service-wide outer authentication.
 
+Middleware is not the only in-runtime gate. [Thread access](/docs/thread-access)
+is a second one on a different axis — the thread rather than the route — and it
+covers every thread endpoint, including the ones middleware never sees. Where
+both apply they compose as AND.
+
 ## Related
 
 <RelatedCards items={[

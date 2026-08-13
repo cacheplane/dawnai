@@ -42,6 +42,8 @@ export default defineThreadAccess({
 
 Dawn probes four paths, in order: `src/thread-access.ts`, `src/thread-access.js`, `thread-access.ts`, `thread-access.js`. The `default` export wins; a named `threadAccess` export is the fallback.
 
+`create-dawn-app` scaffolds this file, and the `src/auth.ts` it imports, as `src/thread-access.ts.example` and `src/auth.ts.example`. Drop both `.example` suffixes to activate them — Dawn probes for the exact names above, so an unrenamed scaffold changes nothing. They ship inert because a deny-by-default policy denies every request from a caller the app cannot yet authenticate, and a generated app has no identity provider on its first run.
+
 `fallback` is required. "I forgot to handle delete" is a compile error rather than a silent allow — or a silent deny — on every request of that action.
 
 ## What the policy receives
@@ -75,6 +77,11 @@ Repeated headers arrive joined. `X-User-Id: victim` plus `X-User-Id: attacker` i
 | `GET /threads/:thread_id/state` | 404, the same body a missing checkpoint returns |
 | `DELETE /threads/:thread_id` | 403 `thread_access_denied` |
 | `POST /threads/:thread_id/cancel` | 403 `thread_access_denied` |
+| `GET /threads/:thread_id/pending_interrupts` | 404 `thread_not_found`, the same body a genuine miss returns |
+| `POST /threads/:thread_id/runs/stream` | 403 `thread_access_denied` |
+| `POST /threads/:thread_id/runs/wait` | 403 `thread_access_denied` |
+| `POST /threads/:thread_id/resume` | 403 `thread_access_denied` |
+| `POST /agui/:routeId` | 403 `thread_access_denied` |
 
 The read default is 404 so a denial cannot be told apart from a miss, which is what stops anyone enumerating thread ids. The 403s sit on endpoints where the caller has already named a specific thread and asked to change it.
 
@@ -119,7 +126,11 @@ Dawn: no thread access policy (all thread endpoints are open)
 
 ## Build targets
 
-`dawn build --target hono` and `--target langsmith` **fail** with `DAWN_E1005` while a policy file exists. Neither runtime can carry the hook today, and a build that silently dropped it would deploy every thread endpoint ungated. The `node` target needs nothing special — its emitted server reaches the same disk probe `dawn dev` does. An app with no policy file builds for every target exactly as before. See [Deployment](/docs/deployment).
+`dawn build --target langsmith` **fails** with `DAWN_E1005` while a policy file exists, and always will: that target materializes per-route graphs and no Dawn HTTP layer, so there is nowhere for the hook to run, and a build that silently dropped it would deploy every thread endpoint ungated. Put equivalent authorization at the LangSmith platform boundary instead.
+
+`hono` and `vercel` carry the policy. They share one emitter, and the built manifest has a slot for it: the policy rides in as a static import, and the generated entry point records that the build saw one. If a manifest generated before the app grew a policy is later deployed beside a newer entry point, the boot **fails** rather than coming up silently ungated — there is no disk to probe on a bundled runtime, so nothing else would notice.
+
+The `node` target needs nothing special; its emitted server reaches the same disk probe `dawn dev` does. An app with no policy file builds for every target exactly as before. See [Deployment](/docs/deployment) and [Edge and Hono](/docs/deployment/edge).
 
 ## Adopting a policy on an existing app
 
@@ -146,6 +157,16 @@ This is in the same class as `dawn inspect` and `dawn memory`: a local operator 
 
 `GET /threads/:thread_id` returns the raw thread, reserved key included. That is deliberate — hiding it would break round-tripping and make the stamp undebuggable, and that endpoint is gated by the very policy the stamp feeds. Put identifiers in a stamp. Do not put anything in it whose disclosure to a caller your `read` policy admits would matter.
 
-## What this does not cover yet
+## The run endpoints and middleware
 
-The run endpoints — `POST /threads/:thread_id/runs/stream`, `/runs/wait`, `/resume` and `POST /agui/{routeId}` — are gated by [route middleware](/docs/middleware) only. They are not yet on this policy, and a caller who can run a route on a thread can still create the row for an id of their choosing. Keep middleware doing real per-caller authorization until they are.
+The run endpoints — `POST /threads/:thread_id/runs/stream`, `/runs/wait`, `/resume` and `POST /agui/{routeId}` — plus `GET /threads/:thread_id/pending_interrupts` are on this policy **as well as** [route middleware](/docs/middleware). The two compose as AND: middleware answers "may this caller run this route", the policy answers "may this caller touch this thread", and a request needs both. Neither replaces the other, so keep middleware doing the per-caller work it does today.
+
+All four `run.*` operations arrive under `action: "update"` — including on an id with no row yet, which those endpoints create. Starting a turn on a thread mutates it; none of them is a `create`.
+
+`GET /threads/:thread_id/pending_interrupts` composes both checks as AND — the route that parked the interrupts must admit the caller *and* this policy must permit the read — and which one refused is deliberately not visible in the response: a thread-access deny returns the handler's own `404 thread_not_found`, the same bytes a genuine miss returns, while a route-identity refusal returns whatever your middleware returns. Dawn logs neither, so log the denial inside your own policy if you need to tell them apart.
+
+<Callout type="warn" title="On /resume, a thread-access deny replaces a middleware 401">
+`POST /threads/:thread_id/resume` and `GET /threads/:thread_id/pending_interrupts` are the two endpoints whose thread-access gate runs **before** middleware, so on them a caller middleware would have refused with a `401` receives this policy's deny instead — a `403` on `/resume`, a `404` on `/pending_interrupts`.
+
+That ordering is forced, not preferred. Middleware needs the route key, and on both endpoints the route key is read from the thread's own metadata — so resolving the identity middleware would authorize against means reading a thread the caller is not yet authorized to read. On `/resume`, gating later also let a denied caller take the thread's resume claim (a denial of service against a parked turn, needing no credential at all) and read the `400`/`409` codes as an oracle on a guessed `interruptId`/`resumeKey`. Both checks still apply on both endpoints; only which one answers first is decided here.
+</Callout>

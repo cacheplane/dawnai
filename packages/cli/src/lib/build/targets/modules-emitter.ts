@@ -363,7 +363,7 @@ export function emitModulesFileWithFlavor(
   const runtimeSpecifier = JSON.stringify(flavor.runtimeSpecifier)
   // Composed from a list rather than branched per combination: with two
   // optional helpers a ternary tree has four arms, and the arm a middleware-only
-  // app takes must stay byte-identical to what it emitted before thread access
+  // app takes must emit exactly the same bytes it emitted before thread access
   // existed. The order is fixed here — `buildStaticRouteModule` first, then the
   // normalizers in the order their entries appear in the default export below.
   const runtimeImports = [
