@@ -232,7 +232,60 @@ export function runThreadsStoreConformance(opts: {
         const fetched = await s.getThread("t-dup")
         expect(fetched?.status).toBe("idle")
         expect(fetched?.created_at).toMatch(ISO_MS)
-        expect([{ v: 1 }, { v: 2 }]).toContainEqual(fetched?.metadata)
+        // WHICH metadata survives is not "either one" — it is pinned by the
+        // next case, which is stricter than anything that belongs here.
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("a colliding createThread never applies the caller's metadata", async () => {
+      const s = await makeStore()
+      try {
+        // The two conformant outcomes above diverge by backend: sqlite's bare
+        // INSERT throws, a multi-writer backend upserts and hands back the row
+        // that is already there. The THIRD outcome — the caller's metadata
+        // overwriting the stored row's — is not conformant on either.
+        //
+        // Thread ids are `t-` plus four random bytes, so collisions are a
+        // 32-bit birthday problem, not a hypothetical. Dawn stores each
+        // thread's authorization stamp under a reserved metadata key, so a
+        // store that let a second create rewrite metadata would let whoever
+        // draws (or guesses) a live id restamp someone else's thread and then
+        // read it legally.
+        await s.createThread({ thread_id: "t-collide", metadata: { owner: "first" } })
+        await s
+          .createThread({ thread_id: "t-collide", metadata: { owner: "second" } })
+          .catch(() => undefined)
+        expect((await s.getThread("t-collide"))?.metadata).toEqual({ owner: "first" })
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("updateMetadata leaves a top-level key the patch does not name intact", async () => {
+      const s = await makeStore()
+      try {
+        // The companion to the shallow-merge case above. That one pins what a
+        // patch REPLACES; this one pins what it must not touch.
+        //
+        // `dawn:access` is the reserved key Dawn's thread-access stamp lives
+        // under (`THREAD_ACCESS_METADATA_KEY`), written once at create and
+        // never again. Every later `route` and `parked_route` write is a patch
+        // like the two below. If a patch could drop an unrelated key, a thread
+        // would silently lose its stamp on its next run and read back as an
+        // unstamped legacy thread — which a policy is entitled to treat as
+        // admin-only, or as nobody's.
+        await s.createThread({
+          thread_id: "t-untouched",
+          metadata: { "dawn:access": { ownerId: "u-1" }, user: "brian" },
+        })
+        await s.updateMetadata("t-untouched", { route: "/chat#agent" })
+        await s.updateMetadata("t-untouched", { parked_route: "/chat#agent" })
+        expect((await s.getThread("t-untouched"))?.metadata).toEqual({
+          "dawn:access": { ownerId: "u-1" },
+          parked_route: "/chat#agent",
+          route: "/chat#agent",
+          user: "brian",
+        })
       } finally {
         await close?.(s)
       }

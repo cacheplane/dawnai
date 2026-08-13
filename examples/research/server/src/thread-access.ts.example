@@ -1,0 +1,66 @@
+/**
+ * Thread authorization: may this caller create, read, mutate or destroy this
+ * thread?
+ *
+ * Rename to `src/thread-access.ts` — drop the `.example` — to activate it,
+ * together with `src/auth.ts.example`. Until you do, every thread endpoint is
+ * open to anyone who can name a thread id, and ids are neither secret nor
+ * collision-proof (`t-` plus four random bytes). Activating it before you have
+ * an authenticated caller will deny every request, which is the point: this
+ * policy is deny-by-default and only `principalOf` can open it.
+ *
+ * This is NOT route middleware. Middleware is keyed on route identity, and a
+ * thread has no owning route — every endpoint that starts a turn overwrites the
+ * thread's `route` metadata, so anyone allowed to run any route on a thread can
+ * move that identity onto a route of their choosing. Two concepts, two files.
+ *
+ * Run `dawn docs thread-access` for the full reference.
+ */
+
+import { defineThreadAccess, deny, permit, type ThreadAccessRequest } from "@dawn-ai/sdk"
+
+import { principalOf } from "./auth.js"
+
+const owned = async (req: ThreadAccessRequest) => {
+  const user = await principalOf(req.headers)
+  if (!user) return deny()
+
+  // `thread: undefined` reaches `delete`, `update` and `read` alike — Dawn
+  // invokes the policy on every gated request rather than short-circuiting to
+  // the endpoint's natural 404 or 204. Denying it FIRST, ahead of any admin
+  // branch, is what keeps "not yours" and "never existed" the same answer. An
+  // admin allowed to delete a row that never existed reopens the existence
+  // oracle this default closes.
+  if (req.thread === undefined) return deny()
+
+  // `req.thread.access`, never `req.thread.metadata`. Metadata is
+  // client-supplied and untrusted — anyone who can create a thread can write
+  // anything into it. `access` is the stamp this policy's own `create` decision
+  // returned, stored under a reserved key Dawn strips from client input on
+  // every create path, so a client cannot forge one.
+  const owner = req.thread.access?.ownerId
+
+  // `undefined` means a thread created before this app had a policy. Dawn does
+  // not guess what that should mean. Admin-only is the conservative answer; a
+  // one-time backfill is the other one. Do not permit it outright.
+  if (owner === undefined) return user.isAdmin ? permit() : deny()
+
+  if (owner === user.id) return permit()
+  if (req.action === "read" && user.isAdmin) return permit()
+  return deny()
+}
+
+export default defineThreadAccess({
+  create: async (req) => {
+    const user = await principalOf(req.headers)
+    return user ? permit({ ownerId: user.id, org: user.org }) : deny()
+  },
+  // `fallback` is required, and it is the deny-by-default floor: an action with
+  // no handler of its own lands here rather than falling through to an allow.
+  //
+  // It also handles the `update` recheck Dawn runs after every create. The row
+  // just stamped has `ownerId === user.id`, so `owned` permits it; a row the
+  // store handed back on an id collision carries someone else's, so `owned`
+  // denies and the caller never receives a thread they do not own.
+  fallback: owned,
+})
