@@ -497,9 +497,32 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Install kubeconform
+        # This step extracts a tarball from the internet and `sudo install`s it
+        # into /usr/local/bin — the same trust boundary as a GitHub Action, and
+        # every action in this repo is SHA-pinned. So pin the artifact too.
+        #
+        # The checksum is a literal on purpose. Fetching the release CHECKSUMS
+        # file over the same channel and trusting it verifies nothing: whoever
+        # can serve a bad tarball can serve a matching checksum. That is the
+        # mistake upstream kind.sh makes. This value was read from the v0.8.0
+        # release CHECKSUMS and confirmed against a locally computed sha256 of
+        # the downloaded artifact.
+        #
+        # --fail so a 429/5xx is an error rather than an HTML error page written
+        # into the tarball (which surfaced as "tar: Error is not recoverable"),
+        # and --retry so a transient blip is retried instead of failing CI.
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
+          set -euo pipefail
+          expected=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+          curl --fail --retry 5 --retry-all-errors --retry-delay 2 -sSL -o /tmp/kubeconform.tar.gz \
             https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          actual="$(sha256sum /tmp/kubeconform.tar.gz | cut -d' ' -f1)"
+          if [ "$actual" != "$expected" ]; then
+            echo "kubeconform-linux-amd64.tar.gz checksum mismatch" >&2
+            echo "  expected $expected" >&2
+            echo "  actual   $actual" >&2
+            exit 1
+          fi
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
           sudo install /tmp/kubeconform /usr/local/bin/kubeconform
           kubeconform -v

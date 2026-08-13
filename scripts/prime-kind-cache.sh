@@ -26,6 +26,17 @@
 # so writing a verified binary to exactly that path makes the action skip the
 # download altogether.
 #
+# Known, deliberately unfixed: the same `kind.sh` has the identical bug in
+# `install_kubectl`, which fetches the kubectl binary and its `.sha256` from
+# dl.k8s.io with the same no-`--fail` curl and then runs
+# `echo "$(cat kubectl.sha256) kubectl" | sha256sum -c`. If you are reading
+# this because a lane failed just after printing "Installing kubectl...", that
+# is the cause, and the fix is this same lever applied one directory over:
+# prime "${RUNNER_TOOL_CACHE}/kind/${version}/${arch}/kubectl/bin/kubectl",
+# which kind.sh guards with the same `[[ ! -x ... ]]` check. It was left alone
+# because it hits a different, more reliable CDN than GitHub releases and we
+# have never observed it failing — not because it is safe.
+#
 # Contract
 # --------
 #   * Every fetch uses `curl --fail --retry ...`: a transient error is retried

@@ -166,7 +166,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Install kubeconform",
-                "run": "curl -sSL -o /tmp/kubeconform.tar.gz \\\n  https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz\ntar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform\nsudo install /tmp/kubeconform /usr/local/bin/kubeconform\nkubeconform -v\n"
+                "run": "set -euo pipefail\nexpected=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883\ncurl --fail --retry 5 --retry-all-errors --retry-delay 2 -sSL -o /tmp/kubeconform.tar.gz \\\n  https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz\nactual=\"$(sha256sum /tmp/kubeconform.tar.gz | cut -d' ' -f1)\"\nif [ \"$actual\" != \"$expected\" ]; then\n  echo \"kubeconform-linux-amd64.tar.gz checksum mismatch\" >&2\n  echo \"  expected $expected\" >&2\n  echo \"  actual   $actual\" >&2\n  exit 1\nfi\ntar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform\nsudo install /tmp/kubeconform /usr/local/bin/kubeconform\nkubeconform -v\n"
               }
             },
             {
