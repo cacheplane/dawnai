@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import { loadThreadAccess } from "../src/lib/dev/thread-access-node.js"
 import { nodeBootFallbacks } from "../src/lib/runtime/execute-route.js"
+import type { DawnStaticModules } from "../src/lib/runtime/static-modules.js"
 import { loadStaticModules } from "../src/lib/runtime/static-modules.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
@@ -186,6 +187,74 @@ describe("thread-access boot resolution", () => {
       log.mockRestore()
     }
     expect(lines).not.toContain("Dawn: no thread access policy (all thread endpoints are open)")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The manifest-staleness guard: a build that SAW a policy file stamps a record
+// into the artifact it generates alongside the manifest. If the manifest that
+// reaches the runtime does not carry a thread-access entry, the two artifacts
+// did not come from the same build — the exact shape of the failure this
+// closes: a manifest generated before the app grew a policy, deployed to edge
+// (where there is no filesystem to fall back to), silently ungated.
+// ---------------------------------------------------------------------------
+
+describe("thread-access manifest staleness", () => {
+  const emptyManifest = { routes: [] } as const
+
+  it("fails the boot when the build saw a policy and the manifest has no entry", async () => {
+    const appRoot = await fixtureApp()
+    const failure = await bootFailure({
+      appRoot,
+      modules: emptyManifest,
+      threadAccessExpected: true,
+    })
+    expect(failure.code).toBe("DAWN_E3003")
+    expect(failure.message).toContain("re-run `dawn build`")
+  })
+
+  it("does not log a boot line for the manifest it rejected", async () => {
+    const appRoot = await fixtureApp()
+    const lines: string[] = []
+    const log = vi.spyOn(console, "log").mockImplementation((line: unknown) => {
+      lines.push(String(line))
+    })
+    try {
+      await bootFailure({ appRoot, modules: emptyManifest, threadAccessExpected: true })
+    } finally {
+      log.mockRestore()
+    }
+    expect(lines).not.toContain("Dawn: no thread access policy (all thread endpoints are open)")
+  })
+
+  it("accepts a manifest that carries the key bound to nothing", async () => {
+    // `in`, not truthiness: an entry present and undefined is a build that
+    // considered the policy and bound nothing (a hand-rolled embed's
+    // `threadAccess: undefined`), which is a different fact from an entry that
+    // was never emitted at all. Conflating them is the bug.
+    const appRoot = await fixtureApp()
+    // Cast because `exactOptionalPropertyTypes` forbids writing the key as
+    // undefined in TypeScript at all — which is exactly why the runtime must
+    // handle it: a generated `.mjs` manifest carries no types.
+    const modules = { routes: [], threadAccess: undefined } as unknown as DawnStaticModules
+    const lines = await bootWithLog({ appRoot, modules, threadAccessExpected: true })
+    expect(lines).toContain("Dawn: no thread access policy (all thread endpoints are open)")
+  })
+
+  it("accepts a manifest that carries the policy", async () => {
+    const appRoot = await fixtureApp()
+    const lines = await bootWithLog({
+      appRoot,
+      modules: { routes: [], threadAccess: allowAll },
+      threadAccessExpected: true,
+    })
+    expect(lines).toContain("Dawn: thread access policy bound from the build manifest")
+  })
+
+  it("leaves a build that saw no policy alone", async () => {
+    const appRoot = await fixtureApp()
+    const lines = await bootWithLog({ appRoot, modules: emptyManifest })
+    expect(lines).toContain("Dawn: no thread access policy (all thread endpoints are open)")
   })
 })
 

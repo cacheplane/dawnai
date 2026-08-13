@@ -90,6 +90,24 @@ export interface StartRuntimeServerOptions {
    * the dynamic src/thread-access.ts probe.
    */
   readonly threadAccess?: ThreadAccessPolicy
+  /**
+   * What the BUILD saw: true when `dawn build` found a thread-access policy
+   * file for this app. Set by the generated entry point, which is a different
+   * artifact from the manifest it imports — that separation is the whole point.
+   *
+   * With it set, a `modules` manifest that carries no `threadAccess` KEY fails
+   * the boot: the two artifacts cannot have come from the same build, and the
+   * runtime this matters on (a bundled one) has no filesystem probe to fall
+   * back to, so it would otherwise come up with every thread endpoint open and
+   * log that the app has no policy. That is a real deployment shape — a
+   * manifest generated before the app grew a policy, shipped beside a newer
+   * entry point.
+   *
+   * The check is `"threadAccess" in modules`, not a truthiness test: a key
+   * present and bound to undefined is a build that considered the policy and
+   * bound nothing, which is a different fact from a key that was never emitted.
+   */
+  readonly threadAccessExpected?: boolean
   /** Boot-resolved sandbox manager. Absent: built from `config.sandbox`. */
   readonly sandboxManager?: SandboxManager
   /**

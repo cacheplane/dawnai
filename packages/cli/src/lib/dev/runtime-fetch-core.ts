@@ -134,6 +134,31 @@ class ThreadAccessPolicyError extends Error {
   }
 }
 
+/**
+ * The entry point says this build saw a policy file; the manifest beside it
+ * carries no thread-access entry at all. Those two artifacts did not come from
+ * the same build, and on a runtime with no filesystem the difference is not
+ * recoverable — so this fails the boot rather than serving every thread
+ * endpoint open while logging that the app has no policy.
+ *
+ * A local class for the same reason `ThreadAccessPolicyError` is one:
+ * `../output.js` is node-only and this module is in the `@dawn-ai/cli/fetch`
+ * graph. Same registry code, because from an operator's seat this IS the policy
+ * failing to load — it just failed at the build boundary rather than at import.
+ */
+class StaleThreadAccessManifestError extends Error {
+  readonly code = "DAWN_E3003"
+  constructor() {
+    super(
+      "This app was built with a thread access policy, but the static module manifest it " +
+        "booted with carries no thread access entry — the manifest is older than the build " +
+        "that stamped the policy. Dawn will not boot with every thread endpoint ungated: " +
+        "re-run `dawn build` and deploy the whole build output together.",
+    )
+    this.name = "StaleThreadAccessManifestError"
+  }
+}
+
 function threadAccessSourceLabel(source: {
   readonly fromManifest: boolean
   readonly fromOptions: boolean
@@ -311,6 +336,19 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // BEFORE the resolution below, because the resolution cannot tell the
+  // difference this catches: a stale manifest resolves to `undefined` exactly
+  // like an app that never had a policy. `in`, not truthiness — a key present
+  // and bound to undefined is a build that considered the policy and bound
+  // nothing, which is a legitimate (if unusual) hand-rolled embed, whereas a
+  // key that was never emitted means the manifest predates the policy.
+  //
+  // Scoped to a manifest boot on purpose: without `modules` the policy comes
+  // from the disk probe, which reads the app's CURRENT state and so cannot be
+  // stale in this way.
+  if (options.threadAccessExpected && options.modules && !("threadAccess" in options.modules)) {
+    throw new StaleThreadAccessManifestError()
+  }
   // Authorization, unlike middleware, must never resolve to "allow all" by
   // accident: `loadThreadAccess` throws DAWN_E3003 rather than degrading when a
   // policy file exists but cannot be bound. An absent file resolves to
