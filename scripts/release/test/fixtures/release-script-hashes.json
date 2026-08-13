@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "scripts": {
+    "scripts/backfill-release-tags.mjs": {
+      "sha256": "54ca2306204e1e78f3fbc9f78a8375e42ed3a17eed2d6a4fc1b3d1ff233743f1"
+    },
+    "scripts/release-publish.mjs": {
+      "sha256": "fc111388f247c66a27154c3a1862ac0c0ece9cf5f9d61848632e6578cbdfa5b0"
+    },
+    "scripts/sync-chart-appversion.mjs": {
+      "sha256": "a676484449091e5c7fc891c75b014ab92c3b6319201871ba7fcb42817c4c5ed7"
+    },
+    "scripts/upload-release-assets.mjs": {
+      "sha256": "b4bac9fd5052487bebf26f59d5e0e211cde15c3e37561fb44eb2a8037a938417"
+    }
+  }
+}
