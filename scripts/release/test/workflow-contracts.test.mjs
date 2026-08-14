@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import {
   lstat,
   mkdir,
@@ -33,6 +34,33 @@ const EXECUTABLE_ALLOWLIST_PATH = path.join(
 const EXECUTABLE_ALLOWLIST = JSON.parse(
   await readBoundedFixture(EXECUTABLE_ALLOWLIST_PATH, { root: ROOT }),
 )
+const SCRIPT_PIN_FIXTURE = "scripts/release/test/fixtures/release-script-hashes.json"
+const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
+// The four repository scripts release.yml executes: two as `run:` steps, and two
+// through the changesets action's `version:` and `publish:` inputs. The entrypoint
+// allowlist pins the command lines; these pins cover the bytes those commands run.
+// Deliberately narrow: scripts reached only from ci.yml (check-docs.mjs,
+// check-changesets.mjs, prime-kind-cache.sh) change often and are covered by branch
+// protection and review, not by a hash.
+const PINNED_RELEASE_SCRIPTS = [
+  "scripts/backfill-release-tags.mjs",
+  "scripts/release-publish.mjs",
+  "scripts/sync-chart-appversion.mjs",
+  "scripts/upload-release-assets.mjs",
+]
+// pnpm indirections release.yml uses inside `run:` bodies. Each reaches validation or
+// post-publish verification scripts rather than publishing ones, so those scripts are
+// covered by review rather than a content pin. Adding a name here is a deliberate,
+// reviewed decision; a `run:` step invoking any other pnpm script fails closed.
+const AUDITED_RELEASE_RUN_INDIRECTIONS = new Set([
+  "install",
+  "ci:validate",
+  "published:verify",
+  "published:smoke",
+])
+const SHA256_HEX = /^[0-9a-f]{64}$/u
+const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
+const PNPM_REFERENCE = /(?:^|[\s;&|"'(])pnpm\s+(?:run\s+)?([\w:.-]+)/gu
 const LEGACY_SAFE_ENTRYPOINTS = new Set([
   "step-uses:actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   "step-uses:actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
@@ -617,6 +645,120 @@ test("legacy publication indirection is bound to exact root scripts and regular 
   await assert.rejects(() => assertReleaseIndirection(root), /not explicitly audited/u)
 })
 
+test("release scripts match their audited content pins", async () => {
+  const pins = JSON.parse(await readBoundedFixture(SCRIPT_PIN_PATH, { root: ROOT }))
+
+  assert.deepEqual(Object.keys(pins).sort(), ["schemaVersion", "scripts"])
+  assert.equal(pins.schemaVersion, 1)
+  assert.deepEqual(
+    Object.keys(pins.scripts).sort(),
+    [...PINNED_RELEASE_SCRIPTS].sort(),
+    `${SCRIPT_PIN_FIXTURE} must pin exactly the scripts listed in PINNED_RELEASE_SCRIPTS (scripts/release/test/workflow-contracts.test.mjs). Add or remove the pin and the constant together.`,
+  )
+  await assertPinnedScriptContents(ROOT, pins)
+})
+
+test("release.yml reaches no repository script that is left unpinned", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"))
+
+  assertReleaseScriptCoverage(sources["release.yml"], packageJson)
+  assert.deepEqual(
+    releaseWorkflowScriptReferences(sources["release.yml"], packageJson).referenced,
+    [...PINNED_RELEASE_SCRIPTS].sort(),
+    "every repository script release.yml reaches must be pinned, and every pin must still be reached",
+  )
+})
+
+test("the release.yml reachability scan fails closed on a fifth script added by either route", async (t) => {
+  const packageJson = { scripts: { "release:publish": "node scripts/release-publish.mjs" } }
+  const step = (body) => `jobs:\n  release:\n    steps:\n      - name: Publish\n${body}`
+  const cases = [
+    ["run step", step("        run: node scripts/evil.mjs\n"), /scripts\/evil\.mjs/u],
+    [
+      "action input literal",
+      step(
+        "        uses: example/action@x\n        with:\n          publish: node scripts/evil.mjs\n",
+      ),
+      /scripts\/evil\.mjs/u,
+    ],
+    [
+      "action input pnpm indirection",
+      step("        uses: example/action@x\n        with:\n          publish: pnpm release:evil\n"),
+      /cannot follow|scripts\/evil\.mjs/u,
+    ],
+    [
+      "unaudited run indirection",
+      step("        run: pnpm sneak\n"),
+      /cannot follow to a repository script/u,
+    ],
+  ]
+  for (const [name, source, pattern] of cases) {
+    await t.test(name, () => {
+      assert.throws(
+        () =>
+          assertReleaseScriptCoverage(source, {
+            scripts: { ...packageJson.scripts, "release:evil": "node scripts/evil.mjs" },
+          }),
+        pattern,
+        name,
+      )
+    })
+  }
+
+  await t.test("action input naming no package.json script", () => {
+    assert.throws(
+      () =>
+        assertReleaseScriptCoverage(
+          step("        uses: example/action@x\n        with:\n          publish: pnpm ghost\n"),
+          packageJson,
+        ),
+      /cannot follow to a repository script/u,
+    )
+  })
+
+  await t.test("a stale pin whose step disappeared", () => {
+    assert.throws(
+      () => assertReleaseScriptCoverage(step("        run: pnpm ci:validate\n"), packageJson),
+      /no longer reaches/u,
+    )
+  })
+})
+
+test("script content pins fail closed on drift and on a pinned script that went missing", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-script-pins-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, "scripts"))
+  const file = PINNED_RELEASE_SCRIPTS[0]
+  const body = "export {}\n"
+  const pins = {
+    schemaVersion: 1,
+    scripts: { [file]: { sha256: createHash("sha256").update(body).digest("hex") } },
+  }
+  await writeFile(path.join(root, file), body)
+  await assertPinnedScriptContents(root, pins, [file])
+
+  await writeFile(path.join(root, file), `${body}// appended\n`)
+  await assert.rejects(
+    () => assertPinnedScriptContents(root, pins, [file]),
+    (error) =>
+      error.message.includes(file) &&
+      error.message.includes(pins.scripts[file].sha256) &&
+      error.message.includes(SCRIPT_PIN_FIXTURE),
+    "drift must report the file, both hashes, and the fixture to update",
+  )
+
+  await rm(path.join(root, file))
+  await assert.rejects(
+    () => assertPinnedScriptContents(root, pins, [file]),
+    (error) => error.message.includes(file) && /missing|not a regular file/u.test(error.message),
+    "a pinned script that disappeared must fail rather than silently pass",
+  )
+
+  await symlink(path.join(root, "scripts"), path.join(root, file))
+  await assert.rejects(() => assertPinnedScriptContents(root, pins, [file]))
+})
+
 test("root scripts expose shadow and preflight without adding the slow workflow test to fast scripts", async () => {
   const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"))
 
@@ -696,6 +838,121 @@ async function assertReleaseIndirection(root) {
     }
   } catch {
     throw unauditedEntrypoint()
+  }
+}
+
+// Collects the repository scripts release.yml reaches, by both routes a script can
+// enter the workflow: a `run:` body and an action `with:` input. Literal `scripts/...`
+// paths are collected directly; a `pnpm <name>` inside a `with:` input is resolved one
+// step through package.json. Anything this cannot follow is reported rather than
+// dropped, so an unfollowable indirection fails instead of silently widening the gap.
+function releaseWorkflowScriptReferences(source, packageJson) {
+  const workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+  const referenced = new Set()
+  const unfollowable = []
+  for (const [job, descriptor] of Object.entries(workflow.jobs ?? {})) {
+    for (const [stepIndex, step] of (descriptor.steps ?? []).entries()) {
+      const where = `${job} step ${stepIndex}${step.name ? ` ("${step.name}")` : ""}`
+      if (typeof step.run === "string") {
+        for (const file of matchAllGroups(step.run, SCRIPT_REFERENCE)) referenced.add(file)
+        for (const name of matchAllGroups(step.run, PNPM_REFERENCE)) {
+          if (!AUDITED_RELEASE_RUN_INDIRECTIONS.has(name))
+            unfollowable.push(`${where} runs \`pnpm ${name}\``)
+        }
+      }
+      for (const [key, value] of Object.entries(step.with ?? {})) {
+        if (typeof value !== "string") continue
+        for (const file of matchAllGroups(value, SCRIPT_REFERENCE)) referenced.add(file)
+        for (const name of matchAllGroups(value, PNPM_REFERENCE)) {
+          const command = packageJson.scripts?.[name]
+          if (typeof command !== "string") {
+            unfollowable.push(
+              `${where} passes \`${key}: ${value}\`, and \`${name}\` is not a package.json script`,
+            )
+            continue
+          }
+          const files = matchAllGroups(command, SCRIPT_REFERENCE)
+          for (const file of files) referenced.add(file)
+          if (files.length === 0 || matchAllGroups(command, PNPM_REFERENCE).length > 0)
+            unfollowable.push(
+              `${where} passes \`${key}: ${value}\`, which resolves to \`${command}\``,
+            )
+        }
+      }
+    }
+  }
+  return { referenced: [...referenced].sort(), unfollowable }
+}
+
+function assertReleaseScriptCoverage(source, packageJson, pinned = PINNED_RELEASE_SCRIPTS) {
+  const { referenced, unfollowable } = releaseWorkflowScriptReferences(source, packageJson)
+  if (unfollowable.length > 0) {
+    throw new Error(
+      [
+        `Release workflow reaches a command this check cannot follow to a repository script:`,
+        ...unfollowable.map((entry) => `  ${entry}`),
+        `An unfollowable command could run an unpinned script. Either invoke the script directly so its path is visible in release.yml, or — if it reaches only validation and verification scripts that are covered by review rather than a content pin — add its name to AUDITED_RELEASE_RUN_INDIRECTIONS in scripts/release/test/workflow-contracts.test.mjs with a comment recording why.`,
+      ].join("\n"),
+    )
+  }
+  for (const file of referenced) {
+    if (pinned.includes(file)) continue
+    throw new Error(
+      [
+        `Release workflow reaches a repository script with no content pin: ${file}`,
+        `.github/workflows/release.yml runs it, directly or through a package.json script, so its bytes have to be pinned alongside the command line.`,
+        `Add its sha256 to ${SCRIPT_PIN_FIXTURE} and its path to PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs. Compute the hash with:`,
+        `  node -p "require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('${file}')).digest('hex')"`,
+      ].join("\n"),
+    )
+  }
+  for (const file of pinned) {
+    if (referenced.includes(file)) continue
+    throw new Error(
+      [
+        `Release script pin is stale: ${file} is pinned but .github/workflows/release.yml no longer reaches it.`,
+        `Either restore the step that runs it, or remove its entry from ${SCRIPT_PIN_FIXTURE} and its path from PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs.`,
+      ].join("\n"),
+    )
+  }
+}
+
+function matchAllGroups(value, pattern) {
+  return [...value.matchAll(pattern)].map(([, group]) => group)
+}
+
+async function assertPinnedScriptContents(root, pins, files = PINNED_RELEASE_SCRIPTS) {
+  for (const file of files) {
+    const expected = pins.scripts?.[file]?.sha256
+    if (typeof expected !== "string" || !SHA256_HEX.test(expected)) {
+      throw new Error(
+        `Release script pin for ${file} is missing or is not a 64-character lowercase sha256 in ${SCRIPT_PIN_FIXTURE}.`,
+      )
+    }
+    let source
+    try {
+      source = await readBoundedFixture(path.join(root, file), { root, maxBytes: 1024 * 1024 })
+    } catch {
+      throw new Error(
+        [
+          `Release script ${file} is pinned in ${SCRIPT_PIN_FIXTURE} but is missing or not a regular file inside the repository.`,
+          `A pinned script must exist: release.yml runs it. If it was intentionally removed, delete its entry from ${SCRIPT_PIN_FIXTURE} and its path from PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs, and remove the step that runs it from .github/workflows/release.yml.`,
+        ].join("\n"),
+      )
+    }
+    const actual = createHash("sha256").update(Buffer.from(source, "utf8")).digest("hex")
+    if (actual !== expected) {
+      throw new Error(
+        [
+          `Release script content pin mismatch: ${file}`,
+          `  expected sha256: ${expected}`,
+          `  actual   sha256: ${actual}`,
+          `This script runs during a release, so its bytes are pinned alongside the command line in the workflow entrypoint allowlist.`,
+          `If you meant to change it, update the "sha256" for ${file} in ${SCRIPT_PIN_FIXTURE} in the same commit, and have the script diff reviewed as a release-integrity change. Recompute with:`,
+          `  node -p "require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('${file}')).digest('hex')"`,
+        ].join("\n"),
+      )
+    }
   }
 }
 

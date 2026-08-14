@@ -187,6 +187,18 @@ deployed-app smoke), `chart-validate` (Helm lint + kubeconform), and
   `scripts/check-docs.mjs` for the exact patterns.
 - **Always run commands from the repo root.** Turbo and workspace-package
   resolution assume it.
+- **Four release scripts are content-pinned.** `scripts/backfill-release-tags.mjs`,
+  `scripts/release-publish.mjs`, `scripts/sync-chart-appversion.mjs`, and
+  `scripts/upload-release-assets.mjs`
+  run during a release, so their SHA256 is recorded in
+  `scripts/release/test/fixtures/release-script-hashes.json`. Editing one fails
+  `pnpm test:release-controller` until the hash is updated in the same commit;
+  the failure prints the expected and actual hash and the recompute command.
+  The suite also re-derives which scripts `release.yml` reaches — through `run:`
+  steps and through action `with:` inputs — so a fifth script cannot join the
+  release path unpinned. This is deliberately limited to the release path;
+  CI-only scripts are not pinned. See `CONTRIBUTORS.md`'s "Release Integrity
+  Coverage" for what the release controller does and does not cover.
 
 ## Where things live
 

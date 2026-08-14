@@ -83,6 +83,15 @@ The repo uses a layered verification model:
 
 Treat these lanes as distinct: package tests prove package behavior, harness lanes prove repo-level runtime behavior, and publish smoke proves the distribution surface.
 
+## Release Integrity Coverage
+
+`pnpm test:release-controller` pins the release path. It is worth knowing exactly how far that pin reaches, because the answer is narrower than "the release is pinned":
+
+- **Workflow structure and command lines are pinned.** `scripts/release/test/fixtures/workflow-entrypoints.json` and `workflow-safe-executables.json` record every workflow's jobs, steps, and `run:` bodies byte-for-byte, and `scripts/release/preflight.mjs` re-checks `.github/workflows/release.yml` against its own expected shape before a release publishes. Drift fails closed, and there is no regeneration script: an intended edit has to be transcribed into the fixture and reviewed.
+- **The bytes of the four scripts `release.yml` runs are pinned.** `scripts/release/test/fixtures/release-script-hashes.json` records the SHA256 of `scripts/backfill-release-tags.mjs`, `scripts/release-publish.mjs`, `scripts/sync-chart-appversion.mjs`, and `scripts/upload-release-assets.mjs`. Two are `run:` steps; the other two are reached through the changesets action's `publish:` and `version:` inputs. Editing any of them fails the release-controller suite until its hash is updated in the same commit, so the diff is reviewed as a release-integrity change rather than landing invisibly behind an already-audited command line.
+- **A fifth script cannot join `release.yml` unpinned.** The suite re-derives which repository scripts `release.yml` reaches, by both routes a script can enter it — a literal `scripts/...` path in a `run:` body or in an action `with:` input, and a `pnpm <name>` input resolved one step through `package.json` — and requires that set to equal the pinned set exactly. Commands it cannot follow fail rather than being skipped: a `run:` step may only invoke the pnpm scripts named in its audited list, and a `with:` input that names an unknown pnpm script, or one that resolves to something with no visible script path, is reported. It does **not** follow the pnpm scripts inside `run:` bodies (`ci:validate`, `published:verify`, `published:smoke`), so editing one of *those* package.json entries to reach a new script is not caught here — review is what covers that.
+- **In-repo scripts generally are not pinned.** Everything else under `scripts/` — including `check-docs.mjs`, `check-changesets.mjs`, and `prime-kind-cache.sh`, which run in CI rather than in the release — is covered by branch protection and review, not by a content hash.
+
 ## Documentation Sources
 
 - Root docs (`README.md` and this file) are the primary repo entrypoints.
