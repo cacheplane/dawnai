@@ -40,6 +40,16 @@ export interface GateSpec {
   readonly threadId?: string
   readonly thread?: Thread
   readonly requestedMetadata?: Record<string, unknown>
+  /**
+   * Whether this request continues a parked turn — see
+   * `ThreadAccessRequest.resuming`. Optional HERE so the many call sites that
+   * can never be a resume say nothing; the gate defaults it to `false` and the
+   * policy always receives a boolean.
+   *
+   * An endpoint that gates more than once for one request must pass the SAME
+   * value at every site. Compute it once at the top of the handler.
+   */
+  readonly resuming?: boolean
   /** The response a denied READ must be indistinguishable from. Supply it whenever action is "read". */
   readonly notFound?: () => Response
 }
@@ -166,6 +176,9 @@ export function makeThreadGate(
       method,
       operation: spec.operation,
       requestedMetadata: spec.requestedMetadata,
+      // Required on the published type, optional on the spec: an omitted spec
+      // field is "this endpoint cannot resume", which is `false`.
+      resuming: spec.resuming ?? false,
       thread: spec.thread ? toThreadSubject(spec.thread) : undefined,
       threadId: spec.threadId,
       url,
@@ -222,16 +235,28 @@ export function makeThreadGate(
 export async function createGatedThreadForRun(args: {
   readonly gate: (spec: GateSpec) => Gate | Promise<Gate>
   readonly operation: ThreadOperation
+  /**
+   * The caller's own `resuming` — the recheck is the SAME request as the gate
+   * that authorized the create, so it must report the same value. Defaults to
+   * `false` for the endpoints that can never resume.
+   */
+  readonly resuming?: boolean
   readonly stamp: Record<string, unknown> | undefined
   readonly store: ThreadsStore
   readonly threadId: string
 }): Promise<{ readonly ok: true; readonly thread: Thread } | GateDenied> {
-  const { gate, operation, stamp, store, threadId } = args
+  const { gate, operation, resuming, stamp, store, threadId } = args
   const thread = await store.createThread({
     thread_id: threadId,
     ...(stamp ? { metadata: { [THREAD_ACCESS_METADATA_KEY]: stamp } } : {}),
   })
-  const recheck = gate({ action: "update", operation, thread, threadId: thread.thread_id })
+  const recheck = gate({
+    action: "update",
+    operation,
+    resuming: resuming ?? false,
+    thread,
+    threadId: thread.thread_id,
+  })
   const settled = isThenable(recheck) ? await recheck : recheck
   if (!settled.ok) return settled
   return { ok: true, thread }

@@ -121,6 +121,32 @@ export interface ThreadAccessRequest {
    * `run.*` create: those endpoints accept no thread metadata at all.
    */
   readonly requestedMetadata: Readonly<Record<string, unknown>> | undefined
+  /**
+   * This request carries a resume credential and will CONTINUE a parked turn —
+   * an already-interrupted run answering the `interruptId`/`resumeKey` pair a
+   * human-approval prompt parked — rather than start a fresh one.
+   *
+   * Separate from `operation` on purpose. `operation` is endpoint identity
+   * ("which door did this come through"); this is request SHAPE ("what is in
+   * the body"). Two different endpoints resume, and only one of them says so in
+   * its name:
+   *
+   * - `POST /threads/:id/resume` — `run.resume`. Always `true`; the endpoint
+   *   exists for nothing else.
+   * - `POST /agui/:routeId` — `run.agui`, exactly as an ordinary AG-UI turn
+   *   does. `true` when the AG-UI input carries a resume, `false` otherwise.
+   *   Nothing in `operation` distinguishes the two, which is what this field is
+   *   for.
+   *
+   * `false` everywhere else. Always a boolean, never absent — a policy that
+   * wants resumes held to a higher bar (step-up auth, a second approver, extra
+   * logging) writes `if (req.resuming)` and never `?? false`.
+   *
+   * One request reports ONE value: an endpoint that gates more than once — the
+   * gate before its side effects, the mid-flight recheck, the implicit create's
+   * recheck — reports the same `resuming` at every one of them.
+   */
+  readonly resuming: boolean
 }
 
 export interface ThreadAccessAllow {
