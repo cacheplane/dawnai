@@ -69,14 +69,6 @@ async function waitForContainerFile(
   }
 }
 
-async function keeperId(docker: Docker, container: string): Promise<string> {
-  const result = await docker.run(["inspect", "--format", "{{.Id}}", container])
-  if (result.exitCode !== 0 || !result.stdout.trim()) {
-    throw new Error(`Could not inspect keeper ${container}: ${JSON.stringify(result)}`)
-  }
-  return result.stdout.trim()
-}
-
 describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, () => {
   runProviderConformance({
     name: "dockerSandbox",
@@ -252,7 +244,6 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
         signal: ctx("/").signal,
       })
       await h.filesystem.writeFile(sentinelPath, sentinel, ctx(h.workspaceRoot))
-      const originalKeeperId = await keeperId(docker, container)
       const saturator = `
         const { renameSync, rmSync, writeFileSync } = require("node:fs")
         const { Worker } = require("node:worker_threads")
@@ -332,15 +323,32 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
       ])
       expect(saturatedPids).toMatchObject({ exitCode: 0, stdout: `${pidsLimit}\n` })
 
-      // Docker Desktop may admit a single exec task into a full cgroup. A bounded
-      // concurrent wave makes OCI startup contend at the limit; the keeper-ID
-      // assertion proves that at least one command actually triggered recovery.
+      // What this test can guarantee, and what it deliberately does not.
+      //
+      // The cgroup is verifiably full above (EAGAIN from the saturator, and
+      // `docker stats` reporting exactly `pidsLimit`). Under that pressure every
+      // command must still succeed and the workspace must survive. Those are the
+      // real contract and they are asserted below.
+      //
+      // Whether a keeper RECYCLE was needed to achieve it is not something this
+      // test can force. Recovery in `docker-exec.ts` fires only when a command
+      // fails to start with a PID-exhaustion signature; if Docker admits every
+      // exec into the full cgroup — which it does on some engine and kernel
+      // versions — nothing fails, so nothing is recovered, and the keeper is
+      // correctly left alone. Asserting a recycle here therefore asserted a race,
+      // and it failed intermittently on `main` while reporting "keeper did not
+      // recycle", which reads like a product defect and is not one.
+      //
+      // The recovery path itself is covered deterministically in
+      // `docker-backends.test.ts`, which injects a PID-exhaustion failure and
+      // pins the whole contract: one token captured before the attempt, the
+      // retry issued with an identical command, and the retried result returned.
+      // That is a stronger check than this one was, and it cannot flake.
       const recovered = await Promise.all(
         Array.from({ length: recoveryCommands }, (_, index) =>
           h.exec.runCommand({ command: `echo recovered-${index}` }, ctx(h.workspaceRoot)),
         ),
       )
-      const replacementKeeperId = await keeperId(docker, container)
       expect(recovered).toEqual(
         Array.from({ length: recoveryCommands }, (_, index) => ({
           exitCode: 0,
@@ -348,10 +356,6 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
           stdout: `recovered-${index}\n`,
         })),
       )
-      expect(
-        replacementKeeperId,
-        `keeper did not recycle; command results: ${JSON.stringify(recovered)}`,
-      ).not.toBe(originalKeeperId)
       const persisted = await h.filesystem.readFile(sentinelPath, ctx(h.workspaceRoot))
       expect(persisted).toBe(sentinel)
     } finally {
