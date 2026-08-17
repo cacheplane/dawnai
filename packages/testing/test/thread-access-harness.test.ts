@@ -83,6 +83,26 @@ describe("createThreadAccessHarness", () => {
     expect(received?.requestedMetadata).toEqual({ tenant: "acme" })
   })
 
+  it("defaults resuming to false and passes an explicit one through", async () => {
+    const received: ThreadAccessRequest[] = []
+    const harness = createThreadAccessHarness({
+      policy: defineThreadAccess({
+        fallback: (req) => {
+          received.push(req)
+          return permit()
+        },
+      }),
+    })
+    await harness.check({ action: "read", threadId: "t-1" })
+    await harness.check({
+      action: "update",
+      operation: "run.resume",
+      resuming: true,
+      threadId: "t-1",
+    })
+    expect(received.map((req) => req.resuming)).toEqual([false, true])
+  })
+
   it("runs the result through the runtime's own normalization, so a malformed return denies", async () => {
     const harness = createThreadAccessHarness({
       policy: { fallback: () => undefined as never },

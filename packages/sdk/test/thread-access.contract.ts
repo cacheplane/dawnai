@@ -82,8 +82,20 @@ const request: ThreadAccessRequest = {
   method: "GET",
   url: "/threads/t-1/state",
   requestedMetadata: undefined,
+  resuming: false,
 }
 void request
+
+// Required and a plain boolean, never `boolean | undefined`: a policy that
+// treats resumes differently must be able to write `if (req.resuming)` with no
+// `?? false`, and a runtime that forgets to pass it must not compile.
+type _Resuming = Expect<Equal<ThreadAccessRequest["resuming"], boolean>>
+
+// A resume-aware policy: the AG-UI door reports `run.agui` whether or not it is
+// resuming, so `operation` cannot answer this question and `resuming` must.
+const stepUpOnResume: DawnThreadAccess = (req) =>
+  req.resuming && req.headers["x-step-up"] === undefined ? deny({ status: 403 }) : permit()
+void stepUpOnResume
 
 declare function sessionFor(
   token: string | undefined,

@@ -19,6 +19,13 @@ export interface ThreadAccessCheckSpec {
   readonly method?: string
   readonly url?: string
   readonly requestedMetadata?: Readonly<Record<string, unknown>>
+  /**
+   * Whether this request continues a parked turn — see
+   * `ThreadAccessRequest.resuming`. Defaults to `false`, the value every
+   * endpoint but `POST /threads/:id/resume` and a resume-carrying
+   * `POST /agui/:routeId` reports.
+   */
+  readonly resuming?: boolean
 }
 
 export interface ThreadAccessHarness {
@@ -63,6 +70,7 @@ export function createThreadAccessHarness(options: {
         method: spec.method ?? defaultMethod(spec.action),
         operation,
         requestedMetadata: spec.requestedMetadata,
+        resuming: spec.resuming ?? false,
         thread: spec.thread,
         threadId: spec.threadId,
         url: spec.url ?? (spec.threadId ? `/threads/${spec.threadId}` : "/threads"),

@@ -57,6 +57,42 @@ Dawn probes four paths, in order: `src/thread-access.ts`, `src/thread-access.js`
 | `headers` | Lowercase keys, repeated headers joined with `", "`. |
 | `method`, `url` | The originating request's method, and its path plus query. |
 | `requestedMetadata` | Client-supplied metadata on a create, already stripped of Dawn's reserved key. `undefined` everywhere else. |
+| `resuming` | `true` when this request carries a resume credential and will continue a parked turn. Always a boolean. See below. |
+
+### `resuming`: which requests continue a parked turn
+
+`resuming` is `true` when the request answers a parked human-approval prompt — it carries an `interruptId`/`resumeKey` credential and will continue an already-interrupted run rather than start a fresh one. It is `false` on every other request, and it is never absent, so a policy writes `if (req.resuming)` and never `?? false`.
+
+**Both doors resume.** Two different endpoints continue a parked turn, and only one of them says so in its `operation`:
+
+| Request | `operation` | `resuming` |
+|---|---|---|
+| `POST /threads/:thread_id/resume` | `run.resume` | always `true` |
+| `POST /agui/{routeId}` carrying a `resume` array | `run.agui` | `true` |
+| `POST /agui/{routeId}` with no `resume` | `run.agui` | `false` |
+| everything else | — | `false` |
+
+That middle row is the reason this field exists. An AG-UI resume reports `run.agui`, exactly as an ordinary AG-UI turn does — the only thing that distinguishes them is the request body, which a policy never sees. So **a policy that wants resumes held to a higher bar — step-up auth, a second approver, extra logging — must check `req.resuming`, not `req.operation`.** Keying that rule on `operation === "run.resume"` leaves every CopilotKit-driven resume ungoverned.
+
+`operation` and `resuming` answer different questions and neither replaces the other: `operation` is endpoint identity ("which door did this come through"), `resuming` is request shape ("what is in the body").
+
+An endpoint that gates more than once for a single request — the gate before its side effects, the mid-flight recheck, the implicit create's recheck — reports the **same** `resuming` at every one of them. One request, one value.
+
+```ts
+import { defineThreadAccess, deny, permit } from "@dawn-ai/sdk"
+
+export default defineThreadAccess({
+  // ...
+  update: (req) => {
+    if (!owns(req)) return deny()
+    // Resuming a parked approval is the moment the agent gets to act, so it
+    // costs a fresh step-up — on BOTH doors, which `operation` alone cannot see.
+    if (req.resuming && !hasStepUp(req.headers)) return deny({ status: 403 })
+    return permit()
+  },
+  fallback: (req) => (owns(req) ? permit() : deny()),
+})
+```
 
 `thread.metadata` is client-supplied and untrusted — anyone who can create a thread can write anything into it. **Authorize against `thread.access`**, which is the stamp your own `create` decision returned. Dawn stores it under a reserved key (`dawn:access`) that it strips from client input on every create path, so a client cannot forge one, and it is lifted out of `metadata` before your policy sees the row.
 

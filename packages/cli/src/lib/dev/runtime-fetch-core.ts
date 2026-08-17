@@ -2553,6 +2553,9 @@ async function handleResumeRequest(options: {
     const g = gate({
       action: "update",
       operation: "run.resume",
+      // Unconditionally: this endpoint continues a parked turn or it does
+      // nothing at all. See ThreadAccessRequest.resuming.
+      resuming: true,
       threadId,
       ...(existing ? { thread: existing } : {}),
     })

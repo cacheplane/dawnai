@@ -226,6 +226,13 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
 
     const requestUrl = new URL(request.url)
     const dawnInput = fromRunAgentInput(input)
+    // The one place this turn decides it is a resume. Computed HERE, above
+    // every gate site, because this endpoint gates up to twice per request and
+    // a turn that reported `resuming: true` at one gate and `false` at another
+    // would be describing two different requests. `fromRunAgentInput` leaves
+    // `resume` undefined for an absent OR empty array, so this is exactly the
+    // condition the resume claim below takes itself on.
+    const resuming = dawnInput.resume !== undefined
     const middlewareRequest: MiddlewareRequest = {
       assistantId: route.assistantId,
       headers: headersToRecord(request.headers),
@@ -259,6 +266,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       const g = gate({
         action: existing ? "update" : "create",
         operation: "run.agui",
+        resuming,
         threadId: input.threadId,
         ...(existing ? { thread: existing } : {}),
       })
@@ -270,7 +278,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       }
     }
 
-    if (dawnInput.resume !== undefined) {
+    if (resuming) {
       releaseResumeClaim = resumeClaims.tryClaim(input.threadId)
       if (!releaseResumeClaim) {
         return Response.json(
@@ -326,6 +334,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       const recheck = createGate({
         action: "update",
         operation: "run.agui",
+        resuming,
         thread: existingThread,
         threadId,
       })
@@ -335,6 +344,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       const created = await createGatedThreadForRun({
         gate: createGate,
         operation: "run.agui",
+        resuming,
         stamp: createStamp,
         store: threadsStore,
         threadId,
