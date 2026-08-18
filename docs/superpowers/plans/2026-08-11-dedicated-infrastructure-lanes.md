@@ -278,6 +278,7 @@ lane\tstatus\tstarted_at\tfinished_at\texit_code\tclassification\tresource\ttool
 
 **Files:**
 - Create: `test/k8s-compat/assert-docker-smoke.test.ts`
+- Create: `test/k8s-smoke/run-bounded.mjs`
 - Modify: `test/k8s-smoke/assert-docker.sh`
 
 - [ ] **Step 1: Add the failing fake-daemon lifecycle tests**
@@ -289,14 +290,15 @@ sandbox labels, container user/rootfs/hostname, and named volumes explicitly.
 Record every fake command in a JSONL transcript.
 
 Use asynchronous `spawn("sh", [script], { detached: true })`, not
-`spawnSync`. Give every run a ten-second watchdog that sends `SIGKILL` to
-the process group and fails the test if the script hangs. For the signal case,
-the fake `curl` writes a `run-wait-entered` marker and remains alive. The
-test waits for that marker, sends `SIGTERM` to the whole process group with
-`process.kill(-child.pid!, "SIGTERM")`, and asserts:
+`spawnSync`. Give every run a ten-second watchdog that remains armed through
+the child `close` event, sends `SIGKILL` to the process group, and fails the
+test if the script or its output pipes hang. For signal cases, the fake `curl`
+writes a `run-wait-entered` marker and remains alive. Test direct-PID and
+process-group HUP, INT, and TERM delivery, and assert:
 
-- the top-level shell exits with code `143` and no Node-level signal;
-- diagnostics include `signal=TERM`;
+- the top-level shell exits with code `129`, `130`, or `143` and no Node-level
+  signal;
+- diagnostics include the corresponding signal name;
 - the first diagnostic command precedes every destructive command; and
 - only IDs/names owned by this run are removed.
 
@@ -321,7 +323,13 @@ Cover these scenarios:
 10. a hanging diagnostic command and a hanging cleanup command: the watchdog
    terminates each bounded command, the script itself exits within ten seconds,
    diagnostic timeout still precedes cleanup, and cleanup timeout is reported
-   as failure rather than hanging.
+   as failure rather than hanging;
+11. ambiguous fixed-resource creates: a per-run token label permits adoption
+   only for an exact-name object created by this run, while late foreign
+   collisions are preserved; and
+12. renamed fixed resources: retain and remove the owned immutable ID, report
+   validation failure, preserve any same-name replacement, and skip sandbox
+   cleanup when app-name quiescence cannot be proved.
 
 The fake must support these identity reads exactly:
 
@@ -348,19 +356,44 @@ handling and object-ID ownership.
 
 In `assert-docker.sh`:
 
-- require `docker`, `curl`, `jq`, `awk`, `grep`, `sed`, and `tr`;
-- add `run_bounded`, implemented with POSIX background processes: start the
-  requested command, start a watchdog that sleeps
-  `SMOKE_COMMAND_TIMEOUT_SECONDS` (default `30`), sends TERM, waits
-  `SMOKE_COMMAND_KILL_GRACE_SECONDS` (default `2`), then sends KILL; wait for
-  the command while capturing its status; stop/reap the watchdog; and return
-  the command status. Do not depend on GNU `timeout`;
+- require `docker`, `curl`, `jq`, `awk`, `grep`, `sed`, `tr`, `mkfifo`, and
+  `node`;
+- add `run_bounded` backed by a persistent, run-scoped `run-bounded.mjs`
+  supervisor. Pure POSIX shell cannot create and prove a private process group
+  across noninteractive macOS `sh` and Linux `dash`. The shell therefore uses
+  private request/response FIFOs for sequential calls while the supervisor
+  creates a fresh detached shell-wrapper group for each foreground CLI. A
+  permanent per-call atomic decision latch chooses normal completion, timeout,
+  or an external signal; timeout/signal sends TERM once, waits for wrapper
+  acknowledgement, gives the command the full
+  `SMOKE_COMMAND_KILL_GRACE_SECONDS` (default `2`), then sends KILL to the
+  anchored group and reaps it. `SMOKE_COMMAND_TIMEOUT_SECONDS` defaults to
+  `30`; timeout always returns `124`. Command output stays in private `0600`
+  regular files. The shell starts the supervisor once in its top-level process
+  group, performs a bounded out-of-band READY handshake, and sends STOP before
+  waiting for bounded out-of-band STOPPED/exit markers during EXIT. Control
+  waits poll helper liveness to a deadline and use TERM/KILL/reap fallback; no
+  FIFO open, handshake read, or final wait is allowed to hang. This internal
+  harness targets Darwin and Linux and may use their verified read-write FIFO
+  open behavior; it does not claim a portable POSIX FIFO abstraction. The shell
+  signals only its unreaped launcher child, which forwards TERM/KILL to the
+  helper; it never reads a mutable helper PID file. Do not depend on GNU
+  `timeout`;
+- keep `/runs/wait` on a distinct budget slightly greater than its curl
+  `--max-time 240` setting;
+- remove active bounded command substitutions and pipelines transitively;
+  bounded reads/listings use global capture results, and only already-reaped
+  regular-file output may be transformed in command substitutions;
 - install separate `HUP`, `INT`, `TERM`, and `EXIT` traps;
 - make signal traps set `SIGNAL_NAME` and exit `129`, `130`, or `143`;
 - make the EXIT trap preserve the original status unless validation/cleanup
   itself fails;
 - reject occupied exact app/mock/network names and any existing
   `dawn-sbx-*` container or `dawn-sbx-vol-*` volume before mutation;
+- generate a collision-resistant run token before mutation and label the fixed
+  network/app/mock atomically with `dawn.smoke.run=$RUN_TOKEN`; pending
+  no-output creates may reconcile only an exact-name object carrying that
+  token;
 - record the app, mock, and network object IDs immediately after successful
   creation;
 - sanitize the returned thread ID with the provider-compatible expression
@@ -373,19 +406,23 @@ In `assert-docker.sh`:
   after this run request began. Record a canonical fingerprint from
   `docker volume inspect` normalized with `jq -cS` over `CreatedAt`, `Driver`,
   `Labels`, `Mountpoint`, `Name`, `Options`, and `Scope`;
-- before diagnostics/cleanup, re-read every owned object ID. A changed fixed
-  object is a cleanup failure and is skipped. A changed sandbox ID or either
-  changed label invalidates both sandbox claims. A changed volume fingerprint
-  invalidates the volume claim;
+- before diagnostics/cleanup, list full object IDs and names. A renamed fixed
+  object remains owned and is removed by ID while validation fails; a same-name
+  replacement is never claimed. A changed sandbox ID or either changed label
+  invalidates both sandbox claims. A changed or unreadable volume fingerprint
+  invalidates both claims so provider cleanup cannot delete an associated
+  untrusted object;
 - capture bounded app/mock logs, exact sandbox inspect data, and at most 50
   read-only prefix namespace entries on every nonzero exit;
 - route every Docker inspect/log/removal used by ownership validation,
   diagnostics, or cleanup through `run_bounded`. A timeout skips that target,
   marks cleanup failed when applicable, and cannot suppress the original
   diagnostic output;
-- after diagnostics, delete containers and the network by their recorded
-  object IDs, not by names. Delete the exact sandbox volume name only while its
-  sandbox ownership claim remains valid;
+- after diagnostics, use `DELETE /threads/{id}` while the owned app is still
+  running as the only destructive sandbox-volume cleanup path, then delete any
+  remaining claimed containers and the network by recorded object IDs, not by
+  names. Never call Docker volume removal by name; if the exact claimed volume
+  remains after provider cleanup, preserve it and fail cleanup;
 - after `DELETE /threads/{id}`, poll only the exact sandbox names. Clear claims
   only after exact absence is observed; and
 - retain all existing non-root, read-only-rootfs, hostname, and genuine
@@ -403,15 +440,21 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   pnpm exec tsc -p test/k8s-compat/tsconfig.json --noEmit
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   pnpm exec biome check --config-path packages/config-biome/biome.json \
-  test/k8s-compat/assert-docker-smoke.test.ts
+  test/k8s-compat/assert-docker-smoke.test.ts test/k8s-smoke/run-bounded.mjs
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  node --check test/k8s-smoke/run-bounded.mjs
 sh -n test/k8s-smoke/assert-docker.sh
+dash -n test/k8s-smoke/assert-docker.sh
+shellcheck test/k8s-smoke/assert-docker.sh
 git diff --check
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add test/k8s-compat/assert-docker-smoke.test.ts test/k8s-smoke/assert-docker.sh
+git add docs/superpowers/plans/2026-08-11-dedicated-infrastructure-lanes.md \
+  test/k8s-compat/assert-docker-smoke.test.ts \
+  test/k8s-smoke/assert-docker.sh test/k8s-smoke/run-bounded.mjs
 git commit -m "fix(testing): isolate Docker smoke cleanup"
 ```
 
