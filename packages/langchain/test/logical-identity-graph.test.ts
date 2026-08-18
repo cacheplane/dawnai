@@ -17,6 +17,7 @@ import type { ChatResult } from "@langchain/core/outputs"
 import { MemorySaver } from "@langchain/langgraph"
 import { createReactAgent } from "@langchain/langgraph/prebuilt"
 import { describe, expect, it } from "vitest"
+import { streamAgent } from "../src/agent-adapter.js"
 import { materializeStateSchema } from "../src/state-adapter.js"
 import { convertToolToLangChain } from "../src/tool-converter.js"
 
@@ -150,5 +151,67 @@ describe("real-graph pins for logical tool identity", () => {
       (m: { tool_call_id?: unknown }) => typeof m?.tool_call_id === "string",
     )
     expect(toolMessage?.tool_call_id).toBe("call_writeTodos_1")
+  })
+
+  async function collectAgentChunks(graph: unknown) {
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry: graph as never,
+      input: { messages: [{ role: "user", content: "go" }] },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      threadId: "spike-thread-e2e",
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+    return chunks
+  }
+
+  it("streamAgent keys root tool chunks by the model's tool-call id (string tool)", async () => {
+    const probe = convertToolToLangChain({ name: "probe", run: async () => ({ result: "probe-ok" }) })
+    const graph = createReactAgent({
+      llm: scriptedModel("call_probe_1", "probe", { q: "x" }),
+      tools: [probe],
+      checkpointer: new MemorySaver(),
+      // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options
+    } as any)
+
+    const chunks = await collectAgentChunks(graph)
+    const toolCalls = chunks.filter((c) => c.type === "tool_call")
+    const toolResults = chunks.filter((c) => c.type === "tool_result")
+    expect(toolCalls).toEqual([
+      { type: "tool_call", data: { id: "call_probe_1", name: "probe", input: { q: "x" } } },
+    ])
+    expect(toolResults).toHaveLength(1)
+    expect((toolResults[0]?.data as { id?: unknown }).id).toBe("call_probe_1")
+  })
+
+  it("streamAgent keys root tool chunks by the model's tool-call id (Command tool)", async () => {
+    const writeTodos = convertToolToLangChain({
+      name: "writeTodos",
+      run: (input: unknown) => {
+        const todos = (input as { todos: unknown }).todos
+        return { result: { todos }, state: { todos } }
+      },
+    })
+    const graph = createReactAgent({
+      llm: scriptedModel("call_writeTodos_1", "writeTodos", {
+        todos: [{ content: "first", status: "in_progress" }],
+      }),
+      tools: [writeTodos],
+      stateSchema: materializeStateSchema([{ name: "todos", reducer: "replace", default: [] }]),
+      checkpointer: new MemorySaver(),
+      // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options
+    } as any)
+
+    const chunks = await collectAgentChunks(graph)
+    const toolCalls = chunks.filter((c) => c.type === "tool_call")
+    const toolResults = chunks.filter((c) => c.type === "tool_result")
+    expect(toolCalls).toHaveLength(1)
+    expect((toolCalls[0]?.data as { id?: unknown }).id).toBe("call_writeTodos_1")
+    expect(toolResults).toHaveLength(1)
+    expect((toolResults[0]?.data as { id?: unknown }).id).toBe("call_writeTodos_1")
   })
 })
