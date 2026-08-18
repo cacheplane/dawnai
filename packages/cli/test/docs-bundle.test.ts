@@ -39,6 +39,14 @@ const EXPECTED_DOCS = navModule.ALL_DOCS_PAGES.map(({ href, label }) => ({
   label,
 }))
 const apiHubIndex = EXPECTED_DOCS.findIndex(({ slug }) => slug === "api")
+const FINAL_PR2_API_DOCS = [
+  ["@dawn-ai/permissions", "api/permissions.md"],
+  ["@dawn-ai/workspace", "api/workspace.md"],
+  ["@dawn-ai/sandbox", "api/sandbox.md"],
+  ["@dawn-ai/langgraph", "api/langgraph.md"],
+  ["@dawn-ai/langchain", "api/langchain.md"],
+  ["@dawn-ai/sqlite-storage", "api/sqlite-storage.md"],
+] as const
 const scannedTextExtensions = new Set([
   ".cjs",
   ".css",
@@ -425,7 +433,9 @@ describe("generated documentation bundle", () => {
       file: "recipes/index.md",
     })
     expect(topics).toHaveLength(EXPECTED_DOCS.length)
-    expect(topics.slice(apiHubIndex, apiHubIndex + 11).map(({ title }) => title)).toEqual([
+    expect(topics).toHaveLength(75)
+    expect(topics).toContainEqual({ title: "Thread Access", file: "thread-access.md" })
+    expect(topics.slice(apiHubIndex, apiHubIndex + 17).map(({ title }) => title)).toEqual([
       "API Reference",
       "@dawn-ai/sdk",
       "@dawn-ai/cli",
@@ -437,7 +447,11 @@ describe("generated documentation bundle", () => {
       "@dawn-ai/testing",
       "@dawn-ai/evals",
       "dawn:routes",
+      ...FINAL_PR2_API_DOCS.map(([title]) => title),
     ])
+    for (const [title, file] of FINAL_PR2_API_DOCS) {
+      expect(topics).toContainEqual({ title, file })
+    }
     expect(topics).toContainEqual({
       title: "Long-term Memory",
       file: "memory/long-term.md",

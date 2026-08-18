@@ -2048,6 +2048,14 @@ describe("package API reference pages", () => {
     expect(content).not.toContain('api-contract="@dawn-ai/langchain#.:ExecuteWithToolLoopOptions"')
   })
 
+  it("describes AgentTurnResult using its actual settled-turn fields", () => {
+    const content = foundationalContent("langchain")
+    expect(content).toContain(
+      "| `AgentTurnResult` | Describe a settled agent turn's output and whether it parked on an interrupt. |",
+    )
+    expect(content).not.toContain("emitted messages, values, and status")
+  })
+
   it("documents the exact Sandbox root and testing ownership", () => {
     const content = foundationalContent("sandbox")
     for (const exportName of [

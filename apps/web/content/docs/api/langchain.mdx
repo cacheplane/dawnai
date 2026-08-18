@@ -34,22 +34,17 @@ The runtime root is edge-safe for Dawn's emitted Hono/workerd target. Compatibil
 
 ### `@dawn-ai/langchain`
 
-Agent materialization and streaming:
-
 | Export | Responsibility |
 |---|---|
 | `AgentStreamChunk` | Describe streamed tokens, tool activity, interrupts, completion, and extensions. |
+| `AgentTurnResult` | Describe a settled agent turn's output and whether it parked on an interrupt. |
 | `DawnToolDefinition` | Describe a Dawn tool accepted by agent materialization. |
 | `__resetMaterializedAgentsForTests` | Reset the process-global materialized-agent cache for tests. |
 | `executeAgent` | Consume an agent stream and return its completed output. |
+| `executeAgentTurn` | Execute one materialized-agent turn and return its structured result. |
 | `materializeAgentGraph` | Compile a Dawn agent descriptor into a LangGraph graph. |
 | `streamAgent` | Stream normalized agent chunks. |
 | `chainAdapter` | Adapt a LangChain runnable to Dawn's chain backend contract. |
-
-Provider and retry helpers:
-
-| Export | Responsibility |
-|---|---|
 | `BuiltInModelProviderId` | Re-export the SDK-owned built-in provider union. |
 | `ModelProviderId` | Re-export the SDK-owned provider identifier. |
 | `createChatModel` | Load and construct a selected provider chat model. |
@@ -61,11 +56,6 @@ Provider and retry helpers:
 | `isRetryableError` | Classify known transient error messages. |
 | `withRetry` | Retry transient async failures with jittered exponential backoff. |
 | `openaiEmbedder` | Construct the OpenAI-backed memory embedder. |
-
-Offloading and tools:
-
-| Export | Responsibility |
-|---|---|
 | `OffloadStoreOptions` | Configure an offload store and its cleanup limits. |
 | `buildOffloadFileName` | Produce a sanitized deterministic output filename. |
 | `OffloadStore` | Persist tool output and perform throttled best-effort cleanup. |
@@ -78,11 +68,6 @@ Offloading and tools:
 | `UnwrappedToolResult` | Describe agent-visible content and optional state updates. |
 | `unwrapToolResult` | Decode Dawn's strict `{ result, state? }` tool-return wrapper. |
 | `Command` | Re-export LangGraph's resume/state-update command. |
-
-State, subagents, and summarization:
-
-| Export | Responsibility |
-|---|---|
 | `materializeStateSchema` | Build a LangGraph annotation root from resolved state fields. |
 | `ResolvedSubagentGraph` | Describe a resolved child route graph. |
 | `SubagentResolver` | Resolve an allowed task request to a child graph or rejection. |

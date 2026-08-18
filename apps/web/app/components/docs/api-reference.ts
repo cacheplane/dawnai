@@ -3,7 +3,7 @@ import type { ApiReferencePage } from "./api-reference-pages"
 export type { ApiReferencePage } from "./api-reference-pages"
 export { API_REFERENCE_PAGES, API_REFERENCE_PARENT } from "./api-reference-pages"
 
-export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal" | "deferred-to-pr2"
+export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal"
 export type ImportSurfaceKind = "typescript-runtime" | "config-artifact" | "metadata"
 export type OperatedArtifactKind = "executable" | "operated-application"
 export type RuntimeCompatibility = "node-only" | "edge-safe"
@@ -809,7 +809,7 @@ export const API_BEHAVIOR_CONTRACTS = [
         file: "packages/langchain/test/tool-loop.test.ts",
         testNames: ["limits tool loop iterations to prevent infinite loops"],
         assertionFingerprint:
-          'await expect ( executeWithToolLoop ( { chain : mockChain , input : { } , tools , signal : new AbortController ( ) . signal , maxIterations : 3 , } ) , ) . rejects . toThrow ( /maximum.*iterations/i )',
+          "await expect ( executeWithToolLoop ( { chain : mockChain , input : { } , tools , signal : new AbortController ( ) . signal , maxIterations : 3 , } ) , ) . rejects . toThrow ( /maximum.*iterations/i )",
       },
     ],
   },
@@ -1239,18 +1239,11 @@ export const ARTIFACT_REGISTRY = [
   ),
   runtimeImport("@dawn-ai/sqlite-storage", ".", "detailed", "node-only", "application"),
 
-  staticImport(
-    "@dawn-ai/config-biome",
-    ".",
-    "catalog-only",
-    "config-artifact",
-    "tooling",
-    "supported",
-  ),
+  staticImport("@dawn-ai/config-biome", ".", "internal", "config-artifact", "tooling", "supported"),
   staticImport(
     "@dawn-ai/config-biome",
     "./biome",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -1258,7 +1251,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     ".",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -1266,7 +1259,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./base",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -1274,7 +1267,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./library",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -1282,7 +1275,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./node",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -1290,13 +1283,13 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./nextjs",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
   ),
   runtimeImport("@dawn-ai/devkit", ".", "internal", "node-only", "internal", "internal"),
-  runtimeImport("@dawn-ai/vite-plugin", ".", "internal", "node-only", "internal", "internal"),
+  runtimeImport("@dawn-ai/vite-plugin", ".", "internal", "node-only", "tooling", "internal"),
 
   operatedArtifact(
     "@dawn-ai/cli",
@@ -1396,7 +1389,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/config-biome",
     "Shared Biome configuration for Dawn projects.",
     "packages/config-biome/README.md",
-    "/docs/api#dawn-ai-config-biome",
+    "/docs/api#dawn-aiconfig-biome",
     "/docs/getting-started",
     [
       importAddress("@dawn-ai/config-biome", "."),
@@ -1409,7 +1402,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/config-typescript",
     "Shared TypeScript configurations for Dawn projects.",
     "packages/config-typescript/README.md",
-    "/docs/api#dawn-ai-config-typescript",
+    "/docs/api#dawn-aiconfig-typescript",
     "/docs/getting-started",
     [
       importAddress("@dawn-ai/config-typescript", "."),
@@ -1439,7 +1432,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/devkit",
     "Internal scaffold templates and generated-app test utilities.",
     "packages/devkit/README.md",
-    "/docs/api#dawn-ai-devkit",
+    "/docs/api#dawn-aidevkit",
     "/docs/getting-started",
     [importAddress("@dawn-ai/devkit", ".")],
     "internal",
@@ -1459,7 +1452,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/inspector",
     "Browser application for inspecting a running Dawn app.",
     "packages/inspector/README.md",
-    "/docs/api#dawn-ai-inspector",
+    "/docs/api#dawn-aiinspector",
     "/docs/inspector",
     [operatedAddress("@dawn-ai/inspector", "dawnInspector.server")],
     "tooling",
@@ -1588,10 +1581,10 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/vite-plugin",
     "Internal Vite integration for Dawn type generation.",
     "packages/vite-plugin/README.md",
-    "/docs/api#dawn-ai-vite-plugin",
+    "/docs/api#dawn-aivite-plugin",
     "/docs/routes",
     [importAddress("@dawn-ai/vite-plugin", ".")],
-    "internal",
+    "tooling",
     "internal",
   ),
   packageEntry(
@@ -1644,12 +1637,7 @@ interface ApiReferenceRegistries {
   readonly packages: readonly PackageCatalogEntry[]
 }
 
-const COVERAGES = new Set<ApiReferenceCoverage>([
-  "detailed",
-  "catalog-only",
-  "internal",
-  "deferred-to-pr2",
-])
+const COVERAGES = new Set<ApiReferenceCoverage>(["detailed", "catalog-only", "internal"])
 const AUDIENCES = new Set<ApiReferenceAudience>([
   "application",
   "integration",

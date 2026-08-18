@@ -14,6 +14,14 @@ const EXPECTED_MAP_LINKS = [
   ["Configuration Reference", "/docs/configuration"],
   ["API Reference", "/docs/api"],
 ] as const
+const FINAL_PR2_API_HREFS = [
+  "/docs/api/permissions",
+  "/docs/api/workspace",
+  "/docs/api/sandbox",
+  "/docs/api/langgraph",
+  "/docs/api/langchain",
+  "/docs/api/sqlite-storage",
+] as const
 
 describe("compact LLM documentation route", () => {
   it("publishes the curated application-developer documentation map", async () => {
@@ -45,6 +53,9 @@ describe("compact LLM documentation route", () => {
     expect(body).toContain("https://dawnai.org/docs/api")
     for (const page of API_REFERENCE_PAGES) {
       expect(body).not.toContain(`https://dawnai.org${page.href}`)
+    }
+    for (const href of FINAL_PR2_API_HREFS) {
+      expect(body).not.toContain(`https://dawnai.org${href}`)
     }
   })
 })

@@ -3,6 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { API_REFERENCE_PAGES } from "../../../components/docs/api-reference-pages"
 import { GET } from "./route"
 
+const FINAL_PR2_API_HREFS = [
+  "/docs/api/permissions",
+  "/docs/api/workspace",
+  "/docs/api/sandbox",
+  "/docs/api/langgraph",
+  "/docs/api/langchain",
+  "/docs/api/sqlite-storage",
+] as const
+
 async function getMarkdown(slug: readonly string[]): Promise<Response> {
   return GET(new Request(`https://dawnai.org/api/markdown/${slug.join("/")}`), {
     params: Promise.resolve({ slug }),
@@ -28,11 +37,24 @@ describe("markdown route", () => {
     expect(await response.text()).toContain("# Add a Tool")
   })
 
+  it("serves the Thread Access journey page", async () => {
+    const response = await getMarkdown(["thread-access"])
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain("# Thread Access")
+  })
+
   it.each(API_REFERENCE_PAGES)("serves nested API reference $href", async (page) => {
     const response = await getMarkdown(page.href.slice("/docs/".length).split("/"))
 
     expect(response.status).toBe(200)
     expect(await response.text()).toContain(`# ${page.label}`)
+  })
+
+  it("serves all six PR2 API reference leaves", async () => {
+    for (const href of FINAL_PR2_API_HREFS) {
+      const response = await getMarkdown(href.slice("/docs/".length).split("/"))
+      expect(response.status, href).toBe(200)
+    }
   })
 
   it("rejects an empty slug", async () => {

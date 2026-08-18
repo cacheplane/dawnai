@@ -1070,11 +1070,17 @@ describe("docs links and in-page anchors", () => {
       "@dawn-ai/cli",
       "@dawn-ai/core",
       "@dawn-ai/evals",
+      "@dawn-ai/langchain",
+      "@dawn-ai/langgraph",
       "@dawn-ai/memory",
       "@dawn-ai/memory-pgvector",
+      "@dawn-ai/permissions",
       "@dawn-ai/postgres-storage",
+      "@dawn-ai/sandbox",
       "@dawn-ai/sdk",
+      "@dawn-ai/sqlite-storage",
       "@dawn-ai/testing",
+      "@dawn-ai/workspace",
     ])
 
     const failures = DETAILED_PACKAGE_READMES.flatMap((entry) => {
@@ -1122,6 +1128,34 @@ describe("docs links and in-page anchors", () => {
         failed.push("duplicates exhaustive inventory")
       }
       return failed.map((failure) => `${entry.packageName}: ${failure}`)
+    })
+
+    expect(failures).toEqual([])
+  })
+
+  it("keeps catalog and internal READMEs compact and linked to exact hub anchors", () => {
+    const expected = new Map([
+      ["@dawn-ai/config-biome", "/docs/api#dawn-aiconfig-biome"],
+      ["@dawn-ai/config-typescript", "/docs/api#dawn-aiconfig-typescript"],
+      ["@dawn-ai/devkit", "/docs/api#dawn-aidevkit"],
+      ["@dawn-ai/inspector", "/docs/api#dawn-aiinspector"],
+      ["@dawn-ai/vite-plugin", "/docs/api#dawn-aivite-plugin"],
+      ["create-dawn-ai-app", "/docs/api#create-dawn-ai-app"],
+    ])
+    const entries = PACKAGE_CATALOG.filter(({ packageName }) => expected.has(packageName))
+    expect(entries).toHaveLength(6)
+
+    const failures = entries.flatMap((entry) => {
+      const source = readFileSync(join(REPO_ROOT, entry.readmePath), "utf8")
+      const destinations = markdownDestinations(source)
+      const expectedReference = `https://dawnai.org${expected.get(entry.packageName)}`
+      return [
+        ...(destinations.includes(expectedReference) ? [] : [`${entry.packageName}: reference`]),
+        ...(destinations.includes(`https://dawnai.org${entry.conceptualGuideDestination}`)
+          ? []
+          : [`${entry.packageName}: guide`]),
+        ...(source.split(/\r?\n/).length <= 50 ? [] : [`${entry.packageName}: not concise`]),
+      ]
     })
 
     expect(failures).toEqual([])
