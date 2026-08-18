@@ -461,6 +461,18 @@ function classifyStreamEvent(
         interrupts: [],
       }
     }
+    /**
+     * Root tool calls are announced here, from the model turn, rather than
+     * from `on_tool_start`'s execution run id. LangGraph re-executes an
+     * interrupted tool node from scratch on resume — the ToolNode callback
+     * gets a FRESH `run_id` each pass — but the checkpointed `AIMessage`
+     * keeps the SAME model/provider tool-call id across that whole
+     * interrupt→resume cycle. Announcing under that stable id lets an AG-UI
+     * client dedupe the pre-interrupt and post-resume streams into one card
+     * instead of rendering a duplicate. Execution run ids stay purely
+     * internal bookkeeping (see `heldRootToolStarts` below) and never reach
+     * the wire as an identity by themselves when a logical id is available.
+     */
     case "on_chat_model_end": {
       if (child) break
       const output = event.data.output as { tool_calls?: unknown } | undefined
@@ -529,6 +541,29 @@ function classifyStreamEvent(
           interrupts: [],
         }
       }
+      /**
+       * Three-way resolution for the root announce/result pairing:
+       *
+       *  (a) The call was already announced from `on_chat_model_end` (its id
+       *      is in `announcedToolCallIds`) — this event only ever needs to
+       *      emit the matching `tool_result`, keyed by that same id.
+       *  (b) The call was never announced from a model turn at all. This is
+       *      the resume-replay path: LangGraph re-executes an interrupted
+       *      tool node with NO new model turn, so `on_chat_model_end` never
+       *      fires for it — the only signals we get are this `on_tool_end`
+       *      (plus, usually, a held `on_tool_start`). We announce here,
+       *      preferring the logical id recovered from the output and
+       *      falling back to the held start's input for `data.input`; when
+       *      the provider/output carries no logical id either (e.g. a tool
+       *      returning a bare string), we fall back further to the
+       *      execution `run_id` itself so ID-less providers still get a
+       *      paired announce+result.
+       *  (c) An orphan result — no held `on_tool_start` AND no logical id —
+       *      means the stream began observation mid-execution (or the tool
+       *      genuinely returned nothing identifiable). There is nothing to
+       *      announce, so this stays result-only, matching the pre-rekey
+       *      behavior for that case exactly.
+       */
       const held = rootTools.heldRootToolStarts.get(event.run_id)
       rootTools.heldRootToolStarts.delete(event.run_id)
       const logicalId = readLogicalToolCallId(event.data.output)

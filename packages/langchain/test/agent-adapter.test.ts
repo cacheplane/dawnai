@@ -1230,6 +1230,75 @@ describe("logical-identity root tool projection", () => {
     ])
   })
 
+  test("a duplicate on_tool_end for the same run id never re-announces or swallows output", async () => {
+    const entry = streamOf([
+      {
+        event: "on_tool_start",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { input: { q: "x" } },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { output: "first result" },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { output: "second result" },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "dup-run-1", name: "probe", input: { q: "x" } } },
+      { type: "tool_result", data: { id: "dup-run-1", name: "probe", output: "first result" } },
+      { type: "tool_result", data: { id: "dup-run-1", name: "probe", output: "second result" } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("an unrelated execution whose output forges an already-announced id is keyed under that id", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [{ id: "call_x_1", name: "alpha", args: {} }],
+          },
+        },
+      },
+      {
+        event: "on_tool_start",
+        run_id: "beta-run",
+        name: "beta",
+        data: { input: {} },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "beta-run",
+        name: "beta",
+        data: { output: { tool_call_id: "call_x_1", content: "beta-ok" } },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_x_1", name: "alpha", input: {} } },
+      {
+        type: "tool_result",
+        data: { id: "call_x_1", name: "beta", output: { tool_call_id: "call_x_1", content: "beta-ok" } },
+      },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
   test("child tool events are untouched by the root re-key", async () => {
     const metadata = {
       dawn: {
