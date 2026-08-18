@@ -53,6 +53,12 @@ through package-manager overrides.
 - Stable `@copilotkit/runtime@1.68.1` still declares
   `@ai-sdk/google-vertex`, so changing the import path does not remove the
   outstanding `@ai-sdk/provider-utils` advisory from the installed graph.
+- CopilotKit `1.68.1` pins its direct AG-UI client/core dependencies to
+  `0.0.57`. Dawn's type-facing `HttpAgent` dependency must stay on that exact
+  version to avoid loading a second, potentially type-incompatible
+  `AbstractAgent` generation. A separate `@ag-ui/client@0.0.54` remains
+  encapsulated below CopilotKit's `@ag-ui/mcp-middleware@0.0.1`; it is not the
+  agent type Dawn passes into `CopilotRuntime`.
 
 References:
 
@@ -64,13 +70,14 @@ References:
 
 1. **Use the latest stable packages.** Raise both examples to
    `@copilotkit/react-core@^1.68.1` and `@copilotkit/runtime@^1.68.1`. Keep
-   `@ag-ui/client` exactly pinned because it remains pre-1.0, updating it to the
-   current compatible release as part of the lock refresh.
+   `@ag-ui/client` exactly pinned at `0.0.57` because it remains pre-1.0 and
+   CopilotKit `1.68.1` depends on that exact generation. Do not independently
+   update it to `0.0.58`.
 2. **Use V2 imports throughout.** All CopilotKit React imports remain on
    `@copilotkit/react-core/v2`; both server routes move to
    `@copilotkit/runtime/v2`.
 3. **Adopt the native multi-route V2 transport.** Use
-   `createCopilotRuntimeHandler`, a Next.js optional catch-all route, and the
+   `createCopilotRuntimeHandler`, a Next.js required catch-all route, and the
    V2 REST/SSE route layout. Do not retain the legacy single-route envelope.
 4. **Keep Dawn's AG-UI boundary.** Each CopilotKit runtime continues to register
    an `@ag-ui/client` `HttpAgent` pointing at the existing Dawn `/agui/{route}`
@@ -108,7 +115,7 @@ app/api/copilotkit/route.ts
 to:
 
 ```text
-app/api/copilotkit/[[...slug]]/route.ts
+app/api/copilotkit/[...path]/route.ts
   @copilotkit/runtime/v2
   CopilotRuntime
   createCopilotRuntimeHandler
@@ -129,7 +136,7 @@ base URL.
 
 ### Chat example
 
-- Upgrade the three integration packages.
+- Upgrade the two CopilotKit packages and retain the aligned AG-UI pin.
 - Migrate the CopilotKit runtime route.
 - Preserve the `/chat#agent` Dawn route mapping.
 - Remove comments and documentation that describe the legacy endpoint factory
@@ -181,14 +188,25 @@ Verification covers Dawn behavior and public integration contracts rather than
 CopilotKit's internal implementation:
 
 1. Typecheck and production-build both web examples.
-2. Update the deterministic runtime-route test to exercise the V2 route shape:
-   a valid information request plus a malformed run request that proves the
-   registered agent boundary is active without calling a model.
-3. Run the research web component tests unchanged or with type-only adaptations.
-4. Exercise the real chat and research UI paths against Dawn's AG-UI endpoint,
-   including streaming plus the existing permission and research renderers.
-5. Run the dependency-resolution tests and both production and full audits.
-6. Run the repository Definition of Done before completion.
+2. Add an automated frontend transport regression that proves each real
+   `<CopilotKit>` provider selects multi-route mode: its first runtime discovery
+   request reaches `GET /api/copilotkit/info`, and it does not send the legacy
+   method envelope to `POST /api/copilotkit`.
+3. Update the deterministic runtime-route test to exercise a valid information
+   request plus a malformed run request without calling a model.
+4. Add a loopback integration test with a schema-valid fake AG-UI endpoint. Run
+   one request through each real CopilotKit handler and assert that `HttpAgent`
+   reaches exactly `/agui/%2Fchat%23agent` and
+   `/agui/%2Fresearch%23agent`, then forwards the fake SSE response through the
+   CopilotKit boundary. This is the CI proof that the migrated examples still
+   target Dawn rather than only constructing a valid CopilotKit handler.
+5. Run the research web component tests unchanged or with type-only adaptations.
+6. Perform a non-gating live-model smoke of chat streaming and the research
+   permission/rendering flows when credentials are available; keep the current
+   README distinction between deterministic CI coverage and manual live-model
+   verification.
+7. Run the dependency-resolution tests and both production and full audits.
+8. Run the repository Definition of Done before completion.
 
 The tests must fail if either example returns to the root CopilotKit runtime
 adapter or if the final lockfile resolves a known vulnerable version that has a
@@ -228,6 +246,15 @@ against an integration Dawn immediately intends to replace.
 - Both examples use the V2 multi-route handler and still reach the same Dawn
   agents through `HttpAgent`.
 - Both examples typecheck, build, and pass their relevant integration tests.
+- Both providers are regression-tested in multi-route mode, including the
+  `/api/copilotkit/info` discovery request.
+- A deterministic loopback test proves each `HttpAgent` retains its exact
+  encoded Dawn AG-UI target and forwards a schema-valid event stream.
+- Both examples' direct, type-facing `HttpAgent` edges resolve to
+  `@ag-ui/client@0.0.57`, and no `0.0.58` identity is present. The older
+  `0.0.54` identity is permitted only beneath
+  `@ag-ui/mcp-middleware@0.0.1`; its presence is not required if upstream
+  removes that private edge.
 - The refreshed graph uses compatible patched dependency versions without new
   overrides.
 - The refreshed audit explicitly distinguishes fixed findings from the
