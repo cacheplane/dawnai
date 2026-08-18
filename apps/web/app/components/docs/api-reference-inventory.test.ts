@@ -40,6 +40,20 @@ const packagePages = [
   },
   { slug: "testing", label: "@dawn-ai/testing", href: "/docs/api/testing" },
   { slug: "evals", label: "@dawn-ai/evals", href: "/docs/api/evals" },
+  {
+    slug: "permissions",
+    label: "@dawn-ai/permissions",
+    href: "/docs/api/permissions",
+  },
+  { slug: "workspace", label: "@dawn-ai/workspace", href: "/docs/api/workspace" },
+  { slug: "sandbox", label: "@dawn-ai/sandbox", href: "/docs/api/sandbox" },
+  { slug: "langgraph", label: "@dawn-ai/langgraph", href: "/docs/api/langgraph" },
+  { slug: "langchain", label: "@dawn-ai/langchain", href: "/docs/api/langchain" },
+  {
+    slug: "sqlite-storage",
+    label: "@dawn-ai/sqlite-storage",
+    href: "/docs/api/sqlite-storage",
+  },
 ] as const
 const allReferencePages = [...foundationalPages, ...packagePages] as const
 
@@ -138,6 +152,20 @@ function foundationalContent(slug: string): string {
 function foundationalWrapper(slug: string): string {
   const path = join(REPO_ROOT, "apps/web/app/docs/api", slug, "page.tsx")
   return existsSync(path) ? readFileSync(path, "utf8") : ""
+}
+
+function langchainPrivateHelperShapeFailures(source: string): string[] {
+  const start = source.indexOf("type ToolExecutor = {")
+  const end = source.indexOf("type BuildStubArgs = {", start)
+  if (start === -1 || end === -1) return ["missing bounded private helper-shape section"]
+  const section = source.slice(start, end)
+  return [
+    "readonly middleware?: Readonly<Record<string, unknown>>",
+    ") => Promise<unknown> | unknown",
+    "readonly middlewareContext?: Readonly<Record<string, unknown>>",
+  ]
+    .filter((contract) => !section.includes(contract))
+    .map((contract) => `missing private helper contract: ${contract}`)
 }
 
 function packageExample(slug: string): string {
@@ -699,6 +727,66 @@ function mutated(name: string, mutate: (fixture: InventoryFixture) => void): Inv
   ;(fixture as { name: string }).name = name
   mutate(fixture)
   return fixture
+}
+
+function publicMembersFixture(
+  name: string,
+  addCloseTo?: "saver" | "store" | "base",
+): InventoryFixture {
+  const saverClose = addCloseTo === "saver" ? "\n  close(): void {}" : ""
+  const storeClose = addCloseTo === "store" ? "\n  close(): void" : ""
+  const baseClose = addCloseTo === "base" ? "\n  close(): void {}" : ""
+  return {
+    name,
+    packages: [],
+    artifacts: [],
+    documents: [
+      {
+        href: "/docs/api/sqlite-storage",
+        path: "docs/sqlite-storage.mdx",
+        source: `#### Behavior contract \`sqlite-public-members\`
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sqlite-storage/src/checkpointer/saver.ts","selector":"DawnSqliteSaver.publicMembers"},{"kind":"source-ast","file":"packages/sqlite-storage/src/threads/store.ts","selector":"ThreadsStore.publicMembers"}] */}
+The public saver and thread store omit close.`,
+      },
+    ],
+    behaviorContracts: [
+      {
+        id: "sqlite-public-members",
+        ownerHref: "/docs/api/sqlite-storage",
+        claim: "The public saver and thread store omit close.",
+        authorities: [
+          {
+            kind: "source-ast",
+            file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+            selector: "DawnSqliteSaver.publicMembers",
+            expected: "public members: baseMethod, getTuple, put",
+          },
+          {
+            kind: "source-ast",
+            file: "packages/sqlite-storage/src/threads/store.ts",
+            selector: "ThreadsStore.publicMembers",
+            expected: "public members: createThread, listThreads",
+          },
+        ],
+      },
+    ],
+    files: {
+      "packages/sqlite-storage/src/checkpointer/saver.ts": `class BaseCheckpointSaver {
+  baseMethod(): void {}${baseClose}
+}
+export class DawnSqliteSaver extends BaseCheckpointSaver {
+  constructor(private readonly db: unknown) {}
+  async getTuple(): Promise<unknown> { return undefined }
+  protected internal(): void {}
+  private secret(): void {}
+  async put(): Promise<void> {}${saverClose}
+}`,
+      "packages/sqlite-storage/src/threads/store.ts": `export interface ThreadsStore {
+  createThread(): Promise<void>
+  listThreads(): Promise<unknown[]>${storeClose}
+}`,
+    },
+  }
 }
 
 function generatedFixture(
@@ -1683,6 +1771,10 @@ const fixtures: InventoryFixture[] = [
   unresolvedWorkspaceFixture,
   ...generatedFixtures,
   ...generatedReviewFixtures,
+  publicMembersFixture("public-members-baseline"),
+  publicMembersFixture("behavior-public-members-saver-close", "saver"),
+  publicMembersFixture("behavior-public-members-store-close", "store"),
+  publicMembersFixture("behavior-public-members-inherited-close", "base"),
 ]
 
 const fixtureInput = JSON.stringify(fixtures)
@@ -1872,6 +1964,27 @@ describe("foundational API reference pages", () => {
       "testing.harness-isolation",
       "evals.scorer-errors.zero-score",
       "evals.run-and-gate",
+      "permissions.match.prefix",
+      "permissions.tool.exact",
+      "permissions.subagent.exact",
+      "permissions.store.noninteractive",
+      "workspace.compose.order",
+      "workspace.exec.timeout",
+      "workspace.filesystem.symlink",
+      "sandbox.docker.release",
+      "sandbox.kubernetes.release",
+      "sandbox.kubernetes.allow-network",
+      "sandbox.error.create",
+      "langgraph.entry.exclusive",
+      "langgraph.route-module.surface",
+      "langchain.provider.explicit",
+      "langchain.retry.exhaustion",
+      "langchain.tool-loop.limit",
+      "langchain.chain.stream-fallback",
+      "sqlite.checkpointer.persistence",
+      "sqlite.threads.order",
+      "sqlite.db.pragmas",
+      "sqlite.public.no-close",
     ])
   })
 
@@ -1913,6 +2026,232 @@ describe("package API reference pages", () => {
     expect(foundationalContent("postgres-storage")).toContain(
       "### `@dawn-ai/postgres-storage/node`",
     )
+    expect(foundationalContent("permissions")).toContain("### `@dawn-ai/permissions/node`")
+    expect(foundationalContent("workspace")).toContain("### `@dawn-ai/workspace/node`")
+    expect(foundationalContent("sandbox")).toContain("### `@dawn-ai/sandbox/testing`")
+  })
+
+  it("keeps LangChain's leaked tool-loop helper shape exact without publishing it", () => {
+    const content = foundationalContent("langchain")
+    expect(langchainPrivateHelperShapeFailures(content)).toEqual([])
+    for (const contract of [
+      "readonly middleware?: Readonly<Record<string, unknown>>",
+      ") => Promise<unknown> | unknown",
+      "readonly middlewareContext?: Readonly<Record<string, unknown>>",
+    ]) {
+      expect(langchainPrivateHelperShapeFailures(content.replace(contract, ""))).toEqual([
+        `missing private helper contract: ${contract}`,
+      ])
+    }
+    expect(content).not.toContain("| `ExecuteWithToolLoopOptions` |")
+    expect(content).not.toContain("| `ToolExecutor` |")
+    expect(content).not.toContain('api-contract="@dawn-ai/langchain#.:ExecuteWithToolLoopOptions"')
+  })
+
+  it("describes AgentTurnResult using its actual settled-turn fields", () => {
+    const content = foundationalContent("langchain")
+    expect(content).toContain(
+      "| `AgentTurnResult` | Describe a settled agent turn's output and whether it parked on an interrupt. |",
+    )
+    expect(content).not.toContain("emitted messages, values, and status")
+  })
+
+  it("documents the exact Sandbox root and testing ownership", () => {
+    const content = foundationalContent("sandbox")
+    for (const exportName of [
+      "SandboxConfig",
+      "SandboxHandle",
+      "SandboxPolicy",
+      "SandboxProvider",
+      "DockerSandboxOptions",
+      "dockerSandbox",
+      "KubeClient",
+      "KubernetesSandboxOptions",
+      "kubernetesSandbox",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    for (const exportName of ["fakeSandbox", "runProviderConformance"]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    for (const privateName of [
+      "sandboxUnavailable",
+      "KubePodSpec",
+      "PodPhase",
+      "resolveSecurity",
+    ]) {
+      expect(content).not.toContain(`| \`${privateName}\` |`)
+    }
+    expect(content).toContain("canonical field owner is [Workspace](/docs/api/workspace)")
+    expect(content).not.toContain("**Fields: `@dawn-ai/sandbox#.:SandboxProvider`**")
+  })
+
+  it("documents the exact SQLite Storage root ownership", () => {
+    const content = foundationalContent("sqlite-storage")
+    for (const exportName of [
+      "SqliteCheckpointerOptions",
+      "DawnSqliteSaver",
+      "sqliteCheckpointer",
+      "CreateThreadInput",
+      "Thread",
+      "ThreadStatus",
+      "ThreadsStore",
+      "ThreadsStoreOptions",
+      "createThreadsStore",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+  })
+
+  it("keeps Sandbox and SQLite lifecycle and trust boundaries explicit", () => {
+    const sandbox = foundationalContent("sandbox")
+    expect(sandbox).toContain("cleanup calls swallow provider deletion errors")
+    expect(sandbox).toContain("PVC wait stops after 30 seconds")
+    expect(sandbox).toContain("does not promise unrestricted egress")
+    expect(sandbox).toContain("does not prove NetworkPolicy enforcement")
+    expect(sandbox).toContain("gated Docker and Kubernetes integration lanes")
+
+    const sqlite = foundationalContent("sqlite-storage")
+    expect(sqlite).toContain("opens and retains a `DatabaseSync` handle")
+    expect(sqlite).toContain("does not close automatically")
+    expect(sqlite).toContain("Use separate files")
+    expect(sqlite).toContain("`checkpoints.sqlite` and `threads.sqlite`")
+    expect(sqlite).toContain("WAL applies only to file-backed databases")
+    expect(sqlite).toContain("does not define a tie-break")
+  })
+
+  it("installs Vitest before showing the Sandbox testing subpath import", () => {
+    const content = foundationalContent("sandbox")
+    const install = content.indexOf("pnpm add -D vitest")
+    const testingImport = content.indexOf('from "@dawn-ai/sandbox/testing"')
+    expect(install).toBeGreaterThan(-1)
+    expect(testingImport).toBeGreaterThan(install)
+  })
+
+  it("couples SQLite's missing public close hooks to both public-member sets", () => {
+    expect(API_BEHAVIOR_CONTRACTS.find(({ id }) => id === "sqlite.public.no-close")).toEqual({
+      id: "sqlite.public.no-close",
+      ownerHref: "/docs/api/sqlite-storage",
+      claim: "The public SQLite saver and thread store expose no explicit close method.",
+      authorities: [
+        {
+          kind: "source-ast",
+          file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+          selector: "DawnSqliteSaver.publicMembers",
+          expected: "public members: deleteThread, getTuple, list, put, putWrites",
+        },
+        {
+          kind: "source-ast",
+          file: "packages/sqlite-storage/src/threads/store.ts",
+          selector: "ThreadsStore.publicMembers",
+          expected:
+            "public members: createThread, deleteThread, getThread, listThreads, updateMetadata, updateStatus",
+        },
+      ],
+    })
+  })
+
+  it("documents the exact Permissions root and node ownership", () => {
+    const content = foundationalContent("permissions")
+    for (const exportName of [
+      "matchPermission",
+      "subagentPermissionPattern",
+      "suggestedCommandPattern",
+      "suggestedMemoryPattern",
+      "suggestedPathPattern",
+      "CommandDetail",
+      "MemoryDetail",
+      "PathDetail",
+      "PermissionDecision",
+      "PermissionMode",
+      "PermissionRequest",
+      "PermissionsFile",
+      "PermissionsStore",
+      "SubagentDetail",
+      "ToolDetail",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    expect(content).toContain("### `@dawn-ai/permissions/node`")
+    expect(content).toContain("| `createPermissionsStore` |")
+    expect(content).not.toContain("| `CreateOptions` |")
+  })
+
+  it("documents the exact Workspace root and node ownership", () => {
+    const content = foundationalContent("workspace")
+    for (const exportName of [
+      "compose",
+      "LocalExecOptions",
+      "LocalFilesystemOptions",
+      "SandboxConfig",
+      "SandboxHandle",
+      "SandboxPolicy",
+      "SandboxProvider",
+      "SandboxSecurityPolicy",
+      "BackendContext",
+      "ExecBackend",
+      "ExecMiddleware",
+      "FilesystemBackend",
+      "FilesystemMiddleware",
+      "LoggingOptions",
+      "withExecLogging",
+      "withFilesystemLogging",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+    expect(content).toContain("### `@dawn-ai/workspace/node`")
+    for (const exportName of [
+      "LocalExecOptions",
+      "LocalFilesystemOptions",
+      "localExec",
+      "localFilesystem",
+    ]) {
+      expect(content).toContain(`| \`${exportName}\` |`)
+    }
+  })
+
+  it("keeps Permissions and Workspace lifecycle and trust boundaries explicit", () => {
+    const permissions = foundationalContent("permissions")
+    expect(permissions).toContain("Reserved `tool` and `subagent` keys use exact matching")
+    expect(permissions).toContain("await `store.load()` before any store use")
+    expect(permissions).toContain("especially before `addAllow()`")
+    expect(permissions).not.toContain("Call `load()` before matching")
+    expect(permissions).toContain("Only `addAllow()` persists a runtime decision")
+    expect(permissions).toContain("inline input object is public; `CreateOptions` is not exported")
+
+    const workspace = foundationalContent("workspace")
+    expect(workspace).toContain("Core owns the path jail")
+    expect(workspace).toContain("does not enforce that boundary")
+    expect(workspace).toContain("does not inherit the host environment")
+    for (const contractName of [
+      "SandboxPolicy",
+      "SandboxSecurityPolicy",
+      "SandboxHandle",
+      "SandboxProvider",
+      "SandboxConfig",
+    ]) {
+      expect(workspace).toContain(`**Fields: \`@dawn-ai/workspace#.:${contractName}\`**`)
+    }
+  })
+
+  it("couples reserved subagent exactness to exact and non-prefix assertions", () => {
+    expect(API_BEHAVIOR_CONTRACTS.find(({ id }) => id === "permissions.subagent.exact")).toEqual({
+      id: "permissions.subagent.exact",
+      ownerHref: "/docs/api/permissions",
+      claim: "Reserved subagent identities match exactly rather than by prefix.",
+      authorities: [
+        {
+          kind: "test-assertion",
+          file: "packages/permissions/test/pattern-matching.test.ts",
+          testNames: [
+            "matches an exact parent route and subagent name tuple",
+            "does not prefix-match a serialized tuple identity",
+          ],
+          assertionFingerprint:
+            'expect ( matchPermission ( "subagent" , supportResearcher , { subagent : [ supportResearcher ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "subagent" , `\u0024{ supportResearcher }:extended` , { subagent : [ supportResearcher ] } , { } , ) , ) . toBe ( "unknown" )',
+        },
+      ],
+    })
   })
 
   it("documents Testing's fake embedder and all four conformance runners", () => {
@@ -2046,7 +2385,7 @@ ${packageExample("memory-pgvector").replace(
     }
   })
 
-  it("passes the source-derived inventory and behavior contracts for all ten owners", () => {
+  it("passes the source-derived inventory and behavior contracts for all sixteen owners", () => {
     const result = spawnSync(
       process.execPath,
       [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
@@ -2101,13 +2440,34 @@ ${packageExample("memory-pgvector").replace(
       "testing.harness-isolation",
       "evals.scorer-errors.zero-score",
       "evals.run-and-gate",
+      "permissions.match.prefix",
+      "permissions.tool.exact",
+      "permissions.subagent.exact",
+      "permissions.store.noninteractive",
+      "workspace.compose.order",
+      "workspace.exec.timeout",
+      "workspace.filesystem.symlink",
+      "sandbox.docker.release",
+      "sandbox.kubernetes.release",
+      "sandbox.kubernetes.allow-network",
+      "sandbox.error.create",
+      "langgraph.entry.exclusive",
+      "langgraph.route-module.surface",
+      "langchain.provider.explicit",
+      "langchain.retry.exhaustion",
+      "langchain.tool-loop.limit",
+      "langchain.chain.stream-fallback",
+      "sqlite.checkpointer.persistence",
+      "sqlite.threads.order",
+      "sqlite.db.pragmas",
+      "sqlite.public.no-close",
     ])
   })
 })
 
 describe("source-derived API inventory", () => {
   it("runs every isolated fixture through one compact stdin-fed process", () => {
-    expect(fixtures).toHaveLength(161)
+    expect(fixtures).toHaveLength(165)
     expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)
     expect(Buffer.byteLength(fixtureInput)).toBeLessThan(2 * 1024 * 1024)
     expect(subprocesses).toHaveLength(1)
@@ -2121,6 +2481,7 @@ describe("source-derived API inventory", () => {
 
   it("accepts checker-derived named, wildcard, alias, and default re-exports", () => {
     expect(byName.get("baseline")?.failures).toEqual([])
+    expect(byName.get("public-members-baseline")?.failures).toEqual([])
   })
 
   it.each(["generated-no-state", "generated-with-state", "generated-no-state-after-state"])(
@@ -2363,6 +2724,15 @@ describe("source-derived API inventory", () => {
     ["behavior-selector-object", /sdk-selector-shapes.*source-ast.*behaviorMap\.retry/i],
     ["behavior-selector-arrow-branch", /sdk-selector-shapes.*source-ast.*decide\.branch/i],
     ["behavior-selector-ambiguous", /sdk-selector-shapes.*source-ast.*retryDefault/i],
+    [
+      "behavior-public-members-saver-close",
+      /sqlite-public-members.*DawnSqliteSaver\.publicMembers/i,
+    ],
+    ["behavior-public-members-store-close", /sqlite-public-members.*ThreadsStore\.publicMembers/i],
+    [
+      "behavior-public-members-inherited-close",
+      /sqlite-public-members.*DawnSqliteSaver\.publicMembers/i,
+    ],
     ["behavior-duplicate-test-name", /sdk-retries.*test-assertion.*uses three retries/i],
     ["behavior-await", /sdk-retries.*test-assertion.*uses three retries/i],
     ["duplicate-behavior-id", /duplicate.*sdk-retries/i],

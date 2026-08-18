@@ -1,0 +1,291 @@
+# @dawn-ai/workspace
+
+## Use this when
+
+Use this package to implement or wrap filesystem, command, and execution-sandbox backends for a Dawn application. The root owns the portable backend and sandbox contracts, middleware composition, and logging wrappers. Import `/node` only for the local filesystem and shell implementations.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/workspace
+```
+
+```ts
+import { compose, withExecLogging, type SandboxProvider } from "@dawn-ai/workspace"
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/workspace` | edge-safe | dependency-free | application | supported |
+| `@dawn-ai/workspace/node` | node-only | not-claimed | application | supported |
+
+The root's emitted subpath graph has no runtime package or Node built-in dependencies. Its `LocalExecOptions` and `LocalFilesystemOptions` exports are types only. The `/node` factories use Node child-process, filesystem, path, and utility APIs.
+
+## Public exports
+
+### `@dawn-ai/workspace`
+
+| Export | Responsibility |
+|---|---|
+| `compose` | Compose backend middleware right-to-left. |
+| `LocalExecOptions` | Configure the local command backend without importing its runtime. |
+| `LocalFilesystemOptions` | Configure the local filesystem backend without importing its runtime. |
+| `SandboxConfig` | Configure provider selection and lifecycle policy. |
+| `SandboxHandle` | Describe one acquired sandbox. |
+| `SandboxPolicy` | Describe per-thread network, environment, resource, and security policy. |
+| `SandboxProvider` | Define sandbox acquisition, release, and destruction. |
+| `SandboxSecurityPolicy` | Describe provider-agnostic hardening intent. |
+| `BackendContext` | Carry cancellation and the active workspace root. |
+| `ExecBackend` | Define shell-command execution. |
+| `ExecMiddleware` | Wrap an execution backend. |
+| `FilesystemBackend` | Define text, binary, directory, canonicalization, and optional file operations. |
+| `FilesystemMiddleware` | Wrap a filesystem backend. |
+| `LoggingOptions` | Configure backend log delivery. |
+| `withExecLogging` | Log command calls around an execution backend. |
+| `withFilesystemLogging` | Log public filesystem calls while preserving optional capabilities. |
+
+### `@dawn-ai/workspace/node`
+
+The `/node` entry independently owns the following four exports. The two option types are also available from the dependency-free root for type-only consumers; the factories are not.
+
+| Export | Responsibility |
+|---|---|
+| `LocalExecOptions` | Configure timeout and command allowlisting. |
+| `localExec` | Create the Node shell-command backend. |
+| `LocalFilesystemOptions` | Configure the default file-size limit. |
+| `localFilesystem` | Create the Node filesystem backend. |
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/workspace#.:BackendContext"
+export interface BackendContext {
+  readonly signal: AbortSignal
+  readonly workspaceRoot: string
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:BackendContext`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly signal` | `AbortSignal` | yes | Abort work when the parent run is cancelled. |
+| `readonly workspaceRoot` | `string` | yes | Name the active route workspace's absolute root. |
+
+```ts api-contract="@dawn-ai/workspace#.:FilesystemBackend"
+export interface FilesystemBackend {
+  readFile(
+    path: string,
+    ctx: BackendContext,
+    opts?: { readonly maxBytes?: number },
+  ): Promise<string>
+  readBinaryFile?(
+    path: string,
+    ctx: BackendContext,
+    opts?: { readonly maxBytes?: number },
+  ): Promise<Uint8Array>
+  writeFile(
+    path: string,
+    content: string,
+    ctx: BackendContext,
+  ): Promise<{ readonly bytesWritten: number }>
+  listDir(path: string, ctx: BackendContext): Promise<readonly string[]>
+  realPath(path: string, ctx: BackendContext): Promise<string>
+  statFile?(
+    path: string,
+    ctx: BackendContext,
+  ): Promise<{ readonly size: number; readonly mtimeMs: number }>
+  removeFile?(path: string, ctx: BackendContext): Promise<void>
+  touchFile?(path: string, ctx: BackendContext): Promise<void>
+  mkdir?(path: string, ctx: BackendContext): Promise<void>
+}
+```
+
+```ts api-contract="@dawn-ai/workspace#.:ExecBackend"
+export interface ExecBackend {
+  runCommand(
+    args: {
+      readonly command: string
+      readonly cwd?: string
+      readonly env?: Readonly<Record<string, string>>
+    },
+    ctx: BackendContext,
+  ): Promise<{
+    readonly stdout: string
+    readonly stderr: string
+    readonly exitCode: number
+  }>
+}
+```
+
+```ts api-contract="@dawn-ai/workspace#.:compose"
+export declare function compose<T>(
+  ...middlewares: ReadonlyArray<(next: T) => T>
+): (base: T) => T
+```
+
+#### Behavior contract `workspace.compose.order`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/workspace/test/compose.test.ts","testNames":["applies middlewares right-to-left (outermost first)"]}] */}
+Backend middleware composes right-to-left, with the first listed middleware outermost.
+
+#### Sandbox contracts
+
+```ts api-contract="@dawn-ai/workspace#.:SandboxPolicy"
+export interface SandboxPolicy {
+  readonly network:
+    | { readonly mode: "allow"; readonly denylist?: readonly string[] }
+    | { readonly mode: "deny"; readonly allowlist?: readonly string[] }
+  readonly env?: Readonly<Record<string, string>>
+  readonly resources?: {
+    readonly memoryMb?: number
+    readonly cpus?: number
+    readonly timeoutMs?: number
+    readonly diskGb?: number
+  }
+  readonly security?: SandboxSecurityPolicy
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:SandboxPolicy`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly network` | `\| { readonly mode: "allow"; readonly denylist?: readonly string[] } \| { readonly mode: "deny"; readonly allowlist?: readonly string[] }` | yes | Set the provider's network policy intent. |
+| `readonly env` | `Readonly<Record<string, string>>` | no | Supply the sandbox environment explicitly. |
+| `readonly resources` | `{ readonly memoryMb?: number; readonly cpus?: number; readonly timeoutMs?: number; readonly diskGb?: number }` | no | Request provider resource limits. |
+| `readonly security` | `SandboxSecurityPolicy` | no | Override provider hardening intent. |
+
+```ts api-contract="@dawn-ai/workspace#.:SandboxSecurityPolicy"
+export interface SandboxSecurityPolicy {
+  readonly dropAllCapabilities?: boolean
+  readonly noNewPrivileges?: boolean
+  readonly readOnlyRootFilesystem?: boolean
+  readonly runAsNonRoot?: boolean | { readonly uid: number; readonly gid: number }
+  readonly pidsLimit?: number
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:SandboxSecurityPolicy`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly dropAllCapabilities` | `boolean` | no | Request dropping every Linux capability. |
+| `readonly noNewPrivileges` | `boolean` | no | Request blocking setuid/setgid escalation. |
+| `readonly readOnlyRootFilesystem` | `boolean` | no | Request an immutable root filesystem. |
+| `readonly runAsNonRoot` | `boolean \| { readonly uid: number; readonly gid: number }` | no | Request non-root execution or an explicit identity. |
+| `readonly pidsLimit` | `number` | no | Request a process-count limit. |
+
+```ts api-contract="@dawn-ai/workspace#.:SandboxHandle"
+export interface SandboxHandle {
+  readonly threadId: string
+  readonly filesystem: FilesystemBackend
+  readonly exec: ExecBackend
+  readonly workspaceRoot: string
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:SandboxHandle`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly threadId` | `string` | yes | Identify the owning conversation thread. |
+| `readonly filesystem` | `FilesystemBackend` | yes | Route file operations into the sandbox. |
+| `readonly exec` | `ExecBackend` | yes | Route command execution into the sandbox. |
+| `readonly workspaceRoot` | `string` | yes | Name the absolute root inside the sandbox. |
+
+```ts api-contract="@dawn-ai/workspace#.:SandboxProvider"
+export interface SandboxProvider {
+  readonly name: string
+  acquire(input: {
+    readonly threadId: string
+    readonly policy: SandboxPolicy
+    readonly signal: AbortSignal
+  }): Promise<SandboxHandle>
+  release(threadId: string): Promise<void>
+  destroy(threadId: string): Promise<void>
+  preflight?(): Promise<{
+    readonly ok: boolean
+    readonly detail?: string
+    readonly warnings?: readonly string[]
+  }>
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:SandboxProvider`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly name` | `string` | yes | Identify the provider. |
+
+```ts api-contract="@dawn-ai/workspace#.:SandboxConfig"
+export interface SandboxConfig {
+  readonly provider: SandboxProvider
+  readonly network?: SandboxPolicy["network"]
+  readonly env?: SandboxPolicy["env"]
+  readonly resources?: SandboxPolicy["resources"]
+  readonly security?: SandboxSecurityPolicy
+  readonly idleTimeoutMs?: number
+}
+```
+
+**Fields: `@dawn-ai/workspace#.:SandboxConfig`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly provider` | `SandboxProvider` | yes | Supply the sandbox provider. |
+| `readonly network` | `SandboxPolicy["network"]` | no | Set the default network policy. |
+| `readonly env` | `SandboxPolicy["env"]` | no | Set the default explicit environment. |
+| `readonly resources` | `SandboxPolicy["resources"]` | no | Set default resource requests. |
+| `readonly security` | `SandboxSecurityPolicy` | no | Set default hardening intent. |
+| `readonly idleTimeoutMs` | `number` | no | Set the manager idle-reap window; default 600,000 ms. |
+
+```ts api-contract="@dawn-ai/workspace#./node:LocalExecOptions"
+export interface LocalExecOptions {
+  readonly timeout?: number
+  readonly allowedCommands?: readonly RegExp[]
+}
+```
+
+```ts api-contract="@dawn-ai/workspace#./node:localExec"
+export declare function localExec(opts?: LocalExecOptions): ExecBackend
+```
+
+#### Behavior contract `workspace.exec.timeout`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/workspace/test/local-exec.test.ts","testNames":["runCommand enforces timeout"]}] */}
+The local exec backend enforces its configured timeout.
+
+```ts api-contract="@dawn-ai/workspace#./node:LocalFilesystemOptions"
+export interface LocalFilesystemOptions {
+  readonly maxFileBytes?: number
+}
+```
+
+```ts api-contract="@dawn-ai/workspace#./node:localFilesystem"
+export declare function localFilesystem(opts?: LocalFilesystemOptions): FilesystemBackend
+```
+
+#### Behavior contract `workspace.filesystem.symlink`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/workspace/test/local-filesystem.test.ts","testNames":["realPath resolves an escaping symlink to the outside real path"]},{"kind":"test-assertion","file":"packages/core/test/capabilities/workspace-fs.test.ts","testNames":["gates a symlink that escapes the workspace (caught, not silently allowed)"]}] */}
+`localFilesystem.realPath` resolves an escaping symlink to its outside real path; Core owns any path-jail enforcement.
+
+### Lifecycle, failure, and trust boundaries
+
+Backend methods receive absolute paths and a cancellation signal from their caller. Core owns the path jail and canonical-root enforcement. `localFilesystem` canonicalizes existing ancestors, including escaping symlinks, and does not enforce that boundary. Its reads default to a 256 KiB cap, allow a per-call override, and reject missing or oversized files. Writes create parent directories.
+
+`localExec` defaults to a 30-second timeout. A non-empty `allowedCommands` list rejects a command unless a regular expression matches. When `args.env` is omitted, `localExec` inherits `process.env`; when supplied, it replaces that environment. By contrast, `SandboxPolicy.env` is the explicit environment injected into a sandbox and does not inherit the host environment.
+
+Sandbox `release()` and `destroy()` express distinct lifecycle responsibilities, but exact persistence and cleanup behavior belongs to each provider. Security fields express provider-agnostic intent; an unset field does not by itself prove a particular provider's enforcement.
+
+Logging middleware defaults to `console.error`. A custom destination receives `{ method, args }`. Filesystem logging does not serialize binary content and passes through `realPath`, `statFile`, `removeFile`, `touchFile`, and `mkdir`; treat logged paths, command text, working directories, and text write contents as potentially sensitive.
+
+## Examples and related guides
+
+```ts
+import { compose, withExecLogging, withFilesystemLogging } from "@dawn-ai/workspace"
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
+
+const filesystem = compose(withFilesystemLogging())(
+  localFilesystem({ maxFileBytes: 512 * 1024 }),
+)
+const exec = compose(withExecLogging())(
+  localExec({ timeout: 10_000, allowedCommands: [/^pnpm test\b/] }),
+)
+```
+
+Continue with [Workspace Filesystem](/docs/workspace), [Execution Sandbox](/docs/sandbox), and [Permissions API](/docs/api/permissions).

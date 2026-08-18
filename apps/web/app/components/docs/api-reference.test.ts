@@ -19,6 +19,7 @@ import { API_REFERENCE_PAGES, API_REFERENCE_PARENT } from "./api-reference-pages
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
+const CHANGESET_PATH = join(REPO_ROOT, ".changeset/api-reference-coverage.md")
 
 const EXPECTED_REFERENCE_PAGES = [
   ["@dawn-ai/sdk", "/docs/api/sdk", "@dawn-ai/sdk", ["@dawn-ai/sdk"]],
@@ -41,21 +42,22 @@ const EXPECTED_REFERENCE_PAGES = [
   ["@dawn-ai/testing", "/docs/api/testing", "@dawn-ai/testing", ["@dawn-ai/testing"]],
   ["@dawn-ai/evals", "/docs/api/evals", "@dawn-ai/evals", ["@dawn-ai/evals"]],
   ["dawn:routes", "/docs/api/generated-routes", "dawn:routes", ["@dawn-ai/cli", "@dawn-ai/core"]],
-] as const
-
-const EXPECTED_DEFERRED_IMPORTS = [
-  ["@dawn-ai/permissions", "."],
-  ["@dawn-ai/permissions", "./node"],
-  ["@dawn-ai/workspace", "."],
-  ["@dawn-ai/workspace", "./node"],
-  ["@dawn-ai/sandbox", "."],
-  ["@dawn-ai/sandbox", "./testing"],
-  ["@dawn-ai/langgraph", "."],
-  ["@dawn-ai/langgraph", "./define-entry"],
-  ["@dawn-ai/langgraph", "./route-module"],
-  ["@dawn-ai/langchain", "."],
-  ["@dawn-ai/langchain", "./package.json"],
-  ["@dawn-ai/sqlite-storage", "."],
+  [
+    "@dawn-ai/permissions",
+    "/docs/api/permissions",
+    "@dawn-ai/permissions",
+    ["@dawn-ai/permissions"],
+  ],
+  ["@dawn-ai/workspace", "/docs/api/workspace", "@dawn-ai/workspace", ["@dawn-ai/workspace"]],
+  ["@dawn-ai/sandbox", "/docs/api/sandbox", "@dawn-ai/sandbox", ["@dawn-ai/sandbox"]],
+  ["@dawn-ai/langgraph", "/docs/api/langgraph", "@dawn-ai/langgraph", ["@dawn-ai/langgraph"]],
+  ["@dawn-ai/langchain", "/docs/api/langchain", "@dawn-ai/langchain", ["@dawn-ai/langchain"]],
+  [
+    "@dawn-ai/sqlite-storage",
+    "/docs/api/sqlite-storage",
+    "@dawn-ai/sqlite-storage",
+    ["@dawn-ai/sqlite-storage"],
+  ],
 ] as const
 
 const EXPECTED_DETAILED_IMPORTS = [
@@ -79,33 +81,173 @@ const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/postgres-storage", "./node"],
   ["@dawn-ai/testing", "."],
   ["@dawn-ai/evals", "."],
+  ["@dawn-ai/permissions", "."],
+  ["@dawn-ai/permissions", "./node"],
+  ["@dawn-ai/workspace", "."],
+  ["@dawn-ai/workspace", "./node"],
+  ["@dawn-ai/sandbox", "."],
+  ["@dawn-ai/sandbox", "./testing"],
+  ["@dawn-ai/langgraph", "."],
+  ["@dawn-ai/langgraph", "./define-entry"],
+  ["@dawn-ai/langgraph", "./route-module"],
+  ["@dawn-ai/langchain", "."],
+  ["@dawn-ai/langchain", "./package.json"],
+  ["@dawn-ai/sqlite-storage", "."],
 ] as const
 
 const EXPECTED_CATALOG_AND_INTERNAL_IMPORTS = [
   ["@dawn-ai/core", "./internal/compiler", "internal"],
-  ["@dawn-ai/config-biome", ".", "catalog-only"],
-  ["@dawn-ai/config-biome", "./biome", "catalog-only"],
-  ["@dawn-ai/config-typescript", ".", "catalog-only"],
-  ["@dawn-ai/config-typescript", "./base", "catalog-only"],
-  ["@dawn-ai/config-typescript", "./library", "catalog-only"],
-  ["@dawn-ai/config-typescript", "./node", "catalog-only"],
-  ["@dawn-ai/config-typescript", "./nextjs", "catalog-only"],
+  ["@dawn-ai/config-biome", ".", "internal"],
+  ["@dawn-ai/config-biome", "./biome", "internal"],
+  ["@dawn-ai/config-typescript", ".", "internal"],
+  ["@dawn-ai/config-typescript", "./base", "internal"],
+  ["@dawn-ai/config-typescript", "./library", "internal"],
+  ["@dawn-ai/config-typescript", "./node", "internal"],
+  ["@dawn-ai/config-typescript", "./nextjs", "internal"],
   ["@dawn-ai/devkit", ".", "internal"],
   ["@dawn-ai/vite-plugin", ".", "internal"],
 ] as const
 
 const EXPECTED_OPERATED_ARTIFACTS = [
-  ["@dawn-ai/cli", "bin.dawn", "executable", "./dist/index.js"],
-  ["create-dawn-ai-app", "bin.create-dawn-ai-app", "executable", "./dist/bin.js"],
+  [
+    "@dawn-ai/cli",
+    "bin.dawn",
+    "executable",
+    "./dist/index.js",
+    "detailed",
+    "node-only",
+    "tooling",
+    "supported",
+  ],
+  [
+    "create-dawn-ai-app",
+    "bin.create-dawn-ai-app",
+    "executable",
+    "./dist/bin.js",
+    "catalog-only",
+    "node-only",
+    "tooling",
+    "supported",
+  ],
   [
     "@dawn-ai/inspector",
     "dawnInspector.server",
     "operated-application",
     ".next/standalone/packages/inspector/server.js",
+    "catalog-only",
+    "node-only",
+    "tooling",
+    "supported",
   ],
 ] as const
 
+const EXPECTED_FINAL_ARTIFACT_POLICIES = [
+  [
+    "import:@dawn-ai/config-biome:.",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-biome:./biome",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-typescript:.",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./base",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./library",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./node",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./nextjs",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+  ],
+  [
+    "import:@dawn-ai/devkit:.",
+    "internal",
+    "typescript-runtime",
+    "node-only",
+    "not-claimed",
+    "internal",
+    "internal",
+  ],
+  [
+    "import:@dawn-ai/vite-plugin:.",
+    "internal",
+    "typescript-runtime",
+    "node-only",
+    "not-claimed",
+    "tooling",
+    "internal",
+  ],
+] as const
+
+const EXPECTED_CATALOG_DESTINATIONS = new Map<string, string>([
+  ["@dawn-ai/config-biome", "/docs/api#dawn-aiconfig-biome"],
+  ["@dawn-ai/config-typescript", "/docs/api#dawn-aiconfig-typescript"],
+  ["@dawn-ai/devkit", "/docs/api#dawn-aidevkit"],
+  ["@dawn-ai/inspector", "/docs/api#dawn-aiinspector"],
+  ["@dawn-ai/vite-plugin", "/docs/api#dawn-aivite-plugin"],
+  ["create-dawn-ai-app", "/docs/api#create-dawn-ai-app"],
+] as const)
+
 const EXPECTED_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -147,6 +289,14 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -158,6 +308,14 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -169,6 +327,19 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ] as const
 
 interface ManifestFixture {
@@ -274,7 +445,7 @@ describe("API reference page registry", () => {
         ownerPackageNames,
       ]),
     ).toEqual(EXPECTED_REFERENCE_PAGES)
-    expect(API_REFERENCE_PAGES).toHaveLength(10)
+    expect(API_REFERENCE_PAGES).toHaveLength(16)
     for (const page of API_REFERENCE_PAGES) {
       expect(page.parent).toEqual({ label: "API Reference", href: "/docs/api" })
     }
@@ -345,7 +516,7 @@ describe("client navigation dependency boundary", () => {
 
 describe("artifact registry", () => {
   it("renders stable public documentation labels without delivery-state coverage names", () => {
-    const forbidden = /\b(?:detailed|catalog-only|deferred-to-pr2)\b/
+    const forbidden = /\b(?:detailed|catalog-only)\b/
     for (const artifact of ARTIFACT_REGISTRY) {
       expect(artifactBoundaryFor(artifact)).not.toMatch(forbidden)
     }
@@ -353,12 +524,6 @@ describe("artifact registry", () => {
     expect(
       artifactBoundaryFor(
         ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "catalog-only") ??
-          ARTIFACT_REGISTRY[0],
-      ),
-    ).toContain("catalog summary")
-    expect(
-      artifactBoundaryFor(
-        ARTIFACT_REGISTRY.find(({ coverage }) => coverage === "deferred-to-pr2") ??
           ARTIFACT_REGISTRY[0],
       ),
     ).toContain("catalog summary")
@@ -558,16 +723,6 @@ describe("artifact registry", () => {
     ).toHaveLength(1)
   })
 
-  it("pins the exact deferred-to-PR2 import allowlist", () => {
-    expect(
-      ARTIFACT_REGISTRY.flatMap((artifact) =>
-        artifact.kind === "import" && artifact.coverage === "deferred-to-pr2"
-          ? [[artifact.packageName, artifact.subpath]]
-          : [],
-      ),
-    ).toEqual(EXPECTED_DEFERRED_IMPORTS)
-  })
-
   it("pins the complete detailed, catalog, internal, and operated inventories", () => {
     expect(
       ARTIFACT_REGISTRY.flatMap((artifact) =>
@@ -586,14 +741,44 @@ describe("artifact registry", () => {
     ).toEqual(EXPECTED_CATALOG_AND_INTERNAL_IMPORTS)
     expect(
       ARTIFACT_REGISTRY.filter((artifact) => artifact.kind === "operated").map(
-        ({ packageName, selector, operatedKind, manifestTarget }) => [
+        ({
           packageName,
           selector,
           operatedKind,
           manifestTarget,
+          coverage,
+          runtime,
+          audience,
+          stability,
+        }) => [
+          packageName,
+          selector,
+          operatedKind,
+          manifestTarget,
+          coverage,
+          runtime,
+          audience,
+          stability,
         ],
       ),
     ).toEqual(EXPECTED_OPERATED_ARTIFACTS)
+    expect(
+      ARTIFACT_REGISTRY.flatMap((artifact) => {
+        const address = artifactAddressFor(artifact)
+        if (!EXPECTED_FINAL_ARTIFACT_POLICIES.some(([expected]) => expected === address)) return []
+        return [
+          [
+            address,
+            artifact.coverage,
+            artifact.kind === "import" ? artifact.surfaceKind : artifact.kind,
+            "runtime" in artifact ? artifact.runtime : null,
+            "purity" in artifact ? artifact.purity : null,
+            artifact.audience,
+            artifact.stability,
+          ],
+        ]
+      }),
+    ).toEqual(EXPECTED_FINAL_ARTIFACT_POLICIES)
   })
 
   it("rejects address-preserving artifact policy mutations", () => {
@@ -664,6 +849,33 @@ describe("artifact registry", () => {
   })
 
   it("rejects duplicate addresses and invalid discriminant combinations", () => {
+    const retiredCoverage = ["deferred", "to", "pr2"].join("-")
+    const retiredCoverageArtifact = {
+      ...ARTIFACT_REGISTRY[0],
+      coverage: retiredCoverage,
+    }
+    expect(() =>
+      validateApiReferenceRegistries({
+        pages: API_REFERENCE_PAGES,
+        artifacts: ARTIFACT_REGISTRY.map((artifact, index) =>
+          index === 0 ? (retiredCoverageArtifact as unknown as ApiReferenceArtifact) : artifact,
+        ),
+        packages: PACKAGE_CATALOG,
+      }),
+    ).toThrow(new RegExp(`invalid coverage: ${retiredCoverage}`))
+    expect(
+      analyzeApiReferenceRegistry(
+        API_REFERENCE_PAGES,
+        ARTIFACT_REGISTRY.map((artifact, index) =>
+          index === 0 ? retiredCoverageArtifact : artifact,
+        ),
+      ).failures,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(new RegExp(`invalid coverage: ${retiredCoverage}`)),
+      ]),
+    )
+
     expectRegistryRejection({ ...ARTIFACT_REGISTRY[0] }, /duplicate artifact address/)
     expectRegistryRejection(
       {
@@ -818,9 +1030,31 @@ describe("published manifest address inventory", () => {
 })
 
 describe("package catalog", () => {
+  it("pins the exact twelve-package patch changeset", () => {
+    const source = readFileSync(CHANGESET_PATH, "utf8")
+    const entries = [...source.matchAll(/^"([^"]+)": (\w+)$/gm)].map((match) => [
+      match[1],
+      match[2],
+    ])
+    expect(entries).toEqual([
+      ["@dawn-ai/permissions", "patch"],
+      ["@dawn-ai/workspace", "patch"],
+      ["@dawn-ai/sandbox", "patch"],
+      ["@dawn-ai/langgraph", "patch"],
+      ["@dawn-ai/langchain", "patch"],
+      ["@dawn-ai/sqlite-storage", "patch"],
+      ["create-dawn-ai-app", "patch"],
+      ["@dawn-ai/config-biome", "patch"],
+      ["@dawn-ai/config-typescript", "patch"],
+      ["@dawn-ai/devkit", "patch"],
+      ["@dawn-ai/inspector", "patch"],
+      ["@dawn-ai/vite-plugin", "patch"],
+    ])
+  })
+
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(63)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(105)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")
@@ -879,9 +1113,10 @@ describe("package catalog", () => {
         expect(entry.canonicalReferenceDestination).toBe(leaf)
       } else {
         expect(entry.canonicalReferenceDestination).toBe(
-          `/docs/api#${entry.packageName.replace(/^@/, "").replaceAll("/", "-")}`,
+          EXPECTED_CATALOG_DESTINATIONS.get(entry.packageName),
         )
       }
     }
+    expect([...EXPECTED_CATALOG_DESTINATIONS]).toHaveLength(6)
   })
 })

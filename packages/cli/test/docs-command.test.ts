@@ -46,7 +46,15 @@ describe("runDocsCommand()", () => {
 
     const listed = out.join("\n")
     const apiPages = pages.filter(({ slug }) => slug.startsWith("api/"))
-    expect(apiPages).toHaveLength(10)
+    expect(apiPages).toHaveLength(16)
+    expect(apiPages.slice(-6).map(({ slug }) => slug)).toEqual([
+      "api/permissions",
+      "api/workspace",
+      "api/sandbox",
+      "api/langgraph",
+      "api/langchain",
+      "api/sqlite-storage",
+    ])
     for (const page of apiPages) {
       expect(listed).toContain(page.slug)
     }

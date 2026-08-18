@@ -1,0 +1,177 @@
+# @dawn-ai/langgraph
+
+## Use this when
+
+Use this integration package when a Dawn runtime or framework extension must normalize `graph` and `workflow` route modules or execute those entries through Dawn's backend-adapter contract. Application route authors normally use the [SDK route contracts](/docs/api/sdk) and let the CLI choose these adapters.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/langgraph
+```
+
+```ts
+import { defineEntry, graphAdapter, normalizeRouteModule } from "@dawn-ai/langgraph"
+import type { RouteModule } from "@dawn-ai/langgraph/route-module"
+```
+
+Use `@dawn-ai/langgraph/define-entry` for the smallest entry-validation import and `@dawn-ai/langgraph/route-module` for normalization contracts without the adapters.
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/langgraph` | edge-safe | dependency-free | integration | supported |
+| `@dawn-ai/langgraph/define-entry` | edge-safe | dependency-free | integration | supported |
+| `@dawn-ai/langgraph/route-module` | edge-safe | dependency-free | integration | supported |
+
+All three runtime surfaces bundle without third-party runtime dependencies or Node globals. This classification covers importing and executing these Dawn adapters; it does not classify a graph, workflow, or tool supplied by an application.
+
+## Public exports
+
+### `@dawn-ai/langgraph`
+
+| Export | Responsibility |
+|---|---|
+| `defineEntry` | Validate and return a graph-or-workflow route module unchanged. |
+| `graphAdapter` | Execute callable graphs or objects with `invoke(input)`. |
+| `workflowAdapter` | Execute callable workflow entries. |
+| `GraphRouteModule` | Describe a module with a `graph` entry. |
+| `NormalizedRouteModule` | Describe the normalized kind, entry, and config. |
+| `normalizeRouteModule` | Validate and normalize either route-module form. |
+| `RouteConfig` | Re-export the [SDK-owned route configuration](/docs/api/sdk#routeconfig). |
+| `RouteKind` | Re-export the SDK-owned `agent`, `chain`, `graph`, or `workflow` kind. |
+| `RouteModule` | Unite graph and workflow route-module forms. |
+| `WorkflowRouteModule` | Describe a module with a `workflow` entry. |
+| `RuntimeContext` | Re-export the [SDK-owned runtime context](/docs/api/sdk). |
+| `RuntimeTool` | Re-export the SDK-owned callable tool contract. |
+
+`ToolRegistry` exists in a private implementation module but is not exported from this package surface.
+
+### `@dawn-ai/langgraph/define-entry`
+
+| Export | Responsibility |
+|---|---|
+| `defineEntry` | Validate and preserve one route-module object. |
+
+### `@dawn-ai/langgraph/route-module`
+
+| Export | Responsibility |
+|---|---|
+| `GraphRouteModule` | Describe a module with a `graph` entry. |
+| `NormalizedRouteModule` | Describe the normalized kind, entry, and config. |
+| `normalizeRouteModule` | Produce a normalized route module. |
+| `assertExactlyOneEntry` | Assert the runtime graph/workflow exclusivity rule. |
+| `RouteConfig` | Re-export the SDK-owned route configuration. |
+| `RouteKind` | Re-export the SDK-owned route kind. |
+| `RouteModule` | Unite graph and workflow module forms. |
+| `WorkflowRouteModule` | Describe a module with a `workflow` entry. |
+
+The route-module subpath exposes only its published normalization and route-module contracts. The source-derived inventory pins these eight names independently from the root and `/define-entry` surfaces.
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/langgraph#./define-entry:defineEntry"
+export declare function defineEntry<TEntry, TModule extends RouteModule<TEntry>>(
+  module: TModule,
+): TModule
+```
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:GraphRouteModule"
+export interface GraphRouteModule<TEntry = unknown> {
+  readonly graph: TEntry
+  readonly workflow?: never
+  readonly config?: RouteConfig
+}
+```
+
+**Fields: `@dawn-ai/langgraph#./route-module:GraphRouteModule`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly graph` | `TEntry` | yes | Supply the graph entry. |
+| `readonly workflow` | `never` | no | Exclude the workflow alternative. |
+| `readonly config` | `RouteConfig` | no | Configure the route; normalization defaults it to `{}`. |
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:WorkflowRouteModule"
+export interface WorkflowRouteModule<TEntry = unknown> {
+  readonly workflow: TEntry
+  readonly graph?: never
+  readonly config?: RouteConfig
+}
+```
+
+**Fields: `@dawn-ai/langgraph#./route-module:WorkflowRouteModule`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly workflow` | `TEntry` | yes | Supply the workflow entry. |
+| `readonly graph` | `never` | no | Exclude the graph alternative. |
+| `readonly config` | `RouteConfig` | no | Configure the route; normalization defaults it to `{}`. |
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:RouteModule"
+export type RouteModule<TEntry = unknown> = GraphRouteModule<TEntry>
+  | WorkflowRouteModule<TEntry>
+```
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:NormalizedRouteModule"
+export interface NormalizedRouteModule<TEntry = unknown> {
+  readonly kind: RouteKind
+  readonly entry: TEntry
+  readonly config: RouteConfig
+}
+```
+
+**Fields: `@dawn-ai/langgraph#./route-module:NormalizedRouteModule`**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `readonly kind` | `RouteKind` | yes | Identify the selected route entry kind. |
+| `readonly entry` | `TEntry` | yes | Hold the selected graph or workflow. |
+| `readonly config` | `RouteConfig` | yes | Hold the supplied config or `{}`. |
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:normalizeRouteModule"
+export declare function normalizeRouteModule<TEntry>(
+  module: RouteModule<TEntry> | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
+): NormalizedRouteModule<TEntry>
+```
+
+```ts api-contract="@dawn-ai/langgraph#./route-module:assertExactlyOneEntry"
+export declare function assertExactlyOneEntry<TEntry>(
+  module: RouteModule<TEntry> | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
+): asserts module is RouteModule<TEntry>
+```
+
+#### Behavior contract `langgraph.entry.exclusive`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langgraph/test/define-entry.test.ts","testNames":["rejects modules that provide both graph and workflow","rejects modules that provide neither graph nor workflow"]}] */}
+A route module must provide exactly one of graph or workflow.
+
+#### Entry validation caveats
+
+An explicitly `undefined` key counts as absent. `defineEntry()` returns the original object, while `normalizeRouteModule()` fills an omitted `config` with a new empty object. Invalid modules throw synchronously before an entry executes.
+
+#### Behavior contract `langgraph.route-module.surface`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/langgraph/test/route-module.test.ts","testNames":["exposes publishable exports and types on the package surface"]}] */}
+The route-module subpath exposes only its published normalization and route-module contracts.
+
+#### Adapter lifecycle and failure boundaries
+
+The manifest assertion establishes the published declaration target; the source-derived ownership inventory above establishes the exact eight-symbol surface.
+
+`graphAdapter` calls a function directly or calls an object's `invoke`; `workflowAdapter` accepts only a function. Both pass `{ signal }`, await the result, and implement `stream()` as a single yielded execute result. They do not provide native multi-chunk graph streaming. The `runtime`, `streaming`, and `tags` route-config fields are reserved contracts but these adapters do not branch on them today.
+
+## Examples and related guides
+
+```ts
+import { defineEntry, normalizeRouteModule } from "@dawn-ai/langgraph"
+
+const route = defineEntry({
+  workflow: async (input: { name: string }, { signal }: { signal: AbortSignal }) => {
+    signal.throwIfAborted()
+    return { greeting: `Hello, ${input.name}` }
+  },
+  config: { runtime: "node", streaming: false }, // reserved; no adapter runtime effect
+})
+
+const normalized = normalizeRouteModule(route)
+console.log(normalized.kind) // workflow
+```
+
+Continue with [Routes](/docs/routes), [SDK API](/docs/api/sdk), and [CLI API](/docs/api/cli).

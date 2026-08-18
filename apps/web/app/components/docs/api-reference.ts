@@ -3,7 +3,7 @@ import type { ApiReferencePage } from "./api-reference-pages"
 export type { ApiReferencePage } from "./api-reference-pages"
 export { API_REFERENCE_PAGES, API_REFERENCE_PARENT } from "./api-reference-pages"
 
-export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal" | "deferred-to-pr2"
+export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal"
 export type ImportSurfaceKind = "typescript-runtime" | "config-artifact" | "metadata"
 export type OperatedArtifactKind = "executable" | "operated-application"
 export type RuntimeCompatibility = "node-only" | "edge-safe"
@@ -569,6 +569,326 @@ export const API_BEHAVIOR_CONTRACTS = [
       },
     ],
   },
+  {
+    id: "permissions.match.prefix",
+    ownerHref: "/docs/api/permissions",
+    claim:
+      "Non-reserved command, path, and memory candidates use prefix matching, and deny wins over allow.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: [
+          "commands keep prefix matching",
+          "treats path candidates with absolute prefixes",
+          "allows deeper namespaces under the route",
+          "deny wins over allow when both match",
+          "deny wins over allow for the memory key",
+        ],
+        assertionFingerprint:
+          'expect ( matchPermission ( "bash" , "ls -la" , { bash : [ "ls" ] } , { } ) ) . toBe ( "allow" )\nexpect ( matchPermission ( "readFile" , "/Users/blove/.zshrc" , { readFile : [ "/Users/blove/" ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "memory" , "workspace=app|route=/a|tenant=acme|" , allow , { } ) ) . toBe ( "allow" , )\nexpect ( matchPermission ( "bash" , "rm -rf /tmp" , { bash : [ "rm -rf" ] } , { bash : [ "rm -rf" ] } ) ) . toBe ( "deny" , )\nexpect ( matchPermission ( "memory" , "workspace=app|route=/a|" , allow , deny ) ) . toBe ( "deny" )',
+      },
+    ],
+  },
+  {
+    id: "permissions.tool.exact",
+    ownerHref: "/docs/api/permissions",
+    claim: "Reserved tool names match exactly rather than by prefix.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: ["does not prefix-match tool names", "matches an exact tool name"],
+        assertionFingerprint:
+          'expect(matchPermission("tool", "deployProd", { tool: ["deploy"] }, {})).toBe("unknown")\nexpect(matchPermission("tool", "deployProd", { tool: ["deployProd"] }, {})).toBe("allow")',
+      },
+    ],
+  },
+  {
+    id: "permissions.subagent.exact",
+    ownerHref: "/docs/api/permissions",
+    claim: "Reserved subagent identities match exactly rather than by prefix.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/pattern-matching.test.ts",
+        testNames: [
+          "matches an exact parent route and subagent name tuple",
+          "does not prefix-match a serialized tuple identity",
+        ],
+        assertionFingerprint:
+          'expect ( matchPermission ( "subagent" , supportResearcher , { subagent : [ supportResearcher ] } , { } ) , ) . toBe ( "allow" )\nexpect ( matchPermission ( "subagent" , `\u0024{ supportResearcher }:extended` , { subagent : [ supportResearcher ] } , { } , ) , ) . toBe ( "unknown" )',
+      },
+    ],
+  },
+  {
+    id: "permissions.store.noninteractive",
+    ownerHref: "/docs/api/permissions",
+    claim: "Non-interactive mode ignores the runtime permissions file.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/permissions/test/permissions-store.test.ts",
+        testNames: ["ignores the runtime file in non-interactive mode"],
+        assertionFingerprint:
+          'expect(store.match("bash", "npm install react")).toBe("unknown")\nexpect(store.match("bash", "ls -la")).toBe("allow")',
+      },
+    ],
+  },
+  {
+    id: "workspace.compose.order",
+    ownerHref: "/docs/api/workspace",
+    claim: "Backend middleware composes right-to-left, with the first listed middleware outermost.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/compose.test.ts",
+        testNames: ["applies middlewares right-to-left (outermost first)"],
+        assertionFingerprint:
+          'expect(trace).toEqual(["a:before", "b:before", "b:after", "a:after"])',
+      },
+    ],
+  },
+  {
+    id: "workspace.exec.timeout",
+    ownerHref: "/docs/api/workspace",
+    claim: "The local exec backend enforces its configured timeout.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/local-exec.test.ts",
+        testNames: ["runCommand enforces timeout"],
+        assertionFingerprint:
+          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) , ) . rejects . toThrow ( /timeout/i )',
+      },
+    ],
+  },
+  {
+    id: "workspace.filesystem.symlink",
+    ownerHref: "/docs/api/workspace",
+    claim:
+      "localFilesystem.realPath resolves an escaping symlink to its outside real path; Core owns any path-jail enforcement.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/workspace/test/local-filesystem.test.ts",
+        testNames: ["realPath resolves an escaping symlink to the outside real path"],
+        assertionFingerprint:
+          "expect(await fs.realPath(link, ctx(root))).toBe(realpathSync(target))",
+      },
+      {
+        kind: "test-assertion",
+        file: "packages/core/test/capabilities/workspace-fs.test.ts",
+        testNames: ["gates a symlink that escapes the workspace (caught, not silently allowed)"],
+        assertionFingerprint: 'await expect(fs.readFile("escape")).rejects.toThrow(/fail-closed/)',
+      },
+    ],
+  },
+  {
+    id: "sandbox.docker.release",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Docker release removes the container but retains its volume; destroy removes both.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/docker-sandbox.unit.test.ts",
+        testNames: ["release removes container but not volume; destroy removes both"],
+        assertionFingerprint:
+          'expect(runs.some((r) => r[0] === "rm" && r.includes("dawn-sbx-abc"))).toBe(true)\nexpect(runs.some((r) => r[0] === "volume" && r[1] === "rm")).toBe(false)\nexpect ( runs . some ( ( r ) => r [ 0 ] === "volume" && r [ 1 ] === "rm" && r . includes ( "dawn-sbx-vol-abc" ) ) , ) . toBe ( true )',
+      },
+    ],
+  },
+  {
+    id: "sandbox.kubernetes.release",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Kubernetes release deletes the Pod but retains the PVC; destroy removes both.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/kube-sandbox.unit.test.ts",
+        testNames: ["release deletes the pod but keeps the PVC; destroy removes both"],
+        assertionFingerprint:
+          'expect(k.pods.has("dawn-sbx-t")).toBe(false)\nexpect(k.pvcs.has("dawn-sbx-vol-t")).toBe(true)\nexpect(k.pvcs.has("dawn-sbx-vol-t")).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "sandbox.kubernetes.allow-network",
+    ownerHref: "/docs/api/sandbox",
+    claim: "Kubernetes network:allow without an allowlist emits no NetworkPolicy.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/kube-sandbox.unit.test.ts",
+        testNames: ["network:allow with no allowlist emits no NetworkPolicy"],
+        assertionFingerprint: 'expect(k.netpols.has("dawn-sbx-net-t")).toBe(false)',
+      },
+    ],
+  },
+  {
+    id: "sandbox.error.create",
+    ownerHref: "/docs/api/sandbox",
+    claim: "A failed sandbox container creation is tagged DAWN_E2001.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sandbox/test/sandbox-error-code.test.ts",
+        testNames: ["a failed container creation throws an error tagged DAWN_E2001"],
+        assertionFingerprint:
+          'await expect ( p . acquire ( { threadId : "t1" , policy : { network : { mode : "deny" } } , signal : signal ( ) } ) , ) . rejects . toMatchObject ( { code : "DAWN_E2001" } )',
+      },
+    ],
+  },
+  {
+    id: "langgraph.entry.exclusive",
+    ownerHref: "/docs/api/langgraph",
+    claim: "A route module must provide exactly one of graph or workflow.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langgraph/test/define-entry.test.ts",
+        testNames: [
+          "rejects modules that provide both graph and workflow",
+          "rejects modules that provide neither graph nor workflow",
+        ],
+        assertionFingerprint:
+          'expect ( ( ) => defineEntry ( { graph , workflow , } as never ) , ) . toThrow ( `Route index.ts must export exactly one of "workflow" or "graph"` )\nexpect ( ( ) => normalizeRouteModule ( invalidModule as never ) ) . toThrow ( `Route index.ts must export exactly one of "workflow" or "graph"` , )\nexpect ( ( ) => defineEntry ( { } as never ) ) . toThrow ( `Route index.ts exports neither "workflow" nor "graph"` , )\nexpect ( ( ) => normalizeRouteModule ( { } as never ) ) . toThrow ( `Route index.ts exports neither "workflow" nor "graph"` , )',
+      },
+    ],
+  },
+  {
+    id: "langgraph.route-module.surface",
+    ownerHref: "/docs/api/langgraph",
+    claim:
+      "The route-module subpath exposes only its published normalization and route-module contracts.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langgraph/test/route-module.test.ts",
+        testNames: ["exposes publishable exports and types on the package surface"],
+        assertionFingerprint:
+          'expect ( packageJson . types ) . toBe ( "./dist/index.d.ts" )\nexpect ( packageJson . exports [ "." ] ?. types ) . toBe ( "./dist/index.d.ts" )\nexpect ( packageJson . exports [ "." ] ?. default ) . toBe ( "./dist/index.js" )\nexpect ( packageJson . exports [ "./route-module" ] ?. types ) . toBe ( "./dist/route-module.d.ts" )',
+      },
+    ],
+  },
+  {
+    id: "langchain.provider.explicit",
+    ownerHref: "/docs/api/langchain",
+    claim: "An explicit model provider bypasses provider inference.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/model-provider-resolver.test.ts",
+        testNames: ["explicit provider bypasses inference"],
+        assertionFingerprint:
+          'expect ( resolveProvider ( { provider : "groq" , model : "llama-3.3-70b-versatile" } ) ) . toBe ( "groq" )',
+      },
+    ],
+  },
+  {
+    id: "langchain.retry.exhaustion",
+    ownerHref: "/docs/api/langchain",
+    claim: "Retry throws after the configured maximum attempts are exhausted.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/retry.test.ts",
+        testNames: ["throws after max attempts exhausted"],
+        assertionFingerprint:
+          'await expect ( withRetry ( async ( ) => { attempts ++ throw new Error ( "503 Service Unavailable" ) } , { baseDelayMs : 10 , maxAttempts : 2 } , ) , ) . rejects . toThrow ( "503 Service Unavailable" )\nexpect ( attempts ) . toBe ( 2 )',
+      },
+    ],
+  },
+  {
+    id: "langchain.tool-loop.limit",
+    ownerHref: "/docs/api/langchain",
+    claim: "The tool loop limits iterations to prevent an infinite loop.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/tool-loop.test.ts",
+        testNames: ["limits tool loop iterations to prevent infinite loops"],
+        assertionFingerprint:
+          "await expect ( executeWithToolLoop ( { chain : mockChain , input : { } , tools , signal : new AbortController ( ) . signal , maxIterations : 3 , } ) , ) . rejects . toThrow ( /maximum.*iterations/i )",
+      },
+    ],
+  },
+  {
+    id: "langchain.chain.stream-fallback",
+    ownerHref: "/docs/api/langchain",
+    claim: "A chain stream falls back to invoke when the entry has no stream method.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/langchain/test/chain-adapter.test.ts",
+        testNames: ["stream falls back to invoke when no stream method"],
+        assertionFingerprint: 'expect ( chunks ) . toEqual ( [ { result : { msg : "hi" } } ] )',
+      },
+    ],
+  },
+  {
+    id: "sqlite.checkpointer.persistence",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "A file-backed SQLite checkpoint persists across saver instances.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/checkpointer.test.ts",
+        testNames: ["persists across saver instances (file-backed)"],
+        assertionFingerprint: "expect(t?.checkpoint.channel_values).toEqual({ x: 1 })",
+      },
+    ],
+  },
+  {
+    id: "sqlite.threads.order",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "listThreads returns most-recently-updated threads first.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/threads.test.ts",
+        testNames: ["listThreads returns most-recently-updated first"],
+        assertionFingerprint:
+          "expect(list[0]?.thread_id).toBe(b.thread_id)\nexpect(list[1]?.thread_id).toBe(a.thread_id)",
+      },
+    ],
+  },
+  {
+    id: "sqlite.db.pragmas",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "SQLite opens with WAL mode, foreign keys enabled, and synchronous NORMAL.",
+    authorities: [
+      {
+        kind: "test-assertion",
+        file: "packages/sqlite-storage/test/db.test.ts",
+        testNames: [
+          "opens a database with WAL journal_mode, foreign_keys ON, and synchronous=NORMAL",
+        ],
+        assertionFingerprint:
+          'expect(journal.journal_mode).toBe("wal")\nexpect(fk.foreign_keys).toBe(1)\nexpect(sync.synchronous).toBe(1)',
+      },
+    ],
+  },
+  {
+    id: "sqlite.public.no-close",
+    ownerHref: "/docs/api/sqlite-storage",
+    claim: "The public SQLite saver and thread store expose no explicit close method.",
+    authorities: [
+      {
+        kind: "source-ast",
+        file: "packages/sqlite-storage/src/checkpointer/saver.ts",
+        selector: "DawnSqliteSaver.publicMembers",
+        expected: "public members: deleteThread, getTuple, list, put, putWrites",
+      },
+      {
+        kind: "source-ast",
+        file: "packages/sqlite-storage/src/threads/store.ts",
+        selector: "ThreadsStore.publicMembers",
+        expected:
+          "public members: createThread, deleteThread, getThread, listThreads, updateMetadata, updateStatus",
+      },
+    ],
+  },
 ] as const satisfies readonly ApiBehaviorContract[]
 
 interface ArtifactPolicy {
@@ -636,6 +956,19 @@ export interface PackageCatalogEntry {
 // an ordinary example. The inventory analyzer resolves every key back to the
 // public source export and its canonical owner page.
 export const API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -677,6 +1010,14 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -688,6 +1029,14 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -699,6 +1048,19 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ] as const satisfies readonly ApiContractKey[]
 
 function runtimeImport(
@@ -825,50 +1187,63 @@ export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/testing", ".", "detailed", "node-only", "testing"),
   runtimeImport("@dawn-ai/evals", ".", "detailed", "node-only", "testing"),
 
-  runtimeImport("@dawn-ai/permissions", ".", "deferred-to-pr2", "edge-safe", "integration"),
-  runtimeImport("@dawn-ai/permissions", "./node", "deferred-to-pr2", "node-only", "integration"),
-  runtimeImport("@dawn-ai/workspace", ".", "deferred-to-pr2", "edge-safe", "application"),
-  runtimeImport("@dawn-ai/workspace", "./node", "deferred-to-pr2", "node-only", "application"),
-  runtimeImport("@dawn-ai/sandbox", ".", "deferred-to-pr2", "node-only", "application"),
-  runtimeImport("@dawn-ai/sandbox", "./testing", "deferred-to-pr2", "node-only", "testing"),
-  runtimeImport("@dawn-ai/langgraph", ".", "deferred-to-pr2", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/permissions", ".", "detailed", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/permissions", "./node", "detailed", "node-only", "integration"),
+  runtimeImport(
+    "@dawn-ai/workspace",
+    ".",
+    "detailed",
+    "edge-safe",
+    "application",
+    "supported",
+    "dependency-free",
+  ),
+  runtimeImport("@dawn-ai/workspace", "./node", "detailed", "node-only", "application"),
+  runtimeImport("@dawn-ai/sandbox", ".", "detailed", "node-only", "application"),
+  runtimeImport("@dawn-ai/sandbox", "./testing", "detailed", "node-only", "testing"),
+  runtimeImport(
+    "@dawn-ai/langgraph",
+    ".",
+    "detailed",
+    "edge-safe",
+    "integration",
+    "supported",
+    "dependency-free",
+  ),
   runtimeImport(
     "@dawn-ai/langgraph",
     "./define-entry",
-    "deferred-to-pr2",
+    "detailed",
     "edge-safe",
     "integration",
+    "supported",
+    "dependency-free",
   ),
   runtimeImport(
     "@dawn-ai/langgraph",
     "./route-module",
-    "deferred-to-pr2",
+    "detailed",
     "edge-safe",
     "integration",
+    "supported",
+    "dependency-free",
   ),
-  runtimeImport("@dawn-ai/langchain", ".", "deferred-to-pr2", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/langchain", ".", "detailed", "edge-safe", "integration"),
   staticImport(
     "@dawn-ai/langchain",
     "./package.json",
-    "deferred-to-pr2",
+    "detailed",
     "metadata",
     "tooling",
     "supported",
   ),
-  runtimeImport("@dawn-ai/sqlite-storage", ".", "deferred-to-pr2", "node-only", "application"),
+  runtimeImport("@dawn-ai/sqlite-storage", ".", "detailed", "node-only", "application"),
 
-  staticImport(
-    "@dawn-ai/config-biome",
-    ".",
-    "catalog-only",
-    "config-artifact",
-    "tooling",
-    "supported",
-  ),
+  staticImport("@dawn-ai/config-biome", ".", "internal", "config-artifact", "tooling", "supported"),
   staticImport(
     "@dawn-ai/config-biome",
     "./biome",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -876,7 +1251,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     ".",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -884,7 +1259,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./base",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -892,7 +1267,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./library",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -900,7 +1275,7 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./node",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
@@ -908,13 +1283,13 @@ export const ARTIFACT_REGISTRY = [
   staticImport(
     "@dawn-ai/config-typescript",
     "./nextjs",
-    "catalog-only",
+    "internal",
     "config-artifact",
     "tooling",
     "supported",
   ),
   runtimeImport("@dawn-ai/devkit", ".", "internal", "node-only", "internal", "internal"),
-  runtimeImport("@dawn-ai/vite-plugin", ".", "internal", "node-only", "internal", "internal"),
+  runtimeImport("@dawn-ai/vite-plugin", ".", "internal", "node-only", "tooling", "internal"),
 
   operatedArtifact(
     "@dawn-ai/cli",
@@ -1014,7 +1389,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/config-biome",
     "Shared Biome configuration for Dawn projects.",
     "packages/config-biome/README.md",
-    "/docs/api#dawn-ai-config-biome",
+    "/docs/api#dawn-aiconfig-biome",
     "/docs/getting-started",
     [
       importAddress("@dawn-ai/config-biome", "."),
@@ -1027,7 +1402,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/config-typescript",
     "Shared TypeScript configurations for Dawn projects.",
     "packages/config-typescript/README.md",
-    "/docs/api#dawn-ai-config-typescript",
+    "/docs/api#dawn-aiconfig-typescript",
     "/docs/getting-started",
     [
       importAddress("@dawn-ai/config-typescript", "."),
@@ -1057,7 +1432,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/devkit",
     "Internal scaffold templates and generated-app test utilities.",
     "packages/devkit/README.md",
-    "/docs/api#dawn-ai-devkit",
+    "/docs/api#dawn-aidevkit",
     "/docs/getting-started",
     [importAddress("@dawn-ai/devkit", ".")],
     "internal",
@@ -1077,7 +1452,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/inspector",
     "Browser application for inspecting a running Dawn app.",
     "packages/inspector/README.md",
-    "/docs/api#dawn-ai-inspector",
+    "/docs/api#dawn-aiinspector",
     "/docs/inspector",
     [operatedAddress("@dawn-ai/inspector", "dawnInspector.server")],
     "tooling",
@@ -1087,7 +1462,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/langchain",
     "LangChain backend adapters for Dawn agents and chains.",
     "packages/langchain/README.md",
-    "/docs/api#dawn-ai-langchain",
+    "/docs/api/langchain",
     "/docs/agents",
     [
       importAddress("@dawn-ai/langchain", "."),
@@ -1100,7 +1475,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/langgraph",
     "LangGraph runtime adapters and route contracts.",
     "packages/langgraph/README.md",
-    "/docs/api#dawn-ai-langgraph",
+    "/docs/api/langgraph",
     "/docs/routes",
     [
       importAddress("@dawn-ai/langgraph", "."),
@@ -1139,7 +1514,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/permissions",
     "Permission matching and Node-backed approval stores.",
     "packages/permissions/README.md",
-    "/docs/api#dawn-ai-permissions",
+    "/docs/api/permissions",
     "/docs/permissions",
     [importAddress("@dawn-ai/permissions", "."), importAddress("@dawn-ai/permissions", "./node")],
     "integration",
@@ -1162,7 +1537,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/sandbox",
     "Docker-backed isolated workspace execution for Dawn agents.",
     "packages/sandbox/README.md",
-    "/docs/api#dawn-ai-sandbox",
+    "/docs/api/sandbox",
     "/docs/sandbox",
     [importAddress("@dawn-ai/sandbox", "."), importAddress("@dawn-ai/sandbox", "./testing")],
     "application",
@@ -1186,7 +1561,7 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/sqlite-storage",
     "Local SQLite persistence for Dawn runtime state.",
     "packages/sqlite-storage/README.md",
-    "/docs/api#dawn-ai-sqlite-storage",
+    "/docs/api/sqlite-storage",
     "/docs/persistence",
     [importAddress("@dawn-ai/sqlite-storage", ".")],
     "application",
@@ -1206,17 +1581,17 @@ export const PACKAGE_CATALOG = [
     "@dawn-ai/vite-plugin",
     "Internal Vite integration for Dawn type generation.",
     "packages/vite-plugin/README.md",
-    "/docs/api#dawn-ai-vite-plugin",
+    "/docs/api#dawn-aivite-plugin",
     "/docs/routes",
     [importAddress("@dawn-ai/vite-plugin", ".")],
-    "internal",
+    "tooling",
     "internal",
   ),
   packageEntry(
     "@dawn-ai/workspace",
     "Filesystem and shell tools for agent workspaces.",
     "packages/workspace/README.md",
-    "/docs/api#dawn-ai-workspace",
+    "/docs/api/workspace",
     "/docs/workspace",
     [importAddress("@dawn-ai/workspace", "."), importAddress("@dawn-ai/workspace", "./node")],
     "application",
@@ -1262,12 +1637,7 @@ interface ApiReferenceRegistries {
   readonly packages: readonly PackageCatalogEntry[]
 }
 
-const COVERAGES = new Set<ApiReferenceCoverage>([
-  "detailed",
-  "catalog-only",
-  "internal",
-  "deferred-to-pr2",
-])
+const COVERAGES = new Set<ApiReferenceCoverage>(["detailed", "catalog-only", "internal"])
 const AUDIENCES = new Set<ApiReferenceAudience>([
   "application",
   "integration",

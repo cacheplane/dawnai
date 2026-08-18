@@ -9,8 +9,9 @@ describe("sitemap documentation entries", () => {
       .filter((url) => new URL(url).pathname.startsWith("/docs"))
 
     expect(DOCS_PAGES).toHaveLength(59)
-    expect(ALL_DOCS_PAGES).toHaveLength(69)
+    expect(ALL_DOCS_PAGES).toHaveLength(75)
     expect(docsUrls).toEqual(ALL_DOCS_PAGES.map((page) => `https://dawnai.org${page.href}`))
+    expect(docsUrls).toContain("https://dawnai.org/docs/thread-access")
     expect(docsUrls).not.toContain("https://dawnai.org/docs")
   })
 })

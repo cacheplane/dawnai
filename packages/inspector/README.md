@@ -1,9 +1,11 @@
 # @dawn-ai/inspector
 
-Dawn runtime inspector — a browser UI for inspecting a Dawn app, starting with its
-long-term memory store. The inspector's Next.js server loads the app's
-`dawn.config.ts` at runtime (via `loadDawnConfig` from `@dawn-ai/core`) and serves
-the app's LIVE `config.memory.store`.
+Browser application for inspecting a running Dawn app.
 
-Run against an app by pointing `DAWN_APP_ROOT` at the app directory and starting
-the packaged standalone server (`.next/standalone/packages/inspector/server.js`).
+`dawnInspector.server` identifies the node-only, supported tooling application shipped as a standalone server. It is operated separately rather than imported as a TypeScript API.
+
+See the [API catalog entry](https://dawnai.org/docs/api#dawn-aiinspector) and [Inspector guide](https://dawnai.org/docs/inspector).
+
+## License
+
+MIT

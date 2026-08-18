@@ -6,6 +6,14 @@ import { ALL_DOCS_PAGES } from "../components/docs/nav"
 import { GET } from "./route"
 
 const CONTENT_ROOT = webContentRoot()
+const FINAL_PR2_API_HREFS = [
+  "/docs/api/permissions",
+  "/docs/api/workspace",
+  "/docs/api/sandbox",
+  "/docs/api/langgraph",
+  "/docs/api/langchain",
+  "/docs/api/sqlite-storage",
+] as const
 
 describe("full LLM documentation route", () => {
   it("includes every registered page exactly once and in exhaustive registry order", async () => {
@@ -27,6 +35,12 @@ describe("full LLM documentation route", () => {
     })
 
     expect(positions).toEqual([...positions].sort((left, right) => left - right))
+    expect(documentation).toContain("### Thread Access\n")
+    for (const href of FINAL_PR2_API_HREFS) {
+      const page = ALL_DOCS_PAGES.find((candidate) => candidate.href === href)
+      expect(page, href).toBeDefined()
+      expect(documentation).toContain(`### ${page?.label}\n`)
+    }
   })
 
   it("loads the recipes landing page and nested recipe from their authored files", async () => {

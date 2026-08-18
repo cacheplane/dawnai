@@ -1,12 +1,10 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="180" />
-</p>
-
 # @dawn-ai/config-typescript
 
-Shared TypeScript compiler configurations (`base`, `library`, `node`, `nextjs`) for Dawn workspace packages.
+Shared TypeScript configurations for Dawn workspace packages.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
+The root, `/base`, `/library`, `/node`, and `/nextjs` exports are supported tooling configuration artifacts used internally by the Dawn workspace. They are static configuration, not runtime imports.
+
+See the [API catalog entry](https://dawnai.org/docs/api#dawn-aiconfig-typescript) and [Getting Started](https://dawnai.org/docs/getting-started).
 
 ## License
 

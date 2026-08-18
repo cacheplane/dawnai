@@ -631,6 +631,54 @@ const EXPECTED_API_REFERENCE_PAGE_TUPLES = [
     "API Reference",
     "/docs/api",
   ],
+  [
+    "@dawn-ai/permissions",
+    "/docs/api/permissions",
+    "@dawn-ai/permissions",
+    ["@dawn-ai/permissions"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/workspace",
+    "/docs/api/workspace",
+    "@dawn-ai/workspace",
+    ["@dawn-ai/workspace"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/sandbox",
+    "/docs/api/sandbox",
+    "@dawn-ai/sandbox",
+    ["@dawn-ai/sandbox"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/langgraph",
+    "/docs/api/langgraph",
+    "@dawn-ai/langgraph",
+    ["@dawn-ai/langgraph"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/langchain",
+    "/docs/api/langchain",
+    "@dawn-ai/langchain",
+    ["@dawn-ai/langchain"],
+    "API Reference",
+    "/docs/api",
+  ],
+  [
+    "@dawn-ai/sqlite-storage",
+    "/docs/api/sqlite-storage",
+    "@dawn-ai/sqlite-storage",
+    ["@dawn-ai/sqlite-storage"],
+    "API Reference",
+    "/docs/api",
+  ],
 ]
 
 const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
@@ -655,35 +703,25 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["import:@dawn-ai/postgres-storage:./node", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/testing:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/evals:.", "detailed", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/permissions:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/permissions:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/workspace:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/workspace:./node", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/sandbox:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/sandbox:./testing", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/langgraph:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  [
-    "import:@dawn-ai/langgraph:./define-entry",
-    "deferred-to-pr2",
-    "surfaceKind",
-    "typescript-runtime",
-  ],
-  [
-    "import:@dawn-ai/langgraph:./route-module",
-    "deferred-to-pr2",
-    "surfaceKind",
-    "typescript-runtime",
-  ],
-  ["import:@dawn-ai/langchain:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/langchain:./package.json", "deferred-to-pr2", "surfaceKind", "metadata"],
-  ["import:@dawn-ai/sqlite-storage:.", "deferred-to-pr2", "surfaceKind", "typescript-runtime"],
-  ["import:@dawn-ai/config-biome:.", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-biome:./biome", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-typescript:.", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-typescript:./base", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-typescript:./library", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-typescript:./node", "catalog-only", "surfaceKind", "config-artifact"],
-  ["import:@dawn-ai/config-typescript:./nextjs", "catalog-only", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/permissions:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/permissions:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/workspace:./node", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/sandbox:./testing", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:./define-entry", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langgraph:./route-module", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langchain:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/langchain:./package.json", "detailed", "surfaceKind", "metadata"],
+  ["import:@dawn-ai/sqlite-storage:.", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/config-biome:.", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-biome:./biome", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:.", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./base", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./library", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./node", "internal", "surfaceKind", "config-artifact"],
+  ["import:@dawn-ai/config-typescript:./nextjs", "internal", "surfaceKind", "config-artifact"],
   ["import:@dawn-ai/devkit:.", "internal", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/vite-plugin:.", "internal", "surfaceKind", "typescript-runtime"],
   ["operated:@dawn-ai/cli:bin.dawn", "detailed", "operatedKind", "executable"],
@@ -702,7 +740,133 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["generated:dawn:routes", "detailed", "surfaceKind", "generated-types"],
 ]
 
+const EXPECTED_FINAL_API_ARTIFACT_POLICIES = [
+  [
+    "import:@dawn-ai/config-biome:.",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-biome:./biome",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-typescript:.",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./base",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./library",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./node",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/config-typescript:./nextjs",
+    "internal",
+    "config-artifact",
+    null,
+    null,
+    "tooling",
+    "supported",
+    null,
+  ],
+  [
+    "import:@dawn-ai/devkit:.",
+    "internal",
+    "typescript-runtime",
+    "node-only",
+    "not-claimed",
+    "internal",
+    "internal",
+    null,
+  ],
+  [
+    "import:@dawn-ai/vite-plugin:.",
+    "internal",
+    "typescript-runtime",
+    "node-only",
+    "not-claimed",
+    "tooling",
+    "internal",
+    null,
+  ],
+  [
+    "operated:create-dawn-ai-app:bin.create-dawn-ai-app",
+    "catalog-only",
+    "executable",
+    "node-only",
+    null,
+    "tooling",
+    "supported",
+    "./dist/bin.js",
+  ],
+  [
+    "operated:@dawn-ai/inspector:dawnInspector.server",
+    "catalog-only",
+    "operated-application",
+    "node-only",
+    null,
+    "tooling",
+    "supported",
+    ".next/standalone/packages/inspector/server.js",
+  ],
+]
+
 const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
+  "@dawn-ai/langchain#.:AgentStreamChunk",
+  "@dawn-ai/langchain#.:OffloadToolOutputCtx",
+  "@dawn-ai/langchain#.:RetryOptions",
+  "@dawn-ai/langchain#.:UnwrappedToolResult",
+  "@dawn-ai/langchain#.:resolveProvider",
+  "@dawn-ai/langchain#.:withRetry",
+  "@dawn-ai/langgraph#./define-entry:defineEntry",
+  "@dawn-ai/langgraph#./route-module:GraphRouteModule",
+  "@dawn-ai/langgraph#./route-module:NormalizedRouteModule",
+  "@dawn-ai/langgraph#./route-module:RouteModule",
+  "@dawn-ai/langgraph#./route-module:WorkflowRouteModule",
+  "@dawn-ai/langgraph#./route-module:assertExactlyOneEntry",
+  "@dawn-ai/langgraph#./route-module:normalizeRouteModule",
   "@dawn-ai/ag-ui#./sse:encodeAgUiSse",
   "@dawn-ai/ag-ui#.:DAWN_PLAN_ACTIVITY_TYPE",
   "@dawn-ai/ag-ui#.:DAWN_SUBAGENT_ACTIVITY_TYPE",
@@ -744,6 +908,14 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresPermissionsStore",
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
+  "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
+  "@dawn-ai/sandbox#.:dockerSandbox",
+  "@dawn-ai/sandbox#.:kubernetesSandbox",
+  "@dawn-ai/permissions#.:PermissionDecision",
+  "@dawn-ai/permissions#.:PermissionMode",
+  "@dawn-ai/permissions#.:PermissionsFile",
+  "@dawn-ai/permissions#.:PermissionsStore",
   "@dawn-ai/sdk#.:AgentConfig",
   "@dawn-ai/sdk#.:ReasoningConfig",
   "@dawn-ai/sdk#.:RetryConfig",
@@ -755,6 +927,14 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/sdk#.:isDawnAgent",
   "@dawn-ai/sdk#.:reject",
   "@dawn-ai/sdk#.:validateModelId",
+  "@dawn-ai/sqlite-storage#.:CreateThreadInput",
+  "@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions",
+  "@dawn-ai/sqlite-storage#.:Thread",
+  "@dawn-ai/sqlite-storage#.:ThreadStatus",
+  "@dawn-ai/sqlite-storage#.:ThreadsStore",
+  "@dawn-ai/sqlite-storage#.:ThreadsStoreOptions",
+  "@dawn-ai/sqlite-storage#.:createThreadsStore",
+  "@dawn-ai/sqlite-storage#.:sqliteCheckpointer",
   "@dawn-ai/testing#.:AgentHarness",
   "@dawn-ai/testing#.:AgentHarnessOptions",
   "@dawn-ai/testing#.:ScriptBuilder",
@@ -766,6 +946,19 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/testing#.:runPermissionsStoreConformance",
   "@dawn-ai/testing#.:runThreadsStoreConformance",
   "@dawn-ai/testing#.:writeFixtures",
+  "@dawn-ai/workspace#./node:LocalExecOptions",
+  "@dawn-ai/workspace#./node:LocalFilesystemOptions",
+  "@dawn-ai/workspace#./node:localExec",
+  "@dawn-ai/workspace#./node:localFilesystem",
+  "@dawn-ai/workspace#.:BackendContext",
+  "@dawn-ai/workspace#.:ExecBackend",
+  "@dawn-ai/workspace#.:FilesystemBackend",
+  "@dawn-ai/workspace#.:SandboxConfig",
+  "@dawn-ai/workspace#.:SandboxHandle",
+  "@dawn-ai/workspace#.:SandboxPolicy",
+  "@dawn-ai/workspace#.:SandboxProvider",
+  "@dawn-ai/workspace#.:SandboxSecurityPolicy",
+  "@dawn-ai/workspace#.:compose",
 ]
 
 function apiArtifactAddress(artifact) {
@@ -777,6 +970,10 @@ function apiArtifactAddress(artifact) {
 const DEPENDENCY_FREE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:./pure",
   "import:@dawn-ai/memory:./browse",
+  "import:@dawn-ai/workspace:.",
+  "import:@dawn-ai/langgraph:.",
+  "import:@dawn-ai/langgraph:./define-entry",
+  "import:@dawn-ai/langgraph:./route-module",
 ])
 const EDGE_SAFE_API_ADDRESSES = new Set([
   "import:@dawn-ai/sdk:.",
@@ -824,6 +1021,7 @@ function tupleMismatchFields(actual, expected, fields) {
 
 function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
   const analysisFailures = []
+  const allowedCoverages = new Set(["detailed", "catalog-only", "internal"])
   const pageTuples = pages.map(({ label, href, surfaceName, ownerPackageNames, parent }) => [
     label,
     href,
@@ -864,6 +1062,9 @@ function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
   }
 
   const artifactPolicyTuples = artifacts.map((artifact) => {
+    if (!allowedCoverages.has(artifact.coverage)) {
+      analysisFailures.push(`invalid coverage: ${String(artifact.coverage)}`)
+    }
     const base =
       artifact.kind === "operated"
         ? [apiArtifactAddress(artifact), artifact.coverage, "operatedKind", artifact.operatedKind]
@@ -903,6 +1104,30 @@ function analyzeApiReferenceRegistry({ pages = [], artifacts = [] }) {
     if (mismatches.length > 0) {
       analysisFailures.push(
         `API artifact policy tuple ${index + 1} (${expected?.[0] ?? actual?.[0] ?? "missing"}) mismatches ${mismatches.join(", ")}: expected ${JSON.stringify(expected ?? null)}, received ${JSON.stringify(actual ?? null)}`,
+      )
+    }
+  }
+
+  const artifactsByAddress = new Map(
+    artifacts.map((artifact) => [apiArtifactAddress(artifact), artifact]),
+  )
+  for (const expected of EXPECTED_FINAL_API_ARTIFACT_POLICIES) {
+    const artifact = artifactsByAddress.get(expected[0])
+    const actual = artifact
+      ? [
+          expected[0],
+          artifact.coverage,
+          artifact.kind === "operated" ? artifact.operatedKind : artifact.surfaceKind,
+          artifact.runtime ?? null,
+          artifact.purity ?? null,
+          artifact.audience,
+          artifact.stability,
+          artifact.manifestTarget ?? null,
+        ]
+      : null
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      analysisFailures.push(
+        `API final artifact policy tuple ${expected[0]} mismatch: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
       )
     }
   }
@@ -1093,11 +1318,21 @@ async function analyzeDetailedApiReferences() {
 }
 
 if (process.argv[2] === "--analyze-detailed-api-references") {
-  process.stdout.write(`${JSON.stringify(await analyzeDetailedApiReferences())}\n`)
+  const analysis = await analyzeDetailedApiReferences()
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(`${JSON.stringify(analysis)}\n`, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
   process.exit(0)
 }
 
 const checks = [
+  {
+    file: "apps/web/content/docs/api/sandbox.mdx",
+    patterns: ["pnpm add -D vitest", 'from "@dawn-ai/sandbox/testing"'],
+  },
   {
     file: "apps/web/content/docs/api/memory.mdx",
     patterns: [
@@ -1129,6 +1364,14 @@ const checks = [
       "counts collected stream chunks or deltas, not model-tokenizer tokens",
       "`gate.perScorer()` ignores scorers without an explicit threshold",
       "separate default bar of `0.5`",
+    ],
+  },
+  {
+    file: "apps/web/content/docs/api/permissions.mdx",
+    patterns: [
+      "Call and await `store.load()` before any store use, especially before `addAllow()` or other persistence",
+      "Calling `addAllow()` first can overwrite grants already present in the runtime file",
+      "Reserved subagent identities match exactly rather than by prefix",
     ],
   },
   {
@@ -1224,6 +1467,16 @@ for (const check of checks) {
       failures.push(`${check.file} is missing required docs text: ${pattern}`)
     }
   }
+}
+
+const permissionsApiSource = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/api/permissions.mdx"),
+  "utf8",
+)
+if (/\b(?:load|load\(\)|`load\(\)`)\b[^.\n]{0,80}\bbefore matching\b/i.test(permissionsApiSource)) {
+  failures.push(
+    "apps/web/content/docs/api/permissions.mdx must require load before every store use, not only before matching",
+  )
 }
 
 const gettingStartedSource = readFileSync(
@@ -3616,27 +3869,6 @@ if (apiReferenceRegistry) {
       `ARTIFACT_REGISTRY must contain 42 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
     )
   }
-  const expectedDeferredImports = [
-    ["@dawn-ai/permissions", "."],
-    ["@dawn-ai/permissions", "./node"],
-    ["@dawn-ai/workspace", "."],
-    ["@dawn-ai/workspace", "./node"],
-    ["@dawn-ai/sandbox", "."],
-    ["@dawn-ai/sandbox", "./testing"],
-    ["@dawn-ai/langgraph", "."],
-    ["@dawn-ai/langgraph", "./define-entry"],
-    ["@dawn-ai/langgraph", "./route-module"],
-    ["@dawn-ai/langchain", "."],
-    ["@dawn-ai/langchain", "./package.json"],
-    ["@dawn-ai/sqlite-storage", "."],
-  ]
-  const deferredImports = ARTIFACT_REGISTRY.filter(
-    (artifact) => artifact.kind === "import" && artifact.coverage === "deferred-to-pr2",
-  ).map(({ packageName, subpath }) => [packageName, subpath])
-  if (JSON.stringify(deferredImports) !== JSON.stringify(expectedDeferredImports)) {
-    failures.push("ARTIFACT_REGISTRY does not match the exact 12-import deferred-to-pr2 allowlist")
-  }
-
   const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(
     ({ coverage, audience }) =>
       (coverage === "catalog-only" || coverage === "internal") && audience === "application",
@@ -3697,10 +3929,18 @@ if (apiReferenceRegistry) {
         : page.ownerPackageNames.map((packageName) => [packageName, page.href]),
     ),
   )
+  const catalogDestinations = new Map([
+    ["@dawn-ai/config-biome", "/docs/api#dawn-aiconfig-biome"],
+    ["@dawn-ai/config-typescript", "/docs/api#dawn-aiconfig-typescript"],
+    ["@dawn-ai/devkit", "/docs/api#dawn-aidevkit"],
+    ["@dawn-ai/inspector", "/docs/api#dawn-aiinspector"],
+    ["@dawn-ai/vite-plugin", "/docs/api#dawn-aivite-plugin"],
+    ["create-dawn-ai-app", "/docs/api#create-dawn-ai-app"],
+  ])
   for (const entry of PACKAGE_CATALOG) {
     const expectedDestination =
       referenceDestinationByPackage.get(entry.packageName) ??
-      `/docs/api#${entry.packageName.replace(/^@/, "").replaceAll("/", "-")}`
+      catalogDestinations.get(entry.packageName)
     if (entry.canonicalReferenceDestination !== expectedDestination) {
       failures.push(
         `${entry.packageName} canonical reference destination must be ${expectedDestination}`,
@@ -3721,7 +3961,7 @@ if (apiReferenceRegistry) {
   )
   for (const artifact of ARTIFACT_REGISTRY) {
     const boundary = apiReferenceRegistry.artifactBoundaryFor(artifact)
-    if (/\b(?:detailed|catalog-only|deferred-to-pr2)\b/.test(boundary)) {
+    if (/\b(?:detailed|catalog-only)\b/.test(boundary)) {
       failures.push(
         `${apiReferenceRegistry.artifactAddressFor(artifact)} exposes an internal coverage label in its public artifact boundary`,
       )
@@ -3891,6 +4131,29 @@ if (apiReferenceRegistry) {
           `${entry.readmePath} must bind ${surface} to ${artifact.runtime} and ${artifact.stability} on one visible line`,
         )
       }
+    }
+  }
+
+  for (const [packageName, destination] of catalogDestinations) {
+    const entry = PACKAGE_CATALOG.find((candidate) => candidate.packageName === packageName)
+    if (!entry) {
+      failures.push(`PACKAGE_CATALOG is missing ${packageName}`)
+      continue
+    }
+    const readme = readFileSync(resolve(repoRoot, entry.readmePath), "utf8")
+    const destinations = linkDestinations(readme)
+    for (const required of [
+      `https://dawnai.org${destination}`,
+      `https://dawnai.org${entry.conceptualGuideDestination}`,
+    ]) {
+      if (!destinations.includes(required)) {
+        failures.push(
+          `${entry.readmePath} is missing registry-derived README contract: ${required}`,
+        )
+      }
+    }
+    if (readme.split(/\r?\n/).length > 50) {
+      failures.push(`${entry.readmePath} must remain a concise catalog entrypoint`)
     }
   }
 }

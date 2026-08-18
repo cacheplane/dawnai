@@ -1,0 +1,136 @@
+# @dawn-ai/sqlite-storage
+
+## Use this when
+
+Use this Node-only package for local, single-process checkpoint and Agent Protocol thread persistence. It is not encrypted storage and is not shared multi-replica state.
+
+## Install and import
+
+```bash
+pnpm add @dawn-ai/sqlite-storage
+```
+
+```ts
+import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
+```
+
+## Compatibility and audience
+
+| Surface | Runtime | Purity | Audience | Stability |
+|---|---|---|---|---|
+| `@dawn-ai/sqlite-storage` | node-only | not-claimed | application | supported |
+
+The package uses Node's `node:sqlite` `DatabaseSync` and LangGraph checkpoint contracts.
+
+## Public exports
+
+### `@dawn-ai/sqlite-storage`
+
+| Export | Responsibility |
+|---|---|
+| `SqliteCheckpointerOptions` | Select the checkpoint database path. |
+| `DawnSqliteSaver` | Implement the LangGraph checkpoint saver methods. |
+| `sqliteCheckpointer` | Open, migrate, and return a checkpoint saver. |
+| `CreateThreadInput` | Supply an optional thread ID and metadata. |
+| `Thread` | Describe persisted thread identity, timestamps, metadata, and status. |
+| `ThreadStatus` | Restrict status to `idle`, `busy`, or `interrupted`. |
+| `ThreadsStore` | Define thread create/read/delete/list/update operations. |
+| `ThreadsStoreOptions` | Select the thread database path. |
+| `createThreadsStore` | Open, migrate, and return a thread store. |
+
+## Key contracts
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:SqliteCheckpointerOptions"
+export interface SqliteCheckpointerOptions {
+  readonly path: string
+}
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:sqliteCheckpointer"
+export declare function sqliteCheckpointer(options: SqliteCheckpointerOptions): DawnSqliteSaver
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:ThreadStatus"
+export type ThreadStatus = "idle" | "busy" | "interrupted"
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:Thread"
+export interface Thread {
+  readonly thread_id: string
+  readonly created_at: string
+  readonly updated_at: string
+  readonly metadata: Record<string, unknown>
+  readonly status: ThreadStatus
+}
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:CreateThreadInput"
+export interface CreateThreadInput {
+  readonly thread_id?: string
+  readonly metadata?: Record<string, unknown>
+}
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:ThreadsStore"
+export interface ThreadsStore {
+  createThread(input: CreateThreadInput): Promise<Thread>
+  getThread(threadId: string): Promise<Thread | undefined>
+  deleteThread(threadId: string): Promise<void>
+  listThreads(): Promise<Thread[]>
+  updateStatus(threadId: string, status: ThreadStatus): Promise<void>
+  updateMetadata(threadId: string, patch: Record<string, unknown>): Promise<void>
+}
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:ThreadsStoreOptions"
+export interface ThreadsStoreOptions {
+  readonly path: string
+}
+```
+
+```ts api-contract="@dawn-ai/sqlite-storage#.:createThreadsStore"
+export declare function createThreadsStore(
+  options: ThreadsStoreOptions,
+): import("./store.js").ThreadsStore
+```
+
+#### Behavior contract `sqlite.checkpointer.persistence`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sqlite-storage/test/checkpointer.test.ts","testNames":["persists across saver instances (file-backed)"]}] */}
+A file-backed SQLite checkpoint persists across saver instances.
+
+#### Behavior contract `sqlite.threads.order`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sqlite-storage/test/threads.test.ts","testNames":["listThreads returns most-recently-updated first"]}] */}
+`listThreads` returns most-recently-updated threads first.
+
+#### Thread ordering caveat
+
+Ordering is `updated_at DESC` and does not define a tie-break for equal timestamps.
+
+#### Behavior contract `sqlite.db.pragmas`
+{/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sqlite-storage/test/db.test.ts","testNames":["opens a database with WAL journal_mode, foreign_keys ON, and synchronous=NORMAL"]}] */}
+SQLite opens with WAL mode, foreign keys enabled, and synchronous NORMAL.
+
+#### Database mode caveat
+
+WAL applies only to file-backed databases; `:memory:` skips the WAL statement.
+
+#### Behavior contract `sqlite.public.no-close`
+{/* api-behavior-authorities: [{"kind":"source-ast","file":"packages/sqlite-storage/src/checkpointer/saver.ts","selector":"DawnSqliteSaver.publicMembers"},{"kind":"source-ast","file":"packages/sqlite-storage/src/threads/store.ts","selector":"ThreadsStore.publicMembers"}] */}
+The public SQLite saver and thread store expose no explicit close method.
+
+#### Database lifecycle and query caveats
+
+Each factory opens and retains a `DatabaseSync` handle. The public surface does not close automatically and provides no cleanup hook, so treat these as process-lifetime stores under the current API. Use separate files—such as `checkpoints.sqlite` and `threads.sqlite`—because both components use a global `schema_version` table and must not share one path.
+
+Saver `list()` orders lexically by checkpoint ID, ignores the `filter` option, and returns lightweight tuples without pending writes. Fetch a specific tuple for full pending-write hydration. Thread status and metadata updates for a missing ID are no-ops; metadata updates shallow-merge.
+
+## Examples and related guides
+
+```ts
+import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
+
+export const checkpointer = sqliteCheckpointer({ path: ".dawn/checkpoints.sqlite" })
+export const threadsStore = createThreadsStore({ path: ".dawn/threads.sqlite" })
+```
+
+Continue with [Persistence and Tenancy](/docs/persistence) and [CLI API](/docs/api/cli).

@@ -4,6 +4,15 @@ import { filterDocsSearchResults, flattenDocsSearchIndex } from "./docs-search-r
 import { ALL_DOCS_PAGES, DOCS_NAV } from "./nav"
 import { DOCS_INDEX, parsePublicExportAliases } from "./search-index"
 
+const FINAL_PR2_API_HREFS = [
+  "/docs/api/permissions",
+  "/docs/api/workspace",
+  "/docs/api/sandbox",
+  "/docs/api/langgraph",
+  "/docs/api/langchain",
+  "/docs/api/sqlite-storage",
+] as const
+
 describe("documentation search index", () => {
   it("contains every registered page in exhaustive registry order", () => {
     const journeySectionByHref = new Map<string, string>(
@@ -34,6 +43,11 @@ describe("documentation search index", () => {
       title: "Fixtures and Recording",
       section: "Test",
     })
+    expect(expected).toContainEqual({
+      href: "/docs/thread-access",
+      title: "Thread Access",
+      section: "Operate",
+    })
     for (const page of API_REFERENCE_PAGES) {
       expect(expected).toContainEqual({
         href: page.href,
@@ -41,11 +55,22 @@ describe("documentation search index", () => {
         section: "API Reference",
       })
     }
+    expect(expected.filter(({ href }) => FINAL_PR2_API_HREFS.includes(href as never))).toEqual(
+      FINAL_PR2_API_HREFS.map((href) => ({
+        href,
+        title: API_REFERENCE_PAGES.find((page) => page.href === href)?.label,
+        section: "API Reference",
+      })),
+    )
   })
 
   it("maps exact package and subpath aliases to canonical hub or owner pages", () => {
     const results = flattenDocsSearchIndex(DOCS_INDEX)
-    expect(filterDocsSearchResults("@dawn-ai/workspace", results)[0]?.href).toBe("/docs/api")
+    for (const href of FINAL_PR2_API_HREFS) {
+      const packageName = API_REFERENCE_PAGES.find((page) => page.href === href)?.surfaceName
+      expect(packageName).toBeDefined()
+      expect(filterDocsSearchResults(packageName ?? "", results)[0]?.href).toBe(href)
+    }
     expect(filterDocsSearchResults("@dawn-ai/sdk/pure", results)[0]?.href).toBe("/docs/api/sdk")
     expect(filterDocsSearchResults("@dawn-ai/config-typescript/nextjs", results)[0]?.href).toBe(
       "/docs/api",
