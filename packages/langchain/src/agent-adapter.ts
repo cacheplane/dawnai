@@ -569,11 +569,17 @@ function classifyStreamEvent(
       const logicalId = readLogicalToolCallId(event.data.output)
       const id = logicalId ?? event.run_id
       const chunks: AgentStreamChunk[] = []
-      if (!rootTools.announcedToolCallIds.has(id) && (held !== undefined || logicalId !== undefined)) {
+      if (
+        !rootTools.announcedToolCallIds.has(id) &&
+        (held !== undefined || logicalId !== undefined)
+      ) {
         rootTools.announcedToolCallIds.add(id)
         chunks.push({ type: "tool_call", data: { id, name: event.name, input: held?.input } })
       }
-      chunks.push({ type: "tool_result", data: { id, name: event.name, output: event.data.output } })
+      chunks.push({
+        type: "tool_result",
+        data: { id, name: event.name, output: event.data.output },
+      })
       return {
         capturesFinalOutput: false,
         child,

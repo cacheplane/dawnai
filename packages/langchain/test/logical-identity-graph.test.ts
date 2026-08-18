@@ -170,7 +170,10 @@ describe("real-graph pins for logical tool identity", () => {
   }
 
   it("streamAgent keys root tool chunks by the model's tool-call id (string tool)", async () => {
-    const probe = convertToolToLangChain({ name: "probe", run: async () => ({ result: "probe-ok" }) })
+    const probe = convertToolToLangChain({
+      name: "probe",
+      run: async () => ({ result: "probe-ok" }),
+    })
     const graph = createReactAgent({
       llm: scriptedModel("call_probe_1", "probe", { q: "x" }),
       tools: [probe],
@@ -185,7 +188,7 @@ describe("real-graph pins for logical tool identity", () => {
       { type: "tool_call", data: { id: "call_probe_1", name: "probe", input: { q: "x" } } },
     ])
     expect(toolResults).toHaveLength(1)
-    expect((toolResults[0]?.data as { id?: unknown }).id).toBe("call_probe_1")
+    expect((toolResults[0]?.data as { id?: unknown } | undefined)?.id).toBe("call_probe_1")
   })
 
   it("streamAgent keys root tool chunks by the model's tool-call id (Command tool)", async () => {
@@ -210,8 +213,8 @@ describe("real-graph pins for logical tool identity", () => {
     const toolCalls = chunks.filter((c) => c.type === "tool_call")
     const toolResults = chunks.filter((c) => c.type === "tool_result")
     expect(toolCalls).toHaveLength(1)
-    expect((toolCalls[0]?.data as { id?: unknown }).id).toBe("call_writeTodos_1")
+    expect((toolCalls[0]?.data as { id?: unknown } | undefined)?.id).toBe("call_writeTodos_1")
     expect(toolResults).toHaveLength(1)
-    expect((toolResults[0]?.data as { id?: unknown }).id).toBe("call_writeTodos_1")
+    expect((toolResults[0]?.data as { id?: unknown } | undefined)?.id).toBe("call_writeTodos_1")
   })
 })

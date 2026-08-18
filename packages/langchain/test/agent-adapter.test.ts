@@ -1293,7 +1293,11 @@ describe("logical-identity root tool projection", () => {
       { type: "tool_call", data: { id: "call_x_1", name: "alpha", input: {} } },
       {
         type: "tool_result",
-        data: { id: "call_x_1", name: "beta", output: { tool_call_id: "call_x_1", content: "beta-ok" } },
+        data: {
+          id: "call_x_1",
+          name: "beta",
+          output: { tool_call_id: "call_x_1", content: "beta-ok" },
+        },
       },
       { type: "done", data: { ok: true } },
     ])
