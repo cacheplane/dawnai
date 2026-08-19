@@ -865,4 +865,92 @@ describe("orchestration suppression", () => {
       EventType.RUN_FINISHED,
     ])
   })
+
+  test("an interrupt drops the frames of the call it belongs to", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } },
+      {
+        type: "interrupt",
+        data: { interruptId: "int-1", kind: "tool", toolCallId: "call_task_0_2" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+    ])
+    expect(events.at(-1)).toMatchObject({ outcome: { type: "interrupt" } })
+  })
+
+  test("an interrupt flushes an unrelated held call", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_writeTodos_0_1", name: "writeTodos", input: {} } },
+      {
+        type: "interrupt",
+        data: { interruptId: "int-1", kind: "command", toolCallId: "call_runBash_0_9" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("an interrupt with no toolCallId flushes every held call", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } },
+      { type: "interrupt", data: { interruptId: "int-1", kind: "memory" } },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("a malformed interrupt flushes held frames before RUN_ERROR", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } },
+      { type: "interrupt", data: { kind: "tool" } },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.RUN_ERROR,
+    ])
+  })
+
+  test("an upstream error flushes held frames before RUN_ERROR", async () => {
+    async function* failing(): AsyncGenerator<DawnAgentStreamChunk> {
+      yield { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } }
+      throw new Error("boom")
+    }
+
+    const events = []
+    for await (const event of toAguiEvents(failing(), CTX, { idFactory: createCounterIdFactory() })) {
+      events.push(event)
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.RUN_ERROR,
+    ])
+  })
 })

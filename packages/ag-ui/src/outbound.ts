@@ -185,6 +185,7 @@ export async function* toAguiEvents(
             }
             return
           }
+          yield* ledger.settle(interrupt.toolCallId)
           pendingInterrupts.push(interrupt)
           break
         }
