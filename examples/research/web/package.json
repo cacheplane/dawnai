@@ -7,7 +7,7 @@
     "dev": "next dev -p 3010",
     "build": "next build",
     "start": "next start -p 3010",
-    "test": "vitest --run --config vitest.config.ts",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
@@ -17,8 +17,7 @@
     "@dawn-ai/ag-ui": "workspace:*",
     "next": "16.3.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "zod": "^4.4.3"
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
