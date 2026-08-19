@@ -185,6 +185,10 @@ export async function* toAguiEvents(
             }
             return
           }
+          // The resumed run re-presents this same call under the same logical
+          // id, so flushing its frames here would leave an unreconcilable
+          // duplicate on resume; see orchestration-ledger.ts's settle() for
+          // the fuller rationale.
           yield* ledger.settle(interrupt.toolCallId)
           pendingInterrupts.push(interrupt)
           break

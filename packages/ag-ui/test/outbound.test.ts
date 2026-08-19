@@ -883,6 +883,26 @@ describe("orchestration suppression", () => {
     expect(events.at(-1)).toMatchObject({ outcome: { type: "interrupt" } })
   })
 
+  test("an interrupt drops the frames of the call it belongs to via the envelope's callId", async () => {
+    // Dawn's real interrupt envelopes (permission-gate.ts, agent-adapter.ts's
+    // projectInterruptValue) carry `callId`, not `toolCallId` — this proves
+    // the mapper bridges that vocabulary end to end into the ledger.
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } },
+      {
+        type: "interrupt",
+        data: { interruptId: "int-1", kind: "subagent", callId: "call_task_0_2" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+    ])
+    expect(events.at(-1)).toMatchObject({ outcome: { type: "interrupt" } })
+  })
+
   test("an interrupt flushes an unrelated held call", async () => {
     const events = await collect([
       { type: "tool_call", data: { id: "call_writeTodos_0_1", name: "writeTodos", input: {} } },
@@ -900,6 +920,9 @@ describe("orchestration suppression", () => {
       EventType.TOOL_CALL_END,
       EventType.RUN_FINISHED,
     ])
+    expect(events.find((event) => event.type === EventType.TOOL_CALL_START)).toMatchObject({
+      toolCallId: "call_writeTodos_0_1",
+    })
   })
 
   test("an interrupt with no toolCallId flushes every held call", async () => {
@@ -916,6 +939,9 @@ describe("orchestration suppression", () => {
       EventType.TOOL_CALL_END,
       EventType.RUN_FINISHED,
     ])
+    expect(events.find((event) => event.type === EventType.TOOL_CALL_START)).toMatchObject({
+      toolCallId: "call_task_0_2",
+    })
   })
 
   test("a malformed interrupt flushes held frames before RUN_ERROR", async () => {
@@ -941,7 +967,9 @@ describe("orchestration suppression", () => {
     }
 
     const events = []
-    for await (const event of toAguiEvents(failing(), CTX, { idFactory: createCounterIdFactory() })) {
+    for await (const event of toAguiEvents(failing(), CTX, {
+      idFactory: createCounterIdFactory(),
+    })) {
       events.push(event)
     }
 
