@@ -367,6 +367,14 @@ export interface PromptFragment {
 export interface StreamTransformerInput {
   readonly toolName: string
   readonly toolOutput: unknown
+  /**
+   * Model/provider tool-call id (logical identity) of the execution that
+   * produced `toolOutput`, when the runtime has one — the same id the root
+   * AG-UI `TOOL_CALL_*` events are keyed by, never the internal LangChain
+   * execution run id. Optional: adapters that cannot supply one omit it, and
+   * a transformer that uses it must tolerate its absence.
+   */
+  readonly toolCallId?: string
 }
 
 export interface StreamTransformerOutput {

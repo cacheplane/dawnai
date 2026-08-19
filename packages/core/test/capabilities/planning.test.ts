@@ -98,13 +98,20 @@ describe("createPlanningMarker", () => {
       for await (const out of transformer.transform({
         toolName: "writeTodos",
         toolOutput: { todos: newTodos },
+        toolCallId: "call_writeTodos_0_1",
       })) {
         events.push(out)
       }
     }
 
     expect(events).toEqual([
-      { event: "plan_update", data: { todos: [{ content: "x", status: "pending" }] } },
+      {
+        event: "plan_update",
+        data: {
+          todos: [{ content: "x", status: "pending" }],
+          tool_call_id: "call_writeTodos_0_1",
+        },
+      },
     ])
   })
 
@@ -123,6 +130,7 @@ describe("createPlanningMarker", () => {
       for await (const out of transformer.transform({
         toolName: "writeTodos",
         toolOutput: { update: { todos: newTodos } },
+        toolCallId: "call_writeTodos_0_1",
       })) {
         events.push(out)
       }
@@ -131,9 +139,65 @@ describe("createPlanningMarker", () => {
     expect(events).toEqual([
       {
         event: "plan_update",
-        data: { todos: [{ content: "from command", status: "in_progress" }] },
+        data: {
+          todos: [{ content: "from command", status: "in_progress" }],
+          tool_call_id: "call_writeTodos_0_1",
+        },
       },
     ])
+  })
+
+  it("stream transformer omits tool correlation when the call ID is absent", async () => {
+    writeFileSync(join(routeDir, "plan.md"), "")
+    const marker = createPlanningMarker()
+    const contribution = await marker.load(routeDir, ctx)
+    const transformer = contribution.streamTransformers?.[0]
+
+    const events: Array<{ event: string; data: unknown }> = []
+    if (transformer) {
+      const newTodos = [{ content: "without id", status: "pending" }]
+      for await (const out of transformer.transform({
+        toolName: "writeTodos",
+        toolOutput: { todos: newTodos },
+      })) {
+        events.push(out)
+      }
+    }
+
+    expect(events).toEqual([
+      {
+        event: "plan_update",
+        data: { todos: [{ content: "without id", status: "pending" }] },
+      },
+    ])
+    expect(Object.hasOwn(events[0]?.data ?? {}, "tool_call_id")).toBe(false)
+  })
+
+  it("stream transformer omits tool correlation when the call ID is empty", async () => {
+    writeFileSync(join(routeDir, "plan.md"), "")
+    const marker = createPlanningMarker()
+    const contribution = await marker.load(routeDir, ctx)
+    const transformer = contribution.streamTransformers?.[0]
+
+    const events: Array<{ event: string; data: unknown }> = []
+    if (transformer) {
+      const newTodos = [{ content: "empty id", status: "pending" }]
+      for await (const out of transformer.transform({
+        toolName: "writeTodos",
+        toolOutput: { todos: newTodos },
+        toolCallId: "",
+      })) {
+        events.push(out)
+      }
+    }
+
+    expect(events).toEqual([
+      {
+        event: "plan_update",
+        data: { todos: [{ content: "empty id", status: "pending" }] },
+      },
+    ])
+    expect(Object.hasOwn(events[0]?.data ?? {}, "tool_call_id")).toBe(false)
   })
 
   it("stream transformer ignores tool results from other tools", async () => {
