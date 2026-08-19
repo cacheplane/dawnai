@@ -26,21 +26,53 @@ const childIdentity = {
   depth: 1,
 } as const
 
+const ORDINARY_TOOL_CALL_ID = "call_searchCorpus_0_0"
+const PLAN_TOOL_CALL_ID = "call_writeTodos_0_1"
+// The `task` call's id is the subagent's `call_id`: that is how a subagent
+// activity correlates back to the root tool call that started it.
+const TASK_TOOL_CALL_ID = childIdentity.call_id
+
 const CANNED: DawnAgentStreamChunk[] = [
   { type: "token", data: "Researching" },
   {
     type: "tool_call",
-    data: { id: "call_searchCorpus_0_0", name: "searchCorpus", input: { query: "agents" } },
+    data: { id: ORDINARY_TOOL_CALL_ID, name: "searchCorpus", input: { query: "agents" } },
   },
   {
     type: "tool_result",
     data: {
-      id: "call_searchCorpus_0_0",
+      id: ORDINARY_TOOL_CALL_ID,
       name: "searchCorpus",
       output: [{ path: "corpus/a.md" }],
     },
   },
-  { type: "plan_update", data: { todos: [{ content: "search", status: "completed" }] } },
+  {
+    type: "tool_call",
+    data: {
+      id: PLAN_TOOL_CALL_ID,
+      name: "writeTodos",
+      input: { todos: [{ content: "search", status: "completed" }] },
+    },
+  },
+  {
+    type: "plan_update",
+    data: {
+      tool_call_id: PLAN_TOOL_CALL_ID,
+      todos: [{ content: "search", status: "completed" }],
+    },
+  },
+  {
+    type: "tool_result",
+    data: { id: PLAN_TOOL_CALL_ID, name: "writeTodos", output: "Updated todo list" },
+  },
+  {
+    type: "tool_call",
+    data: {
+      id: TASK_TOOL_CALL_ID,
+      name: "task",
+      input: { subagent_type: "researcher", description: "read source" },
+    },
+  },
   { type: "subagent.start", data: childIdentity },
   {
     type: "subagent.plan_update",
@@ -64,6 +96,10 @@ const CANNED: DawnAgentStreamChunk[] = [
   },
   { type: "subagent.message", data: { ...childIdentity, content: "not public message" } },
   { type: "subagent.end", data: { ...childIdentity, final_message: "not public final" } },
+  {
+    type: "tool_result",
+    data: { id: TASK_TOOL_CALL_ID, name: "task", output: "not public final" },
+  },
   { type: "token", data: " done. [corpus/a.md]" },
   { type: "done", data: { messages: [] } },
 ]
@@ -120,6 +156,33 @@ it("produces an AG-UI stream that @ag-ui/client parses and verifyEvents accepts"
   expect(kinds[0]).toBe(EventType.RUN_STARTED)
   expect(kinds).toContain(EventType.TOOL_CALL_START)
   expect(kinds).toContain(EventType.TOOL_CALL_RESULT)
+
+  // The two built-in orchestration calls present as activities only: no generic
+  // tool frame anywhere in the stream references their ids.
+  const toolEvents = events.filter(
+    (event) =>
+      event.type === EventType.TOOL_CALL_START ||
+      event.type === EventType.TOOL_CALL_ARGS ||
+      event.type === EventType.TOOL_CALL_END ||
+      event.type === EventType.TOOL_CALL_RESULT,
+  )
+  expect(toolEvents.map((event) => event.toolCallId)).not.toContain(PLAN_TOOL_CALL_ID)
+  expect(toolEvents.map((event) => event.toolCallId)).not.toContain(TASK_TOOL_CALL_ID)
+  expect(
+    toolEvents
+      .filter((event) => event.type === EventType.TOOL_CALL_START)
+      .map((event) => event.toolCallName),
+  ).toEqual(["searchCorpus"])
+
+  // The ordinary tool keeps its full, correlated frame sequence.
+  const ordinaryFrames = toolEvents.filter((event) => event.toolCallId === ORDINARY_TOOL_CALL_ID)
+  expect(ordinaryFrames.map((event) => event.type)).toEqual([
+    EventType.TOOL_CALL_START,
+    EventType.TOOL_CALL_ARGS,
+    EventType.TOOL_CALL_END,
+    EventType.TOOL_CALL_RESULT,
+  ])
+
   const activities = events
     .filter((event) => event.type === EventType.ACTIVITY_SNAPSHOT)
     .map((event) => ActivitySnapshotEventSchema.parse(event))

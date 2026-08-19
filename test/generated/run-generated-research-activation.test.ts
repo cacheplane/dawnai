@@ -106,10 +106,10 @@ function correlateRootToolCalls(events: readonly AgUiEvent[]): Map<string, unkno
   const starts = events.flatMap((event, index) =>
     event.type === "TOOL_CALL_START" ? [{ event, index }] : [],
   )
+  // `writeTodos` and `task` are absent by design: each presents once, as its
+  // dawn.plan / dawn.subagent activity, with no generic tool frames.
   expect(starts.map(({ event }) => event.toolCallName)).toEqual([
     "recall",
-    "writeTodos",
-    "task",
     "searchCorpus",
     "readDoc",
     "writeFile",
@@ -458,10 +458,11 @@ function assertSafeResearchJourney(
   assertSuccessfulTerminal(events, ids)
 
   const parsedArgsByName = correlateRootToolCalls(events)
-  expect(parsedArgsByName.get("task")).toEqual({
-    subagent: "researcher",
-    input: SUBQUESTION,
-  })
+  // `task`'s arguments no longer reach the wire — the subagent activity is its
+  // only presentation — so an ordinary tool carries the args-decoding pin.
+  expect(parsedArgsByName.has("task")).toBe(false)
+  expect(parsedArgsByName.has("writeTodos")).toBe(false)
+  expect(parsedArgsByName.get("searchCorpus")).toEqual({ query: "agent architectures" })
   const assistantText = reconstructAssistantText(events)
   expect(assistantText).toContain("[corpus/agent-architectures.md]")
   expect(assistantText).not.toContain(CHILD_REPLY)
@@ -564,33 +565,25 @@ function assertSafeResearchJourney(
     },
   ])
 
-  const startByName = new Map(
-    events
-      .filter((event) => event.type === "TOOL_CALL_START")
-      .map((event) => [event.toolCallName, event.toolCallId]),
+  // The generic frames for the two built-in orchestration calls are gone: the
+  // activities above are the only presentation of that work.
+  const toolFrames = events.filter((event) =>
+    ["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT"].includes(
+      String(event.type),
+    ),
   )
-  const writeTodosId = startByName.get("writeTodos")
-  const taskId = startByName.get("task")
-  expect(typeof writeTodosId).toBe("string")
-  expect(typeof taskId).toBe("string")
-  const writeTodosEndIndex = events.findIndex(
-    (event) => event.type === "TOOL_CALL_END" && event.toolCallId === writeTodosId,
-  )
-  const writeTodosResultIndex = events.findIndex(
-    (event) => event.type === "TOOL_CALL_RESULT" && event.toolCallId === writeTodosId,
-  )
-  const taskEndIndex = events.findIndex(
-    (event) => event.type === "TOOL_CALL_END" && event.toolCallId === taskId,
-  )
-  const taskResultIndex = events.findIndex(
-    (event) => event.type === "TOOL_CALL_RESULT" && event.toolCallId === taskId,
-  )
+  for (const suppressedId of ["call_writeTodos_0_1", "call_task_0_2"]) {
+    expect(toolFrames.map((event) => event.toolCallId)).not.toContain(suppressedId)
+  }
+  expect(
+    events.filter((event) => event.type === "TOOL_CALL_START").map((event) => event.toolCallName),
+  ).not.toContain("writeTodos")
+  expect(
+    events.filter((event) => event.type === "TOOL_CALL_START").map((event) => event.toolCallName),
+  ).not.toContain("task")
+
   const activityIndices = activities.map((activity) => events.indexOf(activity))
   const firstFinalTextIndex = events.findIndex((event) => event.type === "TEXT_MESSAGE_CONTENT")
-  expect(activityIndices[0]).toBeGreaterThan(writeTodosEndIndex)
-  expect(activityIndices[0]).toBeLessThan(writeTodosResultIndex)
-  expect(activityIndices[1]).toBeGreaterThan(taskEndIndex)
-  expect(activityIndices[6]).toBeLessThan(taskResultIndex)
   expect(firstFinalTextIndex).toBeGreaterThanOrEqual(0)
   expect(activityIndices.every((index) => index < firstFinalTextIndex)).toBe(true)
 
