@@ -41,6 +41,9 @@ export type OrchestrationToolName = "writeTodos" | "task"
  * Package-private: it never reaches the wire. The suppression ledger is its
  * consumer — it decides whether the generic tool frames for that call are
  * redundant with the activity emitted here.
+ * Populated at exactly two boundaries: a valid `plan_update` carrying a
+ * non-empty `tool_call_id`, and the first `subagent.start` for a given
+ * `call_id`.
  */
 export interface DawnActivityCorrelation {
   readonly toolCallId: string
@@ -254,6 +257,9 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           terminal: false,
         }
         subagents.set(parsedIdentity.callId, state)
+        // Correlation fires only here, on the call that first establishes this
+        // subagent's identity — the deduped re-start above and every later
+        // lifecycle update return through projectEvent, which carries no correlation.
         return {
           event: subagentSnapshot(state),
           orchestration: { toolCallId: parsedIdentity.callId, toolName: "task" as const },
