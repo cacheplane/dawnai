@@ -50,15 +50,16 @@ export const subagentActivityContentSchema = z
  * `todos?: T | undefined` is not assignable to the public `todos?: T` even
  * though a parse never produces the key with an explicit `undefined`. Only that
  * one property is relaxed — every other field is still checked exactly against
- * the public type, which is the point of this probe.
+ * the public type, which is the point of the probe below. Package-internal: the
+ * `./react` entry does not export it.
  */
-type SubagentContentWithOptionalTodos = Omit<DawnSubagentActivityContent, "todos"> & {
+export type SubagentActivityContentOutput = Omit<DawnSubagentActivityContent, "todos"> & {
   readonly todos?: DawnSubagentActivityContent["todos"] | undefined
 }
 
 function assignSubagentOutputToPublicType(
   content: z.output<typeof subagentActivityContentSchema>,
-): SubagentContentWithOptionalTodos {
+): SubagentActivityContentOutput {
   return content
 }
 void assignSubagentOutputToPublicType
