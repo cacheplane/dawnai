@@ -30,11 +30,15 @@ const CANNED: DawnAgentStreamChunk[] = [
   { type: "token", data: "Researching" },
   {
     type: "tool_call",
-    data: { id: "root-tool-1", name: "searchCorpus", input: { query: "agents" } },
+    data: { id: "call_searchCorpus_0_0", name: "searchCorpus", input: { query: "agents" } },
   },
   {
     type: "tool_result",
-    data: { id: "root-tool-1", name: "searchCorpus", output: [{ path: "corpus/a.md" }] },
+    data: {
+      id: "call_searchCorpus_0_0",
+      name: "searchCorpus",
+      output: [{ path: "corpus/a.md" }],
+    },
   },
   { type: "plan_update", data: { todos: [{ content: "search", status: "completed" }] } },
   { type: "subagent.start", data: childIdentity },

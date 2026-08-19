@@ -294,14 +294,6 @@ describe("native subagent event projection", () => {
     }
     expect(chunks).toEqual([
       { type: "token", data: "Parent " },
-      {
-        type: "tool_call",
-        data: {
-          id: "parent-task-run",
-          name: "task",
-          input: { subagent: "researcher", input: "Investigate" },
-        },
-      },
       { type: "subagent.start", data: childIdentity },
       {
         type: "subagent.message",
@@ -332,6 +324,14 @@ describe("native subagent event projection", () => {
       {
         type: "subagent.end",
         data: { ...childIdentity, final_message: "evidence" },
+      },
+      {
+        type: "tool_call",
+        data: {
+          id: "parent-task-run",
+          name: "task",
+          input: { subagent: "researcher", input: "Investigate" },
+        },
       },
       {
         type: "tool_result",
@@ -1010,5 +1010,345 @@ describe("executeAgent with DawnAgent descriptors", () => {
 
     const invokeConfig = invoke.mock.calls[0]?.[1] as { recursionLimit?: number }
     expect(invokeConfig?.recursionLimit).toBeUndefined()
+  })
+})
+
+describe("logical-identity root tool projection", () => {
+  function streamOf(events: readonly Record<string, unknown>[]) {
+    return {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield* events
+      },
+    }
+  }
+
+  async function collect(entry: { invoke: unknown; streamEvents: unknown }) {
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry: entry as never,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+    return chunks
+  }
+
+  test("announces root calls from on_chat_model_end and keys results by the ToolMessage id", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [{ id: "call_probe_1", name: "probe", args: { q: "x" } }],
+          },
+        },
+      },
+      {
+        event: "on_tool_start",
+        run_id: "probe-run-1",
+        name: "probe",
+        data: { input: { q: "x" } },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "probe-run-1",
+        name: "probe",
+        data: { output: { tool_call_id: "call_probe_1", content: "probe-ok" } },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_probe_1", name: "probe", input: { q: "x" } } },
+      {
+        type: "tool_result",
+        data: {
+          id: "call_probe_1",
+          name: "probe",
+          output: { tool_call_id: "call_probe_1", content: "probe-ok" },
+        },
+      },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("emits held frames at on_tool_end for a resume replay with no model turn", async () => {
+    const entry = streamOf([
+      {
+        event: "on_tool_start",
+        run_id: "replay-run-1",
+        name: "runBash",
+        data: { input: { command: "fetch" } },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "replay-run-1",
+        name: "runBash",
+        data: { output: { tool_call_id: "call_runBash_0_0", content: "stdout" } },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      {
+        type: "tool_call",
+        data: { id: "call_runBash_0_0", name: "runBash", input: { command: "fetch" } },
+      },
+      {
+        type: "tool_result",
+        data: {
+          id: "call_runBash_0_0",
+          name: "runBash",
+          output: { tool_call_id: "call_runBash_0_0", content: "stdout" },
+        },
+      },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("falls back to the execution run id when no logical id exists anywhere", async () => {
+    const entry = streamOf([
+      {
+        event: "on_tool_start",
+        run_id: "legacy-run-1",
+        name: "probe",
+        data: { input: { q: "x" } },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "legacy-run-1",
+        name: "probe",
+        data: { output: "plain string result" },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "legacy-run-1", name: "probe", input: { q: "x" } } },
+      {
+        type: "tool_result",
+        data: { id: "legacy-run-1", name: "probe", output: "plain string result" },
+      },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("announced calls with no matching execution leave no stray result", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [{ id: "call_ghost_1", name: "ghost", args: {} }],
+          },
+        },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_ghost_1", name: "ghost", input: {} } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("ignores tool_calls with missing or empty ids and never announces twice", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [
+              { id: "", name: "probe", args: {} },
+              { name: "probe", args: {} },
+              { id: "call_probe_1", name: "probe", args: { q: 1 } },
+              { id: "call_probe_1", name: "probe", args: { q: 1 } },
+            ],
+          },
+        },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_probe_1", name: "probe", input: { q: 1 } } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("on_tool_error discards the held start without emitting frames", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [{ id: "call_gated_1", name: "runBash", args: { command: "x" } }],
+          },
+        },
+      },
+      {
+        event: "on_tool_start",
+        run_id: "gated-run-1",
+        name: "runBash",
+        data: { input: { command: "x" } },
+      },
+      {
+        event: "on_tool_error",
+        run_id: "gated-run-1",
+        name: "runBash",
+        data: {
+          error: {
+            name: "GraphInterrupt",
+            interrupts: [{ id: "int-1", value: { interruptId: "int-1", kind: "command" } }],
+          },
+        },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: {} } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_gated_1", name: "runBash", input: { command: "x" } } },
+      { type: "interrupt", data: { interruptId: "int-1", kind: "command" } },
+      { type: "done", data: {} },
+    ])
+  })
+
+  test("a duplicate on_tool_end for the same run id never re-announces or swallows output", async () => {
+    const entry = streamOf([
+      {
+        event: "on_tool_start",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { input: { q: "x" } },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { output: "first result" },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "dup-run-1",
+        name: "probe",
+        data: { output: "second result" },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "dup-run-1", name: "probe", input: { q: "x" } } },
+      { type: "tool_result", data: { id: "dup-run-1", name: "probe", output: "first result" } },
+      { type: "tool_result", data: { id: "dup-run-1", name: "probe", output: "second result" } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("an unrelated execution whose output forges an already-announced id is keyed under that id", async () => {
+    const entry = streamOf([
+      {
+        event: "on_chat_model_end",
+        run_id: "model-1",
+        name: "model",
+        data: {
+          output: {
+            content: "",
+            tool_calls: [{ id: "call_x_1", name: "alpha", args: {} }],
+          },
+        },
+      },
+      {
+        event: "on_tool_start",
+        run_id: "beta-run",
+        name: "beta",
+        data: { input: {} },
+      },
+      {
+        event: "on_tool_end",
+        run_id: "beta-run",
+        name: "beta",
+        data: { output: { tool_call_id: "call_x_1", content: "beta-ok" } },
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: { ok: true } } },
+    ])
+
+    await expect(collect(entry)).resolves.toEqual([
+      { type: "tool_call", data: { id: "call_x_1", name: "alpha", input: {} } },
+      {
+        type: "tool_result",
+        data: {
+          id: "call_x_1",
+          name: "beta",
+          output: { tool_call_id: "call_x_1", content: "beta-ok" },
+        },
+      },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("child tool events are untouched by the root re-key", async () => {
+    const metadata = {
+      dawn: {
+        subagent_stack: [{ callId: "call-child", name: "researcher", routeId: "/researcher" }],
+      },
+    }
+    const entry = streamOf([
+      {
+        event: "on_tool_start",
+        run_id: "child-tool-run",
+        name: "readFile",
+        data: { input: { path: "a.md" } },
+        metadata,
+      },
+      {
+        event: "on_tool_end",
+        run_id: "child-tool-run",
+        name: "readFile",
+        data: { output: { tool_call_id: "call_should_be_ignored", content: "text" } },
+        metadata,
+      },
+      { event: "on_chain_end", run_id: "root", name: "LangGraph", data: { output: {} } },
+    ])
+
+    const chunks = await collect(entry)
+    const childIdentity = {
+      call_id: "call-child",
+      subagent: "researcher",
+      route_id: "/researcher",
+      depth: 1,
+    }
+    expect(chunks).toEqual([
+      {
+        type: "subagent.tool_call",
+        data: { ...childIdentity, id: "child-tool-run", tool: "readFile", input: { path: "a.md" } },
+      },
+      {
+        type: "subagent.tool_result",
+        data: {
+          ...childIdentity,
+          id: "child-tool-run",
+          tool: "readFile",
+          output: { tool_call_id: "call_should_be_ignored", content: "text" },
+        },
+      },
+      { type: "done", data: {} },
+    ])
   })
 })

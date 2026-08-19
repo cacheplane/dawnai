@@ -6,6 +6,7 @@ import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { createChatModel } from "./chat-model-factory.js"
+import { readLogicalToolCallId } from "./logical-tool-call-id.js"
 import { resolveProvider } from "./model-provider-resolver.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
@@ -273,6 +274,13 @@ interface SubagentToolRunContexts {
   readonly contextsByToolRunId: Map<string, SubagentContext | null>
 }
 
+interface RootToolProjectionState {
+  /** Logical/fallback ids whose root tool_call chunk was already emitted this stream. */
+  readonly announcedToolCallIds: Set<string>
+  /** Root on_tool_start data awaiting resolution at on_tool_end, keyed by execution run id. */
+  readonly heldRootToolStarts: Map<string, { readonly name: string; readonly input: unknown }>
+}
+
 interface SubagentPhaseProjection {
   readonly chunk: AgentStreamChunk
   readonly context: SubagentContext
@@ -420,6 +428,7 @@ function parseSubagentPhaseEvent(event: LangChainStreamEvent): SubagentPhaseProj
 function classifyStreamEvent(
   event: LangChainStreamEvent,
   toolRuns: SubagentToolRunContexts,
+  rootTools: RootToolProjectionState,
 ): StreamEventProjection {
   const phase = parseSubagentPhaseEvent(event)
   if (phase) {
@@ -452,56 +461,133 @@ function classifyStreamEvent(
         interrupts: [],
       }
     }
+    /**
+     * Root tool calls are announced here, from the model turn, rather than
+     * from `on_tool_start`'s execution run id. LangGraph re-executes an
+     * interrupted tool node from scratch on resume — the ToolNode callback
+     * gets a FRESH `run_id` each pass — but the checkpointed `AIMessage`
+     * keeps the SAME model/provider tool-call id across that whole
+     * interrupt→resume cycle. Announcing under that stable id lets an AG-UI
+     * client dedupe the pre-interrupt and post-resume streams into one card
+     * instead of rendering a duplicate. Execution run ids stay purely
+     * internal bookkeeping (see `heldRootToolStarts` below) and never reach
+     * the wire as an identity by themselves when a logical id is available.
+     */
+    case "on_chat_model_end": {
+      if (child) break
+      const output = event.data.output as { tool_calls?: unknown } | undefined
+      const calls = Array.isArray(output?.tool_calls) ? output.tool_calls : []
+      const chunks: AgentStreamChunk[] = []
+      for (const call of calls) {
+        if (!isRecord(call)) continue
+        const id = typeof call.id === "string" && call.id !== "" ? call.id : undefined
+        const name = typeof call.name === "string" && call.name !== "" ? call.name : undefined
+        if (id === undefined || name === undefined) continue
+        if (rootTools.announcedToolCallIds.has(id)) continue
+        rootTools.announcedToolCallIds.add(id)
+        chunks.push({ type: "tool_call", data: { id, name, input: call.args } })
+      }
+      if (chunks.length === 0) break
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks,
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    }
     case "on_tool_start":
+      if (child) {
+        return {
+          capturesFinalOutput: false,
+          child,
+          chunks: [
+            {
+              type: "subagent.tool_call",
+              data: {
+                ...childIdentity(child),
+                id: event.run_id,
+                tool: event.name,
+                input: event.data.input ?? event.data.chunk ?? event.data.output,
+              },
+            },
+          ],
+          finalOutput: undefined,
+          interrupts: [],
+        }
+      }
+      rootTools.heldRootToolStarts.set(event.run_id, {
+        name: event.name,
+        input: event.data.input ?? event.data.chunk ?? event.data.output,
+      })
+      break
+    case "on_tool_end": {
+      if (child) {
+        return {
+          capturesFinalOutput: false,
+          child,
+          chunks: [
+            {
+              type: "subagent.tool_result",
+              data: {
+                ...childIdentity(child),
+                id: event.run_id,
+                tool: event.name,
+                output: event.data.output,
+              },
+            },
+          ],
+          finalOutput: undefined,
+          interrupts: [],
+        }
+      }
+      /**
+       * Three-way resolution for the root announce/result pairing:
+       *
+       *  (a) The call was already announced from `on_chat_model_end` (its id
+       *      is in `announcedToolCallIds`) — this event only ever needs to
+       *      emit the matching `tool_result`, keyed by that same id.
+       *  (b) The call was never announced from a model turn at all. This is
+       *      the resume-replay path: LangGraph re-executes an interrupted
+       *      tool node with NO new model turn, so `on_chat_model_end` never
+       *      fires for it — the only signals we get are this `on_tool_end`
+       *      (plus, usually, a held `on_tool_start`). We announce here,
+       *      preferring the logical id recovered from the output and
+       *      falling back to the held start's input for `data.input`; when
+       *      the provider/output carries no logical id either (e.g. a tool
+       *      returning a bare string), we fall back further to the
+       *      execution `run_id` itself so ID-less providers still get a
+       *      paired announce+result.
+       *  (c) An orphan result — no held `on_tool_start` AND no logical id —
+       *      means the stream began observation mid-execution (or the tool
+       *      genuinely returned nothing identifiable). There is nothing to
+       *      announce, so this stays result-only, matching the pre-rekey
+       *      behavior for that case exactly.
+       */
+      const held = rootTools.heldRootToolStarts.get(event.run_id)
+      rootTools.heldRootToolStarts.delete(event.run_id)
+      const logicalId = readLogicalToolCallId(event.data.output)
+      const id = logicalId ?? event.run_id
+      const chunks: AgentStreamChunk[] = []
+      if (
+        !rootTools.announcedToolCallIds.has(id) &&
+        (held !== undefined || logicalId !== undefined)
+      ) {
+        rootTools.announcedToolCallIds.add(id)
+        chunks.push({ type: "tool_call", data: { id, name: event.name, input: held?.input } })
+      }
+      chunks.push({
+        type: "tool_result",
+        data: { id, name: event.name, output: event.data.output },
+      })
       return {
         capturesFinalOutput: false,
         child,
-        chunks: [
-          child
-            ? {
-                type: "subagent.tool_call",
-                data: {
-                  ...childIdentity(child),
-                  id: event.run_id,
-                  tool: event.name,
-                  input: event.data.input ?? event.data.chunk ?? event.data.output,
-                },
-              }
-            : {
-                type: "tool_call",
-                data: {
-                  id: event.run_id,
-                  name: event.name,
-                  input: event.data.input ?? event.data.chunk ?? event.data.output,
-                },
-              },
-        ],
+        chunks,
         finalOutput: undefined,
         interrupts: [],
       }
-    case "on_tool_end":
-      return {
-        capturesFinalOutput: false,
-        child,
-        chunks: [
-          child
-            ? {
-                type: "subagent.tool_result",
-                data: {
-                  ...childIdentity(child),
-                  id: event.run_id,
-                  tool: event.name,
-                  output: event.data.output,
-                },
-              }
-            : {
-                type: "tool_result",
-                data: { id: event.run_id, name: event.name, output: event.data.output },
-              },
-        ],
-        finalOutput: undefined,
-        interrupts: [],
-      }
+    }
     case "on_custom_event": {
       if (event.name !== "dawn.capability") break
       const payload = parseCapabilityEvent(event.data)
@@ -527,6 +613,7 @@ function classifyStreamEvent(
         interrupts: extractInterrupts(event.data.chunk) ?? [],
       }
     case "on_tool_error":
+      if (!child) rootTools.heldRootToolStarts.delete(event.run_id)
       return {
         capturesFinalOutput: false,
         child,
@@ -942,13 +1029,17 @@ async function* streamFromRunnable(
       capturedInterrupts = []
       emittedInterruptIds = new Set()
       const subagentToolRuns: SubagentToolRunContexts = { contextsByToolRunId: new Map() }
+      const rootTools: RootToolProjectionState = {
+        announcedToolCallIds: new Set(),
+        heldRootToolStarts: new Map(),
+      }
 
       try {
         for await (const event of streamEventsFn(invocationInput, {
           ...invocationConfig,
           version: "v2",
         })) {
-          const projection = classifyStreamEvent(event, subagentToolRuns)
+          const projection = classifyStreamEvent(event, subagentToolRuns, rootTools)
           if (projection.capturesFinalOutput) {
             finalOutput = projection.finalOutput
           }

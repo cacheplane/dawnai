@@ -123,6 +123,9 @@ function correlateRootToolCalls(events: readonly AgUiEvent[]): Map<string, unkno
     expect(typeof event.toolCallId).toBe("string")
     expect(knownIds.has(event.toolCallId)).toBe(true)
   }
+  for (const { event } of starts) {
+    expect(String(event.toolCallId)).toMatch(/^call_/)
+  }
 
   const parsedArgsByName = new Map<string, unknown>()
   for (const { event: start } of starts) {
@@ -609,6 +612,12 @@ function assertSafeResearchJourney(
   ]) {
     expect(serializedActivityContent).not.toContain(privateValue)
   }
+  // Logical tool-call ids are the public tool identity now (amended AG-UI
+  // orchestration projection design): present as toolCallId, but never
+  // inside activity content.
+  for (const activity of events.filter((event) => event.type === "ACTIVITY_SNAPSHOT")) {
+    expect(JSON.stringify(activity.content)).not.toMatch(/call_[A-Za-z]+_\d+_\d+/)
+  }
   const kinds = events.map((event) => event.type)
   expect(kinds).not.toContain("ACTIVITY_DELTA")
   expect(kinds).not.toContain("CUSTOM")
@@ -619,7 +628,7 @@ function assertSafeResearchJourney(
 function assertGatedResearchInterrupt(
   events: readonly AgUiEvent[],
   ids: { readonly runId: string; readonly threadId: string },
-): { readonly interruptId: string } {
+): { readonly gatedToolCallId: string; readonly interruptId: string } {
   expect(events[0]).toMatchObject({
     type: "RUN_STARTED",
     runId: ids.runId,
@@ -670,6 +679,7 @@ function assertGatedResearchInterrupt(
   if (typeof toolCallId !== "string") {
     throw new Error("Gated runBash start omitted its tool-call id")
   }
+  expect(toolCallId).toBe("call_runBash_0_0")
   const correlated = events.filter((event) => event.toolCallId === toolCallId)
   const argEvents = correlated.filter((event) => event.type === "TOOL_CALL_ARGS")
   expect(argEvents.length).toBeGreaterThan(0)
@@ -686,10 +696,9 @@ function assertGatedResearchInterrupt(
       return event.delta
     })
     .join("")
-  const outerArgs = JSON.parse(encodedArgs) as { readonly input?: unknown }
-  expect(Object.keys(outerArgs)).toEqual(["input"])
-  expect(typeof outerArgs.input).toBe("string")
-  expect(JSON.parse(String(outerArgs.input))).toEqual({ command: FETCH_COMMAND })
+  // The re-keyed projection announces root tool calls from the model turn,
+  // so ARGS carry the model's parsed args directly (no ToolNode {input} wrapper).
+  expect(JSON.parse(encodedArgs)).toEqual({ command: FETCH_COMMAND })
   expect(events.filter((event) => event.type === "TOOL_CALL_RESULT")).toEqual([])
   expect(
     events.filter(
@@ -699,12 +708,13 @@ function assertGatedResearchInterrupt(
   expect(events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT")).toEqual([])
   expectNoActivitySnapshots(events)
 
-  return { interruptId }
+  return { gatedToolCallId: toolCallId, interruptId }
 }
 
 function assertResumedGatedJourney(
   events: readonly AgUiEvent[],
   ids: { readonly runId: string; readonly threadId: string },
+  gatedToolCallId: string,
 ): void {
   assertSuccessfulTerminal(events, ids)
 
@@ -714,6 +724,7 @@ function assertResumedGatedJourney(
   if (typeof toolCallId !== "string") {
     throw new Error("Resumed runBash start omitted its tool-call id")
   }
+  expect(toolCallId).toBe(gatedToolCallId)
   const correlated = events.filter((event) => event.toolCallId === toolCallId)
   const argEvents = correlated.filter((event) => event.type === "TOOL_CALL_ARGS")
   expect(argEvents.length).toBeGreaterThan(0)
@@ -1053,7 +1064,7 @@ test("activates the default research scaffold through the complete npm lifecycle
         })
         expect(gatedJourney.status).toBe(200)
         expect(activeAimock.getRequests()).toHaveLength(gatedJournalStart + 1)
-        const { interruptId } = assertGatedResearchInterrupt(gatedJourney.events, {
+        const { gatedToolCallId, interruptId } = assertGatedResearchInterrupt(gatedJourney.events, {
           runId: gatedRunId,
           threadId: gatedThreadId,
         })
@@ -1073,10 +1084,14 @@ test("activates the default research scaffold through the complete npm lifecycle
         expect(resumedJourney.status).toBe(200)
         expect(activeAimock.getRequests()).toHaveLength(resumeJournalStart + 1)
         expect(resumeRunId).not.toBe(gatedRunId)
-        assertResumedGatedJourney(resumedJourney.events, {
-          runId: resumeRunId,
-          threadId: gatedThreadId,
-        })
+        assertResumedGatedJourney(
+          resumedJourney.events,
+          {
+            runId: resumeRunId,
+            threadId: gatedThreadId,
+          },
+          gatedToolCallId,
+        )
         return { interruptId }
       },
     )
@@ -1159,13 +1174,6 @@ test("activates the default research scaffold through the complete npm lifecycle
       builtThreadId,
       builtRunId,
       builtMessageId,
-      "call_recall_0_0",
-      "call_writeTodos_0_1",
-      "call_task_0_2",
-      "call_searchCorpus_0_3",
-      "call_readDoc_0_4",
-      "call_writeFile_0_5",
-      "call_runBash_0_0",
       "test-not-used",
       "ambient-secret",
     ]) {
