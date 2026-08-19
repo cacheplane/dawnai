@@ -46,12 +46,21 @@ export const subagentActivityContentSchema = z
   })
 
 /**
- * This package compiles with `exactOptionalPropertyTypes`, under which zod's
- * `todos?: T | undefined` is not assignable to the public `todos?: T` even
- * though a parse never produces the key with an explicit `undefined`. Only that
- * one property is relaxed — every other field is still checked exactly against
- * the public type, which is the point of the probe below. Package-internal: the
- * `./react` entry does not export it.
+ * What a successful parse actually yields: `DawnSubagentActivityContent`, but
+ * with `todos` widened to admit an explicit `undefined`.
+ *
+ * This package compiles with `exactOptionalPropertyTypes`, which distinguishes
+ * an absent `todos` from a present `todos: undefined`; zod does not — a
+ * `strictObject` with an `.optional()` field passes an input's own
+ * `todos: undefined` key straight through, so the parsed value can carry it and
+ * is genuinely wider than the published exact-optional type.
+ *
+ * Only that one property is relaxed. Every other field name, its value type,
+ * and the presence or absence of all other properties are still checked against
+ * `DawnSubagentActivityContent` by the probe below, which is what keeps this
+ * zod mirror honest. Exported from the `./react` entry, since it is the
+ * parameter type consumers see on `dawnSubagentActivityRenderer.render` and on
+ * `SubagentActivityCard`.
  */
 export type SubagentActivityContentOutput = Omit<DawnSubagentActivityContent, "todos"> & {
   readonly todos?: DawnSubagentActivityContent["todos"] | undefined

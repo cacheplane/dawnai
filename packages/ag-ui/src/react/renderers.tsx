@@ -3,7 +3,6 @@ import {
   DAWN_PLAN_ACTIVITY_TYPE,
   DAWN_SUBAGENT_ACTIVITY_TYPE,
   type DawnPlanActivityContent,
-  type DawnSubagentActivityContent,
 } from "../activities.js"
 import { PlanActivityCard } from "./PlanActivityCard.js"
 import { SubagentActivityCard } from "./SubagentActivityCard.js"
@@ -20,23 +19,16 @@ export const dawnPlanActivityRenderer = {
 } satisfies ReactActivityMessageRenderer<DawnPlanActivityContent>
 
 /**
- * zod cannot express an exact optional property: it types `todos` as
- * `T | undefined`, while the public content type declares `todos?: T` and this
- * package compiles with `exactOptionalPropertyTypes`. A parse never produces
- * the key carrying an explicit `undefined`, so this drops it rather than
- * asserting the difference away.
+ * Typed against `SubagentActivityContentOutput`, not the published
+ * `DawnSubagentActivityContent`: zod passes an input's own `todos: undefined`
+ * key straight through, so the parsed value is genuinely wider than the
+ * exact-optional public type this package compiles against. `SubagentActivityCard`
+ * branches on `content.todos !== undefined` and renders both shapes identically.
  */
-function toPublicSubagentContent(
-  content: SubagentActivityContentOutput,
-): DawnSubagentActivityContent {
-  const { todos, ...rest } = content
-  return todos === undefined ? rest : { ...rest, todos }
-}
-
 export const dawnSubagentActivityRenderer = {
   activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
   content: subagentActivityContentSchema,
-  render: ({ content }) => <SubagentActivityCard content={toPublicSubagentContent(content)} />,
+  render: ({ content }) => <SubagentActivityCard content={content} />,
 } satisfies ReactActivityMessageRenderer<SubagentActivityContentOutput>
 
 /**

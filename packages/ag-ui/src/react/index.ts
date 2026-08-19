@@ -19,7 +19,10 @@
  *
  * The activity type constants and content types (`DAWN_PLAN_ACTIVITY_TYPE`,
  * `DawnPlanActivityContent`, …) live on the root entry and are not re-exported
- * here.
+ * here. The one type this entry does own is `SubagentActivityContentOutput`:
+ * the parsed subagent shape, which admits an explicit `undefined` `todos` that
+ * the published exact-optional type does not. It is the parameter type of both
+ * `SubagentActivityCard` and `dawnSubagentActivityRenderer.render`.
  */
 export { ActivityChecklist } from "./ActivityChecklist.js"
 export { PlanActivityCard } from "./PlanActivityCard.js"
@@ -29,4 +32,8 @@ export {
   dawnSubagentActivityRenderer,
 } from "./renderers.js"
 export { SubagentActivityCard } from "./SubagentActivityCard.js"
-export { planActivityContentSchema, subagentActivityContentSchema } from "./schemas.js"
+export {
+  planActivityContentSchema,
+  type SubagentActivityContentOutput,
+  subagentActivityContentSchema,
+} from "./schemas.js"
