@@ -128,18 +128,21 @@ Dawn's two built-in orchestration actions are presented once. When a
 `writeTodos` call produced the `dawn.plan` activity, or a `task` call produced
 the `dawn.subagent` activity because delegation actually started, the adapter
 emits no `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, or
-`TOOL_CALL_RESULT` for that call. The activity carries the same tool-call id as
-the model's call (`plan_update.tool_call_id`, and the subagent's `call_id`), and
-that correlation is what decides the suppression.
+`TOOL_CALL_RESULT` for that call. The chunk behind the activity carries the same
+tool-call id as the model's call (`plan_update.tool_call_id`, and the subagent's
+`call_id`); that correlation is internal and decides the suppression. It is not
+republished in activity content, which still excludes raw runtime ids. Only
+`dawn.subagent` exposes the id at all, inside its stable `messageId`.
 
 Every other tool is unchanged. `recall`, `searchCorpus`, `readDoc`, `writeFile`,
 `runBash`, and any application tool still produce ordinary tool events.
 
 The rule fails open: whenever suppression cannot be proven, the generic frames
 are preserved and a client sees the ordinary tool card exactly as before. That
-covers a call with no tool-call id, a malformed activity payload, a resolver
-failure that means `subagent.start` never arrives, a result that arrives with no
-correlation, buffer limits, and a stream that ends early.
+includes a call with no tool-call id, a colliding tool-call id, a malformed
+activity payload, a resolver failure that means `subagent.start` never arrives,
+a result that arrives with no correlation, buffer limits, and a stream that ends
+early.
 
 At a permission interrupt belonging to the held call, the held frames are
 dropped rather than flushed, because the resumed run re-presents the same call

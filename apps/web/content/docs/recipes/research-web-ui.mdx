@@ -243,8 +243,9 @@ child answers, route ids, and raw runtime ids.
 These activities are the whole presentation of the two built-in orchestration
 tools. When a `writeTodos` or `task` call produced its activity, Dawn's AG-UI
 adapter emits no tool call/result events for that call, so the wildcard tool
-card receives `recall`, `searchCorpus`, `readDoc`, and `writeFile` but never
-`writeTodos` or `task`. The suppression happens in the adapter, not in
+card receives the ordinary tools (`recall`, `searchCorpus`, `readDoc`,
+`writeFile`, and `runBash` once approved) but never `writeTodos` or `task`. The
+suppression happens in the adapter, not in
 CopilotKit or in these renderers.
 
 The wildcard card is still the fail-open fallback. If an activity cannot be

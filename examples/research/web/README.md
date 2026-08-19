@@ -66,8 +66,9 @@ outputs, final child answers, route ids, and raw runtime ids.
 
 These activities are the whole presentation of `writeTodos` and `task`. Dawn's
 AG-UI adapter emits no tool call/result events for a call whose activity was
-emitted, so the wildcard tool card here receives `recall`, `searchCorpus`,
-`readDoc`, and `writeFile` but never `writeTodos` or `task`. The suppression is
+emitted, so the wildcard tool card here receives the ordinary tools (`recall`,
+`searchCorpus`, `readDoc`, `writeFile`, and `runBash` once approved) but never
+`writeTodos` or `task`. The suppression is
 the adapter's, not CopilotKit's or these renderers'. It fails open: if an
 activity cannot be produced, the ordinary tool events survive and the generic
 card renders them, which is why its `task` argument summary is kept.
@@ -75,8 +76,8 @@ card renders them, which is why its `task` argument summary is kept.
 Choose the safe **Research a topic** suggestion to see plan and researcher
 progress before the cited answer. Activity cards are informational: generic
 root-tool rendering remains registered for the other tools, while standard
-interrupt UI exclusively owns permission actions. Suggestions, memory review, and the server-held
-`OPENAI_API_KEY` flow are unchanged.
+interrupt UI exclusively owns permission actions. Suggestions, memory review,
+and the server-held `OPENAI_API_KEY` flow are unchanged.
 
 ## Running
 
