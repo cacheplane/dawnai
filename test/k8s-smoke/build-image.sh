@@ -1,7 +1,7 @@
 #!/bin/sh
 # Shared image build for the full-arc sandbox smoke.
 #
-#   sh build-image.sh <k8s|docker> <verdaccio-registry-url>
+#   sh build-image.sh <k8s|docker> <verdaccio-registry-url> [output-image-tag]
 #
 # Builds the smoke Dawn app image the *user-facing* way: `dawn build` (node
 # target) emits `.dawn/build/server.mjs` + a hardened `Dockerfile`, and we
@@ -17,8 +17,8 @@
 # `host.docker.internal` + `--add-host=host.docker.internal:host-gateway`.
 set -eu
 
-VARIANT="${1:?usage: build-image.sh <k8s|docker> <verdaccio-registry-url>}"
-REGISTRY_URL="${2:?usage: build-image.sh <k8s|docker> <verdaccio-registry-url>}"
+VARIANT="${1:?usage: build-image.sh <k8s|docker> <verdaccio-registry-url> [output-image-tag]}"
+REGISTRY_URL="${2:?usage: build-image.sh <k8s|docker> <verdaccio-registry-url> [output-image-tag]}"
 
 case "$VARIANT" in
   k8s|docker) ;;
@@ -29,7 +29,17 @@ esac
 SMOKE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH='' cd -- "$SMOKE_DIR/../.." && pwd)
 APP_DIR="$SMOKE_DIR/app"
-TAG="dawn-smoke-app:$VARIANT"
+if [ "$#" -ge 3 ]; then
+  TAG=$3
+else
+  TAG="dawn-smoke-app:$VARIANT"
+fi
+case "$TAG" in
+  ""|*[[:space:]]*)
+    echo "build-image.sh: output image tag must be non-empty and contain no whitespace" >&2
+    exit 2
+    ;;
+esac
 POLICY_FILE="$REPO_ROOT/.github/kubernetes-compatibility.json"
 
 PACKAGED_APP_BASE=$(node -e '
@@ -179,10 +189,10 @@ if [ "$VARIANT" = "docker" ]; then
   tar -xzf "$CLI_TGZ" -C "$CLI_CTX" docker/docker \
     || { echo "FATAL: failed to extract docker/docker from the static tarball" >&2; exit 1; }
   [ -x "$CLI_CTX/docker/docker" ] || { echo "FATAL: extracted docker CLI is not present/executable" >&2; exit 1; }
-  cat > "$CLI_CTX/Dockerfile" <<EOF
-FROM $TAG
-COPY docker/docker /usr/local/bin/docker
-EOF
+  {
+    printf 'FROM %s\n' "$TAG"
+    printf 'COPY docker/docker /usr/local/bin/docker\n'
+  } > "$CLI_CTX/Dockerfile"
   docker build -f "$CLI_CTX/Dockerfile" -t "$TAG" "$CLI_CTX"
 fi
 
