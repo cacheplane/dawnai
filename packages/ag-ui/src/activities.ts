@@ -38,9 +38,11 @@ export type OrchestrationToolName = "writeTodos" | "task"
 /**
  * Correlation between a recognized activity and the root tool call that
  * produced it, keyed by the model/provider tool-call id (logical identity).
- * Package-private: it never reaches the wire. The suppression ledger is its
- * consumer — it decides whether the generic tool frames for that call are
- * redundant with the activity emitted here.
+ * Package-private: it never reaches the wire. The consumer is the
+ * orchestration suppression ledger described in the AG-UI
+ * orchestration-projection design/plan under docs/superpowers, landing in a
+ * follow-up slice — it will decide whether the generic tool frames for that
+ * call are redundant with the activity emitted here.
  * Populated at exactly two boundaries: a valid `plan_update` carrying a
  * non-empty `tool_call_id`, and the first `subagent.start` for a given
  * `call_id`.
