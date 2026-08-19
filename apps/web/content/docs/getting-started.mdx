@@ -193,6 +193,16 @@ curl -s -X POST http://127.0.0.1:3000/threads/$THREAD_ID/runs/wait \
 
 The `#agent` suffix is required — it selects the agent entry on the route. The report lands in `workspace/reports/` inside the project. Thread state checkpoints to `.dawn/checkpoints.sqlite`; threads persist across dev-server restarts.
 
+## 5. See it in a UI
+
+`curl` is not the only surface. The scaffold already installs `@dawn-ai/inspector`, so in another terminal you can open the [Inspector](/docs/inspector) — a browser UI over the app's live memory store, where the records the agent writes with `remember` show up for review:
+
+```bash
+npx dawn inspect
+```
+
+For a chat UI in front of the agent, follow the [Research assistant web UI](/docs/recipes/research-web-ui) recipe. Dawn ships the plan and subagent activity renderers as a package, so a React client passes `dawnActivityRenderers` from [`@dawn-ai/ag-ui/react`](/docs/ag-ui) to CopilotKit's `renderActivityMessages` rather than hand-building cards. The scaffold itself stays server-first and has no client dependencies.
+
 When you are ready to ship, compare [Deployment Options](/docs/deployment) and follow [Node and Docker](/docs/deployment/node) for the default self-hosted path.
 
 ## Where to go next

@@ -43,6 +43,9 @@ ships them, so a React client passes `dawnActivityRenderers` to CopilotKit's
 and also provides cited reports, generic tool cards, suggestion prompts,
 standard permission handling, and memory-candidate review. This generated
 starter remains server-first and contains no web UI or client dependencies.
+Separately, `npx dawn inspect` opens the
+[Dawn Inspector](https://dawnai.org/docs/inspector) — a browser UI over this
+app's live memory store, already installed here as a devDependency.
 
 ## Check it offline
 

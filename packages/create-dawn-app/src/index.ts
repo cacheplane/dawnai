@@ -64,6 +64,10 @@ function printNextSteps(options: CliOptions): void {
     "  # add OPENAI_API_KEY",
     "  npm run verify",
     "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+    "",
+    "See your agent:",
+    "  npx dawn inspect  # memory Inspector (browser UI), in a second terminal",
+    "  # chat UI: https://dawnai.org/docs/recipes/research-web-ui",
   ]
   const basicSteps = [
     changeDirectoryStep,
@@ -82,7 +86,9 @@ function printNextSteps(options: CliOptions): void {
     isWindows ? "Next steps (PowerShell):" : "Next steps:",
     ...(options.template === "research" ? researchSteps : basicSteps),
     "",
-    "See README.md for the full tour, or https://github.com/cacheplane/dawnai",
+    options.template === "research"
+      ? "See README.md for the full tour, or https://github.com/cacheplane/dawnai"
+      : "See AGENTS.md for the app's conventions, or https://dawnai.org/docs/getting-started",
     "",
   ]
   process.stdout.write(`${lines.join("\n")}\n`)

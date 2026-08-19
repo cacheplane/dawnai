@@ -172,8 +172,13 @@ describe("create-dawn-ai-app", () => {
         "  # add OPENAI_API_KEY",
         "  npm run verify",
         "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+        "",
+        "See your agent:",
+        "  npx dawn inspect  # memory Inspector (browser UI), in a second terminal",
+        "  # chat UI: https://dawnai.org/docs/recipes/research-web-ui",
       ].join("\n"),
     )
+    expect(scaffoldResult.stdout).toContain("See README.md for the full tour")
     expect(scaffoldResult.stdout).not.toContain("npm run check")
     expect(scaffoldResult.stdout).not.toContain("npm test")
     expect(scaffoldResult.stdout).not.toContain("export OPENAI_API_KEY")
@@ -198,6 +203,10 @@ describe("create-dawn-ai-app", () => {
         "  # add OPENAI_API_KEY",
         "  npm run verify",
         "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+        "",
+        "See your agent:",
+        "  npx dawn inspect  # memory Inspector (browser UI), in a second terminal",
+        "  # chat UI: https://dawnai.org/docs/recipes/research-web-ui",
       ].join("\n"),
     )
     expect(stdout).not.toContain("npm run check")
@@ -224,6 +233,10 @@ describe("create-dawn-ai-app", () => {
         "  # add OPENAI_API_KEY",
         "  npm run verify",
         "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+        "",
+        "See your agent:",
+        "  npx dawn inspect  # memory Inspector (browser UI), in a second terminal",
+        "  # chat UI: https://dawnai.org/docs/recipes/research-web-ui",
       ].join("\n"),
     )
     expect(stdout).not.toContain("  cp .env.example .env")
@@ -314,6 +327,11 @@ describe("create-dawn-ai-app", () => {
         "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
       ].join("\n"),
     )
+    expect(stdout).toContain(
+      "See AGENTS.md for the app's conventions, or https://dawnai.org/docs/getting-started",
+    )
+    expect(stdout).not.toContain("See README.md")
+    expect(stdout).not.toContain("npx dawn inspect")
     expect(stdout).not.toContain("generate route + tool types")
     expect(stdout).not.toContain(".env.example")
     expect(stdout).not.toContain("npm run verify")
@@ -351,6 +369,11 @@ describe("create-dawn-ai-app", () => {
         "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
       ].join("\n"),
     )
+    expect(stdout).toContain(
+      "See AGENTS.md for the app's conventions, or https://dawnai.org/docs/getting-started",
+    )
+    expect(stdout).not.toContain("See README.md")
+    expect(stdout).not.toContain("npx dawn inspect")
     expect(stdout).not.toContain("export OPENAI_API_KEY")
     expect(stdout).not.toContain(".env.example")
     expect(stdout).not.toContain("Copy-Item")
