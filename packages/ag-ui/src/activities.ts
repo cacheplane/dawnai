@@ -32,8 +32,29 @@ export type DawnActivityChunkType =
   | "subagent.message"
   | "subagent.end"
 
+/** The two built-in orchestration tools that have canonical activities. */
+export type OrchestrationToolName = "writeTodos" | "task"
+
+/**
+ * Correlation between a recognized activity and the root tool call that
+ * produced it, keyed by the model/provider tool-call id (logical identity).
+ * Package-private: it never reaches the wire. The suppression ledger is its
+ * consumer — it decides whether the generic tool frames for that call are
+ * redundant with the activity emitted here.
+ */
+export interface DawnActivityCorrelation {
+  readonly toolCallId: string
+  readonly toolName: OrchestrationToolName
+}
+
+/** An activity projection plus optional orchestration correlation. */
+export interface ProjectedDawnActivity {
+  readonly event: ActivitySnapshotEvent | null
+  readonly orchestration?: DawnActivityCorrelation
+}
+
 export interface DawnActivityProjector {
-  project(type: DawnActivityChunkType, data: unknown): ActivitySnapshotEvent | null
+  project(type: DawnActivityChunkType, data: unknown): ProjectedDawnActivity
 }
 
 interface SubagentIdentity {
@@ -184,6 +205,10 @@ function subagentSnapshot(state: InternalSubagentState): ActivitySnapshotEvent {
   }
 }
 
+function projectEvent(event: ActivitySnapshotEvent | null): ProjectedDawnActivity {
+  return { event }
+}
+
 export function createDawnActivityProjector(runId: string): DawnActivityProjector {
   const subagents = new Map<string, InternalSubagentState>()
 
@@ -191,25 +216,34 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
     project(type, data) {
       if (type === "plan_update") {
         const parsedTodos = parseTodos(data)
-        if (parsedTodos === null) return null
-        return {
+        if (parsedTodos === null) return projectEvent(null)
+        const event: ActivitySnapshotEvent = {
           type: EventType.ACTIVITY_SNAPSHOT,
           messageId: `dawn:plan:${runId}`,
           activityType: DAWN_PLAN_ACTIVITY_TYPE,
           replace: true,
           content: { todos: parsedTodos },
         }
+        const toolCallId = readRawNonemptyString(data, "tool_call_id")
+        return {
+          event,
+          ...(toolCallId !== null
+            ? { orchestration: { toolCallId, toolName: "writeTodos" as const } }
+            : {}),
+        }
       }
 
       const parsedIdentity = parseSubagentIdentity(data)
-      if (parsedIdentity === null) return null
+      if (parsedIdentity === null) return projectEvent(null)
       const current = subagents.get(parsedIdentity.callId)
 
       if (type === "subagent.start") {
         if (current !== undefined) {
-          return !current.terminal && identitiesMatch(current.identity, parsedIdentity)
-            ? subagentSnapshot(current)
-            : null
+          return projectEvent(
+            !current.terminal && identitiesMatch(current.identity, parsedIdentity)
+              ? subagentSnapshot(current)
+              : null,
+          )
         }
         const state: InternalSubagentState = {
           identity: parsedIdentity,
@@ -220,7 +254,10 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           terminal: false,
         }
         subagents.set(parsedIdentity.callId, state)
-        return subagentSnapshot(state)
+        return {
+          event: subagentSnapshot(state),
+          orchestration: { toolCallId: parsedIdentity.callId, toolName: "task" as const },
+        }
       }
 
       if (type === "subagent.plan_update") {
@@ -229,12 +266,12 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           current.terminal ||
           !identitiesMatch(current.identity, parsedIdentity)
         ) {
-          return null
+          return projectEvent(null)
         }
         const parsedTodos = parseTodos(data)
-        if (parsedTodos === null) return null
+        if (parsedTodos === null) return projectEvent(null)
         current.todos = parsedTodos
-        return subagentSnapshot(current)
+        return projectEvent(subagentSnapshot(current))
       }
 
       if (type === "subagent.tool_call") {
@@ -243,11 +280,11 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           current.terminal ||
           !identitiesMatch(current.identity, parsedIdentity)
         ) {
-          return null
+          return projectEvent(null)
         }
         const id = readRawNonemptyString(data, "id")
         const name = readTrimmedNonemptyString(data, "tool")
-        if (id === null || name === null) return null
+        if (id === null || name === null) return projectEvent(null)
 
         const retainedIndex = current.tools.findIndex((tool) => tool.id === id)
         if (retainedIndex !== -1) current.tools.splice(retainedIndex, 1)
@@ -257,7 +294,7 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
         }
         current.tools.push({ id, name, status: "running" })
         if (current.tools.length > 5) current.tools.shift()
-        return subagentSnapshot(current)
+        return projectEvent(subagentSnapshot(current))
       }
 
       if (type === "subagent.tool_result") {
@@ -266,14 +303,14 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           current.terminal ||
           !identitiesMatch(current.identity, parsedIdentity)
         ) {
-          return null
+          return projectEvent(null)
         }
         const id = readRawNonemptyString(data, "id")
-        if (id === null) return null
+        if (id === null) return projectEvent(null)
         const tool = current.tools.find((candidate) => candidate.id === id)
-        if (tool === undefined) return null
+        if (tool === undefined) return projectEvent(null)
         tool.status = "completed"
-        return subagentSnapshot(current)
+        return projectEvent(subagentSnapshot(current))
       }
 
       if (type === "subagent.end") {
@@ -282,10 +319,10 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           current.terminal ||
           !identitiesMatch(current.identity, parsedIdentity)
         ) {
-          return null
+          return projectEvent(null)
         }
         const parsedError = parseEndError(data)
-        if (!parsedError.valid) return null
+        if (!parsedError.valid) return projectEvent(null)
         for (const tool of current.tools) {
           if (tool.status === "running") tool.status = "incomplete"
         }
@@ -296,10 +333,10 @@ export function createDawnActivityProjector(runId: string): DawnActivityProjecto
           current.status = "completed"
         }
         current.terminal = true
-        return subagentSnapshot(current)
+        return projectEvent(subagentSnapshot(current))
       }
 
-      return null
+      return projectEvent(null)
     },
   }
 }

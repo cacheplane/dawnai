@@ -103,8 +103,8 @@ export async function* toAguiEvents(
       }
 
       if (isDawnActivityChunkType(chunk.type)) {
-        const activity = activityProjector.project(chunk.type, chunk.data)
-        if (activity !== null) yield activity
+        const projection = activityProjector.project(chunk.type, chunk.data)
+        if (projection.event !== null) yield projection.event
         continue
       }
 

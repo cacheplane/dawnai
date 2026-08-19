@@ -23,7 +23,7 @@ function createDawnActivityProjector(runId: string) {
   const projector = createUncheckedDawnActivityProjector(runId)
   return {
     project(...args: Parameters<typeof projector.project>) {
-      const event = projector.project(...args)
+      const { event } = projector.project(...args)
       if (event !== null) expect(ActivitySnapshotEventSchema.parse(event)).toEqual(event)
       return event
     },
@@ -648,5 +648,111 @@ describe("createDawnActivityProjector", () => {
       },
     })
     expect(() => projector.project("subagent.end", hostileEnd)).not.toThrow()
+  })
+})
+
+describe("orchestration correlation", () => {
+  const IDENTITY = {
+    call_id: "call_task_0_2",
+    subagent: "researcher",
+    route_id: "/researcher",
+    depth: 1,
+  } as const
+
+  test("a valid plan update correlates to its writeTodos call", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const projection = projector.project("plan_update", {
+      todos: [{ content: "Search", status: "pending" }],
+      tool_call_id: "call_writeTodos_0_1",
+    })
+
+    expect(projection.event).not.toBeNull()
+    expect(projection.orchestration).toEqual({
+      toolCallId: "call_writeTodos_0_1",
+      toolName: "writeTodos",
+    })
+    expect(JSON.stringify(projection.event?.content)).not.toContain("call_writeTodos_0_1")
+  })
+
+  test("a plan update without a correlation id yields no correlation", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const projection = projector.project("plan_update", {
+      todos: [{ content: "Search", status: "pending" }],
+    })
+
+    expect(projection.event).not.toBeNull()
+    expect(projection.orchestration).toBeUndefined()
+  })
+
+  test("an empty or non-string correlation id yields no correlation", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const todos = [{ content: "Search", status: "pending" }]
+
+    expect(
+      projector.project("plan_update", { todos, tool_call_id: "" }).orchestration,
+    ).toBeUndefined()
+    expect(
+      projector.project("plan_update", { todos, tool_call_id: 42 }).orchestration,
+    ).toBeUndefined()
+  })
+
+  test("a malformed plan update yields neither event nor correlation", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const projection = projector.project("plan_update", {
+      todos: [{ content: "bad", status: "unknown" }],
+      tool_call_id: "call_writeTodos_0_1",
+    })
+
+    expect(projection.event).toBeNull()
+    expect(projection.orchestration).toBeUndefined()
+  })
+
+  test("the first subagent start correlates to its task call by call_id", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const projection = projector.project("subagent.start", IDENTITY)
+
+    expect(projection.event).not.toBeNull()
+    expect(projection.orchestration).toEqual({
+      toolCallId: "call_task_0_2",
+      toolName: "task",
+    })
+  })
+
+  test("a repeated subagent start re-emits the snapshot without re-correlating", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    projector.project("subagent.start", IDENTITY)
+    const repeat = projector.project("subagent.start", IDENTITY)
+
+    expect(repeat.event).not.toBeNull()
+    expect(repeat.orchestration).toBeUndefined()
+  })
+
+  test("subagent lifecycle updates after start carry no correlation", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    projector.project("subagent.start", IDENTITY)
+
+    const planUpdate = projector.project("subagent.plan_update", {
+      ...IDENTITY,
+      todos: [{ content: "child", status: "pending" }],
+    })
+    const toolCall = projector.project("subagent.tool_call", {
+      ...IDENTITY,
+      id: "child-tool-1",
+      tool: "readDoc",
+    })
+    const end = projector.project("subagent.end", IDENTITY)
+
+    expect(planUpdate.orchestration).toBeUndefined()
+    expect(toolCall.orchestration).toBeUndefined()
+    expect(end.orchestration).toBeUndefined()
+    expect(end.event).not.toBeNull()
+  })
+
+  test("a malformed subagent start yields neither event nor correlation", () => {
+    const projector = createUncheckedDawnActivityProjector("run-1")
+    const projection = projector.project("subagent.start", { ...IDENTITY, depth: 0 })
+
+    expect(projection.event).toBeNull()
+    expect(projection.orchestration).toBeUndefined()
   })
 })
