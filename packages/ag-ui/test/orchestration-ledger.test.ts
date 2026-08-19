@@ -34,8 +34,6 @@ function text(delta: string): AguiOutboundEvent {
   return { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "msg-1", delta }
 }
 
-const kinds = (events: readonly AguiOutboundEvent[]) => events.map((event) => event.type)
-
 /** Test-side model of the ledger's shallow char accounting. */
 function measure(event: AguiOutboundEvent): number {
   let total = 0
@@ -97,13 +95,6 @@ describe("createOrchestrationLedger", () => {
     // Source order: the deferred events precede the activity that released them,
     // and the suppressed candidate's frames are gone.
     expect(released).toEqual([deferredText, ...searchFrames, planActivity])
-    expect(kinds(released)).toEqual([
-      EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
-      EventType.TOOL_CALL_END,
-      EventType.ACTIVITY_SNAPSHOT,
-    ])
   })
 
   test("a correlation for an unknown id emits the activity and holds the candidate", () => {
@@ -295,5 +286,56 @@ describe("createOrchestrationLedger", () => {
     expect(ledger.onToolResult("call_w1", "writeTodos", result("call_w1"))).toEqual([])
     const after = frames("call_after", "writeTodos")
     expect(ledger.onToolCall("call_after", "writeTodos", after)).toEqual(after)
+  })
+
+  test("returns its held-size accounting to zero after each full drain", () => {
+    const ledger = createOrchestrationLedger()
+    // Two complete suppression cycles: a sign error in the accounting would
+    // leave a skewed counter and make the bound below trip early or late.
+    for (const id of ["call_w1", "call_w2"]) {
+      expect(ledger.onToolCall(id, "writeTodos", frames(id, "writeTodos"))).toEqual([])
+      const planActivity = activity(`dawn:plan:${id}`)
+      expect(ledger.onActivity(planActivity, { toolCallId: id, toolName: "writeTodos" })).toEqual([
+        planActivity,
+      ])
+      expect(ledger.onToolResult(id, "writeTodos", result(id))).toEqual([])
+    }
+    // A third candidate must now see a pristine budget: exactly
+    // MAX_DEFERRED_EVENTS held events are still held, and one more trips.
+    const callFrames = frames("call_w3", "writeTodos")
+    expect(ledger.onToolCall("call_w3", "writeTodos", callFrames)).toEqual([])
+    const inbound: AguiOutboundEvent[] = [...callFrames]
+    for (let index = callFrames.length; index < MAX_DEFERRED_EVENTS; index += 1) {
+      const event = text(`d${index}`)
+      inbound.push(event)
+      expect(ledger.onPassthrough(event)).toEqual([])
+    }
+    const overflow = text("overflow")
+    inbound.push(overflow)
+    expect(ledger.onPassthrough(overflow)).toEqual(inbound)
+  })
+
+  test("never holds a call with an empty-string id", () => {
+    const ledger = createOrchestrationLedger()
+    const first = frames("", "writeTodos", '{"first":true}')
+    expect(ledger.onToolCall("", "writeTodos", first)).toEqual(first)
+    // A second empty id is not treated as a duplicate: nothing was tracked.
+    const second = frames("", "writeTodos", '{"second":true}')
+    expect(ledger.onToolCall("", "writeTodos", second)).toEqual(second)
+    const toolResult = result("")
+    expect(ledger.onToolResult("", "writeTodos", toolResult)).toEqual([toolResult])
+    // Suppression is still available to a properly identified call.
+    expect(ledger.onToolCall("call_w", "writeTodos", frames("call_w", "writeTodos"))).toEqual([])
+  })
+
+  test("settle is idempotent", () => {
+    const ledger = createOrchestrationLedger()
+    const callFrames = frames("call_w", "writeTodos")
+    const between = text("x")
+    expect(ledger.onToolCall("call_w", "writeTodos", callFrames)).toEqual([])
+    expect(ledger.onPassthrough(between)).toEqual([])
+    expect(ledger.settle()).toEqual([...callFrames, between])
+    expect(ledger.settle()).toEqual([])
+    expect(ledger.settle("call_w")).toEqual([])
   })
 })
