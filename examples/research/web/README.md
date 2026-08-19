@@ -64,15 +64,18 @@ activity emission. The `dawn.plan` and `dawn.subagent` activity content supplied
 to the cards excludes child reasoning or prose, prompts, tool inputs, tool
 outputs, final child answers, route ids, and raw runtime ids.
 
-Ordinary root `task` tool call/result events remain a separate surface. Root task
-events can carry the coordinator-visible input and result. The current generic card
-reduces task input to the subagent name and may show the result. The activity renderers
-neither suppress nor specialize those events.
+These activities are the whole presentation of `writeTodos` and `task`. Dawn's
+AG-UI adapter emits no tool call/result events for a call whose activity was
+emitted, so the wildcard tool card here receives `recall`, `searchCorpus`,
+`readDoc`, and `writeFile` but never `writeTodos` or `task`. The suppression is
+the adapter's, not CopilotKit's or these renderers'. It fails open: if an
+activity cannot be produced, the ordinary tool events survive and the generic
+card renders them, which is why its `task` argument summary is kept.
 
 Choose the safe **Research a topic** suggestion to see plan and researcher
 progress before the cited answer. Activity cards are informational: generic
-root-tool rendering remains registered, while standard interrupt UI exclusively
-owns permission actions. Suggestions, memory review, and the server-held
+root-tool rendering remains registered for the other tools, while standard
+interrupt UI exclusively owns permission actions. Suggestions, memory review, and the server-held
 `OPENAI_API_KEY` flow are unchanged.
 
 ## Running

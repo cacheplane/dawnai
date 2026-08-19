@@ -82,6 +82,7 @@ correlation.
 | `token` | `TEXT_MESSAGE_START` once, then `TEXT_MESSAGE_CONTENT` per delta |
 | `tool_call` | close open text, then `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END` |
 | `tool_result` | close open text, then `TOOL_CALL_RESULT` |
+| `tool_call` and `tool_result` for a `writeTodos` or `task` call whose activity was emitted | no `TOOL_CALL_*` events; the activity is the whole presentation |
 | root `plan_update` | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.plan` |
 | `subagent.start` and matching child plan/tool/result/end chunks | replacement `ACTIVITY_SNAPSHOT` with activity type `dawn.subagent` |
 | `interrupt` | terminal `RUN_FINISHED` with `outcome.type: "interrupt"` |
@@ -120,6 +121,36 @@ ignored. Dawn emits neither activity deltas nor a raw advanced child stream.
 Activities are informational; standard interrupt UI remains the only place to
 resolve or cancel permission requests. No queued, waiting, cancelled, or
 parent-task correlation state is inferred.
+
+### Canonical orchestration presentation
+
+Dawn's two built-in orchestration actions are presented once. When a
+`writeTodos` call produced the `dawn.plan` activity, or a `task` call produced
+the `dawn.subagent` activity because delegation actually started, the adapter
+emits no `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, or
+`TOOL_CALL_RESULT` for that call. The activity carries the same tool-call id as
+the model's call (`plan_update.tool_call_id`, and the subagent's `call_id`), and
+that correlation is what decides the suppression.
+
+Every other tool is unchanged. `recall`, `searchCorpus`, `readDoc`, `writeFile`,
+`runBash`, and any application tool still produce ordinary tool events.
+
+The rule fails open: whenever suppression cannot be proven, the generic frames
+are preserved and a client sees the ordinary tool card exactly as before. That
+covers a call with no tool-call id, a malformed activity payload, a resolver
+failure that means `subagent.start` never arrives, a result that arrives with no
+correlation, buffer limits, and a stream that ends early.
+
+At a permission interrupt belonging to the held call, the held frames are
+dropped rather than flushed, because the resumed run re-presents the same call
+under the same tool-call id and the client converges the two into one card.
+Unrelated held calls still flush before the interrupt.
+
+<Callout type="warn" title="Activities are the only surface for these two tools">
+  A client that registers no activity renderer sees less for `writeTodos` and
+  `task` than a generic tool renderer used to show. That is the contract:
+  activities are canonical for built-in orchestration, so render them.
+</Callout>
 
 ### Inbound input
 

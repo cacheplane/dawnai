@@ -30,7 +30,10 @@ curl -N "http://127.0.0.1:3000/agui/%2Fresearch%23agent" \
 That's the [AG-UI](https://github.com/ag-ui-protocol/ag-ui) endpoint (`/agui/<route>`).
 Alongside text, root tools, and interrupts, it emits standard replacement
 `dawn.plan` and `dawn.subagent` activity messages for valid planning and matched
-delegated-work progress. For a **web UI**, follow the
+delegated-work progress. Those activities are the whole presentation of the
+`writeTodos` and `task` calls behind them: a call whose activity was emitted
+produces no root tool events, while every other tool is unchanged. For a
+**web UI**, follow the
 [Research assistant web UI](https://dawnai.org/docs/recipes/research-web-ui)
 recipe or the separate
 [`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
