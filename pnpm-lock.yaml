@@ -343,16 +343,34 @@ importers:
       '@ag-ui/encoder':
         specifier: 0.0.57
         version: 0.0.57
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@ag-ui/client':
         specifier: 0.0.57
         version: 0.0.57
+      '@copilotkit/react-core':
+        specifier: ^1.66.0
+        version: 1.66.4(@types/mdast@4.0.4)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(graphql@16.14.2)(micromark-util-types@2.0.2)(micromark@4.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: 19.2.4
+        version: 19.2.4(@types/react@19.2.18)
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
       rxjs:
         specifier: 7.8.2
         version: 7.8.2
