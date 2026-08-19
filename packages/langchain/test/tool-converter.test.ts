@@ -19,7 +19,8 @@ describe("convertToolToLangChain", () => {
       signal: new AbortController().signal,
       toolCall: { id: "provider-call-1" },
     }
-    const runManager = { runId: "execution-run-1", getChild: vi.fn(() => undefined) }
+    const childCallbacks = {}
+    const runManager = { runId: "execution-run-1", getChild: vi.fn(() => childCallbacks) }
     let transformerInput: StreamTransformerInput | undefined
     dispatchCustomEvent.mockImplementation(async (_name, payload) => {
       order.push(`dispatch:${payload.event}`)
@@ -64,6 +65,7 @@ describe("convertToolToLangChain", () => {
         configurable: config.configurable,
         signal: config.signal,
         toolCall: config.toolCall,
+        callbacks: childCallbacks,
       }),
     )
     expect(dispatchCustomEvent).toHaveBeenNthCalledWith(
@@ -74,8 +76,11 @@ describe("convertToolToLangChain", () => {
         configurable: config.configurable,
         signal: config.signal,
         toolCall: config.toolCall,
+        callbacks: childCallbacks,
       }),
     )
+    // Both dispatches must see the exact same patched live-config object.
+    expect(dispatchCustomEvent.mock.calls[0]?.[2]).toBe(dispatchCustomEvent.mock.calls[1]?.[2])
     expect(order).toEqual([
       "run",
       "transform:first",
@@ -84,7 +89,7 @@ describe("convertToolToLangChain", () => {
       "dispatch:second",
       "returned",
     ])
-    expect(transformerInput).toMatchObject({
+    expect(transformerInput).toEqual({
       toolName: "probe",
       toolOutput: JSON.stringify({ ok: true }),
       toolCallId: "provider-call-1",
