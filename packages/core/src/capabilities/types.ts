@@ -367,6 +367,16 @@ export interface PromptFragment {
 export interface StreamTransformerInput {
   readonly toolName: string
   readonly toolOutput: unknown
+  /**
+   * Model/provider tool-call id (logical identity) of the execution that
+   * produced `toolOutput`, when the runtime has one — the same id the root
+   * AG-UI `TOOL_CALL_*` events are keyed by, never the adapter's internal
+   * execution run id (e.g. LangChain's `run_id`). Optional: adapters omit
+   * the field rather than passing an empty string when they cannot supply
+   * one, and consumers should treat an empty string as absent too, the same
+   * as a missing field — a transformer that reads this must tolerate both.
+   */
+  readonly toolCallId?: string
 }
 
 export interface StreamTransformerOutput {

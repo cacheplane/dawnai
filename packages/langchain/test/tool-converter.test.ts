@@ -1,3 +1,4 @@
+import type { StreamTransformerInput } from "@dawn-ai/core"
 import { type Command, isCommand } from "@langchain/langgraph"
 import { beforeEach, describe, expect, it, test, vi } from "vitest"
 import { convertToolToLangChain, jsonSchemaToZod } from "../src/tool-converter.ts"
@@ -16,7 +17,14 @@ describe("convertToolToLangChain", () => {
     const config = {
       configurable: { thread_id: "thread-1" },
       signal: new AbortController().signal,
+      toolCall: { id: "provider-call-1" },
     }
+    // A distinguishing property (not just `{}`) so `objectContaining({ callbacks: childCallbacks })`
+    // actually proves the DISPATCHED config is the patched one carrying this exact
+    // object, rather than being trivially satisfied by any empty object.
+    const childCallbacks = { handlers: [] }
+    const runManager = { runId: "execution-run-1", getChild: vi.fn(() => childCallbacks) }
+    let transformerInput: StreamTransformerInput | undefined
     dispatchCustomEvent.mockImplementation(async (_name, payload) => {
       order.push(`dispatch:${payload.event}`)
     })
@@ -35,7 +43,7 @@ describe("convertToolToLangChain", () => {
         {
           observes: "tool_result",
           transform: async function* (input) {
-            expect(input).toEqual({ toolName: "probe", toolOutput: JSON.stringify({ ok: true }) })
+            transformerInput = input
             order.push("transform:first")
             yield { event: "first", data: { index: 1 } }
             order.push("transform:second")
@@ -45,13 +53,37 @@ describe("convertToolToLangChain", () => {
       ],
     )
 
-    await converted.func({}, undefined as never, config as never)
+    await converted.func({}, runManager as never, config as never)
     order.push("returned")
 
-    expect(dispatchCustomEvent.mock.calls).toEqual([
-      ["dawn.capability", { event: "first", data: { index: 1 } }, config],
-      ["dawn.capability", { event: "second", data: { index: 2 } }, config],
-    ])
+    // patchConfig's ensureConfig() injects harmless defaults (tags, metadata,
+    // recursionLimit, runId) onto the live config once a runManager is present,
+    // so match on the live-config fields we actually care about rather than
+    // exact identity with the raw `config` object.
+    expect(dispatchCustomEvent).toHaveBeenNthCalledWith(
+      1,
+      "dawn.capability",
+      { event: "first", data: { index: 1 } },
+      expect.objectContaining({
+        configurable: config.configurable,
+        signal: config.signal,
+        toolCall: config.toolCall,
+        callbacks: childCallbacks,
+      }),
+    )
+    expect(dispatchCustomEvent).toHaveBeenNthCalledWith(
+      2,
+      "dawn.capability",
+      { event: "second", data: { index: 2 } },
+      expect.objectContaining({
+        configurable: config.configurable,
+        signal: config.signal,
+        toolCall: config.toolCall,
+        callbacks: childCallbacks,
+      }),
+    )
+    // Both dispatches must see the exact same patched live-config object.
+    expect(dispatchCustomEvent.mock.calls[0]?.[2]).toBe(dispatchCustomEvent.mock.calls[1]?.[2])
     expect(order).toEqual([
       "run",
       "transform:first",
@@ -60,6 +92,64 @@ describe("convertToolToLangChain", () => {
       "dispatch:second",
       "returned",
     ])
+    expect(transformerInput).toEqual({
+      toolName: "probe",
+      toolOutput: JSON.stringify({ ok: true }),
+      toolCallId: "provider-call-1",
+    })
+    expect(transformerInput?.toolCallId).not.toBe("execution-run-1")
+  })
+
+  test("omits the transformer tool-call id when the config carries none", async () => {
+    let transformerInput: StreamTransformerInput | undefined
+    const converted = convertToolToLangChain(
+      { name: "probe", run: async () => "ok" },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          // biome-ignore lint/correctness/useYield: captures the transform input; this transformer emits no events
+          transform: async function* (input) {
+            transformerInput = input
+          },
+        },
+      ],
+    )
+
+    await converted.func({}, undefined as never, { signal: new AbortController().signal } as never)
+
+    expect(transformerInput).toBeDefined()
+    expect(Object.hasOwn(transformerInput ?? {}, "toolCallId")).toBe(false)
+  })
+
+  test("omits the transformer tool-call id when the config carries an empty-string id", async () => {
+    let transformerInput: StreamTransformerInput | undefined
+    const converted = convertToolToLangChain(
+      { name: "probe", run: async () => "ok" },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          // biome-ignore lint/correctness/useYield: captures the transform input; this transformer emits no events
+          transform: async function* (input) {
+            transformerInput = input
+          },
+        },
+      ],
+    )
+
+    await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal, toolCall: { id: "" } } as never,
+    )
+
+    expect(transformerInput).toBeDefined()
+    expect(Object.hasOwn(transformerInput ?? {}, "toolCallId")).toBe(false)
   })
 
   test("transforms and dispatches a Command result before returning it", async () => {

@@ -153,6 +153,47 @@ describe("capability custom events", () => {
       { type: "done", data: { ok: true } },
     ])
   })
+
+  test("strips the child's tool-call id from a namespaced capability chunk", async () => {
+    const chunks = await collectCustomEvents(
+      {
+        dawn: {
+          subagent_stack: [{ callId: "call-child", name: "researcher", routeId: "/researcher" }],
+        },
+      },
+      [{ event: "plan_update", data: { todos: ["child"], tool_call_id: "call_child_writeTodos" } }],
+    )
+
+    const childPlan = chunks.find(
+      (chunk) =>
+        chunk.type === "subagent.plan_update" &&
+        Array.isArray((chunk.data as { todos?: unknown }).todos) &&
+        (chunk.data as { todos: unknown[] }).todos[0] === "child",
+    )
+    expect(childPlan).toBeDefined()
+    expect(Object.hasOwn(childPlan?.data ?? {}, "tool_call_id")).toBe(false)
+    expect(childPlan?.data).toMatchObject({
+      todos: ["child"],
+      call_id: "call-child",
+      subagent: "researcher",
+      route_id: "/researcher",
+    })
+  })
+
+  test("keeps the root's tool-call id on an unnamespaced capability chunk", async () => {
+    const chunks = await collectCustomEvents(undefined, [
+      { event: "plan_update", data: { todos: ["root"], tool_call_id: "call_writeTodos_0_1" } },
+    ])
+
+    const rootPlan = chunks.find(
+      (chunk) =>
+        chunk.type === "plan_update" &&
+        Array.isArray((chunk.data as { todos?: unknown }).todos) &&
+        (chunk.data as { todos: unknown[] }).todos[0] === "root",
+    )
+    expect(rootPlan).toBeDefined()
+    expect((rootPlan?.data as { tool_call_id?: unknown })?.tool_call_id).toBe("call_writeTodos_0_1")
+  })
 })
 
 describe("native subagent event projection", () => {
