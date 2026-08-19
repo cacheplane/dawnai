@@ -153,6 +153,34 @@ describe("capability custom events", () => {
       { type: "done", data: { ok: true } },
     ])
   })
+
+  test("strips the child's tool-call id from a namespaced capability chunk", async () => {
+    const chunks = await collectCustomEvents(
+      {
+        dawn: {
+          subagent_stack: [
+            { callId: "call-child", name: "researcher", routeId: "/researcher" },
+          ],
+        },
+      },
+      [{ event: "plan_update", data: { todos: ["child"], tool_call_id: "call_child_writeTodos" } }],
+    )
+
+    const childPlan = chunks.find(
+      (chunk) =>
+        chunk.type === "subagent.plan_update" &&
+        Array.isArray((chunk.data as { todos?: unknown }).todos) &&
+        (chunk.data as { todos: unknown[] }).todos[0] === "child",
+    )
+    expect(childPlan).toBeDefined()
+    expect(Object.hasOwn(childPlan?.data ?? {}, "tool_call_id")).toBe(false)
+    expect(childPlan?.data).toMatchObject({
+      todos: ["child"],
+      call_id: "call-child",
+      subagent: "researcher",
+      route_id: "/researcher",
+    })
+  })
 })
 
 describe("native subagent event projection", () => {
