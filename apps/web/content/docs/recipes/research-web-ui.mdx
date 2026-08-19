@@ -240,10 +240,18 @@ The `dawn.plan` and `dawn.subagent` activity content supplied to these cards
 excludes child reasoning or prose, prompts, tool inputs, tool outputs, final
 child answers, route ids, and raw runtime ids.
 
-Ordinary root `task` tool call/result events are a separate surface. Root task
-events can carry the coordinator-visible input and result. The current generic
-card reduces task input to the subagent name and may show the result. These
-activity renderers do not suppress or specialize those events.
+These activities are the whole presentation of the two built-in orchestration
+tools. When a `writeTodos` or `task` call produced its activity, Dawn's AG-UI
+adapter emits no tool call/result events for that call, so the wildcard tool
+card receives the ordinary tools (`recall`, `searchCorpus`, `readDoc`,
+`writeFile`, and `runBash` once approved) but never `writeTodos` or `task`. The
+suppression happens in the adapter, not in
+CopilotKit or in these renderers.
+
+The wildcard card is still the fail-open fallback. If an activity cannot be
+produced — no tool-call id, a malformed payload, delegation that never starts —
+the ordinary tool events survive and the generic card renders them, which is why
+its `task` argument summary is worth keeping.
 
 Choose **Research a topic** on the empty chat to see the root plan and
 researcher progress update before the cited answer. This live flow still uses

@@ -16,6 +16,7 @@ import { EventType } from "@ag-ui/core"
 import { createDawnActivityProjector, isDawnActivityChunkType } from "./activities.js"
 import { createDefaultIdFactory, type IdFactory } from "./ids.js"
 import { toAguiInterrupt } from "./interrupts.js"
+import { createOrchestrationLedger } from "./orchestration-ledger.js"
 import {
   asToolCallData,
   asToolResultData,
@@ -74,14 +75,19 @@ export async function* toAguiEvents(
 ): AsyncGenerator<AguiOutboundEvent> {
   const nextId = options.idFactory ?? createDefaultIdFactory()
   const activityProjector = createDawnActivityProjector(ctx.runId)
+  const ledger = createOrchestrationLedger()
   let openMessageId: string | null = null
   const pendingFallbackToolCallIds = new Map<string, string[]>()
   const pendingInterrupts: Interrupt[] = []
 
-  function* flushText(): Generator<TextMessageEndEvent> {
+  function* flushText(): Generator<AguiOutboundEvent> {
     if (openMessageId !== null) {
-      yield { type: EventType.TEXT_MESSAGE_END, messageId: openMessageId }
+      const end: TextMessageEndEvent = {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: openMessageId,
+      }
       openMessageId = null
+      yield* ledger.onPassthrough(end)
     }
   }
 
@@ -91,6 +97,7 @@ export async function* toAguiEvents(
     for await (const chunk of chunks) {
       if (chunk.type !== "interrupt" && pendingInterrupts.length > 0) {
         if (chunk.type === "done") {
+          yield* ledger.settle()
           yield {
             type: EventType.RUN_FINISHED,
             threadId: ctx.threadId,
@@ -104,7 +111,9 @@ export async function* toAguiEvents(
 
       if (isDawnActivityChunkType(chunk.type)) {
         const projection = activityProjector.project(chunk.type, chunk.data)
-        if (projection.event !== null) yield projection.event
+        if (projection.event !== null) {
+          yield* ledger.onActivity(projection.event, projection.orchestration)
+        }
         continue
       }
 
@@ -114,13 +123,17 @@ export async function* toAguiEvents(
           if (delta.length === 0) break
           if (openMessageId === null) {
             openMessageId = nextId("message")
-            yield {
+            yield* ledger.onPassthrough({
               type: EventType.TEXT_MESSAGE_START,
               messageId: openMessageId,
               role: "assistant",
-            }
+            })
           }
-          yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId: openMessageId, delta }
+          yield* ledger.onPassthrough({
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: openMessageId,
+            delta,
+          })
           break
         }
         case "tool_call": {
@@ -136,9 +149,12 @@ export async function* toAguiEvents(
               pendingFallbackToolCallIds.set(tc.name, [toolCallId])
             }
           }
-          yield { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: tc.name }
-          yield { type: EventType.TOOL_CALL_ARGS, toolCallId, delta: stringifyArgs(tc.input) }
-          yield { type: EventType.TOOL_CALL_END, toolCallId }
+          const frames: AguiOutboundEvent[] = [
+            { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: tc.name },
+            { type: EventType.TOOL_CALL_ARGS, toolCallId, delta: stringifyArgs(tc.input) },
+            { type: EventType.TOOL_CALL_END, toolCallId },
+          ]
+          yield* ledger.onToolCall(tc.id, tc.name, frames)
           break
         }
         case "tool_result": {
@@ -149,29 +165,37 @@ export async function* toAguiEvents(
           const toolCallId = tr.id ?? pending?.shift() ?? nextId("toolCall")
           if (pending?.length === 0) pendingFallbackToolCallIds.delete(tr.name)
           const messageId = nextId("toolResult")
-          yield {
+          const resultEvent: ToolCallResultEvent = {
             type: EventType.TOOL_CALL_RESULT,
             messageId,
             toolCallId,
             content: stringifyContent(tr.output),
           }
+          yield* ledger.onToolResult(tr.id, tr.name, resultEvent)
           break
         }
         case "interrupt": {
           yield* flushText()
           const interrupt = toAguiInterrupt(chunk.data)
           if (interrupt === null) {
+            yield* ledger.settle()
             yield {
               type: EventType.RUN_ERROR,
               message: "Malformed Dawn interrupt: missing interruptId",
             }
             return
           }
+          // The resumed run re-presents this same call under the same logical
+          // id, so flushing its frames here would leave an unreconcilable
+          // duplicate on resume; see orchestration-ledger.ts's settle() for
+          // the fuller rationale.
+          yield* ledger.settle(interrupt.toolCallId)
           pendingInterrupts.push(interrupt)
           break
         }
         case "done": {
           yield* flushText()
+          yield* ledger.settle()
           yield {
             type: EventType.RUN_FINISHED,
             threadId: ctx.threadId,
@@ -192,6 +216,7 @@ export async function* toAguiEvents(
     }
     // Stream ended without an explicit done/interrupt: flush and finish.
     yield* flushText()
+    yield* ledger.settle()
     if (pendingInterrupts.length > 0) {
       yield {
         type: EventType.RUN_FINISHED,
@@ -209,6 +234,7 @@ export async function* toAguiEvents(
     }
   } catch (err) {
     yield* flushText()
+    yield* ledger.settle()
     yield { type: EventType.RUN_ERROR, message: err instanceof Error ? err.message : String(err) }
   }
 }

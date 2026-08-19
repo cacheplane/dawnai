@@ -21,6 +21,7 @@ describe("toAguiInterrupt", () => {
     expect(toAguiInterrupt(envelope)).toEqual({
       id: "perm-1",
       reason: "subagent",
+      toolCallId: "task-1",
       metadata: envelope,
     })
   })
@@ -40,7 +41,12 @@ describe("toAguiInterrupt", () => {
   })
 
   test("carries an optional human message and toolCallId when present", () => {
-    const envelope = { interruptId: "perm-2", kind: "tool", message: "Approve?", toolCallId: "tc-9" }
+    const envelope = {
+      interruptId: "perm-2",
+      kind: "tool",
+      message: "Approve?",
+      toolCallId: "tc-9",
+    }
     expect(toAguiInterrupt(envelope)).toEqual({
       id: "perm-2",
       reason: "tool",
@@ -48,6 +54,38 @@ describe("toAguiInterrupt", () => {
       toolCallId: "tc-9",
       metadata: envelope,
     })
+  })
+
+  test("maps callId to toolCallId when the envelope has no toolCallId", () => {
+    const envelope = { interruptId: "perm-3", kind: "tool", callId: "call_task_0_2" }
+    expect(toAguiInterrupt(envelope)).toEqual({
+      id: "perm-3",
+      reason: "tool",
+      toolCallId: "call_task_0_2",
+      metadata: envelope,
+    })
+  })
+
+  test("prefers an explicit toolCallId over callId when both are present", () => {
+    const envelope = { interruptId: "perm-4", kind: "tool", callId: "call-a", toolCallId: "call-b" }
+    expect(toAguiInterrupt(envelope)).toEqual({
+      id: "perm-4",
+      reason: "tool",
+      toolCallId: "call-b",
+      metadata: envelope,
+    })
+  })
+
+  test("omits toolCallId when neither callId nor toolCallId is present", () => {
+    const envelope = { interruptId: "perm-5", kind: "tool" }
+    const interrupt = toAguiInterrupt(envelope)
+    expect(Object.hasOwn(interrupt as object, "toolCallId")).toBe(false)
+  })
+
+  test("omits toolCallId when callId and toolCallId are both empty strings", () => {
+    const envelope = { interruptId: "perm-6", kind: "tool", callId: "", toolCallId: "" }
+    const interrupt = toAguiInterrupt(envelope)
+    expect(Object.hasOwn(interrupt as object, "toolCallId")).toBe(false)
   })
 
   test("rejects a malformed envelope instead of synthesizing an interrupt id", () => {
@@ -83,7 +121,9 @@ describe("fromAguiResume", () => {
   })
 
   test("preserves a present payload key with an undefined value", () => {
-    const [resume] = fromAguiResume([{ interruptId: "perm-1", status: "resolved", payload: undefined }])
+    const [resume] = fromAguiResume([
+      { interruptId: "perm-1", status: "resolved", payload: undefined },
+    ])
     expect(resume).toEqual({ interruptId: "perm-1", status: "resolved", payload: undefined })
     expect(Object.hasOwn(resume, "payload")).toBe(true)
   })

@@ -44,11 +44,23 @@ export function toAguiInterrupt(data: unknown): Interrupt | null {
   }
   const env = data
   const reason = typeof env.kind === "string" ? env.kind : "interrupt"
+  // Dawn's envelopes name the model tool-call id of the `task`/tool call an
+  // interrupt belongs to `callId` (see permission-gate.ts and
+  // agent-adapter.ts's projectInterruptValue); AG-UI's `Interrupt` names the
+  // same concept `toolCallId`. Prefer an explicit `toolCallId` if an envelope
+  // ever carries one, else fall back to `callId` — this bridges the two
+  // vocabularies so the orchestration ledger can settle on the right id.
+  const toolCallId =
+    typeof env.toolCallId === "string" && env.toolCallId.length > 0
+      ? env.toolCallId
+      : typeof env.callId === "string" && env.callId.length > 0
+        ? env.callId
+        : undefined
   return {
     id: interruptId,
     reason,
     ...(typeof env.message === "string" ? { message: env.message } : {}),
-    ...(typeof env.toolCallId === "string" ? { toolCallId: env.toolCallId } : {}),
+    ...(toolCallId !== undefined ? { toolCallId } : {}),
     metadata: env,
   }
 }

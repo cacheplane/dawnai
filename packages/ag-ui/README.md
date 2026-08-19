@@ -19,6 +19,8 @@ import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 
 Plan and subagent activity snapshots are translated on the root surface; use the focused API reference for their exact identifiers and payload contracts.
 
+Built-in orchestration is presented once. A `writeTodos` or `task` call whose activity was emitted produces no `TOOL_CALL_*` events, correlated by the model's tool-call id; every other tool is unchanged. The rule fails open, so the ordinary tool events are preserved whenever the activity cannot be produced. A client that registers no activity renderer therefore sees less for those two tools: activity snapshots are the canonical surface for them.
+
 ## Runtime and stability
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
