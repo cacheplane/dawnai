@@ -13,6 +13,7 @@
     "@ag-ui/client": "0.0.57",
     "@copilotkit/react-core": "^1.66.0",
     "@copilotkit/runtime": "^1.66.0",
+    "@dawn-ai/ag-ui": "workspace:*",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

@@ -1,7 +1,7 @@
 "use client"
 import { useRenderTool } from "@copilotkit/react-core/v2"
 
-// Notes (verified against installed @copilotkit/react-core@1.62.3 types —
+// Notes (verified against installed @copilotkit/react-core@1.66.4 types —
 // examples/research/web/node_modules/@copilotkit/react-core/dist/copilotkit-Bp6BD8xe.d.mts):
 //
 // - The registration hook is `useRenderTool` (NOT `useRenderToolCall` — that
