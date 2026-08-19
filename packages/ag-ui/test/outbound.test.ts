@@ -706,3 +706,163 @@ describe("toAguiEvents", () => {
     expect(out.some((e) => e.type === EventType.TEXT_MESSAGE_END)).toBe(true)
   })
 })
+
+describe("orchestration suppression", () => {
+  const TODOS = [{ content: "Search the corpus", status: "in_progress" }] as const
+  const ORCHESTRATION_CHILD = {
+    call_id: "call_task_0_2",
+    subagent: "researcher",
+    route_id: "/researcher",
+    depth: 1,
+  } as const
+
+  test("a correlated writeTodos call presents only as a plan activity", async () => {
+    const events = await collect([
+      {
+        type: "tool_call",
+        data: { id: "call_writeTodos_0_1", name: "writeTodos", input: { todos: TODOS } },
+      },
+      { type: "plan_update", data: { todos: TODOS, tool_call_id: "call_writeTodos_0_1" } },
+      {
+        type: "tool_result",
+        data: { id: "call_writeTodos_0_1", name: "writeTodos", output: "ok" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("a correlated task call presents only as a subagent activity", async () => {
+    const events = await collect([
+      {
+        type: "tool_call",
+        data: { id: "call_task_0_2", name: "task", input: { subagent: "researcher" } },
+      },
+      { type: "subagent.start", data: ORCHESTRATION_CHILD },
+      { type: "subagent.end", data: ORCHESTRATION_CHILD },
+      { type: "tool_result", data: { id: "call_task_0_2", name: "task", output: "done" } },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("an uncorrelated writeTodos call keeps its generic frames in source order", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_writeTodos_0_1", name: "writeTodos", input: {} } },
+      {
+        type: "tool_result",
+        data: { id: "call_writeTodos_0_1", name: "writeTodos", output: "ok" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.TOOL_CALL_RESULT,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("ordinary tools are never suppressed and keep their order around a suppressed one", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_writeTodos_0_1", name: "writeTodos", input: {} } },
+      {
+        type: "tool_call",
+        data: { id: "call_searchCorpus_0_2", name: "searchCorpus", input: { q: "x" } },
+      },
+      { type: "plan_update", data: { todos: TODOS, tool_call_id: "call_writeTodos_0_1" } },
+      {
+        type: "tool_result",
+        data: { id: "call_searchCorpus_0_2", name: "searchCorpus", output: "hit" },
+      },
+      {
+        type: "tool_result",
+        data: { id: "call_writeTodos_0_1", name: "writeTodos", output: "ok" },
+      },
+      { type: "done", data: {} },
+    ])
+
+    // The ordinary call's frames reached the mapper before the plan activity,
+    // so they stay ahead of it: suppression never reorders the stream.
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.TOOL_CALL_RESULT,
+      EventType.RUN_FINISHED,
+    ])
+    const start = events.find((event) => event.type === EventType.TOOL_CALL_START)
+    expect(start).toMatchObject({ toolCallName: "searchCorpus" })
+  })
+
+  test("text framing survives a deferred orchestration call", async () => {
+    const events = await collect([
+      { type: "token", data: "before" },
+      { type: "tool_call", data: { id: "call_writeTodos_0_1", name: "writeTodos", input: {} } },
+      { type: "plan_update", data: { todos: TODOS, tool_call_id: "call_writeTodos_0_1" } },
+      { type: "token", data: "after" },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("an ID-less writeTodos call is never suppressed", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { name: "writeTodos", input: {} } },
+      { type: "plan_update", data: { todos: TODOS } },
+      { type: "tool_result", data: { name: "writeTodos", output: "ok" } },
+      { type: "done", data: {} },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.TOOL_CALL_RESULT,
+      EventType.RUN_FINISHED,
+    ])
+  })
+
+  test("an incomplete stream flushes held frames before RUN_FINISHED", async () => {
+    const events = await collect([
+      { type: "tool_call", data: { id: "call_task_0_2", name: "task", input: {} } },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_END,
+      EventType.RUN_FINISHED,
+    ])
+  })
+})
