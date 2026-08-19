@@ -1,5 +1,5 @@
-import type { DawnSubagentActivityContent } from "@dawn-ai/ag-ui"
-import { ActivityChecklist } from "./ActivityChecklist"
+import { ActivityChecklist } from "./ActivityChecklist.js"
+import type { SubagentActivityContentOutput } from "./schemas.js"
 
 const toolStatusPresentation = {
   running: { glyph: "◐", label: "running" },
@@ -7,7 +7,7 @@ const toolStatusPresentation = {
   incomplete: { glyph: "!", label: "incomplete" },
 } as const
 
-export function SubagentActivityCard({ content }: { content: DawnSubagentActivityContent }) {
+export function SubagentActivityCard({ content }: { content: SubagentActivityContentOutput }) {
   return (
     <details
       open={content.status === "running"}

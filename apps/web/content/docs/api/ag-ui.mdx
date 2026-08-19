@@ -15,14 +15,23 @@ import { fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 ```
 
+In a React client, and only there, import the renderers from the `./react` subpath:
+
+```tsx
+import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
+```
+
 ## Compatibility and audience
 
 | Surface | Runtime | Purity | Audience | Stability |
 |---|---|---|---|---|
 | `@dawn-ai/ag-ui` | edge-safe | not-claimed | integration | supported |
 | `@dawn-ai/ag-ui/sse` | edge-safe | not-claimed | integration | supported |
+| `@dawn-ai/ag-ui/react` | node-only | not-claimed | application | supported |
 
 The adapter translates protocol data; it does not authenticate a caller or make client-supplied thread, run, state, tool, or context data authoritative.
+
+`@dawn-ai/ag-ui/react` is the client-side entry: it ships ready-made CopilotKit renderers for Dawn's built-in orchestration activities, and React and `@copilotkit/react-core` are optional peer dependencies, so a server-only consumer that imports only the root or `/sse` entry installs neither. Its runtime is recorded as `node-only` because Dawn's edge guard requires an import graph free of unguarded Node globals, and React's own JSX runtime reaches for `process.env.NODE_ENV`. The entry is meant for browser bundles, where an application bundler substitutes that value as usual; it simply cannot carry Dawn's stricter edge-safe claim.
 
 ## Public exports
 
@@ -53,6 +62,22 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 | Export | Responsibility |
 |---|---|
 | `encodeAgUiSse` | Encode one AG-UI event as an SSE frame. |
+
+### `@dawn-ai/ag-ui/react`
+
+| Export | Responsibility |
+|---|---|
+| `dawnActivityRenderers` | Register both built-in Dawn activity renderers with CopilotKit's `renderActivityMessages`. |
+| `dawnPlanActivityRenderer` | Register only the plan activity renderer. |
+| `dawnSubagentActivityRenderer` | Register only the subagent activity renderer. |
+| `PlanActivityCard` | Present one plan snapshot from its `content`. |
+| `SubagentActivityCard` | Present one subagent snapshot from its `content`. |
+| `ActivityChecklist` | Present a todo list from `todos`, truncated at `limit`. |
+| `planActivityContentSchema` | Validate plan activity content in a custom renderer. |
+| `subagentActivityContentSchema` | Validate subagent activity content in a custom renderer. |
+| `SubagentActivityContentOutput` | Describe parsed subagent content, which admits an explicit `undefined` `todos`. |
+
+`dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`.
 
 ## Key contracts
 

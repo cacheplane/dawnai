@@ -26,9 +26,9 @@
   `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
   bubble `subagent.*` Agent Protocol stream events with `call_id` correlation, and the
   AG-UI adapter maps matching lifecycles to bounded replacement `dawn.subagent`
-  snapshots. The basic web client drives only `/chat`; it does not expose
-  `/coordinator` or register activity renderers, so drive coordinator runs through
-  Agent Protocol instead.
+  snapshots. The basic web client registers `dawnActivityRenderers` from
+  `@dawn-ai/ag-ui/react`, but drives only `/chat` and does not expose
+  `/coordinator`, so drive coordinator runs through Agent Protocol instead.
 - **HITL permissions** — `dawn.config.ts` seeds allow/deny lists for `runBash`. Unknown
   commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
   or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
@@ -114,5 +114,5 @@ The remaining limitations are scoped to this example's surface, not missing runt
 capabilities:
 
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
-- The web client only drives `/chat` and registers no activity renderers;
-  `/coordinator` is outside this basic client's UI.
+- The web client only drives `/chat`; `/coordinator` is outside this basic
+  client's UI.

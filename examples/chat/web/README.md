@@ -13,9 +13,11 @@ test suite in `@dawn-ai/cli`.
 
 Scope: basic chat with the `/chat` route. Dawn's AG-UI adapter emits standard
 replacement `dawn.plan` and `dawn.subagent` activity snapshots when matching
-runtime chunks occur, but this client drives only `/chat` and registers no
-activity renderers. It therefore remains a transport-wiring example with no
-planning or subagent presentation, not a coordinator UI.
+runtime chunks occur, and this client registers `dawnActivityRenderers` from
+`@dawn-ai/ag-ui/react` so planning is presented rather than silent — the
+`/chat` route ships a `plan.md`, so the agent plans with `writeTodos`, and Dawn
+presents that only as an activity. It still drives only `/chat`, so it remains a
+transport-wiring example, not a coordinator UI.
 
 ## Architecture
 

@@ -1,12 +1,15 @@
-import { DAWN_PLAN_ACTIVITY_TYPE, DAWN_SUBAGENT_ACTIVITY_TYPE } from "@dawn-ai/ag-ui"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
-import { ActivityChecklist } from "./ActivityChecklist"
-import { activityMessageRenderers } from "./ActivityRenderers"
-import { planActivityContentSchema, subagentActivityContentSchema } from "./ActivitySchemas"
-import { PlanActivityCard } from "./PlanActivityCard"
-import { SubagentActivityCard } from "./SubagentActivityCard"
+import { DAWN_PLAN_ACTIVITY_TYPE, DAWN_SUBAGENT_ACTIVITY_TYPE } from "../../src/activities.js"
+import { ActivityChecklist } from "../../src/react/ActivityChecklist.js"
+import { PlanActivityCard } from "../../src/react/PlanActivityCard.js"
+import { dawnActivityRenderers } from "../../src/react/renderers.js"
+import { SubagentActivityCard } from "../../src/react/SubagentActivityCard.js"
+import {
+  planActivityContentSchema,
+  subagentActivityContentSchema,
+} from "../../src/react/schemas.js"
 
 describe("plan schema", () => {
   it("accepts a valid plan activity", () => {
@@ -385,7 +388,7 @@ describe("activity card quality boundaries", () => {
 
 describe("activity renderer registry", () => {
   it("registers the public activity types in order", () => {
-    expect(activityMessageRenderers.map((renderer) => renderer.activityType)).toEqual([
+    expect(dawnActivityRenderers.map((renderer) => renderer.activityType)).toEqual([
       DAWN_PLAN_ACTIVITY_TYPE,
       DAWN_SUBAGENT_ACTIVITY_TYPE,
     ])
@@ -403,7 +406,7 @@ describe("activity renderer registry", () => {
       },
     ] as const
 
-    activityMessageRenderers.forEach((renderer, index) => {
+    dawnActivityRenderers.forEach((renderer, index) => {
       const result = renderer.content["~standard"].validate(representativeContent[index])
       expect(result).not.toBeInstanceOf(Promise)
       if (result instanceof Promise) throw new Error("activity validation must be synchronous")

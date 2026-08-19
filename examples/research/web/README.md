@@ -8,10 +8,11 @@ reference) and adds research suggestions, plan and researcher activity cards,
 generic tool cards, standard permission handling, and memory-candidate approval.
 
 This app runs **live** against a real model — there is no aimock/demo mode here. The
-focused web tests render the activity components to static markup, proving their
-presentation without a browser or model. The packaged generated-research activation
-drives the deterministic server and AG-UI client path, proving activity snapshots reach
-the client before the final report. Neither test is a browser test or a live-model run.
+activity cards it renders come from `@dawn-ai/ag-ui/react` and are covered by that
+package's tests, which render them to static markup without a browser or model. The
+packaged generated-research activation drives the deterministic server and AG-UI client
+path, proving activity snapshots reach the client before the final report. Neither is a
+browser test or a live-model run.
 
 ## Architecture
 
@@ -27,21 +28,18 @@ browser
   served via `copilotRuntimeNextJSAppRouterEndpoint`. No LLM credentials live here; the
   Dawn server holds `OPENAI_API_KEY`.
 - `app/page.tsx` — `CopilotKit` (`runtimeUrl="/api/copilotkit"`) wrapping a
-  `CopilotSidebar` (streaming chat transcript + cited report), with the stable
-  module-level activity renderer registry, 100 ms render throttle, suggestion prompts,
+  `CopilotSidebar` (streaming chat transcript + cited report), with
+  `renderActivityMessages={dawnActivityRenderers}`, 100 ms render throttle, suggestion prompts,
   generic root-tool cards, standard permission handling, and the memory-review panel.
-- `app/components/ActivitySchemas.ts` — strict runtime schemas for Dawn's public plan
-  and subagent activity content. Incompatible payloads fail closed.
-- `app/components/ActivityChecklist.tsx` and `PlanActivityCard.tsx` — the checklist
-  shared by root and child cards, plus the root plan card. Each checklist view displays
-  at most eight items plus `+N more`, while its snapshot retains the complete valid
-  todo list. The root card derives its completed count from that full snapshot.
-- `app/components/SubagentActivityCard.tsx` — researcher name, depth, lifecycle status,
-  optional child checklist, at most five recent child-tool name/status summaries, total
-  tool count, and an optional error capped at 400 characters.
-- `app/components/ActivityRenderers.tsx` — the module-level
-  `activityMessageRenderers` registry, keyed by the public
-  `DAWN_PLAN_ACTIVITY_TYPE` and `DAWN_SUBAGENT_ACTIVITY_TYPE` constants.
+- `dawnActivityRenderers` from `@dawn-ai/ag-ui/react` — the plan and researcher cards,
+  handed to `renderActivityMessages` in `app/page.tsx`. This app builds none of them
+  itself. The package validates both content types with strict runtime schemas
+  (incompatible payloads fail closed), displays at most eight checklist items plus
+  `+N more` while each snapshot retains the complete valid todo list, and shows the
+  researcher name, depth, lifecycle status, optional child checklist, at most five
+  recent child-tool name/status summaries, total tool count, and an optional error
+  capped at 400 characters. To present the activities differently, the same subpath
+  exports the two renderers individually, the card components, and the content schemas.
 - `app/components/MemoryCandidates.tsx` — after a research run proposes durable memory
   via `remember()`, the candidate (`status:"candidate"`) shows up in this panel with
   **Approve**/**Reject** buttons, backed by the dev server's
@@ -93,8 +91,8 @@ pnpm dev                             # server on :3002, web on :3010
 # open http://localhost:3010
 ```
 
-`pnpm --filter @dawn-example/research-web test` renders the cards on the server and
-checks their schemas and bounds. `typecheck` / `build` verify the CopilotKit/AG-UI
+`pnpm --filter @dawn-ai/ag-ui test` renders the cards on the server and checks their
+schemas and bounds. Here, `typecheck` / `build` verify the CopilotKit/AG-UI
 wiring compiles and the Next.js app builds. The repository's packaged research
 activation proves the deterministic wire path. These checks do **not** drive a browser
 or exercise a live model; this client intentionally has no demo/mock mode.

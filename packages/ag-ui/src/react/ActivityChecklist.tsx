@@ -1,4 +1,4 @@
-import type { DawnPlanActivityContent } from "@dawn-ai/ag-ui"
+import type { DawnPlanActivityContent } from "../activities.js"
 
 const statusPresentation = {
   pending: { glyph: "○", label: "pending" },

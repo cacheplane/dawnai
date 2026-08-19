@@ -37,11 +37,12 @@ produces no root tool events, while every other tool is unchanged. For a
 [Research assistant web UI](https://dawnai.org/docs/recipes/research-web-ui)
 recipe or the separate
 [`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
-client. That CopilotKit example renders the activity messages as plan and
-researcher cards and also provides cited reports, generic tool cards, suggestion
-prompts, standard permission handling, and memory-candidate review. This
-generated starter remains server-first and contains no web UI, client
-dependencies, or activity renderers.
+client. Do not hand-build the plan and researcher cards: `@dawn-ai/ag-ui/react`
+ships them, so a React client passes `dawnActivityRenderers` to CopilotKit's
+`renderActivityMessages` and is done. That CopilotKit example does exactly that,
+and also provides cited reports, generic tool cards, suggestion prompts,
+standard permission handling, and memory-candidate review. This generated
+starter remains server-first and contains no web UI or client dependencies.
 
 ## Check it offline
 

@@ -1,5 +1,5 @@
-import type { DawnPlanActivityContent } from "@dawn-ai/ag-ui"
-import { ActivityChecklist } from "./ActivityChecklist"
+import type { DawnPlanActivityContent } from "../activities.js"
+import { ActivityChecklist } from "./ActivityChecklist.js"
 
 export function PlanActivityCard({ content }: { content: DawnPlanActivityContent }) {
   const completedCount = content.todos.filter((todo) => todo.status === "completed").length

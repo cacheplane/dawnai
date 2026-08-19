@@ -91,7 +91,7 @@ export const POST = async (req: NextRequest): Promise<Response> => {
 ```tsx title="examples/research/web/app/page.tsx"
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
-import { activityMessageRenderers } from "./components/ActivityRenderers"
+import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 import { DemoSuggestions } from "./components/DemoSuggestions"
 import { MemoryCandidates } from "./components/MemoryCandidates"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
@@ -102,7 +102,7 @@ export default function Home() {
     <CopilotKit
       runtimeUrl="/api/copilotkit"
       defaultThrottleMs={100}
-      renderActivityMessages={activityMessageRenderers}
+      renderActivityMessages={dawnActivityRenderers}
     >
       <DemoSuggestions />
       <PermissionInterrupt />
@@ -130,105 +130,37 @@ export default function Home() {
 
 ## Render plan and researcher activities
 
-The client validates both public activity content types with strict runtime
-schemas. A payload with unknown or incompatible fields fails closed instead of
-dumping arbitrary JSON into the transcript:
+The plan and researcher cards ship with the adapter. Install the package and
+hand its renderer array to CopilotKit:
 
-```ts title="examples/research/web/app/components/ActivitySchemas.ts"
-import type {
-  DawnPlanActivityContent,
-  DawnSubagentActivityContent,
-} from "@dawn-ai/ag-ui"
-import { z } from "zod"
-
-const todoSchema = z.strictObject({
-  content: z.string().trim().min(1),
-  status: z.enum(["pending", "in_progress", "completed"]),
-})
-
-export const planActivityContentSchema = z.strictObject({
-  todos: z.array(todoSchema),
-})
-
-function assignPlanOutputToPublicType(
-  content: z.output<typeof planActivityContentSchema>,
-): DawnPlanActivityContent {
-  return content
-}
-void assignPlanOutputToPublicType
-
-const toolSchema = z.strictObject({
-  name: z.string().trim().min(1),
-  status: z.enum(["running", "completed", "incomplete"]),
-})
-
-const subagentFields = {
-  name: z.string().trim().min(1),
-  depth: z.number().int().positive(),
-  todos: z.array(todoSchema).optional(),
-  tools: z.array(toolSchema).max(5),
-  totalToolCount: z.number().int().nonnegative(),
-}
-
-export const subagentActivityContentSchema = z
-  .discriminatedUnion("status", [
-    z.strictObject({ ...subagentFields, status: z.literal("running") }),
-    z.strictObject({ ...subagentFields, status: z.literal("completed") }),
-    z.strictObject({
-      ...subagentFields,
-      status: z.literal("failed"),
-      error: z.string().trim().min(1).max(400),
-    }),
-  ])
-  .refine((content) => content.totalToolCount >= content.tools.length, {
-    message: "totalToolCount must include every displayed tool",
-    path: ["totalToolCount"],
-  })
-
-function assignSubagentOutputToPublicType(
-  content: z.output<typeof subagentActivityContentSchema>,
-): DawnSubagentActivityContent {
-  return content
-}
-void assignSubagentOutputToPublicType
+```bash
+pnpm add @dawn-ai/ag-ui
 ```
 
-Register the renderers once at module scope. The public constants ensure the
-registry follows the adapter's activity-type contract, and stable array
-identity avoids replacing the registry on every React render:
+```tsx
+import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
-```tsx title="examples/research/web/app/components/ActivityRenderers.tsx"
-import type { ReactActivityMessageRenderer } from "@copilotkit/react-core/v2"
-import {
-  DAWN_PLAN_ACTIVITY_TYPE,
-  DAWN_SUBAGENT_ACTIVITY_TYPE,
-  type DawnPlanActivityContent,
-  type DawnSubagentActivityContent,
-} from "@dawn-ai/ag-ui"
-import {
-  planActivityContentSchema,
-  subagentActivityContentSchema,
-} from "./ActivitySchemas"
-import { PlanActivityCard } from "./PlanActivityCard"
-import { SubagentActivityCard } from "./SubagentActivityCard"
-
-const planActivityRenderer = {
-  activityType: DAWN_PLAN_ACTIVITY_TYPE,
-  content: planActivityContentSchema,
-  render: ({ content }) => <PlanActivityCard content={content} />,
-} satisfies ReactActivityMessageRenderer<DawnPlanActivityContent>
-
-const subagentActivityRenderer = {
-  activityType: DAWN_SUBAGENT_ACTIVITY_TYPE,
-  content: subagentActivityContentSchema,
-  render: ({ content }) => <SubagentActivityCard content={content} />,
-} satisfies ReactActivityMessageRenderer<DawnSubagentActivityContent>
-
-export const activityMessageRenderers = [
-  planActivityRenderer,
-  subagentActivityRenderer,
-]
+<CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
 ```
+
+That is the whole wiring, and `app/page.tsx` above already carries it. `dawnActivityRenderers` is a module-scope constant, so
+the registry keeps a stable identity across React renders, and each renderer is
+keyed by the adapter's own activity-type constant. Both renderers validate the
+public activity content with a strict runtime schema: a payload with unknown or
+incompatible fields fails closed instead of dumping arbitrary JSON into the
+transcript.
+
+React and `@copilotkit/react-core` are optional peer dependencies of
+`@dawn-ai/ag-ui`, and only the `./react` subpath needs them. A server that uses
+the root or `./sse` entry installs nothing extra.
+
+To present the same activities your own way, the subpath also exports the pieces
+behind that array: `dawnPlanActivityRenderer` and `dawnSubagentActivityRenderer`
+for registering one without the other; `PlanActivityCard`, `SubagentActivityCard`,
+and `ActivityChecklist` as plain React components; and
+`planActivityContentSchema` and `subagentActivityContentSchema` for validating
+content before rendering it yourself. The cards take a `content` prop and need
+no CopilotKit context.
 
 Root plan snapshots replace `dawn:plan:${runId}` and carry the complete todo
 list. Subagent snapshots replace `dawn:subagent:${call_id}` and carry the name,

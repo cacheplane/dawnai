@@ -1,5 +1,5 @@
-import type { DawnPlanActivityContent, DawnSubagentActivityContent } from "@dawn-ai/ag-ui"
 import { z } from "zod"
+import type { DawnPlanActivityContent, DawnSubagentActivityContent } from "../activities.js"
 
 const todoSchema = z.strictObject({
   content: z.string().trim().min(1),
@@ -45,9 +45,30 @@ export const subagentActivityContentSchema = z
     path: ["totalToolCount"],
   })
 
+/**
+ * What a successful parse actually yields: `DawnSubagentActivityContent`, but
+ * with `todos` widened to admit an explicit `undefined`.
+ *
+ * This package compiles with `exactOptionalPropertyTypes`, which distinguishes
+ * an absent `todos` from a present `todos: undefined`; zod does not — a
+ * `strictObject` with an `.optional()` field passes an input's own
+ * `todos: undefined` key straight through, so the parsed value can carry it and
+ * is genuinely wider than the published exact-optional type.
+ *
+ * Only that one property is relaxed. Every other field name, its value type,
+ * and the presence or absence of all other properties are still checked against
+ * `DawnSubagentActivityContent` by the probe below, which is what keeps this
+ * zod mirror honest. Exported from the `./react` entry, since it is the
+ * parameter type consumers see on `dawnSubagentActivityRenderer.render` and on
+ * `SubagentActivityCard`.
+ */
+export type SubagentActivityContentOutput = Omit<DawnSubagentActivityContent, "todos"> & {
+  readonly todos?: DawnSubagentActivityContent["todos"] | undefined
+}
+
 function assignSubagentOutputToPublicType(
   content: z.output<typeof subagentActivityContentSchema>,
-): DawnSubagentActivityContent {
+): SubagentActivityContentOutput {
   return content
 }
 void assignSubagentOutputToPublicType

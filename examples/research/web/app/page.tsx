@@ -1,6 +1,6 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
-import { activityMessageRenderers } from "./components/ActivityRenderers"
+import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 import { DemoSuggestions } from "./components/DemoSuggestions"
 import { MemoryCandidates } from "./components/MemoryCandidates"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
@@ -28,7 +28,7 @@ export default function Home() {
     <CopilotKit
       runtimeUrl="/api/copilotkit"
       defaultThrottleMs={100}
-      renderActivityMessages={activityMessageRenderers}
+      renderActivityMessages={dawnActivityRenderers}
     >
       <DemoSuggestions />
       <PermissionInterrupt />
