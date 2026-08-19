@@ -33,7 +33,7 @@ import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
 The subpath exports three layers, from drop-in to build-your-own:
 
-- `dawnActivityRenderers` — both renderers, ready to spread into CopilotKit's `renderActivityMessages`.
+- `dawnActivityRenderers` — both renderers, ready to pass to CopilotKit's `renderActivityMessages`.
 - `dawnPlanActivityRenderer` and `dawnSubagentActivityRenderer` — the individual renderers, for a client that wants one of them or mixes them with its own.
 - `PlanActivityCard`, `SubagentActivityCard`, and `ActivityChecklist` — plain React components taking `content`, plus `planActivityContentSchema` and `subagentActivityContentSchema`, the strict validators behind the renderers, for presenting the same activities another way.
 
@@ -43,7 +43,7 @@ The subpath exports three layers, from drop-in to build-your-own:
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/sse` is a supported, edge-safe integration surface.
-- `@dawn-ai/ag-ui/react` is a supported, node-only React application surface. It requires a React runtime; the other two entries never load it.
+- `@dawn-ai/ag-ui/react` is a supported React application surface, built for browser bundles. Dawn records its runtime as `node-only`, which means only that it does not pass Dawn's edge-safety guard — not that it requires Node: React's own JSX runtime reads `process.env.NODE_ENV`, which an application bundler substitutes as usual but the stricter edge guard rejects. The other two entries never load it.
 
 They translate protocol data; they do not authenticate callers or make client-provided state authoritative.
 

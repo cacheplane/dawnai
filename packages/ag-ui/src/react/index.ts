@@ -7,7 +7,7 @@
  *
  * Three layers, from drop-in to build-your-own:
  *
- * 1. `dawnActivityRenderers` — the whole set, ready to spread into
+ * 1. `dawnActivityRenderers` — the whole set, ready to pass to
  *    CopilotKit's `renderActivityMessages`. This is the one-line default.
  * 2. `dawnPlanActivityRenderer` / `dawnSubagentActivityRenderer` — the
  *    individual renderers, for clients that want only one of them or that mix

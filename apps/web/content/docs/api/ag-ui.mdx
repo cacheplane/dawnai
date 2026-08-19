@@ -13,6 +13,11 @@ pnpm add @dawn-ai/ag-ui
 ```ts
 import { fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+```
+
+In a React client, and only there, import the renderers from the `./react` subpath:
+
+```tsx
 import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 ```
 

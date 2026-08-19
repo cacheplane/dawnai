@@ -6,6 +6,8 @@ Use this catalog to choose the Dawn package, subpath, or executable that owns a 
 
 Application shortcuts: author routes with the [`@dawn-ai/sdk` reference](/docs/api/sdk); use the [`dawn` command or runtime entries](/docs/api/cli), including `/fetch` for supported edge integrations; test programmatically with [`@dawn-ai/testing`](/docs/api/testing); score behavior with [`@dawn-ai/evals`](/docs/api/evals); and import app-specific tool and state types from [`dawn:routes`](/docs/api/generated-routes).
 
+Read the runtime column precisely: `node-only` records that a surface does not pass Dawn's edge-safety guard, not that the surface cannot run in a browser. Most `node-only` entries are genuinely server-side, but `@dawn-ai/ag-ui/react` is browser-targeted and fails the guard only because React's JSX runtime reads `process.env.NODE_ENV`.
+
 | Package | Purpose | Audience | Stability | Surfaces | Artifact boundaries | README | Reference | Guide |
 |---|---|---|---|---|---|---|---|---|
 | `@dawn-ai/ag-ui` | AG-UI protocol translation for Dawn runtimes and web clients. | `integration` | `supported` | `@dawn-ai/ag-ui`<br />`@dawn-ai/ag-ui/sse`<br />`@dawn-ai/ag-ui/react` | focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `edge-safe` runtime · `not-claimed` purity<br />focused reference · `node-only` runtime · `not-claimed` purity | [README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md) | [Reference](/docs/api/ag-ui) | [Guide](/docs/ag-ui) |
