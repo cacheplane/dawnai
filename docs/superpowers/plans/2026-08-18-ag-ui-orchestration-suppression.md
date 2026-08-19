@@ -466,12 +466,14 @@ describe("orchestration suppression", () => {
       { type: "done", data: {} },
     ])
 
+    // Source order: searchCorpus's frames arrived BEFORE the plan_update, so
+    // they drain ahead of the activity that released them.
     expect(events.map((event) => event.type)).toEqual([
       EventType.RUN_STARTED,
-      EventType.ACTIVITY_SNAPSHOT,
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.ACTIVITY_SNAPSHOT,
       EventType.TOOL_CALL_RESULT,
       EventType.RUN_FINISHED,
     ])
