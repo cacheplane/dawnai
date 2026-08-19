@@ -41,9 +41,23 @@ browser
 CopilotKit's sidebar uses the literal agent id `default` when none is supplied,
 so the example registers the Dawn route under that key. See
 `examples/chat/web/README.md` for the complete setup and smoke checklist.
-That basic client registers no activity renderers. For plan and researcher
-cards, use the [activity-aware research recipe](/docs/recipes/research-web-ui)
-and its
+
+That client renders plan and researcher cards by passing the adapter's own
+renderer array to CopilotKit:
+
+```tsx
+import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
+
+<CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
+```
+
+React and `@copilotkit/react-core` are optional peer dependencies, so a
+server-only consumer of the root or `/sse` entry installs nothing extra. The
+subpath also exports the two renderers individually, the card components, and
+the content schemas, for a client presenting the activities its own way. For the
+full application wiring — suggestions, generic tool cards, permissions, and
+memory review — see the
+[research web UI recipe](/docs/recipes/research-web-ui) and its
 [`examples/research/web`](https://github.com/cacheplane/dawnai/tree/main/examples/research/web)
 implementation.
 
@@ -152,7 +166,9 @@ Unrelated held calls still flush before the interrupt.
 <Callout type="warn" title="Activities are the only surface for these two tools">
   A client that registers no activity renderer sees less for `writeTodos` and
   `task` than a generic tool renderer used to show. That is the contract:
-  activities are canonical for built-in orchestration, so render them.
+  activities are canonical for built-in orchestration, so render them. For a
+  React client, that is one line — pass `dawnActivityRenderers` from
+  `@dawn-ai/ag-ui/react` to CopilotKit's `renderActivityMessages`.
 </Callout>
 
 ### Inbound input
