@@ -158,9 +158,7 @@ describe("capability custom events", () => {
     const chunks = await collectCustomEvents(
       {
         dawn: {
-          subagent_stack: [
-            { callId: "call-child", name: "researcher", routeId: "/researcher" },
-          ],
+          subagent_stack: [{ callId: "call-child", name: "researcher", routeId: "/researcher" }],
         },
       },
       [{ event: "plan_update", data: { todos: ["child"], tool_call_id: "call_child_writeTodos" } }],
@@ -194,9 +192,7 @@ describe("capability custom events", () => {
         (chunk.data as { todos: unknown[] }).todos[0] === "root",
     )
     expect(rootPlan).toBeDefined()
-    expect((rootPlan?.data as { tool_call_id?: unknown })?.tool_call_id).toBe(
-      "call_writeTodos_0_1",
-    )
+    expect((rootPlan?.data as { tool_call_id?: unknown })?.tool_call_id).toBe("call_writeTodos_0_1")
   })
 })
 

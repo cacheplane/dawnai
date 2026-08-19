@@ -110,6 +110,7 @@ describe("convertToolToLangChain", () => {
       [
         {
           observes: "tool_result",
+          // biome-ignore lint/correctness/useYield: captures the transform input; this transformer emits no events
           transform: async function* (input) {
             transformerInput = input
           },
@@ -133,6 +134,7 @@ describe("convertToolToLangChain", () => {
       [
         {
           observes: "tool_result",
+          // biome-ignore lint/correctness/useYield: captures the transform input; this transformer emits no events
           transform: async function* (input) {
             transformerInput = input
           },
