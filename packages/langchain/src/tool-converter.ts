@@ -106,6 +106,10 @@ export function convertToolToLangChain(
           for await (const output of transformer.transform({
             toolName: tool.name,
             toolOutput: convertedResult,
+            // The model/provider tool-call id — the public identity the root
+            // AG-UI tool frames use. `extractToolCallId` returns "" when the
+            // provider supplied none, in which case the field stays absent.
+            ...(toolCallId ? { toolCallId } : {}),
           })) {
             await dispatchCustomEvent(
               "dawn.capability",
