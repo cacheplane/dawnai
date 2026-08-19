@@ -181,6 +181,23 @@ describe("capability custom events", () => {
       route_id: "/researcher",
     })
   })
+
+  test("keeps the root's tool-call id on an unnamespaced capability chunk", async () => {
+    const chunks = await collectCustomEvents(undefined, [
+      { event: "plan_update", data: { todos: ["root"], tool_call_id: "call_writeTodos_0_1" } },
+    ])
+
+    const rootPlan = chunks.find(
+      (chunk) =>
+        chunk.type === "plan_update" &&
+        Array.isArray((chunk.data as { todos?: unknown }).todos) &&
+        (chunk.data as { todos: unknown[] }).todos[0] === "root",
+    )
+    expect(rootPlan).toBeDefined()
+    expect((rootPlan?.data as { tool_call_id?: unknown })?.tool_call_id).toBe(
+      "call_writeTodos_0_1",
+    )
+  })
 })
 
 describe("native subagent event projection", () => {

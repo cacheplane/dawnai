@@ -386,10 +386,12 @@ function childIdentity(child: SubagentContext): Record<string, unknown> {
 
 function childData(child: SubagentContext, data: unknown): Record<string, unknown> {
   if (!isRecord(data)) return { value: data, ...childIdentity(child) }
-  // A child capability event carries the CHILD's own tool-call id (e.g. a
-  // subagent's writeTodos). Only ROOT orchestration correlates a tool call
-  // with its activity, and the subagent activity boundary keeps child tool
-  // ids internal, so the id is dropped rather than namespaced outward.
+  // A child capability event of ANY type — not just plan_update, whatever
+  // third-party capability produced it — can carry the CHILD's own
+  // tool-call id (e.g. a subagent's writeTodos). Only ROOT orchestration
+  // correlates a tool call with its activity, and the subagent activity
+  // boundary keeps child tool ids internal, so the id is unconditionally
+  // dropped here rather than namespaced outward.
   const { tool_call_id: _toolCallId, ...publicData } = data
   return { ...publicData, ...childIdentity(child) }
 }

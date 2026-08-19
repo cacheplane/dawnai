@@ -84,10 +84,12 @@ export function createPlanningMarker(): CapabilityMarker {
             data: {
               todos,
               // Correlation for the AG-UI adapter: same public id the tool's
-              // own TOOL_CALL_* frames carry, so the client's plan activity
-              // and its tool call can be recognized as one action. Omitted
-              // when the runtime has no logical id; the plan activity is
-              // still valid without it.
+              // own TOOL_CALL_* frames carry, so the AG-UI adapter's
+              // orchestration projection (see the orchestration-projection
+              // design/plan under docs/superpowers) can recognize the
+              // client's plan activity and its writeTodos tool call as one
+              // action. Omitted when the runtime has no logical id; the plan
+              // activity is still valid without it.
               ...(typeof input.toolCallId === "string" && input.toolCallId.length > 0
                 ? { tool_call_id: input.toolCallId }
                 : {}),
