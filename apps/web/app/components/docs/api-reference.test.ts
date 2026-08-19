@@ -72,6 +72,7 @@ const EXPECTED_DETAILED_IMPORTS = [
   ["@dawn-ai/core", "./node"],
   ["@dawn-ai/ag-ui", "."],
   ["@dawn-ai/ag-ui", "./sse"],
+  ["@dawn-ai/ag-ui", "./react"],
   ["@dawn-ai/memory", "."],
   ["@dawn-ai/memory", "./browse"],
   ["@dawn-ai/memory", "./namespace"],
@@ -689,7 +690,7 @@ describe("artifact registry", () => {
   it("uses unique keys in separate import and operated address spaces", () => {
     const addresses = ARTIFACT_REGISTRY.map(artifactAddressFor)
     expect(new Set(addresses).size).toBe(addresses.length)
-    expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import")).toHaveLength(42)
+    expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import")).toHaveLength(43)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated")).toHaveLength(3)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated")).toEqual([
       GENERATED_ROUTES_ARTIFACT,

@@ -1169,6 +1169,7 @@ export const ARTIFACT_REGISTRY = [
   ),
   runtimeImport("@dawn-ai/ag-ui", ".", "detailed", "edge-safe", "integration"),
   runtimeImport("@dawn-ai/ag-ui", "./sse", "detailed", "edge-safe", "integration"),
+  runtimeImport("@dawn-ai/ag-ui", "./react", "detailed", "node-only", "application"),
   runtimeImport("@dawn-ai/memory", ".", "detailed", "node-only", "application"),
   runtimeImport(
     "@dawn-ai/memory",
@@ -1365,7 +1366,11 @@ export const PACKAGE_CATALOG = [
     "packages/ag-ui/README.md",
     "/docs/api/ag-ui",
     "/docs/ag-ui",
-    [importAddress("@dawn-ai/ag-ui", "."), importAddress("@dawn-ai/ag-ui", "./sse")],
+    [
+      importAddress("@dawn-ai/ag-ui", "."),
+      importAddress("@dawn-ai/ag-ui", "./sse"),
+      importAddress("@dawn-ai/ag-ui", "./react"),
+    ],
     "integration",
     "supported",
   ),

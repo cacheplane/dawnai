@@ -43,7 +43,7 @@ The subpath exports three layers, from drop-in to build-your-own:
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/sse` is a supported, edge-safe integration surface.
-- `@dawn-ai/ag-ui/react` is a supported React integration surface. It requires a React runtime; the other two entries never load it.
+- `@dawn-ai/ag-ui/react` is a supported, node-only React application surface. It requires a React runtime; the other two entries never load it.
 
 They translate protocol data; they do not authenticate callers or make client-provided state authoritative.
 
