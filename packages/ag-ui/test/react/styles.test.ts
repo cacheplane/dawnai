@@ -33,7 +33,6 @@ describe("styles.css", () => {
       "--dawn-activity-border",
       "--dawn-activity-text",
       "--dawn-activity-muted",
-      "--dawn-activity-accent",
       "--dawn-activity-running",
       "--dawn-activity-complete",
       "--dawn-activity-failed",
