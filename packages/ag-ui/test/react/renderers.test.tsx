@@ -115,9 +115,23 @@ describe("subagent schema bounds", () => {
   })
 })
 
-/** The text a reader sees, with the markup that carries the styling removed. */
+/**
+ * The text a reader sees, with the markup that carries the styling removed.
+ *
+ * Stripping repeats until the string stops changing. A single pass is the
+ * classic incomplete sanitizer: `<scr<script>ipt>` loses its inner tag and
+ * reassembles into `<script>`. Our input is always our own rendered fixtures,
+ * so nothing hostile reaches this — but a one-pass strip is the wrong shape to
+ * leave lying around in a file people copy from.
+ */
 function visibleText(markup: string): string {
-  return markup.replace(/<[^>]*>/g, "")
+  let previous = markup
+  let current = markup.replace(/<[^>]*>/g, "")
+  while (current !== previous) {
+    previous = current
+    current = current.replace(/<[^>]*>/g, "")
+  }
+  return current
 }
 
 describe("plan activity card", () => {
