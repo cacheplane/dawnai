@@ -1,0 +1,144 @@
+/*
+ * Dawn activity cards — default appearance.
+ *
+ * Import once in your app:
+ *   import "@dawn-ai/ag-ui/react/styles.css"
+ *
+ * Rung 1 of the customization ladder: override any token below in your own CSS
+ * to restyle without touching markup. Every selector here is scoped to the
+ * `dawn-activity` prefix, so this sheet cannot affect the rest of your app.
+ */
+
+:root {
+  --dawn-activity-surface: #ffffff;
+  --dawn-activity-border: #e4e4e7;
+  --dawn-activity-text: #18181b;
+  --dawn-activity-muted: #71717a;
+  --dawn-activity-accent: #ea580c;
+  --dawn-activity-running: #2563eb;
+  --dawn-activity-complete: #16a34a;
+  --dawn-activity-failed: #9f1239;
+  --dawn-activity-radius: 10px;
+  --dawn-activity-gap: 8px;
+  --dawn-activity-font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-dawn-theme="light"]) {
+    --dawn-activity-surface: #141519;
+    --dawn-activity-border: #26272d;
+    --dawn-activity-text: #e4e6eb;
+    --dawn-activity-muted: #8b909c;
+    --dawn-activity-accent: #fb923c;
+    --dawn-activity-running: #60a5fa;
+    --dawn-activity-complete: #4ade80;
+    --dawn-activity-failed: #fb7185;
+  }
+}
+
+:root[data-dawn-theme="dark"] {
+  --dawn-activity-surface: #141519;
+  --dawn-activity-border: #26272d;
+  --dawn-activity-text: #e4e6eb;
+  --dawn-activity-muted: #8b909c;
+  --dawn-activity-accent: #fb923c;
+  --dawn-activity-running: #60a5fa;
+  --dawn-activity-complete: #4ade80;
+  --dawn-activity-failed: #fb7185;
+}
+
+.dawn-activity {
+  background: var(--dawn-activity-surface);
+  border: 1px solid var(--dawn-activity-border);
+  border-radius: var(--dawn-activity-radius);
+  color: var(--dawn-activity-text);
+  font-size: var(--dawn-activity-font-size);
+  margin: 6px 0;
+  padding: 8px 10px;
+}
+
+.dawn-activity__header {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.dawn-activity__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dawn-activity__meta {
+  color: var(--dawn-activity-muted);
+  font-weight: 400;
+}
+
+.dawn-activity__badge {
+  background: var(--dawn-activity-border);
+  border-radius: 4px;
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 1px 5px;
+}
+
+.dawn-activity__section {
+  margin-top: var(--dawn-activity-gap);
+}
+
+.dawn-activity__section-label {
+  color: var(--dawn-activity-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dawn-activity__list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.dawn-activity__item {
+  align-items: baseline;
+  display: flex;
+  gap: var(--dawn-activity-gap);
+  margin-top: 4px;
+}
+
+.dawn-activity__item-glyph {
+  color: var(--dawn-activity-muted);
+}
+
+.dawn-activity__item--running .dawn-activity__item-glyph {
+  color: var(--dawn-activity-running);
+}
+
+.dawn-activity__item--completed .dawn-activity__item-glyph {
+  color: var(--dawn-activity-complete);
+}
+
+.dawn-activity__item--incomplete .dawn-activity__item-glyph {
+  color: var(--dawn-activity-failed);
+}
+
+.dawn-activity__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dawn-activity__item-status {
+  color: var(--dawn-activity-muted);
+  font-size: 11px;
+}
+
+.dawn-activity__overflow {
+  color: var(--dawn-activity-muted);
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+.dawn-activity__error {
+  color: var(--dawn-activity-failed);
+  margin-top: var(--dawn-activity-gap);
+  overflow-wrap: anywhere;
+}
