@@ -4,7 +4,11 @@ export type { ApiReferencePage } from "./api-reference-pages"
 export { API_REFERENCE_PAGES, API_REFERENCE_PARENT } from "./api-reference-pages"
 
 export type ApiReferenceCoverage = "detailed" | "catalog-only" | "internal"
-export type ImportSurfaceKind = "typescript-runtime" | "config-artifact" | "metadata"
+export type ImportSurfaceKind =
+  | "typescript-runtime"
+  | "config-artifact"
+  | "metadata"
+  | "style-asset"
 export type OperatedArtifactKind = "executable" | "operated-application"
 export type RuntimeCompatibility = "node-only" | "edge-safe"
 export type ApiReferenceAudience =
@@ -911,7 +915,7 @@ export interface StaticImportArtifact extends ArtifactPolicy {
   readonly kind: "import"
   readonly packageName: string
   readonly subpath: string
-  readonly surfaceKind: "config-artifact" | "metadata"
+  readonly surfaceKind: "config-artifact" | "metadata" | "style-asset"
 }
 
 export interface GeneratedTypesArtifact extends ArtifactPolicy {
@@ -1170,6 +1174,14 @@ export const ARTIFACT_REGISTRY = [
   runtimeImport("@dawn-ai/ag-ui", ".", "detailed", "edge-safe", "integration"),
   runtimeImport("@dawn-ai/ag-ui", "./sse", "detailed", "edge-safe", "integration"),
   runtimeImport("@dawn-ai/ag-ui", "./react", "detailed", "node-only", "application"),
+  staticImport(
+    "@dawn-ai/ag-ui",
+    "./react/styles.css",
+    "catalog-only",
+    "style-asset",
+    "integration",
+    "supported",
+  ),
   runtimeImport("@dawn-ai/memory", ".", "detailed", "node-only", "application"),
   runtimeImport(
     "@dawn-ai/memory",
@@ -1351,6 +1363,9 @@ export function artifactBoundaryFor(artifact: ApiReferenceArtifact): string {
   if (artifact.surfaceKind === "metadata") {
     return `${documentation} · package metadata; read as data, not runtime code · purity n/a`
   }
+  if (artifact.surfaceKind === "style-asset") {
+    return `${documentation} · stylesheet asset; resolved by a bundler, never evaluated as JS · purity n/a`
+  }
   return `${documentation} · package metadata; read as data, not runtime code · purity n/a`
 }
 
@@ -1370,6 +1385,7 @@ export const PACKAGE_CATALOG = [
       importAddress("@dawn-ai/ag-ui", "."),
       importAddress("@dawn-ai/ag-ui", "./sse"),
       importAddress("@dawn-ai/ag-ui", "./react"),
+      importAddress("@dawn-ai/ag-ui", "./react/styles.css"),
     ],
     "integration",
     "supported",
@@ -1657,6 +1673,7 @@ const GUARD_IDS = new Set<ApiReferenceGuardId>(API_REFERENCE_GUARD_IDS)
 const STATIC_SURFACES = new Set<StaticImportArtifact["surfaceKind"]>([
   "config-artifact",
   "metadata",
+  "style-asset",
 ])
 const OPERATED_ONLY_PACKAGES = new Set(["create-dawn-ai-app", "@dawn-ai/inspector"])
 
