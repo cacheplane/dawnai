@@ -26,6 +26,12 @@
  */
 export { ActivityChecklist } from "./ActivityChecklist.js"
 export { PlanActivityCard } from "./PlanActivityCard.js"
+export type {
+  DawnActivityClassNames,
+  DawnActivityComponents,
+  DawnTodoRowProps,
+  DawnToolRowProps,
+} from "./parts.js"
 export {
   dawnActivityRenderers,
   dawnPlanActivityRenderer,
