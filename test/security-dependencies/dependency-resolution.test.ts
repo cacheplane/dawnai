@@ -1,1039 +1,1037 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { parseDocument } from "yaml";
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { describe, expect, it } from "vitest"
+import { parseDocument } from "yaml"
 
-const testDirectory = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = resolve(testDirectory, "../..");
+const testDirectory = dirname(fileURLToPath(import.meta.url))
+const repositoryRoot = resolve(testDirectory, "../..")
+const exampleImporters = ["examples/chat/web", "examples/research/web"] as const
+const forbiddenOverrideSelector =
+  /(^|>)(?:@copilotkit\/|@ag-ui\/|@ai-sdk\/provider-utils(?:@|$)|@hono\/node-server(?:@|$)|hono(?:@|$)|uuid(?:@|$))/
 
-const expectedUnrelatedOverrides = {
-	"esbuild@<0.25.0": "0.25.10",
-	"esbuild@>=0.27.3 <0.28.1": "0.28.1",
-	langsmith: "0.7.10",
-	"qs@>=6.11.1 <=6.15.1": "^6.15.2",
-	"uuid@<11.1.1": "11.1.1",
-	"vite@>=5 <6.4.3": "6.4.3",
-	"ws@>=8 <8.21.0": "8.21.0",
-} as const;
-
-const expectedSecurityOverrides = {
-	"@hono/node-server@<2.0.10": "2.1.0",
-	"js-yaml@>=4 <4.3.1": "4.3.1",
-	postcss: "8.5.23",
-} as const;
-
-const expectedOverrides = {
-	...expectedUnrelatedOverrides,
-	...expectedSecurityOverrides,
-} as const;
-
-const expectedSnapshotVersions = {
-	"@hono/node-server": ["2.1.0"],
-	"body-parser": ["1.20.6", "2.3.0"],
-	"brace-expansion": ["2.1.4", "5.0.9"],
-	dompurify: ["3.4.13"],
-	"fast-uri": ["3.1.5"],
-	hono: ["4.13.1"],
-	"ip-address": ["10.5.0"],
-	"js-yaml": ["3.15.1", "4.3.1", "5.2.2"],
-	mermaid: ["11.16.1"],
-	nanoid: ["3.3.18"],
-	postcss: ["8.5.23"],
-} as const;
-
-const exactProviderUtilsParents = [
-	["@ai-sdk/anthropic", "2.0.85"],
-	["@ai-sdk/google", "2.0.78"],
-	["@ai-sdk/google-vertex", "3.0.146"],
-	["@ai-sdk/openai-compatible", "1.0.42"],
-] as const;
-
-type JsonRecord = Record<string, unknown>;
+type JsonRecord = Record<string, unknown>
+type DependencySection = "dependencies" | "devDependencies" | "optionalDependencies"
 
 interface ParsedWorkspace {
-	readonly importers: JsonRecord;
-	readonly manifestOverrides: Record<string, string>;
-	readonly packages: JsonRecord;
-	readonly snapshots: JsonRecord;
+  readonly importers: JsonRecord
+  readonly manifestOverrides: Record<string, string>
+  readonly packages: JsonRecord
+  readonly snapshots: JsonRecord
 }
 
 interface Locator {
-	readonly key: string;
-	readonly name: string;
-	readonly value: JsonRecord;
-	readonly version: string;
+  readonly key: string
+  readonly name: string
+  readonly value: JsonRecord
+  readonly version: string
 }
 
-type DependencySection =
-	| "dependencies"
-	| "devDependencies"
-	| "optionalDependencies";
+interface ReverseParent {
+  readonly identity: string
+  readonly kind: "importer" | "snapshot"
+  readonly section: DependencySection
+  readonly targetIdentity: string
+}
 
-interface ReverseEdge {
-	readonly parentIdentity: string;
-	readonly parentKind: "importer" | "snapshot";
-	readonly reference: string;
-	readonly section: DependencySection;
-	readonly target: Locator;
+interface RootImporterPaths {
+  readonly paths: string[][]
+  readonly targetIdentity: string
 }
 
 function requireRecord(value: unknown, label: string): JsonRecord {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error(`${label} must be an object`);
-	}
-	return value as JsonRecord;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`)
+  }
+  return value as JsonRecord
 }
 
 function requireString(value: unknown, label: string): string {
-	if (typeof value !== "string" || value.length === 0) {
-		throw new Error(`${label} must be a non-empty string`);
-	}
-	return value;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string`)
+  }
+  return value
 }
 
-function requireStringMap(
-	value: unknown,
-	label: string,
-): Record<string, string> {
-	const record = requireRecord(value, label);
-	return Object.fromEntries(
-		Object.entries(record).map(([key, entry]) => [
-			key,
-			requireString(entry, `${label}.${key}`),
-		]),
-	);
+function requireStringMap(value: unknown, label: string): Record<string, string> {
+  const record = requireRecord(value, label)
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, requireString(entry, `${label}.${key}`)]),
+  )
+}
+
+function parseJsonRecord(source: string, label: string): JsonRecord {
+  let value: unknown
+  try {
+    value = JSON.parse(source)
+  } catch {
+    throw new Error(`${label} must contain valid JSON`)
+  }
+  return requireRecord(value, label)
 }
 
 function parseManifest(source: string): Record<string, string> {
-	let value: unknown;
-	try {
-		value = JSON.parse(source);
-	} catch {
-		throw new Error("package.json must contain valid JSON");
-	}
-	const manifest = requireRecord(value, "package.json");
-	const pnpm = requireRecord(manifest.pnpm, "package.json.pnpm");
-	return requireStringMap(pnpm.overrides, "package.json.pnpm.overrides");
+  const manifest = parseJsonRecord(source, "package.json")
+  const pnpm = requireRecord(manifest.pnpm, "package.json.pnpm")
+  return requireStringMap(pnpm.overrides, "package.json.pnpm.overrides")
 }
 
 function parseLockfile(source: string): {
-	readonly importers: JsonRecord;
-	readonly overrides: Record<string, string>;
-	readonly packages: JsonRecord;
-	readonly snapshots: JsonRecord;
+  readonly importers: JsonRecord
+  readonly overrides: Record<string, string>
+  readonly packages: JsonRecord
+  readonly snapshots: JsonRecord
 } {
-	const document = parseDocument(source, {
-		strict: true,
-		uniqueKeys: true,
-	});
-	if (document.errors.length > 0 || document.warnings.length > 0) {
-		throw new Error("pnpm-lock.yaml must parse without errors or warnings");
-	}
-	const lockfile = requireRecord(
-		document.toJS({ maxAliasCount: 0 }),
-		"pnpm-lock.yaml",
-	);
-	const expectedKeys = [
-		"importers",
-		"lockfileVersion",
-		"overrides",
-		"packages",
-		"settings",
-		"snapshots",
-	];
-	if (
-		JSON.stringify(Object.keys(lockfile).sort()) !==
-		JSON.stringify(expectedKeys)
-	) {
-		throw new Error(
-			"pnpm-lock.yaml has unexpected or missing top-level records",
-		);
-	}
-	if (lockfile.lockfileVersion !== "9.0") {
-		throw new Error("pnpm-lock.yaml.lockfileVersion must be the string 9.0");
-	}
-	const settings = requireRecord(lockfile.settings, "pnpm-lock.yaml.settings");
-	if (
-		settings.autoInstallPeers !== true ||
-		settings.excludeLinksFromLockfile !== false ||
-		Object.keys(settings).length !== 2
-	) {
-		throw new Error("pnpm-lock.yaml.settings has an unexpected shape");
-	}
-	return {
-		importers: requireRecord(lockfile.importers, "pnpm-lock.yaml.importers"),
-		overrides: requireStringMap(lockfile.overrides, "pnpm-lock.yaml.overrides"),
-		packages: requireRecord(lockfile.packages, "pnpm-lock.yaml.packages"),
-		snapshots: requireRecord(lockfile.snapshots, "pnpm-lock.yaml.snapshots"),
-	};
+  const document = parseDocument(source, {
+    strict: true,
+    uniqueKeys: true,
+  })
+  if (document.errors.length > 0 || document.warnings.length > 0) {
+    throw new Error("pnpm-lock.yaml must parse without errors or warnings")
+  }
+  const lockfile = requireRecord(document.toJS({ maxAliasCount: 0 }), "pnpm-lock.yaml")
+  const expectedKeys = [
+    "importers",
+    "lockfileVersion",
+    "overrides",
+    "packages",
+    "settings",
+    "snapshots",
+  ]
+  if (JSON.stringify(Object.keys(lockfile).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new Error("pnpm-lock.yaml has unexpected or missing top-level records")
+  }
+  if (lockfile.lockfileVersion !== "9.0") {
+    throw new Error("pnpm-lock.yaml.lockfileVersion must be the string 9.0")
+  }
+  const settings = requireRecord(lockfile.settings, "pnpm-lock.yaml.settings")
+  if (
+    settings.autoInstallPeers !== true ||
+    settings.excludeLinksFromLockfile !== false ||
+    Object.keys(settings).length !== 2
+  ) {
+    throw new Error("pnpm-lock.yaml.settings has an unexpected shape")
+  }
+  return {
+    importers: requireRecord(lockfile.importers, "pnpm-lock.yaml.importers"),
+    overrides: requireStringMap(lockfile.overrides, "pnpm-lock.yaml.overrides"),
+    packages: requireRecord(lockfile.packages, "pnpm-lock.yaml.packages"),
+    snapshots: requireRecord(lockfile.snapshots, "pnpm-lock.yaml.snapshots"),
+  }
+}
+
+function sortedStringMapEntries(value: Record<string, string>): string {
+  return JSON.stringify(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
 }
 
 function readWorkspace(): ParsedWorkspace {
-	const manifestOverrides = parseManifest(
-		readFileSync(resolve(repositoryRoot, "package.json"), "utf8"),
-	);
-	const lockfile = parseLockfile(
-		readFileSync(resolve(repositoryRoot, "pnpm-lock.yaml"), "utf8"),
-	);
-	if (
-		JSON.stringify(manifestOverrides) !== JSON.stringify(lockfile.overrides)
-	) {
-		throw new Error(
-			"manifest and lockfile override maps must be byte-equivalent JSON",
-		);
-	}
-	return {
-		importers: lockfile.importers,
-		manifestOverrides,
-		packages: lockfile.packages,
-		snapshots: lockfile.snapshots,
-	};
+  const manifestOverrides = parseManifest(
+    readFileSync(resolve(repositoryRoot, "package.json"), "utf8"),
+  )
+  const lockfile = parseLockfile(readFileSync(resolve(repositoryRoot, "pnpm-lock.yaml"), "utf8"))
+  if (sortedStringMapEntries(manifestOverrides) !== sortedStringMapEntries(lockfile.overrides)) {
+    throw new Error("manifest and lockfile override maps must match")
+  }
+  return {
+    importers: lockfile.importers,
+    manifestOverrides,
+    packages: lockfile.packages,
+    snapshots: lockfile.snapshots,
+  }
+}
+
+function parseLocatorIdentity(
+  key: string,
+  label: string,
+): { readonly name: string; readonly version: string } {
+  const peerSuffix = key.indexOf("(")
+  const bareKey = peerSuffix < 0 ? key : key.slice(0, peerSuffix)
+  const suffix = peerSuffix < 0 ? "" : key.slice(peerSuffix)
+  const peerGroups: string[] = []
+  let groupStart = -1
+  let depth = 0
+  let validSuffix = !bareKey.includes(")")
+  for (let index = 0; validSuffix && index < suffix.length; index += 1) {
+    const character = suffix[index]
+    if (character === "(") {
+      if (depth === 0) groupStart = index + 1
+      depth += 1
+    } else if (character === ")") {
+      if (depth === 0) {
+        validSuffix = false
+        continue
+      }
+      depth -= 1
+      if (depth === 0) {
+        const peerGroup = suffix.slice(groupStart, index)
+        if (peerGroup.length === 0) {
+          validSuffix = false
+        } else {
+          peerGroups.push(peerGroup)
+        }
+      }
+    } else if (depth === 0) {
+      validSuffix = false
+    }
+  }
+  if (!validSuffix || depth !== 0) {
+    throw new Error(`${label} contains malformed package locator ${key}`)
+  }
+  const separator = bareKey.indexOf("@", 1)
+  if (separator <= 0 || separator === bareKey.length - 1) {
+    throw new Error(`${label} contains malformed package locator ${key}`)
+  }
+  const name = bareKey.slice(0, separator)
+  const version = bareKey.slice(separator + 1)
+  const packageSegment = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/
+  const validName = name.startsWith("@")
+    ? (() => {
+        const slash = name.indexOf("/")
+        return (
+          slash > 1 &&
+          slash < name.length - 1 &&
+          name.indexOf("/", slash + 1) < 0 &&
+          packageSegment.test(name.slice(1, slash)) &&
+          packageSegment.test(name.slice(slash + 1))
+        )
+      })()
+    : packageSegment.test(name)
+  if (!validName || /[()\s]/.test(version)) {
+    throw new Error(`${label} contains malformed package locator ${key}`)
+  }
+  let peerGroupStart = 0
+  if (peerGroups[0]?.startsWith("patch_hash=")) {
+    if (!/^patch_hash=[a-z0-9]+$/.test(peerGroups[0])) {
+      throw new Error(`${label} contains malformed package locator ${key}`)
+    }
+    peerGroupStart = 1
+  }
+  const dependencyPeerGroups = peerGroups.slice(peerGroupStart)
+  if (dependencyPeerGroups.some((peerGroup) => peerGroup.startsWith("patch_hash="))) {
+    throw new Error(`${label} contains malformed package locator ${key}`)
+  }
+  const compressedPeerGraph = /^[0-9a-f]{32}$/
+  if (dependencyPeerGroups.some((peerGroup) => compressedPeerGraph.test(peerGroup))) {
+    if (
+      dependencyPeerGroups.length !== 1 ||
+      !compressedPeerGraph.test(dependencyPeerGroups[0] ?? "")
+    ) {
+      throw new Error(`${label} contains malformed package locator ${key}`)
+    }
+  } else {
+    for (const peerGroup of dependencyPeerGroups) {
+      parseLocatorIdentity(peerGroup, `${label} peer suffix`)
+    }
+  }
+  return { name, version }
 }
 
 function parseLocator(key: string, value: unknown, label: string): Locator {
-	const bareKey = key.includes("(") ? key.slice(0, key.indexOf("(")) : key;
-	const separator = bareKey.lastIndexOf("@");
-	if (separator <= 0 || separator === bareKey.length - 1) {
-		throw new Error(`${label} contains malformed package locator ${key}`);
-	}
-	const name = bareKey.slice(0, separator);
-	const version = bareKey.slice(separator + 1);
-	return {
-		key,
-		name,
-		value: requireRecord(value, `${label}.${key}`),
-		version,
-	};
+  const identity = parseLocatorIdentity(key, label)
+  return {
+    key,
+    name: identity.name,
+    value: requireRecord(value, `${label}.${key}`),
+    version: identity.version,
+  }
 }
 
-function locatorsFor(
-	record: JsonRecord,
-	name: string,
-	label: string,
-): Locator[] {
-	return Object.entries(record)
-		.map(([key, value]) => parseLocator(key, value, label))
-		.filter((locator) => locator.name === name)
-		.sort((left, right) => left.key.localeCompare(right.key));
-}
-
-function uniqueLocator(
-	record: JsonRecord,
-	name: string,
-	version: string,
-	label = "snapshots",
-): Locator {
-	const matches = locatorsFor(record, name, label).filter(
-		(locator) => locator.version === version,
-	);
-	if (matches.length !== 1) {
-		throw new Error(
-			`${name}@${version} must have exactly one ${label} identity`,
-		);
-	}
-	const match = matches[0];
-	if (!match) throw new Error(`${name}@${version} identity disappeared`);
-	return match;
-}
-
-function dependenciesOf(locator: Locator): JsonRecord {
-	return requireRecord(
-		locator.value.dependencies,
-		`${locator.key}.dependencies`,
-	);
-}
-
-function locatorReference(locator: Locator): string {
-	const prefix = `${locator.name}@`;
-	if (!locator.key.startsWith(prefix)) {
-		throw new Error(
-			`${locator.key} is not a canonical ${locator.name} locator`,
-		);
-	}
-	return locator.key.slice(prefix.length);
-}
-
-function dependencyVersion(locator: Locator, dependencyName: string): string {
-	return requireString(
-		dependenciesOf(locator)[dependencyName],
-		`${locator.key}.dependencies.${dependencyName}`,
-	);
-}
-
-function importerDependency(
-	workspace: ParsedWorkspace,
-	importerName: string,
-	sectionName: "dependencies" | "devDependencies",
-	dependencyName: string,
-): { readonly specifier: string; readonly version: string } {
-	const importer = requireRecord(
-		workspace.importers[importerName],
-		`importers.${importerName}`,
-	);
-	const section = requireRecord(
-		importer[sectionName],
-		`importers.${importerName}.${sectionName}`,
-	);
-	const entry = requireRecord(
-		section[dependencyName],
-		`importers.${importerName}.${sectionName}.${dependencyName}`,
-	);
-	if (Object.keys(entry).sort().join(",") !== "specifier,version") {
-		throw new Error(
-			`importers.${importerName}.${sectionName}.${dependencyName} has an unexpected shape`,
-		);
-	}
-	return {
-		specifier: requireString(entry.specifier, "dependency specifier"),
-		version: requireString(entry.version, "dependency version"),
-	};
+function locatorsFor(record: JsonRecord, name: string, label: string): Locator[] {
+  return Object.entries(record)
+    .map(([key, value]) => parseLocator(key, value, label))
+    .filter((locator) => locator.name === name)
+    .sort((left, right) => left.key.localeCompare(right.key))
 }
 
 function versionTuple(version: string): readonly [number, number, number] {
-	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-	if (!match) throw new Error(`invalid release version ${version}`);
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
+  if (!match) throw new Error(`invalid release version ${version}`)
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
 function compareVersions(left: string, right: string): number {
-	const leftTuple = versionTuple(left);
-	const rightTuple = versionTuple(right);
-	for (const index of [0, 1, 2] as const) {
-		const difference = leftTuple[index] - rightTuple[index];
-		if (difference !== 0) return difference;
-	}
-	return 0;
+  const leftTuple = versionTuple(left)
+  const rightTuple = versionTuple(right)
+  for (const index of [0, 1, 2] as const) {
+    const difference = leftTuple[index] - rightTuple[index]
+    if (difference !== 0) return difference
+  }
+  return 0
 }
 
-function vulnerableFloor(name: string, version: string): string | undefined {
-	const major = versionTuple(version)[0];
-	const floors: Record<string, Record<number, string>> = {
-		"@hono/node-server": { 1: "2.0.10", 2: "2.0.10" },
-		"body-parser": { 1: "1.20.6" },
-		"brace-expansion": { 2: "2.1.4" },
-		dompurify: { 3: "3.4.13" },
-		"fast-uri": { 3: "3.1.5" },
-		hono: { 4: "4.12.34" },
-		"ip-address": { 10: "10.3.1" },
-		"js-yaml": { 3: "3.15.1", 4: "4.3.1" },
-		mermaid: { 11: "11.16.1" },
-		nanoid: { 3: "3.3.17" },
-		postcss: { 8: "8.5.23" },
-	};
-	return floors[name]?.[major];
+function packageVersions(workspace: ParsedWorkspace, name: string): string[] {
+  const versions = new Set<string>()
+  for (const [recordName, record] of [
+    ["packages", workspace.packages],
+    ["snapshots", workspace.snapshots],
+  ] as const) {
+    for (const locator of locatorsFor(record, name, recordName)) {
+      versions.add(locator.version)
+    }
+  }
+  return [...versions].sort(compareVersions)
 }
 
-function floorFailures(workspace: ParsedWorkspace): string[] {
-	const failures: string[] = [];
-	for (const name of Object.keys(expectedSnapshotVersions)) {
-		for (const locator of locatorsFor(workspace.snapshots, name, "snapshots")) {
-			const floor = vulnerableFloor(name, locator.version);
-			if (floor && compareVersions(locator.version, floor) < 0) {
-				failures.push(`${name}@${locator.version} is below ${floor}`);
-			}
-		}
-	}
-	return failures.sort();
+function importerDependency(
+  workspace: ParsedWorkspace,
+  importerName: string,
+  sectionName: "dependencies" | "devDependencies",
+  dependencyName: string,
+): { readonly specifier: string; readonly version: string } {
+  const importer = requireRecord(workspace.importers[importerName], `importers.${importerName}`)
+  const section = requireRecord(importer[sectionName], `importers.${importerName}.${sectionName}`)
+  const entry = requireRecord(
+    section[dependencyName],
+    `importers.${importerName}.${sectionName}.${dependencyName}`,
+  )
+  if (Object.keys(entry).sort().join(",") !== "specifier,version") {
+    throw new Error(
+      `importers.${importerName}.${sectionName}.${dependencyName} has an unexpected shape`,
+    )
+  }
+  return {
+    specifier: requireString(entry.specifier, "dependency specifier"),
+    version: requireString(entry.version, "dependency version"),
+  }
 }
 
-function snapshotVersions(workspace: ParsedWorkspace, name: string): string[] {
-	return locatorsFor(workspace.snapshots, name, "snapshots")
-		.map((locator) => locator.version)
-		.sort((left, right) => compareVersions(left, right));
-}
-
-function validateExactSnapshotSets(workspace: ParsedWorkspace): void {
-	for (const [name, versions] of Object.entries(expectedSnapshotVersions)) {
-		const snapshots = snapshotVersions(workspace, name);
-		const packages = locatorsFor(workspace.packages, name, "packages")
-			.map((locator) => locator.version)
-			.sort((left, right) => compareVersions(left, right));
-		if (JSON.stringify(snapshots) !== JSON.stringify(versions)) {
-			throw new Error(`${name} has an unexpected complete snapshot set`);
-		}
-		if (JSON.stringify(packages) !== JSON.stringify(versions)) {
-			throw new Error(`${name} has an unexpected complete package set`);
-		}
-	}
-}
-
-function validateOverridePolicy(overrides: Record<string, string>): void {
-	const actual = Object.entries(overrides).sort(([left], [right]) =>
-		left.localeCompare(right),
-	);
-	const expected = Object.entries(expectedOverrides).sort(([left], [right]) =>
-		left.localeCompare(right),
-	);
-	if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-		throw new Error(
-			"root overrides do not equal the exact reviewed ten-entry map",
-		);
-	}
-}
-
-function validateCompleteIdentity(
-	workspace: ParsedWorkspace,
-	name: string,
-	version: string,
+function importerDependencyLocator(
+  workspace: ParsedWorkspace,
+  importerName: string,
+  sectionName: "dependencies" | "devDependencies",
+  dependencyName: string,
 ): Locator {
-	const packageVersions = locatorsFor(workspace.packages, name, "packages").map(
-		(locator) => locator.version,
-	);
-	const snapshotLocators = locatorsFor(workspace.snapshots, name, "snapshots");
-	if (JSON.stringify(packageVersions) !== JSON.stringify([version])) {
-		throw new Error(`${name} has an unexpected complete package identity set`);
-	}
-	if (
-		snapshotLocators.length !== 1 ||
-		snapshotLocators[0]?.version !== version
-	) {
-		throw new Error(`${name} has an unexpected complete snapshot identity set`);
-	}
-	return uniqueLocator(workspace.snapshots, name, version);
+  const dependency = importerDependency(workspace, importerName, sectionName, dependencyName)
+  const label = `importers.${importerName}.${sectionName}.${dependencyName}`
+  const target = snapshotTarget(workspace, dependencyName, dependency.version, `${label}.version`)
+  if (!target) throw new Error(`${label} must resolve to an external snapshot`)
+  return parseLocator(target, workspace.snapshots[target], "snapshots")
 }
 
-function validateNodeServerGraph(workspace: ParsedWorkspace): void {
-	const nodeServer = validateCompleteIdentity(
-		workspace,
-		"@hono/node-server",
-		"2.1.0",
-	);
-	if (nodeServer.key !== "@hono/node-server@2.1.0(hono@4.13.1)") {
-		throw new Error(
-			"node-server snapshot does not have the exact Hono peer identity",
-		);
-	}
-	const expectedReference = "2.1.0(hono@4.13.1)";
-	const cli = importerDependency(
-		workspace,
-		"packages/cli",
-		"devDependencies",
-		"@hono/node-server",
-	);
-	if (cli.specifier !== "^2.1.0" || cli.version !== expectedReference) {
-		throw new Error("CLI does not bind the exact node-server snapshot");
-	}
-
-	const runtime = validateCompleteIdentity(
-		workspace,
-		"@copilotkit/runtime",
-		"1.66.4",
-	);
-	const mcp = validateCompleteIdentity(
-		workspace,
-		"@modelcontextprotocol/sdk",
-		"1.29.0",
-	);
-	for (const parent of [runtime, mcp]) {
-		if (dependencyVersion(parent, "@hono/node-server") !== expectedReference) {
-			throw new Error(
-				`${parent.name} does not bind the exact node-server snapshot`,
-			);
-		}
-	}
-	if (
-		dependencyVersion(runtime, "@modelcontextprotocol/sdk") !==
-		locatorReference(mcp)
-	) {
-		throw new Error("Copilot runtime does not bind the exact MCP snapshot");
-	}
-	validateExactReverseEdges(workspace, nodeServer, [
-		snapshotEdge(runtime),
-		snapshotEdge(mcp),
-		importerEdge("packages/cli", "devDependencies"),
-	]);
-	validateRuntimeRoots(workspace, runtime);
+function snapshotTarget(
+  workspace: ParsedWorkspace,
+  dependencyName: string,
+  reference: string,
+  label: string,
+): string | undefined {
+  if (reference.startsWith("link:") || reference.startsWith("workspace:")) {
+    return undefined
+  }
+  const target = `${dependencyName}@${reference}`
+  const candidates = [...new Set([target, reference])].filter((candidate) =>
+    Object.hasOwn(workspace.snapshots, candidate),
+  )
+  if (candidates.length === 1) return candidates[0]
+  if (candidates.length > 1) {
+    throw new Error(`${label} has ambiguous snapshot references ${candidates.join(", ")}`)
+  }
+  throw new Error(`${label} has dangling snapshot reference ${target}`)
 }
 
-function referenceTarget(
-	workspace: ParsedWorkspace,
-	dependencyName: string,
-	reference: string,
-	label: string,
-): Locator {
-	const key = `${dependencyName}@${reference}`;
-	if (!Object.hasOwn(workspace.snapshots, key)) {
-		throw new Error(`${label} has dangling peer-qualified reference ${key}`);
-	}
-	return parseLocator(key, workspace.snapshots[key], "snapshots");
-}
-
-function collectReverseEdges(
-	workspace: ParsedWorkspace,
-	dependencyName: string,
-): ReverseEdge[] {
-	const edges: ReverseEdge[] = [];
-	for (const [key, value] of Object.entries(workspace.snapshots)) {
-		const locator = parseLocator(key, value, "snapshots");
-		for (const section of ["dependencies", "optionalDependencies"] as const) {
-			const sectionValue = locator.value[section];
-			if (sectionValue === undefined) continue;
-			const dependencyMap = requireRecord(
-				sectionValue,
-				`${locator.key}.${section}`,
-			);
-			if (!Object.hasOwn(dependencyMap, dependencyName)) continue;
-			const reference = requireString(
-				dependencyMap[dependencyName],
-				`${locator.key}.${section}.${dependencyName}`,
-			);
-			edges.push({
-				parentIdentity: locator.key,
-				parentKind: "snapshot",
-				reference,
-				section,
-				target: referenceTarget(
-					workspace,
-					dependencyName,
-					reference,
-					`${locator.key}.${section}.${dependencyName}`,
-				),
-			});
-		}
-	}
-
-	for (const [importerName, value] of Object.entries(workspace.importers)) {
-		const importer = requireRecord(value, `importers.${importerName}`);
-		for (const section of [
-			"dependencies",
-			"devDependencies",
-			"optionalDependencies",
-		] as const) {
-			const sectionValue = importer[section];
-			if (sectionValue === undefined) continue;
-			const dependencyMap = requireRecord(
-				sectionValue,
-				`importers.${importerName}.${section}`,
-			);
-			if (!Object.hasOwn(dependencyMap, dependencyName)) continue;
-			const entry = requireRecord(
-				dependencyMap[dependencyName],
-				`importers.${importerName}.${section}.${dependencyName}`,
-			);
-			if (Object.keys(entry).sort().join(",") !== "specifier,version") {
-				throw new Error(
-					`importers.${importerName}.${section}.${dependencyName} has an unexpected shape`,
-				);
-			}
-			requireString(
-				entry.specifier,
-				`importers.${importerName}.${section}.${dependencyName}.specifier`,
-			);
-			const reference = requireString(
-				entry.version,
-				`importers.${importerName}.${section}.${dependencyName}.version`,
-			);
-			edges.push({
-				parentIdentity: importerName,
-				parentKind: "importer",
-				reference,
-				section,
-				target: referenceTarget(
-					workspace,
-					dependencyName,
-					reference,
-					`importers.${importerName}.${section}.${dependencyName}`,
-				),
-			});
-		}
-	}
-
-	return edges.sort((left, right) =>
-		edgeIdentity(left).localeCompare(edgeIdentity(right)),
-	);
-}
-
-function edgeIdentity(edge: ReverseEdge): string {
-	return `${edge.parentKind}:${edge.parentIdentity}:${edge.section}`;
-}
-
-function snapshotEdge(
-	parent: Locator,
-	section: Extract<
-		DependencySection,
-		"dependencies" | "optionalDependencies"
-	> = "dependencies",
-): string {
-	return `snapshot:${parent.key}:${section}`;
-}
-
-function importerEdge(
-	importerName: string,
-	section: DependencySection = "dependencies",
-): string {
-	return `importer:${importerName}:${section}`;
-}
-
-function validateExactReverseEdges(
-	workspace: ParsedWorkspace,
-	target: Locator,
-	expectedParents: readonly string[],
+function addReverseParent(
+  index: Map<string, ReverseParent[]>,
+  targetIdentity: string,
+  parent: Omit<ReverseParent, "targetIdentity">,
 ): void {
-	const actual = collectReverseEdges(workspace, target.name)
-		.filter((edge) => edge.target.key === target.key)
-		.map(edgeIdentity)
-		.sort();
-	const expected = [...expectedParents].sort();
-	if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-		throw new Error(`${target.key} has an unexpected total reverse-edge set`);
-	}
+  const parents = index.get(targetIdentity) ?? []
+  parents.push({ ...parent, targetIdentity })
+  index.set(targetIdentity, parents)
 }
 
-function validateRuntimeRoots(
-	workspace: ParsedWorkspace,
-	runtime: Locator,
-): void {
-	validateExactReverseEdges(workspace, runtime, [
-		importerEdge("examples/chat/web"),
-		importerEdge("examples/research/web"),
-	]);
-	for (const importerName of ["examples/chat/web", "examples/research/web"]) {
-		const importer = importerDependency(
-			workspace,
-			importerName,
-			"dependencies",
-			"@copilotkit/runtime",
-		);
-		if (
-			importer.specifier !== "^1.66.0" ||
-			`@copilotkit/runtime@${importer.version}` !== runtime.key
-		) {
-			throw new Error(
-				`${importerName} does not bind the exact runtime snapshot`,
-			);
-		}
-	}
+function reverseParentIndex(workspace: ParsedWorkspace): Map<string, ReverseParent[]> {
+  const index = new Map<string, ReverseParent[]>()
+  for (const [key, value] of Object.entries(workspace.snapshots)) {
+    const parent = parseLocator(key, value, "snapshots")
+    for (const section of ["dependencies", "optionalDependencies"] as const) {
+      if (parent.value[section] === undefined) continue
+      const dependencies = requireRecord(parent.value[section], `${parent.key}.${section}`)
+      for (const [dependencyName, value] of Object.entries(dependencies)) {
+        const reference = requireString(value, `${parent.key}.${section}.${dependencyName}`)
+        const target = snapshotTarget(
+          workspace,
+          dependencyName,
+          reference,
+          `${parent.key}.${section}.${dependencyName}`,
+        )
+        if (target) {
+          addReverseParent(index, target, {
+            identity: parent.key,
+            kind: "snapshot",
+            section,
+          })
+        }
+      }
+    }
+  }
+
+  for (const [importerName, value] of Object.entries(workspace.importers)) {
+    const importer = requireRecord(value, `importers.${importerName}`)
+    for (const section of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+      if (importer[section] === undefined) continue
+      const dependencies = requireRecord(importer[section], `importers.${importerName}.${section}`)
+      for (const [dependencyName, value] of Object.entries(dependencies)) {
+        const entry = requireRecord(value, `importers.${importerName}.${section}.${dependencyName}`)
+        const reference = requireString(
+          entry.version,
+          `importers.${importerName}.${section}.${dependencyName}.version`,
+        )
+        const target = snapshotTarget(
+          workspace,
+          dependencyName,
+          reference,
+          `importers.${importerName}.${section}.${dependencyName}`,
+        )
+        if (target) {
+          addReverseParent(index, target, {
+            identity: importerName,
+            kind: "importer",
+            section,
+          })
+        }
+      }
+    }
+  }
+
+  for (const parents of index.values()) {
+    parents.sort((left, right) =>
+      `${left.kind}:${left.identity}:${left.section}`.localeCompare(
+        `${right.kind}:${right.identity}:${right.section}`,
+      ),
+    )
+  }
+  return index
 }
 
-function validateProviderUtilsPath(workspace: ParsedWorkspace): void {
-	for (const recordName of ["packages", "snapshots"] as const) {
-		const versions = locatorsFor(
-			workspace[recordName],
-			"@ai-sdk/provider-utils",
-			recordName,
-		)
-			.map((locator) => locator.version)
-			.sort((left, right) => compareVersions(left, right));
-		if (JSON.stringify(versions) !== JSON.stringify(["3.0.28", "4.0.37"])) {
-			throw new Error(`provider-utils has an unexpected ${recordName} set`);
-		}
-	}
-	const providerUtils = uniqueLocator(
-		workspace.snapshots,
-		"@ai-sdk/provider-utils",
-		"3.0.28",
-	);
-	const vertex = validateCompleteIdentity(
-		workspace,
-		"@ai-sdk/google-vertex",
-		"3.0.146",
-	);
-	const providerParents = exactProviderUtilsParents.map(([name, version]) =>
-		uniqueLocator(workspace.snapshots, name, version),
-	);
-	validateExactReverseEdges(
-		workspace,
-		providerUtils,
-		providerParents.map((parent) => snapshotEdge(parent)),
-	);
-	for (const parent of providerParents) {
-		if (
-			dependencyVersion(parent, "@ai-sdk/provider-utils") !==
-			locatorReference(providerUtils)
-		) {
-			throw new Error(
-				`${parent.key} does not bind the exact provider-utils identity`,
-			);
-		}
-	}
-
-	for (const [name, version] of exactProviderUtilsParents) {
-		if (name === "@ai-sdk/google-vertex") continue;
-		const child = uniqueLocator(workspace.snapshots, name, version);
-		if (dependencyVersion(vertex, name) !== locatorReference(child)) {
-			throw new Error(`Google Vertex does not bind ${name}@${version}`);
-		}
-		validateExactReverseEdges(workspace, child, [snapshotEdge(vertex)]);
-	}
-	if (
-		dependencyVersion(vertex, "@ai-sdk/provider-utils") !==
-		locatorReference(providerUtils)
-	) {
-		throw new Error("Google Vertex does not bind provider-utils 3.0.28");
-	}
-
-	const runtime = validateCompleteIdentity(
-		workspace,
-		"@copilotkit/runtime",
-		"1.66.4",
-	);
-	if (
-		dependencyVersion(runtime, "@ai-sdk/google-vertex") !==
-		locatorReference(vertex)
-	) {
-		throw new Error(
-			"Copilot runtime does not bind the exact Google Vertex identity",
-		);
-	}
-	validateExactReverseEdges(workspace, vertex, [snapshotEdge(runtime)]);
-	validateRuntimeRoots(workspace, runtime);
+function reverseParents(
+  workspace: ParsedWorkspace,
+  name: string,
+  version: string,
+): ReverseParent[] {
+  const index = reverseParentIndex(workspace)
+  return locatorsFor(workspace.snapshots, name, "snapshots")
+    .filter((locator) => locator.version === version)
+    .flatMap((locator) => index.get(locator.key) ?? [])
 }
 
-describe("dependency security lock receipt", () => {
-	it("pins the dedicated config boundary, TSX include, and app-local browser mappings", async () => {
-		const vitestConfig = (await import("./vitest.config.ts")).default;
-		const config = vitestConfig;
-		const testConfig = requireRecord(config.test, "vitest config test block");
-		expect(config.root).toBe(repositoryRoot);
-		expect(testConfig.environment).toBe("node");
-		expect(testConfig.testTimeout).toBe(30_000);
-		expect(testConfig.hookTimeout).toBe(30_000);
-		expect(testConfig.include).toEqual([
-			"test/security-dependencies/**/*.test.ts",
-			"test/security-dependencies/**/*.test.tsx",
-		]);
-		expect(testConfig.env).toEqual({
-			GH_TOKEN: "",
-			GITHUB_TOKEN: "",
-			NODE_AUTH_TOKEN: "",
-			NPM_TOKEN: "",
-		});
+function rootImporterPathsToVersion(
+  workspace: ParsedWorkspace,
+  name: string,
+  version: string,
+): RootImporterPaths[] {
+  const index = reverseParentIndex(workspace)
+  return locatorsFor(workspace.snapshots, name, "snapshots")
+    .filter((target) => target.version === version)
+    .map((target) => {
+      const paths: string[][] = []
+      const visit = (
+        identity: string,
+        path: readonly string[],
+        activePath: ReadonlySet<string>,
+      ): void => {
+        for (const parent of index.get(identity) ?? []) {
+          if (parent.kind === "importer") {
+            paths.push([parent.identity, ...path])
+            continue
+          }
+          if (activePath.has(parent.identity)) continue
+          visit(
+            parent.identity,
+            [parent.identity, ...path],
+            new Set([...activePath, parent.identity]),
+          )
+        }
+      }
+      visit(target.key, [target.key], new Set([target.key]))
+      paths.sort((left, right) => left.join(" -> ").localeCompare(right.join(" -> ")))
+      return { paths, targetIdentity: target.key }
+    })
+}
 
-		const tsconfig = requireRecord(
-			JSON.parse(readFileSync(resolve(testDirectory, "tsconfig.json"), "utf8")),
-			"security tsconfig",
-		);
-		const compilerOptions = requireRecord(
-			tsconfig.compilerOptions,
-			"security tsconfig compilerOptions",
-		);
-		expect(compilerOptions.jsx).toBe("react-jsx");
-		expect(compilerOptions.allowImportingTsExtensions).toBe(true);
-		expect(compilerOptions.lib).toEqual(["ES2022", "DOM", "DOM.Iterable"]);
-		expect(compilerOptions.noEmit).toBe(true);
-		expect(compilerOptions.paths).toEqual({
-			"@copilotkit/react-core/v2": [
-				"../../examples/chat/web/node_modules/@copilotkit/react-core/dist/v2/index.d.mts",
-			],
-			react: ["../../examples/chat/web/node_modules/@types/react/index.d.ts"],
-			"react/jsx-runtime": [
-				"../../examples/chat/web/node_modules/@types/react/jsx-runtime.d.ts",
-			],
-			"react-dom": [
-				"../../examples/chat/web/node_modules/@types/react-dom/index.d.ts",
-			],
-			"react-dom/client": [
-				"../../examples/chat/web/node_modules/@types/react-dom/client.d.ts",
-			],
-		});
-	});
+function patchedFloorFailures(workspace: ParsedWorkspace): string[] {
+  const failures: string[] = []
+  for (const [name, floors] of [
+    ["hono", { 4: "4.12.34" }],
+    ["@hono/node-server", { 1: "1.19.15", 2: "2.0.10" }],
+  ] as const) {
+    for (const version of packageVersions(workspace, name)) {
+      const floor = floors[versionTuple(version)[0] as keyof typeof floors]
+      if (floor && compareVersions(version, floor) < 0) {
+        failures.push(`${name}@${version} is below ${floor}`)
+      }
+    }
+  }
+  for (const version of packageVersions(workspace, "uuid")) {
+    if (compareVersions(version, "11.1.1") < 0) {
+      failures.push(`uuid@${version} is below 11.1.1`)
+    }
+  }
+  return failures.sort()
+}
 
-	it("keeps exactly seven baseline overrides and the three reviewed replacements", () => {
-		const workspace = readWorkspace();
-		expect(() =>
-			validateOverridePolicy(workspace.manifestOverrides),
-		).not.toThrow();
-		expect(
-			Object.fromEntries(
-				Object.entries(workspace.manifestOverrides).filter(([selector]) =>
-					Object.hasOwn(expectedUnrelatedOverrides, selector),
-				),
-			),
-		).toEqual(expectedUnrelatedOverrides);
-	});
+function isPackageIdentity(
+  identity: string,
+  name: string,
+  versionMatches: (version: string) => boolean,
+): boolean {
+  if (!identity.startsWith(`${name}@`)) return false
+  const parsed = parseLocatorIdentity(identity, "dependency path")
+  return parsed.name === name && versionMatches(parsed.version)
+}
 
-	it("contains no targeted snapshot below its advisory floor", () => {
-		expect(floorFailures(readWorkspace())).toEqual([]);
-	});
+function legacyAgUiParentFailures(workspace: ParsedWorkspace): string[] {
+  if (!packageVersions(workspace, "@ag-ui/client").includes("0.0.54")) return []
+  const parents = reverseParents(workspace, "@ag-ui/client", "0.0.54")
+  const targets = locatorsFor(workspace.snapshots, "@ag-ui/client", "snapshots").filter(
+    (locator) => locator.version === "0.0.54",
+  )
+  if (targets.length === 0) return ["@ag-ui/client@0.0.54 has no snapshot identities"]
+  return targets
+    .flatMap((target) => {
+      const targetParents = parents.filter((parent) => parent.targetIdentity === target.key)
+      if (targetParents.length === 0) return [`${target.key} has no reverse parents`]
+      return targetParents.flatMap((parent) =>
+        parent.kind === "snapshot" &&
+        /^@ag-ui\/mcp-middleware@0\.0\.1(?:\(|$)/.test(parent.identity)
+          ? []
+          : [`${target.key} has unexpected reverse parent ${parent.identity}`],
+      )
+    })
+    .sort()
+}
 
-	it("binds the complete deterministic target package and snapshot sets", () => {
-		expect(() => validateExactSnapshotSets(readWorkspace())).not.toThrow();
-	});
+function providerUtilsRootPathFailure(
+  targetIdentity: string,
+  path: readonly string[],
+): string | undefined {
+  if (!exampleImporters.includes(path[0] as (typeof exampleImporters)[number])) {
+    return `${targetIdentity} starts at unexpected importer ${path[0] ?? "<missing>"}`
+  }
+  const runtimeIndex = path.findIndex((identity) =>
+    isPackageIdentity(identity, "@copilotkit/runtime", (candidate) => candidate === "1.68.3"),
+  )
+  const vertexIndex = path.findIndex((identity) =>
+    isPackageIdentity(
+      identity,
+      "@ai-sdk/google-vertex",
+      (candidate) => versionTuple(candidate)[0] === 3,
+    ),
+  )
+  const providerUtilsIndex = path.indexOf(targetIdentity)
+  if (
+    runtimeIndex <= 0 ||
+    vertexIndex <= runtimeIndex ||
+    providerUtilsIndex <= vertexIndex ||
+    providerUtilsIndex !== path.length - 1
+  ) {
+    return `${targetIdentity} has an unexpected root importer path ${path.join(" -> ")}`
+  }
+  return undefined
+}
 
-	it("resolves one node-server 2.1.0 identity through CLI, CopilotKit, and MCP", () => {
-		expect(() => validateNodeServerGraph(readWorkspace())).not.toThrow();
-	});
+function providerUtilsPathFailures(workspace: ParsedWorkspace): string[] {
+  const failures: string[] = []
+  const affectedVersions = packageVersions(workspace, "@ai-sdk/provider-utils").filter(
+    (version) => compareVersions(version, "3.0.0") >= 0 && compareVersions(version, "3.0.97") <= 0,
+  )
+  for (const version of affectedVersions) {
+    const targets = rootImporterPathsToVersion(workspace, "@ai-sdk/provider-utils", version)
+    if (targets.length === 0) {
+      failures.push(`@ai-sdk/provider-utils@${version} has no snapshot identities`)
+    }
+    for (const target of targets) {
+      if (target.paths.length === 0) {
+        failures.push(`${target.targetIdentity} has no root importer paths`)
+      }
+      for (const path of target.paths) {
+        const failure = providerUtilsRootPathFailure(target.targetIdentity, path)
+        if (failure) failures.push(failure)
+      }
+    }
+  }
+  return failures.sort()
+}
 
-	it("retains provider-utils 3.0.28 only below private-example CopilotKit Google Vertex", () => {
-		const workspace = readWorkspace();
-		expect(() => validateProviderUtilsPath(workspace)).not.toThrow();
-		for (const [relativePath, name] of [
-			["examples/chat/web/package.json", "@dawn-example/chat-web"],
-			["examples/research/web/package.json", "@dawn-example/research-web"],
-		] as const) {
-			const manifest = requireRecord(
-				JSON.parse(readFileSync(resolve(repositoryRoot, relativePath), "utf8")),
-				relativePath,
-			);
-			expect(manifest).toMatchObject({ name, private: true });
-		}
-	});
+describe("dependency security graph invariants", () => {
+  it("pins the dedicated config boundary, TSX include, and app-local browser mappings", async () => {
+    const vitestConfig = (await import("./vitest.config.ts")).default
+    const config = vitestConfig
+    const testConfig = requireRecord(config.test, "vitest config test block")
+    expect(config.root).toBe(repositoryRoot)
+    expect(testConfig.environment).toBe("node")
+    expect(testConfig.testTimeout).toBe(30_000)
+    expect(testConfig.hookTimeout).toBe(30_000)
+    expect(testConfig.include).toEqual([
+      "test/security-dependencies/**/*.test.ts",
+      "test/security-dependencies/**/*.test.tsx",
+    ])
+    expect(testConfig.env).toEqual({
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      NODE_AUTH_TOKEN: "",
+      NPM_TOKEN: "",
+    })
 
-	it("fails closed on malformed structure and ambiguous package identities", () => {
-		expect(() => parseManifest("{")).toThrow("valid JSON");
-		expect(() =>
-			parseLockfile("lockfileVersion: 9\nsettings: false\n"),
-		).toThrow("pnpm-lock.yaml");
-		expect(() =>
-			parseLockfile("lockfileVersion: '9.0'\nlockfileVersion: '9.0'\n"),
-		).toThrow("parse without errors");
+    const tsconfig = requireRecord(
+      JSON.parse(readFileSync(resolve(testDirectory, "tsconfig.json"), "utf8")),
+      "security tsconfig",
+    )
+    const compilerOptions = requireRecord(
+      tsconfig.compilerOptions,
+      "security tsconfig compilerOptions",
+    )
+    expect(compilerOptions.jsx).toBe("react-jsx")
+    expect(compilerOptions.allowImportingTsExtensions).toBe(true)
+    expect(compilerOptions.lib).toEqual(["ES2022", "DOM", "DOM.Iterable"])
+    expect(compilerOptions.noEmit).toBe(true)
+    expect(compilerOptions.paths).toEqual({
+      "@copilotkit/react-core/v2": [
+        "../../examples/chat/web/node_modules/@copilotkit/react-core/dist/v2/index.d.mts",
+      ],
+      react: ["../../examples/chat/web/node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["../../examples/chat/web/node_modules/@types/react/jsx-runtime.d.ts"],
+      "react-dom": ["../../examples/chat/web/node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/client": ["../../examples/chat/web/node_modules/@types/react-dom/client.d.ts"],
+    })
+  })
 
-		const ambiguous = {
-			"@hono/node-server@2.1.0(hono@4.13.1)": { dependencies: {} },
-			"@hono/node-server@2.1.0(hono@4.13.2)": { dependencies: {} },
-		};
-		expect(() =>
-			uniqueLocator(ambiguous, "@hono/node-server", "2.1.0"),
-		).toThrow("exactly one");
-	});
+  it("makes the examples and AG-UI package stable CopilotKit owners", () => {
+    const workspace = readWorkspace()
+    for (const importerName of exampleImporters) {
+      const manifestPath = `${importerName}/package.json`
+      const manifest = parseJsonRecord(
+        readFileSync(resolve(repositoryRoot, manifestPath), "utf8"),
+        manifestPath,
+      )
+      expect(manifest.private).toBe(true)
+      const manifestDependencies = requireStringMap(
+        manifest.dependencies,
+        `${manifestPath}.dependencies`,
+      )
+      expect(manifestDependencies["@copilotkit/react-core"]).toBe("^1.68.3")
+      expect(manifestDependencies["@copilotkit/runtime"]).toBe("^1.68.3")
+      expect(manifestDependencies["@ag-ui/client"]).toBe("0.0.57")
 
-	it("rejects old/new mixtures, missing targets, and wrong override selectors", () => {
-		const workspace = readWorkspace();
-		const safeSnapshots = structuredClone(workspace.snapshots);
-		const safePackages = structuredClone(workspace.packages);
-		for (const name of Object.keys(expectedSnapshotVersions)) {
-			for (const locator of locatorsFor(safeSnapshots, name, "snapshots")) {
-				delete safeSnapshots[locator.key];
-			}
-			for (const locator of locatorsFor(safePackages, name, "packages")) {
-				delete safePackages[locator.key];
-			}
-			for (const version of expectedSnapshotVersions[
-				name as keyof typeof expectedSnapshotVersions
-			]) {
-				safeSnapshots[`${name}@${version}`] = {};
-				safePackages[`${name}@${version}`] = {};
-			}
-		}
-		const safeWorkspace = {
-			...workspace,
-			packages: safePackages,
-			snapshots: safeSnapshots,
-		};
-		expect(floorFailures(safeWorkspace)).toEqual([]);
-		expect(() => validateExactSnapshotSets(safeWorkspace)).not.toThrow();
+      for (const dependency of ["@copilotkit/react-core", "@copilotkit/runtime"] as const) {
+        const owned = importerDependency(workspace, importerName, "dependencies", dependency)
+        expect(owned.specifier).toBe("^1.68.3")
+        const target = importerDependencyLocator(
+          workspace,
+          importerName,
+          "dependencies",
+          dependency,
+        )
+        expect({ name: target.name, version: target.version }).toEqual({
+          name: dependency,
+          version: "1.68.3",
+        })
+      }
+      expect(importerDependency(workspace, importerName, "dependencies", "@ag-ui/client")).toEqual({
+        specifier: "0.0.57",
+        version: "0.0.57",
+      })
+      const agUiTarget = importerDependencyLocator(
+        workspace,
+        importerName,
+        "dependencies",
+        "@ag-ui/client",
+      )
+      expect({ name: agUiTarget.name, version: agUiTarget.version }).toEqual({
+        name: "@ag-ui/client",
+        version: "0.0.57",
+      })
+    }
 
-		const mixedWorkspace = structuredClone(safeWorkspace);
-		mixedWorkspace.snapshots["postcss@8.5.10"] = {};
-		expect(floorFailures(mixedWorkspace)).toContain(
-			"postcss@8.5.10 is below 8.5.23",
-		);
-		expect(() => validateExactSnapshotSets(mixedWorkspace)).toThrow();
+    const agUiManifestPath = "packages/ag-ui/package.json"
+    const agUiManifest = parseJsonRecord(
+      readFileSync(resolve(repositoryRoot, agUiManifestPath), "utf8"),
+      agUiManifestPath,
+    )
+    const agUiDevDependencies = requireStringMap(
+      agUiManifest.devDependencies,
+      `${agUiManifestPath}.devDependencies`,
+    )
+    expect(agUiDevDependencies["@ag-ui/client"]).toBe("0.0.57")
+    expect(agUiDevDependencies["@copilotkit/react-core"]).toBe("^1.68.3")
+    expect(
+      requireStringMap(agUiManifest.peerDependencies, `${agUiManifestPath}.peerDependencies`)[
+        "@copilotkit/react-core"
+      ],
+    ).toBe(">=1.66.0")
+    expect(
+      importerDependency(workspace, "packages/ag-ui", "devDependencies", "@ag-ui/client"),
+    ).toEqual({ specifier: "0.0.57", version: "0.0.57" })
+    const agUiClientOwner = importerDependencyLocator(
+      workspace,
+      "packages/ag-ui",
+      "devDependencies",
+      "@ag-ui/client",
+    )
+    expect({ name: agUiClientOwner.name, version: agUiClientOwner.version }).toEqual({
+      name: "@ag-ui/client",
+      version: "0.0.57",
+    })
+    const agUiOwner = importerDependency(
+      workspace,
+      "packages/ag-ui",
+      "devDependencies",
+      "@copilotkit/react-core",
+    )
+    expect(agUiOwner.specifier).toBe("^1.68.3")
+    const agUiReactCoreOwner = importerDependencyLocator(
+      workspace,
+      "packages/ag-ui",
+      "devDependencies",
+      "@copilotkit/react-core",
+    )
+    expect({ name: agUiReactCoreOwner.name, version: agUiReactCoreOwner.version }).toEqual({
+      name: "@copilotkit/react-core",
+      version: "1.68.3",
+    })
+  })
 
-		const missingWorkspace = structuredClone(safeWorkspace);
-		delete missingWorkspace.snapshots["mermaid@11.16.1"];
-		expect(() => validateExactSnapshotSets(missingWorkspace)).toThrow();
+  it("contains only CopilotKit 1.68.3 package identities", () => {
+    const workspace = readWorkspace()
+    for (const name of ["@copilotkit/react-core", "@copilotkit/runtime"] as const) {
+      expect(packageVersions(workspace, name)).toEqual(["1.68.3"])
+    }
+  })
 
-		const wrongSelector = {
-			...expectedOverrides,
-			"@hono/node-server": "2.1.0",
-		};
-		delete (wrongSelector as Record<string, string>)[
-			"@hono/node-server@<2.0.10"
-		];
-		expect(() => validateOverridePolicy(wrongSelector)).toThrow();
-		expect(() =>
-			validateOverridePolicy({
-				...expectedOverrides,
-				"hono@<4.13.1": "4.13.1",
-			}),
-		).toThrow();
+  it("keeps direct AG-UI on 0.0.57 and isolates any legacy 0.0.54", () => {
+    const workspace = readWorkspace()
+    const versions = packageVersions(workspace, "@ag-ui/client")
+    expect(versions).not.toContain("0.0.58")
+    expect(legacyAgUiParentFailures(workspace)).toEqual([])
+  })
 
-		const malformedProviderWorkspace = structuredClone(workspace);
-		const vertex = uniqueLocator(
-			malformedProviderWorkspace.snapshots,
-			"@ai-sdk/google-vertex",
-			"3.0.146",
-		);
-		requireRecord(vertex.value.dependencies, "Vertex dependencies")[
-			"@ai-sdk/provider-utils"
-		] = 3028;
-		expect(() => validateProviderUtilsPath(malformedProviderWorkspace)).toThrow(
-			"must be a non-empty string",
-		);
+  it("contains no override selectors for the public dependency owners", () => {
+    const workspace = readWorkspace()
+    expect(
+      Object.keys(workspace.manifestOverrides).filter((selector) =>
+        forbiddenOverrideSelector.test(selector),
+      ),
+    ).toEqual([])
+    expect(
+      [
+        "@copilotkit/runtime@<2",
+        "parent>@ag-ui/client@0.0.58",
+        "@scope/parent>@ai-sdk/provider-utils@<=3.0.97",
+        "parent>@hono/node-server@<2.0.10",
+        "hono@<4.12.34",
+        "parent>uuid@<11.1.1",
+      ].every((selector) => forbiddenOverrideSelector.test(selector)),
+    ).toBe(true)
+  })
 
-		const extraProviderParentWorkspace = structuredClone(workspace);
-		const mcp = uniqueLocator(
-			extraProviderParentWorkspace.snapshots,
-			"@modelcontextprotocol/sdk",
-			"1.29.0",
-		);
-		requireRecord(mcp.value.dependencies, "MCP dependencies")[
-			"@ai-sdk/provider-utils"
-		] = "3.0.28(zod@3.25.76)";
-		expect(() =>
-			validateProviderUtilsPath(extraProviderParentWorkspace),
-		).toThrow("unexpected total reverse-edge set");
+  it("contains no Hono, node-server, or UUID package below its patched floor", () => {
+    expect(patchedFloorFailures(readWorkspace())).toEqual([])
+  })
 
-		const missingRuntimeReferenceWorkspace = structuredClone(workspace);
-		const runtime = uniqueLocator(
-			missingRuntimeReferenceWorkspace.snapshots,
-			"@copilotkit/runtime",
-			"1.66.4",
-		);
-		delete requireRecord(runtime.value.dependencies, "runtime dependencies")[
-			"@modelcontextprotocol/sdk"
-		];
-		expect(() =>
-			dependencyVersion(runtime, "@modelcontextprotocol/sdk"),
-		).toThrow("must be a non-empty string");
+  it("scopes affected provider-utils 3.x paths to private CopilotKit Vertex", () => {
+    expect(providerUtilsPathFailures(readWorkspace())).toEqual([])
+  })
 
-		const danglingPeerMutations: Array<readonly [string, ParsedWorkspace]> = [];
+  it("rejects malformed peer suffixes", () => {
+    expect(
+      parseLocatorIdentity(
+        "@scope/package@1.2.3(peer@1.0.0)(nested@2.0.0(child@3.0.0))",
+        "valid nested peers",
+      ),
+    ).toEqual({ name: "@scope/package", version: "1.2.3" })
+    for (const malformed of [
+      "package@1.0.0)",
+      "package@1.0.0(peer@1.0.0",
+      "package@1.0.0(peer@1.0.0)stray",
+      "package@1.0.0(peer@1.0.0))",
+    ]) {
+      expect(() => parseLocatorIdentity(malformed, "synthetic locator")).toThrow(
+        "malformed package locator",
+      )
+    }
+  })
 
-		const wrongVertexChildPeer = structuredClone(workspace);
-		const wrongVertex = uniqueLocator(
-			wrongVertexChildPeer.snapshots,
-			"@ai-sdk/google-vertex",
-			"3.0.146",
-		);
-		requireRecord(wrongVertex.value.dependencies, "Vertex dependencies")[
-			"@ai-sdk/anthropic"
-		] = "2.0.85(zod@0.0.0)";
-		danglingPeerMutations.push(["Vertex child peer", wrongVertexChildPeer]);
+  it("rejects balanced peer groups whose contents are not locators", () => {
+    expect(
+      parseLocatorIdentity(
+        "@copilotkit/runtime@1.68.3(@langchain/core@1.2.5(openai@6.45.0(zod@4.4.3)))(vitest@4.1.10)",
+        "valid real-shape peers",
+      ),
+    ).toEqual({ name: "@copilotkit/runtime", version: "1.68.3" })
+    for (const [label, malformed] of [
+      ["missing peer version", "package@1.0.0(peer)"],
+      ["invalid peer name", "package@1.0.0(peer!@1.0.0)"],
+      ["malformed scoped peer", "package@1.0.0(@scope@1.0.0)"],
+      ["nested junk", "package@1.0.0(peer@1.0.0(junk))"],
+      ["empty peer version", "package@1.0.0(peer@)"],
+      ["nested empty version", "package@1.0.0(peer@1.0.0(child@))"],
+    ] as const) {
+      expect
+        .soft(() => parseLocatorIdentity(malformed, label), label)
+        .toThrow("malformed package locator")
+    }
+  })
 
-		const wrongProviderPeer = structuredClone(workspace);
-		const anthropic = uniqueLocator(
-			wrongProviderPeer.snapshots,
-			"@ai-sdk/anthropic",
-			"2.0.85",
-		);
-		requireRecord(anthropic.value.dependencies, "Anthropic dependencies")[
-			"@ai-sdk/provider-utils"
-		] = "3.0.28(zod@0.0.0)";
-		danglingPeerMutations.push(["provider peer", wrongProviderPeer]);
+  it("accepts pnpm patch hashes, compressed peer graphs, and referenced versions", () => {
+    for (const [label, locator, expected] of [
+      [
+        "patch-only hex hash",
+        "package@1.0.0(patch_hash=abcdef0123456789)",
+        { name: "package", version: "1.0.0" },
+      ],
+      [
+        "patch-only alphanumeric hash",
+        "package@1.0.0(patch_hash=abc123z9)",
+        { name: "package", version: "1.0.0" },
+      ],
+      [
+        "compressed peer graph",
+        "package@1.0.0(0123456789abcdef0123456789abcdef)",
+        { name: "package", version: "1.0.0" },
+      ],
+      [
+        "patch and expanded peers",
+        "package@1.0.0(patch_hash=abc123)(peer@2.0.0)(@scope/nested@3.0.0)",
+        { name: "package", version: "1.0.0" },
+      ],
+      [
+        "patch and compressed peer graph",
+        "package@1.0.0(patch_hash=abc123)(0123456789abcdef0123456789abcdef)",
+        { name: "package", version: "1.0.0" },
+      ],
+      [
+        "referenced version containing at-sign",
+        "alias@npm:target@1.0.0",
+        { name: "alias", version: "npm:target@1.0.0" },
+      ],
+    ] as const) {
+      expect(parseLocatorIdentity(locator, label), label).toEqual(expected)
+    }
+  })
 
-		const directVertexImporter = structuredClone(workspace);
-		const cliImporter = requireRecord(
-			directVertexImporter.importers["packages/cli"],
-			"CLI importer",
-		);
-		requireRecord(cliImporter.dependencies, "CLI dependencies")[
-			"@ai-sdk/google-vertex"
-		] = {
-			specifier: "3.0.146",
-			version: locatorReference(vertex),
-		};
-		danglingPeerMutations.push([
-			"direct Vertex importer",
-			directVertexImporter,
-		]);
+  it("rejects malformed patch hashes and compressed peer graphs", () => {
+    for (const [label, locator] of [
+      ["empty patch hash", "package@1.0.0(patch_hash=)"],
+      ["uppercase patch hash", "package@1.0.0(patch_hash=ABC123)"],
+      ["punctuated patch hash", "package@1.0.0(patch_hash=abc-123)"],
+      ["wrong patch prefix", "package@1.0.0(patch-hash=abc123)"],
+      ["duplicate patch hash", "package@1.0.0(patch_hash=abc123)(patch_hash=def456)"],
+      ["patch hash after peer", "package@1.0.0(peer@2.0.0)(patch_hash=abc123)"],
+      ["short compressed peer graph", "package@1.0.0(0123456789abcdef)"],
+      ["nonhex compressed peer graph", "package@1.0.0(gggggggggggggggggggggggggggggggg)"],
+    ] as const) {
+      expect
+        .soft(() => parseLocatorIdentity(locator, label), label)
+        .toThrow("malformed package locator")
+    }
+  })
 
-		const directAnthropicImporter = structuredClone(workspace);
-		const anthropicCliImporter = requireRecord(
-			directAnthropicImporter.importers["packages/cli"],
-			"CLI importer",
-		);
-		requireRecord(anthropicCliImporter.dependencies, "CLI dependencies")[
-			"@ai-sdk/anthropic"
-		] = {
-			specifier: "2.0.85",
-			version: locatorReference(
-				uniqueLocator(
-					directAnthropicImporter.snapshots,
-					"@ai-sdk/anthropic",
-					"2.0.85",
-				),
-			),
-		};
-		danglingPeerMutations.push([
-			"direct Anthropic importer",
-			directAnthropicImporter,
-		]);
+  it("rejects ambiguous alias targets", () => {
+    const ambiguousWorkspace: ParsedWorkspace = {
+      importers: {},
+      manifestOverrides: {},
+      packages: {},
+      snapshots: {
+        "alias@target@1.0.0": {},
+        "target@1.0.0": {},
+      },
+    }
+    expect(() =>
+      snapshotTarget(ambiguousWorkspace, "alias", "target@1.0.0", "synthetic alias"),
+    ).toThrow("ambiguous")
+    expect(
+      snapshotTarget(ambiguousWorkspace, "workspace-package", "link:../workspace", "workspace"),
+    ).toBeUndefined()
+  })
 
-		const optionalProviderParent = structuredClone(workspace);
-		const optionalMcp = uniqueLocator(
-			optionalProviderParent.snapshots,
-			"@modelcontextprotocol/sdk",
-			"1.29.0",
-		);
-		if (optionalMcp.value.optionalDependencies === undefined) {
-			optionalMcp.value.optionalDependencies = {};
-		}
-		const optionalDependencies = requireRecord(
-			optionalMcp.value.optionalDependencies,
-			"MCP optional dependencies",
-		);
-		optionalDependencies["@ai-sdk/provider-utils"] = locatorReference(
-			uniqueLocator(
-				optionalProviderParent.snapshots,
-				"@ai-sdk/provider-utils",
-				"3.0.28",
-			),
-		);
-		danglingPeerMutations.push([
-			"optional provider parent",
-			optionalProviderParent,
-		]);
+  it("rejects dangling direct-owner references", () => {
+    const danglingWorkspace: ParsedWorkspace = {
+      importers: {
+        "examples/chat/web": {
+          dependencies: {
+            "@copilotkit/runtime": {
+              specifier: "^1.68.3",
+              version: "1.68.3(zod@4.4.3)",
+            },
+          },
+        },
+      },
+      manifestOverrides: {},
+      packages: { "@copilotkit/runtime@1.68.3": {} },
+      snapshots: {},
+    }
+    expect(() =>
+      importerDependencyLocator(
+        danglingWorkspace,
+        "examples/chat/web",
+        "dependencies",
+        "@copilotkit/runtime",
+      ),
+    ).toThrow("dangling snapshot reference")
+  })
 
-		const acceptedProviderMutations = danglingPeerMutations.flatMap(
-			([label, mutant]) => {
-				try {
-					validateProviderUtilsPath(mutant);
-					return [label];
-				} catch {
-					return [];
-				}
-			},
-		);
-		expect(acceptedProviderMutations).toEqual([]);
+  it("resolves alias-style direct-owner references", () => {
+    const aliasWorkspace: ParsedWorkspace = {
+      importers: {
+        "examples/chat/web": {
+          dependencies: {
+            alias: { specifier: "npm:target@1.0.0", version: "target@1.0.0" },
+          },
+        },
+      },
+      manifestOverrides: {},
+      packages: { "target@1.0.0": {} },
+      snapshots: { "target@1.0.0": {} },
+    }
+    const target = importerDependencyLocator(
+      aliasWorkspace,
+      "examples/chat/web",
+      "dependencies",
+      "alias",
+    )
+    expect({ key: target.key, name: target.name, version: target.version }).toEqual({
+      key: "target@1.0.0",
+      name: "target",
+      version: "1.0.0",
+    })
+  })
 
-		const safeNodeWorkspace = structuredClone(workspace);
-		for (const locator of locatorsFor(
-			safeNodeWorkspace.packages,
-			"@hono/node-server",
-			"packages",
-		)) {
-			delete safeNodeWorkspace.packages[locator.key];
-		}
-		for (const locator of locatorsFor(
-			safeNodeWorkspace.snapshots,
-			"@hono/node-server",
-			"snapshots",
-		)) {
-			delete safeNodeWorkspace.snapshots[locator.key];
-		}
-		safeNodeWorkspace.packages["@hono/node-server@2.1.0"] = {};
-		safeNodeWorkspace.snapshots["@hono/node-server@2.1.0(hono@4.13.1)"] = {
-			dependencies: { hono: "4.13.1" },
-		};
-		importerDependency(
-			safeNodeWorkspace,
-			"packages/cli",
-			"devDependencies",
-			"@hono/node-server",
-		);
-		const cliNodeEntry = requireRecord(
-			requireRecord(
-				requireRecord(
-					safeNodeWorkspace.importers["packages/cli"],
-					"CLI importer",
-				).devDependencies,
-				"CLI devDependencies",
-			)["@hono/node-server"],
-			"CLI node-server",
-		);
-		cliNodeEntry.version = "2.1.0(hono@4.13.1)";
-		for (const [name, version] of [
-			["@copilotkit/runtime", "1.66.4"],
-			["@modelcontextprotocol/sdk", "1.29.0"],
-		] as const) {
-			const parent = uniqueLocator(safeNodeWorkspace.snapshots, name, version);
-			requireRecord(parent.value.dependencies, `${name} dependencies`)[
-				"@hono/node-server"
-			] = "2.1.0(hono@4.13.1)";
-		}
-		expect(() => validateNodeServerGraph(safeNodeWorkspace)).not.toThrow();
+  it("rejects malformed provider-utils root paths", () => {
+    const target = "@ai-sdk/provider-utils@3.0.50(zod@3.25.76)"
+    const runtime = "@copilotkit/runtime@1.68.3(zod@3.25.76)"
+    const vertex = "@ai-sdk/google-vertex@3.0.1(zod@3.25.76)"
+    expect(
+      providerUtilsRootPathFailure(target, ["examples/chat/web", runtime, vertex, target]),
+    ).toBeUndefined()
+    for (const [label, path] of [
+      ["unexpected importer", ["packages/cli", runtime, vertex, target]],
+      ["missing runtime", ["examples/chat/web", vertex, target]],
+      ["wrong runtime", ["examples/chat/web", "@copilotkit/runtime@1.68.2", vertex, target]],
+      ["missing Vertex", ["examples/chat/web", runtime, target]],
+      ["wrong Vertex", ["examples/chat/web", runtime, "@ai-sdk/google-vertex@2.9.0", target]],
+      ["incorrect ordering", ["examples/chat/web", vertex, runtime, target]],
+    ] as const) {
+      expect(providerUtilsRootPathFailure(target, path), label).toBeDefined()
+    }
+  })
 
-		const extraNodeParentWorkspace = structuredClone(safeNodeWorkspace);
-		const nodeParent = uniqueLocator(
-			extraNodeParentWorkspace.snapshots,
-			"@ai-sdk/google-vertex",
-			"3.0.146",
-		);
-		nodeParent.value.optionalDependencies = {
-			"@hono/node-server": "2.1.0(hono@4.13.1)",
-		};
-		expect(() => validateNodeServerGraph(extraNodeParentWorkspace)).toThrow();
-	});
-});
+  it("reports a synthetic version below its patched floor", () => {
+    const belowFloorWorkspace: ParsedWorkspace = {
+      importers: {},
+      manifestOverrides: {},
+      packages: { "hono@4.12.33": {} },
+      snapshots: { "hono@4.12.33": {} },
+    }
+    expect(patchedFloorFailures(belowFloorWorkspace)).toEqual(["hono@4.12.33 is below 4.12.34"])
+  })
+
+  it("reports an orphan provider-utils peer identity independently", () => {
+    const approvedProvider = "@ai-sdk/provider-utils@3.0.50(zod@3.25.76)"
+    const orphanProvider = "@ai-sdk/provider-utils@3.0.50(zod@4.4.3)"
+    const providerWorkspace: ParsedWorkspace = {
+      importers: {
+        "examples/chat/web": {
+          dependencies: {
+            "@copilotkit/runtime": {
+              specifier: "^1.68.3",
+              version: "1.68.3(zod@3.25.76)",
+            },
+          },
+        },
+      },
+      manifestOverrides: {},
+      packages: {
+        "@ai-sdk/google-vertex@3.0.1": {},
+        "@ai-sdk/provider-utils@3.0.50": {},
+        "@copilotkit/runtime@1.68.3": {},
+      },
+      snapshots: {
+        "@ai-sdk/google-vertex@3.0.1(zod@3.25.76)": {
+          dependencies: {
+            "@ai-sdk/provider-utils": "3.0.50(zod@3.25.76)",
+          },
+        },
+        [approvedProvider]: {},
+        [orphanProvider]: {},
+        "@copilotkit/runtime@1.68.3(zod@3.25.76)": {
+          dependencies: {
+            "@ai-sdk/google-vertex": "3.0.1(zod@3.25.76)",
+          },
+        },
+      },
+    }
+    expect(providerUtilsPathFailures(providerWorkspace)).toEqual([
+      `${orphanProvider} has no root importer paths`,
+    ])
+  })
+
+  it("reports an orphan AG-UI peer identity independently", () => {
+    const approvedClient = "@ag-ui/client@0.0.54(rxjs@7.8.1)"
+    const orphanClient = "@ag-ui/client@0.0.54(rxjs@8.0.0)"
+    const agUiWorkspace: ParsedWorkspace = {
+      importers: {},
+      manifestOverrides: {},
+      packages: {
+        "@ag-ui/client@0.0.54": {},
+        "@ag-ui/mcp-middleware@0.0.1": {},
+      },
+      snapshots: {
+        [approvedClient]: {},
+        "@ag-ui/mcp-middleware@0.0.1(rxjs@7.8.1)": {
+          dependencies: { "@ag-ui/client": "0.0.54(rxjs@7.8.1)" },
+        },
+        [orphanClient]: {},
+      },
+    }
+    expect(legacyAgUiParentFailures(agUiWorkspace)).toEqual([
+      `${orphanClient} has no reverse parents`,
+    ])
+  })
+
+  it("keeps graph traversal cycle-safe and parsing fail-closed", () => {
+    expect(() => parseManifest("{")).toThrow("valid JSON")
+    expect(() => parseLockfile("lockfileVersion: 9\nsettings: false\n")).toThrow("pnpm-lock.yaml")
+    expect(() => parseLockfile("lockfileVersion: '9.0'\nlockfileVersion: '9.0'\n")).toThrow(
+      "parse without errors",
+    )
+
+    const cyclicWorkspace: ParsedWorkspace = {
+      importers: {
+        "examples/chat/web": {
+          dependencies: {
+            "cycle-a": { specifier: "1.0.0", version: "1.0.0" },
+          },
+        },
+      },
+      manifestOverrides: {},
+      packages: {
+        "@ai-sdk/provider-utils@3.0.50": {},
+        "cycle-a@1.0.0": {},
+        "cycle-b@1.0.0": {},
+      },
+      snapshots: {
+        "@ai-sdk/provider-utils@3.0.50": {},
+        "cycle-a@1.0.0": { dependencies: { "cycle-b": "1.0.0" } },
+        "cycle-b@1.0.0": {
+          dependencies: {
+            "@ai-sdk/provider-utils": "3.0.50",
+            "cycle-a": "1.0.0",
+          },
+        },
+      },
+    }
+    expect(rootImporterPathsToVersion(cyclicWorkspace, "@ai-sdk/provider-utils", "3.0.50")).toEqual(
+      [
+        {
+          paths: [
+            [
+              "examples/chat/web",
+              "cycle-a@1.0.0",
+              "cycle-b@1.0.0",
+              "@ai-sdk/provider-utils@3.0.50",
+            ],
+          ],
+          targetIdentity: "@ai-sdk/provider-utils@3.0.50",
+        },
+      ],
+    )
+  })
+})
