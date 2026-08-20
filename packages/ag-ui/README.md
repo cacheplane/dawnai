@@ -51,12 +51,12 @@ import "@dawn-ai/ag-ui/react/styles.css"
 
 ```css
 :root {
-  --dawn-activity-accent: #7c3aed;
+  --dawn-activity-running: #7c3aed;
   --dawn-activity-radius: 4px;
 }
 ```
 
-Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set `data-dawn-theme="dark"` or `data-dawn-theme="light"` on any ancestor element to force one regardless of the system setting.
+Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set `data-dawn-theme="dark"` or `data-dawn-theme="light"` on the root element to force one regardless of the system setting (the selectors match only `:root`, not an arbitrary ancestor).
 
 **Rung 2 — `classNames`.** Pass per-part class names; they are appended to the package defaults, never substituted, so utility classes layer on without fighting specificity:
 
@@ -72,7 +72,7 @@ Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set
   components={{
     TodoRow: ({ content, status, glyph, label }) => (
       <span>
-        {glyph} {content} ({label})
+        <span aria-hidden="true">{glyph}</span> {content} ({label})
       </span>
     ),
   }}
@@ -81,14 +81,14 @@ Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set
 
 `ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept `classNames` and `components`; `SubagentActivityCard` also has a `ToolRow` slot for its tool rows.
 
-**Rung 4 — eject.** For anything the ladder does not cover, copy the card source (`PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, `ActivityChecklist.tsx`) into your own app and compile it directly — it is plain React with no hidden dependency on this package.
+**Rung 4 — eject.** For anything the ladder does not cover, copy `PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, and `ActivityChecklist.tsx` into your own app. They are not a clean drop-in as copied: each imports `cx` from the package-internal `./parts.js` path, which does not exist in a consumer's tree. Change that one import in each file to `@dawn-ai/ag-ui/react`, which exports `cx` along with the `DawnActivityClassNames`/`DawnActivityComponents` types — a one-line edit per file, and after that the components are yours to change freely.
 
 ## Runtime and stability
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/sse` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/react` is a supported React application surface, built for browser bundles. Dawn records its runtime as `node-only`, which means only that it does not pass Dawn's edge-safety guard — not that it requires Node: React's own JSX runtime reads `process.env.NODE_ENV`, which an application bundler substitutes as usual but the stricter edge guard rejects. The other two entries never load it.
-- `@dawn-ai/ag-ui/react/styles.css` is a supported integration surface carrying the cards' default appearance. It is a stylesheet asset, so it has no runtime classification at all: a bundler resolves it and nothing evaluates it as JavaScript. Import it once alongside your global CSS; it is optional, and every selector is scoped to the `dawn-activity` prefix.
+- `@dawn-ai/ag-ui/react/styles.css` is a supported integration surface carrying the cards' default appearance. It is a stylesheet asset, so it has no runtime classification at all: a bundler resolves it and nothing evaluates it as JavaScript. Import it once alongside your global CSS; it is optional, and every rule that styles an element is scoped to the `dawn-activity` prefix (the sheet also declares `--dawn-activity-*` custom properties on `:root`, which is intended and harmless).
 
 They translate protocol data; they do not authenticate callers or make client-provided state authoritative.
 

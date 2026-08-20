@@ -81,6 +81,7 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 | `DawnActivityComponents` | Name the leaf slots (`TodoRow`, `ToolRow`) a card lets a consumer replace (customization rung 3). |
 | `DawnTodoRowProps` | Describe the props passed to a replacement `TodoRow`. |
 | `DawnToolRowProps` | Describe the props passed to a replacement `ToolRow`. |
+| `cx` | Join a package default class with an optional consumer class (customization rung 4: what an ejected card imports in place of its internal `./parts.js` path). |
 
 `dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`. `ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept optional `classNames` and `components` props built from these two types; see [`@dawn-ai/ag-ui/react/styles.css`](#dawn-aiag-uireactstylescss) below for rung 1 and the [package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards) for a runnable example of every rung.
 
@@ -92,7 +93,7 @@ This subpath exposes the activity cards' default appearance as a stylesheet asse
 import "@dawn-ai/ag-ui/react/styles.css"
 ```
 
-The sheet is optional — the cards render without it — and every selector it defines is scoped to the `dawn-activity` prefix, so it cannot restyle the rest of an application. Restyle it by overriding its custom properties in your own CSS: `--dawn-activity-surface`, `--dawn-activity-border`, `--dawn-activity-text`, `--dawn-activity-muted`, `--dawn-activity-accent`, `--dawn-activity-running`, `--dawn-activity-complete`, `--dawn-activity-failed`, `--dawn-activity-radius`, `--dawn-activity-gap`, and `--dawn-activity-font-size`. A dark palette applies under `prefers-color-scheme: dark`; setting `data-dawn-theme="light"` or `data-dawn-theme="dark"` on the root element pins one explicitly.
+The sheet is optional — the cards render without it — and every rule that styles an element is scoped to the `dawn-activity` prefix, so it cannot restyle the rest of an application; it additionally declares `--dawn-activity-*` custom properties on `:root`. Restyle it by overriding its custom properties in your own CSS: `--dawn-activity-surface`, `--dawn-activity-border`, `--dawn-activity-text`, `--dawn-activity-muted`, `--dawn-activity-running`, `--dawn-activity-complete`, `--dawn-activity-failed`, `--dawn-activity-radius`, `--dawn-activity-gap`, and `--dawn-activity-font-size`. A dark palette applies under `prefers-color-scheme: dark`; setting `data-dawn-theme="light"` or `data-dawn-theme="dark"` on the root element pins one explicitly (the selectors match only `:root`, not an arbitrary ancestor).
 
 ## Key contracts
 
