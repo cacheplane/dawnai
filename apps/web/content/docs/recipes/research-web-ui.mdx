@@ -143,6 +143,18 @@ import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 <CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
 ```
 
+Then import the stylesheet once, in your root layout:
+
+```tsx title="app/layout.tsx"
+import "@dawn-ai/ag-ui/react/styles.css"
+```
+
+That import is not optional polish. The cards carry no inline styles, so without
+it they render as bare markup. Once it is in place, restyle by overriding the
+`--dawn-activity-*` custom properties in your own CSS — see the
+[package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards)
+for the full customization ladder.
+
 That is the whole wiring, and `app/page.tsx` above already carries it. `dawnActivityRenderers` is a module-scope constant, so
 the registry keeps a stable identity across React renders, and each renderer is
 keyed by the adapter's own activity-type constant. Both renderers validate the
