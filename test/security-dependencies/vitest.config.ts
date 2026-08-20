@@ -10,6 +10,8 @@ export default defineConfig({
 	test: {
 		environment: "node",
 		env: {
+			COPILOTKIT_TELEMETRY_DISABLED: "true",
+			DO_NOT_TRACK: "1",
 			GH_TOKEN: "",
 			GITHUB_TOKEN: "",
 			NODE_AUTH_TOKEN: "",

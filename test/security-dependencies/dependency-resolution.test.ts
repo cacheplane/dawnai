@@ -565,6 +565,8 @@ describe("dependency security graph invariants", () => {
       "test/security-dependencies/**/*.test.tsx",
     ])
     expect(testConfig.env).toEqual({
+      COPILOTKIT_TELEMETRY_DISABLED: "true",
+      DO_NOT_TRACK: "1",
       GH_TOKEN: "",
       GITHUB_TOKEN: "",
       NODE_AUTH_TOKEN: "",
