@@ -77,8 +77,12 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 | `planActivityContentSchema` | Validate plan activity content in a custom renderer. |
 | `subagentActivityContentSchema` | Validate subagent activity content in a custom renderer. |
 | `SubagentActivityContentOutput` | Describe parsed subagent content, which admits an explicit `undefined` `todos`. |
+| `DawnActivityClassNames` | Name the per-part classes a card appends to its defaults (customization rung 2). |
+| `DawnActivityComponents` | Name the leaf slots (`TodoRow`, `ToolRow`) a card lets a consumer replace (customization rung 3). |
+| `DawnTodoRowProps` | Describe the props passed to a replacement `TodoRow`. |
+| `DawnToolRowProps` | Describe the props passed to a replacement `ToolRow`. |
 
-`dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`.
+`dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`. `ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept optional `classNames` and `components` props built from these two types; see [`@dawn-ai/ag-ui/react/styles.css`](#dawn-aiag-uireactstylescss) below for rung 1 and the [package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards) for a runnable example of every rung.
 
 ### `@dawn-ai/ag-ui/react/styles.css`
 

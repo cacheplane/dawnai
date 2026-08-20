@@ -46,10 +46,18 @@ That client renders plan and researcher cards by passing the adapter's own
 renderer array to CopilotKit:
 
 ```tsx
+import "@dawn-ai/ag-ui/react/styles.css"
 import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
 <CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
 ```
+
+The stylesheet import gives the cards Dawn's default appearance in light and
+dark; without it, the cards still render but with structured, unstyled
+markup. Override its `--dawn-activity-*` CSS custom properties to restyle, or
+pass `classNames`/`components` to the card components for deeper
+customization — see the [package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards)
+for the full ladder.
 
 React and `@copilotkit/react-core` are optional peer dependencies, so a
 server-only consumer of the root or `/sse` entry installs nothing extra. The

@@ -39,6 +39,50 @@ The subpath exports three layers, from drop-in to build-your-own:
 
 `react` and `@copilotkit/react-core` are optional peer dependencies used only by this subpath. Importing the root or `./sse` entry never loads it, so a server-only consumer installs nothing extra.
 
+### Customizing the activity cards
+
+The cards ship with Dawn's visual identity via an optional stylesheet, plus a four-rung customization ladder. A card renders structured-but-unstyled markup if the stylesheet is not imported.
+
+**Rung 1 — tokens.** Import the stylesheet once, then override its CSS custom properties in your own CSS to restyle without touching markup:
+
+```ts
+import "@dawn-ai/ag-ui/react/styles.css"
+```
+
+```css
+:root {
+  --dawn-activity-accent: #7c3aed;
+  --dawn-activity-radius: 4px;
+}
+```
+
+Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set `data-dawn-theme="dark"` or `data-dawn-theme="light"` on any ancestor element to force one regardless of the system setting.
+
+**Rung 2 — `classNames`.** Pass per-part class names; they are appended to the package defaults, never substituted, so utility classes layer on without fighting specificity:
+
+```tsx
+<PlanActivityCard content={content} classNames={{ root: "my-plan-card", title: "font-mono" }} />
+```
+
+**Rung 3 — `components`.** Replace a leaf's rendering while the card keeps ownership of validation, ordering, and the bounded-content rules:
+
+```tsx
+<PlanActivityCard
+  content={content}
+  components={{
+    TodoRow: ({ content, status, glyph, label }) => (
+      <span>
+        {glyph} {content} ({label})
+      </span>
+    ),
+  }}
+/>
+```
+
+`ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept `classNames` and `components`; `SubagentActivityCard` also has a `ToolRow` slot for its tool rows.
+
+**Rung 4 — eject.** For anything the ladder does not cover, copy the card source (`PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, `ActivityChecklist.tsx`) into your own app and compile it directly — it is plain React with no hidden dependency on this package.
+
 ## Runtime and stability
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
