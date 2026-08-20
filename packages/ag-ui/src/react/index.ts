@@ -17,9 +17,12 @@
  *    validators behind the renderers, for clients presenting the same
  *    activities their own way (with or without CopilotKit).
  *
- * `cx` is exported for the eject rung: the card sources are copy-and-compile,
- * and they call it at runtime, so a copied card resolves it from this entry
- * instead of the package-internal `./parts.js` path it was written against.
+ * `cx` is exported for the eject rung. A copied card is not a clean drop-in:
+ * each source carries two package-internal specifiers, and they resolve to
+ * different entries — `../activities.js` to the package root, `./parts.js` and
+ * `./schemas.js` to this one. Exporting `cx` (the only runtime value among
+ * them) is what gives those rewrites somewhere to point. The README's rung-4
+ * table lists every rewrite per file.
  *
  * The activity type constants and content types (`DAWN_PLAN_ACTIVITY_TYPE`,
  * `DawnPlanActivityContent`, …) live on the root entry and are not re-exported

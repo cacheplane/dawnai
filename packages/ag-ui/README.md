@@ -64,6 +64,8 @@ Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set
 <PlanActivityCard content={content} classNames={{ root: "my-plan-card", title: "font-mono" }} />
 ```
 
+A class is applied to every element of that part the card renders, so a part that repeats gets it more than once. `item` lands on each row, and on `SubagentActivityCard` a `section` class lands on both the plan wrapper and the checklist inside it — worth knowing before you pass spacing utilities there.
+
 **Rung 3 — `components`.** Replace a leaf's rendering while the card keeps ownership of validation, ordering, and the bounded-content rules:
 
 ```tsx
@@ -81,7 +83,18 @@ Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set
 
 `ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept `classNames` and `components`; `SubagentActivityCard` also has a `ToolRow` slot for its tool rows.
 
-**Rung 4 — eject.** For anything the ladder does not cover, copy `PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, and `ActivityChecklist.tsx` into your own app. They are not a clean drop-in as copied: each imports `cx` from the package-internal `./parts.js` path, which does not exist in a consumer's tree. Change that one import in each file to `@dawn-ai/ag-ui/react`, which exports `cx` along with the `DawnActivityClassNames`/`DawnActivityComponents` types — a one-line edit per file, and after that the components are yours to change freely.
+**Rung 4 — eject.** For anything the ladder does not cover, copy `PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, and `ActivityChecklist.tsx` into your own app. Each carries two package-internal imports that do not exist in your tree, so repoint them — note they resolve to two *different* entries:
+
+| File | Rewrite | To |
+|---|---|---|
+| `ActivityChecklist.tsx` | `"../activities.js"` | `"@dawn-ai/ag-ui"` |
+| `ActivityChecklist.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `PlanActivityCard.tsx` | `"../activities.js"` | `"@dawn-ai/ag-ui"` |
+| `PlanActivityCard.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `SubagentActivityCard.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `SubagentActivityCard.tsx` | `"./schemas.js"` | `"@dawn-ai/ag-ui/react"` |
+
+`DawnPlanActivityContent` lives on the root entry; `cx`, the `classNames`/`components` types, and `SubagentActivityContentOutput` come from `/react`. The `"./ActivityChecklist.js"` imports need no change — they resolve to the sibling file you copied. After those rewrites the components are yours to change freely.
 
 ## Runtime and stability
 
