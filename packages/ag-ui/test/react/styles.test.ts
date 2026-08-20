@@ -67,4 +67,14 @@ describe("styles.css", () => {
     )
     expect(unscoped).toEqual([":root .consumer-class"])
   })
+
+  test("every status modifier the cards emit has a glyph rule", () => {
+    // Todo statuses: `statusPresentation` in ActivityChecklist.tsx.
+    // Tool statuses: `toolStatusPresentation` in SubagentActivityCard.tsx.
+    const todoStatuses = ["pending", "in_progress", "completed"]
+    const toolStatuses = ["running", "completed", "incomplete"]
+    for (const status of new Set([...todoStatuses, ...toolStatuses])) {
+      expect(CSS).toContain(`.dawn-activity__item--${status} .dawn-activity__item-glyph`)
+    }
+  })
 })

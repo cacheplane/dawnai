@@ -120,6 +120,14 @@
   color: var(--dawn-activity-failed);
 }
 
+.dawn-activity__item--in_progress .dawn-activity__item-glyph {
+  color: var(--dawn-activity-running);
+}
+
+.dawn-activity__item--pending .dawn-activity__item-glyph {
+  color: var(--dawn-activity-muted);
+}
+
 .dawn-activity__item-label {
   flex: 1;
   min-width: 0;
