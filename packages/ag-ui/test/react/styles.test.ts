@@ -18,6 +18,14 @@ function selectors(css: string): string[] {
   return out
 }
 
+// A `:root`-prefixed selector with a combinator or descendant (e.g.
+// `:root .consumer-class`, `:root div`, `:root > body`) reaches outside the
+// document root into a consumer's own markup — exactly what the scoping
+// assertion exists to prevent. So the exemption is anchored to accept only
+// `:root` plus directly-chained attribute/pseudo qualifiers with no
+// whitespace or combinator, i.e. root-level custom-property declarations.
+const rootVariant = /^:root(:[\w-]+(?:\([^)]*\))?|\[[^\]]*\])*$/
+
 describe("styles.css", () => {
   test("defines the documented tokens with light values", () => {
     for (const token of [
@@ -38,11 +46,7 @@ describe("styles.css", () => {
   test("every rule is scoped to the dawn-activity prefix", () => {
     const unscoped = selectors(CSS).filter((selector) => {
       const parts = selector.split(",").map((part) => part.trim())
-      // A bare `:root`, or a `:root` variant like `:root:not(...)` or
-      // `:root[data-dawn-theme="dark"]`, only ever declares custom properties
-      // on the document root — it cannot touch a consumer's markup, so it is
-      // exempt from the prefix requirement the same way bare `:root` is.
-      return parts.some((part) => !part.startsWith(":root") && !part.includes(".dawn-activity"))
+      return parts.some((part) => !rootVariant.test(part) && !part.includes(".dawn-activity"))
     })
     expect(unscoped).toEqual([])
   })
@@ -51,5 +55,16 @@ describe("styles.css", () => {
     expect(CSS).toContain("prefers-color-scheme: dark")
     expect(CSS).toContain('[data-dawn-theme="dark"]')
     expect(CSS).toContain('[data-dawn-theme="light"]')
+  })
+
+  test("the scoping check rejects a :root selector that reaches into consumer markup", () => {
+    const hostile = ":root .consumer-class { color: red }\n"
+    const unscoped = selectors(hostile).filter((selector) =>
+      selector
+        .split(",")
+        .map((part) => part.trim())
+        .some((part) => !rootVariant.test(part) && !part.includes(".dawn-activity")),
+    )
+    expect(unscoped).toEqual([":root .consumer-class"])
   })
 })
