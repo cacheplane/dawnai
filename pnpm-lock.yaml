@@ -201,6 +201,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../../packages/config-typescript
+      '@playwright/test':
+        specifier: 1.62.1
+        version: 1.62.1
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
@@ -327,6 +330,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../../packages/config-typescript
+      '@playwright/test':
+        specifier: 1.62.1
+        version: 1.62.1
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2

@@ -7,6 +7,7 @@
     "dev": "next dev -p 3000",
     "build": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\" && next build",
     "start": "next start -p 3000",
+    "test:e2e": "playwright test --config playwright.config.ts",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@playwright/test": "1.62.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",

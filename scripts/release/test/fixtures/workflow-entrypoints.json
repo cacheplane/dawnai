@@ -237,6 +237,79 @@
         },
         {
           "classification": "safe",
+          "id": "copilotkit-examples-e2e",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0",
+                  "cache": "pnpm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install Chromium",
+                "run": "pnpm --filter @dawn-example/chat-web exec playwright install --with-deps chromium"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build example workspace dependencies",
+                "run": "pnpm --filter @dawn-ai/ag-ui build"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Verify chat transport",
+                "run": "pnpm --filter @dawn-example/chat-web test:e2e"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Verify research transport",
+                "run": "pnpm --filter @dawn-example/research-web test:e2e"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "edge-workerd",
           "descriptor": {
             "runs-on": "ubuntu-latest",
