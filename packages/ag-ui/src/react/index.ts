@@ -17,6 +17,10 @@
  *    validators behind the renderers, for clients presenting the same
  *    activities their own way (with or without CopilotKit).
  *
+ * `cx` is exported for the eject rung: the card sources are copy-and-compile,
+ * and they call it at runtime, so a copied card resolves it from this entry
+ * instead of the package-internal `./parts.js` path it was written against.
+ *
  * The activity type constants and content types (`DAWN_PLAN_ACTIVITY_TYPE`,
  * `DawnPlanActivityContent`, …) live on the root entry and are not re-exported
  * here. The one type this entry does own is `SubagentActivityContentOutput`:
@@ -26,11 +30,12 @@
  */
 export { ActivityChecklist } from "./ActivityChecklist.js"
 export { PlanActivityCard } from "./PlanActivityCard.js"
-export type {
-  DawnActivityClassNames,
-  DawnActivityComponents,
-  DawnTodoRowProps,
-  DawnToolRowProps,
+export {
+  cx,
+  type DawnActivityClassNames,
+  type DawnActivityComponents,
+  type DawnTodoRowProps,
+  type DawnToolRowProps,
 } from "./parts.js"
 export {
   dawnActivityRenderers,
