@@ -100,22 +100,24 @@ Each card accepts an optional `classNames` object keyed by structural part:
 />
 ```
 
-Parts are named for what they are, not where they sit: `root`, `header`,
-`title`, `meta`, `progress`, `list`, `item`, `itemLabel`, `status` for the plan
-card; the subagent card adds `tools`, `tool`, `error`. Classes are appended to
-the defaults, never replace them, so a Tailwind consumer can layer utilities
-without fighting specificity.
+Parts are named for what they are, not where they sit — one shared vocabulary
+across both cards: `root`, `header`, `title`, `meta`, `badge`, `section`,
+`sectionLabel`, `list`, `item`, `itemGlyph`, `itemLabel`, `itemStatus`,
+`overflow`, `error`. A card silently ignores parts it has no markup for.
+Classes are appended to the defaults, never replace them, so a Tailwind consumer
+can layer utilities without fighting specificity.
 
 ### Rung 3 — Component slots
 
 Swap a sub-component while keeping the validated content plumbing:
 
 ```tsx
-<SubagentActivityCard content={content} components={{ ToolChip: MyToolChip }} />
+<SubagentActivityCard content={content} components={{ ToolRow: MyToolRow }} />
 ```
 
-Slots are limited to leaf presentational pieces — `TodoRow`, `StatusDot`,
-`ToolChip`, `ProgressBar` — each with a documented prop contract. The card keeps
+Slots are limited to leaf presentational pieces — `TodoRow` and `ToolRow`, the
+two repeated rows in the current markup — each with a documented prop contract
+(`content`/`name`, `status`, `glyph`, `label`). The card keeps
 ownership of validation, ordering, and the bounded-content rules (five recent
 tools, 400-character error cap) so a slot cannot break the activity contract.
 
