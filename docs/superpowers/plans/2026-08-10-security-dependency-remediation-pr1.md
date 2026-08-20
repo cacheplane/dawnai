@@ -7,35 +7,120 @@
 > superpowers:verification-before-completion before each commit or success
 > claim.
 
-**Goal:** Remove every currently compatible dependency vulnerability from Dawn,
-prove the out-of-range `@hono/node-server` 2.x remediation against the real
-CopilotKit/MCP/Windows paths, and leave only the exact upstream-blocked
-`@ai-sdk/provider-utils` advisory while publication stays disabled.
+**Goal:** Remove every dependency vulnerability that can be fixed through a
+compatible owner or lock resolution, prove the patched Hono-family behavior on
+Dawn-owned paths, and leave only explicitly evidenced upstream boundaries while
+publication stays disabled.
 
-**Architecture:** Keep the persistent dependency policy in the private root
-manifest. Replace the two vulnerable overrides, add one narrowly selected Hono
-adapter override, and refresh only the affected lockfile resolutions. Add a
-repo-level security compatibility project that is anchored to the real example,
-sandbox, and tooling dependency graphs rather than Dawn's already-safe direct
-dependencies. Exercise Mermaid in an isolated DOM/worker boundary, exercise the
-Kubernetes SOCKS path, and run the Windows-only encoded-backslash Hono regression
-in the existing Windows CI job. Retain a human-readable evidence report; pull
-request 3, not this pull request, owns the machine-readable live-alert exception
-gate.
+**Architecture:** Upgrade the real direct owners first, then let their declared
+compatible ranges select patched transitives. Keep only the root dependency
+policies needed for unrelated findings: replace the two vulnerable policies but
+do not add CopilotKit, Hono, node-server, UUID, provider-utils, AG-UI, or Vercel
+overrides. Anchor security tests to Dawn-owned example, sandbox, and tooling
+boundaries instead of freezing upstream package internals. Exercise Mermaid in
+an isolated DOM/worker boundary, exercise the Kubernetes SOCKS path, and run the
+Windows-only encoded-backslash Hono regression in the existing Windows CI job.
+Retain the required Vercel CLI and native deployment lane. Pull request 3, not
+this pull request, owns the machine-readable live-alert exception gate.
 
 **Tech Stack:** Node.js 24.19.0, pnpm 10.33.0, Vitest 4, jsdom, Playwright
-1.62.1, esbuild 0.28.1, Chromium, Next 16.3, Hono 4,
-`@hono/node-server` 2.1, CopilotKit 1.66, MCP SDK, Kubernetes client, GitHub
-Actions, Dependabot, and `pnpm audit`.
+1.62.1, esbuild 0.28.1, Chromium, Next 16.3, Hono 4.13.3,
+`@hono/node-server` 1.19.17/2.1.1, CopilotKit 1.68.3, AG-UI 0.0.57, MCP SDK,
+Kubernetes client, required Vercel CLI 58.9.0, GitHub Actions, Dependabot, and
+`pnpm audit`.
 
-**Pinned baseline:** `8398c908844cf961f1d64e575c8b9a0000923f41`
+**Historical evidence baseline:**
+`docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json` is an
+immutable capture from before the CopilotKit prerequisite. Its source/default
+SHAs and finding counts are historical evidence, not current-head assertions.
 
-**Preferred terminal security set:** Full and production audits contain only
-`GHSA-866g-f22w-33x8`; the live Dependabot open set is exactly alert `#122`.
-`@hono/node-server` alert `#123` is not an approved exception. It can remain only
-if the explicit A/B failure threshold in Task 5 is met and documented.
+**Current implementation base:** The prerequisite was rebased onto immutable
+main commit `2fc92f466ae17a383bf573f0a45890abc6318929`. Final graph/audit evidence is
+recaptured only after the preserved security WIP is restored and reconciled.
+
+**Reviewed current-base Dependabot candidate:** A complete independent read of
+default/main at `2fc92f466ae17a383bf573f0a45890abc6318929` observed these exact
+59 open alerts and candidate post-remediation partition:
+
+```text
+observed open (59):
+122,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,
+193,194,195,196,197,198,199,200,201,204,205,206,207,208,209,210,211,
+212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,
+229,230,231,232,233,234,235,236
+
+candidate fixed after remediation (26):
+124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,
+194,195,196,197,198,199,200,201,236
+
+candidate retained open boundaries (33):
+122,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,
+220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235
+```
+
+Alert `#236` is the current `@hono/node-server` /
+`GHSA-frvp-7c67-39w9` finding and must close on patched `1.19.17`. Alert `#123`
+is absent from every GitHub API state (an exact-number read returns 404) and may
+appear only in explicitly labeled historical evidence. Alerts `#204`–`#235`
+are 32 Vercel-derived findings across path-to-regexp, undici, tar, ajv,
+minimatch, smol-toml, and once; the required Vercel CLI/native deployment lane
+remains. No alert is suppressed or dismissed. This partition is a reviewed
+candidate, not frozen final state: recapture after WIP restoration and after
+every rebase, then update the identity fixture, reviewed-base receipt, and
+explicit reconciliation disposition if any identity changes.
+
+**Preferred terminal security set:** The production audit contains only a
+genuinely upstream-blocked provider-utils record if it remains after final
+resolution. The full audit additionally records the exact reviewed findings
+owned by the required Vercel development/native-deployment boundary if final
+recapture reports them. Final counts are not frozen before recapture, and
+neither mode has muted records. The terminal Dependabot sets are likewise
+determined by the mandatory final recapture and explicit reviewed partition;
+they contain no suppressions or dismissals.
 
 ---
+
+### Task 0: Complete the CopilotKit V2 prerequisite before recapturing security evidence
+
+**Status:** Implementation and task-level checks are complete in the dedicated
+prerequisite commits. Clean prerequisite verification in that plan's Task 5 and
+preserved-WIP restoration/reconciliation in Task 6 remain.
+
+**Files:**
+- Read: `docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md`
+- Read: `docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md`
+
+- [x] **Step 1: Upgrade the real CopilotKit owners without compatibility overrides**
+
+Both private examples select `@copilotkit/react-core` and
+`@copilotkit/runtime` `^1.68.3`; `packages/ag-ui` selects React Core `^1.68.3`
+for development while preserving its optional peer `>=1.66.0`. Direct,
+type-facing `@ag-ui/client` remains exactly `0.0.57`.
+
+- [x] **Step 2: Migrate the runtime and providers to V2 multi-route transport**
+
+Both examples use `@copilotkit/runtime/v2`, required `[...path]` route modules,
+`createCopilotRuntimeHandler`, `basePath: "/api/copilotkit"`, shared `GET`/`POST`,
+and explicit `useSingleEndpoint={false}`. Deterministic loopback tests prove the
+exact encoded Dawn AG-UI targets; real-page browser tests prove same-origin
+`/info` discovery. Both checks are credential-free and model-free. Live
+end-to-end model behavior remains a separate manual smoke that requires provider
+credentials.
+
+- [x] **Step 3: Establish the compatible graph and CI boundary**
+
+The prerequisite removes the obsolete UUID override and rejects the planned
+node-server override. The selected graph contains Hono `4.13.3`, node-server
+`1.19.17` and `2.1.1`, and UUID `11.1.1`/`14.0.1`, all at their patched floors.
+Both Next configs set `agentRules: false` so Next 16.3 does not generate
+contributor-rule files during `next dev`. An additive browser CI job and both
+workflow-audit fixtures are committed without changing the required Vercel CLI
+or native deployment lane.
+
+The rest of this plan operates on that architecture. Any pre-prerequisite
+command/output below is retained only where it documents the immutable RED or
+baseline evidence; it is not an instruction to restore CopilotKit 1.66, the
+legacy endpoint, or a forced node-server major.
 
 ### Task 1: Pin containment and capture the fail-closed baseline
 
@@ -58,16 +143,22 @@ if the explicit A/B failure threshold in Task 5 is met and documented.
 - Create: `test/security-dependencies/publication-containment.test.ts`
 - Create: `test/security-dependencies/dependabot-reconcile.test.ts`
 - Create: `test/security-dependencies/fixtures/audit-baseline.json`
-- Create: `test/security-dependencies/fixtures/audit-provider-utils-only.json`
+- Create: `test/security-dependencies/fixtures/audit-upstream-boundaries.json`
 - Create: `test/security-dependencies/fixtures/dependabot-baseline.json`
 - Create: `test/security-dependencies/vitest.config.ts`
 - Create: `test/security-dependencies/tsconfig.json`
 - Create: `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
 - Modify: `vitest.workspace.ts`
 
-- [ ] **Step 1: Verify branch, base, tools, and a clean worktree**
+- [x] **Step 1: Preserve the completed historical branch/base precondition**
 
-Run every verification block in a fresh shell with Node 24 explicitly selected:
+This verification completed before the CopilotKit prerequisite rebase. The
+block below is immutable baseline evidence for the original security branch
+state; it must not be rerun as an assertion about the current head or current
+`origin/main`.
+
+The completed historical verification used a fresh shell with Node 24
+explicitly selected:
 
 ```bash
 set -euo pipefail
@@ -83,10 +174,11 @@ test "$(git diff --name-only origin/main...HEAD)" = \
 test -z "$(git status --short)"
 ```
 
-Expected: every assertion succeeds; the approved plan is the only branch change
-above the pinned base. Commit this plan before beginning Task 1. If `origin/main`
-moved, stop and rebase/re-review the plan onto the new exact main SHA before
-editing; do not refresh a security lock against a stale base.
+At the historical capture point, every assertion succeeded and the approved
+plan was the only branch change above the pinned base. The preserved
+`8398c908844cf961f1d64e575c8b9a0000923f41` SHA identifies that evidence; it is
+not the current rebase target. Current-head and current-base assertions belong
+to the later rebase/reconciliation steps, not this completed precondition.
 
 - [ ] **Step 2: Prove the operational hold before adding the reviewed reader**
 
@@ -250,9 +342,12 @@ pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts \
   test/security-dependencies/dependabot-reconcile.test.ts
 ```
 
-- [ ] **Step 4: Capture the exact live security and containment baseline**
+- [x] **Step 4: Preserve the completed historical security and containment baseline**
 
-Run the reviewed reader with this exact open-number set:
+This capture completed before the prerequisite rebase. Its old default SHA,
+27-alert set, and command are immutable historical evidence only; do not rerun
+the block as a current-head assertion. The completed reader used this exact
+open-number set:
 
 ```text
 122 123 124 125 160 162 163 164 170 171 172 176 178 179 180 181
@@ -274,11 +369,13 @@ node scripts/security/dependency-evidence.mjs baseline \
   --output docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json
 ```
 
-Expected: 27 exact alert records plus the complete containment facts above. The
-canonical redacted receipt is reviewed and committed so its content and digest
-survive the implementation machine; it is not merely a temporary file. Do not
-infer a clean/smaller alert set or unpublished state from a failed or partial
-query.
+The result contained 27 exact historical alert records plus the complete
+containment facts above. In this receipt, alert `#123` is part of the old
+snapshot; it is not visible in the current GitHub API. The canonical redacted
+receipt remains committed at the August 10 path so its content and digest
+survive the implementation machine. Do not rewrite it, infer current state from
+it, or infer a clean/smaller alert set or unpublished state from a failed or
+partial current query.
 
 - [ ] **Step 5: Capture exact full and production audit baselines**
 
@@ -299,11 +396,13 @@ zero critical) and production audit has 27 advisories (10 high, 12 moderate, 5
 low, zero critical). The audit includes the two nanoid advisories and one
 body-parser advisory that are not yet open in Dependabot.
 
-The after-state fixture is independently minimal: its `full` and `production`
-arrays each contain exactly the `@ai-sdk/provider-utils@3.0.28` /
-`GHSA-866g-f22w-33x8` record and its `muted` arrays are explicitly empty. Tests
-prove a wrong package or version, an extra advisory, a missing mode, or any
-muted record cannot satisfy that fixture.
+The originally drafted provider-utils-only after-state fixture is superseded by
+the required Vercel development boundary now present on main. After compatible
+remediation is complete, recapture a reviewed fixture whose `production` mode
+contains only provider-utils if it remains and whose `full` mode additionally
+contains the exact final Vercel-owned findings, if any. Both `muted` arrays
+remain explicitly empty. Do not freeze those final records or counts during the
+prerequisite.
 
 - [ ] **Step 6: Record the initial dependency graph**
 
@@ -320,115 +419,57 @@ PostCSS 8.5.10, nanoid 3.3.15, fast-uri 3.1.3, brace-expansion 2.1.1, and
 body-parser 1.20.5. Preserve the command outputs outside the worktree for the
 final evidence report.
 
-### Task 2: Add graph and Hono compatibility regressions first
+### Task 2: Keep lean graph and Dawn-owned runtime regressions
 
 **Files:**
 - Modify: `test/security-dependencies/vitest.config.ts`
 - Modify: `test/security-dependencies/tsconfig.json`
-- Create: `test/security-dependencies/dependency-resolution.test.ts`
-- Create: `test/security-dependencies/hono-node-server.test.ts`
+- Modify: `test/security-dependencies/dependency-resolution.test.ts`
+- Create: `test/security-dependencies/copilotkit-v2-runtime.test.ts`
+- Delete: `test/security-dependencies/hono-node-server.test.ts`
 - Read: `vitest.workspace.ts`
 
-- [ ] **Step 1: Confirm the dedicated repo-level Vitest project boundary**
+- [x] **Step 1: Confirm the dedicated repo-level Vitest project boundary**
 
-The security-dependencies config is already registered by Task 1. Confirm its explicit
-Vitest `root` to the repository root so Vite can transform the two example route
-modules without relying on Node to execute TypeScript. Use a Node environment by
-default, bounded test/hook timeouts, no ambient credentials, and an include
-limited to `test/security-dependencies/**/*.test.ts` and `.tsx`. This is a test
-project, not a new workspace package, and the repo-level TypeScript test files
-must not be pulled into a publishable package's `rootDir`.
+The security-dependencies config has an explicit repository root, bounded
+timeouts, no ambient credentials, and a narrow include. Its TypeScript config
+uses explicit example React mappings and remains outside every publishable
+package `rootDir`.
 
-Confirm Task 1's `test/security-dependencies/tsconfig.json` extends the repository's Node
-configuration with DOM libs, `noEmit`, and explicit `jsx: "react-jsx"`. Add the
-missing explicit path mappings to the chat example's React, ReactDOM, and React
-Core types used by the browser entry; do not fall back to root or publishable
-package resolution.
-Include only this test directory's `.ts`/`.tsx` sources and its Vitest and
-Playwright configs. Prove it is independent of every publishable package
-`rootDir`:
+- [x] **Step 2: Replace the exact graph snapshot with public invariants**
+
+Parse `package.json` and `pnpm-lock.yaml` as fail-closed data. Require direct
+CopilotKit `1.68.3` owners, direct AG-UI `0.0.57`, Hono `>=4.12.34`, node-server
+1.x `>=1.19.15`, node-server 2.x `>=2.0.10`, UUID `>=11.1.1`, and no override
+selector for these public owners. Provider-utils path checks accept an empty
+affected set; if an affected 3.x identity remains, every complete importer path
+must stay below private CopilotKit Google Vertex. The locator/path parser rejects
+malformed, dangling, orphaned, and cyclic graph evidence without freezing
+unrelated reverse-edge totals.
+
+- [x] **Step 3: Test Dawn's real V2 server boundary instead of upstream internals**
+
+The model-free loopback test loads both required catch-all route modules,
+verifies `GET /api/copilotkit/info`, rejects malformed run input, and sends a
+schema-valid run through each real `HttpAgent`. It requires the exact encoded
+`/agui/%2Fchat%23agent` and `/agui/%2Fresearch%23agent` targets plus ordered SSE
+forwarding and deterministic cleanup.
+
+- [x] **Step 4: Delete the superseded upstream-internal adapter suite**
+
+`hono-node-server.test.ts` is intentionally removed. Do not restore its exact
+export-map archaeology, forced-major assumptions, or legacy single-route JSON
+response. The lean graph receipt, Dawn CLI Hono roundtrip, Windows disclosure
+regression, and V2 loopback cover the boundaries Dawn owns.
+
+After restoring the remaining security WIP, run:
 
 ```bash
 pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit
-```
-
-- [ ] **Step 2: Add the lock/manifest receipt test**
-
-Parse `package.json` and `pnpm-lock.yaml` as data and fail closed on malformed or
-unexpected lockfile structure. Assert:
-
-- the override **delta** is exactly the PostCSS replacement, js-yaml 4.x
-  replacement, and vulnerable node-server addition; the seven unrelated
-  baseline overrides remain byte-for-byte equivalent and the final override map
-  has exactly ten entries;
-- every targeted package's complete lock snapshot set is at or above the
-  security floor and contains no known vulnerable snapshot;
-- node-server has exactly one resolved 2.1.0 snapshot across the CLI,
-  CopilotKit, and MCP roots;
-- provider-utils 3.0.28 remains only on the exact Google Vertex/CopilotKit
-  private-example path and is not rewritten to an incompatible major. Prove
-  the complete four-snapshot reverse-parent set inside that one Vertex subtree,
-  while retaining the parallel safe provider-utils 4.x snapshot;
-- complete safe side-lines such as js-yaml 5.x, brace-expansion 5.x, and
-  body-parser 2.x remain present rather than being discarded by an
-  over-specific vulnerable-version filter;
-- the expected package names, versions, importers, and parent identities are
-  unique and deterministic.
-
-The test must reject missing records, duplicate/ambiguous identities, unexpected
-old and new versions together, wrong override selectors, malformed scalars, and
-extra vulnerable snapshots.
-
-- [ ] **Step 3: Add app-anchored Hono/node-server compatibility tests**
-
-Use `createRequire()` anchored separately at `examples/chat/web/package.json`
-and `examples/research/web/package.json`. Resolve CopilotKit and MCP through the
-real anchors, then use Node 24's `findPackageJSON()` and each package's export
-map; `@hono/node-server/package.json` is not exported. Require the actual
-`require` target and dynamically import the actual `import` target. Importing
-the CJS file through `import()` is not ESM coverage. Resolve MCP's Streamable
-HTTP module the same way. Never resolve through `packages/cli`, which is already
-on 2.x and would produce a false green.
-
-pnpm exposes the app-facing CopilotKit package through a symlink. After finding
-its package manifest from each app anchor, canonicalize that manifest with
-`realpathSync()` before creating the nested `createRequire()` or locating
-node-server/MCP; repeat that canonicalization for MCP. A nested lookup from the
-logical symlink path is an expected false RED, while resolving from the root or
-CLI is an expected false green. The export-map resolver accepts the current 1.x
-string `require`/`import` branches and the target 2.x nested `default` branches,
-rejecting arrays, types-only branches, and unknown shapes. MCP is loaded through
-the exact `@modelcontextprotocol/sdk/server/streamableHttp.js` subpath, not its
-currently unusable package root.
-
-Cover:
-
-- exact safe version identity at every anchor;
-- both ESM and CJS `serve` and `getRequestListener` exports;
-- a real Hono HTTP GET and POST/body roundtrip using the app-anchored adapter;
-- a real import and construction of MCP's Streamable HTTP server transport;
-- both example Next route handlers, invoked with an empty JSON request, returning
-  exact status `400` and
-  `{"error":"invalid_request","message":"Missing method field"}`;
-- deterministic cleanup of servers, ports, timers, and temporary directories.
-
-Set `COPILOTKIT_TELEMETRY_DISABLED=true` before any dynamic import of either
-route, avoid static route imports, and restore the prior environment in
-`finally`.
-
-- [ ] **Step 4: Run the intended RED**
-
-```bash
-set -euo pipefail
-export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts \
   test/security-dependencies/dependency-resolution.test.ts \
-  test/security-dependencies/hono-node-server.test.ts
+  test/security-dependencies/copilotkit-v2-runtime.test.ts
 ```
-
-Expected RED: the receipt and app anchors report the exact vulnerable versions,
-including node-server 1.19.14. API/route controls may already pass and should be
-recorded separately from the intended version failures.
 
 ### Task 3: Add hostile Mermaid/DOMPurify and SOCKS-path regressions
 
@@ -578,7 +619,7 @@ cases expose Mermaid 11.16.0; the SOCKS version receipt exposes ip-address
 10.2.0. Bounded worker termination is an acceptable intentional RED; a hung or
 leaked test process is not.
 
-### Task 4: Add native browser/Windows gates and capture the test-only RED head
+### Task 4: Add native browser/Windows gates and preserve bounded RED evidence
 
 **Files:**
 - Create: `test/security-dependencies/hono-serve-static-windows.test.ts`
@@ -597,9 +638,10 @@ through the CopilotKit example anchor. Create
 path `/static/admin%5Csecret.txt` over real loopback HTTP.
 
 Fixed expectation: response `404`, no secret bytes, and no authorization
-sentinel header. Always close the server and remove the temporary root. Before
-the override, the native Windows control must demonstrate the vulnerable 1.x
-adapter serves the secret while bypassing the sentinel.
+sentinel header. Always close the server and remove the temporary root. Preserve
+any bounded pre-prerequisite observation of `1.19.14` serving the secret as RED
+evidence, but do not downgrade the selected compatible `1.19.17` or add an
+override merely to recreate it.
 
 - [ ] **Step 2: Add one exact safe Windows CI step**
 
@@ -607,7 +649,7 @@ Append after the existing Windows subprocess test:
 
 ```yaml
 - name: Dependency security regressions
-  run: pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/hono-node-server.test.ts test/security-dependencies/hono-serve-static-windows.test.ts
+  run: pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts
 ```
 
 Do not alter the existing Windows steps, permissions, runner, or timeout unless
@@ -676,7 +718,8 @@ descriptor, the complete receipt-uploader workflow descriptor, and every
 executable to both fixtures. Add mutation regressions proving that changing a
 path, adding a shell operator, broadening a test command, removing the frozen
 install, expanding permissions/triggers, or substituting a dynamic action fails
-closed.
+closed. Preserve the already-audited `copilotkit-examples-e2e` descriptors and
+the required native Vercel job/executables byte-for-byte.
 
 - [ ] **Step 6: Observe workflow-contract RED, then make it green**
 
@@ -692,29 +735,21 @@ Expected RED: exact workflow descriptor/allowlist mismatch. After updating all
 three contract sources, the focused suite is green and the new adversarial
 mutation remains rejected.
 
-- [ ] **Step 7: Commit and push the intentionally failing test-only head**
+- [ ] **Step 7: Commit the behavior regressions against the patched graph**
 
-Run all unaffected controls, prove every new failure is one of the recorded
-vulnerable-version/security assertions, and commit:
+Run all controls and require the selected compatible graph to pass. Preserve
+bounded pre-prerequisite RED receipts outside the worktree; do not create a
+mergeable commit that deliberately restores vulnerable versions. Commit:
 
 ```text
 test(security): cover vulnerable dependency paths
 ```
 
-Push the branch and open a **draft** PR. Pin the exact test-only head SHA. Let CI
-run on that SHA and retain links/results showing:
-
-- native Windows serves `static/admin%5Csecret.txt` with node-server 1.19.14
-  while the middleware sentinel is bypassed;
-- the app-anchored resolver reports node-server 1.19.14;
-- the browser/worker receipts report Mermaid 11.16.0/DOMPurify 3.4.11; and
-- the remaining graph receipts report the exact old versions.
-
-The draft is expected to be red and must not be mergeable/ready. A generic test
-crash, missing browser primitive, missing dependency, timeout outside the bounded
-hostile cases, or unrelated CI failure is not acceptable RED evidence. Do not
-apply the dependency fix until the exact Windows run has demonstrated the
-native advisory path.
+The reviewed test commit must be green for Hono/node-server because the V2
+prerequisite already selected their patched ranges. Mermaid, DOMPurify, SOCKS,
+and other still-unreconciled WIP may retain their own specific RED assertions
+until Task 5; a generic crash, missing primitive, timeout, or unrelated failure
+is never acceptable evidence.
 
 ### Task 5: Apply the minimal dependency policy and targeted lock refresh
 
@@ -736,29 +771,28 @@ JSON-compatible policy explanation only if the manifest's existing style has a
 supported place for it; otherwise document the reason/removal condition in the
 audit report rather than inventing an out-of-schema field.
 
-- [ ] **Step 2: Apply the narrow Hono adapter override**
+- [ ] **Step 2: Preserve the no-Hono/no-UUID override boundary**
 
-Set:
+Do not add any CopilotKit, Hono, node-server, UUID, provider-utils, AG-UI, or
+Vercel selector. The prerequisite already removed:
 
 ```json
-"@hono/node-server@<2.0.10": "2.1.0"
+"uuid@<11.1.1": "11.1.1"
 ```
 
-The selector exists because the CopilotKit 1.66.4 and MCP 1.29 declarations
-still intersect on vulnerable 1.x. It avoids overriding already-safe future
-2.0.10+ versions while making all currently vulnerable ranges resolve to the
-same already-used 2.1.0 adapter. Do not choose 2.0.5 through 2.0.9; they have a
-separate WebSocket advisory.
+The proposed `@hono/node-server@<2.0.10` major-forcing override is rejected.
+CopilotKit `1.68.3` and the refreshed compatible graph select patched 1.x and
+2.x lines without it.
 
 - [ ] **Step 3: Refresh only the affected lock resolutions**
 
 Do not use named `pnpm update`: on pnpm 10.33 it rewrites the CLI's direct Hono
 range, and `--depth Infinity --no-save` still leaves the vulnerable transitives
-unchanged. Instead, temporarily add these exact forcing entries beside the three
-persistent policies:
+unchanged. Hono/node-server/UUID are already safe and must not be forced again.
+For only the still-unreconciled compatible findings, temporarily add these exact
+lock-refresh selectors:
 
 ```json
-"hono@>=4 <4.12.34": "4.13.1",
 "ip-address@>=10 <10.3.1": "10.5.0",
 "js-yaml@>=3 <3.15.1": "3.15.1",
 "mermaid@>=11 <11.16.1": "11.16.1",
@@ -777,19 +811,20 @@ export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 pnpm install --lockfile-only --no-frozen-lockfile
 ```
 
-Remove all nine temporary entries with `apply_patch`, leaving exactly the three
-persistent security-policy changes and the seven untouched baseline overrides,
-then run `pnpm install --lockfile-only --no-frozen-lockfile` again. The admitted
-parent ranges retain the safe lock selections without permanent forcing. Prove
-the final root manifest has no temporary selector and that no workspace package
-manifest changed.
+Remove all eight temporary entries with `apply_patch`, leaving exactly the two
+updated security policies plus the six untouched unrelated overrides: eight
+total. Then run `pnpm install --lockfile-only --no-frozen-lockfile` again. The
+admitted parent ranges retain the safe lock selections without permanent
+forcing. Prove the final root manifest has no temporary selector and that no
+workspace package manifest changed.
 
 Review `pnpm-lock.yaml` before installing. Expected resolution set at planning
 time:
 
 ```text
-hono 4.13.1
-@hono/node-server 2.1.0 only
+hono 4.13.3 (floor 4.12.34)
+@hono/node-server 1.19.17 and 2.1.1 (floors 1.19.15 and 2.0.10)
+uuid 11.1.1 and 14.0.1 (floor 11.1.1)
 ip-address 10.5.0
 js-yaml 3.15.1, 4.3.1, and the unrelated safe 5.x line
 mermaid 11.16.1
@@ -801,9 +836,10 @@ brace-expansion 2.1.4
 body-parser 1.20.6
 ```
 
-A newer same-range resolution is acceptable only after updating the exact
-receipt test and confirming it is not newly vulnerable. Reject unrelated parent
-package upgrades, unrelated importer churn, or a second node-server snapshot.
+A newer same-range resolution is acceptable only after updating the floor-based
+receipt and confirming it is not newly vulnerable. Reject unrelated parent
+package upgrades or importer churn; do not collapse the valid 1.x and 2.x
+node-server lines into one forced major.
 
 - [ ] **Step 4: Realize and freeze the new graph**
 
@@ -825,73 +861,58 @@ Run the security dependency project, sandbox proxy test, workflow contracts,
 existing CLI Hono tests, and both example route/build controls. Require no skip
 except the explicit Windows-only test on non-Windows.
 
-- [ ] **Step 6: Enforce the no-third-outcome Hono decision**
+- [ ] **Step 6: Enforce the compatible Hono floors without a forced major**
 
-Preferred result: 2.1.0 is green and lands.
+Require Hono `>=4.12.34`, node-server 1.x `>=1.19.15`, and node-server 2.x
+`>=2.0.10`, with the current `4.13.3`/`1.19.17`/`2.1.1` graph passing the lean
+receipt, CLI HTTP roundtrip, V2 runtime loopback, example builds, and native
+Windows non-disclosure test. Current alert `#236`
+(`@hono/node-server`, `GHSA-frvp-7c67-39w9`) must close on `1.19.17`. Alert
+`#123` is absent from every current API state and belongs only to the explicitly
+historical August 10 evidence.
 
-Only if 2.1.0 fails, repeat a clean A/B with 2.0.10. `UPSTREAM_BLOCKED` is
-allowed only when baseline 1.19.14 passes the corresponding non-security control
-and both safe versions reproducibly introduce one of:
+If a future compatible owner refresh changes these identities, update the
+floor-based receipt and rerun Dawn-owned behavior. Do not reintroduce the old
+upstream export-map suite, pin an exact safe version, or force all consumers onto
+one major. A reproducible Dawn-owned regression requires a reviewed direct-owner
+reassessment before implementation continues.
 
-- frozen install, peer, or Node 24 engine failure attributable to node-server;
-- ESM/CJS, `serve`, or `getRequestListener` incompatibility;
-- MCP transport import/runtime failure;
-- changed Copilot Next route behavior;
-- CLI Hono target/real HTTP regression;
-- chat/research build or route-smoke regression; or
-- continued Windows secret disclosure.
-
-Semver mismatch alone, an unrelated audit finding, missing Docker/API keys,
-Node below 20, or a flaky lane does not qualify. If the threshold is met, remove
-the override and stop implementation for a reviewed plan amendment. The
-amendment must define this complete alternate outcome before the branch can
-continue:
-
-- final override delta contains only the PostCSS/js-yaml replacements; all seven
-  unrelated overrides remain unchanged and no Hono override remains;
-- the graph receipt requires exactly node-server 1.19.14 at both example/MCP
-  anchors plus the CLI's independent 2.1.0, with all compatibility controls
-  green;
-- the disclosure test is retained as an opt-in evidence probe gated by
-  `DAWN_PROBE_VULNERABLE_HONO=1`, not as a passing assertion of vulnerable
-  behavior; the audited Windows CI step runs the non-disclosure test only on the
-  preferred override path and otherwise runs the API/route compatibility
-  controls;
-- full/prod audit expectations become the exact multiset
-  `{GHSA-866g-f22w-33x8, GHSA-frvp-7c67-39w9}`;
-- the audit report records both owned/expiring exceptions, exact sanitized A/B
-  logs, and a newly filed or existing upstream CopilotKit issue URL requesting a
-  safe node-server range;
-- the PR title/body state that #123 remains open; post-merge expected open set is
-  `{122,123}` and only the other 25 baseline alerts may be required fixed; and
-- independent spec/security reviewers approve the amendment before another
-  implementation commit.
-
-Otherwise, node-server 2.1.0 must land, the Windows test must pass, the audit
-must contain only provider-utils, and alert #123 must close.
-
-### Task 6: Record the exact remediation and sole upstream exception
+### Task 6: Prepare remediation and upstream-boundary evidence
 
 **Files:**
 - Create: `docs/superpowers/audits/2026-08-10-dependency-remediation.md`
+- Modify: `test/security-dependencies/fixtures/audit-upstream-boundaries.json`
+- Read without modification:
+  `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
+- Plan for creation in Task 8:
+  `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`
 
-- [ ] **Step 1: Write a human-readable security receipt**
+- [ ] **Step 1: Prepare the human-readable security receipt schema and draft**
 
-Record:
+Record already-proven decisions and evidence:
 
-- pinned base, exact test-only RED SHA, and exact dependency-fix commit SHA (not
-  the audit document's own future commit or merge SHA);
+- historical evidence base, exact bounded pre-remediation RED receipt/source
+  identities, and exact dependency-fix commit SHA (not the audit document's own
+  future commit or merge SHA);
 - the complete pre-remediation 27-alert set and 30-advisory audit set;
-- each package, GHSA/CVE, old version, resolved version, graph root, and test
-  surface;
+- selected compatible floors and remediation decisions, their graph roots, and
+  the Dawn-owned test surfaces that justify them;
 - why each root override exists and its removal trigger;
-- exact focused/full/gated commands and results;
-- the post-remediation full/prod audit set;
-- live Dependabot baseline and pre-merge state;
-- the checked-in canonical baseline receipt path and SHA-256 digest;
-- publication workflows disabled, zero non-completed runs, and zero
-  exact-reviewed-head publication runs, with every historical incident run
-  preserved and explicitly classified.
+- why no CopilotKit/Hono/node-server/UUID/provider-utils/AG-UI/Vercel override
+  exists; and
+- why the Vercel CLI/native-deployment lane remains required.
+
+Create explicit draft sections, labeled pending rather than stated as final
+facts, for:
+
+- Task 7's exact production/full audit tuples and conditional provider-utils and
+  Vercel retained-boundary or resolution outcome;
+- Task 8's final Dependabot identities, explicit fixed/open disposition, and
+  confirmation of no suppressions or dismissals;
+- Task 8's August 20 reviewed-base receipt path and SHA-256 digest;
+- exact final focused/full/gated command results; and
+- exact-reviewed-head publication containment evidence, while preserving every
+  historical incident run and its classification.
 
 The checked-in document must not promise post-merge facts or contain
 self-referential SHA placeholders. Merge-SHA CI, audit, and alert reconciliation
@@ -899,20 +920,30 @@ live in a content-addressed Actions artifact after merge; the PR comment only
 indexes that artifact. PR3 may later incorporate the receipt into checked-in
 release-gate evidence.
 
+Never update the August 10 receipt to represent a new base. Its path and digest
+may be recorded now as immutable history. The August 20 reviewed-base receipt
+and digest remain explicitly pending until Task 8 recaptures them against the
+exact reviewed base; every later rebase refreshes that current receipt, the
+identity fixture, their digests, and the explicit fixed/open disposition.
+
 Do not paste secrets, URLs with credentials, tokens, ambient proxy values, or
 unbounded raw logs.
 
-- [ ] **Step 2: Record the sole preferred exception**
+- [ ] **Step 2: Conditionally record the provider exception and Vercel development boundary**
 
-Record `GHSA-866g-f22w-33x8` only, bound to:
+The prerequisite observed `GHSA-866g-f22w-33x8` on provider-utils `3.0.28`.
+Prepare the following conditional record schema, but leave its outcome pending
+until Task 7 recaptures the final production audit. Record that advisory only if
+it remains, bound to the exact affected 3.x snapshot and dependency path in that
+final recapture:
 
 ```text
 package: @ai-sdk/provider-utils
-snapshot: 3.0.28
-path: examples/*/web -> @copilotkit/runtime -> @ai-sdk/google-vertex
-reported severity: low
-reachability: unused Vertex response-handler branch in private examples
-disposition: UPSTREAM_BLOCKED
+snapshot: exact affected 3.x snapshot from the final recapture
+path: exact affected dependency path from the final recapture
+reported severity: exact severity from the final recapture
+reachability: reviewed final reachability through the exact affected path
+disposition: UPSTREAM_BLOCKED only if the final evidence supports it
 owner: @blove
 review expiry: 2026-09-10
 recheck triggers: patched compatible 3.x, CopilotKit/Google Vertex dependency
@@ -920,22 +951,41 @@ recheck triggers: patched compatible 3.x, CopilotKit/Google Vertex dependency
   Vertex example/use
 ```
 
-Do not force provider-utils 4.x. Pull request 3 will translate the reviewed
-evidence into the machine-readable, exact-set, expiring live-alert exception
-gate.
+If the advisory remains, do not force provider-utils 4.x. Pull request 3 will
+translate the reviewed evidence into the machine-readable, exact-set, expiring
+live-alert exception gate. Revalidate its reachability and disposition against
+the final path rather than copying the prerequisite rationale. Task 7 updates
+the final fixture and human audit with that observed identity. If the advisory
+is absent, record the resolved version/path and resolution reason, and omit the
+exception instead of carrying a stale upstream-blocked record.
+
+Separately record the required `vercel@58.9.0` CLI path and native-deployment CI
+lane. Vercel findings belong only to the full development audit, are not muted,
+and are not a reason to remove the dependency or the credentialed real-deploy
+test. Leave their exact package/version/GHSA tuples pending until Task 7's
+recapture; do not invent counts or force transitive versions.
+
+Prepare `audit-upstream-boundaries.json` with distinct `production` and `full`
+schemas and explicit empty `muted` arrays. Task 7 fills and verifies the exact
+records: production contains provider-utils only if it remains, while full adds
+the exact reviewed Vercel-owned tuples only if final recapture reports them.
 
 - [ ] **Step 3: Explain why no changeset exists**
 
 State explicitly that persistent manifest changes are private root policy/test
-dependencies, lockfile resolutions stay within existing published dependency
-ranges, and all Dawn package changes are tests only. If implementation changes a
-publishable package's normal dependency or `src/`, stop and add a patch changeset
-for that package instead of retaining this conclusion.
+dependencies, private-example dependencies, or `packages/ag-ui`'s development
+owner only; its runtime dependencies, optional peer floor, and `src/` are
+unchanged. Lockfile resolutions stay within existing published dependency
+ranges. If implementation changes a publishable package's normal dependency or
+`src/`, stop and add a patch changeset for that package instead of retaining
+this conclusion.
 
 ### Task 7: Run focused and integration verification under Node 24
 
 **Files:**
 - Test: all files changed above
+- Modify: `docs/superpowers/audits/2026-08-10-dependency-remediation.md`
+- Modify: `test/security-dependencies/fixtures/audit-upstream-boundaries.json`
 - Test: `packages/cli/test/hono-target.test.ts`
 - Test: `packages/cli/test/hono-node-roundtrip.test.ts`
 - Test: `scripts/release/test/fault-harness.integration.mjs`
@@ -943,24 +993,30 @@ for that package instead of retaining this conclusion.
 - [ ] **Step 1: Verify exact resolution and audit sets**
 
 Run all `pnpm why`/`pnpm list` receipts again. Then capture full and production
-audits with explicit status and schema checks. Preferred exact GHSA set for both
-is:
-
-```json
-["GHSA-866g-f22w-33x8"]
-```
+audits with explicit status and schema checks. From the complete recapture,
+update `audit-upstream-boundaries.json` with the exact final production/full
+records and explicit empty `muted` arrays, then rerun the reviewed reader against
+that fixture. Production contains provider-utils only if it remains; full adds
+the exact Vercel development-boundary records only if final recapture reports
+them. No final count is inferred from the pre-prerequisite graph.
 
 ```bash
 set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 node scripts/security/dependency-evidence.mjs audit \
-  --expected test/security-dependencies/fixtures/audit-provider-utils-only.json \
+  --expected test/security-dependencies/fixtures/audit-upstream-boundaries.json \
   --output /tmp/dawn-pr1-audit-after.json
 ```
 
 Reject a missing expected advisory, any extra advisory, malformed JSON, audit
 network/error envelope, non-unique record, contradictory severity counts, or an
 unexpected exit status. This task does not dismiss or suppress the advisory.
+
+After the exact fixture passes, update the human audit draft with the final
+production/full tuples and either the retained provider-utils/Vercel boundaries
+or each finding's resolved version/path and resolution reason. Replace only the
+Task 7 audit placeholders; keep final Dependabot disposition and the August 20
+reviewed-base receipt/digest explicitly pending for Task 8.
 
 - [ ] **Step 2: Run the focused security matrix**
 
@@ -977,8 +1033,11 @@ pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts \
   test/hono-target.test.ts
 DAWN_REQUIRE_DOCKER=1 pnpm --filter @dawn-ai/cli exec vitest --run \
   --config vitest.config.ts test/hono-node-roundtrip.test.ts
+pnpm --filter @dawn-ai/ag-ui build
+pnpm --filter @dawn-example/chat-web test:e2e
 pnpm --filter @dawn-example/chat-web typecheck
 pnpm --filter @dawn-example/chat-web build
+pnpm --filter @dawn-example/research-web test:e2e
 pnpm --filter @dawn-example/research-web typecheck
 pnpm --filter @dawn-example/research-web build
 pnpm --filter @dawn-ai/web build
@@ -1015,8 +1074,87 @@ workspace-wide `biome check --write`.
 
 **Files:**
 - Test: repository Definition of Done
+- Modify: `docs/superpowers/audits/2026-08-10-dependency-remediation.md`
+- Review and commit:
+  `test/security-dependencies/fixtures/audit-upstream-boundaries.json`
+- Modify: `test/security-dependencies/fixtures/dependabot-baseline.json`
+- Create or update:
+  `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`
+- Read without modification:
+  `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
 
-- [ ] **Step 1: Run the complete local lane serially**
+- [ ] **Step 1: Re-prove publication containment and change scope**
+
+Require the reviewed reader to reproduce the full Task 1 containment proof at
+the exact reviewed branch head while the default branch remains the reviewed
+base. This repeats all 21 npm version/attestation reads plus complete workflow,
+tag, Release, and Actions-artifact pagination; it is not only a workflow-state
+check.
+
+First recapture every current Dependabot identity with complete bounded
+pagination and rewrite `dependabot-baseline.json` so its `defaultSha` is the
+exact reviewed base and its sorted `open` array is the complete reviewed set.
+The independently observed base candidate has 59 records, but neither that
+count nor its disposition substitutes for this fresh read. Review every added,
+removed, or identity-changed record; update the explicit candidate fixed/open
+partition in this plan before continuing. No dismissal or suppression is
+accepted. The shell derives the all-open baseline CSV from the reviewed fixture
+only after fail-closed provenance, state, ordering, and uniqueness checks:
+
+```bash
+set -euo pipefail
+REVIEWED_HEAD_SHA="$(git rev-parse HEAD)"
+REVIEWED_BASE_SHA="$(git rev-parse origin/main)"
+DEPENDABOT_IDENTITIES="test/security-dependencies/fixtures/dependabot-baseline.json"
+EXPECTED_OPEN_CSV="$(
+  jq -er --arg reviewed_base "$REVIEWED_BASE_SHA" '
+    .open as $open
+    | [$open[].number] as $numbers
+    | if .schemaVersion != 1
+      or .repository != "cacheplane/dawnai"
+      or .defaultSha != $reviewed_base
+      or ($open | type) != "array"
+      or ($open | length) == 0
+      or any($open[]; .state != "open" or .dismissal != null)
+      or $numbers != ($numbers | sort | unique)
+      then error("invalid reviewed Dependabot identity fixture")
+      else $numbers | map(tostring) | join(",")
+      end
+  ' "$DEPENDABOT_IDENTITIES"
+)"
+test -n "$EXPECTED_OPEN_CSV"
+node scripts/security/dependency-evidence.mjs baseline \
+  --repo cacheplane/dawnai \
+  --inventory-ref HEAD \
+  --source-sha "$REVIEWED_HEAD_SHA" \
+  --expected-default-sha "$REVIEWED_BASE_SHA" \
+  --current-version 0.8.21 \
+  --target-version 0.8.22 \
+  --expected-identities "$DEPENDABOT_IDENTITIES" \
+  --expected-open "$EXPECTED_OPEN_CSV" \
+  --output docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json
+git diff --exit-code origin/main...HEAD -- \
+  .github/workflows/release.yml .github/workflows/publish-chart.yml
+```
+
+Review the canonical reviewed-base receipt and its digest. Then finalize the
+human audit document with the exact recaptured Dependabot identities, explicit
+fixed/open disposition, confirmation of no suppressions or dismissals, and the
+August 20 receipt path/digest. Carry forward the exact provider-utils/Vercel
+outcome established in Task 7. Remove the corresponding pending labels only
+after these values agree; do not change the immutable August 10 receipt or its
+historical claims.
+
+Beyond the already-committed, audited `copilotkit-examples-e2e` job, the CI
+workflow may change only for the audited Windows regression and isolated
+Chromium security job. The new receipt-uploader workflow must remain the exact
+read-only, manual, allowlisted descriptor from Task 4. Preserve the required
+native Vercel job and all of its executables unchanged.
+
+- [ ] **Step 2: Run the complete local lane on the finalized evidence state**
+
+Run this once after Step 1 completes every final fixture, receipt, and human
+audit mutation. It validates the exact state that Step 3 commits and reviews:
 
 ```bash
 set -euo pipefail
@@ -1026,39 +1164,10 @@ DAWN_REQUIRE_DOCKER=1 pnpm ci:validate
 
 Expected: every Definition-of-Done and local-only release-script lane passes,
 including all three long harness families. Preserve a bounded result summary,
-not an unbounded raw log in Git.
+not an unbounded raw log in Git. Do not run a second redundant full validation
+before Step 3 unless the evidence state changes again.
 
-- [ ] **Step 2: Re-prove publication containment and change scope**
-
-Require the reviewed reader to reproduce the full Task 1 containment proof at
-the exact reviewed branch head while the default branch remains the reviewed
-base. This repeats all 21 npm version/attestation reads plus complete workflow,
-tag, Release, and Actions-artifact pagination; it is not only a workflow-state
-check:
-
-```bash
-set -euo pipefail
-REVIEWED_HEAD_SHA="$(git rev-parse HEAD)"
-REVIEWED_BASE_SHA="$(git rev-parse origin/main)"
-node scripts/security/dependency-evidence.mjs baseline \
-  --repo cacheplane/dawnai \
-  --inventory-ref HEAD \
-  --source-sha "$REVIEWED_HEAD_SHA" \
-  --expected-default-sha "$REVIEWED_BASE_SHA" \
-  --current-version 0.8.21 \
-  --target-version 0.8.22 \
-  --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
-  --expected-open 122,123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
-  --output /tmp/dawn-pr1-reviewed-head-baseline.json
-git diff --exit-code origin/main...HEAD -- \
-  .github/workflows/release.yml .github/workflows/publish-chart.yml
-```
-
-The CI workflow may change only for the audited Windows regression and isolated
-Chromium security job. The new receipt-uploader workflow must remain the exact
-read-only, manual, allowlisted descriptor from Task 4.
-
-- [ ] **Step 3: Commit in reviewable units**
+- [ ] **Step 3: Commit and review the finalized evidence in reviewable units**
 
 The approved plan is committed before Task 1. Recommended implementation
 commits are:
@@ -1067,8 +1176,11 @@ commits are:
 2. `fix(security): update compatible dependencies`
 3. `docs(security): record dependency remediation`
 
-Each commit must pass `git show --check`; no commit or PR text may reference an
-assistant implementation tool.
+The documentation commit includes the finalized human audit, exact audit and
+Dependabot fixtures, and checked-in August 20 reviewed-base receipt. Review all
+paths and recompute the recorded digests before committing. Each commit must
+pass `git show --check`; no commit or PR text may reference an assistant
+implementation tool.
 
 - [ ] **Step 4: Request independent spec and code-quality reviews**
 
@@ -1091,10 +1203,12 @@ Critical/Important findings.
 Fetch main. If it moved, rebase and repeat frozen install, resolution receipt,
 full/prod audits, focused tests, and all affected validation. Recapture the
 complete live alert baseline against the new base; update and review the
-identity fixture's `defaultSha`, the checked-in baseline receipt, and their
-digests before accepting the rebased branch. Record the exact reviewed head SHA
-and reviewed base SHA, announce an operational main freeze for the merge
-window, and require a clean worktree. Auto-merge remains off.
+identity fixture's `defaultSha`, the checked-in August 20 reviewed-base receipt,
+the explicit fixed/open disposition, and their digests before accepting the
+rebased branch. Never rewrite the immutable August 10 historical receipt.
+Record the exact reviewed head SHA and reviewed base SHA, announce an
+operational main freeze for the merge window, and require a clean worktree.
+Auto-merge remains off.
 
 - [ ] **Step 2: Push the fix/evidence commits and finalize the draft PR**
 
@@ -1102,16 +1216,21 @@ Push the dependency-fix and evidence commits to the existing draft PR from Task
 4. Update it with a concise security-focused title and body. Include:
 
 - exact dependency/override changes;
-- Hono 2.1 compatibility and native Windows evidence;
-- exact post-change audit set;
-- why provider-utils remains upstream-blocked;
+- compatible Hono/node-server floors, absence of a forced-major override, and
+  native Windows evidence;
+- exact post-change production and full audit sets;
+- either the exact observed provider-utils upstream boundary if it remains, or
+  its resolved version/path and resolution reason;
+- why the Vercel CLI/native deployment lane remains required and either why any
+  exact full-audit Vercel findings remain upstream development boundaries, or
+  their resolved versions/paths and resolution reasons if none remain;
 - why there is no changeset;
 - local verification summary;
 - explicit statement that publication workflows remain disabled.
 
 Keep it draft until local verification and both independent reviews are green.
 Then mark that exact head ready; do not open a second PR and do not discard the
-linked test-only RED runs.
+bounded pre-remediation RED receipts.
 
 - [ ] **Step 3: Monitor the exact PR head**
 
@@ -1162,6 +1281,8 @@ papered over as the reviewed merge.
 - Verify: GitHub Actions and security APIs
 - Verify: npm audit/lock graph
 - Verify: `.github/workflows/dependency-security-receipt.yml`
+- Verify:
+  `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`
 
 - [ ] **Step 1: Select and pin the exact observation head**
 
@@ -1185,19 +1306,32 @@ Create a clean detached verification worktree at `OBSERVATION_HEAD_SHA`; do not
 move the implementation worktree. Under Node 24, run frozen install, the full
 security dependency project, browser and focused graph receipts, then capture
 full/prod audits with
-`test/security-dependencies/fixtures/audit-provider-utils-only.json`. Require
-the exact provider-utils-only package/version/GHSA/reported-severity tuple and
-empty muted sets. Write one canonical audit receipt to
+`test/security-dependencies/fixtures/audit-upstream-boundaries.json`. Require
+the exact distinct production/full package/version/GHSA/reported-severity
+tuples and empty muted sets. Write one canonical audit receipt to
 `/tmp/dawn-pr1-postmerge-audit.json` and compute its SHA-256. Remove the detached
 worktree only after proving no scoped process uses it.
 
 - [ ] **Step 3: Produce one stable, bracketed reconciliation receipt**
 
 Run `reconcile` from the detached observation-head checkout. On the preferred
-path, expected fixed alerts are
-`123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201`
-and the exact open set is `{122}`. The reviewed fallback amendment substitutes
-the other 25 fixed alerts and exact open set `{122,123}`.
+path, begin from the independently reviewed 59-record current-base observation
+and the candidate partition recorded at the top of this plan. The candidate
+fixed set is
+`124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201,236`;
+the candidate retained-open set is
+`122,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235`.
+Current Hono/node-server alert `#236` must close on the compatible patched
+`1.19.17` graph; `#123` is historical and is not an API-visible reconciliation
+identity. The `#204`–`#235` candidate boundaries come from the required Vercel
+development/native-deployment path. No alert may be suppressed or dismissed.
+
+Task 8's mandatory final recapture controls execution. If it changes any
+identity or disposition—including resolution of provider-utils or a Vercel
+finding—stop and update the reviewed identity fixture, August 20 reviewed-base
+receipt, human audit, candidate text, and both explicit shell variables below
+before running reconciliation. Do not infer fixed/open disposition from the
+fixture; the partition remains an explicit reviewed security decision.
 
 The operation validates the exact PR number, reviewed base/head, merge commit
 and parents, observation head, and `merged_at`; verifies CI/CodeQL/Scorecard run
@@ -1257,6 +1391,8 @@ uploader/artifact identities.
 ```bash
 set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
+EXPECTED_FIXED_CSV="124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201,236"
+EXPECTED_OPEN_CSV="122,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235"
 node scripts/security/dependency-evidence.mjs reconcile \
   --repo cacheplane/dawnai \
   --pr "$PR_NUMBER" \
@@ -1268,10 +1404,10 @@ node scripts/security/dependency-evidence.mjs reconcile \
   --current-version 0.8.21 \
   --target-version 0.8.22 \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
-  --expected-fixed 123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
-  --expected-open 122 \
-  --baseline-receipt docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json \
-  --audit-expectation test/security-dependencies/fixtures/audit-provider-utils-only.json \
+  --expected-fixed "$EXPECTED_FIXED_CSV" \
+  --expected-open "$EXPECTED_OPEN_CSV" \
+  --baseline-receipt docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json \
+  --audit-expectation test/security-dependencies/fixtures/audit-upstream-boundaries.json \
   --audit-receipt /tmp/dawn-pr1-postmerge-audit.json \
   --wait-timeout-ms 900000 \
   --poll-interval-ms 15000 \
@@ -1279,10 +1415,9 @@ node scripts/security/dependency-evidence.mjs reconcile \
   --output /tmp/dawn-pr1-reconciliation.json
 ```
 
-Only the Task 5 reviewed A/B failure path may use `{122,123}`. Any timeout,
-query/parse/schema error, head drift, mismatched bracketing snapshot, new or
-reopened alert, dismissal, compatible alert left open, or containment failure
-is `UNPROVABLE` and keeps publication blocked.
+Any timeout, query/parse/schema error, head drift, mismatched bracketing
+snapshot, new or reopened alert, dismissal, compatible alert left open, or
+containment failure is `UNPROVABLE` and keeps publication blocked.
 
 - [ ] **Step 4: Seal the receipt in an exact-head Actions artifact**
 
@@ -1312,7 +1447,8 @@ artifact ID/URL/service digest, receipt/uploader/audit/baseline/fixture digests,
 and the final alert/containment verdict. The artifact's reconciliation receipt
 contains the validated audit evidence preimage as well as its digest; the
 temporary standalone audit file is not the only surviving copy. Recompute the
-checked-in baseline digest against the human audit first. Do not modify the
+checked-in August 20 reviewed-base receipt digest against the human audit first;
+index the immutable August 10 historical digest separately. Do not modify the
 merged audit document or create a self-referential evidence commit.
 
 Publication remains paused after PR1. Do not enable Release, generate a version

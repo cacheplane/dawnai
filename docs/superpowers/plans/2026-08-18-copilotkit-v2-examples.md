@@ -2,18 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade Dawn's chat and research examples to stable CopilotKit `1.68.1`, use the supported V2 frontend and runtime APIs end to end, and prove the multi-route Dawn/AG-UI boundary without adding dependency overrides.
+**Goal:** Upgrade Dawn's chat and research examples to selected stable CopilotKit `1.68.3`, use the supported V2 frontend and runtime APIs end to end, and prove the multi-route Dawn/AG-UI boundary without adding dependency overrides.
 
 **Architecture:** Keep each browser connected to a same-origin CopilotKit runtime, and keep each runtime's `HttpAgent` connected to the existing encoded Dawn `/agui/{routeId}` endpoint. Replace the legacy single-route Next.js adapter with `createCopilotRuntimeHandler` from `@copilotkit/runtime/v2`, mount it under a required catch-all route, and set the real React providers to multi-route mode. Verify direct dependency ownership with a lean lockfile receipt, the server boundary with a model-free loopback AG-UI stream, and the actual pages with Playwright request observation.
 
-**Tech Stack:** TypeScript 7, Next.js 16 App Router, React 19, CopilotKit `1.68.1`, AG-UI `0.0.57`, Vitest 4, Playwright `1.62.1`, pnpm 10.
+**Tech Stack:** TypeScript 7, Next.js 16 App Router, React 19, CopilotKit `1.68.3`, AG-UI `0.0.57`, Vitest 4, Playwright `1.62.1`, pnpm 10.
 
 ---
 
 ## Scope and file map
 
 This is one coherent prerequisite to the broader dependency-security plan. It
-does not implement the final audit exceptions or the unrelated Vercel work.
+does not implement the final audit exceptions or alter Dawn's required Vercel
+CLI dependency and native-deployment CI lane.
 
 **Create:**
 
@@ -32,12 +33,18 @@ does not implement the final audit exceptions or the unrelated Vercel work.
 
 **Modify:**
 
-- `examples/chat/web/package.json` — CopilotKit `^1.68.1`, exact Playwright test
+- `examples/chat/web/package.json` — CopilotKit `^1.68.3`, exact Playwright test
   dependency, and `test:e2e` script; retain `@ag-ui/client` `0.0.57`.
 - `examples/research/web/package.json` — same dependency/script changes.
+- `packages/ag-ui/package.json` — align the development owner to
+  `@copilotkit/react-core@^1.68.3` while preserving the optional peer
+  `>=1.66.0`.
 - `examples/chat/web/app/page.tsx` — explicit multi-route provider setting and
   current-version comments.
 - `examples/research/web/app/page.tsx` — same provider migration and route comment.
+- `examples/chat/web/next.config.mjs` and
+  `examples/research/web/next.config.mjs` — disable Next 16.3's generated agent
+  rules during real-page browser verification.
 - `package.json` — remove the obsolete `uuid@<11.1.1` override and reject the
   in-flight plan's proposed `@hono/node-server@<2.0.10` override; preserve all
   unrelated in-flight edits when the security WIP is restored.
@@ -49,6 +56,9 @@ does not implement the final audit exceptions or the unrelated Vercel work.
 - `test/security-dependencies/vitest.config.ts` — disable CopilotKit telemetry in
   the isolated test process.
 - `.github/workflows/ci.yml` — add a bounded browser job for the two example pages.
+- `scripts/release/test/fixtures/workflow-entrypoints.json` and
+  `scripts/release/test/fixtures/workflow-safe-executables.json` — register the
+  additive browser job in the fail-closed workflow audit.
 - `examples/chat/README.md`, `examples/chat/web/README.md`,
   `examples/research/web/README.md`, and
   `apps/web/content/docs/recipes/research-web-ui.mdx` — document the V2 route and
@@ -57,7 +67,11 @@ does not implement the final audit exceptions or the unrelated Vercel work.
   comparison to the old single-route CopilotKit file.
 - `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md` —
   make this migration the first prerequisite and update CopilotKit/version/route
-  assumptions after the preserved WIP is restored.
+  assumptions now; Task 6 reconciles the restored in-flight evidence around
+  those reviewed decisions.
+- `docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md` and this
+  implementation plan — record the selected release and actual implementation
+  scope.
 
 **Delete:**
 
@@ -79,8 +93,10 @@ does not implement the final audit exceptions or the unrelated Vercel work.
   implementing the prerequisite. Task 0 temporarily preserves them by immutable
   stash OID; Task 6 restores them.
 - Do not add a CopilotKit, Hono, node-server, provider-utils, or AG-UI override.
-- Do not upgrade direct `@ag-ui/client` to `0.0.58`; CopilotKit `1.68.1` expects
+- Do not upgrade direct `@ag-ui/client` to `0.0.58`; CopilotKit `1.68.3` expects
   the type-facing `0.0.57` generation.
+- Preserve `packages/ag-ui`'s optional `@copilotkit/react-core` peer range
+  `>=1.66.0`; only its development owner moves to `^1.68.3`.
 - Keep publication workflows disabled throughout.
 
 ### Task 0: Preserve the in-flight security WIP
@@ -90,7 +106,7 @@ does not implement the final audit exceptions or the unrelated Vercel work.
 - No repository file changes.
 - Preserve all tracked and untracked paths currently shown by `git status`.
 
-- [ ] **Step 1: Record the current branch, head, status, and existing recovery stashes**
+- [x] **Step 1: Record the current branch, head, status, and existing recovery stashes**
 
 Run:
 
@@ -111,7 +127,7 @@ security recovery OIDs named
 `pr1-task3-before-main-8398c908`. Do not modify those or any other existing
 stash.
 
-- [ ] **Step 2: Stash the current dirty state, including untracked files**
+- [x] **Step 2: Stash the current dirty state, including untracked files**
 
 Run:
 
@@ -123,7 +139,7 @@ git rev-parse stash@{0}
 Expected: one new OID. Copy the exact OID into the execution notes and refer to
 it by OID, never by a moving `stash@{n}` index.
 
-- [ ] **Step 3: Verify the worktree is clean and the new stash contains every prior dirty path**
+- [x] **Step 3: Verify the worktree is clean and the new stash contains every prior dirty path**
 
 Run:
 
@@ -135,7 +151,7 @@ git stash show --stat --include-untracked <NEW_STASH_OID>
 Expected: clean worktree; the stash lists the tracked and untracked security WIP.
 If either check fails, stop before editing.
 
-- [ ] **Step 4: Rebase the committed branch onto an immutable current main**
+- [x] **Step 4: Rebase the committed branch onto an immutable current main**
 
 Refresh the remote-tracking ref, record its exact commit, and rebase only after
 the WIP is safely stashed:
@@ -161,12 +177,13 @@ stash yet.
 
 - Modify: `examples/chat/web/package.json`
 - Modify: `examples/research/web/package.json`
+- Modify: `packages/ag-ui/package.json`
 - Modify: `package.json`
 - Modify: `pnpm-lock.yaml`
 - Modify: `test/security-dependencies/dependency-resolution.test.ts`
 - Delete: `test/security-dependencies/hono-node-server.test.ts`
 
-- [ ] **Step 1: Replace the exact lock snapshot test with desired public graph invariants**
+- [x] **Step 1: Replace the exact lock snapshot test with desired public graph invariants**
 
 Keep the strict JSON/YAML parsing helpers, but remove:
 
@@ -185,18 +202,18 @@ it("binds both private examples to stable CopilotKit V2 owners", () => {
   const workspace = readWorkspace()
   for (const importer of exampleImporters) {
     expect(importerDependency(workspace, importer, "dependencies", "@copilotkit/react-core")).toMatchObject({
-      specifier: "^1.68.1",
+      specifier: "^1.68.3",
     })
     expect(importerDependency(workspace, importer, "dependencies", "@copilotkit/runtime")).toMatchObject({
-      specifier: "^1.68.1",
+      specifier: "^1.68.3",
     })
     expect(importerDependency(workspace, importer, "dependencies", "@ag-ui/client")).toEqual({
       specifier: "0.0.57",
       version: "0.0.57",
     })
   }
-  expect(packageVersions(workspace, "@copilotkit/react-core")).toEqual(["1.68.1"])
-  expect(packageVersions(workspace, "@copilotkit/runtime")).toEqual(["1.68.1"])
+  expect(packageVersions(workspace, "@copilotkit/react-core")).toEqual(["1.68.3"])
+  expect(packageVersions(workspace, "@copilotkit/runtime")).toEqual(["1.68.3"])
 })
 
 it("keeps Dawn's HttpAgent type edge on AG-UI 0.0.57", () => {
@@ -256,7 +273,7 @@ it("confines any affected provider-utils 3.x to private CopilotKit Google Vertex
           path.importer as (typeof exampleImporters)[number],
         ) &&
         path.identities.some((identity) =>
-          identity.startsWith("@copilotkit/runtime@1.68.1"),
+          identity.startsWith("@copilotkit/runtime@1.68.3"),
         ) &&
         path.identities.some((identity) =>
           identity.startsWith("@ai-sdk/google-vertex@3."),
@@ -276,7 +293,12 @@ reverse edges. Do not require an affected provider-utils identity to remain: if
 upstream eventually resolves the advisory within the compatible graph, an empty
 affected set is the desired result.
 
-- [ ] **Step 2: Run the focused test and verify it fails for the old owners**
+Also treat `packages/ag-ui` as a direct development owner: require its manifest
+and lock importer to resolve `@copilotkit/react-core@^1.68.3` and direct
+`@ag-ui/client@0.0.57`, while requiring its optional React Core peer to remain
+`>=1.66.0`.
+
+- [x] **Step 2: Run the focused test and verify it fails for the old owners**
 
 Run:
 
@@ -288,14 +310,14 @@ Expected: FAIL because the example specifiers/resolutions are `1.66.x`, the UUID
 override still exists, and compatible Hono/node-server patches have not been
 selected.
 
-- [ ] **Step 3: Raise the direct CopilotKit floors and remove the obsolete UUID override**
+- [x] **Step 3: Raise the direct CopilotKit floors and remove the obsolete UUID override**
 
 Apply these manifest changes:
 
 ```json
 "@ag-ui/client": "0.0.57",
-"@copilotkit/react-core": "^1.68.1",
-"@copilotkit/runtime": "^1.68.1"
+"@copilotkit/react-core": "^1.68.3",
+"@copilotkit/runtime": "^1.68.3"
 ```
 
 Remove this root override:
@@ -305,9 +327,10 @@ Remove this root override:
 ```
 
 Do not change `@ag-ui/client`, add replacement overrides, or touch the Vercel
-CLI dependency.
+CLI dependency. In `packages/ag-ui`, update only the React Core development
+owner to `^1.68.3`; retain its optional peer `>=1.66.0`.
 
-- [ ] **Step 4: Regenerate the lock and explicitly refresh compatible Hono patches**
+- [x] **Step 4: Regenerate the lock and explicitly refresh compatible Hono patches**
 
 Run:
 
@@ -320,17 +343,18 @@ git diff --name-only -- ':(glob)**/package.json'
 ```
 
 Expected: all commands succeed. The example importers resolve CopilotKit
-`1.68.1`; their direct `@ag-ui/client` remains `0.0.57`; compatible Hono,
+`1.68.3`; their direct `@ag-ui/client` remains `0.0.57`; compatible Hono,
 node-server, and UUID patches are selected without an override; and the CLI
 manifest is byte-unchanged. The explicit update is necessary because a plain
 lockfile install retains the old compatible-but-vulnerable Hono/node-server
-resolutions. The final manifest listing must contain only root `package.json`
-and the two intentionally changed example manifests. Inspect the lock delta:
+resolutions. The final manifest listing must contain only root `package.json`,
+the two intentionally changed example manifests, and `packages/ag-ui/package.json`.
+Inspect the lock delta:
 bounded peer-snapshot churn inside the CLI/Copilot LangChain/OpenAI closure is
 acceptable after focused/full verification, but no other workspace manifest,
 unrelated importer, or provider-utils version change is.
 
-- [ ] **Step 5: Run the focused graph test and inspect direct ownership**
+- [x] **Step 5: Run the focused graph test and inspect direct ownership**
 
 Run:
 
@@ -343,7 +367,7 @@ pnpm --filter @dawn-example/research-web why @copilotkit/runtime @ag-ui/client @
 Expected: PASS; direct AG-UI is `0.0.57`; no `0.0.58`; any `0.0.54` appears only
 below `@ag-ui/mcp-middleware@0.0.1`; no forced node-server major.
 
-- [ ] **Step 6: Delete the superseded upstream-internal adapter test and run the full security project**
+- [x] **Step 6: Delete the superseded upstream-internal adapter test and run the full security project**
 
 Delete `test/security-dependencies/hono-node-server.test.ts`. Its compatible
 version requirements now live in the lean lock receipt, and Task 2 immediately
@@ -359,12 +383,12 @@ pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts
 Expected: PASS. This keeps the Task 1 commit green instead of retaining exact
 `1.66.4`/`2.1.0` assertions after the graph changes.
 
-- [ ] **Step 7: Commit the direct-owner graph change**
+- [x] **Step 7: Commit the direct-owner graph change**
 
 Run:
 
 ```bash
-git add package.json examples/chat/web/package.json examples/research/web/package.json pnpm-lock.yaml test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-node-server.test.ts
+git add package.json packages/ag-ui/package.json examples/chat/web/package.json examples/research/web/package.json pnpm-lock.yaml test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-node-server.test.ts
 git diff --cached --check
 git commit -m "chore(examples): update stable CopilotKit dependencies"
 ```
@@ -383,7 +407,7 @@ Expected: one commit containing only the dependency/receipt paths above.
 - Delete: `examples/chat/web/app/api/copilotkit/route.ts`
 - Delete: `examples/research/web/app/api/copilotkit/route.ts`
 
-- [ ] **Step 1: Disable CopilotKit telemetry in the isolated Vitest project**
+- [x] **Step 1: Disable CopilotKit telemetry in the isolated Vitest project**
 
 Add these entries to `test.env` in
 `test/security-dependencies/vitest.config.ts`:
@@ -398,7 +422,7 @@ requests. Update `dependency-resolution.test.ts`'s exact `testConfig.env`
 assertion in the same step so it expects both new keys alongside the existing
 four credential-clearing keys.
 
-- [ ] **Step 2: Write the failing V2 route and Dawn forwarding integration test**
+- [x] **Step 2: Write the failing V2 route and Dawn forwarding integration test**
 
 Create a loopback `node:http` server on `127.0.0.1` that:
 
@@ -447,7 +471,7 @@ capturedRequests.length = 0
 const info = await route.GET(new Request("http://dawn.test/api/copilotkit/info"))
 expect(info.status).toBe(200)
 expect(await info.json()).toMatchObject({
-  version: "1.68.1",
+  version: "1.68.3",
   mode: "sse",
   agents: { default: { name: "default" } },
 })
@@ -529,7 +553,7 @@ and restore `console.error` around the intentional malformed request because
 CopilotKit logs the validation error; assert only the stable error code and that
 the details mention `threadId`, not the full Zod wording or minified class name.
 
-- [ ] **Step 3: Run the new test and verify it fails on the missing V2 route files**
+- [x] **Step 3: Run the new test and verify it fails on the missing V2 route files**
 
 Run:
 
@@ -539,7 +563,7 @@ pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test
 
 Expected: FAIL because the required catch-all route modules do not exist.
 
-- [ ] **Step 4: Implement both V2 route modules**
+- [x] **Step 4: Implement both V2 route modules**
 
 Use this exact shape, changing only the Dawn route and default port:
 
@@ -570,7 +594,7 @@ export const POST = handler
 Research uses port `3002` and route `"/research#agent"`. Delete the two old
 `route.ts` files; do not leave a compatibility re-export.
 
-- [ ] **Step 5: Run the runtime integration and example typechecks**
+- [x] **Step 5: Run the runtime integration and example typechecks**
 
 Run:
 
@@ -588,7 +612,7 @@ Expected: all PASS. If the run body is rejected, inspect the installed
 `RunAgentInputSchema` and correct the fixture; do not weaken the route assertion
 or bypass the real handler.
 
-- [ ] **Step 6: Commit the V2 server boundary**
+- [x] **Step 6: Commit the V2 server boundary**
 
 Run:
 
@@ -614,9 +638,13 @@ two V2 handlers and focused loopback test are committed.
 - Create: `examples/research/web/e2e/copilotkit-v2.spec.ts`
 - Modify: `examples/chat/web/app/page.tsx`
 - Modify: `examples/research/web/app/page.tsx`
+- Modify: `examples/chat/web/next.config.mjs`
+- Modify: `examples/research/web/next.config.mjs`
 - Modify: `.github/workflows/ci.yml`
+- Modify: `scripts/release/test/fixtures/workflow-entrypoints.json`
+- Modify: `scripts/release/test/fixtures/workflow-safe-executables.json`
 
-- [ ] **Step 1: Add package-owned Playwright test infrastructure**
+- [x] **Step 1: Add package-owned Playwright test infrastructure**
 
 In both package manifests add:
 
@@ -636,7 +664,7 @@ pnpm install --lockfile-only
 pnpm install --frozen-lockfile
 ```
 
-- [ ] **Step 2: Create each package's Playwright config**
+- [x] **Step 2: Create each package's Playwright config**
 
 Chat configuration:
 
@@ -674,18 +702,25 @@ test must exercise the current worktree rather than an unrelated process already
 holding the port. Keep telemetry disabled in both local Next processes so the
 transport test has no unrelated network dependency.
 
-- [ ] **Step 3: Write the failing request-observation specs against the actual pages**
+Set top-level `agentRules: false` in both existing `next.config.mjs` files while
+preserving `experimental.useTypeScriptCli`. Next 16.3 otherwise writes generated
+contributor-rule files when the Playwright-owned `next dev` processes start,
+leaving CI/local verification with unrelated artifacts.
+
+- [x] **Step 3: Write the failing request-observation specs against the actual pages**
 
 Each test observes only same-origin CopilotKit runtime traffic:
 
 ```ts
 import { expect, test } from "@playwright/test"
 
+const appOrigin = "http://127.0.0.1:3000"
+
 test("uses CopilotKit V2 multi-route discovery", async ({ page }) => {
   const runtimeRequests: Array<{ method: string; pathname: string }> = []
   page.on("request", (request) => {
     const url = new URL(request.url())
-    if (url.pathname.startsWith("/api/copilotkit")) {
+    if (url.origin === appOrigin && url.pathname.startsWith("/api/copilotkit")) {
       runtimeRequests.push({ method: request.method(), pathname: url.pathname })
     }
   })
@@ -695,7 +730,11 @@ test("uses CopilotKit V2 multi-route discovery", async ({ page }) => {
   )
   const infoResponse = page.waitForResponse((response) => {
     const url = new URL(response.url())
-    return url.pathname === "/api/copilotkit/info"
+    return (
+      response.request().method() === "GET" &&
+      url.origin === appOrigin &&
+      url.pathname === "/api/copilotkit/info"
+    )
   })
   await page.goto("/")
 
@@ -716,7 +755,7 @@ from contacting a Dawn server during this transport-only test. Research's
 Playwright config changes the Next port in both `baseURL`, `webServer.url`, and
 the command to `3010`.
 
-- [ ] **Step 4: Run both browser specs and verify they fail in legacy mode**
+- [x] **Step 4: Run both browser specs and verify they fail in legacy mode**
 
 Run:
 
@@ -731,7 +770,7 @@ Expected: both tests observe `POST /api/copilotkit` or time out waiting for
 `GET /api/copilotkit/info`, because the real providers still default to the
 legacy single-endpoint transport.
 
-- [ ] **Step 5: Switch both real providers to multi-route mode**
+- [x] **Step 5: Switch both real providers to multi-route mode**
 
 Add the explicit property in both `page.tsx` files:
 
@@ -744,11 +783,11 @@ Add the explicit property in both `page.tsx` files:
 >
 ```
 
-Update nearby comments to reference installed `1.68.1` types and the new
+Update nearby comments to reference installed `1.68.3` types and the new
 `api/copilotkit/[...path]/route.ts` path. Do not change hooks, renderers, or
 agent IDs.
 
-- [ ] **Step 6: Re-run browser, component, typecheck, and build verification**
+- [x] **Step 6: Re-run browser, component, typecheck, and build verification**
 
 Run:
 
@@ -765,7 +804,7 @@ pnpm --filter @dawn-example/research-web build
 Expected: all PASS; browser tests observe `GET /api/copilotkit/info` and no base
 POST envelope.
 
-- [ ] **Step 7: Add a dedicated CI browser job**
+- [x] **Step 7: Add a dedicated CI browser job**
 
 Add a `copilotkit-examples-e2e` job to `.github/workflows/ci.yml` using the same
 pinned checkout, pnpm setup, Node 24.17.0 setup, and frozen install steps as the
@@ -790,18 +829,32 @@ secrets or write permissions. The tests use only local Next servers and `/info`.
 This job is additive: preserve the existing Vercel native-deployment lane and
 its CLI coverage unchanged.
 
-- [ ] **Step 8: Commit the browser-proven frontend transport**
+The release controller parses every workflow entrypoint and executable. After
+adding the job, regenerate its exact descriptors in
+`scripts/release/test/fixtures/workflow-entrypoints.json` and
+`scripts/release/test/fixtures/workflow-safe-executables.json`, classify only
+the new local browser commands as safe, and run:
+
+```bash
+node --test scripts/release/test/workflow-contracts.test.mjs
+```
+
+Do not change any Vercel job descriptor or executable while updating the
+fixtures.
+
+- [x] **Step 8: Commit the browser-proven frontend transport**
 
 Run:
 
 ```bash
-git add .github/workflows/ci.yml examples/chat/web/package.json examples/chat/web/playwright.config.ts examples/chat/web/e2e examples/chat/web/app/page.tsx examples/research/web/package.json examples/research/web/playwright.config.ts examples/research/web/e2e examples/research/web/app/page.tsx pnpm-lock.yaml
+git add .github/workflows/ci.yml examples/chat/web/package.json examples/chat/web/playwright.config.ts examples/chat/web/e2e examples/chat/web/app/page.tsx examples/chat/web/next.config.mjs examples/research/web/package.json examples/research/web/playwright.config.ts examples/research/web/e2e examples/research/web/app/page.tsx examples/research/web/next.config.mjs pnpm-lock.yaml scripts/release/test/fixtures/workflow-entrypoints.json scripts/release/test/fixtures/workflow-safe-executables.json
 git diff --cached --check
 git commit -m "test(examples): verify CopilotKit v2 transport"
 ```
 
 Expected: one commit containing the explicit provider setting, package-owned
-browser tests, CI job, and corresponding lock importer updates.
+browser tests, side-effect-free Next configs, CI job, corresponding lock
+importer updates, and the two workflow audit fixtures.
 
 ### Task 4: Refresh current documentation and the active security plan
 
@@ -812,9 +865,12 @@ browser tests, CI job, and corresponding lock importer updates.
 - Modify: `examples/research/web/README.md`
 - Modify: `apps/web/content/docs/recipes/research-web-ui.mdx`
 - Modify: `examples/research/web/app/api/memory/[...path]/route.ts`
+- Modify: `examples/research/web/app/components/ToolCallCard.tsx`
 - Modify: `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md`
+- Modify: `docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md`
+- Modify: `docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md`
 
-- [ ] **Step 1: Update README route maps and operational guidance**
+- [x] **Step 1: Update README route maps and operational guidance**
 
 Replace every current-runtime reference to:
 
@@ -837,7 +893,7 @@ Document that the page sets `useSingleEndpoint={false}`, the runtime exposes V2
 REST/SSE routes under `/api/copilotkit/*`, and credentials remain only on Dawn's
 server. Preserve the existing live-model/manual-smoke language.
 
-- [ ] **Step 2: Replace the docs recipe's server and provider snippets**
+- [x] **Step 2: Replace the docs recipe's server and provider snippets**
 
 Use the same handler shown in Task 2 and include:
 
@@ -853,49 +909,63 @@ Change the code-fence title to
 `examples/research/web/app/api/copilotkit/[...path]/route.ts`. Remove the service
 adapter and legacy endpoint factory entirely.
 
-- [ ] **Step 3: Fix the memory proxy comment**
+- [x] **Step 3: Fix the memory proxy and tool-renderer comments**
 
 Describe it as a same-origin proxy parallel to the CopilotKit API boundary; do
 not claim its required catch-all path mirrors the old single file.
 
-- [ ] **Step 4: Amend the active security plan**
+Describe `ToolCallCard` against the CopilotKit 1.68.3 V2 runtime/default-renderer
+contract. The public wildcard `useRenderTool` overload types its render props as
+`any`, so do not claim its field names or status values are statically enforced;
+retain the defensive parsing around the current runtime fields.
+
+- [x] **Step 4: Amend the active security plan**
 
 At the start of the implementation sequence, add this migration as prerequisite
 Task 0. Replace current claims that freeze CopilotKit `1.66`, force
 `@hono/node-server` 2.x, or depend on the legacy single-route response. State:
 
-- stable CopilotKit owner: `1.68.1`;
+- selected stable CopilotKit owner: `1.68.3`;
 - direct/type-facing AG-UI: `0.0.57`;
+- `packages/ag-ui` development owner: `^1.68.3`, with optional peer
+  compatibility retained at `>=1.66.0`;
 - compatible node-server 1.x is accepted at `>=1.19.15`;
 - no CopilotKit/node-server override;
 - the obsolete UUID override is removed and the planned forced node-server
   override is rejected, leaving six unrelated/eight total overrides;
-- provider-utils remains upstream-blocked after the owner upgrade; and
-- V2 multi-route behavior is proven by the new loopback and page tests.
+- provider-utils is recorded as upstream-blocked only if final recapture still
+  reports it; otherwise record its resolved identity and reason; and
+- V2 multi-route behavior is proven by the new loopback and page tests;
+- Vercel remains a required CLI/native-deployment CI boundary; any final
+  full-audit findings are not hidden, overridden, or used as a reason to remove
+  that lane, and resolved findings are recorded as such; and
+- final production/full audit sets are captured only after the remaining
+  compatible remediation is complete.
 
 Do not recapture final audit counts in this task; that happens after all
 compatible dependency remediation is complete.
 
-- [ ] **Step 5: Verify current docs and stale-symbol absence**
+- [x] **Step 5: Verify current docs and stale-symbol absence**
 
 Run:
 
 ```bash
 node scripts/check-docs.mjs
-rg -n "ExperimentalEmptyAdapter|copilotRuntimeNextJSAppRouterEndpoint|api/copilotkit/route\.ts|CopilotKit 1\.66" examples/chat examples/research/web apps/web/content/docs/recipes/research-web-ui.mdx docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md
+rg -n "ExperimentalEmptyAdapter|copilotRuntimeNextJSAppRouterEndpoint|api/copilotkit/route\.ts|CopilotKit 1\.66" examples/chat examples/research/web apps/web/content/docs/recipes/research-web-ui.mdx
 rg -n 'from "@copilotkit/(react-core|runtime)"' examples/chat/web examples/research/web
+rg -n '1\.68\.1|\^1\.68\.1' docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md examples/chat examples/research/web apps/web/content/docs/recipes/research-web-ui.mdx
 ```
 
-Expected: docs check PASS; both `rg` commands return no current-guidance or
-root-entrypoint matches. Historical specs/plans outside this explicit set remain
-archival.
+Expected: docs check PASS; all three `rg` commands return no current-guidance,
+root-entrypoint, or stale selected-version matches. Historical specs/plans
+outside this explicit set remain archival.
 
-- [ ] **Step 6: Commit the documentation update**
+- [x] **Step 6: Commit the documentation update**
 
 Run:
 
 ```bash
-git add examples/chat/README.md examples/chat/web/README.md examples/research/web/README.md examples/research/web/app/api/memory/'[...path]'/route.ts apps/web/content/docs/recipes/research-web-ui.mdx docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md
+git add examples/chat/README.md examples/chat/web/README.md examples/research/web/README.md examples/research/web/app/api/memory/'[...path]'/route.ts examples/research/web/app/components/ToolCallCard.tsx apps/web/content/docs/recipes/research-web-ui.mdx docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md
 git diff --cached --check
 git commit -m "docs(examples): document CopilotKit v2 runtime"
 ```
@@ -918,6 +988,7 @@ pnpm --filter @dawn-ai/ag-ui build
 pnpm --filter @dawn-example/research-web test
 pnpm --filter @dawn-example/chat-web test:e2e
 pnpm --filter @dawn-example/research-web test:e2e
+node --test scripts/release/test/workflow-contracts.test.mjs
 ```
 
 Expected: all PASS.
@@ -998,6 +1069,9 @@ plan commits. Do not proceed to WIP restoration until this is true.
 - Restore the exact files recorded in Task 0.
 - Reconcile likely overlaps in `package.json`, `pnpm-lock.yaml`, and
   `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md`.
+- Reconcile: `test/security-dependencies/fixtures/dependabot-baseline.json`
+- Reconcile: `test/security-dependencies/dependabot-reconcile.test.ts`
+- Reconcile: `test/security-dependencies/dependency-evidence.test.ts`
 
 - [ ] **Step 1: Apply the preserved stash by immutable OID**
 
@@ -1024,9 +1098,21 @@ Rules:
   importer/package changes.
 - active security plan: retain the reviewed V2 prerequisite and integrate any
   restored evidence/reassessment edits around it.
+- Dependabot evidence: recapture
+  `test/security-dependencies/fixtures/dependabot-baseline.json` against the
+  exact reviewed current default base and update the restored
+  `dependabot-reconcile.test.ts` and `dependency-evidence.test.ts` assumptions.
+  The independently reviewed observation at default/main
+  `2fc92f466ae17a383bf573f0a45890abc6318929` contained 59 open alerts, including
+  current Hono/node-server alert `#236` and Vercel-derived alerts `#204`–`#235`;
+  it is a recapture candidate, not a substitute for a fresh complete read.
+  Remove restored old-27-alert and old-default-SHA expectations. Preserve
+  `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
+  byte-for-byte as immutable historical evidence rather than rewriting it for
+  the new base.
 - untracked Mermaid/SOCKS work: restore every file, but update the Mermaid
   receipts' CopilotKit range/version assertions from `^1.66.0`/`1.66.4` to
-  `^1.68.1`/`1.68.1`; do not stage that broader WIP as part of the CopilotKit
+  `^1.68.3`/`1.68.3`; do not stage that broader WIP as part of the CopilotKit
   commits.
 
 - [ ] **Step 3: Verify the prerequisite still holds in the combined worktree**
@@ -1038,6 +1124,7 @@ git diff --check
 pnpm install --lockfile-only
 pnpm install --frozen-lockfile
 pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/copilotkit-v2-runtime.test.ts
+pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-evidence.test.ts test/security-dependencies/dependabot-reconcile.test.ts
 pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/mermaid-rendering.test.ts
 pnpm exec playwright test --config test/security-dependencies/playwright.config.ts
 pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit
@@ -1046,11 +1133,13 @@ pnpm --filter @dawn-example/chat-web exec next typegen
 pnpm --filter @dawn-example/research-web exec next typegen
 pnpm --filter @dawn-example/chat-web typecheck
 pnpm --filter @dawn-example/research-web typecheck
-rg -n '1\.66' test/security-dependencies examples/chat/web examples/research/web
+rg -n '\^1\.66\.0|1\.66\.4' test/security-dependencies examples/chat/web examples/research/web
 ```
 
-Expected: focused prerequisite and restored Mermaid checks PASS; the final `rg`
-returns no current-code version matches. Broader dirty WIP may still have its own
+Expected: focused prerequisite, reconciled evidence, and restored Mermaid checks
+PASS; the final `rg` returns no current-code matches for the exact obsolete
+range or installed version. The intentional `>=1.66.0` optional peer and its
+resolution assertion remain allowed. Broader dirty WIP may still have its own
 unfinished tests and is not claimed complete here.
 
 - [ ] **Step 4: Prove the stash was fully restored before dropping only the new recovery entry**
@@ -1077,7 +1166,8 @@ Preserve every older stash, including the three security recovery stashes.
 
 After Task 6:
 
-- the branch contains the stable CopilotKit dependency upgrade, V2 runtime/page
+- the branch contains the selected stable CopilotKit `1.68.3` dependency
+  upgrade, V2 runtime/page
   migration, deterministic tests, CI browser lane, and current docs as commits;
 - the pre-existing security WIP is restored for the broader remediation;
 - no new dependency override exists;

@@ -1,10 +1,16 @@
 # Dawn Workbench — the research example's web client
 
 A [CopilotKit](https://docs.copilotkit.ai) v2 app (`@copilotkit/react-core/v2` +
-`@copilotkit/runtime`) that talks to Dawn's `/research` agent over AG-UI. It is a
+`@copilotkit/runtime/v2`) that talks to Dawn's `/research` agent over AG-UI. Its
+required catch-all route (`app/api/copilotkit/[...path]/route.ts`) registers an
+`HttpAgent` pointed at Dawn's encoded `/research#agent` endpoint. It is a
 workbench rather than a chat widget: the app renders its own transcript and composer
 instead of mounting `CopilotSidebar`, so the plan and researcher activity cards appear
 inline in the conversation.
+
+The live app uses a real model; there is no aimock/demo mode. Its browser test is
+model-free and proves the page discovers `GET /api/copilotkit/info` instead of sending
+a legacy base-URL POST.
 
 ## Layout
 
@@ -25,11 +31,27 @@ inline in the conversation.
   flight. It is blocked while the agent is running or waiting on an approval; the header
   says which.
 
-The wiring: `app/api/copilotkit/route.ts` registers an `HttpAgent` pointed at the Dawn
-server's encoded `/agui/%2Fresearch%23agent` endpoint under CopilotKit's default agent
-id, and `app/page.tsx` mounts `CopilotKit` plus a `CopilotChatConfigurationProvider`
-carrying the active thread id. No model credentials live in this app — the Dawn server
-holds them.
+```
+browser
+  → /api/copilotkit/* (app/api/copilotkit/[...path]/route.ts, this app, no API key)
+    → HttpAgent → POST /agui/%2Fresearch%23agent  (Dawn dev server, holds OPENAI_API_KEY)
+      → live /research agent
+        → AG-UI event stream back to the browser
+```
+
+- `app/api/copilotkit/[...path]/route.ts` — `CopilotRuntime` with
+  `agents: { default: new HttpAgent(...) }`, served through
+  `createCopilotRuntimeHandler` from `@copilotkit/runtime/v2` with
+  `basePath: "/api/copilotkit"` and shared `GET`/`POST` exports. No LLM credentials
+  live here; the Dawn server holds `OPENAI_API_KEY`.
+- `app/page.tsx` — `CopilotKit` (`runtimeUrl="/api/copilotkit"`,
+  `useSingleEndpoint={false}`) plus a `CopilotChatConfigurationProvider` carrying the
+  active thread id. The workbench renders its own transcript and composer, with
+  `renderActivityMessages={workbenchActivityRenderers}` and a 100 ms render throttle.
+
+Components/hooks that omit `agentId` resolve CopilotKit's default agent id
+(`"default"`), which the runtime route registers as the Dawn `/research` agent — same
+pattern as `examples/chat/web`, no per-component wiring needed.
 
 ## Thread history
 
@@ -107,6 +129,13 @@ pnpm dev                             # server on :3002, web on :3010
 `web/.env.example` holds only `DAWN_SERVER_URL` (default `http://127.0.0.1:3002`); copy
 it to `web/.env` if your server listens elsewhere.
 
+`pnpm --filter @dawn-ai/ag-ui test` renders the cards on the server and checks their
+schemas and bounds. Here, `typecheck` / `build` verify the CopilotKit/AG-UI wiring
+compiles and the Next.js app builds. The repository's packaged research activation
+proves the deterministic wire path. `pnpm --filter @dawn-example/research-web
+test:e2e` drives the real page in a browser to verify V2 transport selection. None of
+these checks exercises a live model; this client intentionally has no demo/mock mode.
+
 ## Restyling it
 
 `app/theme.css` is the one file to edit. The whole palette is defined there as CSS
@@ -141,12 +170,14 @@ the tool-call card, all three permission surfaces (`PermissionPrompt`,
 server-probe behaviour. `typecheck` and `build` prove the CopilotKit/AG-UI wiring
 compiles. The activity cards themselves are tested in `@dawn-ai/ag-ui`.
 
-There are no browser or live-model tests here. The connect screen, its auto-recovery,
-the empty state, thread hydration including the new-thread 404, and every proxy
-allow/reject case were verified by hand in a real browser against a real server. A full
-research run — streaming, activity cards, the permission gate live and across a reload,
-memory candidates appearing and superseding — needs a real `OPENAI_API_KEY` and has not
-been exercised in this repo; those paths are covered by unit tests only.
+The model-free `test:e2e` browser test proves the V2 transport begins with
+`GET /api/copilotkit/info` rather than the legacy single-endpoint `POST`. The connect
+screen, its auto-recovery, the empty state, thread hydration including the new-thread
+404, and every proxy allow/reject case were also verified by hand in a real browser
+against a real server. A full research run — streaming, activity cards, the permission
+gate live and across a reload, memory candidates appearing and superseding — needs a
+real `OPENAI_API_KEY` and has not been exercised in this repo; those paths are covered
+by unit tests only.
 
 ## What it does not do yet
 
