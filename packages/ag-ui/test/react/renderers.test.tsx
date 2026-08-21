@@ -116,22 +116,17 @@ describe("subagent schema bounds", () => {
 })
 
 /**
- * The text a reader sees, with the markup that carries the styling removed.
+ * The text a reader sees, collected from between the tags.
  *
- * Stripping repeats until the string stops changing. A single pass is the
- * classic incomplete sanitizer: `<scr<script>ipt>` loses its inner tag and
- * reassembles into `<script>`. Our input is always our own rendered fixtures,
- * so nothing hostile reaches this — but a one-pass strip is the wrong shape to
- * leave lying around in a file people copy from.
+ * This gathers the runs of text that follow each `>` and contain no `<`, which
+ * is extraction rather than sanitization. Removing tags with a replace is the
+ * shape to avoid: one pass turns `<scr<script>ipt>` back into `<script>`, and
+ * even a repeat-until-stable version reads like a sanitizer that someone will
+ * later copy somewhere it matters. Taking only `<`-free substrings cannot
+ * reassemble a tag no matter what the input is.
  */
 function visibleText(markup: string): string {
-  let previous = markup
-  let current = markup.replace(/<[^>]*>/g, "")
-  while (current !== previous) {
-    previous = current
-    current = current.replace(/<[^>]*>/g, "")
-  }
-  return current
+  return Array.from(markup.matchAll(/>([^<]*)/g), (match) => match[1] ?? "").join("")
 }
 
 describe("plan activity card", () => {
