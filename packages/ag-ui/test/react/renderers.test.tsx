@@ -115,6 +115,20 @@ describe("subagent schema bounds", () => {
   })
 })
 
+/**
+ * The text a reader sees, collected from between the tags.
+ *
+ * This gathers the runs of text that follow each `>` and contain no `<`, which
+ * is extraction rather than sanitization. Removing tags with a replace is the
+ * shape to avoid: one pass turns `<scr<script>ipt>` back into `<script>`, and
+ * even a repeat-until-stable version reads like a sanitizer that someone will
+ * later copy somewhere it matters. Taking only `<`-free substrings cannot
+ * reassemble a tag no matter what the input is.
+ */
+function visibleText(markup: string): string {
+  return Array.from(markup.matchAll(/>([^<]*)/g), (match) => match[1] ?? "").join("")
+}
+
 describe("plan activity card", () => {
   it("expands an active plan and shows progress with visible status labels", () => {
     const markup = renderToStaticMarkup(
@@ -130,7 +144,7 @@ describe("plan activity card", () => {
     )
 
     expect(markup).toContain("<details open")
-    expect(markup).toContain("Plan · 1/3 complete")
+    expect(visibleText(markup)).toContain("Plan · 1/3 complete")
     expect(markup).toContain("pending")
     expect(markup).toContain("in progress")
     expect(markup).toContain("completed")
@@ -265,6 +279,7 @@ describe("subagent activity card", () => {
     )
 
     expect(markup).toContain('role="alert"')
+    expect(markup).toContain("dawn-activity__error")
     expect(markup).toContain(boundedError)
   })
 
@@ -336,8 +351,7 @@ describe("activity card quality boundaries", () => {
     )
 
     expect(markup).toContain(longContent)
-    expect(markup).toContain("min-width:0")
-    expect(markup).toContain("overflow-wrap:anywhere")
+    expect(markup.match(/dawn-activity__item-label/g)).toHaveLength(1)
   })
 
   it("protects long unbroken subagent and tool names from overflowing", () => {
@@ -357,8 +371,8 @@ describe("activity card quality boundaries", () => {
 
     expect(markup).toContain(longName)
     expect(markup).toContain(longToolName)
-    expect(markup.match(/min-width:0/g)).toHaveLength(2)
-    expect(markup.match(/overflow-wrap:anywhere/g)).toHaveLength(2)
+    expect(markup.match(/dawn-activity__title/g)).toHaveLength(1)
+    expect(markup.match(/dawn-activity__item-label/g)).toHaveLength(1)
   })
 
   it("retains explicit list semantics for the markerless checklist", () => {

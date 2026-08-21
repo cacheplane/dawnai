@@ -39,11 +39,69 @@ The subpath exports three layers, from drop-in to build-your-own:
 
 `react` and `@copilotkit/react-core` are optional peer dependencies used only by this subpath. Importing the root or `./sse` entry never loads it, so a server-only consumer installs nothing extra.
 
+### Customizing the activity cards
+
+The cards ship with Dawn's visual identity via an optional stylesheet, plus a four-rung customization ladder. A card renders structured-but-unstyled markup if the stylesheet is not imported.
+
+**Rung 1 — tokens.** Import the stylesheet once, then override its CSS custom properties in your own CSS to restyle without touching markup:
+
+```ts
+import "@dawn-ai/ag-ui/react/styles.css"
+```
+
+```css
+:root {
+  --dawn-activity-running: #7c3aed;
+  --dawn-activity-radius: 4px;
+}
+```
+
+Light and dark values ship out of the box, keyed off `prefers-color-scheme`; set `data-dawn-theme="dark"` or `data-dawn-theme="light"` on the root element to force one regardless of the system setting (the selectors match only `:root`, not an arbitrary ancestor).
+
+**Rung 2 — `classNames`.** Pass per-part class names; they are appended to the package defaults, never substituted, so utility classes layer on without fighting specificity:
+
+```tsx
+<PlanActivityCard content={content} classNames={{ root: "my-plan-card", title: "font-mono" }} />
+```
+
+A class is applied to every element of that part the card renders, so a part that repeats gets it more than once. `item` lands on each row, and on `SubagentActivityCard` a `section` class lands on both the plan wrapper and the checklist inside it — worth knowing before you pass spacing utilities there.
+
+**Rung 3 — `components`.** Replace a leaf's rendering while the card keeps ownership of validation, ordering, and the bounded-content rules:
+
+```tsx
+<PlanActivityCard
+  content={content}
+  components={{
+    TodoRow: ({ content, status, glyph, label }) => (
+      <span>
+        <span aria-hidden="true">{glyph}</span> {content} ({label})
+      </span>
+    ),
+  }}
+/>
+```
+
+`ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept `classNames` and `components`; `SubagentActivityCard` also has a `ToolRow` slot for its tool rows.
+
+**Rung 4 — eject.** For anything the ladder does not cover, copy `PlanActivityCard.tsx`, `SubagentActivityCard.tsx`, and `ActivityChecklist.tsx` into your own app. Each carries two package-internal imports that do not exist in your tree, so repoint them — note they resolve to two *different* entries:
+
+| File | Rewrite | To |
+|---|---|---|
+| `ActivityChecklist.tsx` | `"../activities.js"` | `"@dawn-ai/ag-ui"` |
+| `ActivityChecklist.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `PlanActivityCard.tsx` | `"../activities.js"` | `"@dawn-ai/ag-ui"` |
+| `PlanActivityCard.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `SubagentActivityCard.tsx` | `"./parts.js"` | `"@dawn-ai/ag-ui/react"` |
+| `SubagentActivityCard.tsx` | `"./schemas.js"` | `"@dawn-ai/ag-ui/react"` |
+
+`DawnPlanActivityContent` lives on the root entry; `cx`, the `classNames`/`components` types, and `SubagentActivityContentOutput` come from `/react`. The `"./ActivityChecklist.js"` imports need no change — they resolve to the sibling file you copied. After those rewrites the components are yours to change freely.
+
 ## Runtime and stability
 
 - `@dawn-ai/ag-ui` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/sse` is a supported, edge-safe integration surface.
 - `@dawn-ai/ag-ui/react` is a supported React application surface, built for browser bundles. Dawn records its runtime as `node-only`, which means only that it does not pass Dawn's edge-safety guard — not that it requires Node: React's own JSX runtime reads `process.env.NODE_ENV`, which an application bundler substitutes as usual but the stricter edge guard rejects. The other two entries never load it.
+- `@dawn-ai/ag-ui/react/styles.css` is a supported integration surface carrying the cards' default appearance. It is a stylesheet asset, so it has no runtime classification at all: a bundler resolves it and nothing evaluates it as JavaScript. Import it once alongside your global CSS; it is optional, and every rule that styles an element is scoped to the `dawn-activity` prefix (the sheet also declares `--dawn-activity-*` custom properties on `:root`, which is intended and harmless).
 
 They translate protocol data; they do not authenticate callers or make client-provided state authoritative.
 

@@ -98,6 +98,7 @@ const EXPECTED_DETAILED_IMPORTS = [
 
 const EXPECTED_CATALOG_AND_INTERNAL_IMPORTS = [
   ["@dawn-ai/core", "./internal/compiler", "internal"],
+  ["@dawn-ai/ag-ui", "./react/styles.css", "catalog-only"],
   ["@dawn-ai/config-biome", ".", "internal"],
   ["@dawn-ai/config-biome", "./biome", "internal"],
   ["@dawn-ai/config-typescript", ".", "internal"],
@@ -690,7 +691,7 @@ describe("artifact registry", () => {
   it("uses unique keys in separate import and operated address spaces", () => {
     const addresses = ARTIFACT_REGISTRY.map(artifactAddressFor)
     expect(new Set(addresses).size).toBe(addresses.length)
-    expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import")).toHaveLength(43)
+    expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import")).toHaveLength(44)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated")).toHaveLength(3)
     expect(ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated")).toEqual([
       GENERATED_ROUTES_ARTIFACT,

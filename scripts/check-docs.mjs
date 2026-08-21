@@ -695,6 +695,7 @@ const EXPECTED_API_ARTIFACT_POLICY_TUPLES = [
   ["import:@dawn-ai/ag-ui:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/ag-ui:./sse", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/ag-ui:./react", "detailed", "surfaceKind", "typescript-runtime"],
+  ["import:@dawn-ai/ag-ui:./react/styles.css", "catalog-only", "surfaceKind", "style-asset"],
   ["import:@dawn-ai/memory:.", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/memory:./browse", "detailed", "surfaceKind", "typescript-runtime"],
   ["import:@dawn-ai/memory:./namespace", "detailed", "surfaceKind", "typescript-runtime"],
@@ -3859,15 +3860,15 @@ if (apiReferenceRegistry) {
   }
 
   const artifactAddresses = ARTIFACT_REGISTRY.map(apiReferenceRegistry.artifactAddressFor)
-  if (ARTIFACT_REGISTRY.length !== 47 || new Set(artifactAddresses).size !== 47) {
-    failures.push("ARTIFACT_REGISTRY must contain exactly 47 unique artifact addresses")
+  if (ARTIFACT_REGISTRY.length !== 48 || new Set(artifactAddresses).size !== 48) {
+    failures.push("ARTIFACT_REGISTRY must contain exactly 48 unique artifact addresses")
   }
   const importCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "import").length
   const operatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "operated").length
   const generatedCount = ARTIFACT_REGISTRY.filter(({ kind }) => kind === "generated").length
-  if (importCount !== 43 || operatedCount !== 3 || generatedCount !== 1) {
+  if (importCount !== 44 || operatedCount !== 3 || generatedCount !== 1) {
     failures.push(
-      `ARTIFACT_REGISTRY must contain 43 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
+      `ARTIFACT_REGISTRY must contain 44 imports, 3 operated artifacts, and 1 generated artifact; received ${importCount}, ${operatedCount}, and ${generatedCount}`,
     )
   }
   const invalidApplicationRecommendations = ARTIFACT_REGISTRY.filter(

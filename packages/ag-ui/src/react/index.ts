@@ -17,6 +17,13 @@
  *    validators behind the renderers, for clients presenting the same
  *    activities their own way (with or without CopilotKit).
  *
+ * `cx` is exported for the eject rung. A copied card is not a clean drop-in:
+ * each source carries two package-internal specifiers, and they resolve to
+ * different entries — `../activities.js` to the package root, `./parts.js` and
+ * `./schemas.js` to this one. Exporting `cx` (the only runtime value among
+ * them) is what gives those rewrites somewhere to point. The README's rung-4
+ * table lists every rewrite per file.
+ *
  * The activity type constants and content types (`DAWN_PLAN_ACTIVITY_TYPE`,
  * `DawnPlanActivityContent`, …) live on the root entry and are not re-exported
  * here. The one type this entry does own is `SubagentActivityContentOutput`:
@@ -26,6 +33,13 @@
  */
 export { ActivityChecklist } from "./ActivityChecklist.js"
 export { PlanActivityCard } from "./PlanActivityCard.js"
+export {
+  cx,
+  type DawnActivityClassNames,
+  type DawnActivityComponents,
+  type DawnTodoRowProps,
+  type DawnToolRowProps,
+} from "./parts.js"
 export {
   dawnActivityRenderers,
   dawnPlanActivityRenderer,

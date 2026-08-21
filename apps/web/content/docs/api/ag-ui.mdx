@@ -28,6 +28,7 @@ import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 | `@dawn-ai/ag-ui` | edge-safe | not-claimed | integration | supported |
 | `@dawn-ai/ag-ui/sse` | edge-safe | not-claimed | integration | supported |
 | `@dawn-ai/ag-ui/react` | node-only | not-claimed | application | supported |
+| `@dawn-ai/ag-ui/react/styles.css` | n/a | n/a | integration | supported |
 
 The adapter translates protocol data; it does not authenticate a caller or make client-supplied thread, run, state, tool, or context data authoritative.
 
@@ -76,8 +77,23 @@ The adapter translates protocol data; it does not authenticate a caller or make 
 | `planActivityContentSchema` | Validate plan activity content in a custom renderer. |
 | `subagentActivityContentSchema` | Validate subagent activity content in a custom renderer. |
 | `SubagentActivityContentOutput` | Describe parsed subagent content, which admits an explicit `undefined` `todos`. |
+| `DawnActivityClassNames` | Name the per-part classes a card appends to its defaults (customization rung 2). |
+| `DawnActivityComponents` | Name the leaf slots (`TodoRow`, `ToolRow`) a card lets a consumer replace (customization rung 3). |
+| `DawnTodoRowProps` | Describe the props passed to a replacement `TodoRow`. |
+| `DawnToolRowProps` | Describe the props passed to a replacement `ToolRow`. |
+| `cx` | Join a package default class with an optional consumer class (customization rung 4: what an ejected card imports in place of its internal `./parts.js` path). |
 
-`dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`.
+`dawnActivityRenderers` is the drop-in default; the two individual renderers exist for clients that register only one of them or mix them with their own. The cards are plain React components and need no CopilotKit. `SubagentActivityContentOutput` is wider than the published `DawnSubagentActivityContent` in exactly one way: this package compiles with `exactOptionalPropertyTypes` and zod does not, so a parsed value can carry an explicit `todos: undefined`. `ActivityChecklist`, `PlanActivityCard`, and `SubagentActivityCard` all accept optional `classNames` and `components` props built from these two types; see [`@dawn-ai/ag-ui/react/styles.css`](#dawn-aiag-uireactstylescss) below for rung 1 and the [package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards) for a runnable example of every rung.
+
+### `@dawn-ai/ag-ui/react/styles.css`
+
+This subpath exposes the activity cards' default appearance as a stylesheet asset. It has no TypeScript export inventory, runtime compatibility classification, or purity claim; a bundler resolves it and it is never evaluated as JavaScript. Import it once, wherever your application imports its global CSS:
+
+```ts
+import "@dawn-ai/ag-ui/react/styles.css"
+```
+
+The sheet is optional — the cards render without it — and every rule that styles an element is scoped to the `dawn-activity` prefix, so it cannot restyle the rest of an application; it additionally declares `--dawn-activity-*` custom properties on `:root`. Restyle it by overriding its custom properties in your own CSS: `--dawn-activity-surface`, `--dawn-activity-border`, `--dawn-activity-text`, `--dawn-activity-muted`, `--dawn-activity-running`, `--dawn-activity-complete`, `--dawn-activity-failed`, `--dawn-activity-radius`, `--dawn-activity-gap`, and `--dawn-activity-font-size`. A dark palette applies under `prefers-color-scheme: dark`; setting `data-dawn-theme="light"` or `data-dawn-theme="dark"` on the root element pins one explicitly (the selectors match only `:root`, not an arbitrary ancestor).
 
 ## Key contracts
 
