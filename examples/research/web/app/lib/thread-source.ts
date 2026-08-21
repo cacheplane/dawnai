@@ -11,7 +11,13 @@
  *
  * The planned second implementation is LangGraph Platform, which Dawn already
  * deploys to (`dawn build --target langsmith`) and which can enumerate threads.
- * Everything above this interface stays unchanged when that lands.
+ * This seam names the right boundary, but that implementation will have to
+ * make `list`/`create` async (or add a cached-read variant), since enumeration
+ * and creation there are network calls — callers change with it.
+ *
+ * Known limitation: the localStorage backend below does read-modify-write with
+ * no merge, so concurrent tabs can clobber each other's writes (e.g. a
+ * `create()` in one tab can erase a `touch()` title from another).
  */
 export interface WorkbenchThread {
   readonly id: string
@@ -51,7 +57,10 @@ function write(storage: Storage, threads: readonly WorkbenchThread[]): void {
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(threads))
   } catch {
-    // Private-mode quota failures must not break the conversation.
+    // A failed write (e.g. private-mode quota) still leaves the mutator
+    // returning/completing as if it persisted: the conversation is
+    // unaffected, but the rail's in-memory state is now ahead of storage
+    // and that history is what's lost.
   }
 }
 
