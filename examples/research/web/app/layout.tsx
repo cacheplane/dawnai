@@ -11,9 +11,7 @@ export const metadata = { title: "Dawn research — CopilotKit + AG-UI" }
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body className="m-0 font-sans" style={{ background: "var(--wb-bg)" }}>
-        {children}
-      </body>
+      <body className="m-0 font-sans bg-[var(--wb-bg)] text-[var(--wb-text)]">{children}</body>
     </html>
   )
 }
