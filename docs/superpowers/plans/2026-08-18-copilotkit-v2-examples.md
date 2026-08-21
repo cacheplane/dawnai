@@ -1103,7 +1103,7 @@ Rules:
   exact reviewed current default base and update the restored
   `dependabot-reconcile.test.ts` and `dependency-evidence.test.ts` assumptions.
   The independently reviewed observation at default/main
-  `2fc92f466ae17a383bf573f0a45890abc6318929` contained 59 open alerts, including
+  `fb52e062638e1e09cbdc8b9836ee5b483acde058` contained 59 open alerts, including
   current Hono/node-server alert `#236` and Vercel-derived alerts `#204`–`#235`;
   it is a recapture candidate, not a substitute for a fresh complete read.
   Remove restored old-27-alert and old-default-SHA expectations. Preserve

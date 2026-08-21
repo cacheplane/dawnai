@@ -35,11 +35,11 @@ immutable capture from before the CopilotKit prerequisite. Its source/default
 SHAs and finding counts are historical evidence, not current-head assertions.
 
 **Current implementation base:** The prerequisite was rebased onto immutable
-main commit `2fc92f466ae17a383bf573f0a45890abc6318929`. Final graph/audit evidence is
+main commit `fb52e062638e1e09cbdc8b9836ee5b483acde058`. Final graph/audit evidence is
 recaptured only after the preserved security WIP is restored and reconciled.
 
 **Reviewed current-base Dependabot candidate:** A complete independent read of
-default/main at `2fc92f466ae17a383bf573f0a45890abc6318929` observed these exact
+default/main at `fb52e062638e1e09cbdc8b9836ee5b483acde058` observed these exact
 59 open alerts and candidate post-remediation partition:
 
 ```text
