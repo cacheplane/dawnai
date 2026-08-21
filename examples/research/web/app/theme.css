@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * Every color the workbench uses. Restyling the app is editing this file.
+ *
+ * The dawn gradient appears in exactly two places by design — the brand mark
+ * and the primary action — so the app reads as a tool that happens to be
+ * named Dawn rather than a themed demo.
+ */
+:root {
+  --wb-bg: #fafafa;
+  --wb-surface: #ffffff;
+  --wb-border: #e4e4e7;
+  --wb-text: #18181b;
+  --wb-muted: #71717a;
+  --wb-rail: #f4f4f5;
+  --wb-accent-from: #f97316;
+  --wb-accent-to: #ec4899;
+  --wb-radius: 10px;
+
+  /* Rung 1: the packaged activity cards inherit the workbench palette. */
+  --dawn-activity-surface: var(--wb-surface);
+  --dawn-activity-border: var(--wb-border);
+  --dawn-activity-text: var(--wb-text);
+  --dawn-activity-muted: var(--wb-muted);
+  --dawn-activity-radius: var(--wb-radius);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wb-theme="light"]) {
+    --wb-bg: #0c0d10;
+    --wb-surface: #141519;
+    --wb-border: #26272d;
+    --wb-text: #e4e6eb;
+    --wb-muted: #8b909c;
+    --wb-rail: #101114;
+  }
+}
+
+:root[data-wb-theme="dark"] {
+  --wb-bg: #0c0d10;
+  --wb-surface: #141519;
+  --wb-border: #26272d;
+  --wb-text: #e4e6eb;
+  --wb-muted: #8b909c;
+  --wb-rail: #101114;
+}
+
+.wb-brand-mark {
+  background: linear-gradient(135deg, var(--wb-accent-from), var(--wb-accent-to));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.wb-primary-action {
+  background: linear-gradient(135deg, var(--wb-accent-from), var(--wb-accent-to));
+  color: #ffffff;
+}
