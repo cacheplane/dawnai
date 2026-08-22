@@ -1,4 +1,4 @@
-import { SECONDARY_BUTTON } from "./ui"
+import { neutralButton } from "./ui"
 
 export interface RunErrorProps {
   /** Headline for the failure, chosen from the error's code by `AppShell`. */
@@ -28,7 +28,7 @@ export function RunError({ title, message, onDismiss }: RunErrorProps) {
         <p className="font-medium tracking-tight">{title}</p>
         <p className="mt-1 break-words leading-5 text-wb-muted">{message}</p>
       </div>
-      <button type="button" onClick={onDismiss} className={`${SECONDARY_BUTTON} shrink-0`}>
+      <button type="button" onClick={onDismiss} className={`${neutralButton("sm")} shrink-0`}>
         Dismiss
       </button>
     </div>

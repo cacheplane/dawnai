@@ -1,8 +1,9 @@
 "use client"
 import { useRenderTool } from "@copilotkit/react-core/v2"
 
-// Notes (verified against installed @copilotkit/react-core@1.66.4 types —
-// examples/research/web/node_modules/@copilotkit/react-core/dist/copilotkit-Bp6BD8xe.d.mts):
+// Notes (verified against installed @copilotkit/react-core@1.66.4 types — the
+// bundled `.d.mts` under node_modules/@copilotkit/react-core/dist; its filename
+// carries a content hash that changes between releases, so it is not cited):
 //
 // - The registration hook is `useRenderTool` (NOT `useRenderToolCall` — that
 //   one takes no args and returns a `({toolCall, toolMessage}) => ReactElement`

@@ -47,8 +47,12 @@ variables and re-exported as Tailwind tokens via `@theme inline`, which is why t
 utilities read `bg-wb-surface`, `border-wb-border`, `text-wb-muted`, `rounded-wb`. Change
 a `--wb-*` value and the light and dark palettes, the activity-card tokens, and every
 utility move together. The same file holds the single focus ring (`wb-focus`), the two
-places the dawn gradient is allowed (`.wb-brand-mark`, `.wb-primary-action`), and the
-`.wb-prose` rules for rendered markdown.
+roles the dawn gradient is allowed to play (`.wb-brand-mark`, `.wb-primary-action`), and
+the `.wb-prose` rules for rendered markdown.
+
+The palette follows the OS light/dark setting. To pin one regardless, set
+`data-wb-theme="light"` or `data-wb-theme="dark"` on `<html>` — `theme.css` defines both
+branches.
 
 The plan and researcher cards are **not forks**. They are the packaged
 `@dawn-ai/ag-ui/react` components (`PlanActivityCard`, `SubagentActivityCard`),
@@ -66,16 +70,24 @@ what it puts out of reach.
   (`app/lib/thread-source.ts`) because the Dawn server cannot enumerate threads. The
   list is not shared across browsers, devices, or profiles, and clearing site data
   clears it.
-- **Switching a thread does not restore its history.** There is no hydration from the
-  server in this slice, so the transcript is cleared on switch rather than showing the
-  wrong conversation's messages. Restoring history lands in the next slice.
-- **No memory panel.** `app/components/MemoryCandidates.tsx` is still on disk but is not
-  mounted; it returns with a consolidated, allowlisted memory proxy.
+- **Switching a thread does not restore its history.** The transcript is cleared on
+  switch rather than showing the wrong conversation's messages, and nothing refills it:
+  CopilotKit's replay path (`connectAgent`, which asks the runtime to replay a thread's
+  events) is only ever called from inside `<CopilotChat>`, which this app does not
+  mount. Verified live — switching away from a thread and back fires no request and
+  leaves the transcript empty. The Dawn server may still hold that history; this client
+  never asks for it. Hydration lands in the next slice.
+- **No memory review.** `app/components/MemoryCandidates.tsx` is still on disk but is
+  not mounted, and the `/api/memory/*` proxy route it used has been removed — an
+  unallowlisted pass-through to the Dawn server with no caller is worse than no route.
+  Both return in the next slice as one consolidated, allowlisted proxy. Until then,
+  review candidates with the `dawn memory` CLI.
 - **No connect screen.** If the Dawn server is not running you get a run-error row, not
   a guided setup.
 - **No browser or live-model test coverage here.** The example's own tests
   (`pnpm --filter @dawn-example/research-web test`) cover the thread source, the
-  transcript mapping, the renderer registry, and the composer; `typecheck` and `build`
+  transcript mapping, the renderer registry, the thread rail, the composer, and the
+  shell's thread-switch reset; `typecheck` and `build`
   prove the CopilotKit/AG-UI wiring compiles. The cards themselves are tested in
   `@dawn-ai/ag-ui`.
 

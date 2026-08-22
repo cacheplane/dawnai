@@ -8,9 +8,10 @@
  * -complete/-failed — deliberately stay defined in @dawn-ai/ag-ui; they are
  * already correct and semantic, so this sheet does not override them.)
  *
- * The dawn gradient appears in exactly two places by design — the brand mark
- * and the primary action — so the app reads as a tool that happens to be
- * named Dawn rather than a themed demo.
+ * The dawn gradient has exactly two ROLES by design — the brand mark and the
+ * primary action — so the app reads as a tool that happens to be named Dawn
+ * rather than a themed demo. (Two roles, three render sites: the brand mark
+ * appears in the rail and again in the empty state.)
  */
 :root {
   color-scheme: light dark;

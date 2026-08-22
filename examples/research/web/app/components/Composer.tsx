@@ -1,5 +1,6 @@
 "use client"
 import { type KeyboardEvent, useId, useRef, useState } from "react"
+import { neutralButton } from "./ui"
 
 export interface ComposerProps {
   readonly onSend: (message: string) => void
@@ -97,11 +98,7 @@ export function Composer({ onSend, onStop, isRunning, isAwaitingApproval }: Comp
             // both meaningful, and without it a hung stream (where `isRunning`
             // never clears) leaves the composer dead with no way out but
             // abandoning the conversation.
-            <button
-              type="button"
-              onClick={onStop}
-              className="wb-focus shrink-0 rounded-wb-sm border border-wb-border bg-wb-surface px-3.5 py-1.5 text-[13px] font-medium tracking-tight transition-colors hover:border-wb-muted"
-            >
+            <button type="button" onClick={onStop} className={`${neutralButton("md")} shrink-0`}>
               Stop
             </button>
           ) : (

@@ -122,10 +122,20 @@ export function AppShell({
     }
   }, [copilotkit])
 
-  // Switching threads does not restore that thread's history in this slice —
-  // there is no hydration from the server yet — but the previous thread's
-  // messages must not sit there looking like they belong to the new one, so
-  // the transcript is cleared. `pendingInterrupts` goes with them: leaving a
+  // Switching threads clears the transcript, and nothing refills it.
+  //
+  // Worth stating precisely, because CopilotKit has a replay path that looks
+  // like it would apply and does not. `copilotkit.connectAgent()` asks the
+  // runtime to replay a thread's historic events, but the only two callers of
+  // it live inside `<CopilotChat>`, which this app does not mount, and
+  // `useAgent`'s own thread effect does exactly one thing in 1.66.4:
+  // `agent.threadId = resolvedThreadId`. Verified live: switching away from a
+  // three-message thread and back leaves it empty and fires no network request
+  // at all. The server may still hold that history; this client never asks for
+  // it. Hydration is the next slice.
+  //
+  // So the previous thread's messages must not sit there looking like they
+  // belong to the new one. `pendingInterrupts` goes with them: leaving a
   // parked interrupt from the abandoned thread on the shared agent makes the
   // next run throw ("pending interrupt(s) not addressed by resume").
   //
@@ -197,17 +207,15 @@ export function AppShell({
           ) : null}
         </header>
         {/*
-          `threadKey` and the `Composer` key below both exist to end component
-          state at a thread boundary, and both are bug fixes rather than
-          hygiene — see `Transcript` for what `useInterrupt` does with its own
-          state, and `Composer` for the draft.
+          `threadKey` and the `Composer` key below both end component state at a
+          thread boundary, and both are bug fixes rather than hygiene — see
+          `Transcript` for what `useInterrupt` does with its own state, and
+          `Composer` for the draft.
 
-          They are deliberately NOT the same `key` on these two siblings:
-          React requires keys to be unique among siblings, and giving both
-          `key={activeThreadId}` makes React render BOTH subtrees at once
-          ("Encountered two children with the same key… may cause components to
-          be duplicated") — two transcripts, two live regions, one of them
-          stale. Observed, not theorized.
+          `Transcript` takes the id as a PROP rather than as its own `key`
+          because only `PermissionInterrupt`, deep inside it, needs the
+          remount; keying the whole transcript would also throw away the scroll
+          position and remount the empty state on every switch.
         */}
         <Transcript
           threadKey={activeThreadId}
