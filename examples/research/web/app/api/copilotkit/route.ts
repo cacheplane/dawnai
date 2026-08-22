@@ -1,9 +1,9 @@
+import { HttpAgent } from "@ag-ui/client"
 import {
   CopilotRuntime,
-  ExperimentalEmptyAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
+  ExperimentalEmptyAdapter,
 } from "@copilotkit/runtime"
-import { HttpAgent } from "@ag-ui/client"
 import type { NextRequest } from "next/server"
 
 export const runtime = "nodejs"
