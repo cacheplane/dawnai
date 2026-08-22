@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev -p 3010",
     "build": "next build",
+    "lint": "biome check --config-path ../../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app tsconfig.json vitest.config.ts next.config.mjs postcss.config.mjs",
     "start": "next start -p 3010",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc -p . --noEmit"
@@ -15,15 +16,18 @@
     "@copilotkit/react-core": "^1.66.0",
     "@copilotkit/runtime": "^1.66.0",
     "@dawn-ai/ag-ui": "workspace:*",
+    "@tailwindcss/postcss": "^4.3.3",
     "next": "16.3.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
+    "jsdom": "^30.0.1",
     "typescript": "7.0.2",
     "vitest": "^4.1.10"
   }

@@ -1,9 +1,10 @@
 # Research Assistant Web UI
 
 Wire a [CopilotKit](https://docs.copilotkit.ai) web client to Dawn's research
-demo over [AG-UI](/docs/ag-ui). The example streams chat and a cited report from
-the `/research` agent and provides a separate review panel for durable-memory
-candidates.
+demo over [AG-UI](/docs/ag-ui). The example is a workbench rather than a chat
+widget: it renders its own thread rail, transcript, and composer instead of
+mounting `CopilotSidebar`, so the streamed report and the plan, researcher,
+tool, and permission cards all appear inline in message order.
 
 This recipe focuses on application wiring. For the endpoint, event contract,
 threading, and standard interrupt outcome, see [AG-UI and Web Clients](/docs/ag-ui).
@@ -13,19 +14,27 @@ threading, and standard interrupt outcome, see [AG-UI and Web Clients](/docs/ag-
 The demo lives in `examples/research`: a Dawn server (`server/`) and a Next.js
 CopilotKit client (`web/`). The client provides:
 
-- **Chat + report** - streamed output and citations in a `CopilotSidebar`.
+- **Thread rail** - "New conversation" plus the list of threads, each titled
+  from its first user message.
+- **Chat + report** - streamed markdown output and citations in the app's own
+  transcript.
 - **Plan cards** - the root checklist updates in place while research runs.
 - **Researcher cards** - delegated-work status, child checklist progress, and a
   bounded trail of child-tool names and statuses.
-- **Suggestions + tools** - the three discovery prompts and generic root-tool
-  cards remain available.
-- **Permissions** - standard interrupt UI owns approval and denial actions.
-- **Memory candidates** - durable facts proposed by the agent and reviewed from
-  the web UI.
+- **Suggestions + tools** - three discovery prompts on the empty state, and
+  generic root-tool cards in the transcript.
+- **Permissions** - standard interrupt UI owns approval and denial actions,
+  rendered at the end of the transcript where the run stopped.
+- **Composer** - send, and stop while a run is in flight; blocked while the
+  agent is running or waiting on an approval, with the header saying which.
 
 The plan and researcher cards are informational. They never resolve or cancel
 an interrupt; interrupt outcomes and answers use the standard AG-UI fields
 documented on the protocol page.
+
+Durable-memory review is not part of this slice — the Dawn endpoints are in
+place, but the example mounts no panel and ships no proxy route. See
+[Approve memory candidates](#approve-memory-candidates) below.
 
 ## Run it
 
@@ -57,8 +66,8 @@ Open [http://localhost:3010](http://localhost:3010) and ask a research question.
 ## Connect the client to Dawn
 
 The Next.js runtime route registers an AG-UI `HttpAgent` pointed at the encoded
-Dawn assistant id. Register it under CopilotKit's `default` agent id so the
-sidebar and other consumers bind without per-component wiring:
+Dawn assistant id. Register it under CopilotKit's `default` agent id so every
+hook binds without per-component wiring:
 
 <CodeGroup>
 
@@ -66,10 +75,13 @@ sidebar and other consumers bind without per-component wiring:
 import { HttpAgent } from "@ag-ui/client"
 import {
   CopilotRuntime,
-  ExperimentalEmptyAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
+  ExperimentalEmptyAdapter,
 } from "@copilotkit/runtime"
 import type { NextRequest } from "next/server"
+
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
 const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
@@ -89,44 +101,80 @@ export const POST = async (req: NextRequest): Promise<Response> => {
 ```
 
 ```tsx title="examples/research/web/app/page.tsx"
-"use client"
-import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
-import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
-import { DemoSuggestions } from "./components/DemoSuggestions"
-import { MemoryCandidates } from "./components/MemoryCandidates"
-import { PermissionInterrupt } from "./components/PermissionInterrupt"
-import { ToolCallCard } from "./components/ToolCallCard"
-
-export default function Home() {
-  return (
-    <CopilotKit
-      runtimeUrl="/api/copilotkit"
-      defaultThrottleMs={100}
-      renderActivityMessages={dawnActivityRenderers}
-    >
-      <DemoSuggestions />
-      <PermissionInterrupt />
-      <ToolCallCard />
-      <div style={{ display: "flex", height: "100vh" }}>
-        <MemoryCandidates />
-        <main style={{ flex: 1 }}>
-          <CopilotSidebar
-            defaultOpen
-            labels={{ modalHeaderTitle: "Dawn research" }}
-          />
-        </main>
-      </div>
-    </CopilotKit>
-  )
-}
+// Excerpt: the provider tree. Thread state and its handlers live in the same
+// file, over `app/lib/thread-source.ts`.
+<CopilotKit
+  runtimeUrl="/api/copilotkit"
+  defaultThrottleMs={100}
+  renderActivityMessages={workbenchActivityRenderers}
+>
+  <CopilotChatConfigurationProvider threadId={activeThreadId}>
+    <DemoSuggestions />
+    <ToolCallCard />
+    <AppShell
+      threads={threads}
+      activeThreadId={activeThreadId}
+      onSelectThread={handleSelect}
+      onCreateThread={handleCreate}
+      onUserMessage={handleUserMessage}
+    />
+  </CopilotChatConfigurationProvider>
+</CopilotKit>
 ```
 
 </CodeGroup>
 
 <Callout type="warn" title="Register the agent as default">
-  CopilotKit's sidebar falls back to the id `default`. Register the Dawn agent
-  under that id, or set the same explicit id on every consumer.
+  CopilotKit hooks that omit an `agentId` resolve the id `default`. Register the
+  Dawn agent under that id, or set the same explicit id on every consumer.
 </Callout>
+
+Three pieces of that tree are load-bearing:
+
+- `defaultThrottleMs={100}` — the re-render throttle defaults to *unthrottled*,
+  and a full research run streams hundreds of events, which pegs the renderer.
+- `CopilotChatConfigurationProvider` — `CopilotKit` does not provide one;
+  `<CopilotChat>` and `<CopilotSidebar>` did. Without it every thread-aware hook
+  falls back to the agent's own auto-minted thread and selecting a row in the
+  rail would change nothing.
+- `<DemoSuggestions />` and `<ToolCallCard />` render nothing. They publish into
+  CopilotKit's registries, and the transcript reads them back.
+
+## The workbench shell
+
+`AppShell` is the only component that talks to the agent. It calls `useAgent()`
+with no arguments — the unscoped form, which takes its thread from the
+surrounding chat configuration — so the transcript, `useInterrupt`,
+`useSuggestions`, and the tool-call renderers all resolve the same agent and the
+same thread.
+
+Two consequences of dropping the sidebar are worth copying if you build your
+own shell:
+
+- **Run failures need a subscription.** `copilotkit.runAgent` does not reject
+  when a run fails; it catches, emits an error, and resolves normally. Failures
+  surface through `copilotkit.subscribe({ onError })`, which is what the sidebar
+  used to do for you.
+- **The permission gate needs `renderInChat: false`.** The default (`true`)
+  publishes the element into `<CopilotChat>`/`<CopilotSidebar>`. With neither
+  mounted, the gate would render nowhere: the run parks with no approve or deny
+  UI, no error, and green tests. With it set, `useInterrupt` returns the element
+  and `Transcript` places it at the end of the message list.
+
+Threads are local to the browser. Dawn's server can create and fetch a thread by
+id but cannot enumerate threads, so the rail keeps its own list in
+`localStorage` behind a `ThreadSource` interface
+(`examples/research/web/app/lib/thread-source.ts`); CopilotKit's `useThreads` is
+deliberately unused. Switching threads clears the transcript, and nothing
+refills it: CopilotKit's replay path (`connectAgent`, which asks the runtime to
+replay a thread's events) is reached only from inside `<CopilotChat>`, which
+this app does not mount, so no request is made on a switch. History restore is
+the next slice.
+
+Restyling is one file: `examples/research/web/app/theme.css` defines the palette
+as CSS variables and re-exports it as Tailwind tokens through `@theme inline`,
+which is why the app's utilities read `bg-wb-surface`, `border-wb-border`, and
+`rounded-wb`.
 
 ## Render plan and researcher activities
 
@@ -155,12 +203,21 @@ it they render as bare markup. Once it is in place, restyle by overriding the
 [package README](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/README.md#customizing-the-activity-cards)
 for the full customization ladder.
 
-That is the whole wiring, and `app/page.tsx` above already carries it. `dawnActivityRenderers` is a module-scope constant, so
-the registry keeps a stable identity across React renders, and each renderer is
-keyed by the adapter's own activity-type constant. Both renderers validate the
-public activity content with a strict runtime schema: a payload with unknown or
+`dawnActivityRenderers` is a module-scope constant, so the registry keeps a
+stable identity across React renders, and each renderer is keyed by the
+adapter's own activity-type constant. Both renderers validate the public
+activity content with a strict runtime schema: a payload with unknown or
 incompatible fields fails closed instead of dumping arbitrary JSON into the
 transcript.
+
+The example passes `workbenchActivityRenderers` instead — its own two renderers,
+in `examples/research/web/app/components/activity-renderers.tsx`. They are not
+forks: they wrap the packaged `PlanActivityCard` and `SubagentActivityCard` and
+pass the packaged content schemas, adding only per-part classes through the
+`classNames` prop, so validation and bounds stay in the package where they are
+tested. One constraint governs which classes work: a `classNames` entry can only
+set a property the package stylesheet leaves unset on that element, because the
+package's CSS is unlayered and Tailwind's utilities are not.
 
 React and `@copilotkit/react-core` are optional peer dependencies of
 `@dawn-ai/ag-ui`, and only the `./react` subpath needs them. A server that uses
@@ -197,7 +254,7 @@ produced — no tool-call id, a malformed payload, delegation that never starts 
 the ordinary tool events survive and the generic card renders them, which is why
 its `task` argument summary is worth keeping.
 
-Choose **Research a topic** on the empty chat to see the root plan and
+Choose **Research a topic** on the empty transcript to see the root plan and
 researcher progress update before the cited answer. This live flow still uses
 the Dawn server's model key; it is not a browser-automation fixture.
 
@@ -212,27 +269,41 @@ POST /memory/candidates/:id/approve
 POST /memory/candidates/:id/reject
 ```
 
-The example's same-origin Next.js proxy forwards these requests to Dawn, which
-avoids browser CORS configuration. The panel refetches after each completed run,
-when any newly proposed candidates are available:
+<Callout type="warn" title="No memory review in this slice">
+  The Dawn endpoints above are live, but the example reaches none of them:
+  `app/components/MemoryCandidates.tsx` is still on disk and no longer mounted,
+  and the `/api/memory/*` proxy route it used has been removed. That route
+  forwarded any path straight through to the Dawn server, and with no caller
+  left, shipping it was worse than shipping nothing. Both return in the next
+  slice as one consolidated, allowlisted proxy. Until then, review candidates
+  with the [`dawn memory`](/docs/memory/long-term) CLI.
+</Callout>
+
+A same-origin Next.js proxy is how the panel will reach these endpoints without
+browser CORS configuration. The unmounted panel refetches after each completed
+run, when any newly proposed candidates are available:
 
 ```tsx title="examples/research/web/app/components/MemoryCandidates.tsx"
 const refetch = useCallback(() => {
   fetch("/api/memory/candidates")
-    .then((response) => response.json())
-    .then((data) => setCandidates(data.candidates ?? []))
+    .then((r) => r.json())
+    .then((d) => setCandidates((d.candidates ?? []) as Candidate[]))
     .catch(() => setCandidates([]))
 }, [])
 
 useEffect(() => {
-  const subscription = agent.subscribe({ onRunFinishedEvent: refetch })
-  refetch()
-  return () => subscription.unsubscribe()
+  const sub = agent.subscribe({
+    onRunFinishedEvent: () => {
+      refetch()
+    },
+  })
+  return () => sub.unsubscribe()
 }, [agent, refetch])
 
-const approve = async (id: string) => {
-  await fetch(`/api/memory/candidates/${id}/approve`, { method: "POST" })
-  refetch()
+const approve = (id: string) => {
+  fetch(`/api/memory/candidates/${id}/approve`, { method: "POST" })
+    .catch(() => undefined)
+    .finally(refetch)
 }
 ```
 

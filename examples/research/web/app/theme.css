@@ -1,0 +1,263 @@
+@import "tailwindcss";
+
+/*
+ * The workbench palette, its Tailwind tokens, and the markdown styling.
+ * Restyling the app is editing this file.
+ *
+ * (The packaged activity cards' status colors — --dawn-activity-running/
+ * -complete/-failed — deliberately stay defined in @dawn-ai/ag-ui; they are
+ * already correct and semantic, so this sheet does not override them.)
+ *
+ * The dawn gradient has exactly two ROLES by design — the brand mark and the
+ * primary action — so the app reads as a tool that happens to be named Dawn
+ * rather than a themed demo. (Two roles, three render sites: the brand mark
+ * appears in the rail and again in the empty state.)
+ */
+:root {
+  color-scheme: light dark;
+
+  --wb-bg: #fafafa;
+  --wb-surface: #ffffff;
+  --wb-border: #e4e4e7;
+  --wb-text: #18181b;
+  --wb-muted: #71717a;
+  --wb-rail: #f4f4f5;
+  --wb-accent-from: #f97316;
+  --wb-accent-to: #ec4899;
+  --wb-radius: 10px;
+}
+
+/*
+ * The palette as Tailwind tokens: `bg-wb-surface`, `border-wb-border`,
+ * `text-wb-muted`, `rounded-wb`.
+ *
+ * `@theme inline`, not plain `@theme`. Inline substitutes the *value* into the
+ * generated utility, so `bg-wb-bg` compiles to `background-color: var(--wb-bg)`
+ * and the `--wb-*` variables above stay the single source of truth — including
+ * for the dark-mode overrides below and the --dawn-activity-* mapping. A plain
+ * `@theme` would emit a second set of variables that the media query would not
+ * reach, and dark mode would silently stop working for every utility.
+ */
+@theme inline {
+  --color-wb-bg: var(--wb-bg);
+  --color-wb-surface: var(--wb-surface);
+  --color-wb-border: var(--wb-border);
+  --color-wb-text: var(--wb-text);
+  --color-wb-muted: var(--wb-muted);
+  --color-wb-rail: var(--wb-rail);
+  --color-wb-accent-from: var(--wb-accent-from);
+  --color-wb-accent-to: var(--wb-accent-to);
+
+  --radius-wb: var(--wb-radius);
+  --radius-wb-sm: calc(var(--wb-radius) - 3px);
+}
+
+/* The app's one focus ring. Every interactive element wears `wb-focus`. */
+@utility wb-focus {
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-from);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * Rung 1: the packaged activity cards inherit the workbench palette.
+ *
+ * `:root:root`, not `:root`. @dawn-ai/ag-ui's own dark palette is applied by
+ * `:root:not([data-dawn-theme="light"])` and `:root[data-dawn-theme="dark"]`,
+ * both specificity (0,2,0), so a plain `:root` override loses in dark mode and
+ * the cards keep the package's colors. Doubling `:root` ties that specificity;
+ * this sheet is imported last, so the tie resolves here. (Reported as a gap in
+ * the package — the ladder's rung 1 should not require this.)
+ */
+:root:root {
+  --dawn-activity-surface: var(--wb-surface);
+  --dawn-activity-border: var(--wb-border);
+  --dawn-activity-text: var(--wb-text);
+  --dawn-activity-muted: var(--wb-muted);
+  --dawn-activity-radius: var(--wb-radius);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wb-theme="light"]) {
+    --wb-bg: #0c0d10;
+    --wb-surface: #141519;
+    --wb-border: #26272d;
+    --wb-text: #e4e6eb;
+    --wb-muted: #8b909c;
+    --wb-rail: #101114;
+  }
+}
+
+:root[data-wb-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-wb-theme="dark"] {
+  color-scheme: dark;
+  --wb-bg: #0c0d10;
+  --wb-surface: #141519;
+  --wb-border: #26272d;
+  --wb-text: #e4e6eb;
+  --wb-muted: #8b909c;
+  --wb-rail: #101114;
+}
+
+.wb-brand-mark {
+  background: linear-gradient(135deg, var(--wb-accent-from), var(--wb-accent-to));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.wb-primary-action {
+  background: linear-gradient(135deg, var(--wb-accent-from), var(--wb-accent-to));
+  color: #ffffff;
+}
+
+/*
+ * Assistant markdown.
+ *
+ * The agent is prompted to write cited reports, so its answers are markdown.
+ * `CopilotChatAssistantMessage.MarkdownRenderer` (a thin pass-through to
+ * Streamdown, already in the dependency graph) turns them into real elements;
+ * this is what those elements look like.
+ *
+ * Streamdown puts its own Tailwind utility classes on the nodes it renders —
+ * `mt-6 mb-2 font-semibold text-3xl` and friends — but those are class names
+ * in a transitive dependency's dist, not in this project's source, so this
+ * build never generates them and they style nothing. Rather than point
+ * `@source` at a pnpm-hashed path to resurrect a chat-generic look we would
+ * then have to override, the workbench styles the elements directly. That
+ * keeps the whole appearance of an answer in this file, next to the palette.
+ *
+ * Element selectors, not utilities, because the markup is generated: there is
+ * no JSX to hang a class on.
+ */
+.wb-prose {
+  font-size: 0.875rem;
+  line-height: 1.75;
+  letter-spacing: -0.011em;
+}
+
+.wb-prose > :first-child {
+  margin-top: 0;
+}
+
+.wb-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.wb-prose p,
+.wb-prose ul,
+.wb-prose ol,
+.wb-prose blockquote,
+.wb-prose pre,
+.wb-prose table {
+  margin: 0.75rem 0;
+}
+
+.wb-prose h1,
+.wb-prose h2,
+.wb-prose h3,
+.wb-prose h4 {
+  margin: 1.5rem 0 0.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.wb-prose h1 {
+  font-size: 1.25rem;
+}
+
+.wb-prose h2 {
+  font-size: 1.0625rem;
+}
+
+.wb-prose h3,
+.wb-prose h4 {
+  font-size: 0.9375rem;
+}
+
+.wb-prose ul,
+.wb-prose ol {
+  padding-left: 1.25rem;
+}
+
+.wb-prose ul {
+  list-style: disc;
+}
+
+.wb-prose ol {
+  list-style: decimal;
+}
+
+.wb-prose li {
+  margin: 0.25rem 0;
+}
+
+.wb-prose strong {
+  font-weight: 600;
+}
+
+.wb-prose em {
+  font-style: italic;
+}
+
+.wb-prose a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wb-prose code {
+  border-radius: 4px;
+  background: var(--wb-rail);
+  padding: 0.1em 0.35em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.wb-prose pre {
+  overflow-x: auto;
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius);
+  background: var(--wb-surface);
+  padding: 0.75rem 0.875rem;
+}
+
+.wb-prose pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.8125rem;
+}
+
+.wb-prose blockquote {
+  border-left: 2px solid var(--wb-border);
+  padding-left: 0.75rem;
+  color: var(--wb-muted);
+}
+
+.wb-prose hr {
+  margin: 1.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--wb-border);
+}
+
+.wb-prose table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.wb-prose th,
+.wb-prose td {
+  border: 1px solid var(--wb-border);
+  padding: 0.375rem 0.625rem;
+  text-align: left;
+}
+
+.wb-prose th {
+  font-weight: 600;
+}
