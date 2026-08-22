@@ -13,6 +13,14 @@ import { useInterrupt } from "@copilotkit/react-core/v2"
 // `interrupt.metadata`, so the command being gated is at
 // `metadata.detail.command`. For a permission prompt, Dawn reads the resolved
 // payload as its decision ("once" | "always"); cancelling maps to denial.
+//
+// `renderInChat: false` — NOT the default, and load-bearing. The default
+// (`true`) publishes the element into `<CopilotChat>`/`<CopilotSidebar>` and
+// returns `void`. This app renders its own transcript and mounts neither, so
+// under the default the gate would render NOWHERE: the run parks on an
+// interrupt with no approve/deny UI, no error, and green tests. With
+// `renderInChat: false` the hook returns the element instead, and `Transcript`
+// places it at the end of the message list — where the run stopped.
 type PermissionMetadata = {
   kind?: string
   detail?: {
@@ -26,47 +34,48 @@ type PermissionMetadata = {
   }
 }
 
+/**
+ * The gate's own surface, deliberately NOT the workbench's neutral card: it is
+ * the one thing in the transcript that stops the run and waits on a person, so
+ * it carries an amber edge and a filled ground the rest of the app never uses.
+ * (It borrows no gradient — that stays reserved for the brand mark and the send
+ * button.)
+ */
+const CARD =
+  "rounded-[var(--wb-radius)] border border-amber-500/40 bg-amber-500/5 px-3.5 py-3 text-[13px]"
+const TITLE = "text-[13px] font-medium tracking-tight"
+const ROW = "mt-1 text-[13px] leading-5 text-[var(--wb-muted)]"
+const CODE = "rounded bg-[var(--wb-bg)] px-1 py-0.5 font-mono text-[12px] text-[var(--wb-text)]"
+const ACTIONS = "mt-3 flex flex-wrap gap-2"
+const BUTTON =
+  "rounded-[calc(var(--wb-radius)-3px)] border border-[var(--wb-border)] bg-[var(--wb-surface)] px-2.5 py-1 text-[12px] font-medium transition-colors hover:border-[var(--wb-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
+
 export function PermissionInterrupt() {
-  useInterrupt({
+  return useInterrupt({
+    renderInChat: false,
     render: ({ interrupt, resolve, cancel }) => {
       const meta = (interrupt?.metadata ?? {}) as PermissionMetadata
       if (meta.kind === "subagent") {
         const detail = meta.detail
         return (
-          <div
-            style={{
-              border: "1px solid #f0c000",
-              background: "#fffbe6",
-              borderRadius: 8,
-              padding: 12,
-              margin: "8px 0",
-              fontSize: 13,
-            }}
-          >
-            <p style={{ margin: 0, fontWeight: 600 }}>Subagent approval required</p>
-            <p style={{ margin: "6px 0 0", color: "#665" }}>
-              <strong>Parent:</strong> <code>{detail?.parentRouteId ?? "Unknown route"}</code>
+          <div className={CARD}>
+            <p className={TITLE}>Subagent approval required</p>
+            <p className={ROW}>
+              Parent <code className={CODE}>{detail?.parentRouteId ?? "unknown route"}</code> wants
+              to dispatch{" "}
+              <code className={CODE}>{detail?.subagentName ?? "an unknown subagent"}</code>
+              {detail?.subagentRouteId ? ` (${detail.subagentRouteId})` : null}.
             </p>
-            <p style={{ margin: "4px 0 0", color: "#665" }}>
-              <strong>Subagent:</strong> <code>{detail?.subagentName ?? "Unknown subagent"}</code>
-              {detail?.subagentRouteId ? <> ({detail.subagentRouteId})</> : null}
-            </p>
-            <p style={{ margin: "4px 0 0", color: "#665" }}>
-              <strong>Input:</strong> {detail?.inputPreview ?? "No input preview"}
-            </p>
-            {detail?.reason ? (
-              <p style={{ margin: "4px 0 8px", color: "#665" }}>
-                <strong>Reason:</strong> {detail.reason}
-              </p>
-            ) : null}
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => resolve("once")}>
+            <p className={ROW}>Input: {detail?.inputPreview ?? "no input preview"}</p>
+            {detail?.reason ? <p className={ROW}>Reason: {detail.reason}</p> : null}
+            <div className={ACTIONS}>
+              <button type="button" className={BUTTON} onClick={() => resolve("once")}>
                 Once
               </button>
-              <button type="button" onClick={() => resolve("always")}>
+              <button type="button" className={BUTTON} onClick={() => resolve("always")}>
                 Always
               </button>
-              <button type="button" onClick={() => resolve("deny")}>
+              <button type="button" className={BUTTON} onClick={() => resolve("deny")}>
                 Deny
               </button>
             </div>
@@ -75,29 +84,20 @@ export function PermissionInterrupt() {
       }
       const command = meta.detail?.command
       return (
-        <div
-          style={{
-            border: "1px solid #f0c000",
-            background: "#fffbe6",
-            borderRadius: 8,
-            padding: 12,
-            margin: "8px 0",
-            fontSize: 13,
-          }}
-        >
-          <p style={{ margin: 0, fontWeight: 600 }}>Permission required</p>
-          <p style={{ margin: "4px 0", color: "#665" }}>
+        <div className={CARD}>
+          <p className={TITLE}>Permission required</p>
+          <p className={ROW}>
             {interrupt?.reason ? `${interrupt.reason}: ` : ""}
-            <code>{command ?? interrupt?.message ?? JSON.stringify(meta)}</code>
+            <code className={CODE}>{command ?? interrupt?.message ?? JSON.stringify(meta)}</code>
           </p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" onClick={() => resolve("once")}>
+          <div className={ACTIONS}>
+            <button type="button" className={BUTTON} onClick={() => resolve("once")}>
               Allow once
             </button>
-            <button type="button" onClick={() => resolve("always")}>
+            <button type="button" className={BUTTON} onClick={() => resolve("always")}>
               Allow always
             </button>
-            <button type="button" onClick={() => cancel()}>
+            <button type="button" className={BUTTON} onClick={() => cancel()}>
               Deny
             </button>
           </div>
@@ -105,5 +105,4 @@ export function PermissionInterrupt() {
       )
     },
   })
-  return null
 }
