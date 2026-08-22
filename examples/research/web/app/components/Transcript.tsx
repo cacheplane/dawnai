@@ -8,11 +8,16 @@ import {
 } from "../lib/transcript"
 import { EmptyState } from "./EmptyState"
 import { PermissionInterrupt } from "./PermissionInterrupt"
+import { RunError } from "./RunError"
 
 export interface TranscriptProps {
   readonly messages: readonly TranscriptMessage[]
   readonly isRunning: boolean
   readonly onSelectSuggestion: (message: string) => void
+  /** The last run failure, or null. Owned by `AppShell`. */
+  readonly runError: string | null
+  readonly onDismissRunError: () => void
+  readonly onRunError: (error: unknown) => void
 }
 
 /**
@@ -36,10 +41,28 @@ export interface TranscriptProps {
  * interrupt, so it appears exactly where it is placed and nowhere else — with
  * the default (`true`) it would be published into `<CopilotChat>`, which this
  * app no longer mounts, and the permission gate would render nowhere at all.
- * It is mounted only on the non-empty branch, which is sound because an
- * interrupt can only follow a user message.
+ *
+ * It is mounted UNCONDITIONALLY — outside the empty/non-empty branch — and that
+ * is a correctness requirement, not tidiness. `useInterrupt` subscribes to the
+ * agent from a mount effect, so branching on `items.length` would make the
+ * subscription's existence depend on render timing: it would only be listening
+ * if a commit happened between the send and the run finishing with an
+ * interrupt. That happens to hold today (`addMessage` notifies and the
+ * throttler is leading-edge, so the commit lands long before the round-trip),
+ * but it is a race, not a guarantee, and it stops holding the moment a thread
+ * is hydrated already parked — the run would have finished before the mount and
+ * the gate would render nowhere, silently. Mounted unconditionally, there is no
+ * window at all. The wrapper is `empty:hidden` so it costs no layout when
+ * neither the gate nor an error is showing.
  */
-export function Transcript({ messages, isRunning, onSelectSuggestion }: TranscriptProps) {
+export function Transcript({
+  messages,
+  isRunning,
+  onSelectSuggestion,
+  runError,
+  onDismissRunError,
+  onRunError,
+}: TranscriptProps) {
   const { renderActivityMessage } = useRenderActivityMessage()
   const renderToolCall = useRenderToolCall()
   // NOT memoized on `messages`, and that is load-bearing. `AbstractAgent`
@@ -131,9 +154,12 @@ export function Transcript({ messages, isRunning, onSelectSuggestion }: Transcri
               Working…
             </p>
           ) : null}
-          <PermissionInterrupt />
         </div>
       )}
+      <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 empty:hidden">
+        <PermissionInterrupt onError={onRunError} />
+        {runError !== null ? <RunError message={runError} onDismiss={onDismissRunError} /> : null}
+      </div>
     </div>
   )
 }

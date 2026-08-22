@@ -50,10 +50,25 @@ const ACTIONS = "mt-3 flex flex-wrap gap-2"
 const BUTTON =
   "rounded-[calc(var(--wb-radius)-3px)] border border-[var(--wb-border)] bg-[var(--wb-surface)] px-2.5 py-1 text-[12px] font-medium transition-colors hover:border-[var(--wb-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
 
-export function PermissionInterrupt() {
+export interface PermissionInterruptProps {
+  /**
+   * Where a failed resume goes. `resolve`/`cancel` start a *run* (the resume),
+   * so they reject exactly like the send path does — and being fired from an
+   * onClick, an uncaught rejection would be an unhandled promise and nothing
+   * on screen. Routed to the same failure surface as `runAgent`.
+   */
+  readonly onError: (error: unknown) => void
+}
+
+export function PermissionInterrupt({ onError }: PermissionInterruptProps) {
   return useInterrupt({
     renderInChat: false,
     render: ({ interrupt, resolve, cancel }) => {
+      const decide = (decision: () => Promise<unknown> | unknown) => () => {
+        Promise.resolve()
+          .then(decision)
+          .catch((error: unknown) => onError(error))
+      }
       const meta = (interrupt?.metadata ?? {}) as PermissionMetadata
       if (meta.kind === "subagent") {
         const detail = meta.detail
@@ -69,13 +84,13 @@ export function PermissionInterrupt() {
             <p className={ROW}>Input: {detail?.inputPreview ?? "no input preview"}</p>
             {detail?.reason ? <p className={ROW}>Reason: {detail.reason}</p> : null}
             <div className={ACTIONS}>
-              <button type="button" className={BUTTON} onClick={() => resolve("once")}>
+              <button type="button" className={BUTTON} onClick={decide(() => resolve("once"))}>
                 Once
               </button>
-              <button type="button" className={BUTTON} onClick={() => resolve("always")}>
+              <button type="button" className={BUTTON} onClick={decide(() => resolve("always"))}>
                 Always
               </button>
-              <button type="button" className={BUTTON} onClick={() => resolve("deny")}>
+              <button type="button" className={BUTTON} onClick={decide(() => resolve("deny"))}>
                 Deny
               </button>
             </div>
@@ -91,13 +106,13 @@ export function PermissionInterrupt() {
             <code className={CODE}>{command ?? interrupt?.message ?? JSON.stringify(meta)}</code>
           </p>
           <div className={ACTIONS}>
-            <button type="button" className={BUTTON} onClick={() => resolve("once")}>
+            <button type="button" className={BUTTON} onClick={decide(() => resolve("once"))}>
               Allow once
             </button>
-            <button type="button" className={BUTTON} onClick={() => resolve("always")}>
+            <button type="button" className={BUTTON} onClick={decide(() => resolve("always"))}>
               Allow always
             </button>
-            <button type="button" className={BUTTON} onClick={() => cancel()}>
+            <button type="button" className={BUTTON} onClick={decide(() => cancel())}>
               Deny
             </button>
           </div>

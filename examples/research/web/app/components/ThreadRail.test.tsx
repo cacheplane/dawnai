@@ -23,6 +23,24 @@ function render(props: Partial<Parameters<typeof ThreadRail>[0]> = {}): string {
   )
 }
 
+interface ParsedRow {
+  readonly label: string
+  readonly className: string
+  readonly isCurrent: boolean
+}
+
+/** The rendered thread rows, ignoring the "+ New conversation" action above them. */
+function parseRows(markup: string): readonly ParsedRow[] {
+  return markup
+    .split("<li>")
+    .slice(1)
+    .map((chunk) => ({
+      label: chunk.replace(/<[^>]*>/g, ""),
+      className: /class="([^"]*)"/.exec(chunk)?.[1] ?? "",
+      isCurrent: chunk.includes('aria-current="true"'),
+    }))
+}
+
 describe("thread rail", () => {
   test("lists every thread in the order it is given", () => {
     // Rows only, so the "+ New conversation" action above them cannot stand in
@@ -40,23 +58,31 @@ describe("thread rail", () => {
     expect(render()).toContain(`>${UNTITLED_THREAD_LABEL}</button>`)
   })
 
-  test("marks the active thread both visually and for assistive tech", () => {
-    const markup = render()
-    const rows = markup.split("<button").filter((chunk) => chunk.includes("aria-current"))
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toContain(UNTITLED_THREAD_LABEL)
-    expect(rows[0]).toContain("bg-[var(--wb-surface)]")
+  test("marks the active thread for assistive tech, not by color alone", () => {
+    // A rail of buttons where only the background says which one is selected
+    // is unusable without sight. `aria-current` is the other half.
+    const rows = parseRows(render())
+    const current = rows.filter((row) => row.isCurrent)
+    expect(current).toHaveLength(1)
+    expect(current[0]?.label).toBe(UNTITLED_THREAD_LABEL)
   })
 
-  test("hover-highlights the inactive rows rather than filling them", () => {
-    const markup = render()
-    const activeRow = markup.split("<button").find((chunk) => chunk.includes("aria-current"))
-    const inactiveRow = markup
-      .split("<button")
-      .find((chunk) => chunk.includes("Agent architectures"))
-    expect(inactiveRow).toContain("hover:bg-[var(--wb-surface)]")
-    expect(inactiveRow).toContain("text-[var(--wb-muted)]")
-    expect(activeRow).not.toContain("text-[var(--wb-muted)]")
+  test("styles the active row differently from the inactive ones, which match each other", () => {
+    // Asserts the distinction the design calls for without pinning which
+    // utilities produce it — restyling the rail should not red this test,
+    // but flattening the active state into the others should.
+    const rows = parseRows(render())
+    const active = rows.find((row) => row.isCurrent)
+    const inactive = rows.filter((row) => !row.isCurrent)
+    expect(inactive).toHaveLength(2)
+    expect(active?.className).toBeDefined()
+    for (const row of inactive) expect(row.className).not.toBe(active?.className)
+    expect(new Set(inactive.map((row) => row.className)).size).toBe(1)
+  })
+
+  test("gives the inactive rows a hover affordance", () => {
+    const inactive = parseRows(render()).filter((row) => !row.isCurrent)
+    for (const row of inactive) expect(row.className).toMatch(/\bhover:/)
   })
 
   test("truncates a long title in the fixed-width rail instead of wrapping it", () => {

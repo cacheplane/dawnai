@@ -1,6 +1,6 @@
 "use client"
 import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2"
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { WorkbenchThread } from "../lib/thread-source"
 import { Composer } from "./Composer"
 import { ThreadRail, UNTITLED_THREAD_LABEL } from "./ThreadRail"
@@ -41,6 +41,41 @@ export function AppShell({
 }: AppShellProps) {
   const { agent } = useAgent()
   const { copilotkit } = useCopilotKit()
+  const [runError, setRunError] = useState<string | null>(null)
+
+  // `pendingInterrupts` is populated while the RUN_FINISHED event is applied,
+  // which is strictly before `onRunFinalized` fires — and `onRunFinalized` is
+  // one of the notifications `useAgent` re-renders on. So by the time this
+  // component re-renders after a parked run, the count below is already right.
+  const isAwaitingApproval = agent.pendingInterrupts.length > 0
+
+  const reportRunError = useCallback((error: unknown) => {
+    setRunError(error instanceof Error ? error.message : String(error))
+  }, [])
+
+  const dismissRunError = useCallback(() => {
+    setRunError(null)
+  }, [])
+
+  // THE seam for run failures — not the `catch` around `runAgent`.
+  // `copilotkit.runAgent` does not reject when a run fails: it catches, calls
+  // `emitError`, and returns `{ result: undefined, newMessages: [] }`. So an
+  // unreachable server, a 500 from `/api/copilotkit`, or the pending-interrupt
+  // throw all resolve normally and a `try/catch` alone would show the user
+  // nothing (verified live: the row never appeared until this subscription
+  // existed). Errors surface only here, as `CopilotKitCoreErrorCode` events.
+  // `<CopilotSidebar>` was the previous subscriber; deleting it is what left
+  // the shell with no failure state at all.
+  useEffect(() => {
+    const subscription = copilotkit.subscribe({
+      onError: ({ error }) => {
+        setRunError(error.message)
+      },
+    })
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [copilotkit])
 
   // Switching threads does not restore that thread's history in this slice —
   // there is no hydration from the server yet — but the previous thread's
@@ -55,10 +90,12 @@ export function AppShell({
     if (agent.isRunning) agent.abortRun()
     agent.pendingInterrupts = []
     agent.setMessages([])
+    setRunError(null)
   }, [activeThreadId, agent])
 
   const send = useCallback(
     async (message: string) => {
+      setRunError(null)
       agent.addMessage({ id: globalThis.crypto.randomUUID(), role: "user", content: message })
       onUserMessage(message)
       try {
@@ -67,10 +104,13 @@ export function AppShell({
         // the registered renderers depend on.
         await copilotkit.runAgent({ agent })
       } catch (error) {
+        // A backstop, not the main path (see the subscription above): only the
+        // rejections core rethrows rather than swallows land here.
         console.error("AppShell: runAgent failed", error)
+        reportRunError(error)
       }
     },
-    [agent, copilotkit, onUserMessage],
+    [agent, copilotkit, onUserMessage, reportRunError],
   )
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId)
@@ -100,13 +140,25 @@ export function AppShell({
               running
             </span>
           ) : null}
+          {isAwaitingApproval ? (
+            <span className="shrink-0 text-[11px] uppercase tracking-[0.08em] text-[var(--wb-muted)]">
+              awaiting approval
+            </span>
+          ) : null}
         </header>
         <Transcript
           messages={agent.messages}
           isRunning={agent.isRunning}
           onSelectSuggestion={send}
+          runError={runError}
+          onDismissRunError={dismissRunError}
+          onRunError={reportRunError}
         />
-        <Composer onSend={send} isRunning={agent.isRunning} />
+        <Composer
+          onSend={send}
+          isRunning={agent.isRunning}
+          isAwaitingApproval={isAwaitingApproval}
+        />
       </main>
     </div>
   )

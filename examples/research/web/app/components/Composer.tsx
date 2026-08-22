@@ -3,13 +3,26 @@ import { type KeyboardEvent, useState } from "react"
 
 export interface ComposerProps {
   readonly onSend: (message: string) => void
-  /** True while a run is in flight — the send button is unavailable until it settles. */
+  /** True while a run is in flight. */
   readonly isRunning: boolean
+  /**
+   * True while the agent is parked on an unresolved interrupt.
+   *
+   * A separate flag from `isRunning`, not a refinement of it: when Dawn's
+   * permission gate parks a run, the run has *finished* — `isRunning` is false
+   * and `agent.pendingInterrupts` is non-empty. Gating on `isRunning` alone
+   * therefore leaves the composer live under an open approve/deny card, and
+   * sending from there throws `Thread has N pending interrupt(s) not addressed
+   * by resume` from inside `runAgent` — after the user's message is already in
+   * the transcript.
+   */
+  readonly isAwaitingApproval: boolean
 }
 
-export function Composer({ onSend, isRunning }: ComposerProps) {
+export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProps) {
   const [value, setValue] = useState("")
-  const canSend = !isRunning && value.trim().length > 0
+  const isBlocked = isRunning || isAwaitingApproval
+  const canSend = !isBlocked && value.trim().length > 0
 
   function send() {
     if (!canSend) return
@@ -26,6 +39,18 @@ export function Composer({ onSend, isRunning }: ComposerProps) {
     send()
   }
 
+  // A greyed-out box with no explanation reads as broken. Say which of the two
+  // reasons it is, in the placeholder and again under the box.
+  const placeholder = isAwaitingApproval
+    ? "Waiting on your decision above…"
+    : isRunning
+      ? "The agent is working…"
+      : "Ask the research agent…"
+  const hint = isAwaitingApproval
+    ? "Allow or deny the request above to continue this conversation."
+    : "Enter to send · Shift+Enter for a new line"
+  const label = isAwaitingApproval ? "Waiting" : isRunning ? "Running…" : "Send"
+
   return (
     <div className="border-t border-[var(--wb-border)] px-6 py-4">
       <form
@@ -39,23 +64,22 @@ export function Composer({ onSend, isRunning }: ComposerProps) {
           <textarea
             rows={1}
             value={value}
+            disabled={isAwaitingApproval}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Ask the research agent…"
+            placeholder={placeholder}
             aria-label="Message"
-            className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-[var(--wb-muted)]"
+            className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-[var(--wb-muted)] disabled:cursor-not-allowed"
           />
           <button
             type="submit"
             disabled={!canSend}
             className="wb-primary-action shrink-0 rounded-[calc(var(--wb-radius)-3px)] px-3.5 py-1.5 text-[13px] font-medium tracking-tight transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
           >
-            {isRunning ? "Running…" : "Send"}
+            {label}
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-[var(--wb-muted)]">
-          Enter to send · Shift+Enter for a new line
-        </p>
+        <p className="mt-2 text-[11px] text-[var(--wb-muted)]">{hint}</p>
       </form>
     </div>
   )
