@@ -29,13 +29,27 @@ interface ParsedRow {
   readonly isCurrent: boolean
 }
 
+/**
+ * The visible text of a markup fragment.
+ *
+ * Extracts the `<`-free runs that follow a `>` rather than stripping tags with
+ * a `replace`. A removal pass over `<[^>]*>` is what CodeQL flags as
+ * `js/incomplete-multi-character-sanitization`, and repeating it until stable
+ * does not satisfy the rule — it objects to the shape. Collecting the text
+ * between tags is safe by construction. Same approach as
+ * `packages/ag-ui/test/react/renderers.test.tsx`.
+ */
+function visibleText(fragment: string): string {
+  return Array.from(fragment.matchAll(/>([^<]*)/g), (match) => match[1] ?? "").join("")
+}
+
 /** The rendered thread rows, ignoring the "+ New conversation" action above them. */
 function parseRows(markup: string): readonly ParsedRow[] {
   return markup
     .split("<li>")
     .slice(1)
     .map((chunk) => ({
-      label: chunk.replace(/<[^>]*>/g, ""),
+      label: visibleText(chunk),
       className: /class="([^"]*)"/.exec(chunk)?.[1] ?? "",
       isCurrent: chunk.includes('aria-current="true"'),
     }))
@@ -45,10 +59,7 @@ describe("thread rail", () => {
   test("lists every thread in the order it is given", () => {
     // Rows only, so the "+ New conversation" action above them cannot stand in
     // for the untitled row's label.
-    const rows = render()
-      .split("<li>")
-      .slice(1)
-      .map((chunk) => chunk.replace(/<[^>]*>/g, ""))
+    const rows = render().split("<li>").slice(1).map(visibleText)
     expect(rows).toEqual(["Agent architectures", UNTITLED_THREAD_LABEL, "Quantum computing"])
   })
 
