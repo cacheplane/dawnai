@@ -32,18 +32,22 @@ const subagentClassNames: DawnActivityClassNames = {
   // text-transform + letter-spacing — "Plan"/"Tools" as small-caps eyebrows,
   // the one piece of structure the card exposes above the lists.
   sectionLabel: "uppercase tracking-[0.08em]",
-  // width + display + text-align — fixed glyph column, shared by the plan
-  // checklist and the tools list.
-  itemGlyph: "inline-block w-4 text-center",
+  // width + text-align — fixed glyph column, shared by the plan checklist and
+  // the tools list. No display utility: a flex item of `__item` is blockified,
+  // so `inline-*` would be inert.
+  itemGlyph: "w-4 text-center",
   // line-height.
   itemLabel: "leading-5",
   // white-space — "completed"/"incomplete" stay on one line.
   itemStatus: "whitespace-nowrap",
   // font-variant-numeric — "+N more".
   overflow: "tabular-nums",
-  // border-left + padding-left — a failure gets a rule down its edge. The text
-  // color is already the package's failed token, which theme.css keeps.
-  error: "border-l-2 border-[var(--dawn-activity-failed)] pl-2",
+  // border-left-width + padding-left — a failure gets a rule down its edge. No
+  // border-color class: the package sets `color: var(--dawn-activity-failed)` on
+  // this element and an unspecified border-color resolves to `currentColor`, so
+  // the rule already tracks the failure color (and any theme override of it) for
+  // free. Naming the token here would only duplicate that.
+  error: "border-l-2 pl-2",
 }
 
 export function SubagentCard({ content }: { content: SubagentActivityContentOutput }) {

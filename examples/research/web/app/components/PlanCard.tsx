@@ -24,9 +24,11 @@ const planClassNames: DawnActivityClassNames = {
   title: "font-medium",
   // font-variant-numeric — "1/2 complete" must not jitter as the counter moves.
   meta: "tabular-nums",
-  // width + display + text-align — a fixed glyph column so ○ ◐ ✓ (different
-  // widths) all leave labels starting at the same x.
-  itemGlyph: "inline-block w-4 text-center",
+  // width + text-align — a fixed glyph column so ○ ◐ ✓ (different advance
+  // widths) all leave labels starting at the same x. No display utility: the
+  // glyph is a flex item of `__item`, so its `display` is blockified and any
+  // `inline-*` class would be inert.
+  itemGlyph: "w-4 text-center",
   // line-height — unset by the package; 20px on 13px text keeps wrapped todos
   // readable without the airy default.
   itemLabel: "leading-5",
