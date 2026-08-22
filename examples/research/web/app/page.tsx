@@ -24,7 +24,6 @@ import {
 // - Components/hooks that omit agentId resolve CopilotKit's default id ("default").
 //   The runtime route (api/copilotkit/route.ts) registers the Dawn /research route
 //   under "default", so every hook binds without per-component agentId wiring.
-// - `labels` is `Partial<CopilotChatLabels>`, whose header title field is `modalHeaderTitle`.
 // - `defaultThrottleMs` coalesces the useAgent re-renders that the transcript and panels
 //   get from OnMessagesChanged/OnStateChanged. It defaults to UNTHROTTLED,
 //   and a full research run streams hundreds of events, which pegs the renderer
@@ -62,10 +61,16 @@ export default function Home() {
 
   const handleCreate = useCallback(() => {
     if (source === null) return
+    // Clicking "New conversation" twice used to leave two identical untitled
+    // rows. A thread stays untitled until its first user message lands, so
+    // "the active thread has no title" is exactly "it is already the blank
+    // conversation you are asking for" — make the second click a no-op.
+    const active = threads.find((thread) => thread.id === activeThreadId)
+    if (active !== undefined && active.title === undefined) return
     const created = source.create()
     setThreads(source.list())
     setActiveThreadId(created.id)
-  }, [source])
+  }, [source, threads, activeThreadId])
 
   const handleSelect = useCallback((threadId: string) => {
     setActiveThreadId(threadId)

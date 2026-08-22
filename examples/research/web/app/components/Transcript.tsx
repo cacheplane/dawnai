@@ -1,5 +1,9 @@
 "use client"
-import { useRenderActivityMessage, useRenderToolCall } from "@copilotkit/react-core/v2"
+import {
+  CopilotChatAssistantMessage,
+  useRenderActivityMessage,
+  useRenderToolCall,
+} from "@copilotkit/react-core/v2"
 import { useEffect, useRef } from "react"
 import {
   buildTranscriptItems,
@@ -11,11 +15,24 @@ import { PermissionInterrupt } from "./PermissionInterrupt"
 import { RunError } from "./RunError"
 
 export interface TranscriptProps {
+  /**
+   * The active thread's id, used only as `PermissionInterrupt`'s `key`.
+   *
+   * `useInterrupt` keeps its OWN pending state: it is fed by
+   * `onRunFinishedEvent` and cleared only by a *new* run, a failure, or
+   * unmount — and its subscription effect is keyed `[agent]`, whose identity
+   * does not change on a thread switch. Without a remount, thread A's
+   * approve/deny card survives a switch to thread B and answers A's
+   * interruptId against an agent now pointed at B's thread. Remounting happens
+   * at switch time, long before any run, so it does not reintroduce the mount
+   * race described below.
+   */
+  readonly threadKey: string | undefined
   readonly messages: readonly TranscriptMessage[]
   readonly isRunning: boolean
   readonly onSelectSuggestion: (message: string) => void
   /** The last run failure, or null. Owned by `AppShell`. */
-  readonly runError: string | null
+  readonly runError: { readonly title: string; readonly message: string } | null
   readonly onDismissRunError: () => void
   readonly onRunError: (error: unknown) => void
 }
@@ -56,6 +73,7 @@ export interface TranscriptProps {
  * neither the gate nor an error is showing.
  */
 export function Transcript({
+  threadKey,
   messages,
   isRunning,
   onSelectSuggestion,
@@ -94,22 +112,33 @@ export function Transcript({
       case "user":
         return (
           <div key={item.id} className="flex justify-end">
-            <p className="max-w-[85%] whitespace-pre-wrap rounded-[var(--wb-radius)] border border-[var(--wb-border)] bg-[var(--wb-surface)] px-3.5 py-2 text-sm leading-6">
+            <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-wb border border-wb-border bg-wb-surface px-3.5 py-2 text-sm leading-6">
               {item.text}
             </p>
           </div>
         )
       case "assistant":
+        // Markdown, not raw text. The agent is prompted to write cited reports,
+        // so its answers arrive as `## Findings` / `- bullet` / `**bold**`, and
+        // rendering them verbatim is the most visible thing lost when
+        // `<CopilotSidebar>` went away.
+        //
+        // `CopilotChatAssistantMessage.MarkdownRenderer` is a pass-through to
+        // Streamdown (already in the dependency graph via CopilotKit, and built
+        // for *streaming* markdown — it tolerates the half-finished syntax that
+        // arrives mid-token). Only the renderer, not `CopilotChatAssistantMessage`
+        // itself, which would drag in the copy/thumbs/regenerate toolbar and its
+        // `cpk:`-prefixed chrome. The look is `.wb-prose` in `app/theme.css`.
         return (
-          <p key={item.id} className="whitespace-pre-wrap text-sm leading-7 tracking-tight">
-            {item.text}
-          </p>
+          <div key={item.id} className="wb-prose break-words">
+            <CopilotChatAssistantMessage.MarkdownRenderer content={item.text} />
+          </div>
         )
       case "reasoning":
         return (
           <p
             key={item.id}
-            className="whitespace-pre-wrap border-l border-[var(--wb-border)] pl-3 text-[13px] italic leading-6 text-[var(--wb-muted)]"
+            className="whitespace-pre-wrap break-words border-l border-wb-border pl-3 text-[13px] italic leading-6 text-wb-muted"
           >
             {item.text}
           </p>
@@ -134,31 +163,52 @@ export function Transcript({
             })}
           </div>
         )
-      default:
-        return null
+      default: {
+        // Exhaustiveness, not a fallback. A new `TranscriptItem` kind must fail
+        // to compile here rather than silently render as nothing.
+        const unhandled: never = item
+        return unhandled
+      }
     }
   }
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      {items.length === 0 ? (
-        <EmptyState onSelectSuggestion={onSelectSuggestion} />
-      ) : (
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8">
-          {items.map(renderItem)}
-          {isRunning ? (
-            <p
-              aria-live="polite"
-              className="text-[13px] text-[var(--wb-muted)] motion-safe:animate-pulse"
-            >
-              Working…
-            </p>
-          ) : null}
-        </div>
-      )}
+      {items.length === 0 ? <EmptyState onSelectSuggestion={onSelectSuggestion} /> : null}
+      {/*
+        The live region is the message list itself, and it is rendered in both
+        states so it exists BEFORE its content changes — a region inserted at
+        the same moment as its first content is unreliably announced across
+        assistive tech, which is what the old `aria-live` on the "Working…"
+        element was. `role="log"` is the right role for an append-only
+        transcript, and `aria-relevant="additions text"` covers the answer
+        streaming in character by character, not just whole new messages.
+      */}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        className={
+          items.length === 0
+            ? "mx-auto max-w-3xl px-6"
+            : "mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8"
+        }
+      >
+        {items.map(renderItem)}
+        {/* Persistent, with toggling text — same reason as the region above. */}
+        <p className="text-[13px] text-wb-muted empty:hidden motion-safe:animate-pulse">
+          {isRunning ? "Working…" : ""}
+        </p>
+      </div>
       <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 empty:hidden">
-        <PermissionInterrupt onError={onRunError} />
-        {runError !== null ? <RunError message={runError} onDismiss={onDismissRunError} /> : null}
+        <PermissionInterrupt key={threadKey} onError={onRunError} isResuming={isRunning} />
+        {runError !== null ? (
+          <RunError
+            title={runError.title}
+            message={runError.message}
+            onDismiss={onDismissRunError}
+          />
+        ) : null}
       </div>
     </div>
   )

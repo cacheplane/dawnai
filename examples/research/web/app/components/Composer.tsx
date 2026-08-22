@@ -1,8 +1,10 @@
 "use client"
-import { type KeyboardEvent, useState } from "react"
+import { type KeyboardEvent, useId, useRef, useState } from "react"
 
 export interface ComposerProps {
   readonly onSend: (message: string) => void
+  /** Aborts the in-flight run. */
+  readonly onStop: () => void
   /** True while a run is in flight. */
   readonly isRunning: boolean
   /**
@@ -19,8 +21,10 @@ export interface ComposerProps {
   readonly isAwaitingApproval: boolean
 }
 
-export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProps) {
+export function Composer({ onSend, onStop, isRunning, isAwaitingApproval }: ComposerProps) {
   const [value, setValue] = useState("")
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const hintId = useId()
   const isBlocked = isRunning || isAwaitingApproval
   const canSend = !isBlocked && value.trim().length > 0
 
@@ -28,6 +32,11 @@ export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProp
     if (!canSend) return
     onSend(value.trim())
     setValue("")
+    // Sending empties the box, which flips `canSend` false and disables the
+    // very button the user just activated — and a disabled element cannot hold
+    // focus, so it lands on <body> and the next Tab restarts from the top of
+    // the page. Put the caret back where the user is working.
+    inputRef.current?.focus()
   }
 
   // Enter sends, Shift+Enter newlines. `isComposing` guards IME input: while a
@@ -40,7 +49,9 @@ export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProp
   }
 
   // A greyed-out box with no explanation reads as broken. Say which of the two
-  // reasons it is, in the placeholder and again under the box.
+  // reasons it is — and say it in the accessibility tree too, via the
+  // `aria-describedby` below, since "the text under the box" is a visual
+  // relationship that assistive tech cannot infer.
   const placeholder = isAwaitingApproval
     ? "Waiting on your decision above…"
     : isRunning
@@ -49,10 +60,9 @@ export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProp
   const hint = isAwaitingApproval
     ? "Allow or deny the request above to continue this conversation."
     : "Enter to send · Shift+Enter for a new line"
-  const label = isAwaitingApproval ? "Waiting" : isRunning ? "Running…" : "Send"
 
   return (
-    <div className="border-t border-[var(--wb-border)] px-6 py-4">
+    <div className="border-t border-wb-border px-6 py-4">
       <form
         className="mx-auto max-w-3xl"
         onSubmit={(event) => {
@@ -60,26 +70,53 @@ export function Composer({ onSend, isRunning, isAwaitingApproval }: ComposerProp
           send()
         }}
       >
-        <div className="flex items-end gap-2 rounded-[var(--wb-radius)] border border-[var(--wb-border)] bg-[var(--wb-surface)] p-2 transition-colors focus-within:border-[var(--wb-muted)]">
+        <div className="flex items-end gap-2 rounded-wb border border-wb-border bg-wb-surface p-2 transition-colors focus-within:border-wb-muted">
           <textarea
+            ref={inputRef}
             rows={1}
             value={value}
-            disabled={isAwaitingApproval}
+            // `readOnly` + `aria-disabled`, NOT `disabled`. An interrupt can
+            // arrive mid-sentence, and `disabled` would yank focus out of the
+            // box the user is typing in, hide it from assistive tech, and lose
+            // the draft's reachability. `readOnly` keeps it focusable and
+            // readable while refusing edits.
+            readOnly={isAwaitingApproval}
+            aria-disabled={isAwaitingApproval}
+            aria-describedby={hintId}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder={placeholder}
             aria-label="Message"
-            className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-[var(--wb-muted)] disabled:cursor-not-allowed"
+            // `field-sizing-content` grows the box with the text, bounded by
+            // `max-h-40` — without it, "Shift+Enter for a new line" produces a
+            // one-row box the user cannot see their own message in.
+            className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none field-sizing-content placeholder:text-wb-muted read-only:cursor-not-allowed"
           />
-          <button
-            type="submit"
-            disabled={!canSend}
-            className="wb-primary-action shrink-0 rounded-[calc(var(--wb-radius)-3px)] px-3.5 py-1.5 text-[13px] font-medium tracking-tight transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
-          >
-            {label}
-          </button>
+          {isRunning ? (
+            // Swapped in rather than sitting alongside Send: the two are never
+            // both meaningful, and without it a hung stream (where `isRunning`
+            // never clears) leaves the composer dead with no way out but
+            // abandoning the conversation.
+            <button
+              type="button"
+              onClick={onStop}
+              className="wb-focus shrink-0 rounded-wb-sm border border-wb-border bg-wb-surface px-3.5 py-1.5 text-[13px] font-medium tracking-tight transition-colors hover:border-wb-muted"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="wb-primary-action wb-focus shrink-0 rounded-wb-sm px-3.5 py-1.5 text-[13px] font-medium tracking-tight transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isAwaitingApproval ? "Waiting" : "Send"}
+            </button>
+          )}
         </div>
-        <p className="mt-2 text-[11px] text-[var(--wb-muted)]">{hint}</p>
+        <p id={hintId} className="mt-2 text-[11px] text-wb-muted">
+          {hint}
+        </p>
       </form>
     </div>
   )

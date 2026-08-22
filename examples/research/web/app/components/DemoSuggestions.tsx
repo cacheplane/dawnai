@@ -15,7 +15,10 @@ import { useConfigureSuggestions } from "@copilotkit/react-core/v2"
 // - "agent architectures" IS in the corpus  -> plan, researcher subagent, citations
 // - "quantum computing" is deliberately NOT -> forces the gated external fetch,
 //   which is what makes the approve/deny flow discoverable
-// - the preference prompt drives remember() -> a candidate to approve in the panel
+// - the preference prompt drives remember() -> the memory tool call, visible as
+//   a tool card in the transcript. It deliberately stops there in this slice:
+//   reviewing and approving the resulting candidate needs the memory panel,
+//   which lands in SP2b, so the pill promises a tool call and nothing more.
 export function DemoSuggestions() {
   useConfigureSuggestions(
     {
@@ -30,7 +33,7 @@ export function DemoSuggestions() {
             "The corpus has nothing on quantum computing — run the external fetch script for it with runBash.",
         },
         {
-          title: "Teach it a preference",
+          title: "Watch it use a tool",
           message: "Remember that I prefer concise, cited reports.",
         },
       ],

@@ -5,7 +5,7 @@ import { Composer } from "./Composer"
 const noop = () => {}
 
 function render(state: { isRunning: boolean; isAwaitingApproval: boolean }): string {
-  return renderToStaticMarkup(<Composer onSend={noop} {...state} />)
+  return renderToStaticMarkup(<Composer onSend={noop} onStop={noop} {...state} />)
 }
 
 const IDLE = { isRunning: false, isAwaitingApproval: false }
@@ -17,10 +17,21 @@ describe("composer", () => {
     expect(render(IDLE)).toContain("disabled")
   })
 
-  test("blocks sending while a run is in flight", () => {
+  test("keeps the blocked textarea focusable and described, not disabled", () => {
+    // `disabled` on the textarea would yank focus out of the box mid-sentence
+    // when an interrupt arrives, and hide it from assistive tech entirely.
+    const markup = render(AWAITING)
+    expect(markup).toMatch(/\breadonly=""/i)
+    expect(markup).toContain('aria-disabled="true"')
+    expect(markup).toMatch(/aria-describedby="[^"]+"/)
+  })
+
+  test("offers Stop instead of Send while a run is in flight", () => {
+    // Without it, the only escape from a long — or hung, where `isRunning`
+    // never clears — run is switching threads, which destroys the transcript.
     const markup = render(RUNNING)
-    expect(markup).toContain("disabled")
-    expect(markup).toContain("Running…")
+    expect(markup).toContain("Stop")
+    expect(markup).not.toContain("Send")
   })
 
   /**

@@ -32,7 +32,7 @@ export function EmptyState({ onSelectSuggestion }: EmptyStateProps) {
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col justify-center px-6 py-16">
       <h1 className="wb-brand-mark text-3xl font-semibold tracking-tight">Dawn research</h1>
-      <p className="mt-3 text-sm leading-6 text-[var(--wb-muted)]">
+      <p className="mt-3 text-sm leading-6 text-wb-muted">
         A research agent that plans its work, dispatches subagents, cites a local corpus, and asks
         before it does anything you have not allowed yet.
       </p>
@@ -43,12 +43,12 @@ export function EmptyState({ onSelectSuggestion }: EmptyStateProps) {
               <button
                 type="button"
                 onClick={() => onSelectSuggestion(suggestion.message)}
-                className="group block w-full rounded-[var(--wb-radius)] border border-[var(--wb-border)] bg-[var(--wb-surface)] px-4 py-3 text-left transition-colors hover:border-[var(--wb-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
+                className="group block w-full rounded-wb border border-wb-border bg-wb-surface px-4 py-3 text-left transition-colors hover:border-wb-muted wb-focus"
               >
                 <span className="block text-[13px] font-medium tracking-tight">
                   {suggestion.title}
                 </span>
-                <span className="mt-1 block text-[13px] leading-5 text-[var(--wb-muted)]">
+                <span className="mt-1 block text-[13px] leading-5 text-wb-muted">
                   {suggestion.message}
                 </span>
               </button>

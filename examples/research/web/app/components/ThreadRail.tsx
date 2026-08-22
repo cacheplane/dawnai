@@ -24,11 +24,11 @@ export interface ThreadRailProps {
 export const UNTITLED_THREAD_LABEL = "New conversation"
 
 const ROW_BASE =
-  "block w-full truncate rounded-[var(--wb-radius)] px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
+  "block w-full truncate rounded-wb px-2.5 py-1.5 text-left text-[13px] transition-colors wb-focus"
 
-const ROW_ACTIVE = "bg-[var(--wb-surface)] font-medium text-[var(--wb-text)] shadow-xs"
+const ROW_ACTIVE = "bg-wb-surface font-medium text-wb-text shadow-xs"
 
-const ROW_IDLE = "text-[var(--wb-muted)] hover:bg-[var(--wb-surface)] hover:text-[var(--wb-text)]"
+const ROW_IDLE = "text-wb-muted hover:bg-wb-surface hover:text-wb-text"
 
 export function ThreadRail({ threads, activeThreadId, onSelect, onCreate }: ThreadRailProps) {
   return (
@@ -37,16 +37,16 @@ export function ThreadRail({ threads, activeThreadId, onSelect, onCreate }: Thre
         <button
           type="button"
           onClick={onCreate}
-          className="w-full rounded-[var(--wb-radius)] border border-[var(--wb-border)] bg-[var(--wb-surface)] px-3 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors hover:border-[var(--wb-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--wb-accent-from)]"
+          className="w-full rounded-wb border border-wb-border bg-wb-surface px-3 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors hover:border-wb-muted wb-focus"
         >
           + New conversation
         </button>
       </div>
-      <p className="px-4 pt-6 pb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--wb-muted)]">
+      <p className="px-4 pt-6 pb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-wb-muted">
         Recent
       </p>
       {threads.length === 0 ? (
-        <p className="px-4 text-[13px] text-[var(--wb-muted)]">No conversations yet.</p>
+        <p className="px-4 text-[13px] text-wb-muted">No conversations yet.</p>
       ) : (
         <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
           {threads.map((thread) => {
