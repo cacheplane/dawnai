@@ -8,11 +8,13 @@ import { type DawnActivityClassNames, PlanActivityCard } from "@dawn-ai/ag-ui/re
  * Tailwind utilities per part. Nothing here reimplements the card, so the
  * validation and the bounded-content rules stay where they are tested.
  *
- * Every class below sets a property the package stylesheet does NOT set on
- * that same element. That is a hard constraint, not a style preference: the
- * package sheet is unlayered and Tailwind's utilities live in
- * `@layer utilities`, so unlayered wins on any shared property no matter how
- * specific the utility is. See the report for the properties this rules out.
+ * Every class below sets a property the package stylesheet leaves unset on that
+ * element. That is a hard constraint, not a preference — see the class-selection
+ * rule in `activity-renderers.tsx` for why, and for what it puts out of reach.
+ *
+ * Deliberately NOT shared with `SubagentCard`: these seven are independent
+ * judgements about one card, not shared logic. A common object would mean
+ * nudging the plan's title silently restyles the subagent's name.
  */
 const planClassNames: DawnActivityClassNames = {
   // letter-spacing — unset by the package, and it inherits, so one class gives
@@ -24,11 +26,13 @@ const planClassNames: DawnActivityClassNames = {
   title: "font-medium",
   // font-variant-numeric — "1/2 complete" must not jitter as the counter moves.
   meta: "tabular-nums",
-  // width + text-align — a fixed glyph column so ○ ◐ ✓ (different advance
-  // widths) all leave labels starting at the same x. No display utility: the
-  // glyph is a flex item of `__item`, so its `display` is blockified and any
-  // `inline-*` class would be inert.
-  itemGlyph: "w-4 text-center",
+  // width + flex-shrink + text-align — a fixed glyph column so ○ ◐ ✓ (different
+  // advance widths) all leave labels starting at the same x. `shrink-0` is what
+  // makes it fixed: the glyph is a flex child of `__item` and would otherwise
+  // absorb the overflow that belongs to the label (`__item-label` is `flex: 1`,
+  // basis 0%) at the narrow widths the transcript column actually hits. No
+  // display utility — a flex item is blockified, so `inline-*` would be inert.
+  itemGlyph: "w-4 shrink-0 text-center",
   // line-height — unset by the package; 20px on 13px text keeps wrapped todos
   // readable without the airy default.
   itemLabel: "leading-5",

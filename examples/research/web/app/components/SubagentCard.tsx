@@ -8,15 +8,14 @@ import {
  * The workbench's subagent card — the plan card's treatment plus the parts only
  * this card has: the depth badge, the section labels, and the failure message.
  *
- * Same constraint as `PlanCard`: every class sets a property the package sheet
- * leaves unset on that element, because unlayered package rules beat Tailwind's
- * `@layer utilities` output regardless of specificity.
+ * Same class-selection rule as `PlanCard`, and for the same reason: see
+ * `activity-renderers.tsx`.
  *
- * `classNames` is passed WHOLE into the card's two checklists, so `section`,
- * `list`, `item*` and friends apply to the plan list and the tools list alike —
- * and `section` lands on both the outer `<section>` and the checklist's own
- * inner wrapper. Anything box-like (a divider, padding) would therefore double
- * up, which is why the separators this look wants are absent below.
+ * One `classNames` object serves every list this card renders — the plan
+ * checklist and the tools list — and `section` additionally lands on both the
+ * outer `<section>` and the checklist's own inner wrapper nested inside it. So
+ * anything box-like (a divider, padding) would draw twice, which is why the
+ * separators this look wants are absent below.
  */
 const subagentClassNames: DawnActivityClassNames = {
   // letter-spacing — inherited by every part, same as the plan card.
@@ -32,11 +31,12 @@ const subagentClassNames: DawnActivityClassNames = {
   // text-transform + letter-spacing — "Plan"/"Tools" as small-caps eyebrows,
   // the one piece of structure the card exposes above the lists.
   sectionLabel: "uppercase tracking-[0.08em]",
-  // width + text-align — fixed glyph column, shared by the plan checklist and
-  // the tools list. No display utility: a flex item of `__item` is blockified,
-  // so `inline-*` would be inert.
-  itemGlyph: "w-4 text-center",
-  // line-height.
+  // width + flex-shrink + text-align — fixed glyph column across both lists.
+  // `shrink-0` keeps the glyph from absorbing overflow that belongs to the
+  // label; no display utility, since a flex item is blockified anyway.
+  itemGlyph: "w-4 shrink-0 text-center",
+  // line-height — tool names and todos share one rhythm; 20px on 13px text
+  // stays readable when a long tool name wraps.
   itemLabel: "leading-5",
   // white-space — "completed"/"incomplete" stay on one line.
   itemStatus: "whitespace-nowrap",
