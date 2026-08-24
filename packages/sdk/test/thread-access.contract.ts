@@ -36,6 +36,7 @@ type _Operation = Expect<
     | "run.stream"
     | "run.wait"
     | "run.resume"
+    | "thread.attach"
     | "run.agui"
   >
 >
