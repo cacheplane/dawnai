@@ -25,7 +25,7 @@ describe("proxy allowlist", () => {
     )
   })
 
-  test("rejects the right method on an allowed path", () => {
+  test("rejects the wrong method on an allowed path", () => {
     expect(resolveProxyTarget("POST", ["memory", "candidates"], BASE)).toBeNull()
     expect(resolveProxyTarget("DELETE", ["threads", "t1", "state"], BASE)).toBeNull()
   })
@@ -39,6 +39,7 @@ describe("proxy allowlist", () => {
   })
 
   test("rejects a segment that tries to climb out of the allowed path", () => {
+    expect(resolveProxyTarget("GET", ["threads", ".", "state"], BASE)).toBeNull()
     expect(resolveProxyTarget("GET", ["threads", "..", "state"], BASE)).toBeNull()
     expect(resolveProxyTarget("GET", ["threads", "a/b", "state"], BASE)).toBeNull()
     expect(resolveProxyTarget("GET", ["threads", "", "state"], BASE)).toBeNull()
@@ -47,6 +48,12 @@ describe("proxy allowlist", () => {
   test("encodes the id rather than letting it forge a path", () => {
     expect(resolveProxyTarget("GET", ["threads", "a b", "state"], BASE)).toBe(
       "http://localhost:3002/threads/a%20b/state",
+    )
+    expect(resolveProxyTarget("GET", ["threads", "a?b", "state"], BASE)).toBe(
+      "http://localhost:3002/threads/a%3Fb/state",
+    )
+    expect(resolveProxyTarget("GET", ["threads", "a#b", "state"], BASE)).toBe(
+      "http://localhost:3002/threads/a%23b/state",
     )
   })
 

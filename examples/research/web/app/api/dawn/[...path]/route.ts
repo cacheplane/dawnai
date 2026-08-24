@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { resolveProxyTarget } from "@/app/lib/proxy-allowlist"
+import { resolveProxyTarget } from "../../../lib/proxy-allowlist"
 
 // Same-origin proxy to the Dawn server. The dev server sets no CORS headers,
 // so the browser cannot read it directly. Every routing decision is in
@@ -8,8 +8,15 @@ import { resolveProxyTarget } from "@/app/lib/proxy-allowlist"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const SERVER_URL = process.env.DAWN_SERVER_URL ?? "http://localhost:3002"
+// Matches app/api/copilotkit/route.ts and the dev server's own bind address.
+// `localhost` is not equivalent: on a dual-stack box it resolves `::1` first,
+// which either pays a failed-connect retry or times out outright if `::1` is
+// blackholed, while `127.0.0.1` (what the dev server actually binds) works
+// immediately.
+const SERVER_URL = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
 
+// Next also routes HEAD requests into the GET export; the allowlist has no
+// HEAD entries, so those deliberately fall through to the 404 branch below.
 async function forward(
   request: NextRequest,
   context: { params: Promise<{ path?: string[] }> },
@@ -20,16 +27,32 @@ async function forward(
     return NextResponse.json({ error: "Not proxied" }, { status: 404 })
   }
   try {
-    const upstream = await fetch(target, { method: request.method })
+    // Every allowlisted route takes no request body, query string or auth
+    // header, so none is forwarded — widen this deliberately if you add one
+    // that does. `signal` propagates a client abort so it stops holding an
+    // upstream socket open; beyond that there is deliberately no timeout,
+    // since undici's default is enough for a localhost dev proxy.
+    const upstream = await fetch(target, { method: request.method, signal: request.signal })
+    const headers: Record<string, string> = {
+      // Every allowlisted route is volatile (candidates change on approve/
+      // reject, thread state changes as the run progresses), so default to
+      // no-store rather than let a client-facing cache serve a stale answer;
+      // `force-dynamic` above only governs Next's own caches, not this.
+      "cache-control": upstream.headers.get("cache-control") ?? "no-store",
+    }
+    const contentType = upstream.headers.get("content-type")
+    if (contentType !== null) {
+      headers["content-type"] = contentType
+    }
     // Pass the body and status through untouched: the UI shows the Dawn
     // server's own error messages rather than a re-worded copy of them.
-    return new Response(upstream.body, {
-      headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-      status: upstream.status,
-    })
+    return new Response(upstream.body, { headers, status: upstream.status })
   } catch (error) {
+    // `fetch failed` (the error's own message) never says why; the useful
+    // part of an undici network failure — ECONNREFUSED, etc. — is on `cause`.
+    const cause = error instanceof Error && error.cause !== undefined ? error.cause : error
     return NextResponse.json(
-      { error: `Cannot reach the Dawn server at ${SERVER_URL}: ${String(error)}` },
+      { error: `Cannot reach the Dawn server at ${SERVER_URL}: ${String(cause)}` },
       { status: 502 },
     )
   }

@@ -8,9 +8,9 @@
  * the point of the route, not an optimization over it.
  *
  * The decision lives here, as a pure function, rather than inside the route
- * handler: no test in this repo imports a Next route module, and the one
- * precedent that exists boots a standalone server behind an env gate. A pure
- * module is testable the way `transcript.ts` and `thread-source.ts` are.
+ * handler: a pure module is testable the way `transcript.ts` and
+ * `thread-source.ts` are, and it keeps the policy separate from the fetch
+ * plumbing in `route.ts`.
  */
 
 /** A single allowed route: an exact method plus a fixed-arity path shape. */
