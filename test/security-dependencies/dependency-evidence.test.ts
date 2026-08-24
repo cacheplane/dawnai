@@ -619,7 +619,7 @@ describe("dependency evidence CLI", () => {
 			repository: "cacheplane/dawnai",
 			sourceSha,
 		});
-		expect(receipt.dependabot.open).toHaveLength(27);
+		expect(receipt.dependabot.open).toHaveLength(59);
 		expect(receipt.publication.npm.requestCount).toBe(63);
 
 		const wrongFixture = structuredClone(fixture);
@@ -856,7 +856,7 @@ describe("dependency evidence CLI", () => {
 						"--source-sha",
 						sourceSha,
 						"--expected-default-sha",
-						"8398c908844cf961f1d64e575c8b9a0000923f41",
+						"fb52e062638e1e09cbdc8b9836ee5b483acde058",
 						"--current-version",
 						"0.8.21",
 						"--target-version",
@@ -864,7 +864,7 @@ describe("dependency evidence CLI", () => {
 						"--expected-identities",
 						resolve(testDir, "fixtures/dependabot-baseline.json"),
 						"--expected-open",
-						"122,123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201",
+						"122,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236",
 						"--output",
 						resolve(temporary, "baseline.json"),
 					],
@@ -906,7 +906,7 @@ describe("dependency evidence CLI", () => {
 			const output = resolve(temporary, "reconciliation.json");
 			await writeFile(baselineReceipt, '{"baseline":true}\n');
 			await writeFile(auditReceipt, '{"audit":true}\n');
-			const reviewedBaseSha = "8398c908844cf961f1d64e575c8b9a0000923f41";
+			const reviewedBaseSha = "fb52e062638e1e09cbdc8b9836ee5b483acde058";
 			const reviewedHeadSha = "b".repeat(40);
 			const mergeSha = "c".repeat(40);
 			const observationHeadSha = "d".repeat(40);

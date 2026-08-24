@@ -41,10 +41,12 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDir, "../..");
 const fixturePath = resolve(testDir, "fixtures/dependabot-baseline.json");
 const execFileAsync = promisify(execFile);
-const defaultSha = "8398c908844cf961f1d64e575c8b9a0000923f41";
+const defaultSha = "fb52e062638e1e09cbdc8b9836ee5b483acde058";
 const expectedNumbers = [
-	122, 123, 124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180,
-	181, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201,
+	122, 124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180, 181,
+	191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 204, 205, 206, 207,
+	208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222,
+	223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236,
 ];
 
 const sharedSchemaMutationCorpus = [
@@ -168,7 +170,7 @@ describe("shared reconciliation input schemas", () => {
 });
 
 describe("Dependabot baseline identities", () => {
-	it("loads the exact complete 27-alert fixture", async () => {
+	it("loads the exact complete 59-alert fixture", async () => {
 		const fixture = await loadDependabotExpectation(fixturePath, {
 			root: repositoryRoot,
 		});
@@ -178,7 +180,7 @@ describe("Dependabot baseline identities", () => {
 		);
 		expect(
 			new Set(fixture.open.map((alert: any) => alert.number)),
-		).toHaveLength(27);
+		).toHaveLength(59);
 		expect(fixture.open.every((alert: any) => alert.dismissal === null)).toBe(
 			true,
 		);
