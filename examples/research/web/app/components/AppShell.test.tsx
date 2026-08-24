@@ -214,7 +214,7 @@ beforeEach(() => {
   mocks.agent = makeAgent()
   // The default: every thread is empty, which is what the pre-existing
   // switch-reset tests below assume (the shell leaves the agent alone).
-  hydrate = vi.fn(async () => ({ messages: [], todos: [] }))
+  hydrate = vi.fn(async () => ({ messages: [], rawMessageCount: 0, todos: [] }))
   // The default: nothing is parked, which is what every pre-existing test here
   // assumes (no hydrated card, no composer block from that source).
   pendingInterrupts = vi.fn(async () => [])
@@ -286,6 +286,7 @@ describe("app shell thread-switch reset", () => {
 describe("app shell hydration", () => {
   const RESTORED: HydratedThread = {
     messages: [{ content: "what did we find?", id: "h1", role: "user" }],
+    rawMessageCount: 1,
     todos: [{ content: "Read the corpus", status: "completed" }],
   }
 
@@ -312,6 +313,7 @@ describe("app shell hydration", () => {
   test("drops a malformed plan rather than rendering it, keeping the messages", async () => {
     hydrate = vi.fn(async () => ({
       messages: RESTORED.messages,
+      rawMessageCount: RESTORED.rawMessageCount,
       // Past `hydrate.ts`'s own filter only because this test bypasses it —
       // the point is that the schema, not the mapper, is the last gate.
       todos: [{ content: "x", status: "bogus" }] as unknown as HydratedThread["todos"],
@@ -331,6 +333,31 @@ describe("app shell hydration", () => {
     expect(container.textContent).not.toContain(RESTORED_HISTORY_NOTICE)
   })
 
+  test("shouts when a non-empty checkpoint maps to nothing, instead of restoring blank", async () => {
+    // The wire-shape-drift guard. `hydrate.ts` returns empty for anything it
+    // does not recognize, so without the `rawMessageCount` comparison every
+    // conversation in the app would restore blank and look exactly like a
+    // brand-new thread — a total loss of history with green tests.
+    hydrate = vi.fn(async () => ({ messages: [], rawMessageCount: 3, todos: [] }))
+    render(undefined)
+    render("thread-a")
+    await settleHydration()
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain("Could not restore this conversation")
+    expect(alert?.textContent).toContain("its format may be newer than this app")
+    // Still nothing applied: there was nothing to apply. The row is the whole
+    // point — the transcript below it is honestly empty.
+    expect(mocks.agent.messages).toEqual([])
+  })
+
+  test("stays silent for a genuinely empty checkpoint, which is the normal new-thread case", async () => {
+    hydrate = vi.fn(async () => ({ messages: [], rawMessageCount: 0, todos: [] }))
+    render(undefined)
+    render("thread-a")
+    await settleHydration()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
   test("surfaces a failed hydrate as a run error", async () => {
     hydrate = vi.fn(async () => {
       throw new Error("Could not load this conversation (HTTP 500).")
@@ -347,7 +374,9 @@ describe("app shell hydration", () => {
     const first = deferred<HydratedThread>()
     const second = deferred<HydratedThread>()
     const answers = [first.promise, second.promise]
-    hydrate = vi.fn(() => answers.shift() ?? Promise.resolve({ messages: [], todos: [] }))
+    hydrate = vi.fn(
+      () => answers.shift() ?? Promise.resolve({ messages: [], rawMessageCount: 0, todos: [] }),
+    )
     render(undefined)
     render("thread-a")
     render("thread-b")
@@ -359,7 +388,11 @@ describe("app shell hydration", () => {
     expect(mocks.agent.messages).toEqual([])
     expect(container.textContent).not.toContain(RESTORED_HISTORY_NOTICE)
     // B's own answer still applies, so the guard is not simply refusing all.
-    second.resolve({ messages: [{ content: "b", id: "b1", role: "user" }], todos: [] })
+    second.resolve({
+      messages: [{ content: "b", id: "b1", role: "user" }],
+      rawMessageCount: 1,
+      todos: [],
+    })
     await settleHydration(second.promise)
     expect(mocks.agent.messages).toEqual([{ content: "b", id: "b1", role: "user" }])
   })
@@ -393,7 +426,11 @@ describe("app shell hydration", () => {
     swapped.messages = []
     mocks.agent = swapped
     render("thread-a")
-    pending.resolve({ messages: [{ content: "late", id: "l1", role: "user" }], todos: [] })
+    pending.resolve({
+      messages: [{ content: "late", id: "l1", role: "user" }],
+      rawMessageCount: 1,
+      todos: [],
+    })
     await settleHydration()
     expect(swapped.messages).toEqual([{ content: "late", id: "l1", role: "user" }])
     // The replacement instance was never cleared by the switch effect, so its
@@ -607,7 +644,11 @@ describe("app shell connect screen", () => {
           "Could not load this conversation (HTTP 502): Cannot reach the Dawn server at http://127.0.0.1:3002: ECONNREFUSED",
         )
       }
-      return { messages: [{ content: "recovered", id: "r1", role: "user" }], todos: [] }
+      return {
+        messages: [{ content: "recovered", id: "r1", role: "user" }],
+        rawMessageCount: 1,
+        todos: [],
+      }
     })
     render(undefined)
     render("thread-a")

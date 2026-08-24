@@ -43,11 +43,16 @@ export interface ToolCallViewProps {
 /**
  * Unwrap a tool call's arguments.
  *
- * THIS IS FOR THE LIVE AG-UI STREAM ONLY. There, args reach the browser as a
- * JSON *string* under `input` — LangGraph's own `on_tool_start` shape, which
- * `@dawn-ai/ag-ui`'s outbound layer serializes — so `parameters` arrives as
- * `{ input: '{"path":"corpus/x.md"}' }`. Unwrapping it is what keeps the card
- * from showing double-encoded JSON.
+ * THIS IS FOR THE LIVE AG-UI STREAM ONLY, where there are TWO shapes, not one
+ * (`app/lib/hydrate.ts`'s header states the same pair from the other side).
+ * The dominant `on_chat_model_end` path announces a root tool call's args as a
+ * real object; the held `on_tool_start` path carries LangGraph's own `{input}`
+ * wrapper, whose value is itself a JSON string. Either way `@dawn-ai/ag-ui`'s
+ * outbound layer serializes the whole thing to the JSON string this card
+ * receives, so after the caller parses it `parameters` is either the args
+ * object directly or `{ input: '{"path":"corpus/x.md"}' }`. The `input` branch
+ * below fires on the second and passes the first straight through; unwrapping
+ * is what keeps the card from showing double-encoded JSON.
  *
  * The OTHER wire format this app reads, `GET /threads/:id/state`, does NOT look
  * like this: a checkpoint's `tool_calls[].args` is already a real object.

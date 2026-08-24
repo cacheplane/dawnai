@@ -91,6 +91,23 @@ export function HydratedInterrupts({
     // unmounting and remounting them — which would flicker them and drop focus
     // to <body> in the middle of a decision.
     setParked([])
+    // `resolvingId` goes with them, and this is a bug fix rather than
+    // tidiness. Park in thread A, click Allow, then switch to B before the
+    // resume settles — A's `.finally()` has not fired, so `resolvingId` still
+    // holds A's interrupt id while B's gates are being read. Two things go
+    // wrong with a stale one, both because ids are not unique across threads
+    // (the server mints them from the tool call, and the same gated tool in
+    // two conversations gets the same id):
+    //
+    // - while the run is still in flight, rule 2 below keeps ONLY the entry
+    //   matching `resolvingId` — so a B gate that happens to share A's id
+    //   leaks onto the screen as "the card you just answered", which is the
+    //   one thing rule 2 exists to prevent;
+    // - and it renders dimmed and unclickable (`isResolving` below), so B's
+    //   gate cannot be answered until A's `.finally()` eventually fires.
+    //
+    // Clearing here closes both windows.
+    setResolvingId(null)
     if (threadId === undefined) return
     const controller = new AbortController()
     void load(controller.signal)

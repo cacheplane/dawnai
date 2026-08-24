@@ -109,6 +109,7 @@ describe("local thread source hydration", () => {
     const source = createLocalThreadSource(memoryStorage(), fetchFn)
     await expect(source.hydrate("thread-1")).resolves.toEqual({
       messages: [{ content: "hello", id: "h1", role: "user" }],
+      rawMessageCount: 1,
       todos: [{ content: "Read the corpus", status: "completed" }],
     })
     expect(fetchFn).toHaveBeenCalledWith("/api/dawn/threads/thread-1/state")
@@ -127,7 +128,11 @@ describe("local thread source hydration", () => {
         error: { kind: "request_error", message: "No checkpoint found for thread" },
       }),
     )
-    await expect(source.hydrate("never-run")).resolves.toEqual({ messages: [], todos: [] })
+    await expect(source.hydrate("never-run")).resolves.toEqual({
+      messages: [],
+      rawMessageCount: 0,
+      todos: [],
+    })
   })
 
   test("hands back a fresh empty result each time, never a shared one", async () => {

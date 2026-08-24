@@ -220,7 +220,10 @@ export function createLocalThreadSource(
       // the rail but has never run, and a freshly created thread is in that
       // second state until its first turn finishes. A fresh literal per call,
       // never a shared constant — the caller owns what it gets back.
-      if (response.status === 404) return { messages: [], todos: [] }
+      // `rawMessageCount: 0` is load-bearing, not filler: `AppShell` reads it
+      // to tell a thread with no history apart from one whose history it could
+      // not read, and a 404 is emphatically the first of those.
+      if (response.status === 404) return { messages: [], rawMessageCount: 0, todos: [] }
       if (!response.ok) {
         const detail = await failureDetail(response)
         throw new Error(
@@ -239,11 +242,9 @@ export function createLocalThreadSource(
       // that has never run or whose route is gone, a 403 the proxy refusing a
       // path outside its allowlist — and the ordinary answer for a healthy
       // thread that simply is not parked is a 200 with an empty array, which
-      // this deliberately cannot be distinguished from. There is nothing the
-      // reader could do with any of it: the worst case is that a prompt which
-      // may well not exist is not restored, and the transcript's own restore
-      // already reports a server that is genuinely unreachable, in a message
-      // about something the reader can actually see.
+      // this deliberately cannot be distinguished from. So this is surface 4,
+      // deliberate silence: see the error-surface note at the top of
+      // `app/components/AppShell.tsx`.
       if (!response.ok) return []
       return readParkedInterrupts(await response.json())
     },

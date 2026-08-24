@@ -292,7 +292,12 @@ the agent surface out of reach of a template every Dawn developer copies.
 <Callout title="Allowlist before you extend">
   Running, resuming, and cancelling a thread are deliberately absent from the
   list; those go through CopilotKit's own runtime route. Add a route to the
-  allowlist only when the browser genuinely needs it, and prefer reads.
+  allowlist only when the browser genuinely needs it, and prefer reads. Note
+  what the allowlist is not: the proxy forwards with no authentication and the
+  example installs no `threadAccess` policy, so it bounds which routes are
+  reachable, not who may reach them — anything that can reach the Next app can
+  read any thread's transcript by guessing its id. Add a `threadAccess` policy
+  on the Dawn side before this leaves your own machine.
 </Callout>
 
 `app/components/MemoryPanel.tsx` renders the candidates in the thread rail with

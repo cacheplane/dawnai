@@ -339,12 +339,20 @@ export function MemoryPanel() {
     try {
       const response = await fetch("/api/dawn/memory/candidates", signal ? { signal } : {})
       // 502 is the proxy's one dedicated "I cannot reach Dawn" signal (see
-      // `route.ts`), and `AppShell`'s probe is already watching for exactly
-      // that — it is about to replace this whole shell with `ConnectScreen`.
-      // A second "couldn't load" line in the rail for the same fact would be
-      // a competing error surface for a condition another component owns, so
-      // this one stays silent and leaves the list as it was.
-      if (response.status === 502) return
+      // `route.ts`), and it belongs to another surface: the connect screen
+      // owns this during "checking" and after a failed hydrate, and while the
+      // shell is up a run failure is the surface. Either way a second
+      // "couldn't load" line in the rail would compete. See the error-surface
+      // note at the top of `AppShell.tsx`.
+      //
+      // The list is left as it was — but the notice is CLEARED, because a
+      // stale "couldn't load" from an earlier non-502 failure would otherwise
+      // sit under a list this read just chose not to touch, saying the last
+      // thing that went wrong rather than what is true now.
+      if (response.status === 502) {
+        if (isCurrent()) setLoadFailure(null)
+        return
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const body: unknown = await response.json()
       if (!isCurrent()) return

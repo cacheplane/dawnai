@@ -54,6 +54,104 @@ const STATE = {
   },
 }
 
+/**
+ * The SAME conversation as `STATE`, in the complete shape a live checkpoint DB
+ * actually stores: every `kwargs` key LangChain writes, not just the ones this
+ * mapper reads. Real reproduction, trimmed only of usage numbers.
+ */
+const FULL_STATE = {
+  values: {
+    context: "",
+    messages: [
+      {
+        lc: 1,
+        type: "constructor",
+        id: ["langchain_core", "messages", "HumanMessage"],
+        kwargs: {
+          content: "What are common agent architectures?",
+          additional_kwargs: {},
+          response_metadata: {},
+          id: "h-real-1",
+        },
+      },
+      {
+        lc: 1,
+        type: "constructor",
+        id: ["langchain_core", "messages", "AIMessageChunk"],
+        kwargs: {
+          content: "",
+          additional_kwargs: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_searchCorpus_0_0",
+                type: "function",
+                function: {
+                  name: "searchCorpus",
+                  arguments: '{"query":"agent architectures"}',
+                },
+              },
+            ],
+          },
+          response_metadata: { model_provider: "openai" },
+          tool_call_chunks: [
+            {
+              name: "searchCorpus",
+              args: '{"query":"agent architectures"}',
+              id: "call_searchCorpus_0_0",
+              index: 0,
+              type: "tool_call_chunk",
+            },
+          ],
+          tool_calls: [
+            {
+              name: "searchCorpus",
+              args: { query: "agent architectures" },
+              id: "call_searchCorpus_0_0",
+              type: "tool_call",
+            },
+          ],
+          id: "chatcmpl-ewwyWCZa7FNPznQA",
+          invalid_tool_calls: [],
+        },
+      },
+      {
+        lc: 1,
+        type: "constructor",
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: {
+          content: '[{"path":"corpus/agent-architectures.md","score":2}]',
+          tool_call_id: "call_searchCorpus_0_0",
+          name: "searchCorpus",
+          additional_kwargs: {},
+          response_metadata: {},
+          status: "success",
+          metadata: {},
+          id: "t-real-1",
+        },
+      },
+      {
+        lc: 1,
+        type: "constructor",
+        id: ["langchain_core", "messages", "AIMessageChunk"],
+        kwargs: {
+          content: "ReAct and plan-and-execute are common.",
+          additional_kwargs: {},
+          response_metadata: { model_provider: "openai", finish_reason: "stop" },
+          tool_call_chunks: [],
+          tool_calls: [],
+          id: "chatcmpl-ewwyWCZa7FNPznQB",
+          invalid_tool_calls: [],
+        },
+      },
+    ],
+    todos: [
+      { content: "Search the corpus", status: "completed" },
+      { content: "Read the best sources", status: "in_progress" },
+    ],
+  },
+}
+
 describe("hydrateThreadState", () => {
   test("maps each LangChain envelope to its transcript role", () => {
     const { messages } = hydrateThreadState(STATE)
@@ -231,9 +329,13 @@ describe("hydrateThreadState", () => {
   })
 
   test("degrades to empty rather than throwing on a malformed payload", () => {
-    expect(hydrateThreadState(null)).toEqual({ messages: [], todos: [] })
-    expect(hydrateThreadState({})).toEqual({ messages: [], todos: [] })
-    expect(hydrateThreadState({ values: {} })).toEqual({ messages: [], todos: [] })
+    expect(hydrateThreadState(null)).toEqual({ messages: [], rawMessageCount: 0, todos: [] })
+    expect(hydrateThreadState({})).toEqual({ messages: [], rawMessageCount: 0, todos: [] })
+    expect(hydrateThreadState({ values: {} })).toEqual({
+      messages: [],
+      rawMessageCount: 0,
+      todos: [],
+    })
   })
 
   test("the empty result is a fresh array each call, since AbstractAgent mutates messages in place", () => {
@@ -323,5 +425,84 @@ describe("hydrateThreadState", () => {
       },
     })
     expect(todos).toEqual([{ content: "valid", status: "pending" }])
+  })
+
+  test("counts raw entries, including the ones it drops", () => {
+    // The denominator `AppShell` uses to tell "this thread never ran" apart
+    // from "this thread has history nothing here could read". Four entries in,
+    // one mapped.
+    const { messages, rawMessageCount } = hydrateThreadState({
+      values: {
+        messages: [
+          null,
+          "nonsense",
+          { lc: 1, type: "constructor", id: ["x", "y", "SystemMessage"], kwargs: { content: "s" } },
+          { lc: 1, type: "constructor", id: ["x", "y", "HumanMessage"], kwargs: { content: "hi" } },
+        ],
+      },
+    })
+    expect(messages).toHaveLength(1)
+    expect(rawMessageCount).toBe(4)
+  })
+
+  test("counts a not_implemented envelope even though nothing can render it", () => {
+    // LangChain serializes a class it cannot reconstruct as `type:
+    // "not_implemented"` with no `kwargs` at all. Dropping it is right; NOT
+    // counting it would make a checkpoint full of them look like a thread that
+    // never ran, which is the exact silence `rawMessageCount` exists to break.
+    const { messages, rawMessageCount } = hydrateThreadState({
+      values: {
+        messages: [
+          { lc: 1, type: "not_implemented", id: ["langchain_core", "messages", "FunctionMessage"] },
+        ],
+      },
+    })
+    expect(messages).toEqual([])
+    expect(rawMessageCount).toBe(1)
+  })
+
+  test("a genuinely empty checkpoint counts zero, so it stays indistinguishable from a new thread", () => {
+    expect(hydrateThreadState({ values: { messages: [] } }).rawMessageCount).toBe(0)
+    expect(hydrateThreadState({ values: { messages: "not an array" } }).rawMessageCount).toBe(0)
+  })
+
+  test("the full serialization shape maps identically to the trimmed fixture", () => {
+    // `STATE` above is hand-trimmed to the keys this file reads, which is
+    // exactly how a mapper passes its own tests while missing the real wire.
+    // `FULL_STATE` is a real body captured from a live checkpoint DB — every
+    // `kwargs` key LangChain actually writes, trimmed only of usage numbers —
+    // so if a future refactor starts depending on a key's absence, or a full
+    // envelope stops matching, this reds.
+    const trimmed = hydrateThreadState(STATE).messages
+    const full = hydrateThreadState(FULL_STATE).messages
+    expect(full).toHaveLength(trimmed.length)
+    expect(hydrateThreadState(FULL_STATE).rawMessageCount).toBe(
+      hydrateThreadState(STATE).rawMessageCount,
+    )
+    // Ids are the one thing that legitimately differs: the real capture
+    // carries the provider's own `chatcmpl-…` id where the trimmed fixture
+    // says "m2". Everything else must be byte-identical.
+    const withoutIds = (messages: readonly unknown[]) =>
+      messages.map((message) => {
+        const { id: _id, ...rest } = message as Record<string, unknown>
+        return rest
+      })
+    expect(withoutIds(full)).toEqual(withoutIds(trimmed))
+    // And the ids that ARE there are the real ones, not minted stand-ins.
+    expect(full.map((message) => message.id)).toEqual([
+      "h-real-1",
+      "chatcmpl-ewwyWCZa7FNPznQA",
+      "t-real-1",
+      "chatcmpl-ewwyWCZa7FNPznQB",
+    ])
+  })
+
+  test("the full fixture still feeds buildTranscriptItems as a paired tool card", () => {
+    const items = buildTranscriptItems(hydrateThreadState(FULL_STATE).messages)
+    expect(items.map((item) => item.kind)).toEqual(["user", "toolCall", "assistant"])
+    expect(items[1]).toMatchObject({
+      kind: "toolCall",
+      toolResult: { toolCallId: "call_searchCorpus_0_0" },
+    })
   })
 })

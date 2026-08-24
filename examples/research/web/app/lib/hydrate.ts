@@ -24,6 +24,16 @@ import type { TranscriptMessage } from "./transcript.js"
  * Everything degrades to empty rather than throwing. A thread whose checkpoint
  * this cannot read should show an empty transcript you can talk to, never a
  * blank screen.
+ *
+ * That degradation has one failure mode worth naming, which is why
+ * `rawMessageCount` exists: if the wire shape ever drifts — LangChain renames a
+ * class, the serialization gains a wrapper — every branch below misses, this
+ * returns no messages, and `AppShell` cannot tell that apart from a thread that
+ * has never run. Every conversation would restore blank and nothing would say
+ * so. `rawMessageCount` is the raw denominator that makes the difference
+ * visible: entries in `values.messages` BEFORE any filtering, so
+ * `rawMessageCount > 0` with zero mapped messages is exactly "there was history
+ * here and this file could not read it".
  */
 
 /** The checkpointed plan. Structurally `DawnPlanActivityContent["todos"]`. */
@@ -35,6 +45,13 @@ export interface HydratedTodo {
 export interface HydratedThread {
   readonly messages: readonly TranscriptMessage[]
   readonly todos: readonly HydratedTodo[]
+  /**
+   * How many entries `values.messages` held before any filtering — including
+   * the ones dropped as unrecognized. Compare it against `messages.length` to
+   * tell "this thread never ran" (0) apart from "this thread has history this
+   * file could not read" (> 0, with `messages` empty). See the file header.
+   */
+  readonly rawMessageCount: number
 }
 
 const TODO_STATUSES = new Set(["pending", "in_progress", "completed"])
@@ -114,9 +131,9 @@ function toTodos(raw: unknown): readonly HydratedTodo[] {
 }
 
 export function hydrateThreadState(state: unknown): HydratedThread {
-  if (!isRecord(state)) return { messages: [], todos: [] }
+  if (!isRecord(state)) return { messages: [], rawMessageCount: 0, todos: [] }
   const values = state.values
-  if (!isRecord(values)) return { messages: [], todos: [] }
+  if (!isRecord(values)) return { messages: [], rawMessageCount: 0, todos: [] }
 
   // Seeded per call (not module-level): ids only need to be unique within one
   // hydration. A per-call counter makes them stable across repeat hydrations
@@ -173,5 +190,5 @@ export function hydrateThreadState(state: unknown): HydratedThread {
     // them on the live path too.
   }
 
-  return { messages, todos: toTodos(values.todos) }
+  return { messages, rawMessageCount: rawMessages.length, todos: toTodos(values.todos) }
 }

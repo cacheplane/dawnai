@@ -77,7 +77,7 @@ function answering(...answers: ParkedInterrupt[][]) {
  */
 const source: ThreadSource = {
   create: () => ({ id: "unused", lastActiveAt: 0 }),
-  hydrate: async () => ({ messages: [], todos: [] }),
+  hydrate: async () => ({ messages: [], rawMessageCount: 0, todos: [] }),
   list: () => [],
   pendingInterrupts: (id, signal) => pendingInterrupts(id, signal),
   touch: () => {},
@@ -332,6 +332,59 @@ describe("HydratedInterrupts", () => {
     await settle()
     expect(onError).toHaveBeenCalledTimes(1)
     expect(String(onError.mock.calls[0]?.[0])).toContain("not addressed")
+  })
+
+  /**
+   * The other half of the switch-mid-decision story: `resolvingId` has to be
+   * dropped at the thread boundary too, not just `parked`.
+   *
+   * Interrupt ids are NOT unique across threads — the server mints them from
+   * the tool call, so the same gated tool in two conversations gets the same
+   * id. Answer A's gate, switch to B before the resume settles, and a stale
+   * `resolvingId` makes B's own gate match the "the card you just answered"
+   * escape hatch in rule 2, painting it as an answered card in a run the user
+   * never started here.
+   */
+  test("drops the resolving id at the thread boundary, so the next thread's gates cannot borrow it", async () => {
+    const SAME_ID_IN_B: ParkedInterrupt = {
+      interruptId: "perm-1",
+      metadata: {
+        kind: "tool",
+        detail: { toolName: "migrateDb", argsPreview: "{}", suggestedPattern: "migrateDb" },
+      },
+    }
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mocks.runAgent = vi.fn(async () => {
+      mocks.agent.isRunning = true
+      await held
+      mocks.agent.isRunning = false
+      return { newMessages: [], result: undefined }
+    })
+    pendingInterrupts = vi.fn(async (id: string) => (id === "thread-a" ? [PARKED] : [SAME_ID_IN_B]))
+    render("thread-a")
+    await settle()
+    act(() => {
+      buttonNamed("Allow once").click()
+    })
+    await settle()
+    // The switch, with A's resume still in flight.
+    render("thread-b")
+    await settle()
+    // The re-render `useAgent` would give us; `isRunning` is still true.
+    render("thread-b")
+    expect(mocks.agent.isRunning).toBe(true)
+    // Nothing at all: a run this component did not start is in flight, and
+    // there is no answered card of B's to keep. Without the clear, B's gate
+    // borrows A's resolving id and paints.
+    expect(cards()).toHaveLength(0)
+    expect(container.textContent).not.toContain("migrateDb")
+    act(() => {
+      release()
+    })
+    await settle()
   })
 
   /**

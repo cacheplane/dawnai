@@ -136,7 +136,8 @@ what it puts out of reach.
 `pnpm --filter @dawn-example/research-web test` runs 15 test files: the proxy route and
 its allowlist, the thread source, the checkpoint hydrator, the transcript mapping, the
 renderer registry, the thread rail, the composer, the connect screen, the memory panel,
-the tool-call card, both permission surfaces, and the shell's thread-switch and
+the tool-call card, all three permission surfaces (`PermissionPrompt`,
+`PermissionInterrupt`, `HydratedInterrupts`), and the shell's thread-switch and
 server-probe behaviour. `typecheck` and `build` prove the CopilotKit/AG-UI wiring
 compiles. The activity cards themselves are tested in `@dawn-ai/ag-ui`.
 
@@ -158,8 +159,21 @@ been exercised in this repo; those paths are covered by unit tests only.
   calls and results, and the plan. Subagent activity cards from earlier runs are not
   saved and do not return.
 - **Memory review is candidates only** — see above. No browsing, searching, or editing.
+- **A connection loss costs you your draft.** When a probe finds the Dawn server down,
+  the connect screen replaces the whole shell — which unmounts the composer, so anything
+  typed but not sent is gone when the server comes back.
 
 ## Security caveat
 
 Same as the server: tools run against the workspace with real network and filesystem
 access as configured. Do not point untrusted users at this example.
+
+The proxy adds a second exposure, and the allowlist does not close it. `/api/dawn/[...path]`
+is same-origin and forwards to Dawn with **no authentication of any kind**, and this
+example installs no `threadAccess` policy — so anything that can reach this Next app can
+read any thread's full checkpoint transcript by guessing its id, and can permanently
+delete memory candidates through `/reject`. The allowlist bounds WHICH routes are
+reachable, not WHO may reach them: it is a blast-radius limit, not an access control.
+The fix belongs on the Dawn side — a `threadAccess` policy on the server, so a request
+for someone else's thread is refused where the data lives rather than in front of it.
+Until that is in place, run this only on a trusted machine you are the sole user of.

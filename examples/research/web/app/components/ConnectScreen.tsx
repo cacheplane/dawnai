@@ -32,12 +32,9 @@ export const CONNECT_SCREEN_HEADING = "Can’t reach the Dawn server"
  * Without this, the likeliest first run of this example — open the web app
  * before the agent server — showed an empty workbench and, on send, a run
  * error row that names a CopilotKit error code, not "start the server". This
- * replaces the whole shell (see `AppShell`) rather than living inside the
- * transcript: `RunError` stays for a transient failure mid-conversation,
- * where the conversation above it is still real. Here there is no
- * conversation to show — nothing in the shell works — so the guidance gets
- * the full screen instead of competing with a rail and an empty transcript
- * for attention.
+ * is surface 1 — see the error-surface note at the top of `AppShell.tsx` for
+ * why it replaces the whole shell instead of sharing the transcript with the
+ * `RunError` row.
  *
  * Pure props, no CopilotKit import: `AppShell.test.tsx` covers the polling
  * predicate against a fake `fetch`; this file's own test renders it

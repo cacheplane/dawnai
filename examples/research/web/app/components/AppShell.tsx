@@ -13,6 +13,34 @@ import { ThreadRail, UNTITLED_THREAD_LABEL } from "./ThreadRail"
 import { Transcript } from "./Transcript"
 
 /**
+ * THE ERROR-SURFACE NOTE. Four surfaces can report a failure in this app, and
+ * they are stated once here so the sites that implement them can cite this
+ * instead of each re-arguing why they are not the others.
+ *
+ * 1. `ConnectScreen` — the server is KNOWN to be down. Two ways to learn that:
+ *    a probe through the proxy came back 502 (`probeDawnServer`), or a real
+ *    hydrate hit the same dead proxy first (`isProxyUnreachableError` in
+ *    `reportHydrateFailure`). It replaces the entire shell, because nothing in
+ *    the shell works without a server.
+ * 2. The `RunError` row inside `Transcript` — something failed while the shell
+ *    is UP and there is a conversation on screen to attach it to: a run
+ *    (`RUN_ERROR_TITLES`, via the `copilotkit.subscribe` seam below), a resume,
+ *    or a restore that failed for a reason other than an unreachable server.
+ *    This is also where a restore that read NOTHING out of a non-empty
+ *    checkpoint lands (see `applyRestored`).
+ * 3. The memory panel's quiet muted line — `MemoryPanel`'s own candidate read
+ *    failing for a reason that is NOT a 502. A 502 there is surface 1's fact,
+ *    so the panel stays silent for it rather than competing.
+ * 4. Silence, deliberately — a hydrate 404 (a thread that has never run has no
+ *    checkpoint, which is not an error) and `HydratedInterrupts`' own fetch
+ *    failures (nothing the reader could do, and the transcript's restore
+ *    already reports a genuinely unreachable server).
+ *
+ * The rule that generates all four: report a fact once, on the surface that
+ * owns it, at the size of the thing that broke.
+ */
+
+/**
  * The default `api/copilotkit/route.ts` and `api/dawn/[...path]/route.ts` fall
  * back to when `DAWN_SERVER_URL` is unset. Those two are the SHAREABLE copies
  * — one source, read from the env at request time on the server. This one is
@@ -231,7 +259,12 @@ export function AppShell({
   // wrong predicate) could never un-latch from "error" without a remount —
   // this probe can, because it is ours to re-run. Polls only while "down":
   // no interval running while "checking" (the initial probe owns that) or
-  // "up" (nothing to watch for).
+  // "up". That last one is a scope choice, not an absence of things to
+  // watch: a server that dies mid-session is NOT noticed by this poll, and
+  // the surface for it is a failed run rather than the connect screen (see
+  // the error-surface note at the top of this file). Polling a healthy
+  // server forever to pre-empt a failure the next send reports anyway is
+  // not worth the request.
   useEffect(() => {
     if (serverStatus !== "down") return
     const id = setInterval(runProbe, SERVER_PROBE_INTERVAL_MS)
@@ -390,10 +423,13 @@ export function AppShell({
     }
     if (activeThreadId === undefined || threadSource === null) return
 
-    // Captured, not read from the ref later: this is the instance whose
-    // messages and interrupts were just cleared, and telling it apart from a
-    // replacement is what makes the "user typed ahead" check below sound.
-    const clearedAgent = agent
+    // Captured, not read from the ref later: this is the instance this
+    // hydrate was issued against, and telling it apart from a replacement is
+    // what makes the "user typed ahead" check below sound. Named for the
+    // hydrate rather than the clear because only the thread-changed path
+    // above actually cleared it — a nonce-driven retry captures the same
+    // instance with everything still on it.
+    const hydratingAgent = agent
     const hydratingThreadId = activeThreadId
 
     // Staleness is checked against the ref, NOT against a flag flipped in the
@@ -404,20 +440,51 @@ export function AppShell({
     // history must not be painted into thread B.
     const isStale = () => renderedThreadIdRef.current !== hydratingThreadId
 
+    // NO `isMountedRef` guard in these two continuations, unlike the probe
+    // above and `MemoryPanel`'s read, and the difference is deliberate: those
+    // two write React state and re-arm their flag for StrictMode, while these
+    // are keyed off `isStale()` — a ref that only moves on a real thread
+    // switch — and write mostly onto the agent, which outlives this component.
+    // A late `setRunError` on an unmounted shell is a no-op under React 19.
     const applyRestored = (thread: HydratedThread) => {
       if (isStale()) return
       const messages = withRestoredPlan(thread, hydratingThreadId)
-      // An empty result is the normal answer for a thread that has never run,
-      // so it is silent: no error row, and no `setMessages` either, since the
-      // clear above already left the transcript empty.
-      if (messages.length === 0) return
+      if (messages.length === 0) {
+        // Nothing mapped. Two very different situations, and `hydrate.ts`'s
+        // `rawMessageCount` is the only thing that tells them apart.
+        //
+        // The checkpoint was genuinely empty (a thread that has never run,
+        // whose `/state` 404s or answers with no messages): the normal case,
+        // and silent — no error row, and no `setMessages` either, since the
+        // clear above already left the transcript empty.
+        //
+        // The checkpoint HAD entries and none of them survived the mapper:
+        // that is a wire-shape drift, and it would otherwise restore every
+        // conversation in the app blank and indistinguishable from a new one.
+        // Loud, on the run-error row — surface 2 in the error-surface note at
+        // the top of this file, because the shell is up and this is about the
+        // conversation on screen.
+        if (thread.rawMessageCount > 0) {
+          setRunError({
+            title: "Could not restore this conversation",
+            message:
+              "Could not read this conversation's saved history — its format may be newer than this app.",
+          })
+        }
+        return
+      }
       const target = agentRef.current
       // Two different situations, and only one of them is a reason to skip.
       //
-      // Same instance with messages on it: the user got ahead of the network
-      // and typed while the history was loading. Their message is the live
-      // one and may already have a run attached — replacing the list under
-      // that run would drop it and orphan the run's appends. Skip the restore.
+      // Same instance with messages on it. Usually that means the user got
+      // ahead of the network and typed while the history was loading: their
+      // message is the live one and may already have a run attached, and
+      // replacing the list under that run would drop it and orphan the run's
+      // appends. The nonce/recovery path reaches this same guard with nothing
+      // cleared at all — the messages are simply the conversation that was
+      // already on screen — and skipping is right there too, for the same
+      // reason: what is mounted is live and the restore has nothing to add.
+      // Either way, skip.
       //
       // A DIFFERENT instance (`useAgent` swapped the provisional agent for the
       // real one mid-flight): whatever it holds was never cleared by this
@@ -426,8 +493,8 @@ export function AppShell({
       // leftovers too, and a parked interrupt from the abandoned instance
       // makes the next run throw, so they get the same clear the switch gave
       // the original.
-      if (target === clearedAgent && target.messages.length > 0) return
-      if (target !== clearedAgent) target.pendingInterrupts = []
+      if (target === hydratingAgent && target.messages.length > 0) return
+      if (target !== hydratingAgent) target.pendingInterrupts = []
       // `TranscriptMessage` is a deliberate supertype of AG-UI's own `Message`
       // union (see `transcript.ts`) so that either installed copy of
       // `@ag-ui/core` assigns INTO it; going the other way needs the cast. The
@@ -442,13 +509,10 @@ export function AppShell({
     const reportHydrateFailure = (error: unknown) => {
       if (isStale()) return
       if (isProxyUnreachableError(error)) {
-        // The same fact the probe exists to catch, just noticed a different
-        // way — a real hydrate hit the dead proxy before the next poll did.
-        // Flip state instead of surfacing a run-error row: `ConnectScreen`
-        // is about to replace whatever would have shown that row, so
-        // recording "could not restore this conversation" here would only
-        // ever be seen if the server never actually recovers, at which point
-        // it is a distraction from the one thing worth saying twice.
+        // The same fact the probe exists to catch, noticed a different way —
+        // a real hydrate hit the dead proxy before the next poll did. Flip
+        // state rather than surfacing a row: this is surface 1's fact, not
+        // surface 2's (see the error-surface note at the top of this file).
         setServerStatus("down")
         return
       }
