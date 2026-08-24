@@ -1115,7 +1115,7 @@ Rules:
   exact reviewed current default base and update the restored
   `dependabot-reconcile.test.ts` and `dependency-evidence.test.ts` assumptions.
   The final reviewed observation at default/main
-  `239cf18d6f16448184c44369aa3ae89e976e95df` contains 59 open alerts, including
+  `d2404dc7b138db151ae58f0b36788dfa08e2008e` contains 59 open alerts, including
   current Hono/node-server alert `#236` and Vercel-derived alerts `#204`–`#235`.
   Alert `#232` is the only identity-field change from the prior 59-record
   observation: its `tar` advisory severity is now `high`, not `medium`.

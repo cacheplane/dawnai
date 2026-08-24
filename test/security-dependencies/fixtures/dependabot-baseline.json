@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "cacheplane/dawnai",
-  "defaultSha": "239cf18d6f16448184c44369aa3ae89e976e95df",
+  "defaultSha": "d2404dc7b138db151ae58f0b36788dfa08e2008e",
   "open": [
     {"number": 122, "state": "open", "ecosystem": "npm", "package": "@ai-sdk/provider-utils", "manifest": "pnpm-lock.yaml", "relationship": "transitive", "scope": "runtime", "ghsa": "GHSA-866g-f22w-33x8", "severity": "low", "dismissal": null, "fixedAt": null, "autoDismissedAt": null, "createdAt": "2026-07-08T21:56:11Z", "updatedAt": "2026-07-08T21:56:11Z"},
     {"number": 124, "state": "open", "ecosystem": "npm", "package": "dompurify", "manifest": "pnpm-lock.yaml", "relationship": "transitive", "scope": "runtime", "ghsa": "GHSA-c2j3-45gr-mqc4", "severity": "low", "dismissal": null, "fixedAt": null, "autoDismissedAt": null, "createdAt": "2026-07-24T15:17:45Z", "updatedAt": "2026-07-24T15:17:45Z"},

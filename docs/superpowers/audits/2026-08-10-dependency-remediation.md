@@ -8,7 +8,7 @@ Nothing in those pending sections is a claim about merged `main`.
 **Repository:** `cacheplane/dawnai`
 
 **Dependency-fix commit:**
-`e80045608b22bfdd69003c9fa8fbf36d09ba057d`
+`a43b793fde96283fe55c84b570a6631857409a8a`
 (`fix(deps): refresh compatible security resolutions`)
 
 ## Scope and decision summary
@@ -39,7 +39,7 @@ The dependency strategy is:
 The canonical historical receipt is
 [`2026-08-10-dependency-remediation-baseline.json`](./2026-08-10-dependency-remediation-baseline.json).
 It was committed by
-`dd0ce9b3e9c160ca1151deb65e9edb3d216544ad` and must not be rewritten to
+`06806eb2d01d42c0044269457377376f8251024a` and must not be rewritten to
 represent a newer base.
 
 | Field | Exact value |
@@ -82,20 +82,20 @@ no-op booleans and bounded-log digests are in the canonical receipt.
 
 | Commit | Evidence or decision |
 |---|---|
-| `e5974e4431ae91e4f8bc0b23d929fe4897c2101a` | Completed the fail-closed dependency evidence controller |
-| `dd0ce9b3e9c160ca1151deb65e9edb3d216544ad` | Committed the immutable August 10 baseline receipt |
-| `3b2471c5c7469b53c1cad7e2528c4d9a384220d4` | Updated direct private-example CopilotKit owners to stable `1.68.3` |
-| `44c5c15b359bfacf821b941495145f600fc200b9` | Adopted V2 catch-all runtime handlers in both examples |
-| `9f3567e13547f71f3d2e3379849ac2956a8936ac` | Added model-free V2 transport verification |
-| `61639112ef55872fe4e3eea20ef7512662043427` | Reconciled the current working alert identity fixture before the lock fix |
-| `e3c1bb65f18d8abca714767f37e8f9bc8bba66a8` | Committed the Dawn-owned hostile-path tests and audited workflow gates against the pre-fix graph |
-| `e80045608b22bfdd69003c9fa8fbf36d09ba057d` | Applied the compatible lock refresh and minimal final policy |
-| `b3edb5c11ee32d9821f19bcc539c60101ea18fd7` | Taught the fail-closed audit reader to accept multiple installed-version findings grouped under one advisory while preserving identity, uniqueness, total, muted-record, and exit-status checks |
+| `a9b5ca46ce040a1278cefa0544666fd5e23555eb` | Completed the fail-closed dependency evidence controller |
+| `06806eb2d01d42c0044269457377376f8251024a` | Committed the immutable August 10 baseline receipt |
+| `2a3f6241fb5aad69a1cc7d316ff811cb8d8069d1` | Updated direct private-example CopilotKit owners to stable `1.68.3` |
+| `1ff8d6ae7d7b71bae3c3e65c69f9c021708a8ba6` | Adopted V2 catch-all runtime handlers in both examples |
+| `9bc5d2c149636a1f0bcce36dfcff99380fd4db1c` | Added model-free V2 transport verification |
+| `1437f26e2aec3d55460dc35ba587b6e888d38fb5` | Reconciled the current working alert identity fixture before the lock fix |
+| `3adba8505013578f9a19ac46158a671ef20b57ad` | Committed the Dawn-owned hostile-path tests and audited workflow gates against the pre-fix graph |
+| `a43b793fde96283fe55c84b570a6631857409a8a` | Applied the compatible lock refresh and minimal final policy |
+| `ae6d01b1caa5791f7b87b190b120bd9a77b8fbc0` | Taught the fail-closed audit reader to accept multiple installed-version findings grouped under one advisory while preserving identity, uniqueness, total, muted-record, and exit-status checks |
 
 ### Bounded pre-fix RED observations
 
 The exact committed pre-fix source is
-`e3c1bb65f18d8abca714767f37e8f9bc8bba66a8`. Before the dependency-fix commit,
+`3adba8505013578f9a19ac46158a671ef20b57ad`. Before the dependency-fix commit,
 the focused observations were bounded and specific:
 
 | Surface | Pre-fix bounded result | Vulnerable identity exposed |
@@ -203,7 +203,7 @@ Both modes have explicit empty `muted` arrays.
 ### Selected graph and owned controls
 
 The selected versions below are the lock state in dependency-fix commit
-`e80045608b22bfdd69003c9fa8fbf36d09ba057d`. Floors are acceptance
+`a43b793fde96283fe55c84b570a6631857409a8a`. Floors are acceptance
 invariants, not new exact-version policies.
 
 | Package/path | Patched acceptance floor | Selected identity | Real graph root | Dawn-owned control |
@@ -415,8 +415,8 @@ place.
 ## Reviewed current-base alert disposition
 
 The current-base capture is bound to default/main
-`239cf18d6f16448184c44369aa3ae89e976e95df` and source snapshot
-`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f`. It contains the complete 59-alert
+`d2404dc7b138db151ae58f0b36788dfa08e2008e` and source snapshot
+`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f`. It contains the complete 59-alert
 open set. Every record is open with `dismissal`, `fixedAt`, and
 `autoDismissedAt` all null.
 
@@ -444,12 +444,12 @@ set still has no suppressions, dismissals, or auto-dismissals.
 
 The reviewed-base receipt is
 `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`.
-It was captured at `2026-08-24T18:14:19Z` from source snapshot
-`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f` against reviewed base
-`239cf18d6f16448184c44369aa3ae89e976e95df`. Its SHA-256 is
-`5e8d8c37c62e37c14b7b8d3879fa5f249fcd7de79c0cf2648c292e1015ca26b4`;
+It was captured at `2026-08-24T19:11:29Z` from source snapshot
+`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f` against reviewed base
+`d2404dc7b138db151ae58f0b36788dfa08e2008e`. Its SHA-256 is
+`f7be43a2afb2817042a08a35ef3a5298a92eb21b9e727ef5b9c2b7c23fe75865`;
 the exact 59-record identity fixture SHA-256 is
-`9e6c7737598fe8230ddb14d07b75a96e65e9d85e1b88ac63747874feebebb0f0`.
+`bc477a099f4f5085c9fbc55c8e9a3de877717e885adc07157385f9fac28d263e`.
 The immutable August 10 receipt remains unchanged.
 
 The bounded capture re-proved Release workflow `260503756` and Publish Chart

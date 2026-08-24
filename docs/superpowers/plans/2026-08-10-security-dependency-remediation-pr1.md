@@ -34,13 +34,13 @@ Kubernetes client, required Vercel CLI 58.9.0, GitHub Actions, Dependabot, and
 immutable capture from before the CopilotKit prerequisite. Its source/default
 SHAs and finding counts are historical evidence, not current-head assertions.
 
-**Current implementation base:** The branch is rebased onto immutable main
-commit `239cf18d6f16448184c44369aa3ae89e976e95df`. The final graph/audit evidence
+**Current implementation base:** The branch is rebased onto reviewed main
+commit `d2404dc7b138db151ae58f0b36788dfa08e2008e`. The final graph/audit evidence
 and reviewed-base receipt are recaptured against that exact base.
 
 **Reviewed current-base Dependabot set:** A complete bounded read of
-default/main at `239cf18d6f16448184c44369aa3ae89e976e95df` from source snapshot
-`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f` observed these exact 59 open alerts
+default/main at `d2404dc7b138db151ae58f0b36788dfa08e2008e` from source snapshot
+`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f` observed these exact 59 open alerts
 and candidate post-remediation partition:
 
 ```text

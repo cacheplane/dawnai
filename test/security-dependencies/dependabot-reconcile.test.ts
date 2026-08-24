@@ -41,7 +41,7 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDir, "../..");
 const fixturePath = resolve(testDir, "fixtures/dependabot-baseline.json");
 const execFileAsync = promisify(execFile);
-const defaultSha = "239cf18d6f16448184c44369aa3ae89e976e95df";
+const defaultSha = "d2404dc7b138db151ae58f0b36788dfa08e2008e";
 const expectedNumbers = [
 	122, 124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180, 181,
 	191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 204, 205, 206, 207,

@@ -1,7 +1,7 @@
 {
-  "capturedAt": "2026-08-24T18:14:19Z",
+  "capturedAt": "2026-08-24T19:11:29Z",
   "dependabot": {
-    "defaultSha": "239cf18d6f16448184c44369aa3ae89e976e95df",
+    "defaultSha": "d2404dc7b138db151ae58f0b36788dfa08e2008e",
     "open": [
       {
         "autoDismissedAt": null,
@@ -956,7 +956,7 @@
       "releases": true,
       "tags": true
     },
-    "defaultSha": "239cf18d6f16448184c44369aa3ae89e976e95df",
+    "defaultSha": "d2404dc7b138db151ae58f0b36788dfa08e2008e",
     "incidents": {
       "chart": {
         "headSha": "3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb",
@@ -1033,7 +1033,7 @@
         "create-dawn-ai-app"
       ],
       "ref": "HEAD",
-      "sourceSha": "e40a503c19a3f1699cd74a0f0ee85f308e73fd2f",
+      "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f",
       "targetVersion": "0.8.22"
     },
     "npm": {
@@ -1190,7 +1190,7 @@
     },
     "repository": "cacheplane/dawnai",
     "schemaVersion": 1,
-    "sourceSha": "e40a503c19a3f1699cd74a0f0ee85f308e73fd2f",
+    "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f",
     "workflows": {
       "chart": {
         "completeRuns": 19,
@@ -1216,5 +1216,5 @@
   },
   "repository": "cacheplane/dawnai",
   "schemaVersion": 1,
-  "sourceSha": "e40a503c19a3f1699cd74a0f0ee85f308e73fd2f"
+  "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f"
 }
