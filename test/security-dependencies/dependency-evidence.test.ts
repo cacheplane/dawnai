@@ -337,7 +337,9 @@ describe("dependency audit normalization", () => {
 			"empty findings",
 			(doc: ReturnType<typeof auditDocument>) => {
 				const changed = structuredClone(doc);
-				changed.advisories["1"].findings = [];
+				const advisory = changed.advisories["1"];
+				if (advisory === undefined) throw new Error("missing audit fixture advisory");
+				advisory.findings = [];
 				return changed;
 			},
 			1,
@@ -894,7 +896,7 @@ describe("dependency evidence CLI", () => {
 						"--source-sha",
 						sourceSha,
 						"--expected-default-sha",
-						"fb52e062638e1e09cbdc8b9836ee5b483acde058",
+						"239cf18d6f16448184c44369aa3ae89e976e95df",
 						"--current-version",
 						"0.8.21",
 						"--target-version",
@@ -944,7 +946,7 @@ describe("dependency evidence CLI", () => {
 			const output = resolve(temporary, "reconciliation.json");
 			await writeFile(baselineReceipt, '{"baseline":true}\n');
 			await writeFile(auditReceipt, '{"audit":true}\n');
-			const reviewedBaseSha = "fb52e062638e1e09cbdc8b9836ee5b483acde058";
+			const reviewedBaseSha = "239cf18d6f16448184c44369aa3ae89e976e95df";
 			const reviewedHeadSha = "b".repeat(40);
 			const mergeSha = "c".repeat(40);
 			const observationHeadSha = "d".repeat(40);

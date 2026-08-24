@@ -12,7 +12,7 @@ import {
 } from "../../scripts/security/publication-containment.mjs";
 
 const sourceSha = "b1c0a99287740b3900ae1f0fb240f861b1c2878b";
-const defaultSha = "fb52e062638e1e09cbdc8b9836ee5b483acde058";
+const defaultSha = "239cf18d6f16448184c44369aa3ae89e976e95df";
 
 describe("publication containment", () => {
 	it("accepts only the complete exact containment receipt", () => {
