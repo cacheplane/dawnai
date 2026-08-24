@@ -59,7 +59,8 @@ function canonicalize(value, state, depth) {
       if (
         Object.getPrototypeOf(value) !== Array.prototype ||
         Object.keys(descriptors).some(
-          (key) => key !== "length" && !/^(?:0|[1-9][0-9]*)$/u.test(key),
+          (key) =>
+            key !== "length" && (!/^(?:0|[1-9][0-9]*)$/u.test(key) || Number(key) >= value.length),
         )
       ) {
         fail("INVALID_JSON_VALUE")

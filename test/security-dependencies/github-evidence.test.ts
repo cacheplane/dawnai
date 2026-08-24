@@ -99,6 +99,33 @@ describe("canonical evidence", () => {
 		expect(invoked).toBe(false);
 	});
 
+	it("rejects enumerable array properties outside its exact index range", () => {
+		const hostile = Object.defineProperty(["retained"], "4294967295", {
+			enumerable: true,
+			value: "dropped",
+		});
+
+		expect(() => canonicalJsonBytes(hostile)).toThrow(
+			/UNPROVABLE: INVALID_JSON_VALUE/u,
+		);
+	});
+
+	it("rejects out-of-range array accessors without invoking them", () => {
+		let invoked = false;
+		const hostile = Object.defineProperty(["retained"], "4294967295", {
+			enumerable: true,
+			get() {
+				invoked = true;
+				return "github_pat_leak";
+			},
+		});
+
+		expect(() => canonicalJsonBytes(hostile)).toThrow(
+			/UNPROVABLE: INVALID_JSON_VALUE/u,
+		);
+		expect(invoked).toBe(false);
+	});
+
 	it.each<{ value: unknown }>([
 		{ value: undefined },
 		{ value: Number.NaN },
