@@ -5,18 +5,32 @@ import {
   useRenderToolCall,
 } from "@copilotkit/react-core/v2"
 import { useEffect, useRef } from "react"
+import type { ThreadSource } from "../lib/thread-source"
 import {
   buildTranscriptItems,
   type TranscriptItem,
   type TranscriptMessage,
 } from "../lib/transcript"
 import { EmptyState } from "./EmptyState"
+import { HydratedInterrupts } from "./HydratedInterrupts"
 import { PermissionInterrupt } from "./PermissionInterrupt"
 import { RunError } from "./RunError"
 
+/**
+ * What a restore cannot bring back, said in the app rather than only in the
+ * README. Subagent cards are derived from a live event stream the server does
+ * not persist — the checkpoint holds messages, tool results and the plan, and
+ * nothing else — so the cards the user watched appear are gone for good. The
+ * wording is careful about that: new runs draw new cards, the old ones do not
+ * come back. Exported so the tests assert the string the user reads.
+ */
+export const RESTORED_HISTORY_NOTICE =
+  "Restored from this conversation's saved history. Subagent cards from earlier runs aren't saved — new ones appear as they run."
+
 export interface TranscriptProps {
   /**
-   * The active thread's id, used only as `PermissionInterrupt`'s `key`.
+   * The active thread's id. Two consumers, both about permission gates:
+   * `PermissionInterrupt`'s `key`, and `HydratedInterrupts`' fetch.
    *
    * `useInterrupt` keeps its OWN pending state: it is fed by
    * `onRunFinishedEvent` and cleared only by a *new* run, a failure, or
@@ -31,10 +45,24 @@ export interface TranscriptProps {
   readonly messages: readonly TranscriptMessage[]
   readonly isRunning: boolean
   readonly onSelectSuggestion: (message: string) => void
+  /**
+   * Whether these messages came back from the server's checkpoint rather than
+   * from a live run — the condition for the note below about what a restore
+   * cannot bring back.
+   */
+  readonly hasRestoredHistory: boolean
   /** The last run failure, or null. Owned by `AppShell`. */
   readonly runError: { readonly title: string; readonly message: string } | null
   readonly onDismissRunError: () => void
   readonly onRunError: (error: unknown) => void
+  /** Passed straight to `HydratedInterrupts` — the seam it reads parked gates from. */
+  readonly threadSource: ThreadSource | null
+  /**
+   * How many parked gates the hydrated source is showing. Reported up because
+   * `AppShell` blocks the composer on it: `agent.pendingInterrupts` is empty
+   * after a reload, so it cannot see them.
+   */
+  readonly onHydratedPendingChange: (count: number) => void
 }
 
 /**
@@ -77,9 +105,12 @@ export function Transcript({
   messages,
   isRunning,
   onSelectSuggestion,
+  hasRestoredHistory,
   runError,
   onDismissRunError,
   onRunError,
+  threadSource,
+  onHydratedPendingChange,
 }: TranscriptProps) {
   const { renderActivityMessage } = useRenderActivityMessage()
   const renderToolCall = useRenderToolCall()
@@ -176,6 +207,16 @@ export function Transcript({
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       {items.length === 0 ? <EmptyState onSelectSuggestion={onSelectSuggestion} /> : null}
       {/*
+        Rendered OUTSIDE the live region below (see `RESTORED_HISTORY_NOTICE`):
+        it is static context for what is already on screen, not an addition
+        worth announcing.
+      */}
+      {hasRestoredHistory ? (
+        <p className="mx-auto max-w-3xl px-6 pt-8 text-[12px] leading-5 text-wb-muted">
+          {RESTORED_HISTORY_NOTICE}
+        </p>
+      ) : null}
+      {/*
         The live region is the message list itself, and it is rendered in both
         states so it exists BEFORE its content changes — a region inserted at
         the same moment as its first content is unreliably announced across
@@ -191,7 +232,7 @@ export function Transcript({
         className={
           items.length === 0
             ? "mx-auto max-w-3xl px-6"
-            : "mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8"
+            : `mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 ${hasRestoredHistory ? "pt-4" : "pt-8"}`
         }
       >
         {items.map(renderItem)}
@@ -201,7 +242,29 @@ export function Transcript({
         </p>
       </div>
       <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 empty:hidden">
+        {/*
+          The two sources of permission gates, side by side and deliberately
+          both mounted. `PermissionInterrupt` shows the ones this browser
+          watched a run park on; `HydratedInterrupts` shows the ones the server
+          was already holding when the page loaded — the reload case, which
+          cannot go through `useInterrupt` at all (there is no public setter
+          for its pending state). They cannot show the same interrupt twice:
+          while a run is in flight the hydrated source shows only the card the
+          user just answered, and at rest it filters out every id in
+          `agent.pendingInterrupts` — the same set the live card renders from.
+
+          `HydratedInterrupts` takes the thread id as a PROP rather than as its
+          `key`: its own effect keys on that id, clears the previous thread's
+          list and re-asks the server, so a remount would only throw away the
+          answer it is about to fetch again.
+        */}
         <PermissionInterrupt key={threadKey} onError={onRunError} isResuming={isRunning} />
+        <HydratedInterrupts
+          threadId={threadKey}
+          threadSource={threadSource}
+          onError={onRunError}
+          onPendingChange={onHydratedPendingChange}
+        />
         {runError !== null ? (
           <RunError
             title={runError.title}
