@@ -41,7 +41,7 @@ import { Transcript } from "./Transcript"
  */
 
 /**
- * The default `api/copilotkit/route.ts` and `api/dawn/[...path]/route.ts` fall
+ * The default `api/copilotkit/[...path]/route.ts` and `api/dawn/[...path]/route.ts` fall
  * back to when `DAWN_SERVER_URL` is unset. Those two are the SHAREABLE copies
  * — one source, read from the env at request time on the server. This one is
  * not: it ships inside the client bundle, can only ever be a literal, and
@@ -65,7 +65,7 @@ const SERVER_PROBE_PATH = "/api/dawn/memory/candidates"
  *
  * `useCopilotKit().runtimeConnectionStatus` looks like the right predicate
  * and is not, which is what shipped here first and was caught live: the
- * CopilotKit runtime route (`api/copilotkit/route.ts`) runs in the SAME Next
+ * CopilotKit runtime route (`api/copilotkit/[...path]/route.ts`) runs in the SAME Next
  * process as this page, its `/info` handler enumerates the registered
  * `HttpAgent`s without ever contacting Dawn (`HttpAgent` implements no
  * `getCapabilities`), and any failure to reach Dawn along that path is

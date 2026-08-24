@@ -160,8 +160,9 @@ base URL.
 - Keep the existing V2 activity, permission, tool-rendering, suggestions, and
   memory components unchanged except where updated types require a direct
   adjustment.
-- Accept the Workbench branch's deletion of the unused, unallowlisted memory
-  proxy; do not restore it as part of the CopilotKit transport migration.
+- Keep the old unused, unallowlisted `/api/memory/*` proxy deleted. Preserve the
+  Workbench's bounded memory panel, thread hydration, and consolidated allowlisted
+  `/api/dawn/[...path]` proxy unchanged by the CopilotKit transport migration.
 
 ### Shared security work
 

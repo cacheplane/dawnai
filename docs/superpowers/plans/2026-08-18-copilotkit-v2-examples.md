@@ -65,8 +65,9 @@ CLI dependency and native-deployment CI lane.
   multi-route transport.
 - Superseded after the Workbench rebase:
   `examples/research/web/app/api/memory/[...path]/route.ts` was intentionally
-  removed upstream as an unused, unallowlisted proxy, so there is no route to
-  update or restore.
+  removed upstream as an unused, unallowlisted proxy. Do not restore it; the
+  Workbench instead uses the bounded allowlist in
+  `examples/research/web/app/api/dawn/[...path]/route.ts`.
 - `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md` —
   make this migration the first prerequisite and update CopilotKit/version/route
   assumptions now; Task 6 reconciles the restored in-flight evidence around
@@ -727,8 +728,12 @@ test("uses CopilotKit V2 multi-route discovery", async ({ page }) => {
     }
   })
 
-  await page.route("**/api/memory/**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  await page.route("**/api/dawn/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ candidates: [] }),
+    }),
   )
   const infoResponse = page.waitForResponse((response) => {
     const url = new URL(response.url())
@@ -914,9 +919,11 @@ adapter and legacy endpoint factory entirely.
 
 - [x] **Step 3: Reconcile memory scope and tool-renderer comments**
 
-Accept the Workbench branch's intentional deletion of the unused, unallowlisted
-memory proxy. Do not restore or document a same-origin memory route. Keep the
-remaining UI/docs explicit that durable-memory review is outside this slice.
+Keep the old unused, unallowlisted `/api/memory/*` proxy deleted. Preserve the
+Workbench's bounded `MemoryPanel`, thread hydration, and consolidated
+`/api/dawn/[...path]` proxy, whose explicit allowlist carries only the memory-review
+and thread-read routes the browser needs. Document that durable-memory review is part
+of the Workbench without widening the V2 transport migration itself.
 
 Describe `ToolCallCard` against the CopilotKit 1.68.3 V2 runtime/default-renderer
 contract. The public wildcard `useRenderTool` overload types its render props as

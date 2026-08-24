@@ -17,10 +17,6 @@ test("selects the CopilotKit V2 multi-route transport", async ({ page }) => {
     }
   })
 
-  await page.route("**/api/memory/**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
-  })
-
   const infoResponsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url())
     return (
