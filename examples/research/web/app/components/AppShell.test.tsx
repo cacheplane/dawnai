@@ -68,6 +68,7 @@ interface FakeAgent {
   addMessage: (message: unknown) => void
   setMessages: (messages: unknown[]) => void
   abortRun: () => void
+  subscribe: () => { unsubscribe: () => void }
 }
 
 function makeAgent(): FakeAgent {
@@ -87,6 +88,10 @@ function makeAgent(): FakeAgent {
     abortRun() {
       this.abortCalls += 1
     },
+    // The rail's `MemoryPanel` subscribes for `onRunFinishedEvent` (it re-reads
+    // the candidate list when a run ends). Nothing in this file drives it; the
+    // fake only has to not throw on mount.
+    subscribe: () => ({ unsubscribe: () => {} }),
   }
 }
 
@@ -192,9 +197,13 @@ beforeEach(() => {
   // The default: the probe reports Dawn up, which is what every pre-existing
   // test here assumes (the normal shell, not the connect screen). Tests
   // under "app shell connect screen" below override this per case.
+  // A real empty-candidates body, not a bare 200 with no body: the probe only
+  // reads the status, but the rail's `MemoryPanel` reads this same route and
+  // parses it, and feeding it an unparseable success would put its "couldn't
+  // load" line into every test in this file for no reason.
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(null, { status: 200 })),
+    vi.fn(async () => Response.json({ candidates: [] })),
   )
   container = document.createElement("div")
   document.body.append(container)
@@ -550,13 +559,15 @@ describe("app shell connect screen", () => {
 
   test("polls every ~5s while down, and recovery restores the shell AND re-hydrates the active thread", async () => {
     vi.useFakeTimers()
-    let probeCall = 0
+    // A flag rather than a call counter — the probe shares this route with the
+    // rail's `MemoryPanel`, so "the first fetch" and "the first probe" are no
+    // longer the same request.
+    let isDown = true
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        probeCall += 1
-        return new Response(null, { status: probeCall === 1 ? 502 : 200 })
-      }),
+      vi.fn(async () =>
+        isDown ? new Response(null, { status: 502 }) : Response.json({ candidates: [] }),
+      ),
     )
     // The first hydrate genuinely fails the same way the real fetch inside it
     // would while Dawn is actually down — this is the request that never
@@ -582,6 +593,7 @@ describe("app shell connect screen", () => {
     // ran before the (failed) hydrate — this is not the restore itself.
     expect(mocks.agent.setMessagesCalls).toBe(1)
 
+    isDown = false
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SERVER_PROBE_INTERVAL_MS_FOR_TESTS)
     })
@@ -600,13 +612,16 @@ describe("app shell connect screen", () => {
   })
 
   test("the retry button re-probes immediately, without waiting for the interval", async () => {
-    let call = 0
+    // A flag, not a call counter: the probe is no longer the only caller of
+    // this route — the rail's `MemoryPanel` reads it too — so "the Nth fetch"
+    // is not the same thing as "the Nth probe", and counting made this test
+    // pass or fail on mount ordering.
+    let isDown = true
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        call += 1
-        return new Response(null, { status: call === 1 ? 502 : 200 })
-      }),
+      vi.fn(async () =>
+        isDown ? new Response(null, { status: 502 }) : Response.json({ candidates: [] }),
+      ),
     )
     render("thread-a")
     await flushMicrotasks()
@@ -615,6 +630,7 @@ describe("app shell connect screen", () => {
       (button) => button.textContent === "Try again",
     )
     expect(retry).not.toBeUndefined()
+    isDown = false
     act(() => {
       retry?.click()
     })

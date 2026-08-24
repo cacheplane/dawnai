@@ -179,8 +179,9 @@ function InterruptCard({
  * TODO: `kind: "memory"` is exactly that case today. Its detail carries
  * `namespace`, `identity`, `oldContent` and `newContent` — a belief the agent
  * wants to supersede — which deserves its own branch showing the old and new
- * text rather than this fallback. Deferred with the memory-in-the-workbench
- * slice, which also brings `MemoryCandidates` back.
+ * text rather than this fallback. Still deferred: the memory-in-the-workbench
+ * slice restored the candidate panel (`MemoryPanel.tsx`), which is the review
+ * queue, not this in-run supersede gate.
  */
 const UNRECOGNIZED = "an unrecognized request"
 

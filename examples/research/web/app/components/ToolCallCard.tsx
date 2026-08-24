@@ -28,7 +28,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2"
 //
 // With no agentId, this binds to CopilotKit's default agent id ("default"),
 // which the runtime route registers as our Dawn /research agent — same as
-// MemoryCandidates.tsx.
+// every other CopilotKit hook in this app.
 
 /** The three states `useRenderTool` reports a call in. */
 export type ToolCallStatus = "inProgress" | "executing" | "complete"

@@ -36,9 +36,6 @@ import {
 // would change nothing. With `threadId` set, the provider is thread-controlled and
 // `useAgent()` writes that id onto the agent (it only does so when the configuration
 // reports `hasExplicitThreadId`, which a `threadId` prop implies).
-//
-// SP2b, deliberately absent: `MemoryCandidates` is still on disk but no longer
-// mounted. It comes back with the consolidated allowlisted memory proxy.
 export default function Home() {
   // `createLocalThreadSource` touches localStorage, which does not exist during
   // SSR — hence the guard. It stays null on the server; the effect below runs

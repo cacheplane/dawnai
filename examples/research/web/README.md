@@ -77,11 +77,11 @@ what it puts out of reach.
   mount. Verified live — switching away from a thread and back fires no request and
   leaves the transcript empty. The Dawn server may still hold that history; this client
   never asks for it. Hydration lands in the next slice.
-- **No memory review.** `app/components/MemoryCandidates.tsx` is still on disk but is
-  not mounted, and the `/api/memory/*` proxy route it used has been removed — an
-  unallowlisted pass-through to the Dawn server with no caller is worse than no route.
-  Both return in the next slice as one consolidated, allowlisted proxy. Until then,
-  review candidates with the `dawn memory` CLI.
+- **Memory review is candidates only.** The rail's memory panel
+  (`app/components/MemoryPanel.tsx`) lists what the agent proposed with `remember()`
+  and lets you approve or delete each candidate, through the allowlisted proxy
+  (`app/lib/proxy-allowlist.ts`). It shows at most three at a time and cannot browse,
+  search, or edit stored memories — that is still the `dawn memory` CLI.
 - **No browser or live-model test coverage here.** The example's own tests
   (`pnpm --filter @dawn-example/research-web test`) cover the thread source, the
   transcript mapping, the renderer registry, the thread rail, the composer, and the

@@ -8,6 +8,7 @@ import type { ThreadSource, WorkbenchThread } from "../lib/thread-source"
 import type { TranscriptMessage } from "../lib/transcript"
 import { Composer } from "./Composer"
 import { ConnectScreen } from "./ConnectScreen"
+import { MemoryPanel } from "./MemoryPanel"
 import { ThreadRail, UNTITLED_THREAD_LABEL } from "./ThreadRail"
 import { Transcript } from "./Transcript"
 
@@ -518,6 +519,18 @@ export function AppShell({
           onSelect={onSelectThread}
           onCreate={onCreateThread}
         />
+        {/*
+          Beneath the rail, and only rendered when the server is up — this
+          return is already past the `serverStatus === "down"` branch, so the
+          panel never has to have an opinion about an unreachable Dawn (see
+          its `load` for the 502 it stays silent about).
+
+          Deliberately NOT thread-scoped: memory candidates are the agent's,
+          not a conversation's, and the endpoint has no thread parameter.
+          Switching threads leaves the panel exactly as it was, which is
+          correct — the queue did not change.
+        */}
+        <MemoryPanel />
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b border-wb-border px-6">
