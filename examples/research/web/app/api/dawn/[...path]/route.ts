@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic"
 const SERVER_URL = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
 
 // Next also routes HEAD requests into the GET export; the allowlist has no
-// HEAD entries, so those deliberately fall through to the 404 branch below.
+// HEAD entries, so those deliberately fall through to the 403 branch below —
+// still the honest answer: this proxy does not carry HEAD.
 async function forward(
   request: NextRequest,
   context: { params: Promise<{ path?: string[] }> },
@@ -24,7 +25,13 @@ async function forward(
   const { path } = await context.params
   const target = resolveProxyTarget(request.method, path ?? [], SERVER_URL)
   if (target === null) {
-    return NextResponse.json({ error: "Not proxied" }, { status: 404 })
+    // 403, NOT 404. The workbench gives 404 a specific meaning on
+    // `/threads/:id/state` — "this thread has no checkpoint yet", which
+    // hydration treats as an ordinary empty thread — so a rejection that
+    // answered 404 would make a broken allowlist indistinguishable from a
+    // brand-new thread, and every conversation would restore as blank with no
+    // error anywhere. "Refused, and deliberately" is what actually happened.
+    return NextResponse.json({ error: "Not proxied" }, { status: 403 })
   }
   try {
     // Every allowlisted route takes no request body, query string or auth

@@ -14,6 +14,17 @@ import { EmptyState } from "./EmptyState"
 import { PermissionInterrupt } from "./PermissionInterrupt"
 import { RunError } from "./RunError"
 
+/**
+ * What a restore cannot bring back, said in the app rather than only in the
+ * README. Subagent cards are derived from a live event stream the server does
+ * not persist — the checkpoint holds messages, tool results and the plan, and
+ * nothing else — so the cards the user watched appear are gone for good. The
+ * wording is careful about that: new runs draw new cards, the old ones do not
+ * come back. Exported so the tests assert the string the user reads.
+ */
+export const RESTORED_HISTORY_NOTICE =
+  "Restored from this conversation's saved history. Subagent cards from earlier runs aren't saved — new ones appear as they run."
+
 export interface TranscriptProps {
   /**
    * The active thread's id, used only as `PermissionInterrupt`'s `key`.
@@ -36,7 +47,7 @@ export interface TranscriptProps {
    * from a live run — the condition for the note below about what a restore
    * cannot bring back.
    */
-  readonly restoredHistory: boolean
+  readonly hasRestoredHistory: boolean
   /** The last run failure, or null. Owned by `AppShell`. */
   readonly runError: { readonly title: string; readonly message: string } | null
   readonly onDismissRunError: () => void
@@ -83,7 +94,7 @@ export function Transcript({
   messages,
   isRunning,
   onSelectSuggestion,
-  restoredHistory,
+  hasRestoredHistory,
   runError,
   onDismissRunError,
   onRunError,
@@ -183,18 +194,13 @@ export function Transcript({
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       {items.length === 0 ? <EmptyState onSelectSuggestion={onSelectSuggestion} /> : null}
       {/*
-        What a restore cannot bring back, said in the app rather than only in
-        the README. Subagent cards are derived from a live event stream that
-        the server does not persist — the checkpoint holds messages, tool
-        results and the plan, and nothing else — so a restored thread is
-        genuinely missing cards the user watched appear. Rendered OUTSIDE the
-        live region below: it is static context for what is already there, not
-        an addition worth announcing.
+        Rendered OUTSIDE the live region below (see `RESTORED_HISTORY_NOTICE`):
+        it is static context for what is already on screen, not an addition
+        worth announcing.
       */}
-      {restoredHistory ? (
+      {hasRestoredHistory ? (
         <p className="mx-auto max-w-3xl px-6 pt-8 text-[12px] leading-5 text-wb-muted">
-          Restored from this conversation's saved history. Subagent cards are not saved and reappear
-          on the next run.
+          {RESTORED_HISTORY_NOTICE}
         </p>
       ) : null}
       {/*
@@ -213,7 +219,7 @@ export function Transcript({
         className={
           items.length === 0
             ? "mx-auto max-w-3xl px-6"
-            : `mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 ${restoredHistory ? "pt-4" : "pt-8"}`
+            : `mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 ${hasRestoredHistory ? "pt-4" : "pt-8"}`
         }
       >
         {items.map(renderItem)}

@@ -38,11 +38,15 @@ const RUN_ERROR_TITLES: Readonly<Record<string, string>> = {
 /**
  * The restored thread, with its checkpointed plan put back in front of it.
  *
- * `values.todos` arrives unvalidated (the stream path's plan activity is the
- * only one anything checks), so it goes through the same
- * `planActivityContentSchema` `activity-renderers.tsx` registers — a malformed
- * plan then renders no card at all rather than arbitrary JSON in a plan
- * shaped box. The id is minted here because the checkpoint has none; the
+ * `hydrate.ts` already filters `values.todos`, so the schema here is not
+ * re-checking the mapper: it is the last gate in front of the renderer on a
+ * SWAPPABLE seam. `ThreadSource` has a second implementation coming
+ * (LangGraph Platform), and every implementation after this one is only ever
+ * type-checked — a `HydratedThread` that satisfies the types and lies about
+ * its todos would otherwise reach `PlanCard` unexamined. Validated with the
+ * same `planActivityContentSchema` `activity-renderers.tsx` registers, so a
+ * malformed plan renders no card at all rather than arbitrary JSON in a
+ * plan-shaped box. The id is minted here because the checkpoint has none; the
  * stream path uses `dawn:plan:${runId}`, and `hydrated:plan:${threadId}` is
  * the same idea for a read that has no run: stable across re-renders and
  * re-hydrations, unique per thread.
@@ -113,7 +117,7 @@ export function AppShell({
   const [runError, setRunError] = useState<RunErrorState | null>(null)
   // True only once a hydrate has actually put something back on screen, which
   // is the condition for the "what did not come back" note in `Transcript`.
-  const [restoredHistory, setRestoredHistory] = useState(false)
+  const [hasRestoredHistory, setHasRestoredHistory] = useState(false)
 
   // The agent instance a hydrate that is already in flight should apply to.
   //
@@ -201,6 +205,12 @@ export function AppShell({
   // `useAgent` swaps the provisional stand-in for the real agent once the
   // runtime `/info` sync resolves. Without the ref, that swap re-runs this
   // effect and wipes a transcript nobody asked to leave.
+  //
+  // Seeding the ref with the FIRST `activeThreadId` also means the mount
+  // render never hydrates. That is correct today only because `page.tsx`
+  // starts the id `undefined` and sets the real one from a browser effect; if
+  // it ever resolves an id synchronously (a deep link, say), the thread it
+  // opens on would silently never restore.
   const renderedThreadIdRef = useRef(activeThreadId)
   useEffect(() => {
     if (renderedThreadIdRef.current === activeThreadId) return
@@ -209,50 +219,69 @@ export function AppShell({
     agent.pendingInterrupts = []
     agent.setMessages([])
     setRunError(null)
-    setRestoredHistory(false)
+    setHasRestoredHistory(false)
     if (activeThreadId === undefined || threadSource === null) return
+
+    // Captured, not read from the ref later: this is the instance whose
+    // messages and interrupts were just cleared, and telling it apart from a
+    // replacement is what makes the "user typed ahead" check below sound.
+    const clearedAgent = agent
+    const hydratingThreadId = activeThreadId
+
+    // Staleness is checked against the ref, NOT against a flag flipped in the
+    // effect's cleanup: this effect re-runs (and would therefore clean up)
+    // whenever `agent`'s identity changes, which would cancel a perfectly good
+    // hydrate for the thread still on screen. The ref only moves when the user
+    // actually switches threads, which is exactly the case where thread A's
+    // history must not be painted into thread B.
+    const isStale = () => renderedThreadIdRef.current !== hydratingThreadId
+
+    const applyRestored = (thread: HydratedThread) => {
+      if (isStale()) return
+      const messages = withRestoredPlan(thread, hydratingThreadId)
+      // An empty result is the normal answer for a thread that has never run,
+      // so it is silent: no error row, and no `setMessages` either, since the
+      // clear above already left the transcript empty.
+      if (messages.length === 0) return
+      const target = agentRef.current
+      // Two different situations, and only one of them is a reason to skip.
+      //
+      // Same instance with messages on it: the user got ahead of the network
+      // and typed while the history was loading. Their message is the live
+      // one and may already have a run attached — replacing the list under
+      // that run would drop it and orphan the run's appends. Skip the restore.
+      //
+      // A DIFFERENT instance (`useAgent` swapped the provisional agent for the
+      // real one mid-flight): whatever it holds was never cleared by this
+      // effect, so it is the old agent's leftovers rather than anything the
+      // user did. Restoring over it is right — but its `pendingInterrupts` are
+      // leftovers too, and a parked interrupt from the abandoned instance
+      // makes the next run throw, so they get the same clear the switch gave
+      // the original.
+      if (target === clearedAgent && target.messages.length > 0) return
+      if (target !== clearedAgent) target.pendingInterrupts = []
+      // `TranscriptMessage` is a deliberate supertype of AG-UI's own `Message`
+      // union (see `transcript.ts`) so that either installed copy of
+      // `@ag-ui/core` assigns INTO it; going the other way needs the cast. The
+      // one shape it asserts that `hydrate.ts` does not check is a user
+      // message's `content`, typed `unknown` there — `userText` narrows it
+      // downstream, so an odd checkpoint renders as empty text rather than
+      // crashing the transcript.
+      target.setMessages(messages as Parameters<typeof target.setMessages>[0])
+      setHasRestoredHistory(true)
+    }
+
+    const reportHydrateFailure = (error: unknown) => {
+      if (isStale()) return
+      setRunError({
+        title: "Could not restore this conversation",
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     // `AppShell` does not fetch: the seam does, so the LangGraph Platform
     // implementation is a swap rather than a rewrite of this effect.
-    const hydratingThreadId = activeThreadId
-    void threadSource.hydrate(hydratingThreadId).then(
-      (thread) => {
-        // Staleness is checked against the ref, NOT against a flag flipped in
-        // the effect's cleanup: this effect re-runs (and would therefore clean
-        // up) whenever `agent`'s identity changes, which would cancel a
-        // perfectly good hydrate for the thread still on screen. The ref only
-        // moves when the user actually switches threads, which is exactly the
-        // case where thread A's history must not be painted into thread B.
-        if (renderedThreadIdRef.current !== hydratingThreadId) return
-        const messages = withRestoredPlan(thread, hydratingThreadId)
-        // An empty result is the normal answer for a thread that has never
-        // run, so it is silent: no error row, and no `setMessages` either,
-        // since the clear above already left the transcript empty. Leaving it
-        // alone also means a user who started typing into a brand-new thread
-        // does not have their own message wiped by its own 404.
-        if (messages.length === 0) return
-        // The user got ahead of the network: they typed into the thread while
-        // its history was still loading. Their message is the live one, and
-        // it may already have a run attached to it — replacing the list under
-        // that run would drop the message and orphan the run's appends. The
-        // restore is what gets skipped.
-        if (agentRef.current.messages.length > 0) return
-        // `TranscriptMessage` is a deliberate supertype of AG-UI's own
-        // `Message` union (see `transcript.ts`) so that either installed copy
-        // of `@ag-ui/core` assigns INTO it; going the other way needs the
-        // cast. The shapes `hydrate.ts` builds are the real ones — verified
-        // against `MessageSchema` — so this widens nothing at runtime.
-        agentRef.current.setMessages(messages as Parameters<typeof agentRef.current.setMessages>[0])
-        setRestoredHistory(true)
-      },
-      (error: unknown) => {
-        if (renderedThreadIdRef.current !== hydratingThreadId) return
-        setRunError({
-          title: "Could not restore this conversation",
-          message: error instanceof Error ? error.message : String(error),
-        })
-      },
-    )
+    void threadSource.hydrate(hydratingThreadId).then(applyRestored, reportHydrateFailure)
   }, [activeThreadId, agent, threadSource])
 
   const send = useCallback(
@@ -323,7 +352,7 @@ export function AppShell({
           messages={agent.messages}
           isRunning={agent.isRunning}
           onSelectSuggestion={send}
-          restoredHistory={restoredHistory}
+          hasRestoredHistory={hasRestoredHistory}
           runError={runError}
           onDismissRunError={dismissRunError}
           onRunError={reportRunError}

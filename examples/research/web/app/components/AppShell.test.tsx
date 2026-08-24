@@ -51,6 +51,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 }))
 
 const { AppShell } = await import("./AppShell")
+const { RESTORED_HISTORY_NOTICE } = await import("./Transcript")
 type ThreadSource = import("../lib/thread-source").ThreadSource
 type HydratedThread = import("../lib/hydrate").HydratedThread
 
@@ -135,11 +136,27 @@ function deferred<T>(): {
   return { promise, reject, resolve }
 }
 
-/** Flush the promise callbacks a settled hydrate queues, inside `act`. */
-async function flush() {
+/**
+ * Wait for a hydrate to be applied: by default the one the shell issued last,
+ * or the specific promise a test passes, then let React apply
+ * whatever it did with the result.
+ *
+ * It awaits the seam's OWN promise rather than counting microtask ticks: a
+ * fixed number of ticks encodes how many `await`s the implementation happens
+ * to have, so adding one inside `applyRestored` would red every test here at
+ * once for no behavioral reason. A test with more than one hydrate in flight
+ * must name the one it just settled — awaiting the latest would block on a
+ * promise it never intends to resolve, and a hung `act` corrupts the act
+ * environment for every test after it (which is how this helper first went
+ * wrong: one 5s timeout, three red tests). The short tick loop after it only covers
+ * React's own scheduling, and `allSettled` keeps a rejecting hydrate (a case
+ * under test) from failing the helper instead of the assertion.
+ */
+async function settleHydration(hydration?: Promise<unknown>) {
+  const issued = hydration ?? (hydrate.mock.results.at(-1)?.value as Promise<unknown> | undefined)
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
+    await Promise.allSettled([issued])
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve()
   })
 }
 
@@ -210,7 +227,7 @@ describe("app shell hydration", () => {
     hydrate = vi.fn(async () => RESTORED)
     render(undefined)
     render("thread-a")
-    await flush()
+    await settleHydration()
     expect(hydrate).toHaveBeenCalledWith("thread-a")
     const applied = mocks.agent.setMessagesArgs.at(-1) ?? []
     expect(applied).toEqual([
@@ -223,7 +240,7 @@ describe("app shell hydration", () => {
       { content: "what did we find?", id: "h1", role: "user" },
     ])
     // And the shell admits what a restore cannot bring back.
-    expect(container.textContent).toContain("Subagent cards are not saved")
+    expect(container.textContent).toContain(RESTORED_HISTORY_NOTICE)
   })
 
   test("drops a malformed plan rather than rendering it, keeping the messages", async () => {
@@ -235,19 +252,17 @@ describe("app shell hydration", () => {
     }))
     render(undefined)
     render("thread-a")
-    await flush()
+    await settleHydration()
     expect(mocks.agent.setMessagesArgs.at(-1)).toEqual(RESTORED.messages)
   })
 
   test("treats an empty thread as normal: no messages applied, no error", async () => {
     render(undefined)
     render("thread-a")
-    await flush()
-    // Only the switch's own clear; nothing applied on top of it.
-    expect(mocks.agent.setMessagesCalls).toBe(1)
+    await settleHydration()
     expect(mocks.agent.messages).toEqual([])
     expect(container.querySelector('[role="alert"]')).toBeNull()
-    expect(container.textContent).not.toContain("Subagent cards are not saved")
+    expect(container.textContent).not.toContain(RESTORED_HISTORY_NOTICE)
   })
 
   test("surfaces a failed hydrate as a run error", async () => {
@@ -256,7 +271,7 @@ describe("app shell hydration", () => {
     })
     render(undefined)
     render("thread-a")
-    await flush()
+    await settleHydration()
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toContain("Could not restore this conversation")
     expect(alert?.textContent).toContain("HTTP 500")
@@ -273,14 +288,32 @@ describe("app shell hydration", () => {
     const clearsSoFar = mocks.agent.setMessagesCalls
     // Thread A's history lands late — after the user is already looking at B.
     first.resolve(RESTORED)
-    await flush()
+    await settleHydration(first.promise)
     expect(mocks.agent.setMessagesCalls).toBe(clearsSoFar)
     expect(mocks.agent.messages).toEqual([])
-    expect(container.textContent).not.toContain("Subagent cards are not saved")
+    expect(container.textContent).not.toContain(RESTORED_HISTORY_NOTICE)
     // B's own answer still applies, so the guard is not simply refusing all.
     second.resolve({ messages: [{ content: "b", id: "b1", role: "user" }], todos: [] })
-    await flush()
+    await settleHydration(second.promise)
     expect(mocks.agent.messages).toEqual([{ content: "b", id: "b1", role: "user" }])
+  })
+
+  test("does not overwrite a message the user typed while the history loaded", async () => {
+    const pending = deferred<HydratedThread>()
+    hydrate = vi.fn(() => pending.promise)
+    render(undefined)
+    render("thread-a")
+    // The composer is live the whole time a hydrate is in flight, and this is
+    // what the user doing something with it looks like on the same agent
+    // instance: `addMessage` pushes, and a run may already be attached.
+    const typed = { content: "start over", id: "typed-1", role: "user" }
+    mocks.agent.messages.push(typed)
+    const appliedBefore = mocks.agent.setMessagesArgs.length
+    pending.resolve(RESTORED)
+    await settleHydration()
+    expect(mocks.agent.setMessagesArgs.length).toBe(appliedBefore)
+    expect(mocks.agent.messages).toEqual([typed])
+    expect(container.textContent).not.toContain(RESTORED_HISTORY_NOTICE)
   })
 
   test("applies a late hydrate to the agent instance that is on screen now", async () => {
@@ -295,7 +328,10 @@ describe("app shell hydration", () => {
     mocks.agent = swapped
     render("thread-a")
     pending.resolve({ messages: [{ content: "late", id: "l1", role: "user" }], todos: [] })
-    await flush()
+    await settleHydration()
     expect(swapped.messages).toEqual([{ content: "late", id: "l1", role: "user" }])
+    // The replacement instance was never cleared by the switch effect, so its
+    // leftover parked interrupt would otherwise make the next run throw.
+    expect(swapped.pendingInterrupts).toEqual([])
   })
 })

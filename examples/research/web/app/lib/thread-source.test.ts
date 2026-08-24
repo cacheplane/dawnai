@@ -138,8 +138,37 @@ describe("local thread source hydration", () => {
     expect(first.todos).not.toBe(second.todos)
   })
 
-  test("rejects on any other non-2xx so the caller can surface it", async () => {
-    const source = createLocalThreadSource(memoryStorage(), stubFetch(500, { error: "boom" }))
-    await expect(source.hydrate("thread-1")).rejects.toThrow(/HTTP 500/)
+  test("rejects on any other non-2xx, carrying the body's own explanation", async () => {
+    // The proxy's 502 shape: a flat `error` string, written to be shown.
+    const source = createLocalThreadSource(
+      memoryStorage(),
+      stubFetch(502, {
+        error: "Cannot reach the Dawn server at http://127.0.0.1:3002: ECONNREFUSED",
+      }),
+    )
+    await expect(source.hydrate("thread-1")).rejects.toThrow(
+      "Could not load this conversation (HTTP 502): Cannot reach the Dawn server at http://127.0.0.1:3002: ECONNREFUSED",
+    )
+  })
+
+  test("unwraps the Dawn server's own {error:{message}} shape", async () => {
+    const source = createLocalThreadSource(
+      memoryStorage(),
+      stubFetch(500, { error: { kind: "internal_error", message: "checkpointer exploded" } }),
+    )
+    await expect(source.hydrate("thread-1")).rejects.toThrow(/HTTP 500\): checkpointer exploded/)
+  })
+
+  test("keeps the status when the body is not JSON at all", async () => {
+    // An HTML error page from something in front of the server. Parsing it
+    // must not replace the status with a raw SyntaxError.
+    const fetchFn = vi.fn(
+      async () => new Response("<html>502 Bad Gateway</html>", { status: 502 }),
+    ) as unknown as typeof fetch
+    const source = createLocalThreadSource(memoryStorage(), fetchFn)
+    await expect(source.hydrate("thread-1")).rejects.toThrow(
+      "Could not load this conversation (HTTP 502)",
+    )
+    await expect(source.hydrate("thread-1")).rejects.not.toThrow(/Unexpected token/)
   })
 })

@@ -79,6 +79,33 @@ function byMostRecent(threads: readonly WorkbenchThread[]): WorkbenchThread[] {
 }
 
 /**
+ * The useful half of a failed response, or "".
+ *
+ * The proxy's own 502 body is `{ error: "Cannot reach the Dawn server at
+ * http://127.0.0.1:3002: ECONNREFUSED..." }` and the Dawn server's is
+ * `{ error: { kind, message } }` — both are written to be shown, and a bare
+ * "HTTP 502" throws away the only part that says what to do about it. Any
+ * failure to read or parse the body degrades to "" rather than replacing the
+ * status with a SyntaxError: an error path that can itself error is how a
+ * proxy's HTML error page ends up in the UI as "Unexpected token '<'".
+ */
+async function failureDetail(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json()
+    if (typeof body !== "object" || body === null) return ""
+    const error = (body as { error?: unknown }).error
+    if (typeof error === "string") return error
+    if (typeof error === "object" && error !== null) {
+      const message = (error as { message?: unknown }).message
+      if (typeof message === "string") return message
+    }
+    return ""
+  } catch {
+    return ""
+  }
+}
+
+/**
  * `fetchFn` is a parameter rather than a bare `globalThis.fetch` call so a test
  * can inject one without patching a global. It defaults to `fetch` bound to
  * `globalThis`: an unbound reference would throw "Illegal invocation" in the
@@ -125,7 +152,10 @@ export function createLocalThreadSource(
       // never a shared constant — the caller owns what it gets back.
       if (response.status === 404) return { messages: [], todos: [] }
       if (!response.ok) {
-        throw new Error(`Could not load this conversation (HTTP ${response.status}).`)
+        const detail = await failureDetail(response)
+        throw new Error(
+          `Could not load this conversation (HTTP ${response.status})${detail === "" ? "" : `: ${detail}`}`,
+        )
       }
       return hydrateThreadState(await response.json())
     },
