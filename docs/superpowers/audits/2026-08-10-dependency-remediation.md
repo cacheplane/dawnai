@@ -1,9 +1,10 @@
 # Dependency Security Remediation Audit
 
 **Status:** Draft. The compatible dependency remediation, final audit recapture,
-and reviewed-base evidence are recorded below. Final local validation,
-exact-head pull-request CI, merge, and post-merge reconciliation remain pending.
-Nothing in those pending sections is a claim about merged `main`.
+reviewed-base evidence, focused validation, independent reviews, and full local
+Definition of Done are recorded below. Exact-head pull-request CI, merge, and
+post-merge reconciliation remain pending. Nothing in those pending sections is
+a claim about merged `main`.
 
 **Repository:** `cacheplane/dawnai`
 
@@ -60,9 +61,9 @@ observed-default identities above; none is a current-base assertion.
 
 The historical capture proved both publication workflows were
 `disabled_manually`, all target package documents and attestations were absent,
-and the exact target tag, Release, and artifact identities were absent. Later
-read-only checks have continued to observe the two workflows disabled, but the
-exact-reviewed-head containment rerun remains pending under Task 8.
+and the exact target tag, Release, and artifact identities were absent. The
+reviewed-source containment rerun is recorded below; exact pull-request-head
+containment remains pending until that head exists.
 
 ### Historical incident classifications
 
@@ -93,6 +94,7 @@ no-op booleans and bounded-log digests are in the canonical receipt.
 | `ae6d01b1caa5791f7b87b190b120bd9a77b8fbc0` | Taught the fail-closed audit reader to accept multiple installed-version findings grouped under one advisory while preserving identity, uniqueness, total, muted-record, and exit-status checks |
 | `4bfc149e9a7c57936fa6a90a813e9a31fe51d3a0` | Rejected enumerable array properties that canonical evidence cannot represent |
 | `e2f894a2db7eccfc92e82d1f7712f8a719907c81` | Bound schema-v2 audit evidence to its exact source, lockfile digest, and capture time |
+| `a718070affdee44ec08eb1e281e826af45495ce7` | Recorded the completed focused, browser, workflow, release, and Docker verification matrix |
 
 ### Bounded pre-fix RED observations
 
@@ -326,8 +328,8 @@ post-merge receipt uploader.
 ## Focused and gated verification completed
 
 The final Task 7 focused and locally available gated matrix completed under
-Node `24.19.0`. These checks do not replace the remaining full Definition of
-Done or CI-owned Kubernetes/full-arc lanes.
+Node `24.19.0`. These checks complement the full local Definition of Done below
+but do not replace CI-owned Kubernetes/full-arc lanes.
 
 | Check | Result |
 |---|---|
@@ -455,7 +457,7 @@ confirm every fixed record preserves its reviewed identity, has no dismissal,
 and has a qualifying `fixed_at`. It must also confirm the complete final open
 set still has no suppressions, dismissals, or auto-dismissals.
 
-## Reviewed-base receipt and pending final verification
+## Reviewed-base receipt and completed local verification
 
 The reviewed-base receipt is
 `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`.
@@ -473,14 +475,30 @@ runs in every reviewed status. It also repeated the complete publication
 inventory and candidate-absence reads recorded in the receipt. Any later base
 movement invalidates this current-base receipt and requires a new capture.
 
+The complete local Definition of Done then passed on
+`a718070affdee44ec08eb1e281e826af45495ce7` with Node `24.19.0`, pnpm
+`10.33.0`, and `DAWN_REQUIRE_DOCKER=1`. The run completed at
+`2026-08-24T20:03:13.762Z` and passed lint, build-cache validation, build,
+typecheck, repository tests, release inventory and controller checks, all four
+local release-script suites, documentation validation, package validation,
+the TypeScript tooling-pack probe, and the framework/runtime/smoke harness.
+The repository test phase reported 426 passed files and 17 skipped, with 4,557
+passed tests and 215 skipped. Harness run
+`harness-2026-08-24T195529-088Z-52599` passed all three requested lanes with no
+failed, skipped, or errored lane.
+
+Independent specification and code-quality/security reviews reported no
+Critical, Important, or Minor findings. A separate adversarial review of the
+schema-v2 audit source, lockfile, clock, freshness, canonical serialization,
+receipt digests, and changeset decision also reported no findings; its focused
+verification passed 259 tests.
+
 Still pending:
 
 - CI-owned Kubernetes and full-arc smoke lanes;
-- scoped static hygiene on the final evidence state;
-- `DAWN_REQUIRE_DOCKER=1 pnpm ci:validate` on the finalized state;
-- independent specification and code-quality/security reviews; and
 - exact-head pull-request CI, including Windows, Chromium, Vercel native,
-  CodeQL, Scorecard, and required gated jobs.
+  CodeQL, and required gated jobs; and
+- post-merge Scorecard, reconciliation, and receipt sealing.
 
 ## Changeset decision
 
