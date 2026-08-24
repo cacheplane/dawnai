@@ -2601,7 +2601,7 @@ async function handleApAttachRequest(options: {
   // thread lookup FIRST, with the same code POST /cancel and POST /resume use
   // for an unknown thread → thread-access `read` gate, invoked with `thread:
   // undefined` on a miss and using THIS handler's own `notFound` literal, so a
-  // denial is byte-identical to a genuine miss → route identity, the parking
+  // denial is indistinguishable from a genuine miss → route identity, the parking
   // route winning over the last-run chain → middleware with `method: "GET"`.
   // This endpoint discloses everything the POST stream discloses — channel
   // values, the live turn's input, and (durable path) parked interrupt

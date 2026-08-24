@@ -41,6 +41,7 @@ such as `/research#agent`.
 | `GET /threads/:thread_id/pending_interrupts` | — | `200 { "interrupts": [...] }`; `404` `thread_not_found`; `409` `thread_route_unknown` without a usable route identity |
 | `POST /threads/:thread_id/runs/wait` | `{ "route": "<routeId>#<kind>", "input": { ... } }` | `200` final state JSON |
 | `POST /threads/:thread_id/runs/stream` | Same run body | `200 text/event-stream` |
+| `GET /threads/:thread_id/runs/stream` | — | `200 text/event-stream` (reattach); `404` `thread_not_found`; `409` `thread_route_unknown` without a usable route identity |
 | `POST /threads/:thread_id/resume` | Exact `{ "resume": [...], "route": "<routeId>#<kind>" }` body | `200 text/event-stream` continuation |
 | `POST /threads/:thread_id/cancel` | No body | `200 { "thread_id", "status": "interrupted" }`; `404` unknown thread; `409` no active run |
 | `GET /memory/candidates` | — | `200 { "candidates": [...] }` |
@@ -243,11 +244,60 @@ rather than the thread status.
 Disconnecting an Agent Protocol `runs/stream`, `runs/wait`, or `resume` client
 only detaches that viewer; the checkpointed run continues. To stop the intent,
 call `POST /threads/:thread_id/cancel`. Server shutdown also aborts active work.
+A reconnecting client rejoins the run with `GET /threads/:thread_id/runs/stream`
+(below) rather than polling `GET /threads/:thread_id/state`.
 
 Because run admission and cancel routing are process-local, a multi-replica
 service needs guaranteed thread-keyed routing to one process or distributed
 per-thread serialization and cancel routing. Shared Postgres stores add
 durability, not that coordination.
+
+## Reattaching to a running turn
+
+`GET /threads/:thread_id/runs/stream` is the read-only mirror of the `POST`
+stream: a disconnected client — browser reload, network blip, laptop sleep —
+rejoins without cancelling anything and without a request body, so it is the one
+Agent Protocol stream a stock `EventSource` can consume. It is gated exactly as
+strictly as `GET /threads/:thread_id/pending_interrupts` (thread-access `read`
+plus the parking route's middleware), because it discloses the same content the
+`POST` stream does.
+
+Reattachment is resumable **state**, not a resumable event log: there are no
+cursors, no `Last-Event-ID`, and no retention window. Every reconnect
+re-snapshots, and every failure heals by reconnecting. The stream always opens
+with a single `event: state` frame — a Dawn extension to the Agent Protocol
+wire — carrying `status`, `values` (channel values), `interrupts`, and, when a
+turn is streaming in this process, the turn's frames so far:
+
+```text
+event: state
+data: {"status":"busy","live":true,"anchor":"<checkpoint_id>","run_started_at":"<ISO>",
+       "resume":false,"values":{...},"input":{...},"turn":[...],"interrupts":[]}
+```
+
+- **Live turn present (`live: true`):** `values` is the checkpoint at `anchor`
+  (the instant the run claimed its slot), `turn` is the turn's coalesced frames
+  so far, and the frame is followed by the live tail — the same `chunk` /
+  `tool_call` / `tool_result` / `interrupt` / capability frames the `POST` stream
+  emits — terminated by the turn's own `done`. `interrupts` is always `[]` here:
+  a live turn is not parked, and during a `resume` turn `resume` is `true` and
+  the client must not apply `input` to the transcript. If the in-memory digest
+  overflowed, `turn` is `null` and `turn_truncated: true` is present — reconnect
+  for a fresh snapshot.
+- **No live turn (`live: false`):** the durable path. `values` is the latest
+  checkpoint, `interrupts` carries the parked prompts with their `value`, and the
+  stream then emits `event: done` `{"output":null}` and a `retry:` hint before
+  closing. This path works across restarts, replicas, and serverless, because it
+  is checkpoint-backed. Live tail is best-effort and only available on the
+  process holding the run.
+
+Consumers **must** treat `done` as end-of-stream. Two bounds protect the
+in-memory digest: the per-thread digest is capped at 2 MiB (on overflow the turn
+digest is dropped whole and the snapshot degrades to values-plus-live-tail), and
+each thread serves at most 16 concurrent viewers (a viewer beyond the cap
+receives `event: detached` `{"reason":"capacity"}` and closes). Both are fixed
+defaults today; neither the durable snapshot nor cancellation is affected by
+reaching them.
 
 ## Review memory candidates
 
