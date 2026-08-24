@@ -277,13 +277,15 @@ leaving thousand-line mixed-responsibility files. The CLI exposes four read-only
   selects exactly one successful CI, CodeQL, and Scorecard run for each unique
   required head in `[mergeSha, observationHead]`; this is exactly three run
   records when those heads match and six when they differ.
-- `seal-receipt`: accepts only a bounded base64 canonical reconciliation
-  receipt plus its exact SHA-256 and immutable repository correlation inputs,
-  revalidates the complete receipt schema and digest without network access,
-  then writes the exact receipt plus a separate canonical uploader manifest
-  containing the current workflow run ID/attempt to a contained output
-  directory. The pre-dispatch receipt cannot contain its future uploader run
-  identity. The operation never logs the receipt payload. The output root is an
+- `seal-receipt`: accepts only a bounded gzip-plus-base64 transport of the
+  canonical reconciliation receipt plus its exact uncompressed SHA-256 and
+  immutable repository correlation inputs, applies compressed and decompressed
+  size limits, revalidates the complete canonical receipt schema and digest
+  without network access, then writes the exact uncompressed receipt plus a
+  separate canonical uploader manifest containing the current workflow run
+  ID/attempt to a contained output directory. The pre-dispatch receipt cannot
+  contain its future uploader run identity. The operation never logs the
+  receipt payload. The output root is an
   existing canonical non-symlink directory owned by the current effective user
   with exact mode `0700`; its ancestor chain is not group/world writable except
   for a sticky system temporary ancestor. Portable Node lacks `openat`, so a
@@ -695,15 +697,17 @@ when Chromium setup fails.
 Create `dependency-security-receipt.yml` with only `workflow_dispatch`, an exact
 seven-input contract (`expectedMainSha`, `expectedPrNumber`,
 `expectedReviewedBaseSha`, `expectedReviewedHeadSha`, `expectedMergeSha`,
-`receiptBase64`, and `receiptSha256`), job-level `contents: read`, no secrets, no
+`receiptGzipBase64`, and `receiptSha256`), job-level `contents: read`, no secrets, no
 environment, no write or OIDC permission, and a 10-minute timeout. This workflow does **not**
 read Dependabot: the default `GITHUB_TOKEN` is not treated as sufficient for
 that endpoint before PR3 installs the dedicated read-only GitHub App.
 
 The owner-side reviewed reader produces the bounded redacted receipt. Dispatch
 inputs are safe because the receipt contains no raw descriptions, tokens,
-headers, or error bodies. Canonical receipt bytes are capped at 32 KiB so their
-single-line base64 encoding stays below GitHub's aggregate dispatch-input limit.
+headers, or error bodies. Canonical receipt bytes are capped at 256 KiB. Their
+gzip transport is capped at 48,000 bytes (64,000 base64 characters), leaving
+room below GitHub's aggregate dispatch-input limit for the exact correlation
+fields while retaining decompression-bomb protection.
 Use the repository's pinned checkout, Node 24 setup, and upload actions. Keep
 `seal-receipt` and its imports Node-built-in-only so this uploader needs no
 package install. Its `run-name` includes the exact receipt SHA-256. The job must:
@@ -727,8 +731,9 @@ run; the later PR comment is only an index and is never described as the
 evidence store. Tests reject extra/missing inputs, pull-request or scheduled
 triggers, any write/id-token permission, secret access, an unpinned action,
 credential persistence, dependency installation, a dynamic command, head drift,
-wrong receipt digest, unsafe base64, oversized input, extra archive files, and
-invalid runtime run/attempt values.
+wrong receipt digest, unsafe gzip/base64, compressed or decompressed oversized
+input, decompression bombs, extra archive files, and invalid runtime run/attempt
+values.
 
 - [ ] **Step 5: Update the parsed workflow contracts exactly**
 
@@ -1469,8 +1474,8 @@ is `UNPROVABLE` and keeps publication blocked.
 
 - [ ] **Step 4: Seal the receipt in an exact-head Actions artifact**
 
-Compute the canonical receipt SHA-256, encode the bounded redacted bytes as one
-base64 `workflow_dispatch` input, and dispatch
+Compute the canonical receipt SHA-256, gzip the bounded redacted bytes and
+encode that transport as one base64 `workflow_dispatch` input, and dispatch
 `dependency-security-receipt.yml` with `--ref main` plus exact observation-head,
 PR, reviewed-base, reviewed-head, and merge inputs. `--ref` is deliberately the branch name;
 the workflow itself rejects unless `github.sha` and live `main` both equal the

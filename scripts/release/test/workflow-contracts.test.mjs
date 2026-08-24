@@ -477,7 +477,7 @@ test("dependency security receipt uploader is exact, offline, read-only, and wri
   const expectedReviewedBaseInput = workflowExpression("inputs.expectedReviewedBaseSha")
   const expectedReviewedHeadInput = workflowExpression("inputs.expectedReviewedHeadSha")
   const expectedMergeInput = workflowExpression("inputs.expectedMergeSha")
-  const receiptBase64Input = workflowExpression("inputs.receiptBase64")
+  const receiptGzipBase64Input = workflowExpression("inputs.receiptGzipBase64")
   const receiptSha256Input = workflowExpression("inputs.receiptSha256")
   const runnerTemp = workflowExpression("runner.temp")
   const githubToken = workflowExpression("github.token")
@@ -493,7 +493,7 @@ test("dependency security receipt uploader is exact, offline, read-only, and wri
     "expectedReviewedBaseSha",
     "expectedReviewedHeadSha",
     "expectedMergeSha",
-    "receiptBase64",
+    "receiptGzipBase64",
     "receiptSha256",
   ])
   for (const input of Object.values(inputs)) {
@@ -556,14 +556,14 @@ test("dependency security receipt uploader is exact, offline, read-only, and wri
     EXPECTED_REVIEWED_BASE_SHA: expectedReviewedBaseInput,
     EXPECTED_REVIEWED_HEAD_SHA: expectedReviewedHeadInput,
     EXPECTED_MERGE_SHA: expectedMergeInput,
-    RECEIPT_BASE64: receiptBase64Input,
+    RECEIPT_GZIP_BASE64: receiptGzipBase64Input,
     RECEIPT_SHA256: receiptSha256Input,
     RECEIPT_OUTPUT_ROOT: `${runnerTemp}/dependency-security-receipt-root`,
     RECEIPT_OUTPUT_DIRECTORY: `${runnerTemp}/dependency-security-receipt-root/sealed`,
   })
   assert.equal(
     seal.run,
-    'node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha "$EXPECTED_MAIN_SHA" \\\n  --expected-pr-number "$EXPECTED_PR_NUMBER" \\\n  --expected-reviewed-base-sha "$EXPECTED_REVIEWED_BASE_SHA" \\\n  --expected-reviewed-head-sha "$EXPECTED_REVIEWED_HEAD_SHA" \\\n  --expected-merge-sha "$EXPECTED_MERGE_SHA" \\\n  --receipt-base64 "$RECEIPT_BASE64" \\\n  --receipt-sha256 "$RECEIPT_SHA256" \\\n  --output-root "$RECEIPT_OUTPUT_ROOT" \\\n  --output-directory "$RECEIPT_OUTPUT_DIRECTORY"\n',
+    'node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha "$EXPECTED_MAIN_SHA" \\\n  --expected-pr-number "$EXPECTED_PR_NUMBER" \\\n  --expected-reviewed-base-sha "$EXPECTED_REVIEWED_BASE_SHA" \\\n  --expected-reviewed-head-sha "$EXPECTED_REVIEWED_HEAD_SHA" \\\n  --expected-merge-sha "$EXPECTED_MERGE_SHA" \\\n  --receipt-gzip-base64 "$RECEIPT_GZIP_BASE64" \\\n  --receipt-sha256 "$RECEIPT_SHA256" \\\n  --output-root "$RECEIPT_OUTPUT_ROOT" \\\n  --output-directory "$RECEIPT_OUTPUT_DIRECTORY"\n',
   )
   assert.deepEqual(upload, {
     name: "Upload sealed receipt",

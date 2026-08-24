@@ -6,6 +6,7 @@ import { TextDecoder } from "node:util"
 
 import { canonicalJsonBytes, EvidenceError } from "./github-evidence.mjs"
 import { validateReconciliationReceipt } from "./reconciliation-receipt.mjs"
+import { decodeReconciliationReceiptGzipBase64 } from "./reconciliation-transport.mjs"
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 
@@ -22,7 +23,7 @@ export async function sealReconciliationReceipt({
   expectedReviewedHeadSha,
   outputDirectory,
   outputRoot,
-  receiptBase64,
+  receiptGzipBase64,
   receiptSha256,
   runAttempt,
   runId,
@@ -46,7 +47,7 @@ export async function sealReconciliationReceipt({
   ) {
     fail("INVALID_RECEIPT_CORRELATION")
   }
-  const receiptBytes = decodeCanonicalBase64(receiptBase64)
+  const receiptBytes = decodeReconciliationReceiptGzipBase64(receiptGzipBase64)
   const actualDigest = createHash("sha256").update(receiptBytes).digest("hex")
   if (actualDigest !== receiptSha256) fail("RECEIPT_DIGEST_MISMATCH")
   let parsed
@@ -87,26 +88,6 @@ export async function sealReconciliationReceipt({
     writerCheckpoint,
   })
   return { manifest, ...paths }
-}
-
-function decodeCanonicalBase64(value) {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 43_692 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
-  ) {
-    fail("INVALID_RECEIPT_BASE64")
-  }
-  const bytes = Buffer.from(value, "base64")
-  if (
-    bytes.byteLength === 0 ||
-    bytes.byteLength > 32 * 1024 ||
-    bytes.toString("base64") !== value
-  ) {
-    fail("INVALID_RECEIPT_BASE64")
-  }
-  return bytes
 }
 
 async function writeContainedReceiptPair({

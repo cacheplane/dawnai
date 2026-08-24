@@ -10,6 +10,7 @@ import {
 } from "./dependabot-evidence-schema.mjs"
 import { canonicalJsonBytes, EvidenceError } from "./github-evidence.mjs"
 import { verifyPublicationSnapshot } from "./publication-containment.mjs"
+import { encodeReconciliationReceiptGzipBase64 } from "./reconciliation-transport.mjs"
 
 const MAX_AUDIT_AGE_MILLISECONDS = 5 * 60_000
 
@@ -125,7 +126,9 @@ export function createReconciliationReceipt({
     schemaVersion: 1,
     verificationRuns,
   }
-  if (canonicalJsonBytes(receipt).byteLength > 32 * 1024) {
+  try {
+    encodeReconciliationReceiptGzipBase64(canonicalJsonBytes(receipt))
+  } catch {
     fail("INVALID_RECONCILIATION_RECEIPT")
   }
   return validateReconciliationReceipt(receipt)

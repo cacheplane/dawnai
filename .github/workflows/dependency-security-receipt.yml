@@ -24,8 +24,8 @@ on:
         description: Exact pull request merge SHA
         required: true
         type: string
-      receiptBase64:
-        description: Canonical redacted reconciliation receipt encoded as base64
+      receiptGzipBase64:
+        description: Canonical redacted reconciliation receipt encoded as gzip plus base64
         required: true
         type: string
       receiptSha256:
@@ -106,7 +106,7 @@ jobs:
           EXPECTED_REVIEWED_BASE_SHA: ${{ inputs.expectedReviewedBaseSha }}
           EXPECTED_REVIEWED_HEAD_SHA: ${{ inputs.expectedReviewedHeadSha }}
           EXPECTED_MERGE_SHA: ${{ inputs.expectedMergeSha }}
-          RECEIPT_BASE64: ${{ inputs.receiptBase64 }}
+          RECEIPT_GZIP_BASE64: ${{ inputs.receiptGzipBase64 }}
           RECEIPT_SHA256: ${{ inputs.receiptSha256 }}
           RECEIPT_OUTPUT_ROOT: ${{ runner.temp }}/dependency-security-receipt-root
           RECEIPT_OUTPUT_DIRECTORY: ${{ runner.temp }}/dependency-security-receipt-root/sealed
@@ -117,7 +117,7 @@ jobs:
             --expected-reviewed-base-sha "$EXPECTED_REVIEWED_BASE_SHA" \
             --expected-reviewed-head-sha "$EXPECTED_REVIEWED_HEAD_SHA" \
             --expected-merge-sha "$EXPECTED_MERGE_SHA" \
-            --receipt-base64 "$RECEIPT_BASE64" \
+            --receipt-gzip-base64 "$RECEIPT_GZIP_BASE64" \
             --receipt-sha256 "$RECEIPT_SHA256" \
             --output-root "$RECEIPT_OUTPUT_ROOT" \
             --output-directory "$RECEIPT_OUTPUT_DIRECTORY"
