@@ -319,24 +319,27 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
           existingState !== undefined,
         )
         lifecycleStates.set(threadId, state)
+        const pidExhaustionRecovery = {
+          captureToken: (): DockerRecoveryAttempt => ({
+            [recoveryAttempt]: true,
+            state,
+            generation: state.generation,
+          }),
+          recoverAndRetry: (token: unknown, retry: () => Promise<SpawnResult>) =>
+            recoverAndRetry(threadId, token, retry),
+        }
         return {
           threadId,
-          filesystem: dockerFilesystem(docker, container, (operation) =>
-            lifecycle.runShared(threadId, operation),
-          ),
+          filesystem: dockerFilesystem(docker, container, {
+            runWithExecLease: (operation) => lifecycle.runShared(threadId, operation),
+            pidExhaustionRecovery,
+          }),
           exec: dockerExec(docker, container, {
             runWithExecLease: (operation) => lifecycle.runShared(threadId, operation),
             ...(policy.resources?.timeoutMs !== undefined
               ? { timeoutMs: policy.resources.timeoutMs }
               : {}),
-            pidExhaustionRecovery: {
-              captureToken: (): DockerRecoveryAttempt => ({
-                [recoveryAttempt]: true,
-                state,
-                generation: state.generation,
-              }),
-              recoverAndRetry: (token, retry) => recoverAndRetry(threadId, token, retry),
-            },
+            pidExhaustionRecovery,
           }),
           workspaceRoot: ROOT,
         }

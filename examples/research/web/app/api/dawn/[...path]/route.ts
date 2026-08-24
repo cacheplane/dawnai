@@ -8,7 +8,7 @@ import { resolveProxyTarget } from "../../../lib/proxy-allowlist"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-// Matches app/api/copilotkit/route.ts and the dev server's own bind address.
+// Matches app/api/copilotkit/[...path]/route.ts and the dev server's own bind address.
 // `localhost` is not equivalent: on a dual-stack box it resolves `::1` first,
 // which either pays a failed-connect retry or times out outright if `::1` is
 // blackholed, while `127.0.0.1` (what the dev server actually binds) works

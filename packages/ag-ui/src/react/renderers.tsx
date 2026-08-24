@@ -35,7 +35,13 @@ export const dawnSubagentActivityRenderer = {
  * Both built-in Dawn activity renderers, ready to hand to CopilotKit:
  *
  * ```tsx
- * <CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
+ * import { CopilotKit } from "@copilotkit/react-core/v2"
+ *
+ * <CopilotKit
+ *   runtimeUrl="/api/copilotkit"
+ *   useSingleEndpoint={false}
+ *   renderActivityMessages={dawnActivityRenderers}
+ * >
  * ```
  *
  * Dawn presents `writeTodos` and a started `task` ONLY as these activities —

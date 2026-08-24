@@ -3,7 +3,7 @@ import { neutralButton } from "./ui"
 export interface ConnectScreenProps {
   /**
    * The URL this client proxies to by default. Not read from an env var
-   * here — `DAWN_SERVER_URL` is server-side only (`api/copilotkit/route.ts`,
+   * here — `DAWN_SERVER_URL` is server-side only (`api/copilotkit/[...path]/route.ts`,
    * `api/dawn/[...path]/route.ts`), and a client component cannot read it.
    * The app has no `NEXT_PUBLIC_` twin for it, and adding one just to label
    * this screen would be a second source of truth that can drift from the

@@ -33,10 +33,11 @@
   commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
   or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
   for the interrupt/resume flow.
-- End-to-end streaming to a [CopilotKit](https://docs.copilotkit.ai) web client over Dawn's
-  AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) for basic `/chat` messages.
-  The web example deliberately has no planning or subagent activity presentation and no
-  permission decision control.
+- End-to-end streaming to a [CopilotKit](https://docs.copilotkit.ai) V2 web client over
+  Dawn's AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) for basic `/chat`
+  messages. The browser uses CopilotKit's same-origin multi-route runtime under
+  `/api/copilotkit/*`; the runtime's `HttpAgent` owns the server-to-server Dawn call. The
+  client presents plan/subagent activities and the standard permission decision control.
 
 ## Model choice
 
@@ -80,7 +81,7 @@ examples/chat/
     └── app/
         ├── layout.tsx                 # imports @copilotkit/react-core/v2/styles.css
         ├── page.tsx                   # CopilotKit + CopilotSidebar
-        └── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/%2Fchat%23agent
+        └── api/copilotkit/[...path]/route.ts # V2 runtime + HttpAgent → Dawn /agui/%2Fchat%23agent
 ```
 
 ## Security caveats
@@ -97,7 +98,7 @@ shell expansion — all possible. Do not point untrusted users at this example.
   `workspace/` are also permission-gated by the workspace capability. See
   [Permissions](../../apps/web/content/docs/permissions.mdx) and the
   [configuration reference](../../apps/web/content/docs/configuration.mdx#permissions).
-  The basic web client does not render a decision control.
+  The basic web client renders CopilotKit's standard interrupt decision control.
 - **Tool-output offloading** is supported by the runtime and is active whenever the app
   root has a `workspace/` directory. Large tool results are written under
   `workspace/tool-outputs/` and replaced in context with a preview plus a `readFile`

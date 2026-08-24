@@ -1,7 +1,8 @@
 "use client"
 import { useRenderTool } from "@copilotkit/react-core/v2"
 
-// Notes (verified against the installed @copilotkit/react-core types under
+// CopilotKit 1.68.3 V2 notes (verified against the installed
+// @copilotkit/react-core types under
 // node_modules/@copilotkit/react-core/dist; the bundled `.d.mts` filenames
 // carry content hashes that change between releases, so none is cited here):
 //
@@ -10,21 +11,16 @@ import { useRenderTool } from "@copilotkit/react-core/v2"
 //   render *function* used internally by CopilotKit's own message view; it is
 //   not a registration API). `useRenderTool` is called under `<CopilotKit>`.
 // - Wildcard registration: pass `{ name: "*", render, agentId? }` — the "*"
-//   overload is documented as "used as a fallback when no exact name-matched
-//   renderer is registered for a tool call" (src/v2/hooks/use-render-tool.d.ts).
-//   `WildcardToolCallRender`/`defineToolCallRenderer` are the analogous
-//   *prop*-based API (for `<CopilotKit renderToolCalls={[...]}>`), not needed
-//   here since the hook form matches the rest of this app's components.
-// - Render prop field names for `useRenderTool`'s wildcard overload are
-//   `{ name, toolCallId, parameters, status, result }` — note the args field
-//   is called `parameters` here (not `args`; `args` is only the field name on
-//   the sibling `ReactToolCallRenderer`/`defineToolCallRenderer` types used by
-//   the prop-based API).
-// - `status` is the string union `"inProgress" | "executing" | "complete"`
-//   (plain string literals) for `useRenderTool` — NOT the `ToolCallStatus`
-//   enum (`InProgress`/`Executing`/`Complete`), which belongs to the
-//   prop-based `ReactToolCallRenderer<T>` render props instead.
-// - `result` is `string | undefined`, populated only once `status === "complete"`.
+//   renderer is the fallback when no exact tool-name renderer is registered.
+// - The public wildcard overload currently types `render` props as `any`; it
+//   does not statically enforce field names or status values. The 1.68.3 V2
+//   runtime/default renderer passes
+//   `{ name, toolCallId, parameters, status, result }`, where current status
+//   values are `"inProgress"`, `"executing"`, and `"complete"`, and `result`
+//   is populated for completed calls. Treat this as the current runtime
+//   contract, not a guarantee from the wildcard overload.
+// - Keep argument/result parsing defensive. The runtime field is named
+//   `parameters`, while sibling prop-based renderer APIs use `args`.
 //
 // With no agentId, this binds to CopilotKit's default agent id ("default"),
 // which the runtime route registers as our Dawn /research agent — same as

@@ -7,12 +7,13 @@
     "dev": "next dev -p 3000",
     "build": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\" && next build",
     "start": "next start -p 3000",
+    "test:e2e": "playwright test --config playwright.config.ts",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.57",
-    "@copilotkit/react-core": "^1.66.0",
-    "@copilotkit/runtime": "^1.66.0",
+    "@copilotkit/react-core": "^1.68.3",
+    "@copilotkit/runtime": "^1.68.3",
     "@dawn-ai/ag-ui": "workspace:*",
     "next": "16.3.0",
     "react": "19.2.8",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@playwright/test": "1.62.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
