@@ -7,8 +7,19 @@ import type { HydratedThread } from "../lib/hydrate"
 import type { ThreadSource, WorkbenchThread } from "../lib/thread-source"
 import type { TranscriptMessage } from "../lib/transcript"
 import { Composer } from "./Composer"
+import { ConnectScreen } from "./ConnectScreen"
 import { ThreadRail, UNTITLED_THREAD_LABEL } from "./ThreadRail"
 import { Transcript } from "./Transcript"
+
+/**
+ * The default `api/copilotkit/route.ts` and `api/dawn/[...path]/route.ts` fall
+ * back to when `DAWN_SERVER_URL` is unset. That env var is server-side only —
+ * a client component cannot read it, and this app has deliberately not grown
+ * a `NEXT_PUBLIC_` twin for it (a second value that can drift from the real
+ * one is worse than an honest default). `ConnectScreen` shows this value
+ * labeled as a default, not asserted as the confirmed target.
+ */
+const DEFAULT_SERVER_URL = "http://127.0.0.1:3002"
 
 /**
  * Which CopilotKit core errors are the user's problem, and what to call them.
@@ -114,6 +125,28 @@ export function AppShell({
 }: AppShellProps) {
   const { agent } = useAgent()
   const { copilotkit } = useCopilotKit()
+  // NOT `isReady` from `useAgent`: that flag is false for both "still
+  // connecting" and "the runtime is down", has no retry, and gives no way to
+  // tell the two apart (verified against `react-core/dist/v2/headless.mjs`).
+  // `runtimeConnectionStatus` is the trustworthy read — already reactive,
+  // since `useCopilotKit` force-updates on `onRuntimeConnectionStatusChanged`
+  // — and lands on `"error"` and stays there when the server never answers.
+  // Compared against the string literal rather than
+  // `CopilotKitCoreRuntimeConnectionStatus.Error`: `@copilotkit/core` is not a
+  // direct dependency of this app (only `react-core` and `runtime` are, which
+  // re-export the type but not a value to import), and the same tradeoff was
+  // already made for `RUN_ERROR_TITLES` above.
+  const isServerUnreachable = copilotkit.runtimeConnectionStatus === "error"
+  // Read by the hydrate effect's failure handler below, via a ref rather than
+  // the dependency array: that effect is deliberately NOT keyed on connection
+  // status (see its own comment on why `agent`'s identity gets the same
+  // ref treatment) — putting `isServerUnreachable` in its deps would re-run
+  // the whole clear-and-rehydrate dance on every connection flap, for a value
+  // it only needs to read once, at the moment a hydrate settles.
+  const isServerUnreachableRef = useRef(isServerUnreachable)
+  useEffect(() => {
+    isServerUnreachableRef.current = isServerUnreachable
+  }, [isServerUnreachable])
   const [runError, setRunError] = useState<RunErrorState | null>(null)
   // True only once a hydrate has actually put something back on screen, which
   // is the condition for the "what did not come back" note in `Transcript`.
@@ -291,6 +324,16 @@ export function AppShell({
 
     const reportHydrateFailure = (error: unknown) => {
       if (isStale()) return
+      // Read off the ref, not a value closed over by this render: this effect
+      // does not depend on `isServerUnreachable` (see its declaration above),
+      // so a captured value here could be stale by the time the hydrate
+      // settles. The point of the guard is `ConnectScreen` is up and the
+      // transcript that would show this error is unmounted — recording
+      // "could not restore this conversation" for a server that was never
+      // reachable is not a fact about this thread, and would otherwise sit in
+      // state ready to flash on screen the moment the shell renders the
+      // transcript again.
+      if (isServerUnreachableRef.current) return
       setRunError({
         title: "Could not restore this conversation",
         message: error instanceof Error ? error.message : String(error),
@@ -327,6 +370,30 @@ export function AppShell({
   }, [agent])
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId)
+
+  // Every hook above has run unconditionally on every render — this return
+  // has to come after all of them, or React throws on the next render whose
+  // status differs (rules of hooks). It is deliberately keyed on `"error"`
+  // alone, not on the absence of `"connected"`: `"connecting"` is the normal
+  // shape of a first paint (`useAgent`'s runtime `/info` sync has not
+  // resolved yet), and showing "cannot connect" for that beat would be a lie
+  // for the common case, not just an ugly flash.
+  //
+  // The rail and header disappear with the transcript and composer: the whole
+  // point of this screen is that nothing in the shell works without a server,
+  // including thread switching, so a rail that responds to clicks with
+  // nothing happening is worse than no rail. `ConnectScreen` carries its own
+  // brand mark so the app still has a header-equivalent identity on screen.
+  //
+  // The hydrate effect above still runs — it is keyed on `activeThreadId`,
+  // not on this flag — and will fail against the same unreachable server;
+  // `reportHydrateFailure`'s own guard is what keeps that failure from
+  // landing in `runError` while this screen is up (see its comment).
+  // `HydratedInterrupts`, unmounted along with `Transcript` here, simply does
+  // not run its fetch at all.
+  if (isServerUnreachable) {
+    return <ConnectScreen serverUrl={DEFAULT_SERVER_URL} />
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden">

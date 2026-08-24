@@ -26,6 +26,9 @@ import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from "vi
 const mocks = vi.hoisted(() => ({
   agent: null as unknown as FakeAgent,
   runAgent: (async () => {}) as (params: unknown) => Promise<unknown>,
+  // Matches the real shell's default first paint: connected, not connecting
+  // or errored. Tests that care override it before rendering.
+  runtimeConnectionStatus: "connected" as string,
 }))
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -34,6 +37,9 @@ vi.mock("@copilotkit/react-core/v2", () => ({
     copilotkit: {
       subscribe: () => ({ unsubscribe: () => {} }),
       runAgent: mocks.runAgent,
+      get runtimeConnectionStatus() {
+        return mocks.runtimeConnectionStatus
+      },
     },
   }),
   useRenderActivityMessage: () => ({
@@ -188,6 +194,7 @@ beforeEach(() => {
   // assumes (no hydrated card, no composer block from that source).
   pendingInterrupts = vi.fn(async () => [])
   mocks.runAgent = async () => {}
+  mocks.runtimeConnectionStatus = "connected"
   container = document.createElement("div")
   document.body.append(container)
   root = createRoot(container)
@@ -443,5 +450,29 @@ describe("app shell composer block for restored gates", () => {
     await settleParked()
     expect(composer().readOnly).toBe(false)
     expect(container.textContent).not.toContain("Permission required")
+  })
+})
+
+describe("app shell connect screen", () => {
+  test("shows the connect screen when the runtime connection status is 'error'", () => {
+    mocks.runtimeConnectionStatus = "error"
+    render("thread-a")
+    expect(container.textContent).toContain("Can’t reach the Dawn server")
+    // The whole shell is gone with it — no rail, no composer.
+    expect(container.querySelector("textarea")).toBeNull()
+  })
+
+  test("does NOT show the connect screen while still connecting", () => {
+    mocks.runtimeConnectionStatus = "connecting"
+    render("thread-a")
+    expect(container.textContent).not.toContain("Can’t reach the Dawn server")
+    expect(container.querySelector("textarea")).not.toBeNull()
+  })
+
+  test("renders the normal shell when connected", () => {
+    mocks.runtimeConnectionStatus = "connected"
+    render("thread-a")
+    expect(container.textContent).not.toContain("Can’t reach the Dawn server")
+    expect(container.querySelector("textarea")).not.toBeNull()
   })
 })
