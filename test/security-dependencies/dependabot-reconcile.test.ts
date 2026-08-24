@@ -29,6 +29,7 @@ import {
 	validateReconciliationReceipt,
 } from "../../scripts/security/dependabot-reconcile.mjs";
 import { validateAuditExpectation } from "../../scripts/security/dependency-audit-evidence.mjs";
+import { validateAuditReceipt } from "../../scripts/security/audit-evidence-schema.mjs";
 import {
 	canonicalJsonBytes,
 	createEvidenceBudget,
@@ -42,6 +43,7 @@ const repositoryRoot = resolve(testDir, "../..");
 const fixturePath = resolve(testDir, "fixtures/dependabot-baseline.json");
 const execFileAsync = promisify(execFile);
 const defaultSha = "d2404dc7b138db151ae58f0b36788dfa08e2008e";
+const auditLockfileSha256 = "1".repeat(64);
 const expectedNumbers = [
 	122, 124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180, 181,
 	191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 204, 205, 206, 207,
@@ -119,6 +121,32 @@ const sharedSchemaMutationCorpus = [
 ] as const;
 
 describe("shared reconciliation input schemas", () => {
+	it("rejects a legacy audit receipt that has no source provenance", () => {
+		expect(() => validateAuditReceipt(legacyAuditReceipt())).toThrow(
+			/UNPROVABLE: INVALID_AUDIT_RECEIPT/u,
+		);
+	});
+
+	it.each([
+		["source commit", (receipt: any) => (receipt.sourceSha = "e".repeat(40))],
+		[
+			"lockfile digest",
+			(receipt: any) => (receipt.lockfileSha256 = "e".repeat(64)),
+		],
+	])("rejects audit %s drift before reconciliation", (_name, mutate) => {
+		const inputs = reconciliationFileInputs(defaultSha);
+		const audit = JSON.parse(inputs.auditReceiptBytes.toString("utf8"));
+		mutate(audit);
+		expect(() =>
+			validateReconciliationFileInputs({
+				...inputs,
+				auditReceiptBytes: canonicalJsonBytes(audit),
+				expectedObservationHeadSha: "d".repeat(40),
+				expectedReviewedBaseSha: defaultSha,
+			}),
+		).toThrow(/UNPROVABLE: AUDIT_PROVENANCE_MISMATCH/u);
+	});
+
 	it.each(sharedSchemaMutationCorpus)(
 		"keeps collection and reconciliation schema outcomes identical for $name",
 		({ mutateAudit, mutateDependabot }) => {
@@ -137,6 +165,8 @@ describe("shared reconciliation input schemas", () => {
 					auditReceiptBytes: canonicalJsonBytes(
 						auditReceiptFromExpectation(auditForReceipt),
 					),
+					expectedObservationHeadSha: "d".repeat(40),
+					expectedObservationLockfileSha256: auditLockfileSha256,
 					expectedReviewedBaseSha: defaultSha,
 				});
 				return {
@@ -161,6 +191,7 @@ describe("shared reconciliation input schemas", () => {
 				() =>
 					validateReconciliationFileInputs({
 						...dependabotInputs,
+						expectedObservationHeadSha: "d".repeat(40),
 						expectedReviewedBaseSha: defaultSha,
 					}).dependabotIdentities,
 			);
@@ -694,6 +725,7 @@ describe("merged-head reconciliation", () => {
 		"auditReceiptBytes",
 		"baselineReceiptBytes",
 		"dependabotIdentitiesFixtureBytes",
+		"expectedObservationLockfileSha256",
 		"collectPublication",
 	])(
 		"requires complete provenance input %s before GitHub I/O",
@@ -704,6 +736,7 @@ describe("merged-head reconciliation", () => {
 				"auditReceiptBytes",
 				"baselineReceiptBytes",
 				"dependabotIdentitiesFixtureBytes",
+				"expectedObservationLockfileSha256",
 				"collectPublication",
 			];
 			for (const key of missing === "all" ? keys : [missing])
@@ -925,6 +958,7 @@ describe("merged-head reconciliation", () => {
 			...reconciliationFileInputs(
 				baseSha,
 				reconciliationFixtureWithThree(baseSha),
+				mergeSha,
 			),
 			collectPublication: async () => publicationSnapshot(mergeSha, mergeSha),
 			expectedFixedNumbers: [2, 3],
@@ -1164,6 +1198,33 @@ describe("offline reconciliation receipt sealing", () => {
 	it("validates the exact complete reconciliation schema and correlations", () => {
 		const receipt = completeReconciliationReceipt();
 		expect(validateReconciliationReceipt(receipt)).toEqual(receipt);
+	});
+
+	it.each([
+		[
+			"before the merge",
+			(receipt: any) => (receipt.audit.evidence.capturedAt = "2026-08-10T17:59:59Z"),
+		],
+		[
+			"outside the five-minute freshness window",
+			(receipt: any) => {
+				receipt.pr.mergedAt = "2026-08-10T17:50:00Z";
+				receipt.audit.evidence.capturedAt = "2026-08-10T17:55:59Z";
+			},
+		],
+		[
+			"after reconciliation started",
+			(receipt: any) => (receipt.audit.evidence.capturedAt = "2026-08-10T18:01:01Z"),
+		],
+	])("rejects audit capture time %s", (_name, mutate) => {
+		const receipt: any = completeReconciliationReceipt();
+		mutate(receipt);
+		const auditDigest = digest(receipt.audit.evidence);
+		receipt.audit.digest = auditDigest;
+		receipt.digests.inputs.auditReceiptSha256 = auditDigest;
+		expect(() => validateReconciliationReceipt(receipt)).toThrow(
+			/UNPROVABLE: INVALID_RECONCILIATION_RECEIPT/u,
+		);
 	});
 
 	it.each([
@@ -1771,7 +1832,10 @@ function schemaAuditExpectation() {
 	};
 }
 
-function auditReceiptFromExpectation(expectation: any) {
+function auditReceiptFromExpectation(
+	expectation: any,
+	sourceSha = "d".repeat(40),
+) {
 	const auditMode = (value: any) => {
 		const severityTotals = {
 			critical: 0,
@@ -1792,10 +1856,13 @@ function auditReceiptFromExpectation(expectation: any) {
 		};
 	};
 	return {
+		capturedAt: "2026-08-10T18:00:30Z",
 		full: auditMode(expectation.full),
 		kind: "pnpm-audit",
+		lockfileSha256: auditLockfileSha256,
 		production: auditMode(expectation.production),
-		schemaVersion: 1,
+		schemaVersion: 2,
+		sourceSha,
 	};
 }
 
@@ -1911,7 +1978,7 @@ function reconciliationFixtureWithThree(defaultSha: string) {
 	});
 }
 
-function auditReceipt() {
+function auditReceipt(sourceSha = "c".repeat(40)) {
 	const record = {
 		ghsa: "GHSA-866g-f22w-33x8",
 		package: "@ai-sdk/provider-utils",
@@ -1926,11 +1993,23 @@ function auditReceipt() {
 		status: "findings",
 	};
 	return {
+		capturedAt: "2026-08-10T18:00:30Z",
 		full: mode,
 		kind: "pnpm-audit",
+		lockfileSha256: auditLockfileSha256,
 		production: structuredClone(mode),
-		schemaVersion: 1,
+		schemaVersion: 2,
+		sourceSha,
 	};
+}
+
+function legacyAuditReceipt() {
+	const receipt: any = auditReceipt();
+	delete receipt.capturedAt;
+	delete receipt.lockfileSha256;
+	delete receipt.sourceSha;
+	receipt.schemaVersion = 1;
+	return receipt;
 }
 
 function digest(value: unknown) {
@@ -1944,8 +2023,9 @@ function sha256Bytes(value: Buffer) {
 function reconciliationFileInputs(
 	baseSha: string,
 	fixture = reconciliationFixture(baseSha),
+	observationSha = "d".repeat(40),
 ) {
-	const audit = auditReceipt();
+	const audit = auditReceipt(observationSha);
 	const auditExpectation = {
 		full: { muted: [], records: audit.full.records },
 		production: { muted: [], records: audit.production.records },
@@ -1965,6 +2045,7 @@ function reconciliationFileInputs(
 		auditReceiptBytes: canonicalJsonBytes(audit),
 		baselineReceiptBytes: canonicalJsonBytes(baselineReceipt),
 		dependabotIdentitiesFixtureBytes: canonicalJsonBytes(fixture),
+		expectedObservationLockfileSha256: auditLockfileSha256,
 	};
 }
 
@@ -1974,7 +2055,7 @@ function reconciliationEvidenceArgs(
 	fixture = reconciliationFixture(baseSha),
 ) {
 	return {
-		...reconciliationFileInputs(baseSha, fixture),
+		...reconciliationFileInputs(baseSha, fixture, observationSha),
 		collectPublication: async () =>
 			publicationSnapshot(observationSha, observationSha),
 	};

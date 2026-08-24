@@ -497,12 +497,16 @@ version candidate.
 After merge, the bounded reader must correlate the exact PR, reviewed base,
 reviewed head, merge SHA, stable observation head, fixed/open Dependabot sets,
 final full/production audit, publication containment before and after alert
-reads, and exact required CI/CodeQL/Scorecard runs. The manual receipt workflow
-then seals the canonical redacted receipt into a content-addressed, write-once
-Actions artifact. The PR comment is only an index to that artifact, not the
-evidence store.
+reads, and exact required CI/CodeQL/Scorecard runs. The audit receipt must use
+schema v2, bind its source SHA to the observation head, bind its lockfile digest
+to that exact checkout, and complete after merge but no more than five minutes
+before reconciliation starts. The manual receipt workflow then seals the
+canonical redacted receipt—including that validated audit preimage—into a
+content-addressed, write-once Actions artifact. The PR comment is only an index
+to that artifact, not the evidence store.
 
 The final post-merge section must record the artifact ID, URL, service digest,
 receipt SHA-256, uploader manifest digest, audit digest, reviewed-base receipt
-digest, fixture digest, and final alert/containment verdict. Until that sequence
-completes, all merge and post-merge claims remain pending.
+digest, audit capture/source/lockfile values, fixture digest, and final
+alert/containment verdict. Until that sequence completes, all merge and
+post-merge claims remain pending.

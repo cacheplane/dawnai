@@ -40,6 +40,10 @@ const dependencyEvidenceCliPath = resolve(
 	repositoryRoot,
 	"scripts/security/dependency-evidence.mjs",
 );
+const auditProvenance = {
+	lockfileSha256: "b".repeat(64),
+	sourceSha: "a".repeat(40),
+};
 const execFileAsync = promisify(execFile);
 
 const expectedFullAuditTuples = [
@@ -452,6 +456,7 @@ describe("fixed audit subprocess contract", () => {
 			let calls = 0;
 			await expect(
 				collectAuditEvidence({
+					...auditProvenance,
 					expectation: validateAuditExpectation({
 						full: mode([]),
 						production: mode([]),
@@ -474,6 +479,7 @@ describe("fixed audit subprocess contract", () => {
 			let calls = 0;
 			await expect(
 				collectAuditEvidence({
+					...auditProvenance,
 					expectation: validateAuditExpectation({
 						full: mode([]),
 						production: mode([]),
@@ -495,6 +501,7 @@ describe("fixed audit subprocess contract", () => {
 		let calls = 0;
 		await expect(
 			collectAuditEvidence({
+				...auditProvenance,
 				expectation: validateAuditExpectation({
 					full: mode([]),
 					production: mode([]),
@@ -520,6 +527,7 @@ describe("fixed audit subprocess contract", () => {
 			let calls = 0;
 			await expect(
 				collectAuditEvidence({
+					...auditProvenance,
 					expectation: validateAuditExpectation({
 						full: mode([]),
 						production: mode([]),
@@ -546,6 +554,7 @@ describe("fixed audit subprocess contract", () => {
 		const observed: unknown[] = [];
 		let clock = 100;
 		const result = await collectAuditEvidence({
+			...auditProvenance,
 			cwd: repositoryRoot,
 			expectation,
 			maxBytes: 4096,
@@ -597,6 +606,7 @@ describe("fixed audit subprocess contract", () => {
 		});
 		await expect(
 			collectAuditEvidence({
+				...auditProvenance,
 				cwd: repositoryRoot,
 				expectation,
 				runProcess: async () => ({
@@ -610,6 +620,7 @@ describe("fixed audit subprocess contract", () => {
 		let calls = 0;
 		await expect(
 			collectAuditEvidence({
+				...auditProvenance,
 				cwd: repositoryRoot,
 				expectation,
 				now: () => (calls++ === 0 ? 0 : 100),
@@ -798,10 +809,12 @@ describe("dependency evidence CLI", () => {
 				root: repositoryRoot,
 			});
 			const stdout: string[] = [];
+			const capturedAt = Date.parse("2026-08-10T18:00:30Z");
 			let calls = 0;
 			await runDependencyEvidenceCli({
 				argv: ["audit", "--expected", baselinePath, "--output", output],
 				cwd: repositoryRoot,
+				now: () => capturedAt,
 				runProcess: async () => {
 					const modeExpectation =
 						calls++ === 0 ? expectation.full : expectation.production;
@@ -819,9 +832,88 @@ describe("dependency evidence CLI", () => {
 			const receipt = JSON.parse(bytes.toString("utf8"));
 			expect(receipt.full.records).toHaveLength(30);
 			expect(receipt.production.records).toHaveLength(27);
+			expect(receipt.schemaVersion).toBe(2);
+			expect(receipt.sourceSha).toMatch(/^[0-9a-f]{40}$/u);
+			expect(receipt.lockfileSha256).toBe(
+				createHash("sha256")
+					.update(await readFile(resolve(repositoryRoot, "pnpm-lock.yaml")))
+					.digest("hex"),
+			);
+			expect(receipt.capturedAt).toBe("2026-08-10T18:00:30Z");
 			expect(stdout.join("")).toMatch(/audit receipt .*full=30 production=27/u);
 			expect(stdout.join("")).not.toContain("GHSA-");
 			expect(stdout.join("")).not.toContain("npm_token_secret");
+		} finally {
+			await rm(outputRoot, { force: true, recursive: true });
+		}
+	});
+
+	it("rejects a dirty or drifting audit source before writing a receipt", async () => {
+		const outputRoot = await mkdtemp(resolve(tmpdir(), "dawn-audit-source-"));
+		try {
+			const output = resolve(outputRoot, "audit.json");
+			let auditCalls = 0;
+			await expect(
+				runDependencyEvidenceCli({
+					argv: ["audit", "--expected", providerOnlyPath, "--output", output],
+					cwd: repositoryRoot,
+					gitProcess: async () => {
+						throw new Error("git unavailable");
+					},
+					runProcess: async () => {
+						auditCalls += 1;
+						return cleanAuditProcessResult();
+					},
+					writeStdout: () => {},
+				}),
+			).rejects.toThrow(/UNPROVABLE: AUDIT_SOURCE_UNPROVABLE/u);
+			expect(auditCalls).toBe(0);
+
+			await expect(
+				runDependencyEvidenceCli({
+					argv: ["audit", "--expected", providerOnlyPath, "--output", output],
+					cwd: repositoryRoot,
+					gitProcess: async ({ args }: { args: string[] }) =>
+						args[0] === "rev-parse"
+							? { exitCode: 0, stderr: "", stdout: `${"a".repeat(40)}\n` }
+							: { exitCode: 1, stderr: "", stdout: "" },
+					runProcess: async () => {
+						auditCalls += 1;
+						return cleanAuditProcessResult();
+					},
+					writeStdout: () => {},
+				}),
+			).rejects.toThrow(/UNPROVABLE: AUDIT_SOURCE_UNPROVABLE/u);
+			expect(auditCalls).toBe(0);
+			let headReads = 0;
+			let processReads = 0;
+			await expect(
+				runDependencyEvidenceCli({
+					argv: ["audit", "--expected", providerOnlyPath, "--output", output],
+					cwd: repositoryRoot,
+					gitProcess: async ({ args }: { args: string[] }) =>
+						args[0] === "rev-parse"
+							? {
+									exitCode: 0,
+									stderr: "",
+									stdout: `${(headReads++ === 0 ? "a" : "b").repeat(40)}\n`,
+								}
+							: { exitCode: 0, stderr: "", stdout: "" },
+					runProcess: async () => {
+						const expectation = await loadAuditExpectation(providerOnlyPath, {
+							root: repositoryRoot,
+						});
+						const selected = processReads++ === 0 ? expectation.full : expectation.production;
+						return {
+							exitCode: 1,
+							stderr: "",
+							stdout: JSON.stringify(auditDocument(selected)),
+						};
+					},
+					writeStdout: () => {},
+				}),
+			).rejects.toThrow(/UNPROVABLE: AUDIT_SOURCE_DRIFT/u);
+			await expect(readFile(output)).rejects.toThrow();
 		} finally {
 			await rm(outputRoot, { force: true, recursive: true });
 		}
@@ -868,7 +960,7 @@ describe("dependency evidence CLI", () => {
 				readFile(result.output, "utf8").then(JSON.parse),
 			).resolves.toMatchObject({
 				kind: "pnpm-audit",
-				schemaVersion: 1,
+				schemaVersion: 2,
 			});
 		} finally {
 			await rm(outputRoot, { force: true, recursive: true });
@@ -1002,11 +1094,7 @@ describe("dependency evidence CLI", () => {
 					output,
 				],
 				cwd: repositoryRoot,
-				gitProcess: async () => ({
-					exitCode: 0,
-					stderr: "",
-					stdout: `${observationHeadSha}\n`,
-				}),
+				gitProcess: cleanGitProcessForHead(observationHeadSha),
 				githubTransport: async () => {
 					throw new Error("transport must remain lazy");
 				},
@@ -1026,6 +1114,9 @@ describe("dependency evidence CLI", () => {
 				expectedFixedNumbers: [2],
 				expectedMergeSha: mergeSha,
 				expectedObservationHeadSha: observationHeadSha,
+				expectedObservationLockfileSha256: createHash("sha256")
+					.update(await readFile(resolve(repositoryRoot, "pnpm-lock.yaml")))
+					.digest("hex"),
 				expectedOpenNumbers: [1],
 				expectedReviewedBaseSha: reviewedBaseSha,
 				expectedReviewedHeadSha: reviewedHeadSha,
@@ -1116,11 +1207,7 @@ describe("dependency evidence CLI", () => {
 							...override,
 						}),
 						cwd: repositoryRoot,
-						gitProcess: async () => ({
-							exitCode: 0,
-							stderr: "",
-							stdout: `${"d".repeat(40)}\n`,
-						}),
+						gitProcess: cleanGitProcessForHead("d".repeat(40)),
 						readInventory: async () => ({
 							packages: [...INVENTORY_PACKAGES],
 							version: "0.8.21",
@@ -1169,11 +1256,7 @@ describe("dependency evidence CLI", () => {
 					output,
 				}),
 				cwd: repositoryRoot,
-				gitProcess: async () => ({
-					exitCode: 0,
-					stderr: "",
-					stdout: `${"d".repeat(40)}\n`,
-				}),
+				gitProcess: cleanGitProcessForHead("d".repeat(40)),
 				readInventory: async () => ({
 					packages: [...INVENTORY_PACKAGES],
 					version: "0.8.21",
@@ -1377,6 +1460,18 @@ function cleanAuditProcessResult() {
 	};
 }
 
+function cleanGitProcessForHead(sourceSha: string) {
+	return async ({ args }: { args: string[] }) => {
+		if (args[0] === "rev-parse") {
+			return { exitCode: 0, stderr: "", stdout: `${sourceSha}\n` };
+		}
+		if (args[0] === "diff") {
+			return { exitCode: 0, stderr: "", stdout: "" };
+		}
+		throw new Error("unexpected git request");
+	};
+}
+
 function countSeverity(records: Array<Record<string, string>>) {
 	const result = { critical: 0, high: 0, info: 0, low: 0, moderate: 0 };
 	for (const record of records)
@@ -1551,10 +1646,13 @@ function sealableReconciliationReceipt(baselineOpen: any[]) {
 		status: "findings",
 	};
 	const audit = {
+		capturedAt: "2026-08-10T18:00:30Z",
 		full: auditMode,
 		kind: "pnpm-audit",
+		lockfileSha256: "1".repeat(64),
 		production: structuredClone(auditMode),
-		schemaVersion: 1,
+		schemaVersion: 2,
+		sourceSha: observationHead,
 	};
 	const publication = publicationReceiptFixture(
 		observationHead,

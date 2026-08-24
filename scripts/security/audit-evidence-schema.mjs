@@ -1,3 +1,4 @@
+import { isEvidenceSha, isEvidenceTimestamp } from "./dependabot-evidence-schema.mjs"
 import { canonicalJsonBytes, EvidenceError } from "./github-evidence.mjs"
 
 const GHSA_PATTERN =
@@ -60,15 +61,29 @@ export function normalizeAuditRecord(value, code) {
 
 export function validateAuditReceipt(value) {
   const receipt = safeClone(value, "INVALID_AUDIT_RECEIPT")
-  assertExactKeys(receipt, ["full", "kind", "production", "schemaVersion"], "INVALID_AUDIT_RECEIPT")
-  if (receipt.kind !== "pnpm-audit" || receipt.schemaVersion !== 1) {
+  assertExactKeys(
+    receipt,
+    ["capturedAt", "full", "kind", "lockfileSha256", "production", "schemaVersion", "sourceSha"],
+    "INVALID_AUDIT_RECEIPT",
+  )
+  if (
+    receipt.kind !== "pnpm-audit" ||
+    receipt.schemaVersion !== 2 ||
+    !isEvidenceTimestamp(receipt.capturedAt) ||
+    !isEvidenceSha(receipt.sourceSha) ||
+    typeof receipt.lockfileSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(receipt.lockfileSha256)
+  ) {
     fail("INVALID_AUDIT_RECEIPT")
   }
   return {
+    capturedAt: receipt.capturedAt,
     full: validateAuditReceiptMode(receipt.full),
     kind: "pnpm-audit",
+    lockfileSha256: receipt.lockfileSha256,
     production: validateAuditReceiptMode(receipt.production),
-    schemaVersion: 1,
+    schemaVersion: 2,
+    sourceSha: receipt.sourceSha,
   }
 }
 

@@ -84,6 +84,7 @@ export async function reconcileDependabot({
   expectedFixedNumbers,
   expectedMergeSha,
   expectedObservationHeadSha,
+  expectedObservationLockfileSha256,
   expectedOpenNumbers,
   expectedReviewedBaseSha,
   expectedReviewedHeadSha,
@@ -104,6 +105,8 @@ export async function reconcileDependabot({
     !isEvidenceSha(expectedReviewedHeadSha) ||
     !isEvidenceSha(expectedMergeSha) ||
     !isEvidenceSha(expectedObservationHeadSha) ||
+    typeof expectedObservationLockfileSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(expectedObservationLockfileSha256) ||
     typeof now !== "function" ||
     typeof sleep !== "function" ||
     !Number.isSafeInteger(intervalMs) ||
@@ -134,6 +137,8 @@ export async function reconcileDependabot({
     auditReceiptBytes,
     baselineReceiptBytes,
     dependabotIdentitiesFixtureBytes,
+    expectedObservationHeadSha,
+    expectedObservationLockfileSha256,
     expectedReviewedBaseSha,
   })
   const baseline = fileInputs.dependabotIdentities

@@ -137,13 +137,24 @@ function normalizeSeverityTotals(value) {
 export async function collectAuditEvidence({
   cwd = process.cwd(),
   expectation,
+  lockfileSha256,
   maxBytes = 8 * 1024 * 1024,
   now = Date.now,
   runProcess = runBoundedProcess,
+  sourceSha,
   timeoutMs = 120_000,
 }) {
   const expected = validateAuditExpectation(expectation)
-  if (typeof now !== "function" || typeof runProcess !== "function") fail("INVALID_AUDIT_RUNNER")
+  if (
+    typeof now !== "function" ||
+    typeof runProcess !== "function" ||
+    typeof sourceSha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(sourceSha) ||
+    typeof lockfileSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(lockfileSha256)
+  ) {
+    fail("INVALID_AUDIT_RUNNER")
+  }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) {
     fail("INVALID_AUDIT_TIMEOUT")
   }
@@ -153,6 +164,7 @@ export async function collectAuditEvidence({
   const clock = createAuditClock(now, timeoutMs)
   const env = sanitizedAuditEnvironment(process.env)
   const results = {}
+  let completedAtMilliseconds
   for (const [mode, args] of [
     ["full", ["audit", "--json"]],
     ["production", ["audit", "--json", "--prod"]],
@@ -172,7 +184,7 @@ export async function collectAuditEvidence({
       if (error instanceof EvidenceError) throw error
       fail("AUDIT_PROCESS_FAILED")
     }
-    clock.assertBeforeDeadline()
+    completedAtMilliseconds = clock.assertBeforeDeadline()
     if (
       !isRecord(processResult) ||
       !Number.isInteger(processResult.exitCode) ||
@@ -190,10 +202,13 @@ export async function collectAuditEvidence({
     results[mode] = normalizeAuditDocument(document, expected[mode], processResult.exitCode)
   }
   return {
+    capturedAt: formatUtcSeconds(completedAtMilliseconds),
     full: results.full,
     kind: "pnpm-audit",
+    lockfileSha256,
     production: results.production,
-    schemaVersion: 1,
+    schemaVersion: 2,
+    sourceSha,
   }
 }
 

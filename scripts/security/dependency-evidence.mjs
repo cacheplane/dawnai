@@ -108,14 +108,25 @@ export async function runDependencyEvidenceCli({
   }
   const { operation, options } = parseDependencyEvidenceArguments(argv)
   if (operation === "audit") {
+    const sourceBefore = await readAuditSourceProvenance({ cwd, gitProcess })
     const expectation = await loadAuditExpectation(options.expected, {
       root: cwd,
     })
     const receipt = await collectAuditEvidence({
       cwd,
       expectation,
+      lockfileSha256: sourceBefore.lockfileSha256,
+      now,
       runProcess,
+      sourceSha: sourceBefore.sourceSha,
     })
+    const sourceAfter = await readAuditSourceProvenance({ cwd, gitProcess })
+    if (
+      sourceAfter.sourceSha !== sourceBefore.sourceSha ||
+      sourceAfter.lockfileSha256 !== sourceBefore.lockfileSha256
+    ) {
+      fail("AUDIT_SOURCE_DRIFT")
+    }
     const output = await writeCanonicalEvidenceFile(options.output, receipt, {
       cwd,
     })
@@ -325,6 +336,8 @@ async function runReconciliationCliOperation({
   const expectedOpenNumbers = parseNumberSet(options["expected-open"])
   const sourceSha = await readExactHead({ cwd, gitProcess })
   if (sourceSha !== options["observation-head-sha"]) fail("INVENTORY_SOURCE_MISMATCH")
+  const observationSource = await readAuditSourceProvenance({ cwd, gitProcess })
+  if (observationSource.sourceSha !== sourceSha) fail("INVENTORY_SOURCE_MISMATCH")
   let inventory
   try {
     inventory = await readInventory({ root: cwd, ref: sourceSha })
@@ -393,6 +406,7 @@ async function runReconciliationCliOperation({
     expectedFixedNumbers,
     expectedMergeSha: options["merge-sha"],
     expectedObservationHeadSha: options["observation-head-sha"],
+    expectedObservationLockfileSha256: observationSource.lockfileSha256,
     expectedOpenNumbers,
     expectedReviewedBaseSha: options["reviewed-base-sha"],
     expectedReviewedHeadSha: options["reviewed-head-sha"],
@@ -438,6 +452,55 @@ async function readExactHead({ cwd, gitProcess }) {
   const sourceSha = result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout
   if (!isSha(sourceSha)) fail("INVENTORY_SOURCE_UNPROVABLE")
   return sourceSha
+}
+
+async function readAuditSourceProvenance({ cwd, gitProcess }) {
+  if (typeof cwd !== "string" || typeof gitProcess !== "function") {
+    fail("AUDIT_SOURCE_UNPROVABLE")
+  }
+  let sourceSha
+  try {
+    sourceSha = await readExactHead({ cwd, gitProcess })
+  } catch {
+    fail("AUDIT_SOURCE_UNPROVABLE")
+  }
+  let diff
+  try {
+    diff = await gitProcess({
+      args: [
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        sourceSha,
+        "--",
+        "pnpm-lock.yaml",
+      ],
+      command: "git",
+      cwd,
+      maxBytes: 1024,
+      timeoutMs: 30_000,
+    })
+  } catch {
+    fail("AUDIT_SOURCE_UNPROVABLE")
+  }
+  if (!isRecord(diff) || diff.exitCode !== 0 || diff.stdout !== "" || diff.stderr !== "") {
+    fail("AUDIT_SOURCE_UNPROVABLE")
+  }
+  let lockfileBytes
+  try {
+    lockfileBytes = await readEvidenceInputBytes("pnpm-lock.yaml", {
+      contained: true,
+      cwd,
+      maxBytes: 4 * 1024 * 1024,
+    })
+  } catch {
+    fail("AUDIT_SOURCE_UNPROVABLE")
+  }
+  return {
+    lockfileSha256: createHash("sha256").update(lockfileBytes).digest("hex"),
+    sourceSha,
+  }
 }
 
 function parseNumberSet(value) {

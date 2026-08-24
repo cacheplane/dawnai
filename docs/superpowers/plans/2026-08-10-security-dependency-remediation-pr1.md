@@ -233,7 +233,12 @@ leaving thousand-line mixed-responsibility files. The CLI exposes four read-only
   `production` records and requires an explicit empty `muted` array in each
   mode. Exit `0` is accepted only when both expected sets are empty; every other
   status is an error. A missing `muted` field, any non-empty `muted` record, or
-  severity moved between otherwise identical records fails closed.
+  severity moved between otherwise identical records fails closed. Before the
+  first audit and after the second, the operation reads the exact checkout
+  `HEAD`, proves `pnpm-lock.yaml` is unchanged from that commit, and hashes a
+  bounded no-follow read of the lockfile. The canonical schema-v2 receipt binds
+  `capturedAt`, `sourceSha`, and `lockfileSha256`; any unprovable source or
+  source/lock drift fails before a receipt is written.
 - `baseline`: reads the complete live Dependabot open set and publication
   containment state. Dependabot follows only the API's opaque cursor from a
   validated, same-origin, repository-scoped `Link: ...; rel="next"`; the
@@ -255,9 +260,12 @@ leaving thousand-line mixed-responsibility files. The CLI exposes four read-only
   the baseline package/manifest/scope/GHSA/reported-severity identity, has a
   null dismissal, and has `fixed_at >= merged_at`. It independently validates
   that the identity fixture's `defaultSha` equals the exact reviewed base SHA,
-  the supplied audit receipt, embeds its complete normalized full/production
-  status, tuple, severity-total, and empty-muted evidence in the canonical
-  reconciliation receipt, and also binds the original audit-receipt digest.
+  requires the supplied audit receipt's source SHA and lockfile digest to equal
+  the exact observation checkout, embeds its complete normalized
+  full/production status, tuple, severity-total, empty-muted, and provenance
+  evidence in the canonical reconciliation receipt, and also binds the
+  original audit-receipt digest. The audit must complete after the PR merge, no
+  later than reconciliation start, and at most five minutes before that start.
   It collects complete publication containment both before and after the alert
   reads and requires the two normalized snapshots to be byte-identical. It
   selects exactly one successful CI, CodeQL, and Scorecard run for each unique
@@ -323,7 +331,9 @@ prints only its path/count summary. Tests inject subprocess results and cover
 timeout, truncation, nonzero transport, valid finding exit `1`, malformed JSON,
 missing/duplicate identities, contradictory totals, page/record limits, partial
 pages, cursor addition/removal/reordering/cycles, foreign or credentialed links,
-audit and Dependabot per-record severity drift, workflow ID/path mismatches,
+audit and Dependabot per-record severity drift, legacy audit receipts, dirty or
+drifting audit source/lock state, audit provenance mismatch, pre-merge/stale/
+future audit capture times, workflow ID/path mismatches,
 retrieved/total-count disagreement, one-of-21 npm or attestation presence,
 candidate tag/Release/artifact presence, historical run/head/job mismatch,
 truncated or non-no-op chart logs, default-head drift, terminal open-set drift,
@@ -390,6 +400,10 @@ node scripts/security/dependency-evidence.mjs audit \
   --expected test/security-dependencies/fixtures/audit-baseline.json \
   --output /tmp/dawn-pr1-audit-before.json
 ```
+
+The generated audit receipt uses schema v2 and records the exact source SHA,
+bounded `pnpm-lock.yaml` SHA-256, and production-audit completion time in
+addition to the verified modes below.
 
 Expected baseline: full audit has 30 advisories (13 high, 12 moderate, 5 low,
 zero critical) and production audit has 27 advisories (10 high, 12 moderate, 5
@@ -909,7 +923,8 @@ Create explicit draft sections, labeled pending rather than stated as final
 facts, for:
 
 - Task 7's exact production/full audit tuples and conditional provider-utils and
-  Vercel retained-boundary or resolution outcome;
+  Vercel retained-boundary or resolution outcome, plus the schema-v2 audit
+  receipt's capture time, exact source SHA, lockfile SHA-256, and digest;
 - Task 8's final Dependabot identities, explicit fixed/open disposition, and
   confirmation of no suppressions or dismissals;
 - Task 8's August 20 reviewed-base receipt path and SHA-256 digest;
@@ -927,7 +942,8 @@ Never update the August 10 receipt to represent a new base. Its path and digest
 may be recorded now as immutable history. The August 20 reviewed-base receipt
 and digest remain explicitly pending until Task 8 recaptures them against the
 exact reviewed base; every later rebase refreshes that current receipt, the
-identity fixture, their digests, and the explicit fixed/open disposition.
+identity fixture, their digests, the schema-v2 final audit receipt/provenance,
+and the explicit fixed/open disposition.
 
 Do not paste secrets, URLs with credentials, tokens, ambient proxy values, or
 unbounded raw logs.
@@ -1010,6 +1026,11 @@ node scripts/security/dependency-evidence.mjs audit \
   --expected test/security-dependencies/fixtures/audit-upstream-boundaries.json \
   --output /tmp/dawn-pr1-audit-after.json
 ```
+
+The canonical result is an audit receipt with schema v2. Record its
+`capturedAt`, `sourceSha`, `lockfileSha256`, and SHA-256 alongside the exact
+finding counts; a matching count from a different source or lockfile is not
+acceptable evidence.
 
 Reject a missing expected advisory, any extra advisory, malformed JSON, audit
 network/error envelope, non-unique record, contradictory severity counts, or an
@@ -1200,7 +1221,8 @@ Critical/Important findings.
 - [ ] **Step 1: Rebase/pin before publication of the branch**
 
 Fetch main. If it moved, rebase and repeat frozen install, resolution receipt,
-full/prod audits, focused tests, and all affected validation. Recapture the
+schema-v2 full/prod audit receipt with its exact source/lock provenance, focused
+tests, and all affected validation. Recapture the
 complete live alert baseline against the new base; update and review the
 identity fixture's `defaultSha`, the checked-in August 20 reviewed-base receipt,
 the explicit fixed/open disposition, and their digests before accepting the
@@ -1308,8 +1330,14 @@ full/prod audits with
 `test/security-dependencies/fixtures/audit-upstream-boundaries.json`. Require
 the exact distinct production/full package/version/GHSA/reported-severity
 tuples and empty muted sets. Write one canonical audit receipt to
-`/tmp/dawn-pr1-postmerge-audit.json` and compute its SHA-256. Remove the detached
-worktree only after proving no scoped process uses it.
+`/tmp/dawn-pr1-postmerge-audit.json` and compute its SHA-256. Keep the detached
+worktree through Step 3 and remove it only after reconciliation, after proving
+no scoped process uses it. The audit operation must
+prove that the detached checkout remains at `OBSERVATION_HEAD_SHA`, that its
+lockfile is clean and hashes to the receipt's `lockfileSha256`, and that neither
+identity drifts across the two audit modes. Run reconciliation immediately
+afterward so the receipt is no more than five minutes old when observation
+starts.
 
 - [ ] **Step 3: Produce one stable, bracketed reconciliation receipt**
 
@@ -1338,10 +1366,14 @@ IDs, attempts, heads, and success conclusions; reruns complete publication
 containment before and after alert reads; and binds the audit receipt plus every
 input fixture by SHA-256. It requires the Dependabot identity fixture's
 `defaultSha` to equal the exact reviewed base SHA; it is not compared with the
-later post-merge observation head. The audit receipt is not merely referenced: after
-schema and fixture validation, its complete normalized full/production status,
-package/version/GHSA/reported-severity tuples, severity totals, and explicit
-empty muted sets are embedded in the canonical reconciliation receipt. It polls
+later post-merge observation head. The audit receipt is not merely referenced:
+after schema and fixture validation, its source SHA must equal the observation
+head, its lockfile SHA-256 must equal a fresh bounded hash of that checkout, and
+its capture time must fall from merge time through reconciliation start within
+a five-minute freshness window. Its complete normalized full/production
+status, package/version/GHSA/reported-severity tuples, severity totals,
+explicit empty muted sets, and provenance fields are embedded in the canonical
+reconciliation receipt. It polls
 under one 15-minute deadline, fixed 15-second interval, at most 61 attempts, ten
 pages, and explicit aggregate byte/record caps. At terminal state it requires
 open snapshot A == open snapshot B around one fresh exact-number read of every
@@ -1362,7 +1394,10 @@ digests { inputs { auditExpectationFixtureSha256, auditReceiptSha256,
           outputs { fixedAlertsSha256, openSnapshotASha256,
                     openSnapshotBSha256, publicationBeforeSha256,
                     publicationAfterSha256 } },
-audit { digest, evidence }, dependabot { fixed, open }, publication
+audit { digest,
+        evidence { schemaVersion, kind, capturedAt, sourceSha,
+                   lockfileSha256, full, production } },
+dependabot { fixed, open }, publication
 ```
 
 Each verification-run record has exact keys `workflowPath`, `runId`,
@@ -1378,7 +1413,10 @@ merge/observation heads, with unique positive run IDs and stable head/path
 ordering. Merge parents are exactly `[reviewedBaseSha,
 reviewedHeadSha]`; `mergedAt <= startedAt <= completedAt`; completion is
 captured after the closing publication/head proof and before the shared
-deadline. Input hashes cover the exact bounded file bytes actually validated.
+deadline. Audit capture obeys
+`mergedAt <= audit.capturedAt <= startedAt` and
+`startedAt - audit.capturedAt <= 5 minutes`. Input hashes cover the exact
+bounded file bytes actually validated.
 Audit digest fields agree with the normalized audit bytes. Open A/B digests
 agree with each other and the retained open set; the fixed digest matches the
 retained fixed set; publication before/after digests agree with each other and
@@ -1414,9 +1452,10 @@ node scripts/security/dependency-evidence.mjs reconcile \
   --output /tmp/dawn-pr1-reconciliation.json
 ```
 
-Any timeout, query/parse/schema error, head drift, mismatched bracketing
-snapshot, new or reopened alert, dismissal, compatible alert left open, or
-containment failure is `UNPROVABLE` and keeps publication blocked.
+Any timeout, query/parse/schema error, audit source/lock mismatch, stale or
+misordered audit capture, head drift, mismatched bracketing snapshot, new or
+reopened alert, dismissal, compatible alert left open, or containment failure
+is `UNPROVABLE` and keeps publication blocked.
 
 - [ ] **Step 4: Seal the receipt in an exact-head Actions artifact**
 
@@ -1444,8 +1483,9 @@ write-once Actions artifact. Include immutable PR/reviewed base/head/merge/
 observation identities, exact-head CI/CodeQL/Scorecard run IDs and attempts,
 artifact ID/URL/service digest, receipt/uploader/audit/baseline/fixture digests,
 and the final alert/containment verdict. The artifact's reconciliation receipt
-contains the validated audit evidence preimage as well as its digest; the
-temporary standalone audit file is not the only surviving copy. Recompute the
+contains the validated schema-v2 audit evidence preimage—including its source,
+lockfile digest, and capture time—as well as its digest; the temporary
+standalone audit file is not the only surviving copy. Recompute the
 checked-in August 20 reviewed-base receipt digest against the human audit first;
 index the immutable August 10 historical digest separately. Do not modify the
 merged audit document or create a self-referential evidence commit.

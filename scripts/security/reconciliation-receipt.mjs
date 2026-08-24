@@ -11,6 +11,8 @@ import {
 import { canonicalJsonBytes, EvidenceError } from "./github-evidence.mjs"
 import { verifyPublicationSnapshot } from "./publication-containment.mjs"
 
+const MAX_AUDIT_AGE_MILLISECONDS = 5 * 60_000
+
 export { validateAuditReceipt }
 
 function fail(code) {
@@ -22,6 +24,8 @@ export function validateReconciliationFileInputs({
   auditReceiptBytes,
   baselineReceiptBytes,
   dependabotIdentitiesFixtureBytes,
+  expectedObservationHeadSha,
+  expectedObservationLockfileSha256,
   expectedReviewedBaseSha,
 }) {
   const auditExpectation = validateAuditExpectation(
@@ -29,6 +33,14 @@ export function validateReconciliationFileInputs({
   )
   const audit = validateAuditReceipt(parseEvidenceJsonBytes(auditReceiptBytes))
   if (!canonicalJsonBytes(audit).equals(auditReceiptBytes)) fail("INVALID_AUDIT_RECEIPT")
+  if (
+    !isEvidenceSha(expectedObservationHeadSha) ||
+    !isDigest(expectedObservationLockfileSha256) ||
+    audit.sourceSha !== expectedObservationHeadSha ||
+    audit.lockfileSha256 !== expectedObservationLockfileSha256
+  ) {
+    fail("AUDIT_PROVENANCE_MISMATCH")
+  }
   for (const mode of ["full", "production"]) {
     if (
       JSON.stringify(audit[mode].records) !== JSON.stringify(auditExpectation[mode].records) ||
@@ -261,7 +273,17 @@ function validateReconciliationReceiptValue(value) {
   }
   assertExactKeys(receipt.audit, ["digest", "evidence"])
   const audit = validateAuditReceipt(receipt.audit.evidence)
-  if (!isDigest(receipt.audit.digest) || receipt.audit.digest !== digest(audit)) {
+  const auditCapturedAt = Date.parse(audit.capturedAt)
+  const observationStartedAt = Date.parse(receipt.observation.startedAt)
+  const mergedAt = Date.parse(receipt.pr.mergedAt)
+  if (
+    !isDigest(receipt.audit.digest) ||
+    receipt.audit.digest !== digest(audit) ||
+    audit.sourceSha !== receipt.observationHead ||
+    auditCapturedAt < mergedAt ||
+    auditCapturedAt > observationStartedAt ||
+    observationStartedAt - auditCapturedAt > MAX_AUDIT_AGE_MILLISECONDS
+  ) {
     fail("INVALID_RECONCILIATION_RECEIPT")
   }
   assertExactKeys(receipt.digests, ["inputs", "outputs"])
