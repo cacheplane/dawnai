@@ -121,4 +121,47 @@ describe("LiveTurnHub", () => {
     p.close({ type: "done", output: { ok: true } })
     expect(hub.attach("t")).toBeUndefined()
   })
+
+  it("closeAll fans a terminal frame to every entry's subscribers, across all entries", async () => {
+    const hub = createLiveTurnHub()
+    const p1 = hub.open({
+      threadId: "t1",
+      anchorCheckpointId: null,
+      runStartedAt: "1",
+      resume: false,
+      input: null,
+    })
+    const p2 = hub.open({
+      threadId: "t2",
+      anchorCheckpointId: null,
+      runStartedAt: "2",
+      resume: false,
+      input: null,
+    })
+    const a1 = hub.attach("t1")
+    const a2 = hub.attach("t2")
+    if (!a1 || !a2) throw new Error("no attachment")
+    p1.publish(chunk("hi"))
+    p2.publish(chunk("hey"))
+
+    hub.closeAll()
+
+    // Each subscriber drains its own queued frame, then the fanned terminal,
+    // then null — proving closeAll reaches every entry in the map, not just
+    // whichever one was opened last.
+    expect(await a1.next()).toEqual({ type: "chunk", data: "hi" })
+    expect(await a1.next()).toEqual({ type: "done", output: null })
+    expect(await a1.next()).toBeNull()
+
+    expect(await a2.next()).toEqual({ type: "chunk", data: "hey" })
+    expect(await a2.next()).toEqual({ type: "done", output: null })
+    expect(await a2.next()).toBeNull()
+
+    // A neither-entry-nor-subscriber-exists thread is unaffected.
+    expect(hub.attach("t1")).toBeUndefined()
+    expect(hub.attach("t2")).toBeUndefined()
+
+    a1.detach()
+    a2.detach()
+  })
 })
