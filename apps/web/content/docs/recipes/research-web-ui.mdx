@@ -165,11 +165,21 @@ Threads are local to the browser. Dawn's server can create and fetch a thread by
 id but cannot enumerate threads, so the rail keeps its own list in
 `localStorage` behind a `ThreadSource` interface
 (`examples/research/web/app/lib/thread-source.ts`); CopilotKit's `useThreads` is
-deliberately unused. Switching threads clears the transcript, and nothing
-refills it: CopilotKit's replay path (`connectAgent`, which asks the runtime to
-replay a thread's events) is reached only from inside `<CopilotChat>`, which
-this app does not mount, so no request is made on a switch. History restore is
-the next slice.
+deliberately unused. That same seam is how history comes back on a switch:
+CopilotKit's own replay path (`connectAgent`) is reached only from inside
+`<CopilotChat>`, which this app does not mount, so the shell reads
+`GET /threads/:id/state` through the proxy instead and maps the checkpoint's
+LangChain envelopes into the shapes the transcript already renders
+(`app/lib/hydrate.ts`). Messages, tool calls and results, and the plan come
+back; subagent activity cards from earlier runs are not checkpointed and do
+not, which the app says in a line above the restored messages.
+
+The same seam carries `GET /threads/:id/pending_interrupts`, which is what makes
+a permission prompt survive a reload. `useInterrupt`'s state is fed only by live
+run events, so after a reload the server is still holding the gate and nothing
+on screen says so; `app/components/HydratedInterrupts.tsx` asks for the parked
+interrupts and reports their count upward so the composer stays blocked until
+one is answered.
 
 Restyling is one file: `examples/research/web/app/theme.css` defines the palette
 as CSS variables and re-exports it as Tailwind tokens through `@theme inline`,
@@ -269,43 +279,52 @@ POST /memory/candidates/:id/approve
 POST /memory/candidates/:id/reject
 ```
 
-<Callout type="warn" title="No memory review in this slice">
-  The Dawn endpoints above are live, but the example reaches none of them:
-  `app/components/MemoryCandidates.tsx` is still on disk and no longer mounted,
-  and the `/api/memory/*` proxy route it used has been removed. That route
-  forwarded any path straight through to the Dawn server, and with no caller
-  left, shipping it was worse than shipping nothing. Both return in the next
-  slice as one consolidated, allowlisted proxy. Until then, review candidates
-  with the [`dawn memory`](/docs/memory/long-term) CLI.
+The browser cannot call those routes directly — the Dawn dev server sets no CORS
+headers — so the example reaches them through a same-origin catch-all,
+`app/api/dawn/[...path]/route.ts`. That proxy is **allowlisted**, not
+pass-through: `app/lib/proxy-allowlist.ts` is a pure function listing the exact
+method and path shape of every route the browser may reach — the three memory
+routes above plus `GET /threads/:id/state` and
+`GET /threads/:id/pending_interrupts`. Anything else is rejected with 403 and
+never forwarded, which is what keeps `POST /threads/:id/resume` and the rest of
+the agent surface out of reach of a template every Dawn developer copies.
+
+<Callout title="Allowlist before you extend">
+  Running, resuming, and cancelling a thread are deliberately absent from the
+  list; those go through CopilotKit's own runtime route. Add a route to the
+  allowlist only when the browser genuinely needs it, and prefer reads.
 </Callout>
 
-A same-origin Next.js proxy is how the panel will reach these endpoints without
-browser CORS configuration. The unmounted panel refetches after each completed
-run, when any newly proposed candidates are available:
+`app/components/MemoryPanel.tsx` renders the candidates in the thread rail with
+Approve and Delete on each — Delete maps to `/reject`, a hard delete on the
+server. It reads on mount and again at the end of every run, because
+`remember()` lands mid-run and a memory proposed in the answer you are reading
+should be reviewable without a reload:
 
-```tsx title="examples/research/web/app/components/MemoryCandidates.tsx"
-const refetch = useCallback(() => {
-  fetch("/api/memory/candidates")
-    .then((r) => r.json())
-    .then((d) => setCandidates((d.candidates ?? []) as Candidate[]))
-    .catch(() => setCandidates([]))
-}, [])
+```tsx title="examples/research/web/app/components/MemoryPanel.tsx"
+useEffect(() => {
+  const controller = new AbortController()
+  void load(controller.signal)
+  return () => {
+    controller.abort()
+  }
+}, [load])
 
 useEffect(() => {
-  const sub = agent.subscribe({
+  const subscription = agent.subscribe({
     onRunFinishedEvent: () => {
-      refetch()
+      void load()
     },
   })
-  return () => sub.unsubscribe()
-}, [agent, refetch])
-
-const approve = (id: string) => {
-  fetch(`/api/memory/candidates/${id}/approve`, { method: "POST" })
-    .catch(() => undefined)
-    .finally(refetch)
-}
+  return () => {
+    subscription.unsubscribe()
+  }
+}, [agent, load])
 ```
+
+The panel is review-only, and only of candidates: at most three are listed and
+the rest are counted. Browsing, searching, and editing stored memories remain
+the [`dawn memory`](/docs/memory/long-term) CLI's job.
 
 <Callout title="Deep runs need a higher recursion limit">
   The coordinator plans, dispatches subagents, and makes many tool calls. The
