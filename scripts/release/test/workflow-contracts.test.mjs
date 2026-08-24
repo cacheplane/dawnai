@@ -59,6 +59,7 @@ const AUDITED_RELEASE_RUN_INDIRECTIONS = new Set([
   "published:smoke",
 ])
 const SHA256_HEX = /^[0-9a-f]{64}$/u
+const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
 const PNPM_REFERENCE = /(?:^|[\s;&|"'(])pnpm\s+(?:run\s+)?([\w:.-]+)/gu
 const LEGACY_SAFE_ENTRYPOINTS = new Set([
@@ -309,7 +310,7 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
   )
 })
 
-test("testing-windows has one exact safe descriptor and executable classification", async () => {
+test("testing-windows has the exact safe descriptors and executable classifications", async () => {
   const descriptors = JSON.parse(
     await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }),
   )
@@ -360,6 +361,13 @@ test("testing-windows has one exact safe descriptor and executable classificatio
           run: 'pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"',
         },
       },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Dependency security regressions",
+          run: "pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts",
+        },
+      },
     ],
   })
   assert.deepEqual(
@@ -383,6 +391,397 @@ test("testing-windows has one exact safe descriptor and executable classificatio
     () => auditWorkflowEntrypoints({ ...sources, "ci.yml": mutated }, descriptors.workflows),
     /not explicitly audited/u,
   )
+})
+
+test("dependency-security-browser has one exact isolated read-only descriptor", async () => {
+  const descriptors = JSON.parse(
+    await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }),
+  )
+  const job = descriptors.workflows["ci.yml"].jobs.find(
+    ({ id }) => id === "dependency-security-browser",
+  )
+  assert.deepEqual(job, {
+    classification: "safe",
+    id: "dependency-security-browser",
+    descriptor: {
+      permissions: { contents: "read" },
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+    },
+    steps: [
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Checkout",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+          with: { version: "10.33.0" },
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Setup Node.js",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: { "node-version": "24.17.0", cache: "pnpm" },
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: { name: "Install", run: "pnpm install --frozen-lockfile" },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Install Chromium",
+          run: "pnpm exec playwright install --with-deps chromium",
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Dependency security browser regressions",
+          run: "pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit\npnpm exec playwright test --config test/security-dependencies/playwright.config.ts\n",
+        },
+      },
+    ],
+  })
+  assert.deepEqual(
+    EXECUTABLE_ALLOWLIST.workflows["ci.yml"].filter(
+      ({ job: executableJob }) => executableJob === "dependency-security-browser",
+    ),
+    job.steps.map(({ descriptor }, stepIndex) => ({
+      classification: "safe",
+      job: "dependency-security-browser",
+      stepIndex,
+      step: descriptor.name,
+      kind: descriptor.run === undefined ? "step-uses" : "run",
+      value: descriptor.run ?? descriptor.uses,
+    })),
+  )
+})
+
+test("dependency security receipt uploader is exact, offline, read-only, and write-once", async () => {
+  const source = await readBoundedFixture(path.join(WORKFLOWS, "dependency-security-receipt.yml"), {
+    root: ROOT,
+  })
+  const workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+  const expectedMainInput = workflowExpression("inputs.expectedMainSha")
+  const expectedPrInput = workflowExpression("inputs.expectedPrNumber")
+  const expectedReviewedBaseInput = workflowExpression("inputs.expectedReviewedBaseSha")
+  const expectedReviewedHeadInput = workflowExpression("inputs.expectedReviewedHeadSha")
+  const expectedMergeInput = workflowExpression("inputs.expectedMergeSha")
+  const receiptBase64Input = workflowExpression("inputs.receiptBase64")
+  const receiptSha256Input = workflowExpression("inputs.receiptSha256")
+  const runnerTemp = workflowExpression("runner.temp")
+  const githubToken = workflowExpression("github.token")
+
+  assert.deepEqual(Object.keys(workflow).sort(), ["jobs", "name", "on", "run-name"])
+  assert.equal(workflow.name, "Dependency Security Receipt")
+  assert.equal(workflow["run-name"], `Dependency security receipt ${receiptSha256Input}`)
+  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"])
+  const inputs = workflow.on.workflow_dispatch.inputs
+  assert.deepEqual(Object.keys(inputs), [
+    "expectedMainSha",
+    "expectedPrNumber",
+    "expectedReviewedBaseSha",
+    "expectedReviewedHeadSha",
+    "expectedMergeSha",
+    "receiptBase64",
+    "receiptSha256",
+  ])
+  for (const input of Object.values(inputs)) {
+    assert.equal(input.required, true)
+    assert.equal(input.type, "string")
+    assert.deepEqual(Object.keys(input).sort(), ["description", "required", "type"])
+  }
+
+  assert.deepEqual(Object.keys(workflow.jobs), ["upload"])
+  const job = workflow.jobs.upload
+  assert.deepEqual(job.permissions, { contents: "read" })
+  assert.equal(job["runs-on"], "ubuntu-latest")
+  assert.equal(job["timeout-minutes"], 10)
+  assert.equal(job.environment, undefined)
+  assert.equal(job.secrets, undefined)
+  assert.equal(job.env, undefined)
+  assert.deepEqual(
+    job.steps.map(({ name }) => name),
+    [
+      "Validate receipt correlation inputs",
+      "Checkout exact observation",
+      "Setup Node.js",
+      "Require unchanged default branch head",
+      "Prepare sealed receipt directory",
+      "Seal canonical receipt",
+      "Upload sealed receipt",
+    ],
+  )
+
+  const [validate, checkout, setupNode, requireHead, prepare, seal, upload] = job.steps
+  assert.match(validate.run, /\^\[0-9a-f\]\{40\}\$/u)
+  assert.match(validate.run, /\^\[1-9\]\[0-9\]\{0,14\}\$/u)
+  assert.match(validate.run, /\^\[0-9a-f\]\{64\}\$/u)
+  assert.deepEqual(checkout, {
+    name: "Checkout exact observation",
+    uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    with: {
+      ref: expectedMainInput,
+      "persist-credentials": false,
+    },
+  })
+  assert.deepEqual(setupNode, {
+    name: "Setup Node.js",
+    uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+    with: { "node-version": "24.17.0" },
+  })
+  assert.deepEqual(requireHead.env, {
+    EXPECTED_MAIN_SHA: expectedMainInput,
+    GH_TOKEN: githubToken,
+  })
+  assert.match(requireHead.run, /GITHUB_SHA/u)
+  assert.match(requireHead.run, /repos\/cacheplane\/dawnai\/git\/ref\/heads\/main/u)
+  assert.deepEqual(prepare.env, {
+    RECEIPT_OUTPUT_ROOT: `${runnerTemp}/dependency-security-receipt-root`,
+  })
+  assert.equal(prepare.run, 'install -d -m 0700 -- "$RECEIPT_OUTPUT_ROOT"')
+  assert.deepEqual(seal.env, {
+    EXPECTED_MAIN_SHA: expectedMainInput,
+    EXPECTED_PR_NUMBER: expectedPrInput,
+    EXPECTED_REVIEWED_BASE_SHA: expectedReviewedBaseInput,
+    EXPECTED_REVIEWED_HEAD_SHA: expectedReviewedHeadInput,
+    EXPECTED_MERGE_SHA: expectedMergeInput,
+    RECEIPT_BASE64: receiptBase64Input,
+    RECEIPT_SHA256: receiptSha256Input,
+    RECEIPT_OUTPUT_ROOT: `${runnerTemp}/dependency-security-receipt-root`,
+    RECEIPT_OUTPUT_DIRECTORY: `${runnerTemp}/dependency-security-receipt-root/sealed`,
+  })
+  assert.equal(
+    seal.run,
+    'node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha "$EXPECTED_MAIN_SHA" \\\n  --expected-pr-number "$EXPECTED_PR_NUMBER" \\\n  --expected-reviewed-base-sha "$EXPECTED_REVIEWED_BASE_SHA" \\\n  --expected-reviewed-head-sha "$EXPECTED_REVIEWED_HEAD_SHA" \\\n  --expected-merge-sha "$EXPECTED_MERGE_SHA" \\\n  --receipt-base64 "$RECEIPT_BASE64" \\\n  --receipt-sha256 "$RECEIPT_SHA256" \\\n  --output-root "$RECEIPT_OUTPUT_ROOT" \\\n  --output-directory "$RECEIPT_OUTPUT_DIRECTORY"\n',
+  )
+  assert.deepEqual(upload, {
+    name: "Upload sealed receipt",
+    uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    with: {
+      name: `dependency-security-receipt-${expectedMainInput}-${receiptSha256Input}`,
+      path: `${runnerTemp}/dependency-security-receipt-root/sealed/dependency-security-reconciliation.json\n${runnerTemp}/dependency-security-receipt-root/sealed/uploader-manifest.json\n`,
+      "if-no-files-found": "error",
+      "retention-days": 90,
+    },
+  })
+
+  const actionSteps = job.steps.filter(({ uses }) => uses !== undefined)
+  assert.deepEqual(
+    actionSteps.map(({ uses }) => uses),
+    [
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    ],
+  )
+  for (const step of job.steps) {
+    assert.equal(step.env?.GH_TOKEN, step === requireHead ? githubToken : undefined)
+  }
+  const runs = job.steps
+    .filter(({ run }) => run !== undefined)
+    .map(({ run }) => run)
+    .join("\n")
+  assert.doesNotMatch(runs, /(?:npm|pnpm)\s+install/u)
+  assert.doesNotMatch(source, /secrets\.|id-token\s*:\s*write|contents\s*:\s*write/iu)
+})
+
+test("dependency security workflow mutations fail closed", async (t) => {
+  const descriptors = JSON.parse(
+    await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }),
+  )
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const mutateBrowser = (source, mutate) => {
+    const start = source.indexOf("  dependency-security-browser:\n")
+    const end = source.indexOf("\n  sandbox-docker:\n", start)
+    assert.notEqual(start, -1)
+    assert.notEqual(end, -1)
+    return `${source.slice(0, start)}${mutate(source.slice(start, end))}${source.slice(end)}`
+  }
+  const cases = [
+    [
+      "browser permissions",
+      "ci.yml",
+      (source) => mutateBrowser(source, (job) => job.replace("contents: read", "contents: write")),
+    ],
+    [
+      "browser path",
+      "ci.yml",
+      (source) =>
+        mutateBrowser(source, (job) =>
+          job.replace(
+            "test/security-dependencies/playwright.config.ts",
+            "test/security-dependencies/vitest.config.ts",
+          ),
+        ),
+    ],
+    [
+      "browser shell operator",
+      "ci.yml",
+      (source) =>
+        mutateBrowser(source, (job) =>
+          job.replace(
+            "pnpm exec playwright install --with-deps chromium",
+            "pnpm exec playwright install --with-deps chromium && echo bypass",
+          ),
+        ),
+    ],
+    [
+      "broadened Windows test command",
+      "ci.yml",
+      (source) =>
+        source.replace(
+          "test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts",
+          "test/security-dependencies",
+        ),
+    ],
+    [
+      "browser install without frozen lockfile",
+      "ci.yml",
+      (source) =>
+        mutateBrowser(source, (job) =>
+          job.replace("pnpm install --frozen-lockfile", "pnpm install"),
+        ),
+    ],
+    [
+      "receipt trigger expansion",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "  workflow_dispatch:\n",
+          '  schedule:\n    - cron: "0 0 * * *"\n  workflow_dispatch:\n',
+        ),
+    ],
+    [
+      "receipt pull-request trigger",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace("  workflow_dispatch:\n", "  pull_request:\n  workflow_dispatch:\n"),
+    ],
+    [
+      "receipt input removal",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "      receiptSha256:\n        description: SHA-256 of the canonical reconciliation receipt\n        required: true\n        type: string\n",
+          "",
+        ),
+    ],
+    [
+      "receipt input expansion",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "      expectedMainSha:\n",
+          "      command:\n        description: Unsafe dynamic command\n        required: true\n        type: string\n      expectedMainSha:\n",
+        ),
+    ],
+    [
+      "receipt permission expansion",
+      "dependency-security-receipt.yml",
+      (source) => source.replace("      contents: read", "      contents: write"),
+    ],
+    [
+      "receipt OIDC permission",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace("      contents: read", "      contents: read\n      id-token: write"),
+    ],
+    [
+      "receipt secret access",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          `          RECEIPT_SHA256: ${workflowExpression("inputs.receiptSha256")}\n        run:`,
+          `          RECEIPT_SHA256: ${workflowExpression("inputs.receiptSha256")}\n          UNSAFE_SECRET: ${workflowExpression("secrets.UNSAFE")}\n        run:`,
+        ),
+    ],
+    [
+      "unpinned receipt action",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "uses: actions/checkout@v7",
+        ),
+    ],
+    [
+      "dynamic receipt action",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          `uses: ${workflowExpression("inputs.action")}`,
+        ),
+    ],
+    [
+      "persisted checkout credentials",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "          persist-credentials: false",
+          "          persist-credentials: true",
+        ),
+    ],
+    [
+      "receipt dependency installation",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "      - name: Setup Node.js\n",
+          "      - name: Install dependencies\n        run: pnpm install --frozen-lockfile\n\n      - name: Setup Node.js\n",
+        ),
+    ],
+    [
+      "dynamic receipt command",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "node scripts/security/dependency-evidence.mjs seal-receipt",
+          `node "${workflowExpression("inputs.command")}" seal-receipt`,
+        ),
+    ],
+    [
+      "default branch head drift",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          "repos/cacheplane/dawnai/git/ref/heads/main",
+          "repos/cacheplane/dawnai/git/ref/heads/reviewed-head",
+        ),
+    ],
+    [
+      "extra receipt archive file",
+      "dependency-security-receipt.yml",
+      (source) =>
+        source.replace(
+          `            ${workflowExpression("runner.temp")}/dependency-security-receipt-root/sealed/uploader-manifest.json\n`,
+          `            ${workflowExpression("runner.temp")}/dependency-security-receipt-root/sealed/uploader-manifest.json\n            ${workflowExpression("runner.temp")}/dependency-security-receipt-root/sealed/extra.json\n`,
+        ),
+    ],
+  ]
+  for (const [name, file, mutate] of cases) {
+    await t.test(name, () => {
+      assert.throws(
+        () =>
+          auditWorkflowEntrypoints(
+            { ...sources, [file]: mutate(sources[file]) },
+            descriptors.workflows,
+          ),
+        /not explicitly audited/u,
+      )
+    })
+  }
 })
 
 test("every workflow executable entrypoint matches the readable audited allowlist", async () => {

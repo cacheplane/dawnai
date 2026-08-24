@@ -1,0 +1,133 @@
+name: Dependency Security Receipt
+run-name: Dependency security receipt ${{ inputs.receiptSha256 }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expectedMainSha:
+        description: Exact default-branch observation SHA
+        required: true
+        type: string
+      expectedPrNumber:
+        description: Merged pull request number
+        required: true
+        type: string
+      expectedReviewedBaseSha:
+        description: Exact reviewed pull request base SHA
+        required: true
+        type: string
+      expectedReviewedHeadSha:
+        description: Exact reviewed pull request head SHA
+        required: true
+        type: string
+      expectedMergeSha:
+        description: Exact pull request merge SHA
+        required: true
+        type: string
+      receiptBase64:
+        description: Canonical redacted reconciliation receipt encoded as base64
+        required: true
+        type: string
+      receiptSha256:
+        description: SHA-256 of the canonical reconciliation receipt
+        required: true
+        type: string
+
+jobs:
+  upload:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate receipt correlation inputs
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expectedMainSha }}
+          EXPECTED_PR_NUMBER: ${{ inputs.expectedPrNumber }}
+          EXPECTED_REVIEWED_BASE_SHA: ${{ inputs.expectedReviewedBaseSha }}
+          EXPECTED_REVIEWED_HEAD_SHA: ${{ inputs.expectedReviewedHeadSha }}
+          EXPECTED_MERGE_SHA: ${{ inputs.expectedMergeSha }}
+          RECEIPT_SHA256: ${{ inputs.receiptSha256 }}
+        run: |
+          set -euo pipefail
+          sha_pattern='^[0-9a-f]{40}$'
+          for value in "$EXPECTED_MAIN_SHA" "$EXPECTED_REVIEWED_BASE_SHA" "$EXPECTED_REVIEWED_HEAD_SHA" "$EXPECTED_MERGE_SHA"; do
+            if [[ ! "$value" =~ $sha_pattern ]]; then
+              echo "invalid receipt correlation SHA" >&2
+              exit 2
+            fi
+          done
+          if [[ ! "$EXPECTED_PR_NUMBER" =~ ^[1-9][0-9]{0,14}$ ]]; then
+            echo "invalid pull request number" >&2
+            exit 2
+          fi
+          if [[ ! "$RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "invalid receipt SHA-256" >&2
+            exit 2
+          fi
+
+      - name: Checkout exact observation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expectedMainSha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+
+      - name: Require unchanged default branch head
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expectedMainSha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_SHA" != "$EXPECTED_MAIN_SHA" ]]; then
+            echo "workflow dispatch SHA does not match expectedMainSha" >&2
+            exit 2
+          fi
+          live_main_sha="$(gh api repos/cacheplane/dawnai/git/ref/heads/main --jq '.object.sha')"
+          if [[ "$live_main_sha" != "$EXPECTED_MAIN_SHA" ]]; then
+            echo "default branch moved after the reviewed observation" >&2
+            exit 2
+          fi
+
+      - name: Prepare sealed receipt directory
+        env:
+          RECEIPT_OUTPUT_ROOT: ${{ runner.temp }}/dependency-security-receipt-root
+        run: install -d -m 0700 -- "$RECEIPT_OUTPUT_ROOT"
+
+      - name: Seal canonical receipt
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expectedMainSha }}
+          EXPECTED_PR_NUMBER: ${{ inputs.expectedPrNumber }}
+          EXPECTED_REVIEWED_BASE_SHA: ${{ inputs.expectedReviewedBaseSha }}
+          EXPECTED_REVIEWED_HEAD_SHA: ${{ inputs.expectedReviewedHeadSha }}
+          EXPECTED_MERGE_SHA: ${{ inputs.expectedMergeSha }}
+          RECEIPT_BASE64: ${{ inputs.receiptBase64 }}
+          RECEIPT_SHA256: ${{ inputs.receiptSha256 }}
+          RECEIPT_OUTPUT_ROOT: ${{ runner.temp }}/dependency-security-receipt-root
+          RECEIPT_OUTPUT_DIRECTORY: ${{ runner.temp }}/dependency-security-receipt-root/sealed
+        run: |
+          node scripts/security/dependency-evidence.mjs seal-receipt \
+            --expected-main-sha "$EXPECTED_MAIN_SHA" \
+            --expected-pr-number "$EXPECTED_PR_NUMBER" \
+            --expected-reviewed-base-sha "$EXPECTED_REVIEWED_BASE_SHA" \
+            --expected-reviewed-head-sha "$EXPECTED_REVIEWED_HEAD_SHA" \
+            --expected-merge-sha "$EXPECTED_MERGE_SHA" \
+            --receipt-base64 "$RECEIPT_BASE64" \
+            --receipt-sha256 "$RECEIPT_SHA256" \
+            --output-root "$RECEIPT_OUTPUT_ROOT" \
+            --output-directory "$RECEIPT_OUTPUT_DIRECTORY"
+
+      - name: Upload sealed receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dependency-security-receipt-${{ inputs.expectedMainSha }}-${{ inputs.receiptSha256 }}
+          path: |
+            ${{ runner.temp }}/dependency-security-receipt-root/sealed/dependency-security-reconciliation.json
+            ${{ runner.temp }}/dependency-security-receipt-root/sealed/uploader-manifest.json
+          if-no-files-found: error
+          retention-days: 90

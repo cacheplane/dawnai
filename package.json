@@ -52,7 +52,7 @@
     "verify:harness:runtime": "node scripts/harness-report.mjs runtime",
     "verify:harness:self-test": "node scripts/harness-report.mjs --self-test",
     "verify:harness:smoke": "node scripts/harness-report.mjs smoke",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && tsc -p test/security-dependencies/tsconfig.json --noEmit",
     "verify:typescript-tooling-pack": "pnpm test:typescript-tooling-pack-smoke && node scripts/typescript-tooling-pack-smoke.mjs"
   },
   "devDependencies": {
@@ -60,7 +60,10 @@
     "@changesets/cli": "2.31.1",
     "@copilotkit/aimock": "^1.37.4",
     "@dawn-ai/sdk": "workspace:*",
+    "@playwright/test": "1.62.1",
     "@types/node": "26.1.2",
+    "esbuild": "0.28.1",
+    "jsdom": "30.0.1",
     "publint": "0.3.22",
     "tsx": "^4.23.5",
     "turbo": "2.10.8",
