@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { Worker } from "node:worker_threads";
 
 import { describe, expect, it } from "vitest";
 
@@ -267,6 +268,106 @@ describe("shared evidence budget clock", () => {
 });
 
 describe("GitHub evidence pagination", () => {
+	it(
+		"rejects an adversarial Link prefix within a bounded worker deadline",
+		async () => {
+			const worker = new Worker(
+				`
+					const { parentPort, workerData } = require("node:worker_threads")
+					void import(workerData.moduleUrl).then(({ parseNextLink }) => {
+						const messages = []
+						for (const value of [
+							"<!>;" + ": ;".repeat(32),
+							"<!>;" + "  ;".repeat(32),
+						]) {
+							try {
+								parseNextLink(value, {
+									initialUrl: workerData.initialUrl,
+									seen: new Set(),
+								})
+								parentPort.postMessage({ kind: "accepted" })
+								return
+							} catch (error) {
+								messages.push(error instanceof Error ? error.message : "unknown")
+							}
+						}
+						parentPort.postMessage({ kind: "rejected", messages })
+					}, (error) => {
+						parentPort.postMessage({
+							kind: "worker-error",
+							message: error instanceof Error ? error.message : "unknown",
+						})
+					})
+				`,
+				{
+					eval: true,
+					workerData: {
+						initialUrl: alertsUrl,
+						moduleUrl: new URL(
+							"../../scripts/security/github-evidence.mjs",
+							import.meta.url,
+						).href,
+					},
+				},
+			);
+			try {
+				const result = await new Promise<unknown>((resolveMessage) => {
+					const deadline = setTimeout(() => {
+						resolveMessage({ kind: "deadline-exceeded" });
+					}, 5_000);
+					worker.once("message", (value) => {
+						clearTimeout(deadline);
+						resolveMessage(value);
+					});
+					worker.once("error", (error) => {
+						clearTimeout(deadline);
+						resolveMessage({
+							kind: "worker-error",
+							message: error instanceof Error ? error.message : "unknown",
+						});
+					});
+				});
+				expect(result).toEqual({
+					kind: "rejected",
+					messages: [
+						"UNPROVABLE: MALFORMED_LINK",
+						"UNPROVABLE: MALFORMED_LINK",
+					],
+				});
+			} finally {
+				await worker.terminate();
+			}
+		},
+		10_000,
+	);
+
+	it("accepts multiple parameters with rel after another parameter", () => {
+		expect(
+			parseNextLink(
+				`<${alertsUrl}&after=opaque>; type="application/json"; rel="next"; title=safe`,
+				{
+					cursorOnly: true,
+					initialUrl: alertsUrl,
+					seen: new Set([alertsUrl]),
+				},
+			),
+		).toBe(`${alertsUrl}&after=opaque`);
+	});
+
+	it.each([
+		"<>; rel=next",
+		`<<${alertsUrl}>>; rel=next`,
+		`<${alertsUrl}>`,
+		`<${alertsUrl} extra>; rel=next`,
+	])("rejects malformed Link target %#", (link) => {
+		expect(() =>
+			parseNextLink(link, {
+				initialUrl: alertsUrl,
+				seen: new Set([alertsUrl]),
+			}),
+		).toThrow(/UNPROVABLE: MALFORMED_LINK/u);
+	});
+
 	it("accepts one same-repository opaque after cursor", () => {
 		expect(
 			parseNextLink(`<${alertsUrl}&after=opaque>; rel="next"`, {

@@ -153,23 +153,26 @@ export function parseNextLink(link, { cursorOnly = false, initialUrl, seen }) {
   if (link === null || link === undefined) return null
   if (typeof link !== "string" || link.trim().length === 0) fail("MALFORMED_LINK")
   if (typeof initialUrl !== "string" || !(seen instanceof Set)) fail("INVALID_PAGINATION_STATE")
+  const parameterPattern =
+    /\s*;\s*([!#$%&'*+.^_`|~0-9A-Za-z-]+)\s*=\s*(?:"([^"\\]*)"|([!#$%&'*+.^_`|~0-9A-Za-z-]+))/uy
   const next = []
   for (const rawPart of link.split(",")) {
     const part = rawPart.trim()
-    const match = /^<([^<>\s]+)>((?:\s*;\s*[^;]+)+)$/u.exec(part)
-    if (match === null) fail("MALFORMED_LINK")
+    const closingBracket = part.indexOf(">", 1)
+    if (!part.startsWith("<") || closingBracket <= 1) fail("MALFORMED_LINK")
+    const target = part.slice(1, closingBracket)
+    if (/[<>\s]/u.test(target)) fail("MALFORMED_LINK")
     const parameters = new Map()
-    let rest = match[2]
-    while (rest.length > 0) {
-      const parameter =
-        /^\s*;\s*([!#$%&'*+.^_`|~0-9A-Za-z-]+)\s*=\s*(?:"([^"\\]*)"|([!#$%&'*+.^_`|~0-9A-Za-z-]+))/u.exec(
-          rest,
-        )
+    let cursor = closingBracket + 1
+    if (cursor === part.length) fail("MALFORMED_LINK")
+    while (cursor < part.length) {
+      parameterPattern.lastIndex = cursor
+      const parameter = parameterPattern.exec(part)
       if (parameter === null) fail("MALFORMED_LINK")
       const key = parameter[1].toLowerCase()
       if (parameters.has(key)) fail("MALFORMED_LINK")
       parameters.set(key, parameter[2] ?? parameter[3])
-      rest = rest.slice(parameter[0].length)
+      cursor = parameterPattern.lastIndex
     }
     const relation = parameters.get("rel")
     if (relation === undefined) fail("MALFORMED_LINK")
@@ -183,7 +186,7 @@ export function parseNextLink(link, { cursorOnly = false, initialUrl, seen }) {
     ) {
       fail("MALFORMED_LINK")
     }
-    if (relations.includes("next")) next.push(match[1])
+    if (relations.includes("next")) next.push(target)
   }
   if (next.length > 1) fail("DUPLICATE_NEXT_LINK")
   if (next.length === 0) return null

@@ -1,5 +1,16 @@
+import { randomUUID } from "node:crypto"
 import type { BackendContext, FilesystemBackend } from "@dawn-ai/workspace"
-import type { Docker } from "./docker-cli.ts"
+import type { Docker, SpawnResult } from "./docker-cli.js"
+import {
+  type DockerPidExhaustionRecovery,
+  isDockerExecAdmissionPidExhaustion,
+  isStartedShellPidExhaustion,
+} from "./docker-pid-exhaustion.js"
+
+interface DockerFilesystemOptions {
+  readonly runWithExecLease?: <T>(operation: () => Promise<T>) => Promise<T>
+  readonly pidExhaustionRecovery?: DockerPidExhaustionRecovery
+}
 
 function q(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`
@@ -9,15 +20,48 @@ function q(s: string): string {
 export function dockerFilesystem(
   docker: Docker,
   container: string,
-  runWithExecLease?: <T>(operation: () => Promise<T>) => Promise<T>,
+  opts: DockerFilesystemOptions = {},
 ): FilesystemBackend {
-  const run = (cmd: string, ctx: BackendContext, stdin?: string) => {
-    const operation = () =>
-      docker.exec(container, ["sh", "-c", cmd], {
-        ...(stdin !== undefined ? { stdin } : {}),
-        signal: ctx.signal,
-      })
-    return runWithExecLease !== undefined ? runWithExecLease(operation) : operation()
+  const run = async (cmd: string, ctx: BackendContext, stdin?: string): Promise<SpawnResult> => {
+    const startedMarker = `__DAWN_FILESYSTEM_STARTED_${randomUUID()}__`
+    const startedPrefix = `${startedMarker}\n`
+    const attempt = async () => {
+      const result = await docker.exec(
+        container,
+        ["sh", "-c", `printf '%s\\n' ${q(startedMarker)}; ${cmd}`],
+        {
+          ...(stdin !== undefined ? { stdin } : {}),
+          signal: ctx.signal,
+        },
+      )
+      const started = result.stdout.startsWith(startedPrefix)
+      return {
+        result: started ? { ...result, stdout: result.stdout.slice(startedPrefix.length) } : result,
+        started,
+      }
+    }
+    const executeWithLease = <T>(operation: () => Promise<T>) =>
+      opts.runWithExecLease !== undefined ? opts.runWithExecLease(operation) : operation()
+    let recoveryToken: unknown
+    const firstAttempt = await executeWithLease(async () => {
+      recoveryToken = opts.pidExhaustionRecovery?.captureToken()
+      return attempt()
+    })
+    let result = firstAttempt.result
+    if (
+      opts.pidExhaustionRecovery !== undefined &&
+      recoveryToken !== undefined &&
+      (firstAttempt.started
+        ? isStartedShellPidExhaustion(result)
+        : isDockerExecAdmissionPidExhaustion(result))
+    ) {
+      const recovered = await opts.pidExhaustionRecovery.recoverAndRetry(
+        recoveryToken,
+        async () => (await attempt()).result,
+      )
+      if (recovered !== undefined) result = recovered
+    }
+    return result
   }
   return {
     async readFile(path, ctx, opts) {
