@@ -103,6 +103,7 @@ export default function Home() {
           onSelectThread={handleSelect}
           onCreateThread={handleCreate}
           onUserMessage={handleUserMessage}
+          threadSource={source}
         />
       </CopilotChatConfigurationProvider>
     </CopilotKit>

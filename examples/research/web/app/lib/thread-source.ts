@@ -11,14 +11,18 @@
  *
  * The planned second implementation is LangGraph Platform, which Dawn already
  * deploys to (`dawn build --target langsmith`) and which can enumerate threads.
- * This seam names the right boundary, but that implementation will have to
- * make `list`/`create` async (or add a cached-read variant), since enumeration
- * and creation there are network calls — callers change with it.
+ * That prediction has now come true for one method: `hydrate` is async, because
+ * the rail's list lives in the browser while the conversation lives in the Dawn
+ * server's checkpoint, so reading it is a network call for EVERY backend.
+ * `list`/`create` are still synchronous — LangGraph Platform will make those
+ * async too (or add a cached-read variant), and callers change with it.
  *
  * Known limitation: the localStorage backend below does read-modify-write with
  * no merge, so concurrent tabs can clobber each other's writes (e.g. a
  * `create()` in one tab can erase a `touch()` title from another).
  */
+import { type HydratedThread, hydrateThreadState } from "./hydrate"
+
 export interface WorkbenchThread {
   readonly id: string
   readonly title?: string
@@ -29,6 +33,12 @@ export interface ThreadSource {
   list(): WorkbenchThread[]
   create(): WorkbenchThread
   touch(id: string, firstUserMessage?: string): void
+  /**
+   * The thread's stored history. Async because it is a network read even for
+   * the localStorage source: the rail's list lives in the browser, but the
+   * conversation lives in the Dawn server's checkpoint.
+   */
+  hydrate(id: string): Promise<HydratedThread>
 }
 
 const STORAGE_KEY = "dawn.workbench.threads"
@@ -68,7 +78,16 @@ function byMostRecent(threads: readonly WorkbenchThread[]): WorkbenchThread[] {
   return [...threads].sort((left, right) => right.lastActiveAt - left.lastActiveAt)
 }
 
-export function createLocalThreadSource(storage: Storage): ThreadSource {
+/**
+ * `fetchFn` is a parameter rather than a bare `globalThis.fetch` call so a test
+ * can inject one without patching a global. It defaults to `fetch` bound to
+ * `globalThis`: an unbound reference would throw "Illegal invocation" in the
+ * browser.
+ */
+export function createLocalThreadSource(
+  storage: Storage,
+  fetchFn: typeof fetch = (...args) => globalThis.fetch(...args),
+): ThreadSource {
   return {
     list() {
       return byMostRecent(read(storage))
@@ -96,6 +115,19 @@ export function createLocalThreadSource(storage: Storage): ThreadSource {
         ...(title !== undefined ? { title } : {}),
       }
       write(storage, [updated, ...threads.filter((thread) => thread.id !== id)])
+    },
+    async hydrate(id) {
+      const response = await fetchFn(`/api/dawn/threads/${encodeURIComponent(id)}/state`)
+      // A 404 is the ORDINARY answer, not a failure: the Dawn server returns
+      // it both for a thread it has never heard of and for one that exists in
+      // the rail but has never run, and a freshly created thread is in that
+      // second state until its first turn finishes. A fresh literal per call,
+      // never a shared constant — the caller owns what it gets back.
+      if (response.status === 404) return { messages: [], todos: [] }
+      if (!response.ok) {
+        throw new Error(`Could not load this conversation (HTTP ${response.status}).`)
+      }
+      return hydrateThreadState(await response.json())
     },
   }
 }

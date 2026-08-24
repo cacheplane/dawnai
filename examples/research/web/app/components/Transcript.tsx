@@ -31,6 +31,12 @@ export interface TranscriptProps {
   readonly messages: readonly TranscriptMessage[]
   readonly isRunning: boolean
   readonly onSelectSuggestion: (message: string) => void
+  /**
+   * Whether these messages came back from the server's checkpoint rather than
+   * from a live run — the condition for the note below about what a restore
+   * cannot bring back.
+   */
+  readonly restoredHistory: boolean
   /** The last run failure, or null. Owned by `AppShell`. */
   readonly runError: { readonly title: string; readonly message: string } | null
   readonly onDismissRunError: () => void
@@ -77,6 +83,7 @@ export function Transcript({
   messages,
   isRunning,
   onSelectSuggestion,
+  restoredHistory,
   runError,
   onDismissRunError,
   onRunError,
@@ -176,6 +183,21 @@ export function Transcript({
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       {items.length === 0 ? <EmptyState onSelectSuggestion={onSelectSuggestion} /> : null}
       {/*
+        What a restore cannot bring back, said in the app rather than only in
+        the README. Subagent cards are derived from a live event stream that
+        the server does not persist — the checkpoint holds messages, tool
+        results and the plan, and nothing else — so a restored thread is
+        genuinely missing cards the user watched appear. Rendered OUTSIDE the
+        live region below: it is static context for what is already there, not
+        an addition worth announcing.
+      */}
+      {restoredHistory ? (
+        <p className="mx-auto max-w-3xl px-6 pt-8 text-[12px] leading-5 text-wb-muted">
+          Restored from this conversation's saved history. Subagent cards are not saved and reappear
+          on the next run.
+        </p>
+      ) : null}
+      {/*
         The live region is the message list itself, and it is rendered in both
         states so it exists BEFORE its content changes — a region inserted at
         the same moment as its first content is unreliably announced across
@@ -191,7 +213,7 @@ export function Transcript({
         className={
           items.length === 0
             ? "mx-auto max-w-3xl px-6"
-            : "mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8"
+            : `mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 ${restoredHistory ? "pt-4" : "pt-8"}`
         }
       >
         {items.map(renderItem)}
