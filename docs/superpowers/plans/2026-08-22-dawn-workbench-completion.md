@@ -77,6 +77,18 @@ So this plan splits `PermissionInterrupt` into a **presentational `PermissionPro
 
 ### `isReady` is NOT the connect predicate
 
+> **CORRECTED DURING EXECUTION (Task 5).** The paragraphs below are accurate
+> about `isReady` and about how `runtimeConnectionStatus` behaves — but the
+> conclusion is wrong for THIS app. The CopilotKit runtime is the Next route
+> `/api/copilotkit`, served by the same process as the page; its `/info`
+> handler enumerates agents without probing them (`HttpAgent` implements no
+> `getCapabilities`, and failures are swallowed), so it answers 200 with the
+> Dawn server completely down and the status stays `"connected"`. Proven live.
+> The shipped predicate probes the Dawn server itself through the allowlisted
+> proxy (`GET /api/dawn/memory/candidates`; the proxy's 502 is the signal),
+> which also makes the connect screen self-recovering — the runtime status was
+> terminal until remount.
+
 `useAgent`'s `isReady` is a pure derivation — "is this the real registry agent or a provisional stand-in" — and it is `false` for **both** "still connecting" and "runtime is down", with no retry and no way to tell them apart (`react-core/dist/v2/headless.mjs:326-382`).
 
 The trustworthy signal is `useCopilotKit().copilotkit.runtimeConnectionStatus`: `"disconnected" | "connecting" | "connected" | "error"` (`@copilotkit/core/dist/index.mjs:3941-3947`). It is **already reactive** — `useCopilotKit` force-updates on `onRuntimeConnectionStatusChanged` (`react-core/dist/v2/context.mjs:105-123`). `AppShell` already calls `useCopilotKit()`, so the predicate is free.
