@@ -70,34 +70,37 @@ export function normalizeAuditDocument(value, expectedMode, exitCode) {
       typeof advisory.github_advisory_id !== "string" ||
       typeof advisory.severity !== "string" ||
       !Array.isArray(advisory.findings) ||
-      advisory.findings.length !== 1
+      advisory.findings.length === 0
     ) {
       fail("INVALID_AUDIT_IDENTITY")
     }
-    const finding = advisory.findings[0]
-    if (
-      !isRecord(finding) ||
-      typeof finding.version !== "string" ||
-      !Array.isArray(finding.paths) ||
-      finding.paths.length === 0 ||
-      !finding.paths.every(
-        (path) =>
-          typeof path === "string" && path.length > 0 && Buffer.byteLength(path, "utf8") <= 16_384,
+    for (const finding of advisory.findings) {
+      if (
+        !isRecord(finding) ||
+        typeof finding.version !== "string" ||
+        !Array.isArray(finding.paths) ||
+        finding.paths.length === 0 ||
+        !finding.paths.every(
+          (path) =>
+            typeof path === "string" &&
+            path.length > 0 &&
+            Buffer.byteLength(path, "utf8") <= 16_384,
+        )
+      ) {
+        fail("INVALID_AUDIT_IDENTITY")
+      }
+      records.push(
+        normalizeAuditRecord(
+          {
+            ghsa: advisory.github_advisory_id,
+            package: advisory.module_name,
+            severity: advisory.severity,
+            version: finding.version,
+          },
+          "INVALID_AUDIT_EXPECTATION",
+        ),
       )
-    ) {
-      fail("INVALID_AUDIT_IDENTITY")
     }
-    records.push(
-      normalizeAuditRecord(
-        {
-          ghsa: advisory.github_advisory_id,
-          package: advisory.module_name,
-          severity: advisory.severity,
-          version: finding.version,
-        },
-        "INVALID_AUDIT_EXPECTATION",
-      ),
-    )
   }
   records.sort(compareAuditRecords)
   assertUniqueAuditRecords(records, "DUPLICATE_AUDIT_IDENTITY")

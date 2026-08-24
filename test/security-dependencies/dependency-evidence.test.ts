@@ -288,6 +288,35 @@ describe("dependency audit normalization", () => {
 		});
 	});
 
+	it("normalizes every affected version grouped under one advisory", () => {
+		const expectation = mode([
+			{
+				ghsa: "GHSA-2345-6789-cfgh",
+				package: "example",
+				severity: "high",
+				version: "1.2.3",
+			},
+			{
+				ghsa: "GHSA-2345-6789-cfgh",
+				package: "example",
+				severity: "high",
+				version: "1.2.4",
+			},
+		]);
+		const document = auditDocument(expectation);
+		const firstAdvisory = document.advisories["1"];
+		const secondAdvisory = document.advisories["2"];
+		if (!firstAdvisory || !secondAdvisory) {
+			throw new Error("audit fixture must contain both version findings");
+		}
+		firstAdvisory.findings.push(...secondAdvisory.findings);
+		delete document.advisories["2"];
+
+		expect(normalizeAuditDocument(document, expectation, 1).records).toEqual(
+			expectation.records,
+		);
+	});
+
 	it("accepts exit zero only for an exact empty mode", () => {
 		const expectation = mode([]);
 		expect(
@@ -304,6 +333,15 @@ describe("dependency audit normalization", () => {
 		["error envelope", (doc: any) => ({ ...doc, error: { code: "ERR" } }), 1],
 		["missing muted", (doc: any) => without(doc, "muted"), 1],
 		["nonempty muted", (doc: any) => ({ ...doc, muted: [{ id: 1 }] }), 1],
+		[
+			"empty findings",
+			(doc: ReturnType<typeof auditDocument>) => {
+				const changed = structuredClone(doc);
+				changed.advisories["1"].findings = [];
+				return changed;
+			},
+			1,
+		],
 		[
 			"missing GHSA",
 			(doc: any) => {
