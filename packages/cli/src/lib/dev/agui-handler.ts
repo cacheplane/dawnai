@@ -254,10 +254,12 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // client-supplied `input.threadId` is the only thread identity a caller
     // controls here, and it names any thread id it likes.
     //
-    // The create itself cannot happen here: it must land after the run slot is
-    // claimed, where it has always been. These two carry the `create` decision
-    // down to it. Both stay `undefined` on a row that already exists and on a
-    // hook-less app, which is what the create site branches on.
+    // The create itself lands below, once `resolvePendingResume` has run — but
+    // BEFORE `runRegistry.begin`, so a caller the row recheck ultimately denies
+    // never holds the victim thread's run slot for the width of that recheck.
+    // These two carry the `create` decision down to it. Both stay `undefined` on
+    // a row that already exists and on a hook-less app, which is what the create
+    // site branches on.
     let createGate: ((spec: GateSpec) => Gate | Promise<Gate>) | undefined
     let createStamp: Record<string, unknown> | undefined
     if (threadAccess) {
@@ -308,29 +310,26 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     }
 
     const threadId = input.threadId
-    const run = runRegistry.begin(threadId, signal)
-    if (!run) {
-      return Response.json(
-        createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
-          code: "run_in_flight",
-        }),
-        { status: 409 },
-      )
-    }
-    releaseRunBeforeStream = run.release
 
-    // Read before the turn, for the same reason and with the same staleness
-    // caveat as the Agent Protocol handlers: only the CLEAR consults it.
+    // Authorize — and, when this turn must, create — the concrete row BEFORE
+    // claiming the run slot, mirroring the Agent Protocol run handlers. Doing it
+    // after `runRegistry.begin` (where it used to sit) let a caller the recheck
+    // ultimately denies hold the victim thread's slot for the width of that
+    // recheck: a client-chosen id means the row that turned up may be anybody's,
+    // and a denied caller would brick a concurrent authorized run on the same
+    // thread with a transient `run_in_flight` 409. Read once here; only the
+    // CLEAR consults `previousParkedRoute`, with the same staleness caveat the
+    // Agent Protocol handlers carry.
     const existingThread = await threadsStore.getThread(threadId)
     const previousParkedRoute = readParkedRoute(existingThread)
     if (createGate && existingThread) {
-      // A row appeared between the gate and here. The window is wide on this
-      // endpoint — a resume claim, a run slot and a checkpointer read sit
-      // inside it — and the id is client-chosen, so the row that turned up may
-      // be anybody's. The `create` decision authorized a thread that did not
-      // exist; this one does, so it is authorized as what it now is. Skipping
-      // this on the strength of the earlier decision would run the turn on a
-      // thread nothing admitted this caller to.
+      // A row appeared between the gate and here. The window still exists — a
+      // resume claim and a checkpointer read sit inside it — and the id is
+      // client-chosen, so the row that turned up may be anybody's. The `create`
+      // decision authorized a thread that did not exist; this one does, so it is
+      // authorized as what it now is. Skipping this on the strength of the
+      // earlier decision would run the turn on a thread nothing admitted this
+      // caller to.
       const recheck = createGate({
         action: "update",
         operation: "run.agui",
@@ -354,6 +353,17 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       // Hook-less: unchanged.
       await threadsStore.createThread({ thread_id: threadId })
     }
+
+    const run = runRegistry.begin(threadId, signal)
+    if (!run) {
+      return Response.json(
+        createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+          code: "run_in_flight",
+        }),
+        { status: 409 },
+      )
+    }
+    releaseRunBeforeStream = run.release
     // The last-run route, and therefore NOT the identity
     // GET /threads/:id/pending_interrupts gates on — any run the caller is
     // allowed to start overwrites it. See PARKED_ROUTE_KEY. This endpoint is the
