@@ -91,6 +91,8 @@ no-op booleans and bounded-log digests are in the canonical receipt.
 | `3adba8505013578f9a19ac46158a671ef20b57ad` | Committed the Dawn-owned hostile-path tests and audited workflow gates against the pre-fix graph |
 | `a43b793fde96283fe55c84b570a6631857409a8a` | Applied the compatible lock refresh and minimal final policy |
 | `ae6d01b1caa5791f7b87b190b120bd9a77b8fbc0` | Taught the fail-closed audit reader to accept multiple installed-version findings grouped under one advisory while preserving identity, uniqueness, total, muted-record, and exit-status checks |
+| `4bfc149e9a7c57936fa6a90a813e9a31fe51d3a0` | Rejected enumerable array properties that canonical evidence cannot represent |
+| `e2f894a2db7eccfc92e82d1f7712f8a719907c81` | Bound schema-v2 audit evidence to its exact source, lockfile digest, and capture time |
 
 ### Bounded pre-fix RED observations
 
@@ -352,8 +354,12 @@ The reviewed audit reader ran under Node `24.19.0` against
 The fixture SHA-256 is
 `24bc8ad05992e72fc46e4ea2ba799472b6136b2ee8c048f9dc9f7fd7afe6ab2a`.
 The reader accepted the live full and production multisets exactly and wrote a
-canonical receipt with SHA-256
-`4f1d1831a519ae22ab70e6449bce41d845033bff12a89e624f1ba0f16617dd71`.
+schema-v2 canonical receipt at `2026-08-24T19:34:19Z` from source
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81`. It binds `pnpm-lock.yaml`
+SHA-256
+`f7c08a30d9649a6f795a0b7d33656ecf37e4be92b92717dd666832cc780b8d18`
+and has canonical receipt SHA-256
+`3c653e9dc94580768a805170ab606594560206b9a74b7c60d74c698301d18d91`.
 
 | Mode | Raw audit result | Exact records | Severity totals | Muted |
 |---|---|---:|---|---|
@@ -416,7 +422,7 @@ place.
 
 The current-base capture is bound to default/main
 `d2404dc7b138db151ae58f0b36788dfa08e2008e` and source snapshot
-`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f`. It contains the complete 59-alert
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81`. It contains the complete 59-alert
 open set. Every record is open with `dismissal`, `fixedAt`, and
 `autoDismissedAt` all null.
 
@@ -444,10 +450,10 @@ set still has no suppressions, dismissals, or auto-dismissals.
 
 The reviewed-base receipt is
 `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`.
-It was captured at `2026-08-24T19:11:29Z` from source snapshot
-`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f` against reviewed base
+It was captured at `2026-08-24T19:36:09Z` from source snapshot
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81` against reviewed base
 `d2404dc7b138db151ae58f0b36788dfa08e2008e`. Its SHA-256 is
-`f7be43a2afb2817042a08a35ef3a5298a92eb21b9e727ef5b9c2b7c23fe75865`;
+`702da06ee81623f57f8a9a12e292cd40bbf7b9b373da402b3ac886cd8b4659c0`;
 the exact 59-record identity fixture SHA-256 is
 `bc477a099f4f5085c9fbc55c8e9a3de877717e885adc07157385f9fac28d263e`.
 The immutable August 10 receipt remains unchanged.

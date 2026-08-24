@@ -36,11 +36,12 @@ SHAs and finding counts are historical evidence, not current-head assertions.
 
 **Current implementation base:** The branch is rebased onto reviewed main
 commit `d2404dc7b138db151ae58f0b36788dfa08e2008e`. The final graph/audit evidence
-and reviewed-base receipt are recaptured against that exact base.
+and reviewed-base receipt were recaptured from clean source snapshot
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81` against that exact base.
 
 **Reviewed current-base Dependabot set:** A complete bounded read of
 default/main at `d2404dc7b138db151ae58f0b36788dfa08e2008e` from source snapshot
-`8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f` observed these exact 59 open alerts
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81` observed these exact 59 open alerts
 and candidate post-remediation partition:
 
 ```text
@@ -77,7 +78,12 @@ upstream-blocked provider-utils record. The full audit contains that record plus
 45 exact findings owned by the required Vercel development/native-deployment
 boundary: 46 records total. Neither mode has muted records. The terminal
 Dependabot sets remain subject to post-merge reconciliation and contain no
-suppressions or dismissals.
+suppressions or dismissals. The schema-v2 receipt was captured at
+`2026-08-24T19:34:19Z` from source
+`e2f894a2db7eccfc92e82d1f7712f8a719907c81`, binds lockfile SHA-256
+`f7c08a30d9649a6f795a0b7d33656ecf37e4be92b92717dd666832cc780b8d18`, and
+has canonical SHA-256
+`3c653e9dc94580768a805170ab606594560206b9a74b7c60d74c698301d18d91`.
 
 ---
 

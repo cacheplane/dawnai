@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-08-24T19:11:29Z",
+  "capturedAt": "2026-08-24T19:36:09Z",
   "dependabot": {
     "defaultSha": "d2404dc7b138db151ae58f0b36788dfa08e2008e",
     "open": [
@@ -1033,7 +1033,7 @@
         "create-dawn-ai-app"
       ],
       "ref": "HEAD",
-      "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f",
+      "sourceSha": "e2f894a2db7eccfc92e82d1f7712f8a719907c81",
       "targetVersion": "0.8.22"
     },
     "npm": {
@@ -1190,7 +1190,7 @@
     },
     "repository": "cacheplane/dawnai",
     "schemaVersion": 1,
-    "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f",
+    "sourceSha": "e2f894a2db7eccfc92e82d1f7712f8a719907c81",
     "workflows": {
       "chart": {
         "completeRuns": 19,
@@ -1216,5 +1216,5 @@
   },
   "repository": "cacheplane/dawnai",
   "schemaVersion": 1,
-  "sourceSha": "8187e7ff6afecbd14bacfe6f813c3a8b24f33f0f"
+  "sourceSha": "e2f894a2db7eccfc92e82d1f7712f8a719907c81"
 }
