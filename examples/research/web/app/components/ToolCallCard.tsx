@@ -126,17 +126,33 @@ const STATUS: Record<ToolCallStatus, { readonly glyph: string; readonly label: s
 }
 
 /**
- * The glyph colors. These are the PACKAGE's status tokens, read through
- * arbitrary-value utilities rather than redefined here, because a running tool
- * and a running todo should be the same blue: `app/theme.css` says outright
- * that `--dawn-activity-running`/`-complete` stay owned by `@dawn-ai/ag-ui`
- * (they are already semantic and dark-mode aware), and `app/layout.tsx`
- * imports that stylesheet globally, so the variables are always defined.
+ * The glyph colors — and the one place this card deliberately says LESS than
+ * the activity cards do.
+ *
+ * `executing` borrows the PACKAGE's running token rather than redefining it,
+ * because a running tool and a running todo should be the same blue:
+ * `app/theme.css` says outright that `--dawn-activity-running` stays owned by
+ * `@dawn-ai/ag-ui` (it is already semantic and dark-mode aware), and
+ * `app/layout.tsx` imports that stylesheet globally. The `currentColor`
+ * fallback is not defensive noise: if that import ever went away, the glyph
+ * should drop to the card's own text color by declaration rather than by
+ * invalid-at-computed-value-time accident, which would inherit some unrelated
+ * ancestor's color instead.
+ *
+ * `complete` stays MUTED, and does not take `--dawn-activity-complete`, because
+ * green would claim an outcome the wire never conveys. CopilotKit's `status` is
+ * a lifecycle: a tool that threw still arrives here as `"complete"`, and this
+ * card sees only the result string — the `ToolMessage`'s own success/error flag
+ * (`kwargs.status`) is dropped upstream (see `app/lib/hydrate.ts`, which drops
+ * it deliberately to keep the live and restored paths at parity). Reading it in
+ * `parseResult` would be a behavior change to a frozen function; if outcome is
+ * ever worth showing, it belongs in a follow-up that changes both paths at once.
+ * Until then a muted ✓ means "finished", which is all we know.
  */
 const STATUS_GLYPH_CLASS: Record<ToolCallStatus, string> = {
   inProgress: "text-wb-muted",
-  executing: "text-[var(--dawn-activity-running)]",
-  complete: "text-[var(--dawn-activity-complete)]",
+  executing: "text-[var(--dawn-activity-running,currentColor)]",
+  complete: "text-wb-muted",
 }
 
 /**
@@ -158,6 +174,8 @@ const STATUS_GLYPH_CLASS: Record<ToolCallStatus, string> = {
 export function ToolCallView({ name, status, parameters, result }: ToolCallViewProps) {
   const { glyph, label } = STATUS[status]
   const content = status === "complete" ? parseResult(result) : undefined
+  // UTF-16 units, so an emoji straddling the limit can split. Acceptable for a
+  // bounded preview; a grapheme-aware slice would be the fix if it ever shows.
   const preview = content?.slice(0, RESULT_PREVIEW_LIMIT)
   const hidden = content === undefined ? 0 : content.length - (preview?.length ?? 0)
 
@@ -170,7 +188,18 @@ export function ToolCallView({ name, status, parameters, result }: ToolCallViewP
         >
           {glyph}
         </span>
-        <span className="min-w-0 break-all rounded-wb-sm bg-wb-border px-1.5 py-0.5 font-medium">
+        {/*
+          `overflow-wrap: anywhere`, not `break-all`: a long tool name should
+          break only when it genuinely cannot fit, the same rule the package
+          puts on `.dawn-activity__title`. `break-all` splits mid-token even
+          when there is room, which turns `searchCorpus` into `searchCorp/us`.
+
+          The radius is `rounded-wb-sm` (7px), a deliberate departure from the
+          package badge's flat 4px: that 4px is a hard-coded literal in the
+          package sheet, while this chip is app-owned and derives from
+          `--wb-radius`, so it restyles with the rest of the workbench.
+        */}
+        <span className="min-w-0 rounded-wb-sm bg-wb-border px-1.5 py-0.5 font-medium [overflow-wrap:anywhere]">
           {name}
         </span>
         <span className="text-[11px] text-wb-muted">{label}</span>
@@ -180,9 +209,28 @@ export function ToolCallView({ name, status, parameters, result }: ToolCallViewP
       </div>
       {preview ? (
         <div className="pl-6">
-          <pre className="mt-1.5 max-h-[120px] overflow-auto whitespace-pre-wrap break-words rounded-wb-sm border border-wb-border bg-wb-bg px-2 py-1.5 font-mono text-[12px] leading-5 text-wb-muted">
-            {preview}
-          </pre>
+          {/*
+            `tabIndex={0}` + a named region: this box scrolls, and Safari does
+            not make scrollable containers keyboard-focusable on its own, so
+            without it a keyboard user cannot reach a truncated result at all.
+            The label is what a screen reader announces on entering it.
+
+            `text-wb-text`, not muted — this is the densest content on the card
+            and should not also be the faintest thing on it. The surrounding
+            chrome stays muted; the output itself reads at full contrast.
+          */}
+          <section
+            // A labelled scroll container must be reachable, or its overflow
+            // is keyboard-unreachable content.
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: scroll container
+            tabIndex={0}
+            aria-label={`${name} result`}
+            className="wb-focus mt-1.5 max-h-[120px] overflow-auto rounded-wb-sm border border-wb-border bg-wb-bg px-2 py-1.5"
+          >
+            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-wb-text">
+              {preview}
+            </pre>
+          </section>
           {hidden > 0 ? (
             <p className="mt-1 text-[11px] tabular-nums text-wb-muted">+{hidden} more characters</p>
           ) : null}

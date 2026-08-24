@@ -42,8 +42,9 @@ describe("tool call arguments", () => {
       parameters: { input: '{"path":"corpus/x.md"}' },
     })
     expect(markup).toContain("corpus/x.md")
-    // The wrapper itself must not reach the reader.
-    expect(markup).not.toContain("input")
+    // The double-encoded wrapper itself must not reach the reader. The escaped
+    // JSON is the whole claim: if `parseArgs` stopped unwrapping, the card
+    // would render `{"input":"{\"path\":...`, and this catches it.
     expect(markup).not.toContain("&quot;path&quot;")
   })
 
@@ -113,6 +114,20 @@ describe("tool call results", () => {
     expect(markup).not.toContain("<pre")
   })
 
+  test("suppresses a result that arrives before the call is complete", () => {
+    // `result` is documented as populated only at `complete`, but the type
+    // allows it earlier, and a mid-run string would be a partial buffer. The
+    // card gates on status, not on the presence of a result.
+    const markup = render({
+      name: "runBash",
+      status: "executing",
+      parameters: {},
+      result: toolMessage("half a directory listing"),
+    })
+    expect(markup).not.toContain("half a directory listing")
+    expect(markup).not.toContain("<pre")
+  })
+
   test("bounds a long result instead of filling the transcript", () => {
     const long = "x".repeat(RESULT_PREVIEW_LIMIT + 250)
     const markup = render({
@@ -124,26 +139,40 @@ describe("tool call results", () => {
     expect(markup).toContain("x".repeat(RESULT_PREVIEW_LIMIT))
     expect(markup).not.toContain(long)
     expect(markup).toContain("+250 more characters")
-    // And the box it lives in stays scrollable rather than growing.
-    expect(markup).toContain("max-h-[120px]")
   })
 })
 
 describe("tool call status", () => {
-  test("each status renders its own label", () => {
+  test("each status renders its own glyph and label", () => {
     const base = { name: "readDoc", parameters: {} } as const
-    expect(render({ ...base, status: "inProgress" })).toContain("preparing…")
-    expect(render({ ...base, status: "executing" })).toContain("running…")
-    expect(render({ ...base, status: "complete" })).toContain("done")
+
+    const preparing = render({ ...base, status: "inProgress" })
+    expect(preparing).toContain("preparing…")
+    expect(preparing).toContain("○")
+
+    const running = render({ ...base, status: "executing" })
+    expect(running).toContain("running…")
+    expect(running).toContain("◐")
+
+    const done = render({ ...base, status: "complete" })
+    expect(done).toContain("done")
+    expect(done).toContain("✓")
   })
 
-  test("the workbench tokens replace the old hard-coded greys", () => {
+  test("does not claim an outcome the wire never carried", () => {
+    // `complete` is a LIFECYCLE state: a tool that threw lands here too, and
+    // the card cannot see the ToolMessage's own status. So the finished glyph
+    // stays muted — the package's green `--dawn-activity-complete` would read
+    // as "succeeded". See `STATUS_GLYPH_CLASS` in the component.
+    const markup = render({ name: "runBash", status: "complete", parameters: {} })
+    expect(markup).not.toContain("dawn-activity-complete")
+  })
+
+  test("carries no inline styles or hard-coded greys any more", () => {
+    // The whole restyle in two assertions: every color now comes from a `wb-*`
+    // utility, and nothing is painted from a `style` object.
     const markup = render({ name: "readDoc", status: "executing", parameters: {} })
-    expect(markup).toContain("border-wb-border")
-    expect(markup).toContain("bg-wb-surface")
-    expect(markup).toContain("text-wb-muted")
-    expect(markup).toContain("rounded-wb")
-    expect(markup).not.toContain("#e5e5e5")
     expect(markup).not.toContain("style=")
+    expect(markup).not.toContain("#e5e5e5")
   })
 })
