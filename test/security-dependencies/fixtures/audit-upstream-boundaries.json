@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "full": {
+    "muted": [],
+    "records": [
+      {
+        "ghsa": "GHSA-23c5-xmqv-rm74",
+        "package": "minimatch",
+        "severity": "high",
+        "version": "10.1.1"
+      },
+      {
+        "ghsa": "GHSA-23hp-3jrh-7fpw",
+        "package": "tar",
+        "severity": "critical",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-27v5-c462-wpq7",
+        "package": "path-to-regexp",
+        "severity": "moderate",
+        "version": "8.2.0"
+      },
+      {
+        "ghsa": "GHSA-27v5-c462-wpq7",
+        "package": "path-to-regexp",
+        "severity": "moderate",
+        "version": "8.3.0"
+      },
+      {
+        "ghsa": "GHSA-2g4f-4pwh-qvx6",
+        "package": "ajv",
+        "severity": "moderate",
+        "version": "8.6.3"
+      },
+      {
+        "ghsa": "GHSA-2mjp-6q6p-2qxm",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-2mjp-6q6p-2qxm",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-35p6-xmwp-9g52",
+        "package": "undici",
+        "severity": "low",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-35p6-xmwp-9g52",
+        "package": "undici",
+        "severity": "low",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-3ppc-4f35-3m26",
+        "package": "minimatch",
+        "severity": "high",
+        "version": "10.1.1"
+      },
+      {
+        "ghsa": "GHSA-4992-7rv2-5pvq",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-4992-7rv2-5pvq",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-7r86-cg39-jmmj",
+        "package": "minimatch",
+        "severity": "high",
+        "version": "10.1.1"
+      },
+      {
+        "ghsa": "GHSA-83g3-92jg-28cx",
+        "package": "tar",
+        "severity": "high",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "package": "@ai-sdk/provider-utils",
+        "severity": "low",
+        "version": "3.0.28"
+      },
+      {
+        "ghsa": "GHSA-8x88-c5mf-7j5w",
+        "package": "tar",
+        "severity": "high",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-8xcm-r25x-g524",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-8xcm-r25x-g524",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-9ppj-qmqm-q256",
+        "package": "tar",
+        "severity": "high",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-c76h-2ccp-4975",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-cxrh-j4jr-qwg3",
+        "package": "undici",
+        "severity": "low",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-g8m3-5g58-fq7m",
+        "package": "undici",
+        "severity": "low",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-g8m3-5g58-fq7m",
+        "package": "undici",
+        "severity": "low",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-g9mf-h72j-4rw9",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-g9mf-h72j-4rw9",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-gvwx-54wh-qm9j",
+        "package": "tar",
+        "severity": "moderate",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-j3q9-mxjg-w52f",
+        "package": "path-to-regexp",
+        "severity": "high",
+        "version": "8.2.0"
+      },
+      {
+        "ghsa": "GHSA-j3q9-mxjg-w52f",
+        "package": "path-to-regexp",
+        "severity": "high",
+        "version": "8.3.0"
+      },
+      {
+        "ghsa": "GHSA-m8rv-5g2x-5cg5",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-m8rv-5g2x-5cg5",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-p88m-4jfj-68fv",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-p88m-4jfj-68fv",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-qffp-2rhf-9h96",
+        "package": "tar",
+        "severity": "high",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-r292-9mhp-454m",
+        "package": "tar",
+        "severity": "high",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-v3r7-h72x-cjcm",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-v3r7-h72x-cjcm",
+        "package": "undici",
+        "severity": "moderate",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-v3rj-xjv7-4jmq",
+        "package": "smol-toml",
+        "severity": "moderate",
+        "version": "1.5.2"
+      },
+      {
+        "ghsa": "GHSA-v9p9-hfj2-hcw8",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-v9p9-hfj2-hcw8",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-vmf3-w455-68vh",
+        "package": "tar",
+        "severity": "moderate",
+        "version": "7.5.7"
+      },
+      {
+        "ghsa": "GHSA-vpq2-c234-7xj6",
+        "package": "@tootallnate/once",
+        "severity": "low",
+        "version": "2.0.0"
+      },
+      {
+        "ghsa": "GHSA-vrm6-8vpv-qv8q",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-vrm6-8vpv-qv8q",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-vxpw-j846-p89q",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.28.4"
+      },
+      {
+        "ghsa": "GHSA-vxpw-j846-p89q",
+        "package": "undici",
+        "severity": "high",
+        "version": "5.29.0"
+      },
+      {
+        "ghsa": "GHSA-w8wr-v893-vjvp",
+        "package": "tar",
+        "severity": "moderate",
+        "version": "7.5.7"
+      }
+    ]
+  },
+  "production": {
+    "muted": [],
+    "records": [
+      {
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "package": "@ai-sdk/provider-utils",
+        "severity": "low",
+        "version": "3.0.28"
+      }
+    ]
+  }
+}
