@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
-import { createLocalThreadSource } from "./thread-source.js"
+import { createLocalThreadSource, readParkedInterrupts } from "./thread-source.js"
 
 function memoryStorage(): Storage {
   const map = new Map<string, string>()
@@ -170,5 +170,120 @@ describe("local thread source hydration", () => {
       "Could not load this conversation (HTTP 502)",
     )
     await expect(source.hydrate("thread-1")).rejects.not.toThrow(/Unexpected token/)
+  })
+})
+
+/**
+ * The envelope of a real parked gate, as the endpoint returns it: the entry
+ * carries the server's chosen `interruptId` and `resumeKey`, and `value` is
+ * the Dawn envelope `permission-gate.ts` wrote.
+ */
+const PARKED_BODY = {
+  interrupts: [
+    {
+      interruptId: "perm-1",
+      resumeKey: "__interrupt__:0",
+      value: {
+        detail: { argsPreview: "{}", suggestedPattern: "deployProd", toolName: "deployProd" },
+        interruptId: "perm-1",
+        kind: "tool",
+        type: "permission-request",
+      },
+    },
+  ],
+}
+
+describe("readParkedInterrupts", () => {
+  test("keeps the whole envelope as the card's metadata", () => {
+    expect(readParkedInterrupts(PARKED_BODY)).toEqual([
+      { interruptId: "perm-1", metadata: PARKED_BODY.interrupts[0]?.value },
+    ])
+  })
+
+  test("takes the id the SERVER chose, not the one inside the envelope", () => {
+    // The server resolves `innerId ?? outerId` and keeps an `aliases` list for
+    // when they differ; the resume endpoint matches on the id it published.
+    // Re-deriving the precedence here would be a second copy of that rule,
+    // free to drift into resuming an id the server does not recognize.
+    const parked = readParkedInterrupts({
+      interrupts: [
+        {
+          interruptId: "outer-id",
+          resumeKey: null,
+          value: { interruptId: "inner-id", kind: "tool" },
+        },
+      ],
+    })
+    expect(parked[0]?.interruptId).toBe("outer-id")
+  })
+
+  test("is empty for the ordinary empty answer", () => {
+    expect(readParkedInterrupts({ interrupts: [] })).toEqual([])
+  })
+
+  test.each([
+    ["a null body", null],
+    ["an error envelope", { error: { code: "thread_not_found" } }],
+    ["an array", []],
+    ["a non-array interrupts field", { interrupts: "none" }],
+  ])("is empty for %s rather than throwing", (_label, body) => {
+    expect(readParkedInterrupts(body)).toEqual([])
+  })
+
+  test("drops an entry with no usable id, keeping its neighbours", () => {
+    // An entry that cannot be resumed would render a button that can only
+    // fail; dropping it leaves the thread exactly as stranded as it was.
+    const parked = readParkedInterrupts({
+      interrupts: [
+        { resumeKey: null, value: { kind: "tool" } },
+        { interruptId: "", value: {} },
+        { interruptId: "perm-2", value: { kind: "command" } },
+      ],
+    })
+    expect(parked).toEqual([{ interruptId: "perm-2", metadata: { kind: "command" } }])
+  })
+
+  test("survives an entry whose value is not an object", () => {
+    const parked = readParkedInterrupts({
+      interrupts: [{ interruptId: "perm-3", value: "surprise" }],
+    })
+    expect(parked).toEqual([{ interruptId: "perm-3", metadata: {} }])
+  })
+})
+
+describe("thread source pending interrupts", () => {
+  test("asks the proxy for the thread's parked gates", async () => {
+    const fetchFn = stubFetch(200, PARKED_BODY)
+    const parked = await createLocalThreadSource(memoryStorage(), fetchFn).pendingInterrupts("t 1")
+    expect(fetchFn).toHaveBeenCalledWith("/api/dawn/threads/t%201/pending_interrupts", undefined)
+    expect(parked).toHaveLength(1)
+    expect(parked[0]?.interruptId).toBe("perm-1")
+  })
+
+  test("passes an abort signal through when it is given one", async () => {
+    const fetchFn = stubFetch(200, { interrupts: [] })
+    const controller = new AbortController()
+    await createLocalThreadSource(memoryStorage(), fetchFn).pendingInterrupts(
+      "t1",
+      controller.signal,
+    )
+    expect(fetchFn).toHaveBeenCalledWith("/api/dawn/threads/t1/pending_interrupts", {
+      signal: controller.signal,
+    })
+  })
+
+  test.each([
+    ["404 — no checkpoint row for this thread", 404],
+    ["409 — the thread has never run, or its route is gone", 409],
+    ["403 — the proxy refused a path outside its allowlist", 403],
+    ["502 — the Dawn server is not reachable", 502],
+  ])("resolves empty rather than rejecting on %s", async (_label, status) => {
+    const source = createLocalThreadSource(memoryStorage(), stubFetch(status, { error: "nope" }))
+    await expect(source.pendingInterrupts("thread-1")).resolves.toEqual([])
+  })
+
+  test("resolves empty for a 200 that is not the shape it expects", async () => {
+    const source = createLocalThreadSource(memoryStorage(), stubFetch(200, { unexpected: true }))
+    await expect(source.pendingInterrupts("thread-1")).resolves.toEqual([])
   })
 })

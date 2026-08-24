@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, test } from "vitest"
+import { readParkedInterrupts } from "../lib/thread-source"
 import { MultipleGatesNotice, PermissionPrompt } from "./PermissionPrompt"
 
 /**
@@ -29,6 +30,18 @@ const PARKED = {
   kind: "tool",
   detail: { toolName: "deployProd", argsPreview: "{}", suggestedPattern: "deployProd" },
 } as const
+
+/**
+ * A `kind: "memory"` gate — a real envelope whose `detail` this card has no
+ * branch for. Declared as a plain const rather than inline so its extra fields
+ * are structural context, not an excess-property error against the subset of
+ * the envelope `PermissionMetadata` names.
+ */
+const MEMORY_METADATA = {
+  interruptId: "perm-9",
+  kind: "memory",
+  detail: { namespace: "beliefs", newContent: "ships on Fridays" },
+}
 
 const SUBAGENT_METADATA = {
   interruptId: "perm-3",
@@ -82,27 +95,37 @@ describe("PermissionPrompt", () => {
     const html = markup(
       <PermissionPrompt metadata={COMMAND_METADATA} isResolving={true} onDecide={() => {}} />,
     )
+    // The accessibility tree only — how the dimming is spelled in Tailwind is
+    // not a contract, and asserting the class names just makes a restyle red.
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain("pointer-events-none")
-    expect(html).toContain("opacity-50")
     // Dimmed, never `disabled`: that would drop focus to <body> mid-click.
     expect(html).toContain('aria-disabled="true"')
     expect(html).not.toMatch(/(?<!aria-)disabled=/)
   })
 
   test("a hydrated envelope renders the same card as a live one", () => {
-    // The live route: the envelope arrives as `Interrupt.metadata`.
+    // The live route: `toAguiInterrupt` parks the envelope verbatim under
+    // `Interrupt.metadata`, so this is what the live card receives.
     const live = markup(
       <PermissionPrompt metadata={PARKED} isResolving={false} onDecide={() => {}} />,
     )
-    // The hydrated route: the endpoint's `value`, parsed off a real body.
-    const body = { interrupts: [{ interruptId: "perm-1", resumeKey: null, value: PARKED }] }
-    const value = body.interrupts[0]?.value
+    // The hydrated route, through the REAL mapper rather than the same object
+    // handed over twice — otherwise this asserts nothing about the path the
+    // reload case actually takes.
+    const parked = readParkedInterrupts({
+      interrupts: [{ interruptId: "perm-1", resumeKey: null, value: PARKED }],
+    })
+    expect(parked).toHaveLength(1)
     const hydrated = markup(
-      <PermissionPrompt metadata={value ?? {}} isResolving={false} onDecide={() => {}} />,
+      <PermissionPrompt
+        metadata={parked[0]?.metadata ?? {}}
+        isResolving={false}
+        onDecide={() => {}}
+      />,
     )
     expect(hydrated).toBe(live)
     expect(hydrated).toContain("Permission required")
+    expect(hydrated).toContain("deployProd")
   })
 
   test("a tool gate names the tool rather than dumping the envelope", () => {
@@ -126,6 +149,20 @@ describe("PermissionPrompt", () => {
     )
     expect(html).toContain("Permission required")
     expect(html).toContain("approve the flux")
+  })
+
+  test("a kind with nothing readable says so, without leaking the envelope", () => {
+    // `kind: "memory"` is this case today (see `subjectOf`'s TODO): a real
+    // envelope with a detail shape the card has no branch for.
+    const html = markup(
+      <PermissionPrompt metadata={MEMORY_METADATA} isResolving={false} onDecide={() => {}} />,
+    )
+    expect(html).toContain("memory: ")
+    expect(html).toContain("an unrecognized request")
+    // The whole point: no interruptId, no machine `type`, no JSON in front of
+    // someone being asked to make a security decision.
+    expect(html).not.toContain("perm-9")
+    expect(html).not.toContain("{")
   })
 
   test("the group notice appears only for more than one gate", () => {

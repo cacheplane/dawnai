@@ -1,12 +1,8 @@
 "use client"
 import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2"
-import { useCallback, useEffect, useState } from "react"
-import {
-  MultipleGatesNotice,
-  type PermissionDecision,
-  type PermissionMetadata,
-  PermissionPrompt,
-} from "./PermissionPrompt"
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { ParkedInterrupt, ThreadSource } from "../lib/thread-source"
+import { type PermissionDecision, PermissionPrompt } from "./PermissionPrompt"
 
 /**
  * The permission gates the SERVER is already holding, put back on screen.
@@ -17,136 +13,105 @@ import {
  * inside its own `agent.subscribe(…)` effect. There is no public setter and
  * assigning `agent.pendingInterrupts` does not make it render, so the run is
  * stranded: the composer stays blocked and nothing on screen says why. This
- * component is the second source that fixes that, asking the server directly.
+ * component is the second source that fixes that, asking the backend through
+ * `ThreadSource` — the same seam the transcript's own restore goes through.
  *
- * It renders the same `PermissionPrompt` the live source does, because the
- * endpoint's `value` IS the Dawn envelope `toAguiInterrupt` would have parked
- * under `Interrupt.metadata`. Note the mapping is done HERE rather than with
- * `toAguiInterrupt`: that function is not exported from `@dawn-ai/ag-ui`'s
- * package root (only its `DawnInterruptEnvelope`/`DawnResumeRequest` types
- * are), and widening a package's public API for an example is the wrong
- * direction. Reading `interruptId` and treating the rest as metadata is the
- * whole of what this card needs from it.
+ * It deliberately does NOT write what it finds onto `agent.pendingInterrupts`.
+ * That would look like it unified the two sources, but the server's id for an
+ * interrupt can be one of two aliases (`innerId ?? outerId`, plus an `aliases`
+ * list it keeps for exactly that reason), and seeding CopilotKit's own state
+ * with an id its resume path did not mint risks a set-mismatch rejection on
+ * the next real run. The count is reported UP instead, via `onPendingChange`,
+ * and the composer's block is computed from both sources at the top.
  */
-
-/** One entry of `GET /threads/:id/pending_interrupts`. */
-export interface ParkedInterrupt {
-  readonly interruptId: string
-  readonly metadata: PermissionMetadata
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-/**
- * The endpoint's body, narrowed to what can be rendered.
- *
- * Total rather than throwing: an entry without a usable `interruptId` cannot
- * be resumed, so a card for it would be a button that can only fail. Dropping
- * it silently leaves the thread exactly as stranded as it already was, which
- * is worse than nothing only if the alternative works — and it cannot.
- */
-export function readParkedInterrupts(body: unknown): ParkedInterrupt[] {
-  if (!isRecord(body) || !Array.isArray(body.interrupts)) return []
-  const parked: ParkedInterrupt[] = []
-  for (const entry of body.interrupts) {
-    if (!isRecord(entry)) continue
-    const value = entry.value
-    const interruptId =
-      isRecord(value) && typeof value.interruptId === "string" && value.interruptId.length > 0
-        ? value.interruptId
-        : typeof entry.interruptId === "string" && entry.interruptId.length > 0
-          ? entry.interruptId
-          : undefined
-    if (interruptId === undefined) continue
-    parked.push({ interruptId, metadata: (isRecord(value) ? value : {}) as PermissionMetadata })
-  }
-  return parked
-}
 
 export interface HydratedInterruptsProps {
   /** The thread to ask about. Undefined during SSR and before the first effect. */
   readonly threadId: string | undefined
+  /** Where the parked gates are read from. Null during SSR. */
+  readonly threadSource: ThreadSource | null
   /** Where a failed resume goes — the same surface `PermissionInterrupt` uses. */
   readonly onError: (error: unknown) => void
   /**
-   * `fetch`, injectable so a test does not have to patch a global. Bound to
-   * `globalThis` by default: an unbound reference throws "Illegal invocation"
-   * in the browser.
+   * How many gates this source is showing, reported on every change and 0 on
+   * unmount or thread change.
    *
-   * It is a dependency of the fetching effect, so it must be STABLE — an
-   * inline lambda re-issues the request on every render. `Transcript` passes
-   * nothing, which is why the default lives inside the effect rather than in
-   * the parameter list: a default expression would be a fresh function every
-   * render and would loop on its own.
+   * The feature only half-works without it. `AppShell` computes
+   * `isAwaitingApproval` from `agent.pendingInterrupts`, which is EMPTY after
+   * a reload — so a hydrated card would render "Permission required" over a
+   * live composer, and sending from there starts a fresh run with no resume
+   * against a parked checkpoint: `Thread has N pending interrupt(s) not
+   * addressed by resume`, thrown after the user's message is already in the
+   * transcript. That is the exact failure `Composer`'s own doc gives as the
+   * reason the flag exists; this prop is what makes the flag true for the
+   * source it cannot see.
    */
-  readonly fetchFn?: typeof fetch
+  readonly onPendingChange?: (count: number) => void
 }
 
-export function HydratedInterrupts({ threadId, onError, fetchFn }: HydratedInterruptsProps) {
+export function HydratedInterrupts({
+  threadId,
+  threadSource,
+  onError,
+  onPendingChange,
+}: HydratedInterruptsProps) {
   const { agent } = useAgent()
   const { copilotkit } = useCopilotKit()
   const [parked, setParked] = useState<readonly ParkedInterrupt[]>([])
-  // Bumped after a decision to re-ask the server: a turn can park on two gates
-  // at once, and the second one is only visible once the first is answered.
-  const [reloadToken, setReloadToken] = useState(0)
   const [resolvingId, setResolvingId] = useState<string | null>(null)
 
+  // The thread whose answer may still be painted. Written from the effect
+  // below, not during render, and it — not the AbortController — is what makes
+  // a stale response harmless: the re-fetch after a decision is fired from a
+  // `.finally()` that owns no signal, so abort alone would leave that one read
+  // free to paint thread A's gates into thread B.
+  const renderedThreadIdRef = useRef(threadId)
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      if (threadId === undefined || threadSource === null) return
+      try {
+        const found = await threadSource.pendingInterrupts(threadId, signal)
+        if (signal?.aborted === true || renderedThreadIdRef.current !== threadId) return
+        setParked(found)
+      } catch {
+        // Silent by design — see `pendingInterrupts` in `thread-source.ts` for
+        // why an unreachable server is not a user-facing error here. This also
+        // absorbs the AbortError from the cleanup below.
+      }
+    },
+    [threadId, threadSource],
+  )
+
   useEffect(() => {
-    // Read, not merely listed as a dependency: `reloadToken` is the whole
-    // input this effect takes from a decision, and a lint rule that prunes
-    // "unused" dependencies would otherwise strip the re-fetch out.
-    void reloadToken
+    renderedThreadIdRef.current = threadId
+    // Cleared ONLY here. This effect re-runs on a thread change and nothing
+    // else (`load`'s identity is a function of the same two values), so a
+    // re-fetch after a decision leaves the surviving cards mounted rather than
+    // unmounting and remounting them — which would flicker them and drop focus
+    // to <body> in the middle of a decision.
     setParked([])
     if (threadId === undefined) return
-    // Client-only by construction: this runs in an effect, so SSR renders the
-    // empty list and never issues the request.
-    const request = fetchFn ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args))
-    // Stale-response discipline. The effect re-runs on a thread switch, so its
-    // cleanup is exactly the moment thread A's answer stopped being paintable
-    // — unlike `AppShell`'s hydrate, whose effect also depends on `agent` and
-    // therefore cannot use its own cleanup as the staleness signal. Nothing
-    // here depends on `agent`: it is read at click time, not fetch time.
-    let cancelled = false
-    void (async () => {
-      try {
-        const response = await request(
-          `/api/dawn/threads/${encodeURIComponent(threadId)}/pending_interrupts`,
-        )
-        // Every failure renders nothing, and each has a different innocent
-        // cause: 404 is a thread with no checkpoint row, 409 a thread that has
-        // never run or whose route is gone, 403 the proxy refusing a path that
-        // is not allowlisted. None of them means "your conversation is
-        // broken", and the ordinary answer for a healthy thread that is simply
-        // not parked is a 200 with an empty array. A genuine network failure
-        // is also silent here on purpose: the page still works, the only lost
-        // capability is restoring a prompt that may well not exist, and an
-        // error row for it would fire on every load against a stopped dev
-        // server — where the transcript's own restore already says so, in a
-        // message that is actually about something the user can see.
-        if (!response.ok) return
-        const body: unknown = await response.json()
-        if (cancelled) return
-        setParked(readParkedInterrupts(body))
-      } catch {
-        // See above: unreachable server, aborted request, or a non-JSON body.
-      }
-    })()
+    const controller = new AbortController()
+    void load(controller.signal)
     return () => {
-      cancelled = true
+      controller.abort()
     }
-  }, [threadId, reloadToken, fetchFn])
+  }, [threadId, load])
 
   const decide = useCallback(
     (interruptId: string, decision: PermissionDecision) => {
       setResolvingId(interruptId)
       // The public resume seam. Deny is `{ status: "cancelled" }` with NO
-      // payload — the same choice `PermissionInterrupt` makes by calling
-      // `cancel(id)`, and not merely a stylistic match: the dev runtime's
-      // resume validator requires a cancelled entry to have EXACTLY
-      // `interruptId` and `status`, so tagging a redundant `payload: "deny"`
-      // onto it would be rejected outright.
+      // payload, for three reasons that agree: it is the same thing the live
+      // source says by calling `cancel(id)`; `resolvePendingResume`
+      // (`packages/cli/src/lib/dev/pending-interrupts.ts`) maps
+      // `status === "cancelled"` straight to "deny" and never looks at the
+      // payload; and it is the only shape `isDawnResumeBody` accepts on the
+      // `POST /threads/:id/resume` endpoint, whose exact-key check rejects a
+      // cancelled entry carrying a third key. This app resumes through the
+      // AG-UI handler rather than that endpoint, so the last one is not the
+      // reason — it is the confirmation that this spelling is the portable one.
       Promise.resolve()
         .then(() =>
           copilotkit.runAgent({
@@ -166,12 +131,17 @@ export function HydratedInterrupts({ threadId, onError, fetchFn }: HydratedInter
           // with nothing on screen.
           onError(error)
         })
+        // Re-ask the server: a turn can park on two gates at once, and the
+        // second is only actionable once the first is answered. `resolvingId`
+        // is held until that read lands so the answered card stays dimmed
+        // instead of flicking back to looking clickable in the gap.
         .finally(() => {
-          setResolvingId(null)
-          setReloadToken((token) => token + 1)
+          void load().finally(() => {
+            setResolvingId(null)
+          })
         })
     },
-    [agent, copilotkit, onError],
+    [agent, copilotkit, load, onError],
   )
 
   // The no-double-render rule, and it is two rules because they close
@@ -183,29 +153,56 @@ export function HydratedInterrupts({ threadId, onError, fetchFn }: HydratedInter
   //    from `onRunFinishedEvent` for that same event — so an interrupt the
   //    live card is showing is necessarily in this set, and the filter cannot
   //    miss it.
-  // 2. Nothing at all renders while a run is in flight. That covers the gap
-  //    rule 1 cannot: between clicking a hydrated card and the resumed run
-  //    finishing, the server still lists the interrupt as parked (the resume
-  //    has not been applied yet) while `pendingInterrupts` has been cleared
-  //    for the new run — a re-fetch landing in that window would repaint the
-  //    card the user just answered.
+  // 2. While a run is in flight, the ONLY thing that can render is the card
+  //    the user just answered, still dimmed. That covers the gap rule 1
+  //    cannot: between the click and the resumed run finishing, the server
+  //    still lists every gate as parked (the resume has not been applied yet)
+  //    while `pendingInterrupts` has been cleared for the new run, so a
+  //    re-fetch landing in that window would repaint gates the live source is
+  //    about to own. Keeping the answered one is not a hole in rule 1 — rule 1
+  //    guarantees the live source is not holding that id, because a run that
+  //    is still going has not delivered any interrupt yet.
   //
-  // Together they leave no state in which the same `interruptId` can be on
-  // screen twice: while running, this source shows nothing; while stopped, it
-  // shows only what the live source is not.
+  // Together they leave no state in which the same `interruptId` is on screen
+  // twice: while running, only the answered card; while stopped, only what the
+  // live source is not holding.
   const liveIds = new Set(agent.pendingInterrupts.map((interrupt) => interrupt.id))
-  const visible = agent.isRunning ? [] : parked.filter((entry) => !liveIds.has(entry.interruptId))
+  const visible = agent.isRunning
+    ? parked.filter((entry) => entry.interruptId === resolvingId)
+    : parked.filter((entry) => !liveIds.has(entry.interruptId))
 
+  const pendingCount = visible.length
+  useEffect(() => {
+    onPendingChange?.(pendingCount)
+    return () => {
+      onPendingChange?.(0)
+    }
+  }, [pendingCount, onPendingChange])
+
+  // No `MultipleGatesNotice` here, unlike the live source, and it is not an
+  // omission. A turn's gates all arrive in ONE `RUN_FINISHED` (see
+  // `packages/ag-ui/src/outbound.ts`), so a group is never split across the two
+  // sources in a resting state: either the live source holds all of them, or —
+  // after a reload — this one does. What a per-source count could get wrong is
+  // therefore only the transient it already hides, and a second copy of the
+  // notice that says "2" while the live source says "2" about the same two
+  // gates would be strictly worse than the silence.
   return (
     <>
-      <MultipleGatesNotice count={visible.length} />
-      {visible.map((entry, index) => (
+      {visible.map((entry) => (
         <PermissionPrompt
           key={entry.interruptId}
+          focusKey={entry.interruptId}
           metadata={entry.metadata}
           isResolving={resolvingId === entry.interruptId}
           onDecide={(decision) => decide(entry.interruptId, decision)}
-          autoFocus={index === 0}
+          // NEVER takes the keyboard. The live card follows the user's own
+          // send, so moving focus to it answers something they just did; this
+          // one appears unbidden a moment after the page loads, and grabbing
+          // focus then yanks the caret out of whatever they had started typing
+          // (WCAG 3.2.5 Change on Request). `role="alert"` announces it
+          // without moving anything.
+          autoFocus={false}
         />
       ))}
     </>

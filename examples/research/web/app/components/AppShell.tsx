@@ -118,6 +118,12 @@ export function AppShell({
   // True only once a hydrate has actually put something back on screen, which
   // is the condition for the "what did not come back" note in `Transcript`.
   const [hasRestoredHistory, setHasRestoredHistory] = useState(false)
+  // Gates this browser never saw park, restored from the server by
+  // `HydratedInterrupts`. Kept here rather than derived because there is
+  // nothing on the agent to derive it from — see `isAwaitingApproval`. The
+  // setter is passed down as-is: a `useState` setter is referentially stable,
+  // so it will not re-fire the reporting effect on the way down.
+  const [hydratedPendingCount, setHydratedPendingCount] = useState(0)
 
   // The agent instance a hydrate that is already in flight should apply to.
   //
@@ -145,7 +151,15 @@ export function AppShell({
   // user decided long ago; insisting they have not — and showing "running" and
   // "awaiting approval" side by side — is just wrong. The composer stays
   // blocked either way, via `isRunning`, but now for the true reason.
-  const isAwaitingApproval = agent.pendingInterrupts.length > 0 && !agent.isRunning
+  //
+  // Two sources, ORed, because `pendingInterrupts` only knows about gates this
+  // browser watched park. After a reload it is empty while the server is still
+  // holding one — and the composer would be live under a card that says
+  // "Permission required", with a send from there starting a fresh run against
+  // a parked checkpoint (`Thread has N pending interrupt(s) not addressed by
+  // resume`, thrown once the user's message is already in the transcript).
+  const isAwaitingApproval =
+    !agent.isRunning && (agent.pendingInterrupts.length > 0 || hydratedPendingCount > 0)
 
   const reportRunError = useCallback((error: unknown) => {
     setRunError({
@@ -220,6 +234,10 @@ export function AppShell({
     agent.setMessages([])
     setRunError(null)
     setHasRestoredHistory(false)
+    // `HydratedInterrupts` reports 0 for the new thread on its own, but only
+    // after its effects run; clearing here keeps the composer from staying
+    // blocked across the gap on the previous thread's count.
+    setHydratedPendingCount(0)
     if (activeThreadId === undefined || threadSource === null) return
 
     // Captured, not read from the ref later: this is the instance whose
@@ -356,6 +374,8 @@ export function AppShell({
           runError={runError}
           onDismissRunError={dismissRunError}
           onRunError={reportRunError}
+          threadSource={threadSource}
+          onHydratedPendingChange={setHydratedPendingCount}
         />
         <Composer
           key={activeThreadId}

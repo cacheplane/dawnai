@@ -5,6 +5,7 @@ import {
   useRenderToolCall,
 } from "@copilotkit/react-core/v2"
 import { useEffect, useRef } from "react"
+import type { ThreadSource } from "../lib/thread-source"
 import {
   buildTranscriptItems,
   type TranscriptItem,
@@ -54,6 +55,14 @@ export interface TranscriptProps {
   readonly runError: { readonly title: string; readonly message: string } | null
   readonly onDismissRunError: () => void
   readonly onRunError: (error: unknown) => void
+  /** Passed straight to `HydratedInterrupts` — the seam it reads parked gates from. */
+  readonly threadSource: ThreadSource | null
+  /**
+   * How many parked gates the hydrated source is showing. Reported up because
+   * `AppShell` blocks the composer on it: `agent.pendingInterrupts` is empty
+   * after a reload, so it cannot see them.
+   */
+  readonly onHydratedPendingChange: (count: number) => void
 }
 
 /**
@@ -100,6 +109,8 @@ export function Transcript({
   runError,
   onDismissRunError,
   onRunError,
+  threadSource,
+  onHydratedPendingChange,
 }: TranscriptProps) {
   const { renderActivityMessage } = useRenderActivityMessage()
   const renderToolCall = useRenderToolCall()
@@ -238,9 +249,9 @@ export function Transcript({
           was already holding when the page loaded — the reload case, which
           cannot go through `useInterrupt` at all (there is no public setter
           for its pending state). They cannot show the same interrupt twice:
-          `HydratedInterrupts` renders nothing while a run is in flight and
-          otherwise filters out every id in `agent.pendingInterrupts`, which is
-          the same set the live card is rendering.
+          while a run is in flight the hydrated source shows only the card the
+          user just answered, and at rest it filters out every id in
+          `agent.pendingInterrupts` — the same set the live card renders from.
 
           `HydratedInterrupts` takes the thread id as a PROP rather than as its
           `key`: its own effect keys on that id, clears the previous thread's
@@ -248,7 +259,12 @@ export function Transcript({
           answer it is about to fetch again.
         */}
         <PermissionInterrupt key={threadKey} onError={onRunError} isResuming={isRunning} />
-        <HydratedInterrupts threadId={threadKey} onError={onRunError} />
+        <HydratedInterrupts
+          threadId={threadKey}
+          threadSource={threadSource}
+          onError={onRunError}
+          onPendingChange={onHydratedPendingChange}
+        />
         {runError !== null ? (
           <RunError
             title={runError.title}

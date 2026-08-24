@@ -67,13 +67,15 @@ export interface PermissionInterruptProps {
    */
   readonly onError: (error: unknown) => void
   /**
-   * True while the resumed run is in flight.
+   * True from the moment a decision is taken until the server acknowledges the
+   * resume — `onRunStartedEvent` clears the hook's pending state, which
+   * unmounts these cards, so this covers the round-trip and not the whole run.
    *
    * NOT a double-submit guard — the library seals its interrupt state before
    * `resolve` returns, so a second click is already ignored. This is the
-   * *affordance*: the buttons stay mounted through the whole resumed run, and
-   * without this they look live while doing nothing. Dimming them and setting
-   * `aria-busy` says the decision was taken and the run is working on it.
+   * *affordance*: for as long as the buttons are still on screen after a
+   * click, they must not look live while doing nothing. Dimming them and
+   * setting `aria-busy` says the decision was taken and is being sent.
    */
   readonly isResuming: boolean
 }
@@ -101,6 +103,7 @@ export function PermissionInterrupt({ onError, isResuming }: PermissionInterrupt
             return (
               <PermissionPrompt
                 key={id ?? "legacy"}
+                focusKey={id ?? "legacy"}
                 metadata={(entry?.metadata ?? {}) as PermissionMetadata}
                 isResolving={isResuming}
                 onDecide={decide}

@@ -22,6 +22,14 @@ export type PermissionMetadata = {
   kind?: string
   message?: string
   detail?: {
+    /**
+     * Open, like `DawnInterruptEnvelope` itself. The named fields below are the
+     * ones this card reads; a gate kind it has no branch for still carries its
+     * own detail (`kind: "memory"` brings `namespace`/`oldContent`/…), and
+     * modelling that away would make a real envelope a type error at every
+     * call site rather than the fallback `subjectOf` handles.
+     */
+    readonly [key: string]: unknown
     command?: string
     toolName?: string
     argsPreview?: string
@@ -34,6 +42,7 @@ export type PermissionMetadata = {
     inputPreview?: string
     reason?: string
   }
+  readonly [key: string]: unknown
 }
 
 export type PermissionDecision = "once" | "always" | "deny"
@@ -53,9 +62,21 @@ export interface PermissionPromptProps {
   /**
    * Whether this card takes the keyboard when it mounts. Callers pass true for
    * the first card of a group only, so a turn parked on two gates does not
-   * have its second card steal focus from its first.
+   * have its second card steal focus from its first — and the hydrated source
+   * passes false for every card, because it appears without the user asking.
    */
   readonly autoFocus?: boolean
+  /**
+   * The interrupt's id, used only to decide whether focus has already been
+   * given to THIS gate.
+   *
+   * Belt and braces with the `key` every caller puts on the card: the key
+   * already forces a remount per interrupt id, which would make a plain
+   * once-per-mount flag equivalent. Comparing ids keeps the behavior correct —
+   * focus once per interrupt, never re-stolen — even for a caller that
+   * re-renders one card in place with a new gate in it.
+   */
+  readonly focusKey?: string
 }
 
 const ROW = "mt-1 text-[13px] leading-5 text-wb-muted"
@@ -90,34 +111,33 @@ export function MultipleGatesNotice({ count }: { count: number }) {
  * the first decision — otherwise a keyboard-only user is left tabbing through
  * a dead composer with no indication of why it stopped responding.
  *
- * The effect focuses ONCE PER MOUNT, guarded by a ref so a re-render (a
- * resolving state change, a parent re-render mid-run) cannot re-steal focus
- * the user has since moved. "Once per mount" is only the same thing as "once
- * per interrupt" because every caller keys its cards by `interruptId` — a new
- * gate is therefore a new mount. That is a requirement on callers, not an
- * accident: drop the key and a second gate reuses the first card's element,
- * the ref stays set, and the new decision never takes focus.
+ * The effect focuses once per INTERRUPT, guarded by an id-comparing ref so a
+ * re-render (a resolving state change, a parent re-render mid-run) cannot
+ * re-steal focus the user has since moved, while a genuinely new gate still
+ * gets it. Only the live source asks for this at all — see `autoFocus`.
  */
 function InterruptCard({
   title,
   autoFocus,
+  focusKey,
   isResolving,
   children,
   actions,
 }: {
   title: string
   autoFocus: boolean
+  focusKey: string
   isResolving: boolean
   children: ReactNode
   actions: ReactNode
 }) {
   const actionsRef = useRef<HTMLDivElement>(null)
-  const focusedRef = useRef(false)
+  const focusedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!autoFocus || focusedRef.current) return
-    focusedRef.current = true
+    if (!autoFocus || focusedRef.current === focusKey) return
+    focusedRef.current = focusKey
     actionsRef.current?.querySelector("button")?.focus()
-  }, [autoFocus])
+  }, [autoFocus, focusKey])
 
   return (
     <div
@@ -148,9 +168,22 @@ function InterruptCard({
  * rendered the raw envelope (interruptId and all) inside the `<code>` element.
  * Each branch below reads the field the corresponding `emitPermissionInterrupt`
  * branch in `packages/core/src/capabilities/permission-gate.ts` actually
- * writes. The stringify stays as the last resort for a kind added server-side
- * that this client has not learned yet: unreadable, but never blank.
+ * writes.
+ *
+ * The last resort is a fixed phrase, NOT the stringified envelope: dumping it
+ * is the same defect one line up, and it puts an interruptId and a machine
+ * `type` in front of someone being asked to make a security decision. The kind
+ * still prefixes the line, so an unrecognized gate reads as "memory: an
+ * unrecognized request" — thin, but honest, and the buttons still work.
+ *
+ * TODO: `kind: "memory"` is exactly that case today. Its detail carries
+ * `namespace`, `identity`, `oldContent` and `newContent` — a belief the agent
+ * wants to supersede — which deserves its own branch showing the old and new
+ * text rather than this fallback. Deferred with the memory-in-the-workbench
+ * slice, which also brings `MemoryCandidates` back.
  */
+const UNRECOGNIZED = "an unrecognized request"
+
 function subjectOf(metadata: PermissionMetadata): string {
   const detail = metadata.detail
   const path =
@@ -159,7 +192,7 @@ function subjectOf(metadata: PermissionMetadata): string {
       : detail.operation === undefined
         ? detail.path
         : `${detail.operation} ${detail.path}`
-  return detail?.command ?? detail?.toolName ?? path ?? metadata.message ?? JSON.stringify(metadata)
+  return detail?.command ?? detail?.toolName ?? path ?? metadata.message ?? UNRECOGNIZED
 }
 
 /**
@@ -174,6 +207,7 @@ export function PermissionPrompt({
   isResolving,
   onDecide,
   autoFocus = true,
+  focusKey = "",
 }: PermissionPromptProps) {
   const deny = (
     <button
@@ -202,6 +236,7 @@ export function PermissionPrompt({
       <InterruptCard
         title="Subagent approval required"
         autoFocus={autoFocus}
+        focusKey={focusKey}
         isResolving={isResolving}
         actions={
           <>
@@ -226,6 +261,7 @@ export function PermissionPrompt({
     <InterruptCard
       title="Permission required"
       autoFocus={autoFocus}
+      focusKey={focusKey}
       isResolving={isResolving}
       actions={
         <>

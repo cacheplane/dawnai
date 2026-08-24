@@ -21,6 +21,7 @@
  * no merge, so concurrent tabs can clobber each other's writes (e.g. a
  * `create()` in one tab can erase a `touch()` title from another).
  */
+import type { PermissionMetadata } from "../components/PermissionPrompt"
 import { type HydratedThread, hydrateThreadState } from "./hydrate"
 
 export interface WorkbenchThread {
@@ -39,6 +40,74 @@ export interface ThreadSource {
    * conversation lives in the Dawn server's checkpoint.
    */
   hydrate(id: string): Promise<HydratedThread>
+  /**
+   * The permission gates the backend is holding for this thread right now.
+   *
+   * The second backend read, and it lives on the seam for the same reason
+   * `hydrate` does: a reloaded page has no idea a run is parked, only the
+   * server does. Keeping it here is what makes the LangGraph Platform
+   * implementation a swap rather than a rewrite — that backend answers the
+   * same question at a different URL with a different body, and nothing above
+   * this line should know which one it is talking to.
+   *
+   * Empty is the ordinary answer, and every *expected* failure resolves to it
+   * (see the implementation). `signal` aborts the in-flight read when the user
+   * switches away; a genuine network failure rejects.
+   */
+  pendingInterrupts(id: string, signal?: AbortSignal): Promise<ParkedInterrupt[]>
+}
+
+/**
+ * One parked permission gate, ready for the card to render.
+ *
+ * `metadata` is typed by the CARD rather than here, and the import is
+ * type-only. The Dawn envelope has no shape of its own on this side of the
+ * wire — it is whatever `PermissionPrompt` reads out of it — so letting the
+ * consumer own the type keeps one definition instead of a lib-side copy that
+ * can drift from the component actually rendering it.
+ */
+export interface ParkedInterrupt {
+  readonly interruptId: string
+  readonly metadata: PermissionMetadata
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * `GET /threads/:id/pending_interrupts` -> what the card needs.
+ *
+ * `entry.value` IS the Dawn interrupt envelope — the same object
+ * `@dawn-ai/ag-ui`'s `toAguiInterrupt` parks under `Interrupt.metadata` on the
+ * live path — so a hydrated gate and a live one reach `PermissionPrompt` as
+ * the same shape. (`toAguiInterrupt` itself is not exported from the package
+ * root, only its envelope types are, and widening a package's public API for
+ * an example is the wrong direction. Reading an id and passing the rest
+ * through is the whole of what this consumer needs from it.)
+ *
+ * The id comes off the ENTRY, not off `value`. The server already decided it,
+ * as `innerId ?? outerId` in `packages/cli/src/lib/dev/pending-interrupts.ts`,
+ * and it is the id the resume path matches against — re-deriving that
+ * precedence here would be a second copy of the rule, free to drift into
+ * resuming an id the server does not recognize.
+ *
+ * Total rather than throwing: an entry with no usable id cannot be resumed, so
+ * a card for it would be a button that can only fail. Dropping it leaves the
+ * thread exactly as stranded as it already was, which is only worse than the
+ * alternative if the alternative works — and it cannot.
+ */
+export function readParkedInterrupts(body: unknown): ParkedInterrupt[] {
+  if (!isRecord(body) || !Array.isArray(body.interrupts)) return []
+  const parked: ParkedInterrupt[] = []
+  for (const entry of body.interrupts) {
+    if (!isRecord(entry)) continue
+    const interruptId = entry.interruptId
+    if (typeof interruptId !== "string" || interruptId.length === 0) continue
+    const value = entry.value
+    parked.push({ interruptId, metadata: (isRecord(value) ? value : {}) as PermissionMetadata })
+  }
+  return parked
 }
 
 const STORAGE_KEY = "dawn.workbench.threads"
@@ -158,6 +227,24 @@ export function createLocalThreadSource(
         )
       }
       return hydrateThreadState(await response.json())
+    },
+    async pendingInterrupts(id, signal) {
+      const response = await fetchFn(
+        `/api/dawn/threads/${encodeURIComponent(id)}/pending_interrupts`,
+        signal === undefined ? undefined : { signal },
+      )
+      // EVERY non-2xx is an empty list, and none of them is worth telling the
+      // user about. A 404 is a thread with no checkpoint row, a 409 a thread
+      // that has never run or whose route is gone, a 403 the proxy refusing a
+      // path outside its allowlist — and the ordinary answer for a healthy
+      // thread that simply is not parked is a 200 with an empty array, which
+      // this deliberately cannot be distinguished from. There is nothing the
+      // reader could do with any of it: the worst case is that a prompt which
+      // may well not exist is not restored, and the transcript's own restore
+      // already reports a server that is genuinely unreachable, in a message
+      // about something the reader can actually see.
+      if (!response.ok) return []
+      return readParkedInterrupts(await response.json())
     },
   }
 }
