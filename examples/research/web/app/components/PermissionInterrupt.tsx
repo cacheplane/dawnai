@@ -1,8 +1,16 @@
 "use client"
 import { type Interrupt, useInterrupt } from "@copilotkit/react-core/v2"
-import { type ReactNode, useEffect, useRef } from "react"
-import { neutralButton } from "./ui"
+import {
+  MultipleGatesNotice,
+  type PermissionDecision,
+  type PermissionMetadata,
+  PermissionPrompt,
+} from "./PermissionPrompt"
 
+// The LIVE source of permission gates: the ones this browser watched a run
+// park on. `HydratedInterrupts` is the other source — the ones the server was
+// already holding when the page loaded — and both render `PermissionPrompt`.
+//
 // Dawn's permission gate surfaces as an AG-UI *standard* interrupt: the run ends
 // with `RUN_FINISHED{ outcome:{ type:"interrupt", interrupts:[…] } }`, and the
 // client resumes via the top-level `RunAgentInput.resume` array. `useInterrupt`
@@ -10,6 +18,13 @@ import { neutralButton } from "./ui"
 // `resolve(payload, id)` records `{ status:"resolved", payload }` for that id
 // (resuming once every open interrupt is addressed), while `cancel(id)` records
 // `{ status:"cancelled" }`.
+//
+// That hook is also why the reload case needs a SECOND source rather than a
+// patch to this one: `useInterrupt`'s pending state is written only by
+// `onRunFinishedEvent`/`onRunFinalized` inside its own `agent.subscribe(…)`
+// effect. There is no public setter, and assigning `agent.pendingInterrupts`
+// does not make it render — so an interrupt that parked before this page
+// existed can never reach this component.
 //
 // @dawn-ai/ag-ui's `toAguiInterrupt` preserves the whole Dawn envelope under
 // `interrupt.metadata`, so the command being gated is at
@@ -32,7 +47,8 @@ import { neutralButton } from "./ui"
 // two branches used to disagree about it. `cancel()` wins because it is the
 // AG-UI *protocol's* way to say "the human declined", which stays correct if
 // Dawn's payload vocabulary ever changes, whereas "deny" is a magic string
-// this file would have to keep in sync with the server.
+// this file would have to keep in sync with the server. `HydratedInterrupts`
+// spells the same choice as `{ status: "cancelled" }` with no payload.
 //
 // `renderInChat: false` — NOT the default, and load-bearing. The default
 // (`true`) publishes the element into `<CopilotChat>`/`<CopilotSidebar>` and
@@ -41,18 +57,6 @@ import { neutralButton } from "./ui"
 // interrupt with no approve/deny UI, no error, and green tests. With
 // `renderInChat: false` the hook returns the element instead, and `Transcript`
 // places it at the end of the message list — where the run stopped.
-type PermissionMetadata = {
-  kind?: string
-  detail?: {
-    command?: string
-    suggestedPattern?: string
-    parentRouteId?: string
-    subagentName?: string
-    subagentRouteId?: string
-    inputPreview?: string
-    reason?: string
-  }
-}
 
 export interface PermissionInterruptProps {
   /**
@@ -74,74 +78,6 @@ export interface PermissionInterruptProps {
   readonly isResuming: boolean
 }
 
-const ROW = "mt-1 text-[13px] leading-5 text-wb-muted"
-const CODE = "rounded bg-wb-bg px-1 py-0.5 font-mono text-[12px] text-wb-text"
-const BUTTON = neutralButton("sm")
-
-/**
- * The gate's own surface, deliberately NOT the workbench's neutral card: it is
- * the one thing in the transcript that stops the run and waits on a person, so
- * it carries an amber edge and a filled ground the rest of the app never uses.
- * (It borrows no gradient — that stays reserved for the brand mark and the send
- * button.)
- *
- * A real component rather than markup inlined in `render` so it can own an
- * effect: the card arrives at the bottom of a scrolling region, the composer
- * goes inert at the same moment, and neither event moves focus or says
- * anything. `role="alert"` announces it, and the effect puts the keyboard on
- * the first decision — otherwise a keyboard-only user is left tabbing through
- * a dead composer with no indication of why it stopped responding.
- *
- * The effect is keyed on `focusKey` (the interrupt's id) rather than `[]` so
- * that a later gate in the same thread also takes focus, not just the first of
- * a conversation. Belt and braces with the `key` on the card itself: the key
- * already forces a remount per interrupt id, and the id-comparison here keeps
- * the behavior correct — focus once per interrupt, never re-stolen — even if a
- * re-render arrives without one.
- */
-function InterruptCard({
-  title,
-  focusKey,
-  autoFocus,
-  isResuming,
-  children,
-  actions,
-}: {
-  title: string
-  focusKey: string
-  autoFocus: boolean
-  isResuming: boolean
-  children: ReactNode
-  actions: ReactNode
-}) {
-  const actionsRef = useRef<HTMLDivElement>(null)
-  const focusedRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!autoFocus || focusedRef.current === focusKey) return
-    focusedRef.current = focusKey
-    actionsRef.current?.querySelector("button")?.focus()
-  }, [autoFocus, focusKey])
-
-  return (
-    <div
-      role="alert"
-      aria-busy={isResuming}
-      className="rounded-wb border border-amber-500/40 bg-amber-500/5 px-3.5 py-3 text-[13px]"
-    >
-      <p className="text-[13px] font-medium tracking-tight">{title}</p>
-      {children}
-      <div
-        ref={actionsRef}
-        // Inert, not disabled: `disabled` would drop focus to <body> the
-        // instant the user's own click starts the resume.
-        className={`mt-3 flex flex-wrap gap-2 ${isResuming ? "pointer-events-none opacity-50" : ""}`}
-      >
-        {actions}
-      </div>
-    </div>
-  )
-}
-
 export function PermissionInterrupt({ onError, isResuming }: PermissionInterruptProps) {
   return useInterrupt({
     renderInChat: false,
@@ -152,95 +88,24 @@ export function PermissionInterrupt({ onError, isResuming }: PermissionInterrupt
       // rendering something rather than nothing.
       const open: readonly (Interrupt | null)[] = interrupts.length > 0 ? interrupts : [interrupt]
 
-      const decide = (decision: () => Promise<unknown> | unknown) => () => {
-        Promise.resolve()
-          .then(decision)
-          .catch((error: unknown) => onError(error))
-      }
-
       return (
         <>
-          {open.length > 1 ? (
-            <p className="text-[13px] text-wb-muted">
-              This turn stopped on {open.length} requests. The run continues once every one of them
-              is answered.
-            </p>
-          ) : null}
+          <MultipleGatesNotice count={open.length} />
           {open.map((entry, index) => {
-            const meta = (entry?.metadata ?? {}) as PermissionMetadata
             const id = entry?.id
-            const deny = (
-              <button
-                type="button"
-                className={BUTTON}
-                aria-disabled={isResuming}
-                onClick={decide(() => cancel(id))}
-              >
-                Deny
-              </button>
-            )
-            const allow = (payload: "once" | "always", label: string) => (
-              <button
-                type="button"
-                className={BUTTON}
-                aria-disabled={isResuming}
-                onClick={decide(() => resolve(payload, id))}
-              >
-                {label}
-              </button>
-            )
-            const shared = {
-              focusKey: id ?? "legacy",
-              autoFocus: index === 0,
-              isResuming,
+            const decide = (decision: PermissionDecision) => {
+              Promise.resolve()
+                .then(() => (decision === "deny" ? cancel(id) : resolve(decision, id)))
+                .catch((error: unknown) => onError(error))
             }
-
-            if (meta.kind === "subagent") {
-              const detail = meta.detail
-              return (
-                <InterruptCard
-                  key={shared.focusKey}
-                  title="Subagent approval required"
-                  {...shared}
-                  actions={
-                    <>
-                      {allow("once", "Once")}
-                      {allow("always", "Always")}
-                      {deny}
-                    </>
-                  }
-                >
-                  <p className={ROW}>
-                    Parent <code className={CODE}>{detail?.parentRouteId ?? "unknown route"}</code>{" "}
-                    wants to dispatch{" "}
-                    <code className={CODE}>{detail?.subagentName ?? "an unknown subagent"}</code>
-                    {detail?.subagentRouteId ? ` (${detail.subagentRouteId})` : null}.
-                  </p>
-                  <p className={ROW}>Input: {detail?.inputPreview ?? "no input preview"}</p>
-                  {detail?.reason ? <p className={ROW}>Reason: {detail.reason}</p> : null}
-                </InterruptCard>
-              )
-            }
-
-            const command = meta.detail?.command
             return (
-              <InterruptCard
-                key={shared.focusKey}
-                title="Permission required"
-                {...shared}
-                actions={
-                  <>
-                    {allow("once", "Allow once")}
-                    {allow("always", "Allow always")}
-                    {deny}
-                  </>
-                }
-              >
-                <p className={ROW}>
-                  {entry?.reason ? `${entry.reason}: ` : ""}
-                  <code className={CODE}>{command ?? entry?.message ?? JSON.stringify(meta)}</code>
-                </p>
-              </InterruptCard>
+              <PermissionPrompt
+                key={id ?? "legacy"}
+                metadata={(entry?.metadata ?? {}) as PermissionMetadata}
+                isResolving={isResuming}
+                onDecide={decide}
+                autoFocus={index === 0}
+              />
             )
           })}
         </>

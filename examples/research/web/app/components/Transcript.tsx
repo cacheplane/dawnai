@@ -11,6 +11,7 @@ import {
   type TranscriptMessage,
 } from "../lib/transcript"
 import { EmptyState } from "./EmptyState"
+import { HydratedInterrupts } from "./HydratedInterrupts"
 import { PermissionInterrupt } from "./PermissionInterrupt"
 import { RunError } from "./RunError"
 
@@ -27,7 +28,8 @@ export const RESTORED_HISTORY_NOTICE =
 
 export interface TranscriptProps {
   /**
-   * The active thread's id, used only as `PermissionInterrupt`'s `key`.
+   * The active thread's id. Two consumers, both about permission gates:
+   * `PermissionInterrupt`'s `key`, and `HydratedInterrupts`' fetch.
    *
    * `useInterrupt` keeps its OWN pending state: it is fed by
    * `onRunFinishedEvent` and cleared only by a *new* run, a failure, or
@@ -229,7 +231,24 @@ export function Transcript({
         </p>
       </div>
       <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-8 empty:hidden">
+        {/*
+          The two sources of permission gates, side by side and deliberately
+          both mounted. `PermissionInterrupt` shows the ones this browser
+          watched a run park on; `HydratedInterrupts` shows the ones the server
+          was already holding when the page loaded — the reload case, which
+          cannot go through `useInterrupt` at all (there is no public setter
+          for its pending state). They cannot show the same interrupt twice:
+          `HydratedInterrupts` renders nothing while a run is in flight and
+          otherwise filters out every id in `agent.pendingInterrupts`, which is
+          the same set the live card is rendering.
+
+          `HydratedInterrupts` takes the thread id as a PROP rather than as its
+          `key`: its own effect keys on that id, clears the previous thread's
+          list and re-asks the server, so a remount would only throw away the
+          answer it is about to fetch again.
+        */}
         <PermissionInterrupt key={threadKey} onError={onRunError} isResuming={isRunning} />
+        <HydratedInterrupts threadId={threadKey} onError={onRunError} />
         {runError !== null ? (
           <RunError
             title={runError.title}
