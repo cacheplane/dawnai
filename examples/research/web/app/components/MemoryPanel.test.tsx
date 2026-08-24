@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react"
+import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from "vitest"
@@ -122,6 +122,51 @@ describe("memory panel view", () => {
     expect(disabledButtonCount(markup)).toBe(4)
   })
 
+  test("gives each row's buttons a name that says which candidate they act on", () => {
+    // Three rows of identical "Approve"/"Delete" is three identical control
+    // names to anyone navigating by control.
+    const markup = render({ candidates: [CANDIDATE, SECOND] })
+    expect(markup).toContain('aria-label="Approve: Prefers concise, cited reports."')
+    expect(markup).toContain('aria-label="Delete permanently: Prefers concise, cited reports."')
+    expect(markup).toContain('aria-label="Approve: Works in UTC."')
+  })
+
+  test("truncates a long candidate inside the accessible name", () => {
+    const long = { ...CANDIDATE, content: "x".repeat(200) }
+    const label = /aria-label="Approve: ([^"]*)"/.exec(render({ candidates: [long] }))?.[1] ?? ""
+    // An accessible name is read out in full; a two-sentence memory would turn
+    // "Approve" into a paragraph.
+    expect(label.length).toBeLessThanOrEqual(60)
+    expect(label.endsWith("…")).toBe(true)
+  })
+
+  test("announces the outcome through an always-present live region", () => {
+    // The supersede message is the one outcome the panel must not swallow, and
+    // for a screen-reader user a silent DOM swap swallows it. The region is
+    // present in BOTH states (footnote and outcome) because readers announce
+    // changes to an existing region far more reliably than an inserted one.
+    expect(render()).toContain('role="status"')
+    expect(render({ outcome: "Replaced 1 earlier memory." })).toContain('role="status"')
+    expect(render({ candidates: [], outcome: "Replaced 1 earlier memory." })).toContain(
+      'role="status"',
+    )
+  })
+
+  test("marks the section busy and says so while a decision is in flight", () => {
+    const markup = render({ isBusy: true })
+    expect(markup).toContain('aria-busy="true"')
+    expect(visibleText(markup)).toContain("Saving…")
+    expect(visibleText(markup)).not.toContain("Deleting is permanent")
+  })
+
+  test("the outcome still wins over the busy text", () => {
+    // A decision that reported something and is now re-reading: the report is
+    // what the user needs, not "Saving…".
+    const text = visibleText(render({ isBusy: true, outcome: "Replaced 1 earlier memory." }))
+    expect(text).toContain("Replaced 1 earlier memory.")
+    expect(text).not.toContain("Saving…")
+  })
+
   test("renders NOTHING at all when there is nothing to review", () => {
     // The resting state of most sessions. A permanent empty box in the rail is
     // a permanent suggestion that something is missing.
@@ -223,6 +268,24 @@ function mount() {
   })
 }
 
+/**
+ * The panel under React's StrictMode, which is what the app ACTUALLY runs in.
+ *
+ * Next 16's App Router enables StrictMode by default and this app sets no
+ * `reactStrictMode` key, so dev double-invokes every effect
+ * (setup -> cleanup -> setup). Every other test in this file mounts without
+ * it, which is why a latching mounted-flag passed all of them.
+ */
+function mountStrict() {
+  act(() => {
+    root.render(
+      <StrictMode>
+        <MemoryPanel />
+      </StrictMode>,
+    )
+  })
+}
+
 function buttonNamed(label: string): HTMLButtonElement {
   const found = [...container.querySelectorAll("button")].find(
     (button) => button.textContent === label,
@@ -296,7 +359,13 @@ describe("memory panel container", () => {
     expect(urls()[1]).toBe("/api/dawn/memory/candidates/cand-1/approve")
     // No body at all: the endpoint takes none, and sending one would be a
     // shape the server never agreed to.
-    expect(fetchMock().mock.calls[1]?.[1]).toEqual({ method: "POST" })
+    const init = fetchMock().mock.calls[1]?.[1]
+    expect(init).toMatchObject({ method: "POST" })
+    // The no-body claim, asserted directly rather than by `toEqual` on the
+    // whole init: the endpoint takes none, and sending one would be a shape
+    // the server never agreed to — but an `AbortSignal` added here later is
+    // not a regression and must not red this.
+    expect(init?.body).toBeUndefined()
     expect(urls()[2]).toBe("/api/dawn/memory/candidates")
     expect(container.textContent).toBe("")
   })
@@ -347,7 +416,9 @@ describe("memory panel container", () => {
     })
     await settle()
     expect(urls()[1]).toBe("/api/dawn/memory/candidates/cand-1/reject")
-    expect(fetchMock().mock.calls[1]?.[1]).toEqual({ method: "POST" })
+    const init = fetchMock().mock.calls[1]?.[1]
+    expect(init).toMatchObject({ method: "POST" })
+    expect(init?.body).toBeUndefined()
     expect(container.textContent).toBe("")
   })
 
@@ -390,6 +461,18 @@ describe("memory panel container", () => {
     act(() => {
       root = createRoot(container)
     })
+  })
+
+  test("renders a candidate under StrictMode, which is what dev actually runs", async () => {
+    // MUTATION EVIDENCE: this test is red against an `isMountedRef` whose only
+    // write is `= false` in a cleanup. StrictMode's second setup finds it
+    // already latched, so every `isCurrent()` is false and the panel paints
+    // NOTHING — candidates fetched, rail empty, and `isBusy` stuck on after
+    // the first decision. Invisible to every other test in this file.
+    answering(listing([CANDIDATE]))
+    mountStrict()
+    await settle()
+    expect(container.textContent).toContain("Prefers concise, cited reports.")
   })
 
   test("stays silent about the proxy's 502, which the connect screen owns", async () => {

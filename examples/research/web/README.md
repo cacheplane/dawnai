@@ -80,8 +80,10 @@ what it puts out of reach.
 - **Memory review is candidates only.** The rail's memory panel
   (`app/components/MemoryPanel.tsx`) lists what the agent proposed with `remember()`
   and lets you approve or delete each candidate, through the allowlisted proxy
-  (`app/lib/proxy-allowlist.ts`). It shows at most three at a time and cannot browse,
-  search, or edit stored memories — that is still the `dawn memory` CLI.
+  (`app/lib/proxy-allowlist.ts`). Its **Delete** button maps to the server's
+  `/reject` route, which is a hard delete with no undo — hence the label. It shows at
+  most three at a time and cannot browse, search, or edit stored memories — that is
+  still the `dawn memory` CLI.
 - **No browser or live-model test coverage here.** The example's own tests
   (`pnpm --filter @dawn-example/research-web test`) cover the thread source, the
   transcript mapping, the renderer registry, the thread rail, the composer, and the

@@ -198,13 +198,22 @@ export function AppShell({
   // is gone — the interval below already stops new probes on unmount, but a
   // probe already in flight at that moment still has to be told not to write
   // into unmounted state.
+  //
+  // RE-ARMED on setup, not just cleared on cleanup, and that is a bug fix
+  // rather than symmetry-for-its-own-sake. Next 16's App Router runs
+  // StrictMode by default (this app sets no `reactStrictMode` key), and
+  // StrictMode's dev double-invoke is setup -> cleanup -> setup. A flag whose
+  // only write is `= false` in the cleanup latches false forever on the second
+  // setup, which pins `serverStatus` at "checking": with Dawn completely down,
+  // the connect screen NEVER appears in dev and the shell sits there looking
+  // fine. Verified in jsdom against a non-Strict control.
   const isMountedRef = useRef(true)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
       isMountedRef.current = false
-    },
-    [],
-  )
+    }
+  }, [])
 
   const runProbe = useCallback(() => {
     void probeDawnServer().then((up) => {
@@ -520,10 +529,10 @@ export function AppShell({
           onCreate={onCreateThread}
         />
         {/*
-          Beneath the rail, and only rendered when the server is up — this
-          return is already past the `serverStatus === "down"` branch, so the
-          panel never has to have an opinion about an unreachable Dawn (see
-          its `load` for the 502 it stays silent about).
+          Beneath the rail, and not rendered while the server is KNOWN to be
+          down — this return is already past the `serverStatus === "down"`
+          branch. It does render during "checking", which is why the panel
+          still has a 502 branch of its own (a silent one: see its `load`).
 
           Deliberately NOT thread-scoped: memory candidates are the agent's,
           not a conversation's, and the endpoint has no thread parameter.

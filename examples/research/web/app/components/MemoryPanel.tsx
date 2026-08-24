@@ -102,6 +102,21 @@ export function describeApprove(action: ApproveAction, supersededCount: number):
 }
 
 /**
+ * A candidate's content, short enough to sit inside a control's name.
+ *
+ * Truncated because an accessible name is read out in full: a two-sentence
+ * memory turns "Approve" into a paragraph, and the distinguishing part is at
+ * the front. The ellipsis is the character, not three dots, so a screen
+ * reader does not say "dot dot dot".
+ */
+const LABEL_LIMIT = 60
+
+function shortLabel(content: string): string {
+  const collapsed = content.replace(/\s+/g, " ").trim()
+  return collapsed.length <= LABEL_LIMIT ? collapsed : `${collapsed.slice(0, LABEL_LIMIT - 1)}…`
+}
+
+/**
  * The panel, as pure props.
  *
  * Split out from the container for the reason every other component in this
@@ -124,7 +139,12 @@ export function MemoryPanelView({
     if (outcome === null && loadFailure === null) return null
     return (
       <div className="shrink-0 border-t border-wb-border px-4 pt-3">
-        <p className="text-[11px] leading-4 text-wb-muted">{outcome ?? loadFailure}</p>
+        {/* Same `role="status"` as the populated case below, and for the same
+            reason: this is the branch a supersede of the LAST candidate lands
+            in, so it is the one that most needs announcing. */}
+        <p role="status" className="text-[11px] leading-4 text-wb-muted">
+          {outcome ?? loadFailure}
+        </p>
       </div>
     )
   }
@@ -135,17 +155,29 @@ export function MemoryPanelView({
   return (
     <section
       aria-label="Memory candidates"
+      aria-busy={isBusy}
       className="shrink-0 border-t border-wb-border px-3 pt-3"
     >
       {/*
         A native `<details>`, open by default: a candidate the user never sees
         is the same as no panel, and collapsing is theirs to ask for. Native
-        rather than a `useState` toggle so the disclosure survives every
-        re-render this panel gets from the agent, and so the pure view has no
-        state for the tests to have to drive.
+        rather than a `useState` toggle so the pure view stays stateless —
+        the tests render it with `renderToStaticMarkup` and never have to
+        drive a disclosure to reach the rows underneath.
       */}
-      <details open>
-        <summary className="wb-focus cursor-pointer list-none px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-wb-muted">
+      <details open className="group">
+        {/*
+          `list-none` hides the platform marker (which is a filled triangle on
+          the left, at a size that fights an 11px uppercase label), so the
+          disclosure needs its own affordance or "Memory · 2" reads as a plain
+          heading. Same idea as the packaged activity cards: one glyph, rotated
+          by CSS on the open state. `group-open:` needs the `group` class on
+          the `<details>`, which is why it is there.
+        */}
+        <summary className="wb-focus flex cursor-pointer list-none items-center gap-1.5 px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-wb-muted">
+          <span aria-hidden="true" className="transition-transform group-open:rotate-90">
+            ▸
+          </span>
           Memory · {candidates.length}
         </summary>
         <ul className="mt-2 space-y-2">
@@ -170,9 +202,17 @@ export function MemoryPanelView({
                   : ""}
               </p>
               <div className="mt-1.5 flex gap-1.5">
+                {/*
+                  Three rows of identically-labelled buttons: "Approve" alone
+                  is useless to anyone navigating by control, who gets
+                  "Approve, button" three times with nothing to tell them
+                  apart. The visible label stays short; `aria-label` carries
+                  which candidate it acts on.
+                */}
                 <button
                   type="button"
                   disabled={isBusy}
+                  aria-label={`Approve: ${shortLabel(candidate.content)}`}
                   onClick={() => onApprove(candidate.id)}
                   className={`${neutralButton("sm")} disabled:opacity-50`}
                 >
@@ -189,6 +229,7 @@ export function MemoryPanelView({
                 <button
                   type="button"
                   disabled={isBusy}
+                  aria-label={`Delete permanently: ${shortLabel(candidate.content)}`}
                   onClick={() => onReject(candidate.id)}
                   className={`${neutralButton("sm")} disabled:opacity-50`}
                 >
@@ -200,11 +241,30 @@ export function MemoryPanelView({
         </ul>
         {hidden > 0 ? (
           <p className="mt-2 px-1 text-[11px] leading-4 text-wb-muted">
-            {hidden} more not shown — review the rest with the dawn memory CLI.
+            {hidden} more not shown — review the rest with{" "}
+            {/* `<code>` is how the rest of this app names a command (see
+                `ConnectScreen`); backticks in JSX text would render as
+                literal backticks. */}
+            <code className="text-[11px]">dawn memory list</code>.
           </p>
         ) : null}
-        <p className="mt-2 px-1 pb-3 text-[11px] leading-4 text-wb-muted">
-          {outcome ?? loadFailure ?? "Approving stores the memory. Deleting is permanent."}
+        {/*
+          A live region, and an ALWAYS-PRESENT one whose text is swapped — not
+          an element that appears when there is something to say. Screen
+          readers announce changes to a region that was already in the
+          accessibility tree far more reliably than they announce a region
+          being inserted, and "Replaced 1 earlier memory" is the one outcome
+          this panel exists not to swallow. Its visual default is the
+          permanence note, so the slot is never empty.
+
+          `aria-live` is not spelled out: `role="status"` implies
+          `aria-live="polite"` plus `aria-atomic="true"`, and polite is right —
+          this must not interrupt the answer being read.
+        */}
+        <p role="status" className="mt-2 px-1 pb-3 text-[11px] leading-4 text-wb-muted">
+          {outcome ??
+            loadFailure ??
+            (isBusy ? "Saving…" : "Approving stores the memory. Deleting is permanent.")}
         </p>
       </details>
     </section>
@@ -255,13 +315,21 @@ export function MemoryPanel() {
   // may paint. The mounted flag is the second half, for a read that resolves
   // after this component is gone.
   const readTicketRef = useRef(0)
+  // RE-ARMED on setup, not just cleared on cleanup. Next 16's App Router runs
+  // StrictMode by default (this app sets no `reactStrictMode` key), and
+  // StrictMode's dev double-invoke is setup -> cleanup -> setup: a flag whose
+  // only write is `= false` in the cleanup latches false forever on the second
+  // setup. Every `isCurrent()` would then be permanently false and this panel
+  // would render NOTHING in dev — candidates fetched, nothing painted, and
+  // `isBusy` stuck on after the first decision. Verified in jsdom against a
+  // non-Strict control.
   const isMountedRef = useRef(true)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
       isMountedRef.current = false
-    },
-    [],
-  )
+    }
+  }, [])
 
   const load = useCallback(async (signal?: AbortSignal) => {
     readTicketRef.current += 1

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react"
+import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from "vitest"
 
@@ -129,6 +129,31 @@ function threadSource(): ThreadSource {
  * holds the real one in `useState`, so the app has the same guarantee.
  */
 const stableSource = threadSource()
+
+/**
+ * The shell under React's StrictMode, which is what the app ACTUALLY runs in.
+ *
+ * Next 16's App Router enables StrictMode by default and this app sets no
+ * `reactStrictMode` key, so dev double-invokes every effect
+ * (setup -> cleanup -> setup). Every other test in this file renders without
+ * it, which is why the probe's mounted-flag latch survived them all.
+ */
+function renderStrict(activeThreadId: string | undefined) {
+  act(() => {
+    root.render(
+      <StrictMode>
+        <AppShell
+          threads={[]}
+          activeThreadId={activeThreadId}
+          onSelectThread={() => {}}
+          onCreateThread={() => {}}
+          onUserMessage={() => {}}
+          threadSource={stableSource}
+        />
+      </StrictMode>,
+    )
+  })
+}
 
 function render(activeThreadId: string | undefined) {
   act(() => {
@@ -636,6 +661,22 @@ describe("app shell connect screen", () => {
     })
     await flushMicrotasks()
     expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
+  })
+
+  test("shows the connect screen under StrictMode, which is what dev actually runs", async () => {
+    // MUTATION EVIDENCE: this test is red against a `isMountedRef` whose only
+    // write is `= false` in a cleanup. StrictMode's second setup finds the
+    // flag already latched false, every `setServerStatus` from a probe is
+    // dropped, `serverStatus` stays "checking" forever, and the shell renders
+    // normally with Dawn completely down — the exact outage this screen
+    // exists to prevent, visible only in dev.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 502 })),
+    )
+    renderStrict("thread-a")
+    await flushMicrotasks()
+    expect(container.textContent).toContain(CONNECT_SCREEN_HEADING)
   })
 
   test("stops probing once the component unmounts", async () => {
