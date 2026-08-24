@@ -11,9 +11,10 @@
  *
  * The planned second implementation is LangGraph Platform, which Dawn already
  * deploys to (`dawn build --target langsmith`) and which can enumerate threads.
- * That prediction has now come true for one method: `hydrate` is async, because
- * the rail's list lives in the browser while the conversation lives in the Dawn
- * server's checkpoint, so reading it is a network call for EVERY backend.
+ * An earlier version of this note predicted the interface would have to go
+ * async for that backend; that has now come true for `hydrate` and
+ * `pendingInterrupts`, which are network reads for EVERY backend — the rail's
+ * list lives in the browser while the conversation lives in the server.
  * `list`/`create` are still synchronous — LangGraph Platform will make those
  * async too (or add a cached-read variant), and callers change with it.
  *
