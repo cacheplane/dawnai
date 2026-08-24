@@ -8,8 +8,15 @@ inline in the conversation.
 
 ## Layout
 
+- **Connect screen** (`app/components/ConnectScreen.tsx`) — replaces the whole shell when
+  the Dawn server is not answering, with the two commands that start it. It re-probes
+  every 5 seconds through `GET /api/dawn/memory/candidates` (an allowlisted read, so it
+  measures Dawn's own liveness rather than this Next process's), and clears itself the
+  moment the server comes up — no reload. "Try again" probes immediately.
 - **Thread rail** (left, `app/components/ThreadRail.tsx`) — "New conversation" plus the
   list of threads, each titled from its first user message.
+- **Memory panel** (in the rail, `app/components/MemoryPanel.tsx`) — the candidates the
+  agent proposed with `remember()`, with Approve and Delete on each.
 - **Transcript** (`app/components/Transcript.tsx`) — user and assistant messages,
   with plan / researcher activity cards, tool cards, permission approvals, and run
   errors inline in message order. Before the first message it shows an empty state with
@@ -23,6 +30,66 @@ server's encoded `/agui/%2Fresearch%23agent` endpoint under CopilotKit's default
 id, and `app/page.tsx` mounts `CopilotKit` plus a `CopilotChatConfigurationProvider`
 carrying the active thread id. No model credentials live in this app — the Dawn server
 holds them.
+
+## Thread history
+
+Switching threads restores that conversation. `app/lib/thread-source.ts` reads
+`GET /threads/:id/state` through the proxy and `app/lib/hydrate.ts` turns the
+checkpoint's LangChain envelopes into the same message shapes the live stream produces,
+so a restored thread and a live one render through one path. The checkpointed plan is
+put back in front of the messages as a plan card.
+
+What a restore does **not** bring back is stated in the app itself, above the restored
+messages:
+
+> Restored from this conversation's saved history. Subagent cards from earlier runs
+> aren't saved — new ones appear as they run.
+
+A thread with no checkpoint yet (a brand-new one) 404s, and that is treated as "nothing
+to restore", not an error — no error row appears.
+
+## Permission gates
+
+A run parked on a permission gate survives a reload.
+`app/components/HydratedInterrupts.tsx` asks the server for
+`GET /threads/:id/pending_interrupts` and re-renders the prompt, because CopilotKit's own
+`useInterrupt` state is fed only by live run events and is empty after a reload. It
+reports the count upward so the composer stays blocked — sending into a parked thread
+without resuming is the failure this prevents. It deliberately does not write those
+interrupts onto `agent.pendingInterrupts`; the server's ids for an interrupt can be
+aliases CopilotKit's resume path never minted.
+
+## The proxy
+
+The Dawn dev server sets no CORS headers, so the browser reaches it through the
+same-origin catch-all at `app/api/dawn/[...path]/route.ts`. That proxy is **not** open.
+`app/lib/proxy-allowlist.ts` is a pure function listing every route the browser may
+reach — five of them:
+
+| Method | Path |
+| --- | --- |
+| GET | `/memory/candidates` |
+| POST | `/memory/candidates/:id/approve` |
+| POST | `/memory/candidates/:id/reject` |
+| GET | `/threads/:id/state` |
+| GET | `/threads/:id/pending_interrupts` |
+
+Anything else — a path that is not listed, or a listed path with the wrong method — is
+rejected with **403** and never forwarded. Running, resuming, and cancelling a thread are
+deliberately absent: those go through CopilotKit's own runtime route. Verified live:
+a not-allowlisted POST and a right-path/wrong-method request both returned 403, while
+the allowlisted reads returned 200.
+
+## Memory review
+
+The panel is **candidates only**. It lists what the agent proposed with `remember()` and
+offers two decisions per candidate: **Approve** (`/approve`, which reports back when the
+new record supersedes an older belief) and **Delete** (`/reject`, a hard delete on the
+server with no undo — hence the label, not "Dismiss"). It shows at most three at a time
+and counts the rest, so it cannot push the thread list off the rail. With no candidates it
+renders nothing at all — except the one line reporting the outcome of the decision you
+just made, or a load failure. It cannot browse, search, or edit stored
+memories — that is still `dawn memory list` and the rest of the `dawn memory` CLI.
 
 ## Running
 
@@ -64,32 +131,33 @@ stylesheet leaves unset on that element, because the package's CSS is unlayered 
 Tailwind's utilities are not. `app/components/activity-renderers.tsx` states the rule and
 what it puts out of reach.
 
+## Test coverage
+
+`pnpm --filter @dawn-example/research-web test` runs 15 test files: the proxy route and
+its allowlist, the thread source, the checkpoint hydrator, the transcript mapping, the
+renderer registry, the thread rail, the composer, the connect screen, the memory panel,
+the tool-call card, both permission surfaces, and the shell's thread-switch and
+server-probe behaviour. `typecheck` and `build` prove the CopilotKit/AG-UI wiring
+compiles. The activity cards themselves are tested in `@dawn-ai/ag-ui`.
+
+There are no browser or live-model tests here. The connect screen, its auto-recovery,
+the empty state, thread hydration including the new-thread 404, and every proxy
+allow/reject case were verified by hand in a real browser against a real server. A full
+research run — streaming, activity cards, the permission gate live and across a reload,
+memory candidates appearing and superseding — needs a real `OPENAI_API_KEY` and has not
+been exercised in this repo; those paths are covered by unit tests only.
+
 ## What it does not do yet
 
 - **Threads are local to the browser.** The rail keeps its own list in `localStorage`
   (`app/lib/thread-source.ts`) because the Dawn server cannot enumerate threads. The
   list is not shared across browsers, devices, or profiles, and clearing site data
-  clears it.
-- **Switching a thread does not restore its history.** The transcript is cleared on
-  switch rather than showing the wrong conversation's messages, and nothing refills it:
-  CopilotKit's replay path (`connectAgent`, which asks the runtime to replay a thread's
-  events) is only ever called from inside `<CopilotChat>`, which this app does not
-  mount. Verified live — switching away from a thread and back fires no request and
-  leaves the transcript empty. The Dawn server may still hold that history; this client
-  never asks for it. Hydration lands in the next slice.
-- **Memory review is candidates only.** The rail's memory panel
-  (`app/components/MemoryPanel.tsx`) lists what the agent proposed with `remember()`
-  and lets you approve or delete each candidate, through the allowlisted proxy
-  (`app/lib/proxy-allowlist.ts`). Its **Delete** button maps to the server's
-  `/reject` route, which is a hard delete with no undo — hence the label. It shows at
-  most three at a time and cannot browse, search, or edit stored memories — that is
-  still the `dawn memory` CLI.
-- **No browser or live-model test coverage here.** The example's own tests
-  (`pnpm --filter @dawn-example/research-web test`) cover the thread source, the
-  transcript mapping, the renderer registry, the thread rail, the composer, and the
-  shell's thread-switch reset; `typecheck` and `build`
-  prove the CopilotKit/AG-UI wiring compiles. The cards themselves are tested in
-  `@dawn-ai/ag-ui`.
+  clears it — the server still holds the conversations, but this client would no longer
+  know their ids.
+- **Restores are lossy.** Only what the checkpoint stores comes back: messages, tool
+  calls and results, and the plan. Subagent activity cards from earlier runs are not
+  saved and do not return.
+- **Memory review is candidates only** — see above. No browsing, searching, or editing.
 
 ## Security caveat
 
