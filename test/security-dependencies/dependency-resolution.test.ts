@@ -724,6 +724,35 @@ describe("dependency security graph invariants", () => {
     ).toBe(true)
   })
 
+  it("keeps only the unavoidable js-yaml policy for the remediated packages", () => {
+    const workspace = readWorkspace()
+    const remediatedPackages = [
+      "body-parser",
+      "brace-expansion",
+      "dompurify",
+      "fast-uri",
+      "ip-address",
+      "js-yaml",
+      "mermaid",
+      "nanoid",
+      "postcss",
+    ] as const
+    const remediatedSelectors = Object.keys(workspace.manifestOverrides)
+      .filter((selector) =>
+        remediatedPackages.some(
+          (packageName) =>
+            selector === packageName ||
+            selector.startsWith(`${packageName}@`) ||
+            selector.includes(`>${packageName}@`) ||
+            selector.endsWith(`>${packageName}`),
+        ),
+      )
+      .sort()
+
+    expect(remediatedSelectors).toEqual(["js-yaml@>=4 <4.3.1"])
+    expect(workspace.manifestOverrides["js-yaml@>=4 <4.3.1"]).toBe("4.3.1")
+  })
+
   it("contains no Hono, node-server, or UUID package below its patched floor", () => {
     expect(patchedFloorFailures(readWorkspace())).toEqual([])
   })

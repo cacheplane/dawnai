@@ -13,10 +13,10 @@ Dawn-owned paths, and leave only explicitly evidenced upstream boundaries while
 publication stays disabled.
 
 **Architecture:** Upgrade the real direct owners first, then let their declared
-compatible ranges select patched transitives. Keep only the root dependency
-policies needed for unrelated findings: replace the two vulnerable policies but
-do not add CopilotKit, Hono, node-server, UUID, provider-utils, AG-UI, or Vercel
-overrides. Anchor security tests to Dawn-owned example, sandbox, and tooling
+compatible ranges select patched transitives. Remove the obsolete global
+PostCSS policy, update the unavoidable scoped js-yaml policy, and do not add
+CopilotKit, Hono, node-server, UUID, provider-utils, AG-UI, or Vercel overrides.
+Anchor security tests to Dawn-owned example, sandbox, and tooling
 boundaries instead of freezing upstream package internals. Exercise Mermaid in
 an isolated DOM/worker boundary, exercise the Kubernetes SOCKS path, and run the
 Windows-only encoded-backslash Hono regression in the existing Windows CI job.
@@ -756,22 +756,24 @@ is never acceptable evidence.
 **Files:**
 - Modify: `package.json`
 - Modify: `pnpm-lock.yaml`
+- Modify: `test/security-dependencies/dependency-resolution.test.ts`
 
-- [ ] **Step 1: Replace the two vulnerable root overrides**
+- [x] **Step 1: Remove the obsolete PostCSS policy and update js-yaml**
 
-Set:
+Keep this scoped policy:
 
 ```json
-"postcss": "8.5.23",
 "js-yaml@>=4 <4.3.1": "4.3.1"
 ```
 
-Remove the old PostCSS 8.5.10 and js-yaml 4.2.0 policies. Add a short adjacent
-JSON-compatible policy explanation only if the manifest's existing style has a
-supported place for it; otherwise document the reason/removal condition in the
-audit report rather than inventing an out-of-schema field.
+Remove the old global PostCSS 8.5.10 policy rather than replacing it. Next
+16.3.0 declares exact PostCSS 8.5.23, while Tailwind and Vite admit that safe
+line, so their real owner ranges hold the patched resolution without forcing.
+Keep the scoped js-yaml policy because `@vercel/python-analysis` 0.13.1 pins
+4.1.1 exactly (and 0.14.0 still does); document that owner-pin removal as the
+policy's removal trigger in the audit report.
 
-- [ ] **Step 2: Preserve the no-Hono/no-UUID override boundary**
+- [x] **Step 2: Preserve the no-Hono/no-UUID override boundary**
 
 Do not add any CopilotKit, Hono, node-server, UUID, provider-utils, AG-UI, or
 Vercel selector. The prerequisite already removed:
@@ -784,7 +786,7 @@ The proposed `@hono/node-server@<2.0.10` major-forcing override is rejected.
 CopilotKit `1.68.3` and the refreshed compatible graph select patched 1.x and
 2.x lines without it.
 
-- [ ] **Step 3: Refresh only the affected lock resolutions**
+- [x] **Step 3: Refresh only the affected lock resolutions**
 
 Do not use named `pnpm update`: on pnpm 10.33 it rewrites the CLI's direct Hono
 range, and `--depth Infinity --no-save` still leaves the vulnerable transitives
@@ -793,11 +795,12 @@ For only the still-unreconciled compatible findings, temporarily add these exact
 lock-refresh selectors:
 
 ```json
+"postcss@>=8 <8.5.23": "8.5.23",
 "ip-address@>=10 <10.3.1": "10.5.0",
 "js-yaml@>=3 <3.15.1": "3.15.1",
 "mermaid@>=11 <11.16.1": "11.16.1",
 "dompurify@>=3 <3.4.13": "3.4.13",
-"nanoid@>=3 <3.3.17": "3.3.18",
+"nanoid@>=3 <3.3.18": "3.3.18",
 "fast-uri@>=3 <3.1.5": "3.1.5",
 "brace-expansion@>=2 <2.1.4": "2.1.4",
 "body-parser@>=1 <1.20.6": "1.20.6"
@@ -811,10 +814,10 @@ export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 pnpm install --lockfile-only --no-frozen-lockfile
 ```
 
-Remove all eight temporary entries with `apply_patch`, leaving exactly the two
-updated security policies plus the six untouched unrelated overrides: eight
-total. Then run `pnpm install --lockfile-only --no-frozen-lockfile` again. The
-admitted parent ranges retain the safe lock selections without permanent
+Remove all nine temporary entries with `apply_patch`, leaving exactly the one
+scoped js-yaml security policy plus the six untouched unrelated overrides:
+seven total. Then run `pnpm install --lockfile-only --no-frozen-lockfile` again.
+The admitted parent ranges retain the safe lock selections without permanent
 forcing. Prove the final root manifest has no temporary selector and that no
 workspace package manifest changed.
 
@@ -841,7 +844,7 @@ receipt and confirming it is not newly vulnerable. Reject unrelated parent
 package upgrades or importer churn; do not collapse the valid 1.x and 2.x
 node-server lines into one forced major.
 
-- [ ] **Step 4: Realize and freeze the new graph**
+- [x] **Step 4: Realize and freeze the new graph**
 
 ```bash
 set -euo pipefail
@@ -855,13 +858,13 @@ Expected: frozen install succeeds, only intended manifest/importer/snapshot
 changes appear, and there is no workspace package version or dependency-range
 change.
 
-- [ ] **Step 5: Make all new focused tests green**
+- [x] **Step 5: Make all new focused tests green**
 
 Run the security dependency project, sandbox proxy test, workflow contracts,
 existing CLI Hono tests, and both example route/build controls. Require no skip
 except the explicit Windows-only test on non-Windows.
 
-- [ ] **Step 6: Enforce the compatible Hono floors without a forced major**
+- [x] **Step 6: Enforce the compatible Hono floors without a forced major**
 
 Require Hono `>=4.12.34`, node-server 1.x `>=1.19.15`, and node-server 2.x
 `>=2.0.10`, with the current `4.13.3`/`1.19.17`/`2.1.1` graph passing the lean
