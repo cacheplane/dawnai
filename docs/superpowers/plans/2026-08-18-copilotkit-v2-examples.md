@@ -912,10 +912,11 @@ Change the code-fence title to
 `examples/research/web/app/api/copilotkit/[...path]/route.ts`. Remove the service
 adapter and legacy endpoint factory entirely.
 
-- [x] **Step 3: Fix the memory proxy and tool-renderer comments**
+- [x] **Step 3: Reconcile memory scope and tool-renderer comments**
 
-Describe it as a same-origin proxy parallel to the CopilotKit API boundary; do
-not claim its required catch-all path mirrors the old single file.
+Accept the Workbench branch's intentional deletion of the unused, unallowlisted
+memory proxy. Do not restore or document a same-origin memory route. Keep the
+remaining UI/docs explicit that durable-memory review is outside this slice.
 
 Describe `ToolCallCard` against the CopilotKit 1.68.3 V2 runtime/default-renderer
 contract. The public wildcard `useRenderTool` overload types its render props as
@@ -935,7 +936,8 @@ Task 0. Replace current claims that freeze CopilotKit `1.66`, force
 - compatible node-server 1.x is accepted at `>=1.19.15`;
 - no CopilotKit/node-server override;
 - the obsolete UUID override is removed and the planned forced node-server
-  override is rejected, leaving six unrelated/eight total overrides;
+  override is rejected, leaving six pre-existing policies plus the scoped
+  `js-yaml` policy: seven total overrides;
 - provider-utils is recorded as upstream-blocked only if final recapture still
   reports it; otherwise record its resolved identity and reason; and
 - V2 multi-route behavior is proven by the new loopback and page tests;
@@ -1105,10 +1107,11 @@ Rules:
   `test/security-dependencies/fixtures/dependabot-baseline.json` against the
   exact reviewed current default base and update the restored
   `dependabot-reconcile.test.ts` and `dependency-evidence.test.ts` assumptions.
-  The independently reviewed observation at default/main
-  `fb52e062638e1e09cbdc8b9836ee5b483acde058` contained 59 open alerts, including
-  current Hono/node-server alert `#236` and Vercel-derived alerts `#204`–`#235`;
-  it is a recapture candidate, not a substitute for a fresh complete read.
+  The final reviewed observation at default/main
+  `239cf18d6f16448184c44369aa3ae89e976e95df` contains 59 open alerts, including
+  current Hono/node-server alert `#236` and Vercel-derived alerts `#204`–`#235`.
+  Alert `#232` is the only identity-field change from the prior 59-record
+  observation: its `tar` advisory severity is now `high`, not `medium`.
   Remove restored old-27-alert and old-default-SHA expectations. Preserve
   `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
   byte-for-byte as immutable historical evidence rather than rewriting it for

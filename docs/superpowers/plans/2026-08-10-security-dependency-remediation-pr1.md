@@ -34,13 +34,14 @@ Kubernetes client, required Vercel CLI 58.9.0, GitHub Actions, Dependabot, and
 immutable capture from before the CopilotKit prerequisite. Its source/default
 SHAs and finding counts are historical evidence, not current-head assertions.
 
-**Current implementation base:** The prerequisite was rebased onto immutable
-main commit `fb52e062638e1e09cbdc8b9836ee5b483acde058`. Final graph/audit evidence is
-recaptured only after the preserved security WIP is restored and reconciled.
+**Current implementation base:** The branch is rebased onto immutable main
+commit `239cf18d6f16448184c44369aa3ae89e976e95df`. The final graph/audit evidence
+and reviewed-base receipt are recaptured against that exact base.
 
-**Reviewed current-base Dependabot candidate:** A complete independent read of
-default/main at `fb52e062638e1e09cbdc8b9836ee5b483acde058` observed these exact
-59 open alerts and candidate post-remediation partition:
+**Reviewed current-base Dependabot set:** A complete bounded read of
+default/main at `239cf18d6f16448184c44369aa3ae89e976e95df` from source snapshot
+`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f` observed these exact 59 open alerts
+and candidate post-remediation partition:
 
 ```text
 observed open (59):
@@ -65,26 +66,25 @@ appear only in explicitly labeled historical evidence. Alerts `#204`–`#235`
 are 32 Vercel-derived findings across path-to-regexp, undici, tar, ajv,
 minimatch, smol-toml, and once; the required Vercel CLI/native deployment lane
 remains. No alert is suppressed or dismissed. This partition is a reviewed
-candidate, not frozen final state: recapture after WIP restoration and after
-every rebase, then update the identity fixture, reviewed-base receipt, and
-explicit reconciliation disposition if any identity changes.
+pre-merge set. Alert `#232` (`tar` / `GHSA-r292-9mhp-454m`) is the only
+identity-field change from the previous 59-record capture: its current severity
+is `high`, not `medium`. Recapture after every later rebase, then update the
+identity fixture, reviewed-base receipt, and explicit reconciliation
+disposition if any identity changes.
 
-**Preferred terminal security set:** The production audit contains only a
-genuinely upstream-blocked provider-utils record if it remains after final
-resolution. The full audit additionally records the exact reviewed findings
-owned by the required Vercel development/native-deployment boundary if final
-recapture reports them. Final counts are not frozen before recapture, and
-neither mode has muted records. The terminal Dependabot sets are likewise
-determined by the mandatory final recapture and explicit reviewed partition;
-they contain no suppressions or dismissals.
+**Reviewed terminal audit set:** The production audit contains exactly one
+upstream-blocked provider-utils record. The full audit contains that record plus
+45 exact findings owned by the required Vercel development/native-deployment
+boundary: 46 records total. Neither mode has muted records. The terminal
+Dependabot sets remain subject to post-merge reconciliation and contain no
+suppressions or dismissals.
 
 ---
 
 ### Task 0: Complete the CopilotKit V2 prerequisite before recapturing security evidence
 
-**Status:** Implementation and task-level checks are complete in the dedicated
-prerequisite commits. Clean prerequisite verification in that plan's Task 5 and
-preserved-WIP restoration/reconciliation in Task 6 remain.
+**Status:** Implementation, clean prerequisite verification, and preserved-WIP
+restoration/reconciliation are complete in the dedicated prerequisite commits.
 
 **Files:**
 - Read: `docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md`
@@ -890,7 +890,7 @@ reassessment before implementation continues.
 - Plan for creation in Task 8:
   `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`
 
-- [ ] **Step 1: Prepare the human-readable security receipt schema and draft**
+- [x] **Step 1: Prepare the human-readable security receipt schema and draft**
 
 Record already-proven decisions and evidence:
 
@@ -932,7 +932,7 @@ identity fixture, their digests, and the explicit fixed/open disposition.
 Do not paste secrets, URLs with credentials, tokens, ambient proxy values, or
 unbounded raw logs.
 
-- [ ] **Step 2: Conditionally record the provider exception and Vercel development boundary**
+- [x] **Step 2: Conditionally record the provider exception and Vercel development boundary**
 
 The prerequisite observed `GHSA-866g-f22w-33x8` on provider-utils `3.0.28`.
 Prepare the following conditional record schema, but leave its outcome pending
@@ -973,7 +973,7 @@ schemas and explicit empty `muted` arrays. Task 7 fills and verifies the exact
 records: production contains provider-utils only if it remains, while full adds
 the exact reviewed Vercel-owned tuples only if final recapture reports them.
 
-- [ ] **Step 3: Explain why no changeset exists**
+- [x] **Step 3: Explain why no changeset exists**
 
 State explicitly that persistent manifest changes are private root policy/test
 dependencies, private-example dependencies, or `packages/ag-ui`'s development
@@ -1086,7 +1086,7 @@ workspace-wide `biome check --write`.
 - Read without modification:
   `docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json`
 
-- [ ] **Step 1: Re-prove publication containment and change scope**
+- [x] **Step 1: Re-prove publication containment and change scope**
 
 Require the reviewed reader to reproduce the full Task 1 containment proof at
 the exact reviewed branch head while the default branch remains the reviewed
@@ -1094,14 +1094,12 @@ base. This repeats all 21 npm version/attestation reads plus complete workflow,
 tag, Release, and Actions-artifact pagination; it is not only a workflow-state
 check.
 
-First recapture every current Dependabot identity with complete bounded
-pagination and rewrite `dependabot-baseline.json` so its `defaultSha` is the
+The completed recapture read every current Dependabot identity with bounded
+pagination and rewrote `dependabot-baseline.json` so its `defaultSha` is the
 exact reviewed base and its sorted `open` array is the complete reviewed set.
-The independently observed base candidate has 59 records, but neither that
-count nor its disposition substitutes for this fresh read. Review every added,
-removed, or identity-changed record; update the explicit candidate fixed/open
-partition in this plan before continuing. No dismissal or suppression is
-accepted. The shell derives the all-open baseline CSV from the reviewed fixture
+It confirmed 59 records and found one identity-field change: alert `#232`
+changed severity from `medium` to `high`. No dismissal or suppression was
+accepted. The shell derived the all-open baseline CSV from the reviewed fixture
 only after fail-closed provenance, state, ordering, and uniqueness checks:
 
 ```bash
@@ -1140,13 +1138,11 @@ git diff --exit-code origin/main...HEAD -- \
   .github/workflows/release.yml .github/workflows/publish-chart.yml
 ```
 
-Review the canonical reviewed-base receipt and its digest. Then finalize the
-human audit document with the exact recaptured Dependabot identities, explicit
-fixed/open disposition, confirmation of no suppressions or dismissals, and the
-August 20 receipt path/digest. Carry forward the exact provider-utils/Vercel
-outcome established in Task 7. Remove the corresponding pending labels only
-after these values agree; do not change the immutable August 10 receipt or its
-historical claims.
+The canonical reviewed-base receipt and digest were reviewed, and the human
+audit records the exact recaptured Dependabot identities, explicit fixed/open
+disposition, confirmation of no suppressions or dismissals, August 20 receipt
+path/digest, and provider-utils/Vercel outcome. The immutable August 10 receipt
+and its historical claims remain unchanged.
 
 Beyond the already-committed, audited `copilotkit-examples-e2e` job, the CI
 workflow may change only for the audited Windows regression and isolated

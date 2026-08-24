@@ -160,8 +160,8 @@ base URL.
 - Keep the existing V2 activity, permission, tool-rendering, suggestions, and
   memory components unchanged except where updated types require a direct
   adjustment.
-- Refresh the memory proxy's route-shape comment if it describes the old
-  single-route CopilotKit endpoint.
+- Accept the Workbench branch's deletion of the unused, unallowlisted memory
+  proxy; do not restore it as part of the CopilotKit transport migration.
 
 ### Shared security work
 

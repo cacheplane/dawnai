@@ -1,14 +1,14 @@
 # Dependency Security Remediation Audit
 
-**Status:** Draft. The compatible dependency remediation is committed, but the
-Task 7 audit recapture, Task 8 reviewed-base evidence, final CI/gated results,
-merge, and post-merge reconciliation are pending. Nothing in those pending
-sections is a claim about merged `main`.
+**Status:** Draft. The compatible dependency remediation, final audit recapture,
+and reviewed-base evidence are recorded below. Final local validation,
+exact-head pull-request CI, merge, and post-merge reconciliation remain pending.
+Nothing in those pending sections is a claim about merged `main`.
 
 **Repository:** `cacheplane/dawnai`
 
 **Dependency-fix commit:**
-`b4b5bf088fbb982fdc9110524d651b8c07da6f23`
+`e80045608b22bfdd69003c9fa8fbf36d09ba057d`
 (`fix(deps): refresh compatible security resolutions`)
 
 ## Scope and decision summary
@@ -39,7 +39,7 @@ The dependency strategy is:
 The canonical historical receipt is
 [`2026-08-10-dependency-remediation-baseline.json`](./2026-08-10-dependency-remediation-baseline.json).
 It was committed by
-`d2032eadf672e32432ce8cc32c2b95d3fd98d03c` and must not be rewritten to
+`dd0ce9b3e9c160ca1151deb65e9edb3d216544ad` and must not be rewritten to
 represent a newer base.
 
 | Field | Exact value |
@@ -82,19 +82,20 @@ no-op booleans and bounded-log digests are in the canonical receipt.
 
 | Commit | Evidence or decision |
 |---|---|
-| `3bce3c86293a953a13ceaf59b46bdbf92807ee55` | Completed the fail-closed dependency evidence controller |
-| `d2032eadf672e32432ce8cc32c2b95d3fd98d03c` | Committed the immutable August 10 baseline receipt |
-| `45af1184d411ee2c2e22fbd1cb1982b6e6b96707` | Updated direct private-example CopilotKit owners to stable `1.68.3` |
-| `b3c5b910d57df98808a4b5a4f5bb354ff88ec626` | Adopted V2 catch-all runtime handlers in both examples |
-| `8bf90c5c1b145c94b8def763cbb6c6e78001a245` | Added model-free V2 transport verification |
-| `8b7658503ec583aaf75b0f7a6fffcc1ee1370593` | Reconciled the current working alert identity fixture before the lock fix |
-| `4de8f25114a9c0279da4d35fa73d745236625180` | Committed the Dawn-owned hostile-path tests and audited workflow gates against the pre-fix graph |
-| `b4b5bf088fbb982fdc9110524d651b8c07da6f23` | Applied the compatible lock refresh and minimal final policy |
+| `e5974e4431ae91e4f8bc0b23d929fe4897c2101a` | Completed the fail-closed dependency evidence controller |
+| `dd0ce9b3e9c160ca1151deb65e9edb3d216544ad` | Committed the immutable August 10 baseline receipt |
+| `3b2471c5c7469b53c1cad7e2528c4d9a384220d4` | Updated direct private-example CopilotKit owners to stable `1.68.3` |
+| `44c5c15b359bfacf821b941495145f600fc200b9` | Adopted V2 catch-all runtime handlers in both examples |
+| `9f3567e13547f71f3d2e3379849ac2956a8936ac` | Added model-free V2 transport verification |
+| `61639112ef55872fe4e3eea20ef7512662043427` | Reconciled the current working alert identity fixture before the lock fix |
+| `e3c1bb65f18d8abca714767f37e8f9bc8bba66a8` | Committed the Dawn-owned hostile-path tests and audited workflow gates against the pre-fix graph |
+| `e80045608b22bfdd69003c9fa8fbf36d09ba057d` | Applied the compatible lock refresh and minimal final policy |
+| `b3edb5c11ee32d9821f19bcc539c60101ea18fd7` | Taught the fail-closed audit reader to accept multiple installed-version findings grouped under one advisory while preserving identity, uniqueness, total, muted-record, and exit-status checks |
 
 ### Bounded pre-fix RED observations
 
 The exact committed pre-fix source is
-`4de8f25114a9c0279da4d35fa73d745236625180`. Before the dependency-fix commit,
+`e3c1bb65f18d8abca714767f37e8f9bc8bba66a8`. Before the dependency-fix commit,
 the focused observations were bounded and specific:
 
 | Surface | Pre-fix bounded result | Vulnerable identity exposed |
@@ -202,7 +203,7 @@ Both modes have explicit empty `muted` arrays.
 ### Selected graph and owned controls
 
 The selected versions below are the lock state in dependency-fix commit
-`b4b5bf088fbb982fdc9110524d651b8c07da6f23`. Floors are acceptance
+`e80045608b22bfdd69003c9fa8fbf36d09ba057d`. Floors are acceptance
 invariants, not new exact-version policies.
 
 | Package/path | Patched acceptance floor | Selected identity | Real graph root | Dawn-owned control |
@@ -294,9 +295,26 @@ resource cleanup. A unit mock cannot establish those deployment facts.
 Removing the CLI or lane would trade away the only real deployment signal for
 this supported target. Therefore Vercel-owned findings are handled as a
 separate full-development-audit boundary, never by deleting the lane. They are
-not muted, dismissed, or evidence that the real-deploy test is optional. Task 7
-must record their exact final package/version/advisory tuples; this draft does
-not infer them from an earlier graph.
+not muted, dismissed, or evidence that the real-deploy test is optional. Their
+exact final package/version/advisory tuples are recorded in the final audit
+section below.
+
+The registry's latest stable Vercel CLI was `59.5.0` at the August 24 review.
+An isolated assessment of that release produced the same 46-record full audit,
+the same one-record production audit, and the same 45 Vercel-only records as
+the pinned `58.9.0` graph. It therefore offered no audit reduction. The newer
+CLI's `@vercel/python-analysis@0.14.0` owner still pins `js-yaml@4.1.1`
+exactly, so the scoped `js-yaml` policy remains necessary; removing it added
+three audit records in the isolated assessment.
+
+Moving to `59.5.0` also changes 26 dependencies in Vercel's direct owner set,
+including 20 major-version transitions, and changes the isolated lock by 229
+additions and 151 removals. Dawn's pinned deployment contract has 18 exact CLI
+version/receipt assertions plus a real source-built and prebuilt two-deployment
+lane that would need behavioral qualification. Retaining `58.9.0` in this
+security pull request avoids combining that separate deployment-target upgrade
+with no security benefit. A later Vercel upgrade should update those contracts
+and exercise the real native lane instead of accumulating transitive overrides.
 
 The existing `vercel-native` job and all of its executables are preserved by
 the workflow allowlist tests. The security work adds only the audited Windows
@@ -311,7 +329,7 @@ matrix or Task 8 Definition of Done.
 | Check | Intermediate result |
 |---|---|
 | Security TypeScript project | Passed |
-| Complete security Vitest project | 334 passed; one intentional non-Windows skip |
+| Complete security Vitest project | 336 passed; one intentional non-Windows skip |
 | Mermaid worker suite | 10 passed |
 | Real Chromium security suite | 5 passed |
 | Kubernetes SOCKS suite | 8 passed |
@@ -327,52 +345,85 @@ servers and proves the real Kubernetes client → SOCKS agent → SOCKS →
 `ip-address` chain. Windows CI owns the encoded-backslash disclosure test that
 cannot execute as a passing native assertion on non-Windows.
 
-## Pending Task 7: final audit and upstream boundaries
+## Final Task 7 audit and upstream boundaries
 
-**PENDING — do not treat this section as final disposition.** Task 7 must run
-the reviewed audit reader under Node `24.19.0` against
+The reviewed audit reader ran under Node `24.19.0` against
 [`audit-upstream-boundaries.json`](../../../test/security-dependencies/fixtures/audit-upstream-boundaries.json).
-That fixture has separate `production` and `full` schemas and both `muted`
-arrays must remain exactly empty.
+The fixture SHA-256 is
+`24bc8ad05992e72fc46e4ea2ba799472b6136b2ee8c048f9dc9f7fd7afe6ab2a`.
+The reader accepted the live full and production multisets exactly and wrote a
+canonical receipt with SHA-256
+`4f1d1831a519ae22ab70e6449bce41d845033bff12a89e624f1ba0f16617dd71`.
 
-### Conditional provider-utils record
+| Mode | Raw audit result | Exact records | Severity totals | Muted |
+|---|---|---:|---|---|
+| Production | exit `1`, `findings` | 1 | critical 0, high 0, moderate 0, low 1, info 0 | `[]` |
+| Full | exit `1`, `findings` | 46 | critical 1, high 16, moderate 22, low 7, info 0 | `[]` |
 
-The current candidate graph still contains
-`@ai-sdk/provider-utils@3.0.28` / `GHSA-866g-f22w-33x8` on the private-example
-path through `@copilotkit/runtime@1.68.3` and
-`@ai-sdk/google-vertex@3.0.146`. The graph invariant requires every affected
-3.x path to remain below that private CopilotKit Google Vertex owner. Task 7
-must recapture the exact path, reported severity, and reachability before using
-the `UPSTREAM_BLOCKED` disposition.
+The evidence command itself exited successfully only after verifying both raw
+audit exit codes, schemas, severity totals, empty `muted` arrays, and exact
+expected records. Twenty-nine of the 30 pre-remediation audit tuples are gone.
+The sole retained historical tuple is the provider-utils boundary below.
 
-If it remains, the reviewed record is:
+### Retained provider-utils record
+
+The production record is exactly
+`@ai-sdk/provider-utils@3.0.28` / `GHSA-866g-f22w-33x8` / low. The live audit's
+representative path is
+`examples__chat__web>@copilotkit/runtime>@ai-sdk/google-vertex>@ai-sdk/provider-utils`.
+The lock-graph invariant separately proves that every affected 3.x identity
+reachable from either private example remains below
+`@copilotkit/runtime@1.68.3` and `@ai-sdk/google-vertex@3.0.146`. Dawn's example
+routes instantiate only the AG-UI `HttpAgent`; they do not configure or import
+a Google Vertex model/provider. The reviewed disposition is therefore
+`UPSTREAM_BLOCKED`, not a request to force provider-utils 4.x across its
+upstream API boundary.
 
 - owner: `@blove`;
 - review expiry: `2026-09-10`;
-- no force to provider-utils 4.x; and
 - recheck on a patched compatible 3.x release, CopilotKit/Google Vertex
   migration, a newly reachable import, severity or reachability change, or any
-  Dawn Vertex example/use.
+  Dawn Vertex example/use; and
+- remove the exception if a later production audit no longer reports the exact
+  tuple.
 
-If the advisory is absent from the final production audit, Task 7 must instead
-record the resolved version/path and reason and omit the exception. The final
-production mode contains this record only if it remains. The final full mode
-adds only exact Vercel-owned records actually observed by the final audit.
+### Exact full-development boundary
 
-### Exact final audit tuples
+The full audit contains the provider-utils record above plus the following 45
+records. Every one has a live path beginning at `packages__cli>vercel`; none is
+muted or promoted to a Dawn production boundary.
 
-**PENDING TASK 7:** replace this paragraph with the accepted production/full
-tuple sets, severity totals, exact command status, empty-muted proof, and the
-provider-utils/Vercel outcome produced by the fail-closed reader. Candidate
-fixture contents are not final evidence until the live audit and expected
-multisets agree exactly.
+| Package | Version | Exact advisories and reported severity | Records |
+|---|---|---|---:|
+| `@tootallnate/once` | `2.0.0` | `GHSA-vpq2-c234-7xj6` (low) | 1 |
+| `ajv` | `8.6.3` | `GHSA-2g4f-4pwh-qvx6` (moderate) | 1 |
+| `minimatch` | `10.1.1` | `GHSA-23c5-xmqv-rm74` (high)<br />`GHSA-3ppc-4f35-3m26` (high)<br />`GHSA-7r86-cg39-jmmj` (high) | 3 |
+| `path-to-regexp` | `8.2.0` | `GHSA-27v5-c462-wpq7` (moderate)<br />`GHSA-j3q9-mxjg-w52f` (high) | 2 |
+| `path-to-regexp` | `8.3.0` | `GHSA-27v5-c462-wpq7` (moderate)<br />`GHSA-j3q9-mxjg-w52f` (high) | 2 |
+| `smol-toml` | `1.5.2` | `GHSA-v3rj-xjv7-4jmq` (moderate) | 1 |
+| `tar` | `7.5.7` | `GHSA-23hp-3jrh-7fpw` (critical)<br />`GHSA-83g3-92jg-28cx` (high)<br />`GHSA-8x88-c5mf-7j5w` (high)<br />`GHSA-9ppj-qmqm-q256` (high)<br />`GHSA-gvwx-54wh-qm9j` (moderate)<br />`GHSA-qffp-2rhf-9h96` (high)<br />`GHSA-r292-9mhp-454m` (high)<br />`GHSA-vmf3-w455-68vh` (moderate)<br />`GHSA-w8wr-v893-vjvp` (moderate) | 9 |
+| `undici` | `5.28.4` | `GHSA-2mjp-6q6p-2qxm` (moderate)<br />`GHSA-35p6-xmwp-9g52` (low)<br />`GHSA-4992-7rv2-5pvq` (moderate)<br />`GHSA-8xcm-r25x-g524` (moderate)<br />`GHSA-c76h-2ccp-4975` (moderate)<br />`GHSA-cxrh-j4jr-qwg3` (low)<br />`GHSA-g8m3-5g58-fq7m` (low)<br />`GHSA-g9mf-h72j-4rw9` (moderate)<br />`GHSA-m8rv-5g2x-5cg5` (moderate)<br />`GHSA-p88m-4jfj-68fv` (moderate)<br />`GHSA-v3r7-h72x-cjcm` (moderate)<br />`GHSA-v9p9-hfj2-hcw8` (high)<br />`GHSA-vrm6-8vpv-qv8q` (high)<br />`GHSA-vxpw-j846-p89q` (high) | 14 |
+| `undici` | `5.29.0` | `GHSA-2mjp-6q6p-2qxm` (moderate)<br />`GHSA-35p6-xmwp-9g52` (low)<br />`GHSA-4992-7rv2-5pvq` (moderate)<br />`GHSA-8xcm-r25x-g524` (moderate)<br />`GHSA-g8m3-5g58-fq7m` (low)<br />`GHSA-g9mf-h72j-4rw9` (moderate)<br />`GHSA-m8rv-5g2x-5cg5` (moderate)<br />`GHSA-p88m-4jfj-68fv` (moderate)<br />`GHSA-v3r7-h72x-cjcm` (moderate)<br />`GHSA-v9p9-hfj2-hcw8` (high)<br />`GHSA-vrm6-8vpv-qv8q` (high)<br />`GHSA-vxpw-j846-p89q` (high) | 12 |
 
-## Pending Task 8: reviewed-base alert disposition
+The paths refine to Vercel's direct `undici` and `smol-toml` dependencies and
+its `@vercel/node`, `@vercel/fun`, `@vercel/backends`,
+`@vercel/static-config`, `@vercel/build-utils`, and
+`@vercel/python-analysis` closure. This exact full-only set is the accepted
+development boundary while the required native deployment lane remains in
+place.
 
-**PENDING — the default branch has moved during implementation, so a fresh
-exact-base capture is mandatory.** The current working identity fixture has 59
-candidate open alerts. It is useful for planning but is not the final reviewed
-set.
+## Reviewed current-base alert disposition
+
+The current-base capture is bound to default/main
+`239cf18d6f16448184c44369aa3ae89e976e95df` and source snapshot
+`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f`. It contains the complete 59-alert
+open set. Every record is open with `dismissal`, `fixedAt`, and
+`autoDismissedAt` all null.
+
+The alert numbers and all identity fields are unchanged from the previous
+59-record candidate except alert `#232`: the `tar` /
+`GHSA-r292-9mhp-454m` severity changed from `medium` to `high`. The final
+current-base fixture records `high`; no timestamp or other field changed.
 
 - Candidate fixed after merge (26): `124, 125, 160, 162, 163, 164, 170, 171,
   172, 176, 178, 179, 180, 181, 191, 192, 193, 194, 195, 196, 197, 198, 199,
@@ -383,26 +434,33 @@ set.
 - Historical-only `#123` is absent from the current API and is in neither
   candidate partition.
 
-Task 8 must recapture every identity against the exact reviewed base, review
-every addition/removal/change, update this partition, and confirm every fixed
-record preserves its original identity, has no dismissal, and has a qualifying
-post-merge `fixed_at`. It must also confirm the complete final open set has no
-suppressions, dismissals, or auto-dismissals. No candidate count or list above
-substitutes for that read.
+The fixed/open lists remain a post-merge expectation, not a claim that GitHub
+has already closed the 26 remediated alerts. Post-merge reconciliation must
+confirm every fixed record preserves its reviewed identity, has no dismissal,
+and has a qualifying `fixed_at`. It must also confirm the complete final open
+set still has no suppressions, dismissals, or auto-dismissals.
 
-## Pending Task 8: reviewed-base receipt and final verification
+## Reviewed-base receipt and pending final verification
 
-The planned current-base receipt path is
+The reviewed-base receipt is
 `docs/superpowers/audits/2026-08-20-dependency-remediation-reviewed-base.json`.
-Its exact source SHA, default SHA, capture time, and SHA-256 are **PENDING TASK
-8**. It must be generated by the evidence CLI after the final rebase and must be
-refreshed after any later base movement. The immutable August 10 receipt remains
-unchanged.
+It was captured at `2026-08-24T18:14:19Z` from source snapshot
+`e40a503c19a3f1699cd74a0f0ee85f308e73fd2f` against reviewed base
+`239cf18d6f16448184c44369aa3ae89e976e95df`. Its SHA-256 is
+`5e8d8c37c62e37c14b7b8d3879fa5f249fcd7de79c0cf2648c292e1015ca26b4`;
+the exact 59-record identity fixture SHA-256 is
+`9e6c7737598fe8230ddb14d07b75a96e65e9d85e1b88ac63747874feebebb0f0`.
+The immutable August 10 receipt remains unchanged.
 
-Also pending:
+The bounded capture re-proved Release workflow `260503756` and Publish Chart
+workflow `309127405` were both `disabled_manually`, with zero non-completed
+runs in every reviewed status. It also repeated the complete publication
+inventory and candidate-absence reads recorded in the receipt. Any later base
+movement invalidates this current-base receipt and requires a new capture.
+
+Still pending:
 
 - the final `pnpm why`/`pnpm list` receipts;
-- the accepted full and production audit receipt;
 - the full focused matrix, including native Docker-required CLI roundtrip;
 - Docker sandbox, pgvector, Postgres storage, and memory dogfood lanes;
 - CI-owned Kubernetes and full-arc smoke lanes;
