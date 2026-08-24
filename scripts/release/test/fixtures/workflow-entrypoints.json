@@ -1468,8 +1468,8 @@
                 "required": true,
                 "type": "string"
               },
-              "receiptBase64": {
-                "description": "Canonical redacted reconciliation receipt encoded as base64",
+              "receiptGzipBase64": {
+                "description": "Canonical redacted reconciliation receipt encoded as gzip plus base64",
                 "required": true,
                 "type": "string"
               },
@@ -1561,13 +1561,13 @@
                   "EXPECTED_PR_NUMBER": "${{ inputs.expectedPrNumber }}",
                   "EXPECTED_REVIEWED_BASE_SHA": "${{ inputs.expectedReviewedBaseSha }}",
                   "EXPECTED_REVIEWED_HEAD_SHA": "${{ inputs.expectedReviewedHeadSha }}",
-                  "RECEIPT_BASE64": "${{ inputs.receiptBase64 }}",
+                  "RECEIPT_GZIP_BASE64": "${{ inputs.receiptGzipBase64 }}",
                   "RECEIPT_OUTPUT_DIRECTORY": "${{ runner.temp }}/dependency-security-receipt-root/sealed",
                   "RECEIPT_OUTPUT_ROOT": "${{ runner.temp }}/dependency-security-receipt-root",
                   "RECEIPT_SHA256": "${{ inputs.receiptSha256 }}"
                 },
                 "name": "Seal canonical receipt",
-                "run": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-base64 \"$RECEIPT_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
+                "run": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
               }
             },
             {

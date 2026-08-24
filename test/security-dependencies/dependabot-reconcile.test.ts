@@ -17,8 +17,10 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
+import { validateAuditReceipt } from "../../scripts/security/audit-evidence-schema.mjs";
 import {
 	loadDependabotExpectation,
 	normalizeDependabotAlert,
@@ -29,18 +31,29 @@ import {
 	validateReconciliationReceipt,
 } from "../../scripts/security/dependabot-reconcile.mjs";
 import { validateAuditExpectation } from "../../scripts/security/dependency-audit-evidence.mjs";
-import { validateAuditReceipt } from "../../scripts/security/audit-evidence-schema.mjs";
 import {
 	canonicalJsonBytes,
 	createEvidenceBudget,
 	createGitHubReader,
 } from "../../scripts/security/github-evidence.mjs";
 import { INVENTORY_PACKAGES } from "../../scripts/security/publication-containment.mjs";
-import { validateReconciliationFileInputs } from "../../scripts/security/reconciliation-receipt.mjs";
+import {
+	createReconciliationReceipt,
+	validateReconciliationFileInputs,
+} from "../../scripts/security/reconciliation-receipt.mjs";
+import {
+	encodeReconciliationReceiptGzipBase64,
+	MAX_RECONCILIATION_RECEIPT_BYTES,
+	MAX_RECONCILIATION_RECEIPT_GZIP_BYTES,
+} from "../../scripts/security/reconciliation-transport.mjs";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDir, "../..");
 const fixturePath = resolve(testDir, "fixtures/dependabot-baseline.json");
+const auditExpectationPath = resolve(
+	testDir,
+	"fixtures/audit-upstream-boundaries.json",
+);
 const execFileAsync = promisify(execFile);
 const defaultSha = "d2404dc7b138db151ae58f0b36788dfa08e2008e";
 const auditLockfileSha256 = "1".repeat(64);
@@ -547,7 +560,8 @@ describe("merged-head reconciliation", () => {
 					expectedReviewedHeadSha: headSha,
 					outputDirectory: resolve(sealRoot, "sealed"),
 					outputRoot: sealRoot,
-					receiptBase64: receiptBytes.toString("base64"),
+					receiptGzipBase64:
+						encodeReconciliationReceiptGzipBase64(receiptBytes),
 					receiptSha256: sha256Bytes(receiptBytes),
 					runAttempt: 1,
 					runId: 31_500_000_000,
@@ -555,6 +569,126 @@ describe("merged-head reconciliation", () => {
 			).resolves.toBeTruthy();
 		} finally {
 			await rm(sealRoot, { force: true, recursive: true });
+		}
+	});
+
+	it("produces and seals the complete reviewed 59-alert receipt", async () => {
+		const fixture = validateDependabotExpectation(
+			JSON.parse(await readFile(fixturePath, "utf8")),
+		);
+		const reviewedBaseSha = defaultSha;
+		const reviewedHeadSha = "b".repeat(40);
+		const mergeSha = "c".repeat(40);
+		const mergedAt = "2026-08-10T18:00:00Z";
+		const fixedNumbers = new Set([
+			124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180,
+			181, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 236,
+		]);
+		const fixed = fixture.open
+			.filter((alert) => fixedNumbers.has(alert.number))
+			.map((alert) => ({
+				...alert,
+				fixedAt: mergedAt,
+				state: "fixed",
+				updatedAt: mergedAt,
+			}));
+		const open = fixture.open.filter(
+			(alert) => !fixedNumbers.has(alert.number),
+		);
+		const auditExpectation = validateAuditExpectation(
+			JSON.parse(await readFile(auditExpectationPath, "utf8")),
+		);
+		const audit = auditReceiptFromExpectation(auditExpectation, mergeSha);
+		const publication = publicationSnapshot(mergeSha, mergeSha);
+		const fileInputs = {
+			audit,
+			digests: {
+				auditExpectationFixtureSha256: "d".repeat(64),
+				auditReceiptSha256: digest(audit),
+				baselineReceiptSha256: "e".repeat(64),
+				dependabotIdentitiesFixtureSha256: "f".repeat(64),
+			},
+		};
+		const verificationRuns = [
+			".github/workflows/ci.yml",
+			".github/workflows/codeql.yml",
+			".github/workflows/scorecard.yml",
+		].map((workflowPath, index) => ({
+			conclusion: "success",
+			event: "push",
+			headBranch: "main",
+			headSha: mergeSha,
+			runAttempt: 1,
+			runId: 31_500_000_000 + index,
+			status: "completed",
+			workflowPath,
+		}));
+		const receipt = createReconciliationReceipt({
+			completedAtMilliseconds: Date.parse("2026-08-10T18:01:01Z"),
+			fileInputs,
+			fixed,
+			mergeSha,
+			mergedAt,
+			observationHead: mergeSha,
+			openA: open,
+			openB: structuredClone(open),
+			prNumber: 42,
+			publicationAfter: publication,
+			publicationBefore: structuredClone(publication),
+			repository: "cacheplane/dawnai",
+			reviewedBaseSha,
+			reviewedHeadSha,
+			startedAtMilliseconds: Date.parse("2026-08-10T18:01:00Z"),
+			verificationRuns,
+		});
+		const receiptBytes = canonicalJsonBytes(receipt);
+		expect(receiptBytes.byteLength).toBeGreaterThan(32 * 1024);
+		expect(receiptBytes.byteLength).toBeLessThanOrEqual(
+			MAX_RECONCILIATION_RECEIPT_BYTES,
+		);
+		const receiptGzipBase64 =
+			encodeReconciliationReceiptGzipBase64(receiptBytes);
+		expect(receiptGzipBase64.length).toBeLessThan(10_000);
+		expect(
+			JSON.stringify({
+				expectedMainSha: mergeSha,
+				expectedMergeSha: mergeSha,
+				expectedPrNumber: "490",
+				expectedReviewedBaseSha: reviewedBaseSha,
+				expectedReviewedHeadSha: reviewedHeadSha,
+				receiptGzipBase64: "A".repeat(
+					Math.ceil(MAX_RECONCILIATION_RECEIPT_GZIP_BYTES / 3) * 4,
+				),
+				receiptSha256: "0".repeat(64),
+			}).length,
+		).toBeLessThanOrEqual(65_535);
+
+		const root = await mkdtemp(resolve(tmpdir(), "dawn-full-receipt-"));
+		try {
+			await chmod(root, 0o700);
+			await expect(
+				sealReconciliationReceipt({
+					expectedMainSha: mergeSha,
+					expectedMergeSha: mergeSha,
+					expectedPrNumber: 42,
+					expectedRepository: "cacheplane/dawnai",
+					expectedReviewedBaseSha: reviewedBaseSha,
+					expectedReviewedHeadSha: reviewedHeadSha,
+					outputDirectory: resolve(root, "sealed"),
+					outputRoot: root,
+					receiptGzipBase64,
+					receiptSha256: sha256Bytes(receiptBytes),
+					runAttempt: 1,
+					runId: 31_500_000_010,
+				}),
+			).resolves.toBeTruthy();
+			expect(
+				await readFile(
+					resolve(root, "sealed", "dependency-security-reconciliation.json"),
+				),
+			).toEqual(receiptBytes);
+		} finally {
+			await rm(root, { force: true, recursive: true });
 		}
 	});
 
@@ -1363,7 +1497,8 @@ describe("offline reconciliation receipt sealing", () => {
 				expectedReviewedHeadSha: receipt.pr.reviewedHeadSha,
 				outputDirectory,
 				outputRoot: root,
-				receiptBase64: receiptBytes.toString("base64"),
+				receiptGzipBase64:
+					encodeReconciliationReceiptGzipBase64(receiptBytes),
 				receiptSha256,
 				runAttempt: 2,
 				runId: 31360000000,
@@ -1394,12 +1529,24 @@ describe("offline reconciliation receipt sealing", () => {
 	});
 
 	it.each([
-		["non-base64 input", (args: any) => ({ ...args, receiptBase64: "***" })],
+		[
+			"non-base64 input",
+			(args: any) => ({ ...args, receiptGzipBase64: "***" }),
+		],
+		[
+			"non-gzip input",
+			(args: any) => ({
+				...args,
+				receiptGzipBase64: Buffer.from("not gzip", "utf8").toString("base64"),
+			}),
+		],
 		[
 			"oversized decoded input",
 			(args: any) => ({
 				...args,
-				receiptBase64: Buffer.alloc(32 * 1024 + 1).toString("base64"),
+				receiptGzipBase64: Buffer.alloc(
+					MAX_RECONCILIATION_RECEIPT_GZIP_BYTES + 1,
+				).toString("base64"),
 			}),
 		],
 		[
@@ -1442,6 +1589,36 @@ describe("offline reconciliation receipt sealing", () => {
 		}
 	});
 
+	it("rejects a gzip payload that expands beyond the receipt bound", async () => {
+		const root = await mkdtemp(resolve(tmpdir(), "dawn-receipt-bomb-"));
+		try {
+			await chmod(root, 0o700);
+			const expanded = Buffer.alloc(
+				MAX_RECONCILIATION_RECEIPT_BYTES + 1,
+				0x61,
+			);
+			await expect(
+				sealReconciliationReceipt({
+					...sealArguments(root),
+					receiptGzipBase64: gzipSync(expanded, { level: 9 }).toString(
+						"base64",
+					),
+				}),
+			).rejects.toThrow(/UNPROVABLE: INVALID_RECEIPT_GZIP_BASE64/u);
+			await expect(readdir(resolve(root, "sealed"))).rejects.toThrow();
+		} finally {
+			await rm(root, { force: true, recursive: true });
+		}
+	});
+
+	it("rejects an oversized receipt before gzip encoding", () => {
+		expect(() =>
+			encodeReconciliationReceiptGzipBase64(
+				Buffer.alloc(MAX_RECONCILIATION_RECEIPT_BYTES + 1),
+			),
+		).toThrow(/UNPROVABLE: INVALID_RECEIPT_GZIP_BASE64/u);
+	});
+
 	it("rejects non-canonical JSON and invalid UTF-8 even with matching digests", async () => {
 		const root = await mkdtemp(resolve(tmpdir(), "dawn-receipt-bytes-"));
 		try {
@@ -1450,7 +1627,8 @@ describe("offline reconciliation receipt sealing", () => {
 			await expect(
 				sealReconciliationReceipt({
 					...sealArguments(root),
-					receiptBase64: nonCanonical.toString("base64"),
+					receiptGzipBase64:
+						encodeReconciliationReceiptGzipBase64(nonCanonical),
 					receiptSha256: createHash("sha256")
 						.update(nonCanonical)
 						.digest("hex"),
@@ -1461,7 +1639,8 @@ describe("offline reconciliation receipt sealing", () => {
 			await expect(
 				sealReconciliationReceipt({
 					...sealArguments(root),
-					receiptBase64: invalidUtf8.toString("base64"),
+					receiptGzipBase64:
+						encodeReconciliationReceiptGzipBase64(invalidUtf8),
 					receiptSha256: createHash("sha256").update(invalidUtf8).digest("hex"),
 				}),
 			).rejects.toThrow(/UNPROVABLE: INVALID_RECONCILIATION_RECEIPT/u);
@@ -1533,7 +1712,8 @@ describe("offline reconciliation receipt sealing", () => {
 				await expect(
 					sealReconciliationReceipt({
 						...sealArguments(root),
-						receiptBase64: receiptBytes.toString("base64"),
+						receiptGzipBase64:
+							encodeReconciliationReceiptGzipBase64(receiptBytes),
 						receiptSha256: createHash("sha256")
 							.update(receiptBytes)
 							.digest("hex"),
@@ -2443,7 +2623,7 @@ function sealArguments(root: string) {
 		expectedReviewedHeadSha: receipt.pr.reviewedHeadSha,
 		outputDirectory: resolve(root, "sealed"),
 		outputRoot: root,
-		receiptBase64: receiptBytes.toString("base64"),
+		receiptGzipBase64: encodeReconciliationReceiptGzipBase64(receiptBytes),
 		receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
 		runAttempt: 2,
 		runId: 31360000000,

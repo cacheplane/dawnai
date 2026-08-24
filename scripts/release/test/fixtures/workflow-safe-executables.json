@@ -1236,7 +1236,7 @@
         "stepIndex": 5,
         "step": "Seal canonical receipt",
         "kind": "run",
-        "value": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-base64 \"$RECEIPT_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
+        "value": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
       },
       {
         "classification": "safe",

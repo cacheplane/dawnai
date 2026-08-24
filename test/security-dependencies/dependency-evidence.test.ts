@@ -28,6 +28,7 @@ import {
 } from "../../scripts/security/dependency-evidence.mjs";
 import { canonicalJsonBytes } from "../../scripts/security/github-evidence.mjs";
 import { INVENTORY_PACKAGES } from "../../scripts/security/publication-containment.mjs";
+import { encodeReconciliationReceiptGzipBase64 } from "../../scripts/security/reconciliation-transport.mjs";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDir, "../..");
@@ -769,7 +770,7 @@ describe("dependency evidence CLI", () => {
 				"c".repeat(40),
 				"--expected-merge-sha",
 				"d".repeat(40),
-				"--receipt-base64",
+				"--receipt-gzip-base64",
 				"e30K",
 				"--receipt-sha256",
 				"e".repeat(64),
@@ -1293,6 +1294,8 @@ describe("dependency evidence CLI", () => {
 			const receiptSha256 = createHash("sha256")
 				.update(receiptBytes)
 				.digest("hex");
+			const receiptGzipBase64 =
+				encodeReconciliationReceiptGzipBase64(receiptBytes);
 			const outputDirectory = resolve(outputRoot, "sealed");
 			const stdout: string[] = [];
 			const result = await runDependencyEvidenceCli({
@@ -1308,8 +1311,8 @@ describe("dependency evidence CLI", () => {
 					receipt.pr.reviewedHeadSha,
 					"--expected-merge-sha",
 					receipt.pr.mergeSha,
-					"--receipt-base64",
-					receiptBytes.toString("base64"),
+					"--receipt-gzip-base64",
+					receiptGzipBase64,
 					"--receipt-sha256",
 					receiptSha256,
 					"--output-root",
@@ -1333,7 +1336,7 @@ describe("dependency evidence CLI", () => {
 				runId: 31360000000,
 			});
 			expect(stdout.join("")).toContain(`digest=${receiptSha256}`);
-			expect(stdout.join("")).not.toContain(receiptBytes.toString("base64"));
+			expect(stdout.join("")).not.toContain(receiptGzipBase64);
 			expect(stdout.join("")).not.toContain("GHSA-");
 		} finally {
 			await rm(outputRoot, { force: true, recursive: true });
@@ -1371,7 +1374,7 @@ describe("dependency evidence CLI", () => {
 					"c".repeat(40),
 					"--expected-merge-sha",
 					"d".repeat(40),
-					"--receipt-base64",
+					"--receipt-gzip-base64",
 					"not-canonical-base64",
 					"--receipt-sha256",
 					"e".repeat(64),
@@ -1400,7 +1403,7 @@ describe("dependency evidence CLI", () => {
 				stderr = error.stderr;
 			}
 		}
-		expect(stderr).toContain("UNPROVABLE: INVALID_RECEIPT_BASE64");
+		expect(stderr).toContain("UNPROVABLE: INVALID_RECEIPT_GZIP_BASE64");
 		expect(stderr).not.toContain("EXTERNAL_IMPORT_BLOCKED");
 	});
 });
