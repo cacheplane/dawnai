@@ -63,8 +63,10 @@ CLI dependency and native-deployment CI lane.
   `examples/research/web/README.md`, and
   `apps/web/content/docs/recipes/research-web-ui.mdx` — document the V2 route and
   multi-route transport.
-- `examples/research/web/app/api/memory/[...path]/route.ts` — remove the stale
-  comparison to the old single-route CopilotKit file.
+- Superseded after the Workbench rebase:
+  `examples/research/web/app/api/memory/[...path]/route.ts` was intentionally
+  removed upstream as an unused, unallowlisted proxy, so there is no route to
+  update or restore.
 - `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md` —
   make this migration the first prerequisite and update CopilotKit/version/route
   assumptions now; Task 6 reconciles the restored in-flight evidence around
@@ -864,7 +866,8 @@ importer updates, and the two workflow audit fixtures.
 - Modify: `examples/chat/web/README.md`
 - Modify: `examples/research/web/README.md`
 - Modify: `apps/web/content/docs/recipes/research-web-ui.mdx`
-- Modify: `examples/research/web/app/api/memory/[...path]/route.ts`
+- Superseded after the Workbench rebase: do not restore the deleted
+  `examples/research/web/app/api/memory/[...path]/route.ts` proxy.
 - Modify: `examples/research/web/app/components/ToolCallCard.tsx`
 - Modify: `docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md`
 - Modify: `docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md`
@@ -965,7 +968,7 @@ outside this explicit set remain archival.
 Run:
 
 ```bash
-git add examples/chat/README.md examples/chat/web/README.md examples/research/web/README.md examples/research/web/app/api/memory/'[...path]'/route.ts examples/research/web/app/components/ToolCallCard.tsx apps/web/content/docs/recipes/research-web-ui.mdx docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md
+git add examples/chat/README.md examples/chat/web/README.md examples/research/web/README.md examples/research/web/app/components/ToolCallCard.tsx apps/web/content/docs/recipes/research-web-ui.mdx docs/superpowers/specs/2026-08-18-copilotkit-v2-examples-design.md docs/superpowers/plans/2026-08-18-copilotkit-v2-examples.md docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md
 git diff --cached --check
 git commit -m "docs(examples): document CopilotKit v2 runtime"
 ```
