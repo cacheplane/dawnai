@@ -82,8 +82,6 @@ what it puts out of reach.
   unallowlisted pass-through to the Dawn server with no caller is worse than no route.
   Both return in the next slice as one consolidated, allowlisted proxy. Until then,
   review candidates with the `dawn memory` CLI.
-- **No connect screen.** If the Dawn server is not running you get a run-error row, not
-  a guided setup.
 - **No browser or live-model test coverage here.** The example's own tests
   (`pnpm --filter @dawn-example/research-web test`) cover the thread source, the
   transcript mapping, the renderer registry, the thread rail, the composer, and the

@@ -26,9 +26,6 @@ import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from "vi
 const mocks = vi.hoisted(() => ({
   agent: null as unknown as FakeAgent,
   runAgent: (async () => {}) as (params: unknown) => Promise<unknown>,
-  // Matches the real shell's default first paint: connected, not connecting
-  // or errored. Tests that care override it before rendering.
-  runtimeConnectionStatus: "connected" as string,
 }))
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -37,9 +34,6 @@ vi.mock("@copilotkit/react-core/v2", () => ({
     copilotkit: {
       subscribe: () => ({ unsubscribe: () => {} }),
       runAgent: mocks.runAgent,
-      get runtimeConnectionStatus() {
-        return mocks.runtimeConnectionStatus
-      },
     },
   }),
   useRenderActivityMessage: () => ({
@@ -58,6 +52,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 }))
 
 const { AppShell } = await import("./AppShell")
+const { CONNECT_SCREEN_HEADING } = await import("./ConnectScreen")
 const { RESTORED_HISTORY_NOTICE } = await import("./Transcript")
 type ThreadSource = import("../lib/thread-source").ThreadSource
 type HydratedThread = import("../lib/hydrate").HydratedThread
@@ -194,7 +189,13 @@ beforeEach(() => {
   // assumes (no hydrated card, no composer block from that source).
   pendingInterrupts = vi.fn(async () => [])
   mocks.runAgent = async () => {}
-  mocks.runtimeConnectionStatus = "connected"
+  // The default: the probe reports Dawn up, which is what every pre-existing
+  // test here assumes (the normal shell, not the connect screen). Tests
+  // under "app shell connect screen" below override this per case.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 200 })),
+  )
   container = document.createElement("div")
   document.body.append(container)
   root = createRoot(container)
@@ -205,6 +206,8 @@ afterEach(() => {
     root.unmount()
   })
   container.remove()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe("app shell thread-switch reset", () => {
@@ -453,26 +456,205 @@ describe("app shell composer block for restored gates", () => {
   })
 })
 
+/**
+ * The predicate under test here is a real probe through the proxy
+ * (`GET /api/dawn/memory/candidates`), not `useCopilotKit().runtimeConnectionStatus`
+ * — that read looked right and was proven wrong live: `/api/copilotkit`'s
+ * `/info` handler runs in the SAME Next process as the page and answers 200
+ * without ever contacting Dawn, so it stayed `"connected"` with Dawn
+ * completely down. `global.fetch` is stubbed per test (see `beforeEach`
+ * above for the default "up" case) rather than the CopilotKit mock, because
+ * the probe calls `fetch` directly — see `probeDawnServer` in `AppShell.tsx`.
+ *
+ * `SERVER_PROBE_INTERVAL_MS_FOR_TESTS` mirrors the module-private constant of
+ * the same value in `AppShell.tsx`; it is not exported, so this is the one
+ * place that number is duplicated, and a future change to it needs both
+ * updated together.
+ */
+const SERVER_PROBE_INTERVAL_MS_FOR_TESTS = 5000
+
+/** Flushes the microtask queue so a resolved `fetch`/`hydrate` promise's `.then` has run. */
+async function flushMicrotasks() {
+  await act(async () => {
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve()
+  })
+}
+
+function fetchMock(): Mock<(input: unknown) => Promise<Response>> {
+  return globalThis.fetch as unknown as Mock<(input: unknown) => Promise<Response>>
+}
+
 describe("app shell connect screen", () => {
-  test("shows the connect screen when the runtime connection status is 'error'", () => {
-    mocks.runtimeConnectionStatus = "error"
+  test("shows the connect screen once the probe reports the proxy's cannot-reach 502", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 502 })),
+    )
     render("thread-a")
-    expect(container.textContent).toContain("Can’t reach the Dawn server")
+    await flushMicrotasks()
+    expect(container.textContent).toContain(CONNECT_SCREEN_HEADING)
     // The whole shell is gone with it — no rail, no composer.
     expect(container.querySelector("textarea")).toBeNull()
   })
 
-  test("does NOT show the connect screen while still connecting", () => {
-    mocks.runtimeConnectionStatus = "connecting"
+  test("does NOT show the connect screen while the first probe is still in flight", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    )
     render("thread-a")
-    expect(container.textContent).not.toContain("Can’t reach the Dawn server")
+    await flushMicrotasks()
+    expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
     expect(container.querySelector("textarea")).not.toBeNull()
   })
 
-  test("renders the normal shell when connected", () => {
-    mocks.runtimeConnectionStatus = "connected"
+  test("renders the normal shell once the probe reports up", async () => {
     render("thread-a")
-    expect(container.textContent).not.toContain("Can’t reach the Dawn server")
+    await flushMicrotasks()
+    expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
     expect(container.querySelector("textarea")).not.toBeNull()
+  })
+
+  test("flips to the connect screen when a live hydrate hits the dead proxy, without a run-error row", async () => {
+    // The probe is left pending (never resolves) so ONLY the hydrate
+    // rejection decides `serverStatus` here — this is the OTHER path to
+    // "down": a real hydrate request hitting the dead proxy before the probe
+    // itself gets an answer either way.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    )
+    hydrate = vi.fn(async () => {
+      throw new Error(
+        "Could not load this conversation (HTTP 502): Cannot reach the Dawn server at http://127.0.0.1:3002: ECONNREFUSED",
+      )
+    })
+    render(undefined)
+    render("thread-a")
+    await flushMicrotasks()
+    expect(container.textContent).toContain(CONNECT_SCREEN_HEADING)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  test("keeps a genuine non-502 hydrate failure on the run-error row, not the connect screen", async () => {
+    hydrate = vi.fn(async () => {
+      throw new Error("Could not load this conversation (HTTP 500): boom")
+    })
+    render(undefined)
+    render("thread-a")
+    await flushMicrotasks()
+    expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain("Could not restore this conversation")
+  })
+
+  test("polls every ~5s while down, and recovery restores the shell AND re-hydrates the active thread", async () => {
+    vi.useFakeTimers()
+    let probeCall = 0
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        probeCall += 1
+        return new Response(null, { status: probeCall === 1 ? 502 : 200 })
+      }),
+    )
+    // The first hydrate genuinely fails the same way the real fetch inside it
+    // would while Dawn is actually down — this is the request that never
+    // gets a natural retry (see `reportHydrateFailure`'s
+    // `isProxyUnreachableError` branch) and that recovery has to reissue. The
+    // second call is what a live server answers once it is back.
+    let hydrateCall = 0
+    hydrate = vi.fn(async () => {
+      hydrateCall += 1
+      if (hydrateCall === 1) {
+        throw new Error(
+          "Could not load this conversation (HTTP 502): Cannot reach the Dawn server at http://127.0.0.1:3002: ECONNREFUSED",
+        )
+      }
+      return { messages: [{ content: "recovered", id: "r1", role: "user" }], todos: [] }
+    })
+    render(undefined)
+    render("thread-a")
+    await flushMicrotasks()
+    expect(container.textContent).toContain(CONNECT_SCREEN_HEADING)
+    expect(hydrate).toHaveBeenCalledTimes(1)
+    // 1, not 0: the thread-switch-to-"thread-a" clear step (`agent.setMessages([])`)
+    // ran before the (failed) hydrate — this is not the restore itself.
+    expect(mocks.agent.setMessagesCalls).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_PROBE_INTERVAL_MS_FOR_TESTS)
+    })
+    await flushMicrotasks()
+
+    expect(fetchMock().mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
+    expect(container.querySelector("textarea")).not.toBeNull()
+    // MUTATION CHECK for the recovery-triggers-rehydrate wiring: if
+    // `AppShell`'s down→up effect stopped bumping `hydrateNonce` (or the
+    // thread-switch effect stopped reading it), `hydrate` would still show
+    // exactly 1 call and the two assertions below would red.
+    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(mocks.agent.setMessagesCalls).toBe(2)
+    expect(mocks.agent.messages).toEqual([{ content: "recovered", id: "r1", role: "user" }])
+  })
+
+  test("the retry button re-probes immediately, without waiting for the interval", async () => {
+    let call = 0
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        call += 1
+        return new Response(null, { status: call === 1 ? 502 : 200 })
+      }),
+    )
+    render("thread-a")
+    await flushMicrotasks()
+    expect(container.textContent).toContain(CONNECT_SCREEN_HEADING)
+    const retry = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Try again",
+    )
+    expect(retry).not.toBeUndefined()
+    act(() => {
+      retry?.click()
+    })
+    await flushMicrotasks()
+    expect(container.textContent).not.toContain(CONNECT_SCREEN_HEADING)
+  })
+
+  test("stops probing once the component unmounts", async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 502 })),
+    )
+    // A dedicated root: the shared one from `beforeEach` is unmounted again
+    // in `afterEach`, and unmounting twice would throw.
+    const localContainer = document.createElement("div")
+    document.body.append(localContainer)
+    const localRoot = createRoot(localContainer)
+    act(() => {
+      localRoot.render(
+        <AppShell
+          threads={[]}
+          activeThreadId="thread-a"
+          onSelectThread={() => {}}
+          onCreateThread={() => {}}
+          onUserMessage={() => {}}
+          threadSource={stableSource}
+        />,
+      )
+    })
+    await flushMicrotasks()
+    const callsBeforeUnmount = fetchMock().mock.calls.length
+    expect(callsBeforeUnmount).toBeGreaterThan(0)
+    act(() => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_PROBE_INTERVAL_MS_FOR_TESTS * 2)
+    })
+    expect(fetchMock().mock.calls.length).toBe(callsBeforeUnmount)
   })
 })
