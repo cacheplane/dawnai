@@ -323,21 +323,30 @@ the workflow allowlist tests. The security work adds only the audited Windows
 regression, an isolated read-only Chromium lane, and a separate manual
 post-merge receipt uploader.
 
-## Intermediate verification already completed
+## Focused and gated verification completed
 
-These are focused implementation checks, not substitutes for the final Task 7
-matrix or Task 8 Definition of Done.
+The final Task 7 focused and locally available gated matrix completed under
+Node `24.19.0`. These checks do not replace the remaining full Definition of
+Done or CI-owned Kubernetes/full-arc lanes.
 
-| Check | Intermediate result |
+| Check | Result |
 |---|---|
 | Security TypeScript project | Passed |
-| Complete security Vitest project | 336 passed; one intentional non-Windows skip |
+| Complete security Vitest project | 346 passed; one intentional non-Windows skip |
 | Mermaid worker suite | 10 passed |
 | Real Chromium security suite | 5 passed |
 | Kubernetes SOCKS suite | 8 passed |
 | Dependency-resolution + Windows-focused suite on non-Windows | 20 passed; one Windows-only skip |
 | Workflow contract suite | 56 passed |
-| Root lint at the focused checkpoint | Passed |
+| CLI Hono graph / required Docker roundtrip | 46 passed / 1 passed |
+| AG-UI build | Passed |
+| Chat and research CopilotKit V2 browser lanes | 1 passed each; both typechecks and production builds passed |
+| Documentation site / Inspector dependency builds | Passed |
+| Release fault harness | 25 passed |
+| Docker sandbox | 12 passed |
+| pgvector Docker lane | 92 passed; one expected `OPENAI_API_KEY`-gated live-provider skip |
+| Postgres storage / memory dogfood | 85 passed / 2 passed |
+| Scoped scripts/docs hygiene | Passed |
 
 The worker suite runs each hostile Mermaid case in a fresh bounded worker after
 installing a fresh jsdom realm. The browser suite renders the actual
@@ -466,9 +475,6 @@ movement invalidates this current-base receipt and requires a new capture.
 
 Still pending:
 
-- the final `pnpm why`/`pnpm list` receipts;
-- the full focused matrix, including native Docker-required CLI roundtrip;
-- Docker sandbox, pgvector, Postgres storage, and memory dogfood lanes;
 - CI-owned Kubernetes and full-arc smoke lanes;
 - scoped static hygiene on the final evidence state;
 - `DAWN_REQUIRE_DOCKER=1 pnpm ci:validate` on the finalized state;
@@ -478,17 +484,21 @@ Still pending:
 
 ## Changeset decision
 
-No changeset is required for the current implementation:
+The checked-in `.changeset/copilotkit-v2-guidance.md` is an intentional empty
+no-release acknowledgement:
 
 - root manifest additions and policies are private test/tooling state;
 - chat and research are private examples;
-- `packages/ag-ui` changes only its CopilotKit development owner;
-- `packages/ag-ui` runtime dependencies, optional peer floor, and `src/` are
-  unchanged; and
+- `packages/ag-ui` changes its CopilotKit development owner and updates only a
+  public renderer JSDoc example to show the supported V2 import/provider
+  configuration; it does not change runtime behavior, types, or API shape;
+- `packages/ag-ui` runtime dependencies and optional peer floor are unchanged;
+  and
 - lock resolutions remain within existing published dependency ranges.
 
-If later work changes a publishable package's normal dependency or `src/`, this
-conclusion is invalid and that package needs a patch changeset.
+The empty file makes the reviewed no-release decision explicit without
+claiming a package version bump. Any later runtime, type, API, or normal
+dependency change invalidates this conclusion and requires a patch changeset.
 
 ## Pending pull request, merge, and post-merge receipt
 

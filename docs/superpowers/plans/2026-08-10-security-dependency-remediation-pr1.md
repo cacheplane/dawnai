@@ -995,15 +995,18 @@ schemas and explicit empty `muted` arrays. Task 7 fills and verifies the exact
 records: production contains provider-utils only if it remains, while full adds
 the exact reviewed Vercel-owned tuples only if final recapture reports them.
 
-- [x] **Step 3: Explain why no changeset exists**
+- [x] **Step 3: Record the no-release changeset decision**
 
 State explicitly that persistent manifest changes are private root policy/test
 dependencies, private-example dependencies, or `packages/ag-ui`'s development
-owner only; its runtime dependencies, optional peer floor, and `src/` are
-unchanged. Lockfile resolutions stay within existing published dependency
-ranges. If implementation changes a publishable package's normal dependency or
-`src/`, stop and add a patch changeset for that package instead of retaining
-this conclusion.
+owner. The only public `packages/ag-ui/src` change is a JSDoc example that
+shows the supported V2 import/provider configuration; runtime behavior, types,
+API shape, runtime dependencies, and the optional peer floor are unchanged.
+Record that reviewed no-release decision with an empty
+`.changeset/copilotkit-v2-guidance.md`. Lockfile resolutions stay within
+existing published dependency ranges. If implementation later changes a
+publishable package's runtime behavior, types, API, or normal dependency, stop
+and replace this decision with a patch changeset.
 
 ### Task 7: Run focused and integration verification under Node 24
 
@@ -1251,7 +1254,8 @@ Push the dependency-fix and evidence commits to the existing draft PR from Task
 - why the Vercel CLI/native deployment lane remains required and either why any
   exact full-audit Vercel findings remain upstream development boundaries, or
   their resolved versions/paths and resolution reasons if none remain;
-- why there is no changeset;
+- why the checked-in changeset is an intentional empty no-release
+  acknowledgement;
 - local verification summary;
 - explicit statement that publication workflows remain disabled.
 
