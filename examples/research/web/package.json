@@ -10,7 +10,7 @@
     "start": "next start -p 3010",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "test:e2e": "playwright test --config playwright.config.ts",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "next typegen && tsc -p . --noEmit"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.57",

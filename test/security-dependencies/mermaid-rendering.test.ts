@@ -435,6 +435,12 @@ describe("local Mermaid UI compatibility harness", () => {
   })
 
   it("resolves the complete example-local UI chain and patched versions", () => {
+    for (const importerName of ["examples/chat/web", "examples/research/web"] as const) {
+      const manifest = readManifest(resolve(repositoryRoot, importerName, "package.json"))
+      const scripts = requireRecord(manifest.scripts, `${importerName} scripts`)
+      expect(scripts.typecheck).toBe("next typegen && tsc -p . --noEmit")
+    }
+
     const receipts = [
       resolveUiDependencyReceipt("examples/chat/web"),
       resolveUiDependencyReceipt("examples/research/web"),
