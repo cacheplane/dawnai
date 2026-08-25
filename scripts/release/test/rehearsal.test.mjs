@@ -18,7 +18,9 @@ import {
   parseReleaseMarker,
   parseSmokeReleaseAssetName,
 } from "../metadata.mjs"
+import { validateProductionAuditRun } from "../observe.mjs"
 import { createReleaseRecord } from "../release-record.mjs"
+import { canonicalAuditResultBytes } from "../terminal-records.mjs"
 import { createFaultHarness, executeReleaseRehearsal } from "./support/fault-harness.mjs"
 import { startFaultProxy } from "./support/fault-proxy.mjs"
 import {
@@ -270,6 +272,139 @@ test("lost audit dispatch responses create an orphan but resume only from a new 
   assert.equal(receipt.workflowRunId, 502)
   assert.deepEqual(remote.snapshot().dispatchedRunIds, [501, 502])
   assert.equal(Object.hasOwn(remote.actionsWriter, "listWorkflowRuns"), false)
+})
+
+test("dispatched rehearsal audits expose the exact pending verify-job boundary", async () => {
+  const candidate = {
+    version: "0.8.22",
+    commitSha: "a".repeat(40),
+    ciWorkflow: "CI",
+    ciCheck: "validate",
+    publisherWorkflow: ".github/workflows/release.yml",
+  }
+  const remote = createRehearsalGitHub({
+    candidate,
+    gate: createOrderedFaultGate([]),
+  })
+  const receipt = await remote.actionsWriter.dispatchWorkflowAtRef(
+    auditDispatchInput(candidate.version, candidate.commitSha),
+  )
+  const [run, jobs] = await Promise.all([
+    remote.releaseGitHub.reader.getActionsRun({ runId: receipt.workflowRunId }),
+    remote.releaseGitHub.reader.listActionsRunJobs({ runId: receipt.workflowRunId }),
+  ])
+
+  assert.deepEqual(
+    validateProductionAuditRun({
+      value: run.value,
+      jobs: jobs.value,
+      candidate,
+      marker: { audit: { workflowRunId: receipt.workflowRunId, runAttempt: null } },
+    }),
+    { status: "in_progress", conclusion: null, runAttempt: 1 },
+  )
+  const [verifyJob] = jobs.value
+  for (const [name, value, jobHistory, code] of [
+    ["empty", run.value, [], "RELEASE_AUDIT_RUN_IDENTITY_MISMATCH"],
+    [
+      "gapped",
+      { ...run.value, run_attempt: 2 },
+      [{ ...verifyJob, runAttempt: 2 }],
+      "RELEASE_AUDIT_JOB_ATTEMPT_COVERAGE_INCOMPLETE",
+    ],
+    ["duplicate", run.value, [verifyJob, { ...verifyJob }], "RELEASE_AUDIT_JOB_IDENTITY_MISMATCH"],
+    [
+      "wrong-name",
+      run.value,
+      [{ ...verifyJob, name: "audit" }],
+      "RELEASE_AUDIT_VERIFY_JOB_IDENTITY_MISMATCH",
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        validateProductionAuditRun({
+          value,
+          jobs: jobHistory,
+          candidate,
+          marker: { audit: { workflowRunId: receipt.workflowRunId, runAttempt: null } },
+        }),
+      (error) => error?.code === code,
+      `${name} audit job history must fail closed`,
+    )
+  }
+})
+
+test("a canonical independent-auditor result atomically completes its exact run attempt", async () => {
+  const candidate = {
+    version: "0.8.22",
+    commitSha: "a".repeat(40),
+    ciWorkflow: "CI",
+    ciCheck: "validate",
+    publisherWorkflow: ".github/workflows/release.yml",
+  }
+  const remote = createRehearsalGitHub({
+    candidate,
+    gate: createOrderedFaultGate([]),
+  })
+  const receipt = await remote.actionsWriter.dispatchWorkflowAtRef(
+    auditDispatchInput(candidate.version, candidate.commitSha),
+  )
+  const result = {
+    schemaVersion: 1,
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    manifestSha256: "b".repeat(64),
+    workflowRunId: receipt.workflowRunId,
+    runAttempt: 1,
+    startedAt: "2026-08-25T01:00:00.000Z",
+    finishedAt: "2026-08-25T01:01:00.000Z",
+    checks: [
+      {
+        name: "immutable-inventory",
+        conclusion: "failure",
+        detail: "Independent audit check failed (IMMUTABLE_INVENTORY_INVALID).",
+      },
+    ],
+    conclusion: "failure",
+  }
+  const bytes = canonicalAuditResultBytes(result)
+
+  await remote.recordIndependentAuditResult({
+    workflowRunId: receipt.workflowRunId,
+    result,
+    bytes,
+  })
+  const [run, jobs, artifacts] = await Promise.all([
+    remote.releaseGitHub.reader.getActionsRunAttempt({
+      runId: receipt.workflowRunId,
+      attempt: 1,
+    }),
+    remote.releaseGitHub.reader.listActionsRunJobs({ runId: receipt.workflowRunId }),
+    remote.releaseGitHub.reader.listActionsRunArtifacts({ runId: receipt.workflowRunId }),
+  ])
+
+  assert.deepEqual(
+    validateProductionAuditRun({
+      value: run.value,
+      jobs: jobs.value,
+      candidate,
+      marker: { audit: { workflowRunId: receipt.workflowRunId, runAttempt: 1 } },
+    }),
+    { status: "completed", conclusion: "failure", runAttempt: 1 },
+  )
+  assert.equal(artifacts.value.length, 1)
+  const download = await remote.releaseGitHub.reader.downloadActionsArtifact({
+    artifactId: artifacts.value[0].id,
+  })
+  assert.equal(Buffer.from(download.contentBase64, "base64").includes(bytes), true)
+  await assert.rejects(
+    remote.recordIndependentAuditResult({
+      workflowRunId: receipt.workflowRunId,
+      result: { ...result, manifestSha256: "c".repeat(64) },
+      bytes: canonicalAuditResultBytes({ ...result, manifestSha256: "c".repeat(64) }),
+    }),
+    /conflict|identity/iu,
+  )
 })
 
 test("real escrow transition resumes draft creation and selected 45-asset crash points", async () => {

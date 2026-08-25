@@ -7,7 +7,7 @@ import {
 } from "../../metadata.mjs"
 import { canonicalReleaseRecordBytes } from "../../release-record.mjs"
 import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "../../smoke-result.mjs"
-import { canonicalAuditResultBytes } from "../../terminal-records.mjs"
+import { canonicalAuditResultBytes, parseAuditResult } from "../../terminal-records.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
@@ -83,11 +83,10 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
         state.dispatchedRunIds.push(workflowRunId)
         state.auditRuns.set(
           workflowRunId,
-          auditActionsRun({
+          pendingAuditActionsRun({
             candidate: identity,
             workflowRunId,
             manifestSha256: input.inputs.manifestSha256,
-            conclusion: state.retryAudit ? "success" : "failure",
           }),
         )
         return Object.freeze({
@@ -211,7 +210,10 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       }
       const audit = state.auditRuns.get(Number(runId))
       if (audit !== undefined) {
-        return present("actions-run-artifacts", [structuredClone(audit.metadata)])
+        return present(
+          "actions-run-artifacts",
+          audit.metadata === null ? [] : [structuredClone(audit.metadata)],
+        )
       }
       return present("actions-run-artifacts", [])
     },
@@ -246,12 +248,20 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       ) {
         return present("actions-run-attempt", smokeRun(identity, state.smoke))
       }
+      const audit = state.auditRuns.get(Number(runId))
+      if (audit !== undefined && attempt === audit.run.run_attempt) {
+        return present("actions-run-attempt", structuredClone(audit.run))
+      }
       return absent("actions-run-attempt")
     },
     async listActionsRunJobs({ runId }) {
       if (Number(runId) === 100) return present("actions-run-jobs", [ciJob()])
       if (state.prepared !== null && Number(runId) === 300) {
         return present("actions-run-jobs", [publisherJob({ started: state.publisherStarted })])
+      }
+      const audit = state.auditRuns.get(Number(runId))
+      if (audit !== undefined) {
+        return present("actions-run-jobs", structuredClone(audit.jobs))
       }
       return present("actions-run-jobs", [])
     },
@@ -473,6 +483,50 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       }
       state.smoke = smoke
     },
+    async recordIndependentAuditResult({ workflowRunId, result, bytes }) {
+      const audit = state.auditRuns.get(Number(workflowRunId))
+      const parsed = parseAuditResult(result)
+      const canonical = canonicalAuditResultBytes(parsed)
+      if (
+        audit === undefined ||
+        parsed.version !== identity.version ||
+        parsed.commitSha !== identity.commitSha ||
+        parsed.manifestSha256 !== audit.manifestSha256 ||
+        parsed.workflowRunId !== workflowRunId ||
+        parsed.runAttempt !== audit.run.run_attempt ||
+        !Buffer.from(bytes).equals(canonical)
+      ) {
+        throw new Error("Release rehearsal independent audit result identity conflicts")
+      }
+      if (audit.archive !== null) {
+        const existing = storedZip([{ name: "audit-result.json", bytes: canonical }])
+        if (!audit.archive.equals(existing)) {
+          throw new Error("Release rehearsal independent audit result conflicts")
+        }
+        return { status: "existing", workflowRunId, runAttempt: parsed.runAttempt }
+      }
+      audit.run.status = "completed"
+      audit.run.conclusion = parsed.conclusion
+      audit.jobs = audit.jobs.map((job) => ({
+        ...job,
+        status: "completed",
+        conclusion: parsed.conclusion,
+        completedAt: "2026-08-25T01:01:00.000Z",
+      }))
+      audit.archive = storedZip([{ name: "audit-result.json", bytes: canonical }])
+      audit.metadata = {
+        id: 2_000 + workflowRunId,
+        name: `audit-result-${workflowRunId}-${parsed.runAttempt}`,
+        digest: `sha256:${digest(audit.archive)}`,
+        expired: false,
+        workflow_run: {
+          id: workflowRunId,
+          head_sha: identity.commitSha,
+          head_branch: `v${identity.version}`,
+        },
+      }
+      return { status: "completed", workflowRunId, runAttempt: parsed.runAttempt }
+    },
     snapshot() {
       return deepFreeze({
         dispatchedRunIds: [...state.dispatchedRunIds],
@@ -603,51 +657,32 @@ function smokeRun(candidate, smoke) {
   }
 }
 
-function auditActionsRun({ candidate, workflowRunId, manifestSha256, conclusion }) {
-  const result = {
-    schemaVersion: 1,
-    version: candidate.version,
-    commitSha: candidate.commitSha,
-    manifestSha256,
-    workflowRunId,
-    runAttempt: 1,
-    startedAt: "2026-08-25T01:00:00.000Z",
-    finishedAt: "2026-08-25T01:01:00.000Z",
-    checks: [
-      {
-        name: "published-artifacts",
-        conclusion,
-        detail: conclusion === "success" ? "verified" : "injected retryable failure",
-      },
-    ],
-    conclusion,
-  }
-  const bytes = canonicalAuditResultBytes(result)
-  const archive = storedZip([{ name: "audit-result.json", bytes }])
-  const artifactId = 2_000 + workflowRunId
+function pendingAuditActionsRun({ candidate, workflowRunId, manifestSha256 }) {
   return {
     run: {
       id: workflowRunId,
       run_attempt: 1,
-      status: "completed",
-      conclusion,
+      status: "in_progress",
+      conclusion: null,
       event: "workflow_dispatch",
       path: AUDIT_WORKFLOW,
       head_sha: candidate.commitSha,
       head_branch: `v${candidate.version}`,
     },
-    metadata: {
-      id: artifactId,
-      name: `audit-result-${workflowRunId}-1`,
-      digest: `sha256:${digest(archive)}`,
-      expired: false,
-      workflow_run: {
-        id: workflowRunId,
-        head_sha: candidate.commitSha,
-        head_branch: `v${candidate.version}`,
+    jobs: [
+      {
+        id: 20_000 + workflowRunId,
+        runAttempt: 1,
+        name: "verify",
+        status: "in_progress",
+        conclusion: null,
+        startedAt: "2026-08-25T01:00:00.000Z",
+        completedAt: null,
       },
-    },
-    archive,
+    ],
+    manifestSha256,
+    metadata: null,
+    archive: null,
   }
 }
 
@@ -760,7 +795,9 @@ function actionsArtifactMetadata(state, artifactId) {
   const prepared =
     state.prepared === null ? [] : [state.prepared.payloadMetadata, state.prepared.handoffMetadata]
   const smoke = state.smoke === null ? [] : state.smoke.artifacts.map(({ metadata }) => metadata)
-  const audit = [...state.auditRuns.values()].map(({ metadata }) => metadata)
+  const audit = [...state.auditRuns.values()]
+    .map(({ metadata }) => metadata)
+    .filter((metadata) => metadata !== null)
   return [...prepared, ...smoke, ...audit].find((metadata) => metadata.id === id)
 }
 
@@ -771,7 +808,7 @@ function actionsArchive(state, artifactId) {
     ({ metadata }) => metadata.id === Number(artifactId),
   )?.archive
   if (smoke !== undefined) return smoke
-  return [...state.auditRuns.values()].find(({ metadata }) => metadata.id === Number(artifactId))
+  return [...state.auditRuns.values()].find(({ metadata }) => metadata?.id === Number(artifactId))
     ?.archive
 }
 

@@ -15,6 +15,7 @@ import {
   verifyAuditSuccess,
 } from "../../audit.mjs"
 import { runReleaseCli } from "../../cli.mjs"
+import { runIndependentAudit } from "../../independent-audit.mjs"
 import { readReleaseInventory } from "../../inventory.mjs"
 import {
   canonicalManifestBytes,
@@ -30,6 +31,8 @@ import {
   reconcileSmokeEvidence,
 } from "../../metadata.mjs"
 import { canonicalNpmEvidenceBytes } from "../../npm-evidence.mjs"
+import { observeProductionCandidate } from "../../observe.mjs"
+import { planRelease } from "../../planner.mjs"
 import { createReleasePreparationRunner } from "../../process-runner.mjs"
 import { publishManifestSerially } from "../../publisher.mjs"
 import {
@@ -37,6 +40,7 @@ import {
   REQUIRED_RELEASE_SMOKE_LANES,
   writeCanonicalSmokeResult,
 } from "../../smoke-result.mjs"
+import { canonicalAuditResultBytes, parseAuditResult } from "../../terminal-records.mjs"
 import {
   createRehearsalCliObserver,
   runRehearsalControllerStep,
@@ -519,6 +523,12 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       inventory,
       parentSha: await git.firstParent(candidate.commitSha),
     })
+    const controllerMarker = JSON.parse(
+      await readFile(
+        join(candidateRepository.workingDirectory, "scripts/release/controller-schema.json"),
+        "utf8",
+      ),
+    )
     let npmReader = absentRehearsalNpmReader()
     const npm = deferredNpmReader(() => npmReader)
     const remote = createRehearsalGitHub({
@@ -547,6 +557,7 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
     let retryDispatch = null
     let dispatchSequence = 0
     let auditSequence = 0
+    const independentAuditResults = new Map()
     const controllerReports = []
 
     async function ensureRegistry() {
@@ -653,6 +664,73 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
         { cwd: controllerDir, github: remote.releaseGitHub },
       )
       return durable.receipt
+    }
+
+    async function executeIndependentAuditor(dispatch) {
+      const workflowRunId = dispatch.workflowRunId
+      const expectedConclusion =
+        workflowRunId === initialDispatch?.receipt.workflowRunId ? "failure" : "success"
+      const output = join(controllerDir, `independent-audit-${workflowRunId}-1.json`)
+      const auditInventory =
+        expectedConclusion === "failure"
+          ? createFailingIndependentAuditInventory(productionInventory, candidate)
+          : productionInventory
+      let executionError = null
+      try {
+        await runIndependentAudit(
+          [
+            "--version",
+            candidate.version,
+            "--commit-sha",
+            candidate.commitSha,
+            "--manifest-sha256",
+            record.manifestSha256,
+            "--result",
+            output,
+          ],
+          {
+            cwd: candidateRepository.workingDirectory,
+            environment: independentAuditEnvironment({ candidate, workflowRunId }),
+            async createRuntime() {
+              return {
+                git,
+                github: remote.releaseGitHub.reader,
+                npm,
+                npmAuditFactory: rehearsalNpmAuditFactory(candidate),
+                attestations: verifiedAttestations,
+                inventory: auditInventory,
+                controllerMarker,
+                observeProductionCandidate,
+                planRelease,
+              }
+            },
+            now: deterministicIndependentAuditClock(),
+            clock: () => 0,
+            pollAttempts: 1,
+            pollDelayMs: 0,
+            pollTimeoutMs: 1_000,
+            async delay() {},
+            async writeResult(target, result) {
+              const bytes = canonicalAuditResultBytes(result)
+              await writeCanonicalOrEqual(target, bytes)
+              await remote.recordIndependentAuditResult({ workflowRunId, result, bytes })
+            },
+          },
+        )
+      } catch (error) {
+        executionError = error
+      }
+      const result = parseAuditResult(await readFile(output))
+      if (
+        result.workflowRunId !== workflowRunId ||
+        result.runAttempt !== 1 ||
+        result.conclusion !== expectedConclusion ||
+        (expectedConclusion === "success") !== (executionError === null)
+      ) {
+        throw new Error("Release rehearsal independent auditor conclusion conflicts")
+      }
+      independentAuditResults.set(workflowRunId, result)
+      return result
     }
 
     const effects = Object.freeze({
@@ -855,6 +933,7 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
         if (dispatch === undefined) {
           throw new Error("Release rehearsal lost the direct audit dispatch receipt")
         }
+        await executeIndependentAuditor(dispatch.receipt)
         auditSequence += 1
         const auditPath = join(controllerDir, `audit-result-${workflowRunId}-${auditSequence}.json`)
         const result = await runReleaseCli(
@@ -971,12 +1050,23 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       ({ name }) => parseSmokeReleaseAssetName(name) !== null,
     ).length
     const auditAssetCount = observed.assets.length - baseAssetCount - smokeAssetCount
+    const auditConclusions = [...independentAuditResults.values()].map(
+      ({ workflowRunId, runAttempt, conclusion, checks }) => ({
+        workflowRunId,
+        runAttempt,
+        conclusion,
+        checkCount: checks.length,
+      }),
+    )
     if (
       acceptedPackages.size !== 21 ||
       baseAssetCount !== 45 ||
       smokeAssetCount !== REQUIRED_RELEASE_SMOKE_LANES.length ||
       auditAssetCount !== 3 ||
-      observed.assets.length !== 53
+      observed.assets.length !== 53 ||
+      auditConclusions.length !== 2 ||
+      auditConclusions[0].conclusion !== "failure" ||
+      auditConclusions[1].conclusion !== "success"
     ) {
       throw new Error("Fixed-group release rehearsal terminal inventory is incomplete")
     }
@@ -1022,6 +1112,7 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       totalAssetCount: observed.assets.length,
       dispatchedAuditRuns: observed.dispatchedRunIds.length,
       orphanedAuditRuns: observed.dispatchedRunIds.length - 2,
+      independentAuditRuns: Object.freeze(auditConclusions),
       actionsArtifactRecovery: fallback.source,
       immutable: observed.release.immutable,
       replay: "noop",
@@ -1175,6 +1266,39 @@ function releaseRehearsalEnvironment(candidate) {
     GITHUB_SHA: candidate.commitSha,
     GITHUB_RUN_ID: "300",
     GITHUB_RUN_ATTEMPT: "1",
+  })
+}
+
+function independentAuditEnvironment({ candidate, workflowRunId }) {
+  return Object.freeze({
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/published-artifact-verify.yml@refs/tags/v${candidate.version}`,
+    GITHUB_REF: `refs/tags/v${candidate.version}`,
+    GITHUB_SHA: candidate.commitSha,
+    GITHUB_RUN_ID: String(workflowRunId),
+    GITHUB_RUN_ATTEMPT: "1",
+  })
+}
+
+function deterministicIndependentAuditClock() {
+  let invocation = 0
+  const values = [new Date("2026-08-25T01:00:00.000Z"), new Date("2026-08-25T01:01:00.000Z")]
+  return () => new Date(values[Math.min(invocation++, values.length - 1)])
+}
+
+function createFailingIndependentAuditInventory(inventory, candidate) {
+  return Object.freeze({
+    async read(input) {
+      const value = await inventory.read(input)
+      if (input?.ref !== candidate.commitSha || !Array.isArray(value?.packages)) return value
+      return {
+        ...value,
+        packages: value.packages.map((pkg, index) =>
+          index === 0 ? { ...pkg, version: previousPatchVersion(candidate.version) } : pkg,
+        ),
+      }
+    },
   })
 }
 
