@@ -1,4 +1,5 @@
 import { normalizeAdapterEnvelope } from "./adapter-normalize.mjs"
+import { parseReleaseMarker } from "./metadata.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -422,17 +423,36 @@ function mapRegistryPackage(result, expected, candidate, diagnostics) {
 
 async function mapRelease(result, inventory, candidate, github, diagnostics) {
   if (result.status !== "PRESENT") {
-    return {
-      status: result.status === "ABSENT" ? "absent" : "ambiguous",
-      tag: null,
-      commitSha: null,
-      metadataReconciled: false,
-      assets: [],
-    }
+    return nonPresentRelease(result.status === "ABSENT" ? "absent" : "ambiguous")
   }
   const release = result.value
-  if (!isRecord(release) || !isPositiveId(release.id)) {
+  if (
+    !isRecord(release) ||
+    !isPositiveId(release.id) ||
+    typeof release.draft !== "boolean" ||
+    typeof release.immutable !== "boolean" ||
+    typeof release.tag_name !== "string" ||
+    typeof release.body !== "string"
+  ) {
     addDiagnostic(diagnostics, "github", "release", "ERROR", "MALFORMED_VALUE")
+    return ambiguousRelease()
+  }
+  let marker
+  try {
+    marker = parseReleaseMarker(release.body)
+  } catch {
+    addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "RELEASE_MARKER_INVALID")
+    return ambiguousRelease()
+  }
+  const tag = release.tag_name
+  const commitSha = marker.commitSha
+  if (
+    tag !== `v${candidate.version}` ||
+    marker.tag !== tag ||
+    marker.version !== candidate.version ||
+    commitSha !== candidate.commitSha
+  ) {
+    addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "RELEASE_IDENTITY_MISMATCH")
     return ambiguousRelease()
   }
   if (typeof github.listReleaseAssets !== "function") {
@@ -460,6 +480,18 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
   }
   const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset]))
   const rawAssets = [...assetsResult.value].sort(compareRemoteAssets)
+  if (
+    rawAssets.some(
+      (asset) =>
+        !isRecord(asset) ||
+        !isPositiveId(asset.id) ||
+        typeof asset.name !== "string" ||
+        !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(asset.name),
+    )
+  ) {
+    addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "MALFORMED_VALUE")
+    return ambiguousRelease()
+  }
   const idCounts = new Map()
   for (const asset of rawAssets) {
     const id = String(asset?.id)
@@ -490,17 +522,12 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
       sha256: digest,
     }
   })
-  const tag = release.tag_name
-  const commitSha = release.target_commitish
-  if (tag !== `v${candidate.version}` || commitSha !== candidate.commitSha) {
-    addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "RELEASE_IDENTITY_MISMATCH")
-    return ambiguousRelease()
-  }
   return {
     status: release.draft === true ? "draft" : "published",
     tag,
     commitSha,
-    metadataReconciled: false,
+    immutable: release.immutable,
+    marker,
     assets,
   }
 }
@@ -574,7 +601,11 @@ function ambiguousRegistryPackage(name) {
 }
 
 function ambiguousRelease() {
-  return { status: "ambiguous", tag: null, commitSha: null, metadataReconciled: false, assets: [] }
+  return nonPresentRelease("ambiguous")
+}
+
+function nonPresentRelease(status) {
+  return { status, tag: null, commitSha: null, immutable: null, marker: null, assets: [] }
 }
 
 function normalizeCandidate(value) {

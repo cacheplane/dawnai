@@ -60,6 +60,26 @@ test("release bodies contain one canonical exact marker and reject phase-invalid
       }),
     /phase/iu,
   )
+
+  const foreignRepositoryBody = body.replace(
+    '"repository":"cacheplane/dawnai"',
+    '"repository":"fork/dawnai"',
+  )
+  assert.throws(
+    () => parseReleaseMarker(foreignRepositoryBody),
+    /attestation|repository|identity/iu,
+  )
+  assert.throws(
+    () =>
+      canonicalReleaseBody({
+        marker: {
+          ...marker,
+          attestationSet: { ...marker.attestationSet, repository: "fork/dawnai" },
+        },
+        manifest: fixture.manifest,
+      }),
+    /attestation|repository|identity/iu,
+  )
 })
 
 test("canonical marker updates require revision-by-one legal phase transitions", () => {
@@ -409,16 +429,11 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
     attestations: verifiedAttestations(fixture),
     github: remote.github,
   })
-  const npmEvidence = {
-    schemaVersion: 1,
-    version: VERSION,
-    commitSha: COMMIT_SHA,
-    manifestSha256: fixture.record.manifestSha256,
-    complete: true,
-  }
+  const npmEvidence = completeNpmEvidence(fixture)
   const npmResult = await reconcileNpmEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
+    manifest: fixture.manifest,
     npmEvidence,
     github: remote.github,
   })
@@ -439,6 +454,7 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   const smokeResult = await reconcileSmokeEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
+    manifest: fixture.manifest,
     npmEvidence,
     smokeResults,
     github: remote.github,
@@ -449,6 +465,105 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   assert.match(marker.npmEvidenceSha256, /^[0-9a-f]{64}$/u)
   assert.match(marker.smokeAggregateSha256, /^[0-9a-f]{64}$/u)
   assert.equal(remote.updateCount, 3)
+})
+
+test("npm reconciliation rejects skeletal evidence before mutating the Release", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+  const updates = remote.updateCount
+
+  await assert.rejects(
+    reconcileNpmEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence: {
+        schemaVersion: 1,
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        manifestSha256: fixture.record.manifestSha256,
+        complete: true,
+      },
+      github: remote.github,
+    }),
+    /npm evidence|package|receipt/iu,
+  )
+  assert.equal(remote.updateCount, updates)
+})
+
+test("npm reconciliation binds every package receipt to the sealed manifest", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+  const forged = structuredClone(completeNpmEvidence(fixture))
+  forged.packages[0].size += 1
+  forged.packages[0].tarballSha256 = "f".repeat(64)
+  forged.packages[0].tarballSha512 = "e".repeat(128)
+  forged.packages[0].integrity = `sha512-${Buffer.from(forged.packages[0].tarballSha512, "hex").toString("base64")}`
+  const updates = remote.updateCount
+
+  await assert.rejects(
+    reconcileNpmEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence: forged,
+      github: remote.github,
+    }),
+    /npm evidence|manifest|package/iu,
+  )
+  assert.equal(remote.updateCount, updates)
+})
+
+test("reconciliation rejects a foreign embedded attestation repository with zero mutation", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+  remote.release.body = remote.release.body.replace(
+    '"repository":"cacheplane/dawnai"',
+    '"repository":"fork/dawnai"',
+  )
+  const updates = remote.updateCount
+
+  await assert.rejects(
+    reconcileNpmEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence: completeNpmEvidence(fixture),
+      github: remote.github,
+    }),
+    /attestation|repository|identity/iu,
+  )
+  assert.equal(remote.updateCount, updates)
 })
 
 test("consolidated publication accepts only attached canonical audit bytes and preserves metadata", async () => {
@@ -464,22 +579,18 @@ test("consolidated publication accepts only attached canonical audit bytes and p
     attestations: verifiedAttestations(fixture),
     github: remote.github,
   })
-  const npmEvidence = {
-    schemaVersion: 1,
-    version: VERSION,
-    commitSha: COMMIT_SHA,
-    manifestSha256: fixture.record.manifestSha256,
-    complete: true,
-  }
+  const npmEvidence = completeNpmEvidence(fixture)
   await reconcileNpmEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
+    manifest: fixture.manifest,
     npmEvidence,
     github: remote.github,
   })
   await reconcileSmokeEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
+    manifest: fixture.manifest,
     npmEvidence,
     smokeResults: [
       {
@@ -529,6 +640,56 @@ test("consolidated publication accepts only attached canonical audit bytes and p
   remote.addAsset("audit-attempt-300-1.json", auditBytes)
   remote.addAsset("audit-result.json", auditBytes)
   const bodyBefore = remote.release.body
+
+  for (let index = 0; index < 128; index += 1) {
+    remote.addAsset(`audit-attempt-${index + 1_000}-1.json`, Buffer.from("{}"))
+  }
+  const downloadsBeforePreflight = remote.downloadCount
+  await assert.rejects(
+    publishConsolidatedRelease({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      auditResult,
+      github: remote.github,
+    }),
+    /audit|count|bound/iu,
+  )
+  assert.equal(remote.downloadCount, downloadsBeforePreflight)
+  for (let index = 0; index < 128; index += 1) {
+    remote.assets.delete(`audit-attempt-${index + 1_000}-1.json`)
+  }
+
+  remote.addAsset(
+    "audit-attempt-299-1.json",
+    Buffer.alloc(RELEASE_PAYLOAD_LIMITS.auditReceiptBytes + 1),
+  )
+  await assert.rejects(
+    publishConsolidatedRelease({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      auditResult,
+      github: remote.github,
+    }),
+    /audit|size|byte|limit/iu,
+  )
+  assert.equal(remote.downloadCount, downloadsBeforePreflight)
+  remote.assets.delete("audit-attempt-299-1.json")
+
+  remote.release.body = bodyBefore.replace(
+    '"repository":"cacheplane/dawnai"',
+    '"repository":"fork/dawnai"',
+  )
+  await assert.rejects(
+    publishConsolidatedRelease({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      auditResult,
+      github: remote.github,
+    }),
+    /attestation|repository|identity/iu,
+  )
+  assert.equal(remote.publishCount, 0)
+  remote.release.body = bodyBefore
 
   const historicalSuccess = {
     ...auditResult,
@@ -754,6 +915,35 @@ function verifiedAttestations(fixture) {
   })
 }
 
+function completeNpmEvidence(fixture) {
+  return {
+    schemaVersion: 1,
+    version: VERSION,
+    commitSha: COMMIT_SHA,
+    manifestSha256: fixture.record.manifestSha256,
+    complete: true,
+    status: "NPM_COMPLETE",
+    packages: fixture.manifest.packages.map((pkg) => ({
+      name: pkg.name,
+      version: VERSION,
+      status: "present",
+      size: pkg.size,
+      tarballSha256: pkg.sha256,
+      tarballSha512: pkg.sha512,
+      integrity: pkg.npmIntegrity,
+      latest: { status: "present", version: VERSION },
+      signature: { status: "valid", keyid: "SHA256:dGVzdA==" },
+      provenance: {
+        predicateType: "https://slsa.dev/provenance/v1",
+        workflow: ".github/workflows/release.yml",
+        commitSha: COMMIT_SHA,
+        repository: "https://github.com/cacheplane/dawnai",
+        ref: `refs/tags/v${VERSION}`,
+      },
+    })),
+  }
+}
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
 }
@@ -771,6 +961,7 @@ function inMemoryGitHub() {
     tagObjectSha: "a".repeat(40),
     tagTargetSha: COMMIT_SHA,
     tagReadCount: 0,
+    downloadCount: 0,
   }
   const reader = Object.freeze({
     async getRef() {
@@ -799,10 +990,15 @@ function inMemoryGitHub() {
     async listReleaseAssets() {
       return present(
         "release-assets",
-        [...remote.assets].map(([name, asset]) => ({ id: asset.id, name })),
+        [...remote.assets].map(([name, asset]) => ({
+          id: asset.id,
+          name,
+          size: asset.bytes.byteLength,
+        })),
       )
     },
     async downloadReleaseAsset({ assetId }) {
+      remote.downloadCount += 1
       const asset = [...remote.assets.values()].find((entry) => entry.id === assetId)
       assert.ok(asset)
       return {

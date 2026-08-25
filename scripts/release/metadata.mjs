@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { canonicalManifestBytes, parseSealedReleaseManifest } from "./manifest.mjs"
+import { canonicalNpmEvidenceBytes, parseNpmEvidence } from "./npm-evidence.mjs"
 import {
   canonicalReleaseRecordBytes,
   parseReleaseRecord,
@@ -114,6 +115,8 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
 const ATTESTATION_REPOSITORY = "cacheplane/dawnai"
 const MAX_AUDIT_ATTEMPTS = 128
+const BASE_ASSET_COUNT = 45
+const MAX_PUBLICATION_ASSETS = BASE_ASSET_COUNT + MAX_AUDIT_ATTEMPTS + 1
 
 export function parseReleaseMarker(value) {
   if (typeof value !== "string") throw new TypeError("Release body must be a string")
@@ -465,6 +468,91 @@ export function validatePublicationAuditAssets(value, { marker }) {
   return deepFreeze(validated.sort((left, right) => compareText(left.name, right.name)))
 }
 
+export function preflightPublicationAssetMetadata(value, { marker }) {
+  const releaseMarker = validateMarker(marker)
+  if (releaseMarker.phase !== "AUDIT_VERIFIED") {
+    throw new TypeError("Publication asset metadata requires an AUDIT_VERIFIED marker")
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length < BASE_ASSET_COUNT + 2 ||
+    value.length > MAX_PUBLICATION_ASSETS
+  ) {
+    throw new TypeError("Publication asset count is outside its bound")
+  }
+  const listed = snapshotJson(value)
+  const expectedBase = markerBaseAssets(releaseMarker)
+  const expectedBaseByName = new Map(expectedBase.map((asset) => [asset.name, asset.sha256]))
+  const names = new Set()
+  const ids = new Set()
+  const totals = { base: 0, prepared: 0, bundles: 0, audit: 0 }
+  let auditCount = 0
+  const assets = listed.map((item) => {
+    if (!isRecord(item) || typeof item.name !== "string" || !ASSET_NAME_PATTERN.test(item.name)) {
+      throw new TypeError("Publication asset identity is malformed")
+    }
+    const id = positiveId(item.id, "Publication asset ID")
+    if (!Number.isSafeInteger(item.size) || item.size < 1) {
+      throw new TypeError("Publication asset declared size is invalid")
+    }
+    if (names.has(item.name) || ids.has(id)) {
+      throw new TypeError("Publication asset identity is duplicate")
+    }
+    names.add(item.name)
+    ids.add(id)
+
+    const expectedSha256 = expectedBaseByName.get(item.name) ?? null
+    const limits = publicationAssetLimits(item.name, expectedSha256 !== null)
+    assertPayloadByteLength(item.size, limits.maximumBytes, `${item.name} declared size`)
+    if (limits.group === "audit") {
+      auditCount += 1
+      totals.audit = addPublicationBytes(
+        totals.audit,
+        item.size,
+        RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes,
+        "Publication audit evidence",
+      )
+    } else {
+      totals.base = addPublicationBytes(
+        totals.base,
+        item.size,
+        RELEASE_PAYLOAD_LIMITS.escrowBytes,
+        "Publication base assets",
+      )
+      if (limits.group === "prepared") {
+        totals.prepared = addPublicationBytes(
+          totals.prepared,
+          item.size,
+          RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+          "Publication prepared assets",
+        )
+      } else if (limits.group === "bundles") {
+        totals.bundles = addPublicationBytes(
+          totals.bundles,
+          item.size,
+          RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+          "Publication attestation bundles",
+        )
+      }
+    }
+    return {
+      id,
+      name: item.name,
+      size: item.size,
+      maximumBytes: limits.maximumBytes,
+      group: limits.group,
+      expectedSha256,
+    }
+  })
+  if (auditCount < 2 || auditCount > MAX_AUDIT_ATTEMPTS + 1) {
+    throw new TypeError("Publication audit asset count is outside its bound")
+  }
+  if ([...expectedBaseByName.keys()].some((name) => !names.has(name))) {
+    throw new TypeError("Publication base asset set is incomplete")
+  }
+  return deepFreeze(assets)
+}
+
 export async function escrowCandidate(input) {
   const argumentsSnapshot = snapshotEscrowInput(input)
   const candidate = validateCandidate(argumentsSnapshot.candidate)
@@ -597,13 +685,18 @@ export async function escrowCandidate(input) {
   })
 }
 
-export async function reconcileNpmEvidence({ candidate, record, npmEvidence, github }) {
-  const snapshot = snapshotJson({ candidate, record, npmEvidence })
+export async function reconcileNpmEvidence({ candidate, record, manifest, npmEvidence, github }) {
+  const snapshot = snapshotJson({ candidate, record, manifest, npmEvidence })
   const identity = validateCandidate(snapshot.candidate)
   const releaseRecord = parseReleaseRecord(snapshot.record)
   assertRecordIdentity(releaseRecord, identity)
-  validateNpmEvidence(snapshot.npmEvidence, identity, releaseRecord)
-  const npmDigest = canonicalEvidenceSha256(snapshot.npmEvidence)
+  const normalizedNpmEvidence = normalizeNpmEvidence(
+    snapshot.npmEvidence,
+    identity,
+    releaseRecord,
+    snapshot.manifest,
+  )
+  const npmDigest = normalizedNpmEvidence.sha256
   const effects = snapshotGitHubBoundary(github)
   await verifyAnnotatedCandidateTag(effects.reader, identity)
   let release = await requireDraftRelease(effects.reader, identity)
@@ -646,16 +739,22 @@ export async function reconcileNpmEvidence({ candidate, record, npmEvidence, git
 export async function reconcileSmokeEvidence({
   candidate,
   record,
+  manifest,
   npmEvidence,
   smokeResults,
   github,
 }) {
-  const snapshot = snapshotJson({ candidate, record, npmEvidence, smokeResults })
+  const snapshot = snapshotJson({ candidate, record, manifest, npmEvidence, smokeResults })
   const identity = validateCandidate(snapshot.candidate)
   const releaseRecord = parseReleaseRecord(snapshot.record)
   assertRecordIdentity(releaseRecord, identity)
-  validateNpmEvidence(snapshot.npmEvidence, identity, releaseRecord)
-  const npmDigest = canonicalEvidenceSha256(snapshot.npmEvidence)
+  const normalizedNpmEvidence = normalizeNpmEvidence(
+    snapshot.npmEvidence,
+    identity,
+    releaseRecord,
+    snapshot.manifest,
+  )
+  const npmDigest = normalizedNpmEvidence.sha256
   const smokes = validateSmokeResults(snapshot.smokeResults, identity, releaseRecord)
   const smokeDigest = canonicalEvidenceSha256(smokes)
   const effects = snapshotGitHubBoundary(github)
@@ -1009,28 +1108,12 @@ async function observeExactAssets(reader, releaseId, expectedByName, { allowSubs
 
 async function observePublicationAssets(reader, releaseId, marker, auditBytes) {
   const listed = await readGitHubValue(reader.listReleaseAssets({ releaseId }), "release-assets")
-  if (!Array.isArray(listed)) throw new Error("Published Release asset list is malformed")
-  const expectedBase = markerBaseAssets(marker)
-  const expectedBaseByName = new Map(expectedBase.map((asset) => [asset.name, asset.sha256]))
-  const expectedBaseNames = new Set(expectedBaseByName.keys())
-  const names = new Set()
-  const ids = new Set()
+  const descriptors = preflightPublicationAssetMetadata(listed, { marker })
   const assets = []
-  const bytesByName = new Map()
-  for (const item of listed) {
-    if (!isRecord(item) || typeof item.name !== "string" || !ASSET_NAME_PATTERN.test(item.name)) {
-      throw new Error("Published Release asset identity is malformed")
-    }
-    const id = positiveId(item.id, "Release asset ID")
-    if (names.has(item.name) || ids.has(id))
-      throw new Error("Published Release assets are duplicate")
-    const allowedEvidence =
-      item.name === "audit-result.json" ||
-      /^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(item.name)
-    if (!expectedBaseNames.has(item.name) && !allowedEvidence) {
-      throw new Error("Published Release contains an unexpected or abandonment asset")
-    }
-    const download = snapshotJson(await reader.downloadReleaseAsset({ assetId: id }))
+  const auditAssets = []
+  const totals = { base: 0, prepared: 0, bundles: 0, audit: 0 }
+  for (const descriptor of descriptors) {
+    const download = snapshotJson(await reader.downloadReleaseAsset({ assetId: descriptor.id }))
     if (
       !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
       download.status !== "PRESENT" ||
@@ -1045,27 +1128,19 @@ async function observePublicationAssets(reader, releaseId, marker, auditBytes) {
     if (bytes.toString("base64") !== download.contentBase64) {
       throw new Error("Published Release asset base64 is noncanonical")
     }
+    accountPublicationDownload(descriptor, bytes, totals)
     const digest = sha256(bytes)
-    const expectedBaseDigest = expectedBaseByName.get(item.name)
-    if (expectedBaseDigest !== undefined && digest !== expectedBaseDigest) {
+    if (descriptor.expectedSha256 !== null && digest !== descriptor.expectedSha256) {
       throw new Error("Published Release base asset digest conflicts with its marker")
     }
-    assets.push({ name: item.name, sha256: digest })
-    bytesByName.set(item.name, bytes)
-    names.add(item.name)
-    ids.add(id)
+    assets.push({ name: descriptor.name, sha256: digest })
+    if (descriptor.group === "audit") {
+      auditAssets.push({ name: descriptor.name, bytes })
+    }
   }
-  if ([...expectedBaseNames].some((name) => !names.has(name))) {
-    throw new Error("Published Release base asset set is incomplete")
-  }
-  validatePublicationAuditAssets(
-    [...bytesByName]
-      .filter(([name]) => !expectedBaseNames.has(name))
-      .map(([name, bytes]) => ({ name, bytes })),
-    { marker },
-  )
-  const attemptBytes = bytesByName.get(marker.audit.attemptAssetName)
-  const canonicalBytes = bytesByName.get("audit-result.json")
+  validatePublicationAuditAssets(auditAssets, { marker })
+  const attemptBytes = auditAssets.find(({ name }) => name === marker.audit.attemptAssetName)?.bytes
+  const canonicalBytes = auditAssets.find(({ name }) => name === "audit-result.json")?.bytes
   if (
     attemptBytes === undefined ||
     canonicalBytes === undefined ||
@@ -1077,6 +1152,43 @@ async function observePublicationAssets(reader, releaseId, marker, auditBytes) {
     throw new Error("Canonical audit asset is not byte-identical to its successful attempt")
   }
   return deepFreeze(assets.sort((left, right) => compareText(left.name, right.name)))
+}
+
+function accountPublicationDownload(descriptor, bytes, totals) {
+  if (bytes.byteLength !== descriptor.size) {
+    throw new Error("Published Release asset bytes conflict with their declared size")
+  }
+  assertPayloadByteLength(bytes.byteLength, descriptor.maximumBytes, `${descriptor.name} download`)
+  if (descriptor.group === "audit") {
+    totals.audit = addPublicationBytes(
+      totals.audit,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes,
+      "Downloaded publication audit evidence",
+    )
+    return
+  }
+  totals.base = addPublicationBytes(
+    totals.base,
+    bytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.escrowBytes,
+    "Downloaded publication base assets",
+  )
+  if (descriptor.group === "prepared") {
+    totals.prepared = addPublicationBytes(
+      totals.prepared,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+      "Downloaded publication prepared assets",
+    )
+  } else if (descriptor.group === "bundles") {
+    totals.bundles = addPublicationBytes(
+      totals.bundles,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+      "Downloaded publication attestation bundles",
+    )
+  }
 }
 
 function markerBaseAssets(marker) {
@@ -1105,6 +1217,37 @@ function markerBaseAssets(marker) {
     throw new Error("Published Release base asset-set digest conflicts with its marker")
   }
   return assets
+}
+
+function publicationAssetLimits(name, isBaseAsset) {
+  if (!isBaseAsset) {
+    if (
+      name === "audit-result.json" ||
+      /^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(name)
+    ) {
+      return { group: "audit", maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes }
+    }
+    throw new TypeError("Publication asset namespace contains an unexpected member")
+  }
+  if (name === "release-record.json") {
+    return { group: "record", maximumBytes: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes }
+  }
+  if (name === "manifest.json") {
+    return { group: "prepared", maximumBytes: RELEASE_PAYLOAD_LIMITS.manifestBytes }
+  }
+  if (name.endsWith(".tgz")) {
+    return { group: "prepared", maximumBytes: RELEASE_PAYLOAD_LIMITS.tarballBytes }
+  }
+  if (name === "manifest.json.intoto.jsonl" || name.endsWith(".tgz.intoto.jsonl")) {
+    return { group: "bundles", maximumBytes: RELEASE_PAYLOAD_LIMITS.attestationBundleBytes }
+  }
+  throw new TypeError("Publication base asset namespace is invalid")
+}
+
+function addPublicationBytes(current, size, maximum, label) {
+  const total = current + size
+  assertPayloadByteLength(total, maximum, label)
+  return total
 }
 
 function assertMutableCandidateRelease(release, candidate, title) {
@@ -1157,17 +1300,13 @@ function assertMarkerArtifactIdentity(marker, candidate, record) {
   }
 }
 
-function validateNpmEvidence(value, candidate, record) {
-  if (
-    !isRecord(value) ||
-    value.schemaVersion !== 1 ||
-    value.version !== candidate.version ||
-    value.commitSha !== candidate.commitSha ||
-    value.manifestSha256 !== record.manifestSha256 ||
-    value.complete !== true
-  ) {
-    throw new TypeError("npm evidence is not an exact complete candidate receipt")
-  }
+function normalizeNpmEvidence(value, candidate, record, manifest) {
+  const context = { candidate, manifestSha256: record.manifestSha256, manifest }
+  const evidence = parseNpmEvidence(value, context)
+  return deepFreeze({
+    evidence,
+    sha256: sha256(canonicalNpmEvidenceBytes(evidence, context)),
+  })
 }
 
 function validateSmokeResults(value, candidate, record) {
@@ -1399,7 +1538,7 @@ function validateAuditMarker(audit, marker) {
 function validateEmbeddedAttestation(attestation, marker) {
   assertExactFields(attestation, ATTESTATION_FIELDS, "attestation set")
   if (
-    !REPOSITORY_PATTERN.test(attestation.repository) ||
+    attestation.repository !== ATTESTATION_REPOSITORY ||
     attestation.workflow !== ".github/workflows/release.yml" ||
     attestation.sourceRef !== `refs/tags/${marker.tag}` ||
     attestation.commitSha !== marker.commitSha ||

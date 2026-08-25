@@ -4,6 +4,7 @@ import { normalizeAdapterEnvelope, snapshotJson } from "../adapter-normalize.mjs
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import {
   parseReleaseMarker,
+  preflightPublicationAssetMetadata,
   releaseBodySha256,
   validatePublicationAuditAssets,
 } from "../metadata.mjs"
@@ -228,7 +229,7 @@ export function createGitHubWriter({
       let assets = await readAssets(context, releaseId)
       let existing = findOneAsset(assets, args.name)
       if (existing !== null) {
-        await assertAssetEquality(context, existing, args.sha256)
+        await assertAssetEquality(context, existing, args.sha256, args.maximumBytes)
         await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({ assetId: existing.id, status: "existing", sha256: args.sha256 })
       }
@@ -246,7 +247,7 @@ export function createGitHubWriter({
       assets = await readAssets(context, releaseId)
       existing = findOneAsset(assets, args.name)
       if (existing === null) throw new Error("Uploaded Release asset was not present on re-read")
-      await assertAssetEquality(context, existing, args.sha256)
+      await assertAssetEquality(context, existing, args.sha256, args.maximumBytes)
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
       return Object.freeze({
         assetId: existing.id,
@@ -397,7 +398,10 @@ async function readAssets(context, releaseId) {
     }
     names.add(asset.name)
     ids.add(id)
-    return { id, name: asset.name }
+    if (!Number.isSafeInteger(asset.size) || asset.size < 1) {
+      throw new Error("GitHub Release asset declared size is malformed")
+    }
+    return { id, name: asset.name, size: asset.size }
   })
 }
 
@@ -448,7 +452,8 @@ function findOneAsset(assets, name) {
   return matches[0] ?? null
 }
 
-async function assertAssetEquality(context, asset, expectedSha256) {
+async function assertAssetEquality(context, asset, expectedSha256, maximumBytes) {
+  assertPayloadByteLength(asset.size, maximumBytes, `${asset.name} declared size`)
   const envelope = normalizeAdapterEnvelope(
     await context.reads.downloadReleaseAsset({ assetId: asset.id }),
     {
@@ -469,6 +474,8 @@ async function assertAssetEquality(context, asset, expectedSha256) {
   const canonicalBase64 = bytes.toString("base64")
   if (
     canonicalBase64 !== envelope.contentBase64 ||
+    bytes.byteLength !== asset.size ||
+    bytes.byteLength > maximumBytes ||
     !safeDigestEqual(sha256(bytes), expectedSha256)
   ) {
     throw new Error("GitHub Release asset has different bytes or digest")
@@ -476,33 +483,78 @@ async function assertAssetEquality(context, asset, expectedSha256) {
   return bytes
 }
 
-async function assertExactRemoteAssets(context, releaseId, expectedAssets) {
+async function assertExactRemoteAssets(context, releaseId, expectedAssets, marker) {
   const actual = await readAssets(context, releaseId)
+  const descriptors = preflightPublicationAssetMetadata(actual, { marker })
   if (
-    actual.length !== expectedAssets.length ||
+    descriptors.length !== expectedAssets.length ||
     !arraysEqual(
-      actual.map(({ name }) => name).sort(compareText),
+      descriptors.map(({ name }) => name).sort(compareText),
       expectedAssets.map(({ name }) => name).sort(compareText),
     )
   ) {
     throw new Error("GitHub Release asset namespace is not exact")
   }
   const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset.sha256]))
-  const result = []
-  for (const asset of actual) {
-    const bytes = await assertAssetEquality(context, asset, expectedByName.get(asset.name))
-    result.push(Object.freeze({ name: asset.name, bytes }))
+  const auditAssets = []
+  const totals = { base: 0, prepared: 0, bundles: 0, audit: 0 }
+  for (const descriptor of descriptors) {
+    const bytes = await assertAssetEquality(
+      context,
+      descriptor,
+      expectedByName.get(descriptor.name),
+      descriptor.maximumBytes,
+    )
+    accountPublicationDownload(descriptor, bytes, totals)
+    if (descriptor.group === "audit") {
+      auditAssets.push(Object.freeze({ name: descriptor.name, bytes }))
+    }
   }
-  return Object.freeze(result)
+  return Object.freeze(auditAssets)
 }
 
 async function assertExactPublicationAssets(context, releaseId, expectedAssets, marker) {
-  const actual = await assertExactRemoteAssets(context, releaseId, expectedAssets)
-  const baseNames = new Set(markerBaseAssets(marker).map(({ name }) => name))
-  validatePublicationAuditAssets(
-    actual.filter(({ name }) => !baseNames.has(name)),
-    { marker },
+  const auditAssets = await assertExactRemoteAssets(context, releaseId, expectedAssets, marker)
+  validatePublicationAuditAssets(auditAssets, { marker })
+}
+
+function accountPublicationDownload(descriptor, bytes, totals) {
+  if (descriptor.group === "audit") {
+    totals.audit = addBoundedBytes(
+      totals.audit,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes,
+      "Downloaded publication audit evidence",
+    )
+    return
+  }
+  totals.base = addBoundedBytes(
+    totals.base,
+    bytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.escrowBytes,
+    "Downloaded publication base assets",
   )
+  if (descriptor.group === "prepared") {
+    totals.prepared = addBoundedBytes(
+      totals.prepared,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+      "Downloaded publication prepared assets",
+    )
+  } else if (descriptor.group === "bundles") {
+    totals.bundles = addBoundedBytes(
+      totals.bundles,
+      bytes.byteLength,
+      RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+      "Downloaded publication attestation bundles",
+    )
+  }
+}
+
+function addBoundedBytes(current, size, maximum, label) {
+  const total = current + size
+  assertPayloadByteLength(total, maximum, label)
+  return total
 }
 
 function validatePublicationMarker(marker, args, assets) {

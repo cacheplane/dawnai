@@ -510,6 +510,59 @@ test("publication rejects a malformed historical audit attempt before mutation",
   assert.equal(mutations, 0)
 })
 
+test("publication rejects audit count and declared-size overflow before the first download", async () => {
+  const fixture = verifiedPublicationFixture()
+  const extraAttempts = Array.from({ length: 128 }, (_unused, index) => ({
+    name: `audit-attempt-${index + 1_000}-1.json`,
+    bytes: Buffer.from("{}"),
+  }))
+  const assertPreflightRejects = async (extra, pattern) => {
+    const all = [...fixture.assets, ...extra].map((asset) => ({
+      ...asset,
+      digest: asset.digest ?? sha256(asset.bytes),
+    }))
+    const downloadCalls = []
+    const writer = createGitHubWriter({
+      owner: OWNER,
+      repo: REPO,
+      reader: exactReader({
+        release: draftRelease(fixture.body),
+        assets: all.map((asset, index) => ({
+          id: index + 1,
+          name: asset.name,
+          size: asset.bytes.byteLength,
+        })),
+        downloads: new Map(all.map((asset, index) => [index + 1, asset.bytes])),
+        downloadCalls,
+      }),
+      fetchImpl: assert.fail,
+    })
+
+    await assert.rejects(
+      writer.publishReleaseIfCurrent({
+        releaseId: 7,
+        tag: TAG,
+        targetSha: SHA,
+        expectedBodySha256: releaseBodySha256(fixture.body),
+        assets: all.map(({ name, digest }) => ({ name, sha256: digest })),
+      }),
+      pattern,
+    )
+    assert.deepEqual(downloadCalls, [])
+  }
+
+  await assertPreflightRejects(extraAttempts, /audit|count|bound/iu)
+  await assertPreflightRejects(
+    [
+      {
+        name: "audit-attempt-100-1.json",
+        bytes: Buffer.alloc(RELEASE_PAYLOAD_LIMITS.auditReceiptBytes + 1),
+      },
+    ],
+    /audit|size|byte|limit/iu,
+  )
+})
+
 function exactReader({
   releases,
   release = draftRelease("candidate body"),
@@ -517,6 +570,7 @@ function exactReader({
   downloads = new Map(),
   tagType = "tag",
   tagTargetSha = SHA,
+  downloadCalls = [],
 } = {}) {
   const getReleaseValue = () => (typeof release === "function" ? release() : release)
   return Object.freeze({
@@ -532,8 +586,16 @@ function exactReader({
     listReleases: async () =>
       present("releases", releases ?? [{ id: 7, tag_name: TAG, draft: true }]),
     getRelease: async () => present("release", getReleaseValue()),
-    listReleaseAssets: async () => present("release-assets", assets),
+    listReleaseAssets: async () =>
+      present(
+        "release-assets",
+        assets.map((asset) => ({
+          ...asset,
+          size: asset.size ?? downloads.get(asset.id)?.byteLength ?? 0,
+        })),
+      ),
     downloadReleaseAsset: async ({ assetId }) => {
+      downloadCalls.push(assetId)
       const bytes = downloads.get(assetId)
       assert.ok(bytes, `missing test bytes for asset ${assetId}`)
       return {

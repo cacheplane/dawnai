@@ -4,9 +4,14 @@ import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
+import { canonicalReleaseBody } from "../metadata.mjs"
 import { discoverShadowCandidate, observeCandidate } from "../observe.mjs"
 import { planRelease } from "../planner.mjs"
 import { runShadowReconcile } from "../shadow-reconcile.mjs"
+import {
+  candidate as markerCandidate,
+  observationForMarker,
+} from "./support/marker-observation.mjs"
 
 const SHA = "341678ea7932832ec860bdd915371669440bef7c"
 const SKIPPED_SHA = "5bb97cf3434e7c4afa95646982d510d79387ba5b"
@@ -249,7 +254,14 @@ test("observation composition calls only named readers in inventory order and pr
   assert.equal(result.observation.ci.status, "ambiguous")
   assert.equal(result.observation.tag.status, "ambiguous")
   assert.equal(result.observation.registry.packages[0].status, "ambiguous")
-  assert.equal(result.observation.release.status, "ambiguous")
+  assert.deepEqual(result.observation.release, {
+    status: "ambiguous",
+    tag: null,
+    commitSha: null,
+    immutable: null,
+    marker: null,
+    assets: [],
+  })
   assert.ok(result.diagnostics.every((item) => item.code !== null))
   assert.ok(result.diagnostics.some((item) => item.code === "RATE_LIMITED"))
   assert.deepEqual(
@@ -572,10 +584,15 @@ test("npm integrity mismatch cannot manufacture a managed tarball SHA-256", asyn
 })
 
 test("Release observation preserves duplicate, extra, mismatched, and digest-ambiguous assets", async () => {
+  const template = observationForMarker({ phase: "ESCROWED" })
+  const releaseCandidate = markerCandidate()
   const inventory = {
-    ...managedInventory(),
-    releaseRecordSha256: "8".repeat(64),
-    manifestAttestationSha256: "9".repeat(64),
+    status: "valid",
+    manifestSha256: template.artifacts.manifestSha256,
+    releaseRecordSha256: template.artifacts.releaseRecordAsset.sha256,
+    manifestAttestationSha256: template.artifacts.manifestAttestationAsset.sha256,
+    requiredSmokeLanes: [],
+    packages: template.inventory.packages,
   }
   const expected = expectedReleaseAssets(inventory)
   const rawAssets = [
@@ -583,35 +600,39 @@ test("Release observation preserves duplicate, extra, mismatched, and digest-amb
       id: index + 1,
       name: asset.name,
       digest: `sha256:${asset.sha256}`,
+      size: 1,
     })),
     {
       id: 100,
       name: "manifest.json",
       digest: `sha256:${"a".repeat(64)}`,
+      size: 1,
     },
     {
       id: 1,
       name: "unexpected-managed.txt",
       digest: `sha256:${"b".repeat(64)}`,
+      size: 1,
     },
-    { id: 102, name: "missing-digest.txt" },
+    { id: 102, name: "missing-digest.txt", size: 1 },
   ]
   const github = absentGitHub()
   github.getReleaseByTag = async () =>
     presentEnvelope("release", {
       id: 77,
       draft: true,
-      tag_name: "v0.8.21",
-      target_commitish: SHA,
+      immutable: false,
+      tag_name: template.release.marker.tag,
+      body: canonicalReleaseBody({ marker: template.release.marker, manifest: null }),
     })
   github.listReleaseAssets = async () => presentEnvelope("release-assets", rawAssets)
 
   const result = await observeCandidate({
-    candidate: candidate(),
+    candidate: releaseCandidate,
     inventory,
     git: {
       async resolveTag() {
-        return SHA
+        return releaseCandidate.commitSha
       },
     },
     npm: {
@@ -638,7 +659,7 @@ test("Release observation preserves duplicate, extra, mismatched, and digest-amb
   )
   assert.ok(result.diagnostics.some((item) => item.code === "REMOTE_ASSET_ID_DUPLICATE"))
   const plan = planRelease({
-    candidate: candidate(),
+    candidate: releaseCandidate,
     observation: result.observation,
     mode: "shadow",
   })
