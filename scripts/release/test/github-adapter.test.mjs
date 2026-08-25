@@ -11,6 +11,7 @@ const BASE = "https://api.github.com/repos/dawn-ai/dawn"
 const ALLOWED_METHODS = [
   "downloadActionsArtifact",
   "downloadReleaseAsset",
+  "getActionsArtifact",
   "getActionsPermissions",
   "getActionsRun",
   "getAttestations",
@@ -34,6 +35,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
     jsonResponse({ ref: "refs/tags/v0.8.21", object: { sha: SHA } }),
     jsonResponse({ id: 7, tag_name: "v0.8.21" }),
     jsonResponse([{ id: 8, tag_name: "v0.8.22", draft: true }]),
+    jsonResponse({ id: 8, name: "release-v0.8.22", expired: false }),
     jsonResponse({ id: 9, head_sha: SHA }),
     jsonResponse({ attestations: [] }),
     jsonResponse({ id: 12, path: ".github/workflows/release.yml" }),
@@ -48,6 +50,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
   await github.getRef({ ref: "tags/v0.8.21" })
   await github.getReleaseByTag({ tag: "v0.8.21" })
   await github.listReleases()
+  await github.getActionsArtifact({ artifactId: 8 })
   await github.getActionsRun({ runId: 9 })
   await github.getAttestations({ subjectDigest: `sha256:${"a".repeat(64)}` })
   await github.getWorkflow({ workflow: "release.yml" })
@@ -69,6 +72,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
       `${BASE}/git/ref/tags%2Fv0.8.21`,
       `${BASE}/releases/tags/v0.8.21`,
       `${BASE}/releases?per_page=100`,
+      `${BASE}/actions/artifacts/8`,
       `${BASE}/actions/runs/9`,
       `${BASE}/attestations/sha256%3A${"a".repeat(64)}?per_page=100`,
       `${BASE}/actions/workflows/release.yml`,

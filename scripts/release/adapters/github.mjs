@@ -36,6 +36,7 @@ export function createGitHubReader({
   owner,
   repo,
   token,
+  apiOrigin = API_ORIGIN,
   fetchImpl = fetch,
   timeoutMs,
   maxResponseBytes,
@@ -55,7 +56,8 @@ export function createGitHubReader({
   assertBoundedInteger(maxPages, 1, MAX_GITHUB_PAGES, "GitHub maximum pages")
   assertBoundedInteger(maxRecords, 1, MAX_GITHUB_RECORDS, "GitHub maximum records")
   if (typeof now !== "function") throw new TypeError("Invalid GitHub clock")
-  const base = `${API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+  const normalizedApiOrigin = normalizeApiOrigin(apiOrigin)
+  const base = `${normalizedApiOrigin}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   const http = createHttpGet({
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -63,6 +65,7 @@ export function createGitHubReader({
   })
   const context = {
     base,
+    apiOrigin: normalizedApiOrigin,
     http,
     token: token ?? null,
     timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
@@ -148,6 +151,13 @@ export function createGitHubReader({
       return readObject(context, {
         url: `${base}/actions/runs/${id}`,
         operation: "actions-run",
+      })
+    },
+    getActionsArtifact({ artifactId }) {
+      const id = normalizeId(artifactId)
+      return readObject(context, {
+        url: `${base}/actions/artifacts/${id}`,
+        operation: "actions-artifact",
       })
     },
     listWorkflowRuns({ workflow, commitSha }) {
@@ -304,7 +314,12 @@ async function readPaginated(
     if (page + 1 >= context.maxPages) {
       return failure("ERROR", operation, result.httpStatus, "PAGE_LIMIT_EXCEEDED")
     }
-    const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl, cursorPagination)
+    const nextUrl = normalizeNextUrl(
+      result.nextUrl,
+      initialUrl,
+      cursorPagination,
+      context.apiOrigin,
+    )
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
@@ -458,11 +473,11 @@ function requestHeaders(token, accept) {
   }
 }
 
-function normalizeNextUrl(value, initialValue, cursorPagination) {
+function normalizeNextUrl(value, initialValue, cursorPagination, apiOrigin) {
   try {
     const url = new URL(value)
     const initial = new URL(initialValue)
-    return url.origin === API_ORIGIN &&
+    return url.origin === apiOrigin &&
       url.username === "" &&
       url.password === "" &&
       url.hash === "" &&
@@ -472,6 +487,30 @@ function normalizeNextUrl(value, initialValue, cursorPagination) {
       : null
   } catch {
     return null
+  }
+}
+
+function normalizeApiOrigin(value) {
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_GITHUB_REF_BYTES) {
+    throw new TypeError("Invalid GitHub API origin")
+  }
+  try {
+    const url = new URL(value)
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname)
+    if (
+      !["https:", ...(loopback ? ["http:"] : [])].includes(url.protocol) ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw new TypeError("Invalid GitHub API origin")
+    }
+    return url.origin
+  } catch (error) {
+    if (error instanceof TypeError && error.message === "Invalid GitHub API origin") throw error
+    throw new TypeError("Invalid GitHub API origin", { cause: error })
   }
 }
 
