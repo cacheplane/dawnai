@@ -18,11 +18,14 @@ import { fileURLToPath } from "node:url"
 
 import { parse } from "yaml"
 
+import { ARTIFACT_STORE_SPARSE_FILES } from "../artifact-store.mjs"
 import { readBoundedFixture } from "../fixture-io.mjs"
+import { PUBLISHER_SPARSE_FILES } from "../publisher.mjs"
+import { REQUIRED_RELEASE_SMOKE_LANES } from "../smoke-result.mjs"
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url))
 const WORKFLOWS = path.join(ROOT, ".github/workflows")
-const SHADOW_PATH = path.join(WORKFLOWS, "release-shadow.yml")
+const CONTROLLER_SCHEMA_PATH = path.join(ROOT, "scripts/release/controller-schema.json")
 const ENTRYPOINT_ALLOWLIST_PATH = path.join(
   ROOT,
   "scripts/release/test/fixtures/workflow-entrypoints.json",
@@ -36,173 +39,630 @@ const EXECUTABLE_ALLOWLIST = JSON.parse(
 )
 const SCRIPT_PIN_FIXTURE = "scripts/release/test/fixtures/release-script-hashes.json"
 const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
-// The four repository scripts release.yml executes: two as `run:` steps, and two
-// through the changesets action's `version:` and `publish:` inputs. The entrypoint
-// allowlist pins the command lines; these pins cover the bytes those commands run.
-// Deliberately narrow: scripts reached only from ci.yml (check-docs.mjs,
-// check-changesets.mjs, prime-kind-cache.sh) change often and are covered by branch
-// protection and review, not by a hash.
-const PINNED_RELEASE_SCRIPTS = [
-  "scripts/backfill-release-tags.mjs",
-  "scripts/release-publish.mjs",
-  "scripts/sync-chart-appversion.mjs",
-  "scripts/upload-release-assets.mjs",
-]
-// pnpm indirections release.yml uses inside `run:` bodies. Each reaches validation or
-// post-publish verification scripts rather than publishing ones, so those scripts are
-// covered by review rather than a content pin. Adding a name here is a deliberate,
-// reviewed decision; a `run:` step invoking any other pnpm script fails closed.
-const AUDITED_RELEASE_RUN_INDIRECTIONS = new Set([
-  "install",
-  "ci:validate",
-  "published:verify",
-  "published:smoke",
-])
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
-const PNPM_REFERENCE = /(?:^|[\s;&|"'(])pnpm\s+(?:run\s+)?([\w:.-]+)/gu
-const LEGACY_SAFE_ENTRYPOINTS = new Set([
-  "step-uses:actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  "step-uses:actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-  "step-uses:pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
-  "run:pnpm install --frozen-lockfile",
-  "run:pnpm ci:validate",
-  `run:DAWN_PUBLISHED_VERSION="$(node -p "require('./packages/core/package.json').version")"
-printf 'DAWN_PUBLISHED_VERSION=%s\\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"
-`,
-  'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000',
-  'run:pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling',
-  'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000',
-  'run:pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox',
-])
-const LEGACY_PUBLICATION_ENTRYPOINTS = new Set([
-  "step-uses:changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
-  "step-uses:actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
-  "run:node scripts/upload-release-assets.mjs",
-  "run:node scripts/backfill-release-tags.mjs",
-])
-
-test("release shadow has only manual and scheduled read-only triggers", async () => {
-  const workflow = await readShadowWorkflow()
-
-  assert.deepEqual(Object.keys(workflow.on).sort(), ["schedule", "workflow_dispatch"])
-  assert.deepEqual(workflow.permissions, { actions: "read", contents: "read" })
-  assert.deepEqual(Object.keys(workflow.jobs), ["shadow"])
-  assert.equal(workflow.concurrency, undefined)
+const PNPM_REFERENCE = /(?:^|[\s;&|"'(])pnpm\s+(?:run\s+)?(?!-)([\w:.-]+)/gu
+const ACTIONS = Object.freeze({
+  attest: "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+  changesets: "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+  checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+  download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  pnpm: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+  upload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 })
+const FINAL_WORKFLOW_FILES = Object.freeze([
+  "published-artifact-verify.yml",
+  "release.yml",
+  "version-pr.yml",
+])
+const LEGACY_RELEASE_FILES = Object.freeze([
+  "scripts/backfill-release-tags.mjs",
+  "scripts/backfill-release-tags.test.mjs",
+  "scripts/release-publish.mjs",
+  "scripts/release-publish.test.mjs",
+  "scripts/upload-release-assets.mjs",
+  "scripts/upload-release-assets.test.mjs",
+])
+const LEGACY_PACKAGE_COMMANDS = Object.freeze([
+  "release:publish",
+  "release:shadow",
+  "test:backfill-release-tags",
+  "test:release-publish",
+  "test:upload-release-assets",
+])
+const SMOKE_JOB_BY_LANE = Object.freeze(
+  Object.fromEntries(REQUIRED_RELEASE_SMOKE_LANES.map((lane) => [lane, `smoke-${lane}`])),
+)
+const NORMAL_EXACT_TAG_JOBS = Object.freeze([
+  "prepare",
+  "attest",
+  "escrow",
+  "publish-npm",
+  "reconcile-npm",
+  ...Object.values(SMOKE_JOB_BY_LANE),
+  "reconcile-smokes",
+  "dispatch-audit",
+  "record-audit-dispatch",
+  "correlate-audit",
+  "publish-release",
+])
+const FINAL_RELEASE_JOB_IDS = Object.freeze(["detect", "tag", ...NORMAL_EXACT_TAG_JOBS, "abandon"])
 
-test("release shadow pins setup actions and installs only root tooling on Node 24", async () => {
-  const workflow = await readShadowWorkflow()
-  const steps = workflow.jobs.shadow.steps
-  const actionSteps = steps.filter((step) => typeof step.uses === "string")
-
-  assert.equal(actionSteps.length, 3)
-  for (const step of actionSteps) {
-    assert.match(step.uses, /^[^@\s]+@[0-9a-f]{40}$/u, step.uses)
-  }
-  assert.equal(actionSteps[0].uses.split("@")[0], "actions/checkout")
-  assert.equal(actionSteps[0].with["fetch-depth"], 0)
-  assert.equal(actionSteps[0].with.ref, "main")
-  assert.equal(actionSteps[0].with["persist-credentials"], false)
-  assert.doesNotMatch(JSON.stringify(actionSteps[0].with), /inputs|github\.event|github\.ref/iu)
-  assert.equal(actionSteps[1].uses.split("@")[0], "pnpm/action-setup")
-  assert.equal(actionSteps[2].uses.split("@")[0], "actions/setup-node")
-  assert.equal(actionSteps[2].with["node-version"], "24.17.0")
-  assert.ok(
-    steps.some((step) => step.run === "pnpm install --filter . --frozen-lockfile --ignore-scripts"),
+test("final release ownership is switched atomically and legacy owners are absent", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const packageJson = JSON.parse(
+    await readBoundedFixture(path.join(ROOT, "package.json"), { root: ROOT }),
   )
-})
 
-test("release shadow scopes the GitHub token only to exact API reader steps", async () => {
-  const workflow = await readShadowWorkflow()
-  const job = workflow.jobs.shadow
-
-  assert.equal(job.env, undefined)
-  assert.equal(JSON.stringify(workflow).match(/\$\{\{ github\.token \}\}/gu)?.length, 2)
-  for (const step of job.steps) {
-    if (
-      ["Reconcile release state in shadow mode", "Collect release preflight evidence"].includes(
-        step.name,
-      )
-    ) {
-      assert.deepEqual(step.env?.GITHUB_TOKEN, `\${{ github.token }}`)
-    } else {
-      assert.equal(step.env?.GITHUB_TOKEN, undefined, step.name)
-    }
+  for (const file of FINAL_WORKFLOW_FILES) {
+    assert.equal(typeof sources[file], "string", `${file} must exist in the atomic switch`)
+    assert.doesNotThrow(() => parseWorkflowSource(sources[file], file))
   }
+  assert.equal(sources["release-shadow.yml"], undefined, "release-shadow.yml must be deleted")
+  for (const file of LEGACY_RELEASE_FILES) {
+    await assert.rejects(lstat(path.join(ROOT, file)), { code: "ENOENT" })
+  }
+  for (const command of LEGACY_PACKAGE_COMMANDS) {
+    assert.equal(packageJson.scripts?.[command], undefined, `${command} must be removed`)
+  }
+  assert.doesNotMatch(
+    packageJson.scripts?.["ci:validate"] ?? "",
+    /(?:release-publish|upload-release-assets|backfill-release-tags)/u,
+  )
+
+  const ci = parseWorkflowSource(sources["ci.yml"], "ci.yml")
+  assert.ok(ci.jobs["vercel-native"], "the real Vercel deployment lane is required")
+  assert.ok(ci.jobs["copilotkit-examples-e2e"], "the CopilotKit example e2e lane is required")
+  assert.equal(typeof sources["publish-chart.yml"], "string", "chart publication remains owned")
 })
 
-test("release shadow accepts only paired optional identities and appends read-only reports", async () => {
-  const source = await readShadowSource()
-  const workflow = parse(source)
-  const inputs = workflow.on.workflow_dispatch.inputs
+test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async () => {
+  const { source, workflow } = await readRequiredWorkflow("version-pr.yml")
+  const packageJson = JSON.parse(
+    await readBoundedFixture(path.join(ROOT, "package.json"), { root: ROOT }),
+  )
+  assert.deepEqual(workflow.on, { push: { branches: ["main"] } })
+  assert.deepEqual(workflow.permissions, { contents: "write", "pull-requests": "write" })
+  assert.deepEqual(Object.keys(workflow.jobs), ["version"])
 
-  assert.deepEqual(Object.keys(inputs).sort(), ["commitSha", "version"])
-  assert.equal(inputs.version.required, false)
-  assert.equal(inputs.commitSha.required, false)
-  assert.match(source, /version.*commitSha|commitSha.*version/su)
-  assert.match(source, /pnpm check:release-inventory/u)
-  assert.match(source, /pnpm release:shadow/u)
-  assert.match(source, /pnpm release:preflight/u)
-  assert.match(source, /GITHUB_STEP_SUMMARY/u)
-  assert.doesNotMatch(source, /--strict/u)
+  const version = requiredJob(workflow, "version")
+  assertReadOrWritePermissions(version.permissions, {
+    contents: "write",
+    "pull-requests": "write",
+  })
+  const changesets = onlyStepUsing(version, ACTIONS.changesets)
+  const pnpm = onlyStepUsing(version, ACTIONS.pnpm)
+  assert.deepEqual(pnpm.with, { version: "10.33.0" })
+  assert.deepEqual(changesets.with, {
+    commit: "Version Packages",
+    title: "Version Packages",
+    version: "pnpm run version",
+  })
+  assert.deepEqual(changesets.env, {
+    GITHUB_TOKEN: workflowExpression("secrets.RELEASE_GITHUB_TOKEN"),
+  })
+  assert.equal(
+    packageJson.scripts?.version,
+    "changeset version && node scripts/sync-chart-appversion.mjs",
+    "Version Packages must advance fixed-package and chart versions in one commit",
+  )
+
   assert.doesNotMatch(
     source,
-    /pnpm release:(?:shadow|preflight) --/u,
-    "pnpm forwards this separator to the strict Node CLI",
+    /\|\||secrets\.GITHUB_TOKEN|\bpublish\s*:|createGithubReleases|registry-url/iu,
   )
+  assert.doesNotMatch(
+    source,
+    /id-token|attestations|publisher\.mjs|npm\s+publish|gh\s+release|\/releases/iu,
+  )
+  assertPinnedToolchain(version)
 })
 
-test("release shadow contains no publisher, OIDC, artifact upload, or external write path", async () => {
-  const source = await readShadowSource()
-  const workflow = parse(source)
-  const runs = workflow.jobs.shadow.steps
-    .filter((step) => typeof step.run === "string")
-    .map((step) => step.run)
-    .join("\n")
+test("release.yml has exact triggers and one repository-global non-cancelling queue", async () => {
+  const { workflow } = await readRequiredWorkflow("release.yml")
+  assert.deepEqual(Object.keys(workflow.on).sort(), ["push", "schedule", "workflow_dispatch"])
+  assert.deepEqual(workflow.on.push, { branches: ["main"] })
+  assert.ok(Array.isArray(workflow.on.schedule) && workflow.on.schedule.length === 1)
+  assert.match(workflow.on.schedule[0].cron, /^[\d*/,-]+(?: [\d*/,-]+){4}$/u)
+  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
+    "commitSha",
+    "operation",
+    "reason",
+    "version",
+  ])
+  assertDispatchIdentityInput(workflow.on.workflow_dispatch.inputs.version)
+  assertDispatchIdentityInput(workflow.on.workflow_dispatch.inputs.commitSha)
+  assert.deepEqual(dispatchInputContract(workflow.on.workflow_dispatch.inputs.operation), {
+    default: "reconcile",
+    options: ["reconcile", "abandon"],
+    required: true,
+    type: "choice",
+  })
+  assert.deepEqual(dispatchInputContract(workflow.on.workflow_dispatch.inputs.reason), {
+    required: false,
+    type: "string",
+  })
 
-  assert.doesNotMatch(source, /id-token\s*:\s*write|contents\s*:\s*write/iu)
-  assert.doesNotMatch(source, /actions\/upload-artifact|attest-build-provenance/iu)
-  assert.doesNotMatch(runs, /(?:npm|pnpm)\s+(?:run\s+)?publish\b|release:publish/iu)
-  assert.doesNotMatch(runs, /(?:git\s+(?:push|tag)|gh\s+release|curl\s|wget\s)/iu)
+  assert.equal(typeof workflow.concurrency?.group, "string")
+  assert.match(workflow.concurrency.group, /release/iu)
+  assert.doesNotMatch(workflow.concurrency.group, /\$\{\{/u, "the release lock must be global")
+  assert.equal(workflow.concurrency.queue, "max")
+  assert.equal(workflow.concurrency["cancel-in-progress"], false)
+  assert.deepEqual(Object.keys(workflow.jobs).sort(), [...FINAL_RELEASE_JOB_IDS].sort())
+})
+
+test("final release workflows pin every action and the exact Node, pnpm, and npm toolchain", async () => {
+  const sources = await readFinalWorkflowSources()
+  const allowedActions = new Set(Object.values(ACTIONS))
+  let pnpmSetups = 0
+  let npmChecks = 0
+  for (const [file, source] of Object.entries(sources)) {
+    const workflow = parseWorkflowSource(source, file)
+    for (const entry of workflowExecutables(workflow).filter(({ kind }) => kind === "step-uses")) {
+      assert.match(entry.value, /^[^@\s]+@[0-9a-f]{40}$/u, `${file}: ${entry.value}`)
+      assert.ok(allowedActions.has(entry.value), `${file}: unreviewed action ${entry.value}`)
+    }
+    for (const job of Object.values(workflow.jobs)) {
+      const runs = runSource(job)
+      if (
+        /\bnode\s+scripts\//u.test(runs) ||
+        job.steps?.some((step) => step.uses === ACTIONS.changesets)
+      ) {
+        assertPinnedToolchain(job)
+      }
+      pnpmSetups += job.steps?.filter((step) => step.uses === ACTIONS.pnpm).length ?? 0
+      if (/npm\s+--version[\s\S]*11\.17\.0|11\.17\.0[\s\S]*npm\s+--version/u.test(runs)) {
+        npmChecks += 1
+      }
+    }
+  }
+  assert.ok(pnpmSetups > 0, "the exact pnpm runtime must be installed where versioning uses it")
+  assert.ok(npmChecks > 0, "the exact npm runtime must be asserted before release verification")
+})
+
+test("detect invokes the sole production observer and exports only validated controller outputs", async () => {
+  const { source, workflow } = await readRequiredWorkflow("release.yml")
+  const detect = requiredJob(workflow, "detect")
+  assert.deepEqual(normalizeNeeds(detect.needs), [])
+  assertNoWriteOrOidc(detect)
+  const observe = onlyRunStepMatching(detect, /node scripts\/release\/cli\.mjs observe\b/u)
+  assert.equal(observe.id, "observe")
+  assert.equal(observe["continue-on-error"], undefined)
+  assertCommandFlags(observe.run, "node scripts/release/cli.mjs observe", [
+    "--event",
+    "--report",
+    "--github-output",
+  ])
+  assert.match(observe.run, /--github-output\s+["']?\$GITHUB_OUTPUT["']?/u)
+  assert.deepEqual(detect.outputs, {
+    candidate_sha: workflowExpression("steps.observe.outputs.candidate_sha"),
+    candidate_version: workflowExpression("steps.observe.outputs.candidate_version"),
+    disposition: workflowExpression("steps.observe.outputs.disposition"),
+    next_transition: workflowExpression("steps.observe.outputs.next_transition"),
+    state: workflowExpression("steps.observe.outputs.state"),
+  })
+  assert.doesNotMatch(observe.run, /\|\||continue-on-error|shadow|fallback/iu)
+  assert.equal(countMatches(source, /scripts\/release\/cli\.mjs observe\b/gu), 1)
+  assert.doesNotMatch(source, /release:shadow|shadow-reconcile|release-shadow/iu)
+
+  const immutableGuard = onlyRunStepMatching(
+    detect,
+    /node scripts\/release\/immutable-releases-gate\.mjs\b/u,
+  )
+  assert.ok(detect.steps.indexOf(immutableGuard) < detect.steps.indexOf(observe))
+  assert.equal(
+    commandLine(immutableGuard.run, "node scripts/release/immutable-releases-gate.mjs"),
+    "node scripts/release/immutable-releases-gate.mjs",
+  )
+  assert.deepEqual(immutableGuard.env, {
+    GITHUB_TOKEN: workflowExpression("secrets.RELEASE_ADMIN_READ_TOKEN"),
+  })
+  assert.doesNotMatch(immutableGuard.run, /npm\s+trust|preflight|\|\||continue-on-error/iu)
+})
+
+test("tag is the sole coordinator relay and exact-tag identity requires both ref and SHA", async () => {
+  const { source, workflow } = await readRequiredWorkflow("release.yml")
+  const tag = requiredJob(workflow, "tag")
+  assert.deepEqual(normalizeNeeds(tag.needs), ["detect"])
+  assertReadOrWritePermissions(tag.permissions, { actions: "write", contents: "write" })
+  assert.deepEqual(Object.keys(tag.outputs), ["continue"])
+  assert.match(tag.outputs.continue, /^\$\{\{ steps\.[\w-]+\.outputs\.continue \}\}$/u)
+  onlyRunStepMatching(tag, /node scripts\/release\/cli\.mjs tag --candidate\b/u)
+  const relay = onlyRunStepMatching(tag, /2026-03-10/u)
+  assert.match(relay.run, /\.github\/workflows\/release\.yml/u)
+  assert.match(relay.run, /refs\/tags\/v/u)
+  assert.match(relay.run, /workflow_dispatch|dispatches/iu)
+  assert.match(relay.run, /operation[\s"'=:]+reconcile/iu)
+  assert.deepEqual(relay.env?.GITHUB_TOKEN, workflowExpression("github.token"))
+  assert.doesNotMatch(relay.run, /list.*runs|runs\/\?|poll|wait|sleep/iu)
+  assert.doesNotMatch(source, /target_commitish|git\s+tag\s+(?!-a|-s)|createGithubReleases/iu)
+
+  for (const id of NORMAL_EXACT_TAG_JOBS) {
+    assertExactTagAndOperationGate(requiredJob(workflow, id), { operation: "reconcile" })
+  }
+  assertExactTagAndOperationGate(requiredJob(workflow, "abandon"), { operation: "abandon" })
+})
+
+test("prepare, attestation, and ATTACHING-to-45-base escrow have one ordered authority path", async () => {
+  const { source, workflow } = await readRequiredWorkflow("release.yml")
+  const prepare = requiredJob(workflow, "prepare")
+  const attest = requiredJob(workflow, "attest")
+  const escrow = requiredJob(workflow, "escrow")
+  assert.deepEqual(normalizeNeeds(prepare.needs), ["detect", "tag"])
+  assert.deepEqual(normalizeNeeds(attest.needs), ["detect", "prepare", "tag"])
+  assert.deepEqual(normalizeNeeds(escrow.needs), ["attest", "detect", "tag"])
+  assertNoWriteOrOidc(prepare)
+  assertReadOrWritePermissions(attest.permissions, {
+    actions: "read",
+    attestations: "write",
+    contents: "read",
+    "id-token": "write",
+  })
+  assert.equal(escrow.permissions?.contents, "write")
+  assert.notEqual(escrow.permissions?.actions, "write")
+
+  const handoff = onlyRunStepMatching(prepare, /node scripts\/release\/workflow-handoff\.mjs\b/u)
+  assertCommandFlags(handoff.run, "node scripts/release/workflow-handoff.mjs", [
+    "--report",
+    "--root",
+    "--output",
+  ])
+  const prepareStep = onlyRunStepMatching(prepare, /node scripts\/release\/cli\.mjs prepare\b/u)
+  assert.ok(prepare.steps.indexOf(handoff) < prepare.steps.indexOf(prepareStep))
+  assertCommandFlags(prepareStep.run, "node scripts/release/cli.mjs prepare", [
+    "--handoff",
+    "--root",
+    "--output-dir",
+    "--candidate-output",
+  ])
+
+  const uploads = prepare.steps.filter((step) => step.uses === ACTIONS.upload)
+  assert.equal(uploads.length, 2, "prepare must upload payload and handoff separately")
+  const payload = uploads.find((step) => step.id === "payload")
+  const handoffUpload = uploads.find((step) => step.id === "handoff")
+  assert.ok(payload, "prepare must expose the immutable payload upload")
+  assert.ok(handoffUpload, "prepare must expose the small handoff upload")
+  assert.equal(payload.id, "payload")
+  assert.equal(payload.with?.["if-no-files-found"], "error")
+  assert.equal(payload.with?.overwrite, false)
+  const record = onlyRunStepMatching(prepare, /node scripts\/release\/cli\.mjs record-artifact\b/u)
+  assertCommandFlags(record.run, "node scripts/release/cli.mjs record-artifact", [
+    "--candidate",
+    "--manifest",
+    "--artifact-upload-result",
+    "--output",
+  ])
+  assert.match(record.run, /steps\.payload\.outputs\.artifact-id/u)
+  assert.match(record.run, /steps\.payload\.outputs\.artifact-url/u)
+  assert.match(record.run, /steps\.payload\.outputs\.artifact-digest/u)
+  assert.doesNotMatch(record.run, /steps\.payload\.outputs\.artifact-name/u)
+  assert.deepEqual(workflowArtifactBasenames(handoffUpload.with?.path), [
+    "candidate.json",
+    "preparation-handoff.json",
+    "release-record.json",
+  ])
+  assert.equal(handoffUpload.with?.["if-no-files-found"], "error")
+  assert.equal(handoffUpload.with?.overwrite, false)
+  assert.ok(prepare.steps.indexOf(prepareStep) < prepare.steps.indexOf(payload))
+  assert.ok(prepare.steps.indexOf(payload) < prepare.steps.indexOf(record))
+  assert.ok(prepare.steps.indexOf(record) < prepare.steps.indexOf(handoffUpload))
+
+  onlyStepUsing(attest, ACTIONS.attest)
+  const escrowStep = onlyRunStepMatching(escrow, /node scripts\/release\/cli\.mjs escrow\b/u)
+  assertCommandFlags(escrowStep.run, "node scripts/release/cli.mjs escrow", [
+    "--candidate",
+    "--record",
+    "--artifact-dir",
+    "--attestation-set",
+    "--attestation-bundles-dir",
+  ])
+  assert.equal(countMatches(source, /node scripts\/release\/cli\.mjs escrow\b/gu), 1)
+  assert.doesNotMatch(source, /gh\s+release\s+(?:create|upload|edit)|target_commitish/iu)
+})
+
+test("publish-npm is exact-tag, sparse, dependency-free, and schema-bound", async () => {
+  const { workflow } = await readRequiredWorkflow("release.yml")
+  const schema = JSON.parse(await readBoundedFixture(CONTROLLER_SCHEMA_PATH, { root: ROOT }))
+  const publish = requiredJob(workflow, "publish-npm")
+  assert.deepEqual(normalizeNeeds(publish.needs), ["detect", "escrow", "tag"])
+  assertReadOrWritePermissions(publish.permissions, {
+    actions: "read",
+    attestations: "read",
+    contents: "read",
+    "id-token": "write",
+  })
+  if (schema.npmTrustedPublisherEnvironment === null) {
+    assert.equal(publish.environment, undefined)
+  } else {
+    assert.equal(publish.environment, schema.npmTrustedPublisherEnvironment)
+  }
+
+  const checkout = onlyStepUsing(publish, ACTIONS.checkout)
+  assert.equal(checkout.with?.ref, workflowExpression("needs.detect.outputs.candidate_sha"))
+  assert.equal(checkout.with?.["persist-credentials"], false)
+  assert.equal(checkout.with?.["sparse-checkout-cone-mode"], false)
+  const sparseFiles = String(checkout.with?.["sparse-checkout"] ?? "")
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .sort()
+  assert.deepEqual(
+    sparseFiles,
+    [...new Set([...ARTIFACT_STORE_SPARSE_FILES, ...PUBLISHER_SPARSE_FILES])].sort(),
+  )
+  assert.equal(
+    sparseFiles.some((file) => /(?:^|\/)cli\.mjs$|package\.json|pnpm-lock|packages\//u.test(file)),
+    false,
+  )
+
+  const resolver = onlyRunStepMatching(
+    publish,
+    /node scripts\/release\/artifact-store\.mjs resolve\b/u,
+  )
+  const publisher = onlyRunStepMatching(publish, /node scripts\/release\/publisher\.mjs\b/u)
+  assert.ok(publish.steps.indexOf(resolver) < publish.steps.indexOf(publisher))
+  assertCommandFlags(resolver.run, "node scripts/release/artifact-store.mjs resolve", [
+    "--record",
+    "--output-dir",
+  ])
+  assertCommandFlags(publisher.run, "node scripts/release/publisher.mjs", [
+    "--candidate",
+    "--record",
+    "--artifact-dir",
+    "--report",
+    "--github-output",
+  ])
+  const runs = runSource(publish)
   assert.doesNotMatch(
     runs,
-    /scripts\/(?:release-publish|backfill-release-tags|upload-release-assets)\.mjs/iu,
+    /(?:pnpm|npm|yarn)\s+(?:install|ci)|\b(?:build|test|pack)\b|node_modules|packages\//iu,
+  )
+  assert.doesNotMatch(runs, /cli\.mjs|npm\s+publish/iu, "publisher.mjs owns the only npm mutation")
+})
+
+test("npm reconciliation and five controller-owned smoke lanes are separate and fail closed", async () => {
+  const { workflow } = await readRequiredWorkflow("release.yml")
+  assert.deepEqual(REQUIRED_RELEASE_SMOKE_LANES, [
+    "metadata",
+    "published-harness",
+    "runtime-targets",
+    "scaffold",
+    "storage",
+  ])
+
+  const reconcileNpm = requiredJob(workflow, "reconcile-npm")
+  assert.deepEqual(normalizeNeeds(reconcileNpm.needs), ["detect", "publish-npm", "tag"])
+  assert.equal(reconcileNpm.permissions?.contents, "write")
+  assert.equal(reconcileNpm.permissions?.actions, "read")
+  onlyRunStepMatching(reconcileNpm, /node scripts\/release\/cli\.mjs reconcile-npm\b/u)
+
+  for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
+    const id = SMOKE_JOB_BY_LANE[lane]
+    const smoke = requiredJob(workflow, id)
+    assert.deepEqual(normalizeNeeds(smoke.needs), ["detect", "reconcile-npm", "tag"])
+    assertNoWriteOrOidc(smoke)
+    assert.equal(smoke["runs-on"], "ubuntu-24.04")
+    const entrypoint =
+      lane === "metadata"
+        ? /node scripts\/published-artifact-verify\.mjs\b[\s\S]*--release-mode\b/u
+        : new RegExp(`node scripts/release/smoke/${escapeRegExp(lane)}\\.mjs\\b`, "u")
+    const execute = onlyRunStepMatching(smoke, entrypoint)
+    assertCommandHasFlag(execute.run, "--result")
+    const upload = onlyStepUsing(smoke, ACTIONS.upload)
+    assert.equal(upload.id, "result")
+    assert.equal(upload.if, workflowExpression("always()"))
+    assert.equal(
+      upload.with?.name,
+      `smoke-result-${lane}-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
+    )
+    assert.equal(upload.with?.["if-no-files-found"], "error")
+    assert.deepEqual(smoke.outputs, {
+      artifact_id: workflowExpression(`steps.result.outputs.artifact-id`),
+    })
+  }
+
+  const reconcile = requiredJob(workflow, "reconcile-smokes")
+  assert.deepEqual(
+    normalizeNeeds(reconcile.needs),
+    ["detect", "reconcile-npm", "tag", ...Object.values(SMOKE_JOB_BY_LANE)].sort(),
+  )
+  assert.equal(reconcile.permissions?.contents, "write")
+  assert.equal(reconcile.permissions?.actions, "read")
+  assert.match(reconcile.if, /always\(\)/u)
+  for (const id of Object.values(SMOKE_JOB_BY_LANE)) {
+    assert.match(reconcile.if, new RegExp(`needs\\.${escapeRegExp(id)}\\.result == 'success'`, "u"))
+  }
+  const download = onlyStepUsing(reconcile, ACTIONS.download)
+  const artifactIds = String(download.with?.["artifact-ids"] ?? "")
+  for (const id of Object.values(SMOKE_JOB_BY_LANE)) {
+    assert.match(
+      artifactIds,
+      new RegExp(`needs\\.${escapeRegExp(id)}\\.outputs\\.artifact_id`, "u"),
+    )
+  }
+  assert.equal(download.with?.["merge-multiple"], true)
+  const command = onlyRunStepMatching(
+    reconcile,
+    /node scripts\/release\/cli\.mjs reconcile-smokes\b/u,
+  )
+  assertCommandHasFlag(command.run, "--smoke-results")
+  assert.doesNotMatch(command.run, /required-lanes|lane-set/iu)
+})
+
+test("audit dispatch, receipt recording, correlation, and immutable publication stay split", async () => {
+  const { source, workflow } = await readRequiredWorkflow("release.yml")
+  const dispatch = requiredJob(workflow, "dispatch-audit")
+  const record = requiredJob(workflow, "record-audit-dispatch")
+  const correlate = requiredJob(workflow, "correlate-audit")
+  const publish = requiredJob(workflow, "publish-release")
+  assert.deepEqual(normalizeNeeds(dispatch.needs), ["detect", "reconcile-smokes", "tag"])
+  assert.equal(dispatch.permissions?.actions, "write")
+  assert.notEqual(dispatch.permissions?.contents, "write")
+  const dispatchStep = onlyRunStepMatching(
+    dispatch,
+    /node scripts\/release\/cli\.mjs dispatch-audit\b/u,
+  )
+  assertCommandFlags(dispatchStep.run, "node scripts/release/cli.mjs dispatch-audit", [
+    "--version",
+    "--commit-sha",
+    "--manifest-sha256",
+    "--output",
+  ])
+  assert.doesNotMatch(dispatchStep.run, /return_run_details|list.*runs|runs\/\?/iu)
+
+  assert.deepEqual(normalizeNeeds(record.needs), ["detect", "dispatch-audit", "tag"])
+  assert.equal(record.permissions?.contents, "write")
+  assert.notEqual(record.permissions?.actions, "write")
+  onlyRunStepMatching(record, /node scripts\/release\/cli\.mjs record-audit-dispatch\b/u)
+
+  assert.deepEqual(normalizeNeeds(correlate.needs), ["detect", "record-audit-dispatch", "tag"])
+  assert.equal(correlate.permissions?.actions, "read")
+  assert.equal(correlate.permissions?.contents, "write")
+  onlyRunStepMatching(correlate, /node scripts\/release\/cli\.mjs wait-audit\b/u)
+  onlyRunStepMatching(correlate, /node scripts\/release\/cli\.mjs correlate-audit\b/u)
+
+  assert.deepEqual(normalizeNeeds(publish.needs), ["correlate-audit", "detect", "tag"])
+  assert.equal(publish.permissions?.contents, "write")
+  assert.notEqual(publish.permissions?.actions, "write")
+  const publishStep = onlyRunStepMatching(
+    publish,
+    /node scripts\/release\/cli\.mjs publish-release\b/u,
+  )
+  assertCommandFlags(publishStep.run, "node scripts/release/cli.mjs publish-release", [
+    "--candidate",
+    "--record",
+    "--audit-result",
+  ])
+  const closure = transitiveNeeds(workflow, "publish-release")
+  for (const id of Object.values(SMOKE_JOB_BY_LANE)) assert.ok(closure.has(id), id)
+  assert.ok(closure.has("dispatch-audit"))
+  assert.ok(closure.has("record-audit-dispatch"))
+  assert.ok(closure.has("correlate-audit"))
+  assert.equal(
+    Object.entries(workflow.jobs).some(
+      ([id, job]) =>
+        id !== "publish-release" && normalizeNeeds(job.needs).includes("publish-release"),
+    ),
+    false,
+    "no post-publication job may receive mutation authority",
+  )
+  assert.equal(countMatches(source, /node scripts\/release\/cli\.mjs publish-release\b/gu), 1)
+  assert.doesNotMatch(source, /gh\s+release\s+edit|target_commitish|"draft"\s*:\s*false/iu)
+})
+
+test("protected abandonment derives context at the exact tag and accepts no caller evidence", async () => {
+  const { workflow } = await readRequiredWorkflow("release.yml")
+  const schema = JSON.parse(await readBoundedFixture(CONTROLLER_SCHEMA_PATH, { root: ROOT }))
+  const abandon = requiredJob(workflow, "abandon")
+  assert.deepEqual(normalizeNeeds(abandon.needs), ["detect", "tag"])
+  assert.equal(abandon.environment, schema.abandonmentEnvironment)
+  assert.equal(schema.abandonmentEnvironment, "release-abandonment")
+  assert.equal(abandon.permissions?.contents, "write")
+  assert.notEqual(abandon.permissions?.actions, "write")
+  assert.match(abandon.if, /github\.event_name == 'workflow_dispatch'/u)
+  assert.match(abandon.if, /inputs\.operation == 'abandon'/u)
+
+  const context = onlyRunStepMatching(
+    abandon,
+    /node scripts\/release\/cli\.mjs abandonment-context\b/u,
+  )
+  assertCommandFlags(context.run, "node scripts/release/cli.mjs abandonment-context", [
+    "--version",
+    "--commit-sha",
+    "--output",
+  ])
+  const mutation = onlyRunStepMatching(abandon, /node scripts\/release\/cli\.mjs abandon\b/u)
+  assertCommandFlags(mutation.run, "node scripts/release/cli.mjs abandon", [
+    "--version",
+    "--commit-sha",
+    "--reason",
+    "--artifact-context",
+  ])
+  assert.ok(abandon.steps.indexOf(context) < abandon.steps.indexOf(mutation))
+  assert.match(mutation.run, /--artifact-context\s+[^\s]+/u)
+  assert.doesNotMatch(
+    `${context.run}\n${mutation.run}`,
+    /inputs\.(?:artifact|context|approval|observation|deployment)|--(?:approval|observation|deployment)/iu,
+  )
+
+  const validation = findRunStep(
+    workflow,
+    /operation.*abandon[\s\S]*reason|reason[\s\S]*operation.*abandon/iu,
+  )
+  assert.match(
+    validation.run,
+    /reconcile[\s\S]*(?:-n|!=)[\s\S]*REASON|REASON[\s\S]*(?:-n|!=)[\s\S]*reconcile/iu,
+  )
+  assert.match(
+    validation.run,
+    /abandon[\s\S]*(?:-z|==)[\s\S]*REASON|REASON[\s\S]*(?:-z|==)[\s\S]*abandon/iu,
   )
 })
 
-test("legacy release remains the sole npm publisher without PR 2 topology constraints", async () => {
-  const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
-  const publicationFiles = Object.entries(allowlist.workflows)
-    .filter(([, workflow]) =>
-      workflow.jobs.some((job) =>
-        job.steps.some(({ classification }) => classification === "publication"),
-      ),
-    )
-    .map(([file]) => file)
-    .sort()
+test("the independent workflow audits only the exact tag and always uploads one run-attempt result", async () => {
+  const { source, workflow } = await readRequiredWorkflow("published-artifact-verify.yml")
+  assert.deepEqual(Object.keys(workflow.on).sort(), ["schedule", "workflow_dispatch"])
+  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
+    "commitSha",
+    "manifestSha256",
+    "version",
+  ])
+  for (const input of Object.values(workflow.on.workflow_dispatch.inputs)) {
+    assertDispatchIdentityInput(input)
+  }
+  assert.equal(hasWritePermission(workflow.permissions), false)
 
-  assert.deepEqual(publicationFiles, ["release.yml"])
-  assert.deepEqual(
-    allowlist.workflows["release.yml"].jobs
-      .flatMap((job) => job.steps)
-      .filter(({ classification }) => classification === "publication")
-      .map(({ descriptor }) =>
-        descriptor.uses === undefined ? `run:${descriptor.run}` : `step-uses:${descriptor.uses}`,
-      ),
-    [
-      "step-uses:changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
-      "step-uses:actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
-      "run:node scripts/upload-release-assets.mjs",
-      "run:node scripts/backfill-release-tags.mjs",
-    ],
+  const coordinator = requiredJob(workflow, "coordinate")
+  assert.equal(coordinator.permissions?.actions, "write")
+  assert.notEqual(coordinator.permissions?.contents, "write")
+  const relay = onlyRunStepMatching(coordinator, /2026-03-10/u)
+  assert.match(relay.run, /refs\/tags\/v/u)
+  assert.doesNotMatch(relay.run, /return_run_details|list.*runs|runs\/\?|poll|wait|sleep/iu)
+
+  const audit = requiredJob(workflow, "audit")
+  assert.deepEqual(normalizeNeeds(audit.needs), ["coordinate"])
+  assert.equal(hasWritePermission(audit.permissions), false)
+  assertExactIndependentTagGate(audit)
+  const execute = onlyRunStepMatching(audit, /node scripts\/release\/independent-audit\.mjs\b/u)
+  assertCommandFlags(execute.run, "node scripts/release/independent-audit.mjs", [
+    "--version",
+    "--commit-sha",
+    "--manifest-sha256",
+    "--result",
+  ])
+  const resultUploads = audit.steps.filter((step) => step.uses === ACTIONS.upload)
+  assert.equal(resultUploads.length, 1)
+  assert.equal(resultUploads[0].id, "result")
+  assert.equal(resultUploads[0].if, workflowExpression("always()"))
+  assert.equal(
+    resultUploads[0].with?.name,
+    `audit-result-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
   )
-  const legacy = parse(await readFile(path.join(WORKFLOWS, "release.yml"), "utf8"))
-  assert.deepEqual(Object.keys(legacy.jobs), ["release"])
-  assert.equal(legacy.jobs.detect, undefined)
-  assert.equal(legacy.jobs.prepare, undefined)
-  assert.equal(legacy.jobs.publish, undefined)
+  assert.equal(resultUploads[0].with?.["if-no-files-found"], "error")
+  assert.doesNotMatch(
+    source,
+    /runOpenAI|runPgvector|packageSet|return_run_details|list.*workflow.*runs/iu,
+  )
+  assert.doesNotMatch(source, /contents\s*:\s*write|gh\s+release|\/releases\/.+(?:PATCH|DELETE)/iu)
+})
+
+test("release.yml is the only trusted npm publisher and chart publication remains separate", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const owners = []
+  for (const [file, source] of Object.entries(sources)) {
+    if (/publisher\.mjs|npm\s+publish|NPM_CONFIG_PROVENANCE|registry-url/iu.test(source)) {
+      owners.push(file)
+    }
+  }
+  assert.deepEqual(owners, ["release.yml"])
+  const version = parseWorkflowSource(sources["version-pr.yml"], "version-pr.yml")
+  const changesets = onlyStepUsing(requiredJob(version, "version"), ACTIONS.changesets)
+  assert.equal(changesets.with?.version, "pnpm run version")
+  assert.equal(changesets.with?.publish, undefined)
+  assert.equal(changesets.with?.createGithubReleases, undefined)
+  assert.equal(typeof sources["publish-chart.yml"], "string")
 })
 
 test("workflow entrypoints fail closed unless their exact normalized form is explicitly audited", () => {
@@ -799,49 +1259,49 @@ test("workflow audit binds complete execution descriptors and byte-exact run str
   const cases = [
     [
       "workflow permissions",
-      "release-shadow.yml",
-      (source) => source.replace("actions: read", "actions: write"),
+      "dependency-security-receipt.yml",
+      (source) => source.replace("contents: read", "contents: write"),
     ],
     [
       "job runner",
-      "release-shadow.yml",
+      "dependency-security-receipt.yml",
       (source) => source.replace("ubuntu-latest", "self-hosted"),
     ],
     [
       "checkout inputs",
-      "release-shadow.yml",
-      (source) => source.replace("fetch-depth: 0", "fetch-depth: 1"),
+      "dependency-security-receipt.yml",
+      (source) => source.replace("persist-credentials: false", "persist-credentials: true"),
     ],
     [
       "action inputs",
-      "release-shadow.yml",
-      (source) => source.replace("version: 10.33.0", "version: 10.32.0"),
+      "dependency-security-receipt.yml",
+      (source) => source.replace("node-version: 24.17.0", "node-version: 24.16.0"),
     ],
     [
       "action environment",
-      "release-shadow.yml",
+      "dependency-security-receipt.yml",
       (source) =>
         source.replace(
-          "      - name: Setup pnpm\n",
-          "      - name: Setup pnpm\n        env:\n          BASH_ENV: scripts/bypass.sh\n",
+          "      - name: Setup Node.js\n",
+          "      - name: Setup Node.js\n        env:\n          BASH_ENV: scripts/bypass.sh\n",
         ),
     ],
     [
       "action condition",
-      "release-shadow.yml",
+      "dependency-security-receipt.yml",
       (source) =>
         source.replace(
-          "      - name: Setup pnpm\n",
-          "      - name: Setup pnpm\n        if: always()\n",
+          "      - name: Setup Node.js\n",
+          "      - name: Setup Node.js\n        if: always()\n",
         ),
     ],
     [
       "unknown step key",
-      "release-shadow.yml",
+      "dependency-security-receipt.yml",
       (source) =>
         source.replace(
-          "      - name: Setup pnpm\n",
-          "      - name: Setup pnpm\n        unexpected: true\n",
+          "      - name: Setup Node.js\n",
+          "      - name: Setup Node.js\n        unexpected: true\n",
         ),
     ],
   ]
@@ -884,11 +1344,19 @@ test("workflow classifications are explicit safe or release-only publication", a
   assert.deepEqual(Object.keys(EXECUTABLE_ALLOWLIST).sort(), ["schemaVersion", "workflows"])
   assert.equal(EXECUTABLE_ALLOWLIST.schemaVersion, 1)
   assert.doesNotMatch(JSON.stringify(EXECUTABLE_ALLOWLIST), /"audited"/u)
+  const publication = Object.entries(EXECUTABLE_ALLOWLIST.workflows).flatMap(([file, entries]) =>
+    entries
+      .filter(({ classification }) => classification === "publication")
+      .map((entry) => ({ file, ...entry })),
+  )
+  assert.ok(publication.length > 0, "the final release workflow must retain explicit mutations")
+  assert.ok(publication.every(({ file }) => file === "release.yml"))
+  assert.ok(publication.some(({ value }) => /publisher\.mjs/u.test(value)))
   assert.equal(
-    Object.values(EXECUTABLE_ALLOWLIST.workflows)
-      .flat()
-      .filter(({ classification }) => classification === "publication").length,
-    4,
+    publication.some(({ value }) =>
+      /release-publish|backfill-release-tags|upload-release-assets/iu.test(value),
+    ),
+    false,
   )
 })
 
@@ -913,8 +1381,14 @@ test("matching descriptor inventory cannot classify a new executable as safe", (
     const inventory = {
       "new.yaml": workflowDescriptor(workflow, classifications),
     }
+    const executables = {
+      "new.yaml": workflowExecutables(workflow).map((entry) => ({
+        classification: "safe",
+        ...entry,
+      })),
+    }
     assert.throws(
-      () => auditWorkflowEntrypoints({ "new.yaml": source }, inventory),
+      () => auditWorkflowEntrypoints({ "new.yaml": source }, inventory, executables),
       /not explicitly audited/u,
       name,
     )
@@ -1014,64 +1488,25 @@ test("workflow directory traversal is anchored at regular repository components"
   assert.deepEqual(Object.keys(await readWorkflowSourcesFromRoot(root)), ["safe.yml"])
 })
 
-test("legacy publication indirection is bound to exact root scripts and regular files", async (t) => {
-  await assertReleaseIndirection(ROOT)
-
-  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-release-indirection-"))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(path.join(root, "scripts"))
-  await writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ scripts: { "release:publish": "node scripts/other.mjs" } }),
-  )
-  for (const file of [
-    "release-publish.mjs",
-    "upload-release-assets.mjs",
-    "backfill-release-tags.mjs",
-  ])
-    await writeFile(path.join(root, "scripts", file), "export {}\n")
-  await assert.rejects(() => assertReleaseIndirection(root), /not explicitly audited/u)
-
-  await writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ scripts: { "release:publish": "node scripts/release-publish.mjs" } }),
-  )
-  await rm(path.join(root, "scripts", "upload-release-assets.mjs"))
-  await symlink(
-    path.join(root, "scripts", "release-publish.mjs"),
-    path.join(root, "scripts", "upload-release-assets.mjs"),
-  )
-  await assert.rejects(() => assertReleaseIndirection(root), /not explicitly audited/u)
-})
-
-test("release scripts match their audited content pins", async () => {
+test("all scripts reachable from final release ownership match audited content pins", async () => {
   const pins = JSON.parse(await readBoundedFixture(SCRIPT_PIN_PATH, { root: ROOT }))
+  const sources = await readFinalWorkflowSources()
+  const packageJson = JSON.parse(
+    await readBoundedFixture(path.join(ROOT, "package.json"), { root: ROOT }),
+  )
+  const coverage = releaseWorkflowScriptReferences(sources, packageJson)
 
   assert.deepEqual(Object.keys(pins).sort(), ["schemaVersion", "scripts"])
   assert.equal(pins.schemaVersion, 1)
-  assert.deepEqual(
-    Object.keys(pins.scripts).sort(),
-    [...PINNED_RELEASE_SCRIPTS].sort(),
-    `${SCRIPT_PIN_FIXTURE} must pin exactly the scripts listed in PINNED_RELEASE_SCRIPTS (scripts/release/test/workflow-contracts.test.mjs). Add or remove the pin and the constant together.`,
-  )
-  await assertPinnedScriptContents(ROOT, pins)
+  assert.deepEqual(coverage.unfollowable, [])
+  assert.deepEqual(Object.keys(pins.scripts).sort(), coverage.referenced)
+  await assertPinnedScriptContents(ROOT, pins, coverage.referenced)
 })
 
-test("release.yml reaches no repository script that is left unpinned", async () => {
-  const sources = await readWorkflowSourcesFromRoot(ROOT)
-  const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"))
-
-  assertReleaseScriptCoverage(sources["release.yml"], packageJson)
-  assert.deepEqual(
-    releaseWorkflowScriptReferences(sources["release.yml"], packageJson).referenced,
-    [...PINNED_RELEASE_SCRIPTS].sort(),
-    "every repository script release.yml reaches must be pinned, and every pin must still be reached",
-  )
-})
-
-test("the release.yml reachability scan fails closed on a fifth script added by either route", async (t) => {
-  const packageJson = { scripts: { "release:publish": "node scripts/release-publish.mjs" } }
-  const step = (body) => `jobs:\n  release:\n    steps:\n      - name: Publish\n${body}`
+test("final release reachability fails closed on hidden scripts and package indirection", async (t) => {
+  const packageJson = { scripts: { version: "changeset version && node scripts/sync.mjs" } }
+  const step = (body) =>
+    `on:\n  workflow_dispatch: {}\njobs:\n  release:\n    steps:\n      - name: Publish\n${body}`
   const cases = [
     ["run step", step("        run: node scripts/evil.mjs\n"), /scripts\/evil\.mjs/u],
     [
@@ -1083,8 +1518,8 @@ test("the release.yml reachability scan fails closed on a fifth script added by 
     ],
     [
       "action input pnpm indirection",
-      step("        uses: example/action@x\n        with:\n          publish: pnpm release:evil\n"),
-      /cannot follow|scripts\/evil\.mjs/u,
+      step("        uses: example/action@x\n        with:\n          version: pnpm run version\n"),
+      /scripts\/sync\.mjs/u,
     ],
     [
       "unaudited run indirection",
@@ -1095,10 +1530,7 @@ test("the release.yml reachability scan fails closed on a fifth script added by 
   for (const [name, source, pattern] of cases) {
     await t.test(name, () => {
       assert.throws(
-        () =>
-          assertReleaseScriptCoverage(source, {
-            scripts: { ...packageJson.scripts, "release:evil": "node scripts/evil.mjs" },
-          }),
+        () => assertReleaseScriptCoverage({ "release.yml": source }, packageJson, []),
         pattern,
         name,
       )
@@ -1109,8 +1541,13 @@ test("the release.yml reachability scan fails closed on a fifth script added by 
     assert.throws(
       () =>
         assertReleaseScriptCoverage(
-          step("        uses: example/action@x\n        with:\n          publish: pnpm ghost\n"),
+          {
+            "release.yml": step(
+              "        uses: example/action@x\n        with:\n          publish: pnpm ghost\n",
+            ),
+          },
           packageJson,
+          [],
         ),
       /cannot follow to a repository script/u,
     )
@@ -1118,8 +1555,13 @@ test("the release.yml reachability scan fails closed on a fifth script added by 
 
   await t.test("a stale pin whose step disappeared", () => {
     assert.throws(
-      () => assertReleaseScriptCoverage(step("        run: pnpm ci:validate\n"), packageJson),
-      /no longer reaches/u,
+      () =>
+        assertReleaseScriptCoverage(
+          { "release.yml": step("        run: node scripts/visible.mjs\n") },
+          packageJson,
+          ["scripts/stale.mjs", "scripts/visible.mjs"],
+        ),
+      /pinned but no final owner workflow reaches/u,
     )
   })
 })
@@ -1127,8 +1569,8 @@ test("the release.yml reachability scan fails closed on a fifth script added by 
 test("script content pins fail closed on drift and on a pinned script that went missing", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dawn-script-pins-"))
   t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(path.join(root, "scripts"))
-  const file = PINNED_RELEASE_SCRIPTS[0]
+  await mkdir(path.join(root, "scripts", "release"), { recursive: true })
+  const file = "scripts/release/example.mjs"
   const body = "export {}\n"
   const pins = {
     schemaVersion: 1,
@@ -1158,28 +1600,222 @@ test("script content pins fail closed on drift and on a pinned script that went 
   await assert.rejects(() => assertPinnedScriptContents(root, pins, [file]))
 })
 
-test("root scripts expose shadow and preflight without adding the slow workflow test to fast scripts", async () => {
+test("root scripts retain the controller surfaces without legacy publication commands", async () => {
   const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"))
 
-  assert.equal(packageJson.scripts["release:shadow"], "node scripts/release/shadow-reconcile.mjs")
   assert.equal(packageJson.scripts["release:preflight"], "node scripts/release/preflight.mjs")
   assert.equal(
     packageJson.scripts["test:release-controller"],
     "node --test scripts/release/test/*.test.mjs",
   )
+  for (const command of LEGACY_PACKAGE_COMMANDS)
+    assert.equal(packageJson.scripts[command], undefined)
 })
 
-async function readShadowWorkflow() {
-  return parse(await readShadowSource())
+async function readRequiredWorkflow(file) {
+  let source
+  try {
+    source = await readBoundedFixture(path.join(WORKFLOWS, file), {
+      root: ROOT,
+      maxBytes: 1024 * 1024,
+    })
+  } catch (error) {
+    assert.fail(`${file} must exist as a bounded regular workflow file: ${error.message}`)
+  }
+  return { source, workflow: parseWorkflowSource(source, file) }
 }
 
-async function readShadowSource() {
-  let source = null
+async function readFinalWorkflowSources() {
+  const sources = Object.create(null)
+  for (const file of FINAL_WORKFLOW_FILES) {
+    const { source } = await readRequiredWorkflow(file)
+    sources[file] = source
+  }
+  return sources
+}
+
+function parseWorkflowSource(source, file) {
+  let workflow
   try {
-    source = await readFile(SHADOW_PATH, "utf8")
-  } catch {}
-  assert.notEqual(source, null, "release-shadow.yml must exist")
-  return source
+    workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+  } catch (error) {
+    assert.fail(`${file} must be valid unique-key YAML: ${error.message}`)
+  }
+  assert.ok(isRecord(workflow), `${file} must parse to a workflow object`)
+  assert.ok(isRecord(workflow.on), `${file} must declare parsed triggers`)
+  assert.ok(isRecord(workflow.jobs), `${file} must declare parsed jobs`)
+  return workflow
+}
+
+function requiredJob(workflow, id) {
+  const job = workflow.jobs?.[id]
+  assert.ok(isRecord(job), `workflow must define job ${id}`)
+  assert.ok(Array.isArray(job.steps), `${id} must define concrete steps`)
+  return job
+}
+
+function onlyStepUsing(job, uses) {
+  const matches = job.steps.filter((step) => step.uses === uses)
+  assert.equal(matches.length, 1, `job must use ${uses} exactly once`)
+  return matches[0]
+}
+
+function onlyRunStepMatching(job, pattern) {
+  const matches = job.steps.filter((step) => typeof step.run === "string" && pattern.test(step.run))
+  assert.equal(matches.length, 1, `job must have exactly one run step matching ${pattern}`)
+  return matches[0]
+}
+
+function findRunStep(workflow, pattern) {
+  const matches = Object.values(workflow.jobs).flatMap((job) =>
+    (job.steps ?? []).filter((step) => typeof step.run === "string" && pattern.test(step.run)),
+  )
+  assert.equal(matches.length, 1, `workflow must have exactly one run step matching ${pattern}`)
+  return matches[0]
+}
+
+function runSource(job) {
+  return job.steps
+    .filter((step) => typeof step.run === "string")
+    .map((step) => step.run)
+    .join("\n")
+}
+
+function workflowArtifactBasenames(value) {
+  assert.equal(typeof value, "string", "artifact upload path must be explicit")
+  const entries = value
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+  assert.equal(entries.length, 3, "small handoff must contain exactly three files")
+  const globCharacters = ["*", "?", "!", "[", "]", "{", "}"]
+  assert.ok(
+    entries.every((entry) => globCharacters.every((character) => !entry.includes(character))),
+    "handoff paths must not glob",
+  )
+  return entries.map((entry) => path.posix.basename(entry)).sort()
+}
+
+function assertPinnedToolchain(job) {
+  const nodeSteps = job.steps.filter((step) => step.uses === ACTIONS.node)
+  assert.equal(nodeSteps.length, 1, "Node jobs must have one pinned setup-node step")
+  assert.equal(nodeSteps[0].with?.["node-version"], "24.19.0")
+  for (const step of job.steps.filter((entry) => entry.uses === ACTIONS.pnpm)) {
+    assert.equal(step.with?.version, "10.33.0")
+  }
+  const runs = runSource(job)
+  if (
+    /publisher\.mjs|independent-audit\.mjs|published-artifact-verify\.mjs|release\/smoke\//u.test(
+      runs,
+    )
+  ) {
+    assert.match(runs, /npm\s+--version/u)
+    assert.match(runs, /11\.17\.0/u)
+  }
+}
+
+function dispatchInputContract(input) {
+  assert.ok(isRecord(input))
+  return Object.fromEntries(
+    ["default", "options", "required", "type"]
+      .filter((key) => Object.hasOwn(input, key))
+      .map((key) => [key, input[key]]),
+  )
+}
+
+function assertDispatchIdentityInput(input) {
+  assert.deepEqual(dispatchInputContract(input), { required: true, type: "string" })
+}
+
+function assertReadOrWritePermissions(actual, expected) {
+  assert.deepEqual(actual, expected)
+  for (const [permission, value] of Object.entries(actual)) {
+    assert.ok(["read", "write"].includes(value), `${permission} has invalid permission ${value}`)
+  }
+}
+
+function hasWritePermission(permissions) {
+  return isRecord(permissions) && Object.values(permissions).some((value) => value === "write")
+}
+
+function assertNoWriteOrOidc(job) {
+  assert.ok(isRecord(job.permissions), "read-only jobs must declare explicit permissions")
+  assert.equal(hasWritePermission(job.permissions), false)
+  assert.notEqual(job.permissions["id-token"], "write")
+}
+
+function normalizeNeeds(needs) {
+  if (needs === undefined) return []
+  const values = Array.isArray(needs) ? needs : [needs]
+  assert.ok(values.every((value) => typeof value === "string"))
+  assert.equal(new Set(values).size, values.length, "job needs must not contain duplicates")
+  return [...values].sort()
+}
+
+function commandLine(run, command) {
+  const lines = run.split(/\r?\n/u)
+  const start = lines.findIndex((line) => line.includes(command))
+  assert.notEqual(start, -1, `run step must invoke ${command}`)
+  const selected = []
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].trim()
+    selected.push(line.replace(/\\$/u, "").trim())
+    if (!line.endsWith("\\")) break
+  }
+  return selected.join(" ").replace(/\s+/gu, " ").trim()
+}
+
+function assertCommandFlags(run, command, expectedFlags) {
+  const line = commandLine(run, command)
+  const actualFlags = [...line.matchAll(/(?:^|\s)(--[a-z][a-z0-9-]*)\b/gu)].map(([, flag]) => flag)
+  assert.deepEqual(actualFlags, expectedFlags, `${command} flags must be exact and ordered`)
+}
+
+function assertCommandHasFlag(run, flag) {
+  assert.match(run, new RegExp(`(?:^|\\s)${escapeRegExp(flag)}(?:\\s|$)`, "u"))
+  assert.equal(countMatches(run, new RegExp(escapeRegExp(flag), "gu")), 1)
+}
+
+function assertExactTagAndOperationGate(job, { operation }) {
+  assert.equal(typeof job.if, "string", "exact-tag jobs must declare a job condition")
+  assert.match(job.if, /needs\.tag\.outputs\.continue == 'true'/u)
+  assert.match(
+    job.if,
+    /github\.ref == format\('refs\/tags\/v\{0\}', (?:inputs\.version|needs\.detect\.outputs\.candidate_version)\)/u,
+  )
+  assert.match(job.if, /github\.sha == needs\.detect\.outputs\.candidate_sha/u)
+  assert.match(job.if, /inputs\.version == needs\.detect\.outputs\.candidate_version/u)
+  assert.match(job.if, /inputs\.commitSha == needs\.detect\.outputs\.candidate_sha/u)
+  assert.match(job.if, new RegExp(`inputs\\.operation == '${operation}'`, "u"))
+  if (operation === "abandon") assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u)
+}
+
+function assertExactIndependentTagGate(job) {
+  assert.equal(typeof job.if, "string")
+  assert.match(job.if, /needs\.coordinate\.outputs\.continue == 'true'/u)
+  assert.match(job.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+  assert.match(job.if, /github\.sha == inputs\.commitSha/u)
+}
+
+function transitiveNeeds(workflow, start) {
+  const found = new Set()
+  const visit = (id) => {
+    for (const dependency of normalizeNeeds(requiredJob(workflow, id).needs)) {
+      if (found.has(dependency)) continue
+      found.add(dependency)
+      visit(dependency)
+    }
+  }
+  visit(start)
+  return found
+}
+
+function countMatches(source, pattern) {
+  return source.match(pattern)?.length ?? 0
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }
 
 async function readWorkflowSourcesFromRoot(root) {
@@ -1213,69 +1849,41 @@ async function readWorkflowSourcesFromRoot(root) {
   return sources
 }
 
-async function assertReleaseIndirection(root) {
-  try {
-    const packageJson = JSON.parse(
-      await readBoundedFixture(path.join(root, "package.json"), {
-        root,
-        maxBytes: 1024 * 1024,
-      }),
-    )
-    if (
-      !isRecord(packageJson) ||
-      !isRecord(packageJson.scripts) ||
-      packageJson.scripts["release:publish"] !== "node scripts/release-publish.mjs"
-    ) {
-      throw unauditedEntrypoint()
-    }
-    for (const file of [
-      "scripts/release-publish.mjs",
-      "scripts/upload-release-assets.mjs",
-      "scripts/backfill-release-tags.mjs",
-    ]) {
-      await readBoundedFixture(path.join(root, file), { root, maxBytes: 1024 * 1024 })
-    }
-  } catch {
-    throw unauditedEntrypoint()
-  }
-}
-
-// Collects the repository scripts release.yml reaches, by both routes a script can
-// enter the workflow: a `run:` body and an action `with:` input. Literal `scripts/...`
-// paths are collected directly; a `pnpm <name>` inside a `with:` input is resolved one
-// step through package.json. Anything this cannot follow is reported rather than
-// dropped, so an unfollowable indirection fails instead of silently widening the gap.
-function releaseWorkflowScriptReferences(source, packageJson) {
-  const workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+// Collects every repository script reachable from the three final owner workflows.
+// Literal paths are recorded directly. A pnpm package-script indirection is followed
+// exactly once and rejected when it cannot be resolved without executing code.
+function releaseWorkflowScriptReferences(sources, packageJson) {
   const referenced = new Set()
   const unfollowable = []
-  for (const [job, descriptor] of Object.entries(workflow.jobs ?? {})) {
-    for (const [stepIndex, step] of (descriptor.steps ?? []).entries()) {
-      const where = `${job} step ${stepIndex}${step.name ? ` ("${step.name}")` : ""}`
-      if (typeof step.run === "string") {
-        for (const file of matchAllGroups(step.run, SCRIPT_REFERENCE)) referenced.add(file)
-        for (const name of matchAllGroups(step.run, PNPM_REFERENCE)) {
-          if (!AUDITED_RELEASE_RUN_INDIRECTIONS.has(name))
-            unfollowable.push(`${where} runs \`pnpm ${name}\``)
-        }
-      }
-      for (const [key, value] of Object.entries(step.with ?? {})) {
-        if (typeof value !== "string") continue
-        for (const file of matchAllGroups(value, SCRIPT_REFERENCE)) referenced.add(file)
-        for (const name of matchAllGroups(value, PNPM_REFERENCE)) {
-          const command = packageJson.scripts?.[name]
-          if (typeof command !== "string") {
-            unfollowable.push(
-              `${where} passes \`${key}: ${value}\`, and \`${name}\` is not a package.json script`,
-            )
-            continue
+  for (const [file, source] of Object.entries(sources)) {
+    const workflow = parseWorkflowSource(source, file)
+    for (const [job, descriptor] of Object.entries(workflow.jobs)) {
+      for (const [stepIndex, step] of (descriptor.steps ?? []).entries()) {
+        const where = `${file} ${job} step ${stepIndex}${step.name ? ` ("${step.name}")` : ""}`
+        const scan = (value, key) => {
+          for (const script of matchAllGroups(value, SCRIPT_REFERENCE)) referenced.add(script)
+          for (const name of matchAllGroups(value, PNPM_REFERENCE)) {
+            const command = packageJson.scripts?.[name]
+            if (typeof command !== "string") {
+              unfollowable.push(
+                key === null
+                  ? `${where} runs \`pnpm ${name}\``
+                  : `${where} passes \`${key}: ${value}\`, and \`${name}\` is not a package.json script`,
+              )
+              continue
+            }
+            const scripts = matchAllGroups(command, SCRIPT_REFERENCE)
+            for (const script of scripts) referenced.add(script)
+            if (scripts.length === 0 || matchAllGroups(command, PNPM_REFERENCE).length > 0) {
+              unfollowable.push(
+                `${where} reaches \`pnpm ${name}\`, which resolves to \`${command}\``,
+              )
+            }
           }
-          const files = matchAllGroups(command, SCRIPT_REFERENCE)
-          for (const file of files) referenced.add(file)
-          if (files.length === 0 || matchAllGroups(command, PNPM_REFERENCE).length > 0)
-            unfollowable.push(
-              `${where} passes \`${key}: ${value}\`, which resolves to \`${command}\``,
-            )
+        }
+        if (typeof step.run === "string") scan(step.run, null)
+        for (const [key, value] of Object.entries(step.with ?? {})) {
+          if (typeof value === "string") scan(value, key)
         }
       }
     }
@@ -1283,14 +1891,14 @@ function releaseWorkflowScriptReferences(source, packageJson) {
   return { referenced: [...referenced].sort(), unfollowable }
 }
 
-function assertReleaseScriptCoverage(source, packageJson, pinned = PINNED_RELEASE_SCRIPTS) {
-  const { referenced, unfollowable } = releaseWorkflowScriptReferences(source, packageJson)
+function assertReleaseScriptCoverage(sources, packageJson, pinned) {
+  const { referenced, unfollowable } = releaseWorkflowScriptReferences(sources, packageJson)
   if (unfollowable.length > 0) {
     throw new Error(
       [
         `Release workflow reaches a command this check cannot follow to a repository script:`,
         ...unfollowable.map((entry) => `  ${entry}`),
-        `An unfollowable command could run an unpinned script. Either invoke the script directly so its path is visible in release.yml, or — if it reaches only validation and verification scripts that are covered by review rather than a content pin — add its name to AUDITED_RELEASE_RUN_INDIRECTIONS in scripts/release/test/workflow-contracts.test.mjs with a comment recording why.`,
+        "An unfollowable command could run an unpinned script; invoke the reviewed script directly.",
       ].join("\n"),
     )
   }
@@ -1299,8 +1907,8 @@ function assertReleaseScriptCoverage(source, packageJson, pinned = PINNED_RELEAS
     throw new Error(
       [
         `Release workflow reaches a repository script with no content pin: ${file}`,
-        `.github/workflows/release.yml runs it, directly or through a package.json script, so its bytes have to be pinned alongside the command line.`,
-        `Add its sha256 to ${SCRIPT_PIN_FIXTURE} and its path to PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs. Compute the hash with:`,
+        "A final release owner runs it directly or through package.json, so its bytes must be pinned with the command line.",
+        `Add its sha256 to ${SCRIPT_PIN_FIXTURE}. Compute the hash with:`,
         `  node -p "require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('${file}')).digest('hex')"`,
       ].join("\n"),
     )
@@ -1309,8 +1917,8 @@ function assertReleaseScriptCoverage(source, packageJson, pinned = PINNED_RELEAS
     if (referenced.includes(file)) continue
     throw new Error(
       [
-        `Release script pin is stale: ${file} is pinned but .github/workflows/release.yml no longer reaches it.`,
-        `Either restore the step that runs it, or remove its entry from ${SCRIPT_PIN_FIXTURE} and its path from PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs.`,
+        `Release script pin is stale: ${file} is pinned but no final owner workflow reaches it.`,
+        `Either restore the reviewed entrypoint or remove its entry from ${SCRIPT_PIN_FIXTURE}.`,
       ].join("\n"),
     )
   }
@@ -1320,7 +1928,7 @@ function matchAllGroups(value, pattern) {
   return [...value.matchAll(pattern)].map(([, group]) => group)
 }
 
-async function assertPinnedScriptContents(root, pins, files = PINNED_RELEASE_SCRIPTS) {
+async function assertPinnedScriptContents(root, pins, files) {
   for (const file of files) {
     const expected = pins.scripts?.[file]?.sha256
     if (typeof expected !== "string" || !SHA256_HEX.test(expected)) {
@@ -1335,7 +1943,7 @@ async function assertPinnedScriptContents(root, pins, files = PINNED_RELEASE_SCR
       throw new Error(
         [
           `Release script ${file} is pinned in ${SCRIPT_PIN_FIXTURE} but is missing or not a regular file inside the repository.`,
-          `A pinned script must exist: release.yml runs it. If it was intentionally removed, delete its entry from ${SCRIPT_PIN_FIXTURE} and its path from PINNED_RELEASE_SCRIPTS in scripts/release/test/workflow-contracts.test.mjs, and remove the step that runs it from .github/workflows/release.yml.`,
+          `A pinned script must exist. If it was intentionally removed, delete its entry from ${SCRIPT_PIN_FIXTURE} and its final workflow entrypoint together.`,
         ].join("\n"),
       )
     }
@@ -1438,19 +2046,39 @@ function classifyExecutables(file, actual, expected) {
       value: allowed.value,
     }
     if (canonicalJson(actual[index]) !== canonicalJson(identity)) throw unauditedEntrypoint()
-    const executableKey = `${actual[index].kind}:${actual[index].value}`
+    const publication = isReleaseMutationExecutable(file, actual[index])
     if (allowed.classification === "publication") {
-      if (file !== "release.yml" || !LEGACY_PUBLICATION_ENTRYPOINTS.has(executableKey))
-        throw unauditedEntrypoint()
-    } else if (
-      LEGACY_PUBLICATION_ENTRYPOINTS.has(executableKey) ||
-      (file === "release.yml" && !LEGACY_SAFE_ENTRYPOINTS.has(executableKey))
-    ) {
-      throw unauditedEntrypoint()
-    }
+      if (file !== "release.yml" || !publication) throw unauditedEntrypoint()
+    } else if (publication) throw unauditedEntrypoint()
     classifications.set(executableIdentity(actual[index]), allowed.classification)
   }
   return classifications
+}
+
+function isReleaseMutationExecutable(file, entry) {
+  const value = entry.value
+  if (entry.kind === "job-uses") {
+    return /\.github\/workflows\/release\.yml(?:@|$)/u.test(value)
+  }
+  if (entry.kind === "step-uses") {
+    if (/\/[^@]*(?:publish|release|attest)[^@]*@/iu.test(value)) {
+      return file !== "version-pr.yml" || value !== ACTIONS.changesets
+    }
+    return file === "release.yml" && (value === ACTIONS.attest || value === ACTIONS.changesets)
+  }
+  if (
+    /(?:\bnpm\s+publish\b|scripts\/release\/publisher\.mjs\b|scripts\/(?:release-publish|backfill-release-tags|upload-release-assets)\.mjs\b)/iu.test(
+      value,
+    )
+  ) {
+    return true
+  }
+  return (
+    file === "release.yml" &&
+    /(?:scripts\/release\/cli\.mjs\s+(?:tag|escrow|reconcile-npm|reconcile-smokes|dispatch-audit|record-audit-dispatch|correlate-audit|publish-release|abandon)\b|2026-03-10[\s\S]*workflow_dispatch)/iu.test(
+      value,
+    )
+  )
 }
 
 function executableIdentity(entry) {
@@ -1482,6 +2110,7 @@ const JOB_KEYS = new Set([
   "if",
   "name",
   "needs",
+  "outputs",
   "permissions",
   "runs-on",
   "secrets",

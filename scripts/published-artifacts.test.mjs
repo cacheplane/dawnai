@@ -7,6 +7,8 @@ import { dirname, join } from "node:path"
 import { afterEach, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 
+import { parse } from "yaml"
+
 import {
   assertCleanDependencySpecs,
   assertInstalledCoreResolution,
@@ -43,7 +45,7 @@ import {
   runPublishedArtifactVerify,
 } from "./published-artifact-verify.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "./release/manifest.mjs"
-import { parseSmokeResult } from "./release/smoke-result.mjs"
+import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "./release/smoke-result.mjs"
 
 const {
   agUiEsmProbeSource,
@@ -66,6 +68,7 @@ const {
 } = publishedSmoke
 
 const tempRoots = []
+const workflowExpression = (value) => `\${{ ${value} }}`
 const typescriptPackagePath = fileURLToPath(import.meta.resolve("typescript/package.json"))
 const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"))
 const typescriptCompilerPath = resolvePackageBinPath(
@@ -1368,109 +1371,127 @@ describe("validateExactPublishedPackageEvidence", () => {
   })
 })
 
-describe("published artifact workflow", () => {
-  it("offers TypeScript tooling without enabling pgvector or OpenAI runtime work", () => {
-    const workflow = readFileSync(
-      join(
-        dirname(fileURLToPath(import.meta.url)),
-        "..",
-        ".github",
-        "workflows",
-        "published-artifact-verify.yml",
-      ),
-      "utf8",
+describe("final published-artifact workflow", () => {
+  it("accepts only the three release identities and runs the independent exact-tag executor", () => {
+    const { source, workflow } = readParsedWorkflow("published-artifact-verify.yml")
+    const inputs = workflow.on?.workflow_dispatch?.inputs
+    assert.deepEqual(Object.keys(inputs ?? {}).sort(), ["commitSha", "manifestSha256", "version"])
+    for (const input of Object.values(inputs)) {
+      assert.equal(input.required, true)
+      assert.equal(input.type, "string")
+    }
+    const audit = workflow.jobs?.audit
+    assert.ok(Array.isArray(audit?.steps))
+    assert.match(audit.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+    assert.match(audit.if, /github\.sha == inputs\.commitSha/u)
+    const executor = audit.steps.filter(
+      (step) =>
+        typeof step.run === "string" &&
+        step.run.includes("node scripts/release/independent-audit.mjs"),
     )
-
-    assert.match(workflow, /- typescript-tooling/)
-    assert.match(workflow, /- docker-sandbox/)
-    assert.match(
-      workflow,
-      /if \[ "\$DAWN_RUN_PGVECTOR" = "true" \] && \[ "\$DAWN_PACKAGE_SET" != "typescript-tooling" \] && \[ "\$DAWN_PACKAGE_SET" != "docker-sandbox" \]/,
+    assert.equal(executor.length, 1)
+    assert.deepEqual(workflowCommandFlags(executor[0].run, "independent-audit.mjs"), [
+      "--version",
+      "--commit-sha",
+      "--manifest-sha256",
+      "--result",
+    ])
+    const uploads = audit.steps.filter(
+      (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     )
-    assert.match(
-      workflow,
-      /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \] \|\| \[ "\$DAWN_PACKAGE_SET" = "docker-sandbox" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
+    assert.equal(uploads.length, 1)
+    assert.equal(uploads[0].if, workflowExpression("always()"))
+    assert.equal(
+      uploads[0].with?.name,
+      `audit-result-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
+    )
+    assert.doesNotMatch(
+      source,
+      /packageSet|runPgvector|runOpenAI|published:verify|published:smoke/u,
     )
   })
 })
 
-describe("release workflow published TypeScript tooling verification", () => {
-  const releaseWorkflowPath = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    ".github",
-    "workflows",
-    "release.yml",
+describe("final release published smoke topology", () => {
+  it("runs the fixed five raw-receipt lanes and reconciles their exact artifact IDs", () => {
+    const { source, workflow } = readParsedWorkflow("release.yml")
+    assert.deepEqual(REQUIRED_RELEASE_SMOKE_LANES, [
+      "metadata",
+      "published-harness",
+      "runtime-targets",
+      "scaffold",
+      "storage",
+    ])
+    const smokeJobs = REQUIRED_RELEASE_SMOKE_LANES.map((lane) => [
+      lane,
+      workflow.jobs?.[`smoke-${lane}`],
+    ])
+    for (const [lane, job] of smokeJobs) {
+      assert.ok(Array.isArray(job?.steps), `missing smoke-${lane}`)
+      assert.equal(job["runs-on"], "ubuntu-24.04")
+      assert.equal(Object.values(job.permissions ?? {}).includes("write"), false)
+      const command = job.steps.find(
+        (step) =>
+          typeof step.run === "string" &&
+          (lane === "metadata"
+            ? step.run.includes("node scripts/published-artifact-verify.mjs") &&
+              step.run.includes("--release-mode")
+            : step.run.includes(`node scripts/release/smoke/${lane}.mjs`)),
+      )
+      assert.ok(command, `smoke-${lane} must invoke its production entrypoint`)
+      assert.match(command.run, /(?:^|\s)--result(?:\s|$)/u)
+      const upload = job.steps.find(
+        (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      )
+      assert.equal(upload?.if, workflowExpression("always()"))
+      assert.equal(
+        upload?.with?.name,
+        `smoke-result-${lane}-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
+      )
+    }
+
+    const reconcile = workflow.jobs?.["reconcile-smokes"]
+    assert.ok(Array.isArray(reconcile?.steps))
+    const download = reconcile.steps.find(
+      (step) => step.uses === "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    )
+    assert.ok(download)
+    for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
+      assert.match(
+        String(download.with?.["artifact-ids"] ?? ""),
+        new RegExp(`needs\\.smoke-${lane}\\.outputs\\.artifact_id`, "u"),
+      )
+    }
+    assert.doesNotMatch(
+      source,
+      /Backfill tags|Read published version|package-set typescript-tooling|package-set docker-sandbox|steps\.changesets\.outputs\.published/u,
+    )
+  })
+})
+
+function readParsedWorkflow(file) {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", file),
+    "utf8",
   )
+  const workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+  assert.ok(workflow !== null && typeof workflow === "object" && !Array.isArray(workflow))
+  assert.ok(workflow.jobs !== null && typeof workflow.jobs === "object")
+  return { source, workflow }
+}
 
-  it("extracts the fixed-group version after backfill under the published condition", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const backfillIndex = workflow.indexOf(
-      "- name: Backfill tags/releases for bootstrapped packages",
-    )
-    const versionIndex = workflow.indexOf("- name: Read published version")
-
-    assert.ok(backfillIndex >= 0, "release workflow must retain backfill")
-    assert.ok(versionIndex > backfillIndex, "version extraction must follow backfill")
-    assert.match(
-      workflow,
-      /- name: Read published version\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: \|\n\s+DAWN_PUBLISHED_VERSION="\$\(node -p "require\('\.\/packages\/core\/package\.json'\)\.version"\)"\n\s+printf 'DAWN_PUBLISHED_VERSION=%s\\n' "\$DAWN_PUBLISHED_VERSION" >> "\$GITHUB_ENV"/,
-    )
-  })
-
-  it("verifies and then smokes the exact TypeScript tooling release", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const verifyIndex = workflow.indexOf("- name: Verify published TypeScript tooling")
-    const smokeIndex = workflow.indexOf("- name: Smoke published TypeScript tooling")
-
-    assert.ok(verifyIndex >= 0, "release workflow must verify published tooling")
-    assert.ok(smokeIndex > verifyIndex, "published smoke must follow metadata verification")
-    assert.match(
-      workflow,
-      /- name: Verify published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000/,
-    )
-    assert.match(
-      workflow,
-      /- name: Smoke published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling/,
-    )
-  })
-
-  it("verifies and then runs the Docker recovery smoke against the published sandbox", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const verifyIndex = workflow.indexOf("- name: Verify published Docker sandbox")
-    const smokeIndex = workflow.indexOf("- name: Smoke published Docker sandbox PID recovery")
-
-    assert.ok(verifyIndex >= 0, "release workflow must verify the published sandbox")
-    assert.ok(smokeIndex > verifyIndex, "Docker recovery smoke must follow metadata verification")
-    assert.match(
-      workflow,
-      /published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000/,
-    )
-    assert.match(
-      workflow,
-      /published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox/,
-    )
-  })
-
-  it("keeps each registry delay below one minute and the total wait bounded", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const match = workflow.match(/--wait-attempts (\d+) --wait-delay-ms (\d+)/)
-
-    assert.ok(match, "release verification must declare bounded wait settings")
-    const attempts = Number(match[1])
-    const delayMs = Number(match[2])
-    assert.ok(delayMs < 60_000)
-    assert.ok((attempts - 1) * delayMs < 30 * 60_000)
-  })
-
-  it("documents the manual rerun path when Changesets reports no publication", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-
-    assert.doesNotMatch(workflow, /Runs last so it can never affect the actual publish/)
-    assert.match(workflow, /published=false.*skip.*post-publish/is)
-    assert.match(workflow, /Published Artifact Verification.*exact version.*typescript-tooling/is)
-  })
-})
+function workflowCommandFlags(run, executable) {
+  const lines = run.split(/\r?\n/u)
+  const start = lines.findIndex((entry) => entry.includes(executable))
+  assert.notEqual(start, -1)
+  const command = []
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index]
+    command.push(line.replace(/\\\s*$/u, ""))
+    if (!/\\\s*$/u.test(line)) break
+  }
+  return [...command.join(" ").matchAll(/(?:^|\s)(--[a-z][a-z0-9-]*)\b/gu)].map(([, flag]) => flag)
+}
 
 describe("expectedFilesForPackage", () => {
   it("returns AG-UI entrypoint expectations", () => {
