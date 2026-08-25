@@ -484,6 +484,28 @@ describe("canonical Kubernetes CI evidence", () => {
     expect(requireNamedStep(steps, "Run full-arc assertions").run).toBe(
       "sh test/k8s-smoke/assert-k8s.sh",
     )
+
+    const infraInstall = requireString(
+      requireNamedStep(steps, "Install sandbox-infra chart").run,
+      "sandbox-k8s-e2e infrastructure install",
+    )
+    expect(infraInstall).toContain("install dawn-sandbox-infra charts/dawn-sandbox-infra")
+    expect(infraInstall).toContain("-n dawn-app")
+    expect(infraInstall).not.toContain("-n dawn-sandboxes")
+    expect(infraInstall).not.toContain("--create-namespace")
+
+    const cleanup = requireString(
+      requireNamedStep(steps, "Diagnostics + cleanup").run,
+      "sandbox-k8s-e2e cleanup",
+    )
+    expect(cleanup).toContain("uninstall dawn-sandbox-infra -n dawn-app")
+    expect(cleanup).not.toContain("uninstall dawn-sandbox-infra -n dawn-sandboxes")
+
+    const appValues = requireRecord(
+      parse(readFileSync(resolve(repoRoot, "test/k8s-smoke/values-dawn-app.yaml"), "utf8")),
+      "full-arc dawn-app values",
+    )
+    expect(appValues).not.toHaveProperty("serviceAccount")
     assertExplicitKubernetesContexts(steps, "sandbox-k8s-e2e")
   })
 
@@ -505,6 +527,8 @@ describe("canonical Kubernetes CI evidence", () => {
     expect(run).toContain(".images.reachabilityProbe")
     expect(run).toContain("--set-string image.digest=")
     expect(run).not.toContain("--set image.tag=")
+    expect(run).not.toContain("serviceAccount.create")
+    expect(run).not.toContain("serviceAccount.name")
     expect(run).toContain('--image="$REACHABILITY_IMAGE"')
     assertExplicitKubernetesContexts(steps, "chart-apply-smoke")
   })

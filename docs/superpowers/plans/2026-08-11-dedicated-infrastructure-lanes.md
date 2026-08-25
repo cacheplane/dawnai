@@ -919,8 +919,9 @@ The encoded body must:
 2. split `images.placeholderApp` into repository and digest and validate both
    it and `images.reachabilityProbe` as digest-pinned;
 3. run the CI `helm install dawn-app charts/dawn-app` values exactly:
-   placeholder repository/digest, port `8080`, health path `/`, service
-   account creation/name, `--wait --timeout 3m`;
+   placeholder repository/digest, port `8080`, health path `/`, and `--wait
+   --timeout 3m`; the chart defaults create the application-owned ServiceAccount
+   under the release fullname;
 4. wait for `deploy/dawn-app` for 120 seconds; and
 5. run the pinned reachability image and curl
    `http://dawn-app.default.svc.cluster.local/`.
@@ -932,8 +933,6 @@ helm --kube-context "<context>" install dawn-app charts/dawn-app \
   --set-string "image.repository=<placeholder-repository>" \
   --set-string "image.digest=<placeholder-digest>" \
   --set containerPort=8080 --set healthPath=/ \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app-smoke \
   --wait --timeout 3m
 kubectl --context "<context>" rollout status deploy/dawn-app --timeout=120s
 kubectl --context "<context>" run curl \
@@ -1032,9 +1031,10 @@ The encoded body must:
 6. run `sh test/k8s-smoke/build-image.sh k8s <registry-url>
    <run-unique-app-tag>`, stop the registry, and load that exact tag;
 7. build/load the run-unique K8s aimock tag;
-8. create `dawn-app`, install `dawn-sandbox-infra` with
-   `values-sandbox-infra.yaml`, deploy/wait for aimock, and install
-   `dawn-app` with `values-dawn-app.yaml`;
+8. create `dawn-app`, install the `dawn-sandbox-infra` release there with
+   `values-sandbox-infra.yaml` while its resources remain in `dawn-sandboxes`,
+   deploy/wait for aimock, and install `dawn-app` with
+   `values-dawn-app.yaml` using the chart's ServiceAccount defaults;
 9. run `DAWN_TEST_SMOKE_E2E=1 DAWN_TEST_K8S_CONTEXT=<context>
    sh test/k8s-smoke/assert-k8s.sh`; and
 10. diagnose before uninstalling exact releases/namespaces and deleting the
@@ -1045,7 +1045,7 @@ The workload argv are exactly equivalent to:
 ```bash
 kubectl --context "<context>" create namespace dawn-app
 helm --kube-context "<context>" install dawn-sandbox-infra \
-  charts/dawn-sandbox-infra -n dawn-sandboxes --create-namespace \
+  charts/dawn-sandbox-infra -n dawn-app \
   -f test/k8s-smoke/values-sandbox-infra.yaml --wait
 kubectl --context "<context>" apply \
   -f test/k8s-smoke/aimock.k8s.yaml
@@ -1063,7 +1063,7 @@ Cleanup uses only this disposable cluster/context and these exact names:
 
 ```bash
 helm --kube-context "<context>" uninstall dawn-app -n dawn-app
-helm --kube-context "<context>" uninstall dawn-sandbox-infra -n dawn-sandboxes
+helm --kube-context "<context>" uninstall dawn-sandbox-infra -n dawn-app
 kubectl --context "<context>" delete namespace dawn-app dawn-sandboxes \
   --ignore-not-found=true --wait=false
 kind delete cluster --name "<owned-cluster>"

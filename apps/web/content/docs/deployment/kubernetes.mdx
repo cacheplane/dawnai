@@ -97,9 +97,11 @@ The chart defaults are:
 
 For an app that uses `kubernetesSandbox`, use the default application-owned ServiceAccount in the management namespace. Add that planned ServiceAccount as a cross-namespace subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
 
-First export the release's effective values, including every existing RoleBinding subject:
+First capture the installed infrastructure chart version and export the release's effective values, including every existing RoleBinding subject:
 
 ```bash
+INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace dawn-app | awk '$1 == "VERSION:" { print $2 }')"
+test -n "$INFRA_CHART_VERSION"
 helm get values dawn-sandbox-infra --all --output yaml \
   --namespace dawn-app \
   > dawn-sandbox-infra-rbac-values.yaml
@@ -119,6 +121,7 @@ Inspect the complete file, then apply it. Helm replaces arrays as values, so do 
 
 ```bash
 helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --version "$INFRA_CHART_VERSION" \
   --namespace dawn-app \
   --values dawn-sandbox-infra-rbac-values.yaml
 ```

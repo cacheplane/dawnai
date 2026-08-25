@@ -3316,6 +3316,16 @@ if (appChartValuesSource.includes("dawn-orchestrator")) {
     "charts/dawn-app/values.yaml must not retain the retired dawn-orchestrator ServiceAccount topology",
   )
 }
+const sandboxInfraChartSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-sandbox-infra/Chart.yaml"),
+  "utf8",
+)
+const sandboxInfraChart = parseYaml(sandboxInfraChartSource)
+if (sandboxInfraChart?.version !== "0.1.4") {
+  failures.push(
+    `charts/dawn-sandbox-infra/Chart.yaml must publish the documentation patch as version 0.1.4; found ${sandboxInfraChart?.version ?? "missing"}`,
+  )
+}
 const canonicalKubernetesSandboxUrl = "https://dawnai.org/docs/sandbox/kubernetes"
 const canonicalKubernetesSandboxUrlCount =
   appChartValuesSource.split(canonicalKubernetesSandboxUrl).length - 1
@@ -3418,6 +3428,52 @@ const infrastructureChartReadmeSource = readFileSync(
   resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
   "utf8",
 )
+const appChartNotesSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
+  "utf8",
+)
+const rbacOnlyUpgradeContracts = [
+  {
+    file: "charts/dawn-sandbox-infra/README.md",
+    source: infrastructureChartReadmeSource,
+  },
+  {
+    file: "apps/web/content/docs/deployment/kubernetes.mdx",
+    source: kubernetesDeploymentSource,
+  },
+  {
+    file: "charts/dawn-app/templates/NOTES.txt",
+    source: appChartNotesSource,
+  },
+]
+for (const { file, source } of rbacOnlyUpgradeContracts) {
+  const captureIndex = source.indexOf('INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra')
+  const guardIndex = source.indexOf('test -n "$INFRA_CHART_VERSION"', captureIndex)
+  const upgrades = [
+    ...source.matchAll(/^\s*helm upgrade dawn-sandbox-infra\b(?:[^\n]*\\\n)*[^\n]*/gm),
+  ]
+  const rbacUpgrades = upgrades
+    .map((match) => ({ index: match.index, command: match[0].replaceAll(/\\\s*\n\s*/g, " ") }))
+    .filter(({ command }) => command.includes("--values dawn-sandbox-infra-rbac-values.yaml"))
+
+  if (captureIndex === -1 || !source.includes(`awk '$1 == "VERSION:" { print $2 }')"`)) {
+    failures.push(`${file} must capture the installed infrastructure chart VERSION table row`)
+  }
+  if (guardIndex <= captureIndex) {
+    failures.push(`${file} must reject an empty installed infrastructure chart version`)
+  }
+  if (rbacUpgrades.length !== 1) {
+    failures.push(`${file} must contain exactly one RBAC-only infrastructure upgrade`)
+    continue
+  }
+  const rbacUpgrade = rbacUpgrades[0]
+  if (!rbacUpgrade?.command.includes('--version "$INFRA_CHART_VERSION"')) {
+    failures.push(`${file} RBAC-only infrastructure upgrade must reuse INFRA_CHART_VERSION`)
+  }
+  if (rbacUpgrade === undefined || guardIndex >= rbacUpgrade.index) {
+    failures.push(`${file} must guard INFRA_CHART_VERSION before the RBAC-only upgrade`)
+  }
+}
 const standaloneValuesMarker = "For a fresh release, prepare `dawn-sandbox-infra-values.yaml`"
 const standaloneValuesSource = infrastructureChartReadmeSource.slice(
   infrastructureChartReadmeSource.indexOf(standaloneValuesMarker),

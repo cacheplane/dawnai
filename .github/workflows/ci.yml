@@ -851,7 +851,7 @@ jobs:
       - name: Install sandbox-infra chart
         run: |
           helm --kube-context "$DAWN_TEST_K8S_CONTEXT" install dawn-sandbox-infra charts/dawn-sandbox-infra \
-            -n dawn-sandboxes --create-namespace \
+            -n dawn-app \
             -f test/k8s-smoke/values-sandbox-infra.yaml --wait
 
       - name: Deploy aimock
@@ -881,7 +881,7 @@ jobs:
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
           echo "----- teardown -----"
           helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-app -n dawn-app || true
-          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-sandbox-infra -n dawn-sandboxes || true
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-sandbox-infra -n dawn-app || true
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" delete namespace dawn-app --ignore-not-found --wait=false || true
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true
 
@@ -1019,7 +1019,6 @@ jobs:
             --set-string image.repository="$PLACEHOLDER_REPOSITORY" \
             --set-string image.digest="$PLACEHOLDER_DIGEST" \
             --set containerPort=8080 --set healthPath=/ \
-            --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \
             --wait --timeout 3m
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" rollout status deploy/dawn-app --timeout=120s
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" run curl --image="$REACHABILITY_IMAGE" --restart=Never --rm -i --quiet -- \

@@ -59,9 +59,12 @@ helm install dawn-sandbox-infra ./charts/dawn-sandbox-infra \
   --values dawn-sandbox-infra-values.yaml
 ```
 
-For an existing release, first export its effective values:
+For an existing release, first capture its installed chart version and export
+its effective values:
 
 ```sh
+INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace dawn-app | awk '$1 == "VERSION:" { print $2 }')"
+test -n "$INFRA_CHART_VERSION"
 helm get values dawn-sandbox-infra --all --output yaml \
   --namespace dawn-app \
   > dawn-sandbox-infra-rbac-values.yaml
@@ -75,6 +78,7 @@ file, then apply it:
 
 ```sh
 helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --version "$INFRA_CHART_VERSION" \
   --namespace dawn-app \
   --values dawn-sandbox-infra-rbac-values.yaml
 ```

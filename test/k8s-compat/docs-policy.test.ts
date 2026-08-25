@@ -14,6 +14,7 @@ const repoRoot = resolve(__dirname, "../..")
 const documentationPaths = {
   contributorStandards: resolve(repoRoot, "AGENTS.md"),
   chart: resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
+  sandboxInfraChart: resolve(repoRoot, "charts/dawn-sandbox-infra/Chart.yaml"),
   chartValues: resolve(repoRoot, "charts/dawn-sandbox-infra/values.yaml"),
   chartNotes: resolve(repoRoot, "charts/dawn-sandbox-infra/templates/NOTES.txt"),
   dawnAppChart: resolve(repoRoot, "charts/dawn-app/Chart.yaml"),
@@ -47,6 +48,7 @@ const crossNamespaceDocumentation = [
   "sandboxGuide",
   "deploymentGuide",
 ] as const
+const rbacOnlyUpgradeDocumentation = ["chart", "dawnAppNotes", "deploymentGuide"] as const
 const preflightDocumentation = ["chart", "sandboxGuide"] as const
 const storageDocumentation = ["chart", "sandboxGuide", "contributors"] as const
 const compatibilityDisclaimer =
@@ -280,6 +282,18 @@ function makesUnsupportedCompatibilityClaim(source: string): boolean {
 }
 
 describe("Kubernetes compatibility documentation policy", () => {
+  test("publishes the infrastructure documentation patch as chart 0.1.4", async () => {
+    const { dawnAppChart, sandboxInfraChart } = await loadDocumentation()
+    const infrastructureMetadata = parse(sandboxInfraChart) as {
+      readonly version?: unknown
+      readonly appVersion?: unknown
+    }
+    const applicationMetadata = parse(dawnAppChart) as { readonly appVersion?: unknown }
+
+    expect(infrastructureMetadata.version).toBe("0.1.4")
+    expect(infrastructureMetadata.appVersion).toBe(applicationMetadata.appVersion)
+  })
+
   test("derives every documented Kubernetes target and tool version from policy", async () => {
     const [policy, documentation] = await Promise.all([
       loadCompatibilityPolicy(),
@@ -541,6 +555,43 @@ Managed Kubernetes services require separate validation.`,
     )
     expect(chartNotesCommands[0]?.command).toContain("--version {{ .Chart.Version }}")
     expect(chartNotesCommands[0]?.command).toContain("--namespace {{ .Release.Namespace }}")
+  })
+
+  test("pins RBAC-only upgrades to the installed infrastructure chart version", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of rbacOnlyUpgradeDocumentation) {
+      const source = documentation[name]
+      const captureIndex = source.indexOf(
+        'INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra',
+      )
+      const guardIndex = source.indexOf('test -n "$INFRA_CHART_VERSION"', captureIndex)
+      const versionReuseIndex = source.indexOf('--version "$INFRA_CHART_VERSION"', captureIndex)
+      const upgrades = infrastructureHelmCommands(source).filter(
+        ({ command, verb }) =>
+          verb === "upgrade" && command.includes("--values dawn-sandbox-infra-rbac-values.yaml"),
+      )
+
+      expect(
+        captureIndex,
+        `${name} must capture the installed infrastructure chart version`,
+      ).toBeGreaterThanOrEqual(0)
+      expect(source, `${name} must parse Helm's portable VERSION table row`).toContain(
+        `awk '$1 == "VERSION:" { print $2 }')"`,
+      )
+      expect(guardIndex, `${name} must reject an empty installed chart version`).toBeGreaterThan(
+        captureIndex,
+      )
+      expect(upgrades, `${name} must publish one RBAC-only infrastructure upgrade`).toHaveLength(1)
+      expect(
+        upgrades[0]?.command,
+        `${name} RBAC-only upgrade must reuse the installed version`,
+      ).toContain('--version "$INFRA_CHART_VERSION"')
+      expect(
+        versionReuseIndex,
+        `${name} must guard the installed version before the RBAC-only upgrade`,
+      ).toBeGreaterThan(guardIndex)
+    }
   })
 
   test("defines the canonical app subject before the initial infrastructure and app installs", async () => {

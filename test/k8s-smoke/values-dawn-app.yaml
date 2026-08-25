@@ -13,13 +13,12 @@ image:
   # on a registry.
   pullPolicy: Never
 
-# create + name: the app runs under its own SA, added as a cross-namespace
-# orchestrator subject by values-sandbox-infra.yaml so it can create sandbox
-# Pods in dawn-sandboxes. automountServiceAccountToken defaults true (the app
-# needs the token to call the Kubernetes API).
-serviceAccount:
-  create: true
-  name: dawn-app
+# Exercise the chart defaults: serviceAccount.create is true and an empty name
+# resolves to the release fullname (`dawn-app`). values-sandbox-infra.yaml adds
+# that application-owned ServiceAccount as a cross-namespace orchestrator
+# subject so it can create sandbox Pods in dawn-sandboxes. The chart's
+# automountServiceAccountToken default remains true because the app needs the
+# token to call the Kubernetes API.
 
 # The node-target server listens on :8000 and serves health at /healthz
 # (chart defaults, restated here for clarity).

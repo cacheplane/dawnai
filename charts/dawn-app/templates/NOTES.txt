@@ -52,8 +52,11 @@ management namespace. Confirm it exists before sending traffic.
 Before sending sandbox traffic, bind that ServiceAccount to the sandbox-infra
 orchestrator Role without overwriting existing cross-namespace subjects.
 
-First export the release's effective values:
+First capture the installed infrastructure chart version and export the
+release's effective values:
 
+  INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace {{ .Release.Namespace }} | awk '$1 == "VERSION:" { print $2 }')"
+  test -n "$INFRA_CHART_VERSION"
   helm get values dawn-sandbox-infra --all --output yaml \
     --namespace {{ .Release.Namespace }} \
     > dawn-sandbox-infra-rbac-values.yaml
@@ -71,6 +74,7 @@ a guessed numeric subject index:
 
   helm upgrade dawn-sandbox-infra \
     oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --version "$INFRA_CHART_VERSION" \
     --namespace {{ .Release.Namespace }} \
     --values dawn-sandbox-infra-rbac-values.yaml
 
