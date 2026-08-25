@@ -112,6 +112,23 @@ export function canonicalAbandonmentBytes(value) {
   return bytes
 }
 
+export function parseAbandonmentArtifactContext(value, options) {
+  const expectations = snapshotJson(options)
+  assertExactFields(expectations, ["candidate"], "abandonment artifact context expectations")
+  const candidate = validateCandidate(expectations.candidate)
+  const { decoded, inputBytes } = parseArtifactContextInput(value)
+  const context = validateArtifactContext(decoded, candidate)
+  const canonical = encodeArtifactContext(context)
+  if (inputBytes !== null && !inputBytes.equals(canonical)) {
+    throw new TypeError("Abandonment artifact context bytes are not canonical")
+  }
+  return context
+}
+
+export function canonicalAbandonmentArtifactContextBytes(value, options) {
+  return encodeArtifactContext(parseAbandonmentArtifactContext(value, options))
+}
+
 export function canonicalAbandonmentReleaseBody(input) {
   const source = snapshotJson(input)
   const keys = isRecord(source) ? Object.keys(source) : []
@@ -1013,6 +1030,37 @@ function parseCanonicalAbandonmentBytes(bytes) {
     environment: EXPECTED_ENVIRONMENT,
     packageNames: CANONICAL_PACKAGE_NAMES,
   })
+}
+
+function parseArtifactContextInput(value) {
+  if (typeof value !== "string" && !(value instanceof Uint8Array)) {
+    return { decoded: value, inputBytes: null }
+  }
+  const bytes = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value)
+  assertPayloadByteLength(
+    bytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.manifestBytes,
+    "Abandonment artifact context",
+  )
+  let decoded
+  try {
+    decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } catch (error) {
+    throw new TypeError("Abandonment artifact context bytes are not valid UTF-8 JSON", {
+      cause: error,
+    })
+  }
+  return { decoded, inputBytes: bytes }
+}
+
+function encodeArtifactContext(value) {
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(value), null, 2)}\n`, "utf8")
+  assertPayloadByteLength(
+    bytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.manifestBytes,
+    "Abandonment artifact context",
+  )
+  return bytes
 }
 
 function assertFreshAuthorization(record, now) {

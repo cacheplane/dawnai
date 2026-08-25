@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
 import * as nodeFileSystem from "node:fs/promises"
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -659,7 +659,7 @@ test("release CLI rejects unknown, duplicate, missing, and unpaired command argu
   }
 })
 
-test("abandon, observe, and wait-audit CLI routes coexist", async (t) => {
+test("abandon, abandonment-context, observe, and wait-audit CLI routes coexist", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-release-cli-routes-"))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const missing = (name) => join(directory, `${name}.json`)
@@ -674,6 +674,15 @@ test("abandon, observe, and wait-audit CLI routes coexist", async (t) => {
       "route probe",
       "--artifact-context",
       missing("context"),
+    ],
+    [
+      "abandonment-context",
+      "--version",
+      CANDIDATE.version,
+      "--commit-sha",
+      CANDIDATE.commitSha,
+      "--output",
+      missing("abandonment-context"),
     ],
     [
       "observe",
@@ -695,12 +704,242 @@ test("abandon, observe, and wait-audit CLI routes coexist", async (t) => {
     ],
   ]
 
-  for (const argv of routes) {
+  for (const [index, argv] of routes.entries()) {
     await assert.rejects(
-      runReleaseCli(argv, { cwd: directory, github: { reader: {}, writer: {} } }),
-      (error) => error?.code === "ENOENT" && !/unsupported/u.test(error.message),
+      runReleaseCli(argv, {
+        cwd: directory,
+        github: { reader: {}, writer: {} },
+        ...(index === 1
+          ? {
+              git: {},
+              npm: { observePackageVersion: async () => ({}) },
+              attestations: { verify: async () => ({}) },
+              npmAuditFactory: { create: async () => ({}) },
+              inventory: { read: async () => ({}) },
+              controllerMarker: {},
+              environment: abandonmentContextEnvironment(),
+              importModule: async () => ({
+                async createAbandonmentArtifactContext() {
+                  throw Object.assign(new Error("route reached"), { code: "ROUTE_REACHED" })
+                },
+                canonicalAbandonmentArtifactContextBytes: () => Buffer.from("{}\n"),
+              }),
+            }
+          : {}),
+      }),
+      (error) =>
+        index === 1
+          ? error?.code === "ROUTE_REACHED"
+          : error?.code === "ENOENT" && !/unsupported/u.test(error.message),
     )
   }
+})
+
+test("abandonment-context CLI accepts only candidate identity and writes bare canonical context", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandonment-context-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const output = join(directory, "artifact-context.json")
+  const context = { predecessor: "CANDIDATE_TAGGED", exact: true }
+  const calls = []
+  const dependencies = abandonmentContextCliDependencies({
+    directory,
+    async importModule(specifier) {
+      assert.equal(new URL(specifier).pathname.split("/").at(-1), "abandonment-handoff.mjs")
+      return {
+        async createAbandonmentArtifactContext(input, injected) {
+          calls.push({ input, injected })
+          return context
+        },
+        canonicalAbandonmentArtifactContextBytes(value, options) {
+          assert.equal(value, context)
+          assert.deepEqual(options, { candidate: CANDIDATE })
+          return Buffer.from(`${JSON.stringify(value)}\n`)
+        },
+      }
+    },
+  })
+
+  const result = await runReleaseCli(
+    [
+      "abandonment-context",
+      "--version",
+      CANDIDATE.version,
+      "--commit-sha",
+      CANDIDATE.commitSha,
+      "--output",
+      output,
+    ],
+    dependencies,
+  )
+
+  assert.equal(result, context)
+  assert.deepEqual(JSON.parse(await readFile(output, "utf8")), context)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].input.candidate, CANDIDATE)
+  assert.deepEqual({ ...calls[0].input.environment }, abandonmentContextEnvironment())
+  assert.equal(calls[0].injected.root, directory)
+  assert.equal(calls[0].injected.git, dependencies.git)
+  assert.equal(calls[0].injected.github, dependencies.githubReader)
+  assert.equal(calls[0].injected.npm, dependencies.npm)
+  assert.equal(calls[0].injected.npmAuditFactory, dependencies.npmAuditFactory)
+  assert.equal(calls[0].injected.attestations, dependencies.attestations)
+  assert.equal(calls[0].injected.marker, dependencies.controllerMarker)
+  assert.equal(calls[0].injected.inventory, dependencies.inventory)
+  assert.equal(Object.hasOwn(calls[0].input, "artifactContext"), false)
+})
+
+test("abandonment-context output is canonical, no-clobber, and rejects symlinks", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandonment-output-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const output = join(directory, "artifact-context.json")
+  const argv = [
+    "abandonment-context",
+    "--version",
+    CANDIDATE.version,
+    "--commit-sha",
+    CANDIDATE.commitSha,
+    "--output",
+    output,
+  ]
+  const first = abandonmentContextCliDependencies({
+    directory,
+    context: { predecessor: "CANDIDATE_TAGGED" },
+  })
+  await runReleaseCli(argv, first)
+  await runReleaseCli(argv, first)
+  await assert.rejects(
+    runReleaseCli(
+      argv,
+      abandonmentContextCliDependencies({
+        directory,
+        context: { predecessor: "ARTIFACTS_PREPARED" },
+      }),
+    ),
+    /already exists|different|clobber/iu,
+  )
+  assert.deepEqual(JSON.parse(await readFile(output, "utf8")), {
+    predecessor: "CANDIDATE_TAGGED",
+  })
+
+  const target = join(directory, "target.json")
+  const linked = join(directory, "linked.json")
+  await writeFile(target, "unchanged\n")
+  await symlink(target, linked)
+  await assert.rejects(
+    runReleaseCli([...argv.slice(0, -1), linked], abandonmentContextCliDependencies({ directory })),
+    /regular|symbolic|symlink|bounded|output/iu,
+  )
+  assert.equal(await readFile(target, "utf8"), "unchanged\n")
+})
+
+test("abandonment-context leaves no destination or temporary file when production capture fails", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandonment-failure-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const output = join(directory, "artifact-context.json")
+  const failure = Object.assign(new Error("production capture failed"), {
+    code: "PRODUCTION_CAPTURE_FAILED",
+  })
+  const dependencies = abandonmentContextCliDependencies({
+    directory,
+    async importModule() {
+      return {
+        async createAbandonmentArtifactContext() {
+          await assert.rejects(nodeFileSystem.lstat(output), { code: "ENOENT" })
+          throw failure
+        },
+        canonicalAbandonmentArtifactContextBytes() {
+          assert.fail("failed production capture must not be encoded")
+        },
+      }
+    },
+  })
+
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "abandonment-context",
+        "--version",
+        CANDIDATE.version,
+        "--commit-sha",
+        CANDIDATE.commitSha,
+        "--output",
+        output,
+      ],
+      dependencies,
+    ),
+    (error) => error === failure,
+  )
+  assert.deepEqual(await nodeFileSystem.readdir(directory), [])
+})
+
+test("abandonment-context cleans its temporary file when the no-clobber link fails", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandonment-link-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const output = join(directory, "artifact-context.json")
+  const failure = Object.assign(new Error("link failed"), { code: "LINK_FAILED" })
+  const fileSystem = {
+    ...nodeFileSystem,
+    async link() {
+      throw failure
+    },
+  }
+
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "abandonment-context",
+        "--version",
+        CANDIDATE.version,
+        "--commit-sha",
+        CANDIDATE.commitSha,
+        "--output",
+        output,
+      ],
+      abandonmentContextCliDependencies({ directory, fileSystem }),
+    ),
+    (error) => error === failure,
+  )
+  assert.deepEqual(await nodeFileSystem.readdir(directory), [])
+})
+
+test("abandonment-context fails closed if its output parent is replaced", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandonment-parent-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const parent = join(directory, "output")
+  const displaced = join(directory, "output-displaced")
+  const output = join(parent, "artifact-context.json")
+  await mkdir(parent)
+  let replaced = false
+  const fileSystem = {
+    ...nodeFileSystem,
+    async link(source, target) {
+      if (!replaced && target === output) {
+        replaced = true
+        await rename(parent, displaced)
+        await mkdir(parent)
+      }
+      return nodeFileSystem.link(source, target)
+    },
+  }
+
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "abandonment-context",
+        "--version",
+        CANDIDATE.version,
+        "--commit-sha",
+        CANDIDATE.commitSha,
+        "--output",
+        output,
+      ],
+      abandonmentContextCliDependencies({ directory, fileSystem }),
+    ),
+    /parent|changed|containment/iu,
+  )
+  assert.equal(replaced, true)
+  await assert.rejects(readFile(output), { code: "ENOENT" })
+  await assert.rejects(readFile(join(displaced, "artifact-context.json")), { code: "ENOENT" })
 })
 
 test("abandon CLI derives fresh protected evidence inside each requested mutation authorization", async (t) => {
@@ -1672,6 +1911,67 @@ function observer(values) {
       return structuredClone(value)
     },
   })
+}
+
+function abandonmentContextEnvironment() {
+  return {
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_REF: `refs/tags/v${CANDIDATE.version}`,
+    GITHUB_SHA: CANDIDATE.commitSha,
+    GITHUB_RUN_ID: "7001",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${CANDIDATE.version}`,
+  }
+}
+
+function abandonmentContextCliDependencies({
+  directory,
+  context = { predecessor: "CANDIDATE_TAGGED" },
+  fileSystem = nodeFileSystem,
+  importModule,
+}) {
+  const dependencies = {
+    cwd: directory,
+    fileSystem,
+    environment: abandonmentContextEnvironment(),
+    git: Object.freeze({ kind: "git" }),
+    githubReader: Object.freeze({ kind: "github" }),
+    npm: Object.freeze({
+      async observePackageVersion() {
+        return { status: "ABSENT" }
+      },
+    }),
+    npmAuditFactory: Object.freeze({
+      async create() {
+        return { kind: "audit" }
+      },
+    }),
+    attestations: Object.freeze({
+      async verify() {
+        return { status: "VERIFIED", subjects: [] }
+      },
+    }),
+    inventory: Object.freeze({
+      async read() {
+        return { status: "valid", packages: [] }
+      },
+    }),
+    controllerMarker: Object.freeze({ schemaVersion: 1 }),
+    importModule:
+      importModule ??
+      (async (specifier) => {
+        assert.equal(new URL(specifier).pathname.split("/").at(-1), "abandonment-handoff.mjs")
+        return {
+          async createAbandonmentArtifactContext() {
+            return context
+          },
+          canonicalAbandonmentArtifactContextBytes(value) {
+            return Buffer.from(`${JSON.stringify(value)}\n`, "utf8")
+          },
+        }
+      }),
+  }
+  return dependencies
 }
 
 function plannerFor({ state, disposition, transition }) {

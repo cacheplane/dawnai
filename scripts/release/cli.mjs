@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
 import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
@@ -10,6 +10,7 @@ import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "./smoke-result.m
 
 const COMMANDS = Object.freeze({
   abandon: Object.freeze(["version", "commit-sha", "reason", "artifact-context"]),
+  "abandonment-context": Object.freeze(["version", "commit-sha", "output"]),
   observe: Object.freeze(["event", "report", "github-output"]),
   tag: Object.freeze(["candidate"]),
   prepare: Object.freeze([
@@ -53,6 +54,9 @@ export async function runReleaseCli(argv, dependencies = {}) {
   if (parsed.command === "abandon") {
     return runAbandon(parsed.options, runtime)
   }
+  if (parsed.command === "abandonment-context") {
+    return runAbandonmentContext(parsed.options, runtime)
+  }
   if (parsed.command === "observe") {
     return runObserve(parsed.options, runtime)
   }
@@ -93,6 +97,69 @@ export async function runReleaseCli(argv, dependencies = {}) {
     return runPublishRelease(parsed.options, runtime)
   }
   throw new TypeError("Release CLI command is unsupported")
+}
+
+async function runAbandonmentContext(options, runtime) {
+  const candidate = candidateDocument({
+    version: options.version,
+    commitSha: options["commit-sha"],
+  })
+  const outputPath = resolveCliPath(options.output, runtime.cwd)
+  const module = await runtime.importModule(
+    new URL("./abandonment-handoff.mjs", import.meta.url).href,
+  )
+  const createContext = moduleFunction(
+    module,
+    "createAbandonmentArtifactContext",
+    "abandonment-context creator",
+  )
+  const canonicalContextBytes = moduleFunction(
+    module,
+    "canonicalAbandonmentArtifactContextBytes",
+    "abandonment-context encoder",
+  )
+  const environment = projectEnvironment(runtime.environment, [
+    "GITHUB_REPOSITORY",
+    "GITHUB_REF",
+    "GITHUB_SHA",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_WORKFLOW_REF",
+  ])
+  let context = null
+  await writeContainedCanonicalOutput(
+    runtime.fileSystem,
+    outputPath,
+    "abandonment artifact context",
+    async () => {
+      const [git, github, npm, npmAuditFactory, attestations, marker] = await Promise.all([
+        requireProductionGit(runtime),
+        requireProductionGitHub(runtime),
+        requireNpm(runtime),
+        requireNpmAuditFactory(runtime),
+        requireAttestations(runtime),
+        readControllerMarker(runtime),
+      ])
+      context = await createContext(
+        { candidate, environment },
+        {
+          root: runtime.cwd,
+          git,
+          github,
+          npm,
+          npmAuditFactory,
+          attestations,
+          marker,
+          ...(runtime.inventory === undefined ? {} : { inventory: runtime.inventory }),
+        },
+      )
+      return canonicalContextBytes(context, { candidate })
+    },
+  )
+  if (context === null) {
+    throw new Error("Release CLI abandonment artifact context was not created")
+  }
+  return context
 }
 
 async function runAbandon(options, runtime) {
@@ -1931,6 +1998,232 @@ async function writeCanonicalFile(fileSystem, filePath, bytes, label) {
       throw new Error(`Release CLI ${label} output already exists with different bytes`)
     }
   }
+}
+
+async function writeContainedCanonicalOutput(fileSystem, filePath, label, produceBytes) {
+  if (
+    typeof fileSystem?.open !== "function" ||
+    typeof fileSystem?.lstat !== "function" ||
+    typeof fileSystem?.link !== "function" ||
+    typeof fileSystem?.unlink !== "function" ||
+    typeof produceBytes !== "function" ||
+    !Number.isInteger(fsConstants.O_DIRECTORY) ||
+    !Number.isInteger(fsConstants.O_NOFOLLOW)
+  ) {
+    throw new TypeError(`Release CLI ${label} output containment is unavailable`)
+  }
+  const parentPath = path.dirname(filePath)
+  let parentHandle
+  try {
+    parentHandle = await fileSystem.open(
+      parentPath,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    )
+  } catch (error) {
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError(`Release CLI ${label} output parent must be one regular directory`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+
+  let parentIdentity
+  let temporaryPath = null
+  let temporaryCreated = false
+  let linkedIdentity = null
+  let existingIdentity = null
+  let expected = null
+  let primaryError = null
+  try {
+    parentIdentity = await parentHandle.stat({ bigint: true })
+    if (!parentIdentity.isDirectory()) {
+      throw new TypeError(`Release CLI ${label} output parent must be one regular directory`)
+    }
+    await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+
+    const bytes = await produceBytes()
+    if (
+      !(bytes instanceof Uint8Array) ||
+      bytes.byteLength < 1 ||
+      bytes.byteLength > MAX_JSON_BYTES
+    ) {
+      throw new TypeError(`Release CLI ${label} output bytes are invalid`)
+    }
+    expected = Buffer.from(bytes)
+    await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+
+    temporaryPath = path.join(
+      parentPath,
+      `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+    )
+    const temporaryHandle = await fileSystem.open(
+      temporaryPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600,
+    )
+    temporaryCreated = true
+    try {
+      await temporaryHandle.writeFile(expected)
+      await temporaryHandle.sync()
+      linkedIdentity = await temporaryHandle.stat({ bigint: true })
+      if (
+        !linkedIdentity.isFile() ||
+        linkedIdentity.nlink !== 1n ||
+        linkedIdentity.size !== BigInt(expected.byteLength)
+      ) {
+        throw new Error(`Release CLI ${label} temporary output write was not durable`)
+      }
+    } finally {
+      await temporaryHandle.close()
+    }
+
+    await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+    try {
+      await fileSystem.link(temporaryPath, filePath)
+      await assertLinkedOutput(fileSystem, filePath, linkedIdentity, label, false)
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+        throw error
+      }
+      const existing = await readExistingContainedOutput(
+        fileSystem,
+        filePath,
+        MAX_JSON_BYTES,
+        label,
+      )
+      if (!existing.bytes.equals(expected)) {
+        throw new Error(`Release CLI ${label} output already exists with different bytes`)
+      }
+      existingIdentity = existing.identity
+      linkedIdentity = null
+    }
+    await parentHandle.sync()
+    await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+  } catch (error) {
+    primaryError = error
+  }
+
+  let cleanupError = null
+  if (temporaryCreated) {
+    try {
+      await fileSystem.unlink(temporaryPath)
+      await parentHandle.sync()
+    } catch (error) {
+      cleanupError = error
+    }
+  }
+  if (primaryError === null && cleanupError === null) {
+    try {
+      await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+      if (linkedIdentity !== null) {
+        await assertLinkedOutput(fileSystem, filePath, linkedIdentity, label, true)
+      } else {
+        await assertExistingOutput(fileSystem, filePath, existingIdentity, label)
+      }
+    } catch (error) {
+      primaryError = error
+    }
+  }
+
+  let closeError = null
+  try {
+    await parentHandle.close()
+  } catch (error) {
+    closeError = error
+  }
+  const errors = [primaryError, cleanupError, closeError].filter((error) => error !== null)
+  if (errors.length > 1) {
+    const firstMessage =
+      typeof errors[0]?.message === "string" ? errors[0].message : `Release CLI ${label} failed`
+    throw new AggregateError(errors, `${firstMessage}; output cleanup also failed`)
+  }
+  if (errors.length === 1) throw errors[0]
+}
+
+async function readExistingContainedOutput(fileSystem, filePath, maximumBytes, label) {
+  let handle
+  try {
+    handle = await fileSystem.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError(`Release CLI ${label} output must be one regular file`, { cause: error })
+    }
+    throw error
+  }
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (
+      !before.isFile() ||
+      before.nlink < 1n ||
+      before.size < 1n ||
+      before.size > BigInt(maximumBytes) ||
+      before.size > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new TypeError(`Release CLI ${label} output must be one bounded regular file`)
+    }
+    const bytes = Buffer.allocUnsafe(Number(before.size))
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat({ bigint: true })
+    if (offset !== bytes.byteLength || !sameCanonicalOutput(before, after)) {
+      throw new Error(`Release CLI ${label} output changed while it was read`)
+    }
+    await assertExistingOutput(fileSystem, filePath, after, label)
+    return { bytes, identity: after }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function assertContainedParent(fileSystem, parentPath, expected, label) {
+  const actual = await fileSystem.lstat(parentPath, { bigint: true })
+  if (
+    !actual.isDirectory() ||
+    actual.isSymbolicLink() ||
+    actual.dev !== expected.dev ||
+    actual.ino !== expected.ino
+  ) {
+    throw new Error(`Release CLI ${label} output parent changed during containment`)
+  }
+}
+
+async function assertLinkedOutput(fileSystem, filePath, expected, label, unlinkedTemporary) {
+  const actual = await fileSystem.lstat(filePath, { bigint: true })
+  if (
+    !actual.isFile() ||
+    actual.isSymbolicLink() ||
+    (unlinkedTemporary ? actual.nlink !== 1n : actual.nlink < 2n) ||
+    actual.dev !== expected.dev ||
+    actual.ino !== expected.ino ||
+    actual.size !== expected.size
+  ) {
+    throw new Error(`Release CLI ${label} output changed during containment`)
+  }
+}
+
+async function assertExistingOutput(fileSystem, filePath, expected, label) {
+  const actual = await fileSystem.lstat(filePath, { bigint: true })
+  if (actual.isSymbolicLink() || !sameCanonicalOutput(expected, actual)) {
+    throw new Error(`Release CLI ${label} output changed during containment`)
+  }
+}
+
+function sameCanonicalOutput(before, after) {
+  return (
+    after.isFile() &&
+    after.size === before.size &&
+    after.dev === before.dev &&
+    after.ino === before.ino &&
+    after.nlink === before.nlink &&
+    after.mtimeNs === before.mtimeNs &&
+    after.ctimeNs === before.ctimeNs
+  )
 }
 
 function resolveCliPath(value, cwd) {
