@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process"
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
+import { mkdtemp, open, readdir, readFile, realpath, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+export const PUBLISHED_RELEASE_WORKFLOW = ".github/workflows/release.yml"
+export const PUBLISHED_RELEASE_REPOSITORY = "https://github.com/cacheplane/dawnai"
 
 export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
@@ -84,6 +88,69 @@ export function resolvePackageSet(name, publicPackages = []) {
 
 export function normalizeCliArgs(args) {
   return args[0] === "--" ? args.slice(1) : args
+}
+
+export function publicNpmEnvironment({ home, extra = {}, env = process.env } = {}) {
+  if (typeof home !== "string" || home.length === 0) {
+    throw new TypeError("Public npm environment requires an isolated home directory")
+  }
+  const allowed = [
+    "PATH",
+    "SystemRoot",
+    "ComSpec",
+    "PATHEXT",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+  ]
+  const output = {}
+  for (const name of allowed) {
+    if (typeof env[name] === "string") output[name] = env[name]
+  }
+  return {
+    ...output,
+    ...extra,
+    HOME: home,
+    USERPROFILE: home,
+    npm_config_registry: "https://registry.npmjs.org",
+    npm_config_userconfig: join(home, ".npmrc"),
+    npm_config_cache: join(home, ".npm-cache"),
+    npm_config_always_auth: "false",
+  }
+}
+
+export async function readBoundedRegularFile(path, maximumBytes, label = "File") {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new TypeError("maximumBytes must be a positive safe integer")
+  }
+  const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.size <= 0n || before.size > BigInt(maximumBytes)) {
+      throw new Error(`${label} must be a positive regular file within ${maximumBytes} bytes`)
+    }
+    const expectedSize = Number(before.size)
+    const bytes = Buffer.allocUnsafe(expectedSize)
+    let offset = 0
+    while (offset < expectedSize) {
+      const result = await handle.read(bytes, offset, expectedSize - offset, offset)
+      if (result.bytesRead === 0) throw new Error(`${label} changed while it was read`)
+      offset += result.bytesRead
+    }
+    const overflow = Buffer.allocUnsafe(1)
+    if ((await handle.read(overflow, 0, 1, expectedSize)).bytesRead !== 0) {
+      throw new Error(`${label} changed while it was read`)
+    }
+    const after = await handle.stat({ bigint: true })
+    for (const field of ["dev", "ino", "size", "mtimeNs", "ctimeNs"]) {
+      if (before[field] !== after[field]) throw new Error(`${label} changed while it was read`)
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
 }
 
 export function expectedFilesForPackage(packageName) {
@@ -189,6 +256,88 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
   return failures
 }
 
+export function validateExactPublishedPackageEvidence({
+  entry,
+  observation,
+  tarball,
+  signature,
+  commitSha,
+  workflow = PUBLISHED_RELEASE_WORKFLOW,
+}) {
+  if (
+    observation?.status !== "PRESENT" ||
+    observation.operation !== "package-version" ||
+    observation.package === null ||
+    typeof observation.package !== "object"
+  ) {
+    throw new Error(`${entry?.name ?? "package"} exact registry metadata is not present`)
+  }
+  const published = observation.package
+  if (published.name !== entry.name || published.version !== entry.version) {
+    throw new Error(`${entry.name} registry package identity does not match the manifest`)
+  }
+  if (published.integrity !== entry.npmIntegrity) {
+    throw new Error(`${entry.name}@${entry.version} npm integrity does not match the manifest`)
+  }
+  if (published.latest !== entry.version || published.distTags?.latest !== entry.version) {
+    throw new Error(`${entry.name}@${entry.version} latest dist-tag does not match`)
+  }
+  if (tarball?.url !== published.tarballUrl) {
+    throw new Error(`${entry.name}@${entry.version} registry tarball URL does not match metadata`)
+  }
+  const tarballBytes = decodeCanonicalBase64(tarball?.contentBase64, entry.name)
+  const computed = {
+    size: tarballBytes.length,
+    sha1: createHash("sha1").update(tarballBytes).digest("hex"),
+    sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+    sha512: createHash("sha512").update(tarballBytes).digest("hex"),
+  }
+  for (const field of ["size", "sha256", "sha512"]) {
+    if (tarball?.[field] !== entry[field] || computed[field] !== entry[field]) {
+      throw new Error(`${entry.name}@${entry.version} tarball ${field} does not match the manifest`)
+    }
+  }
+  if (tarball.sha1 !== computed.sha1 || published.shasum !== computed.sha1) {
+    throw new Error(`${entry.name}@${entry.version} tarball sha1 does not match registry metadata`)
+  }
+  if (
+    signature?.status !== "PRESENT" ||
+    signature.operation !== "registry-signature" ||
+    signature.signature?.status !== "valid"
+  ) {
+    throw new Error(`${entry.name}@${entry.version} registry signature is not valid`)
+  }
+  const provenance = published.provenance
+  if (provenance?.status !== "PRESENT") {
+    throw new Error(`${entry.name}@${entry.version} npm provenance is not present`)
+  }
+  if (provenance.workflow !== workflow) {
+    throw new Error(`${entry.name}@${entry.version} npm provenance workflow does not match`)
+  }
+  if (provenance.commitSha !== commitSha) {
+    throw new Error(`${entry.name}@${entry.version} npm provenance commit does not match`)
+  }
+  if (provenance.repository !== PUBLISHED_RELEASE_REPOSITORY) {
+    throw new Error(`${entry.name}@${entry.version} npm provenance repository does not match`)
+  }
+  if (provenance.ref !== `refs/tags/v${entry.version}`) {
+    throw new Error(
+      `${entry.name}@${entry.version} npm provenance ref does not match the release tag`,
+    )
+  }
+}
+
+function decodeCanonicalBase64(value, packageName) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${packageName} registry tarball bytes are missing`)
+  }
+  const bytes = Buffer.from(value, "base64")
+  if (bytes.toString("base64") !== value) {
+    throw new Error(`${packageName} registry tarball bytes are not canonical base64`)
+  }
+  return bytes
+}
+
 export async function assertInstalledCoreResolution({ consumerRoot, expectedCoreVersion }) {
   const rootRequire = createRequire(pathToFileURL(join(consumerRoot, "package.json")))
   const vitePackageJsonPath = join(
@@ -244,7 +393,10 @@ export function readField(value, path) {
 }
 
 export async function npmJson(args, options = {}) {
-  const output = await run("npm", [...args, "--json"], { ...options, stdio: "pipe" })
+  const output = await run("npm", [...args, "--json"], {
+    ...options,
+    stdio: "pipe",
+  })
   return JSON.parse(output || "null")
 }
 
@@ -254,8 +406,12 @@ export async function npmView(
 ) {
   try {
     const [versions, tags] = await Promise.all([
-      npmJsonImpl(["view", packageName, "versions"], { timeoutMs: requestTimeoutMs }),
-      npmJsonImpl(["view", packageName, "dist-tags"], { timeoutMs: requestTimeoutMs }),
+      npmJsonImpl(["view", packageName, "versions"], {
+        timeoutMs: requestTimeoutMs,
+      }),
+      npmJsonImpl(["view", packageName, "dist-tags"], {
+        timeoutMs: requestTimeoutMs,
+      }),
     ])
 
     if (!Array.isArray(versions) || versions.some((version) => typeof version !== "string")) {
@@ -382,7 +538,10 @@ export async function waitForPublishedVersions({
             packageName,
           )
           assertNpmViewResult(packageName, view)
-          return { packageName, visible: view?.versions?.includes(version) === true }
+          return {
+            packageName,
+            visible: view?.versions?.includes(version) === true,
+          }
         } catch (error) {
           return { error, packageName, visible: false }
         }
@@ -533,12 +692,21 @@ export async function run(command, args, options = {}) {
   ) {
     throw new TypeError("timeoutMs must be a positive safe integer")
   }
+  if (
+    options.maxOutputBytes !== undefined &&
+    (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes <= 0)
+  ) {
+    throw new TypeError("maxOutputBytes must be a positive safe integer")
+  }
+  if (options.maxOutputBytes !== undefined && options.stdio !== "pipe") {
+    throw new TypeError("maxOutputBytes requires stdio pipe")
+  }
 
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: childProcessEnv(
-        { ...process.env, ...options.env },
+        options.replaceEnv ? (options.env ?? {}) : { ...process.env, ...options.env },
         { includeOpenAi: options.includeOpenAi },
       ),
       shell: process.platform === "win32",
@@ -548,6 +716,8 @@ export async function run(command, args, options = {}) {
     let stdout = ""
     let stderr = ""
     let timedOut = false
+    let outputExceeded = false
+    let outputBytes = 0
     let settled = false
     let forceKillTimer
     const timeoutTimer =
@@ -576,11 +746,26 @@ export async function run(command, args, options = {}) {
       clearTimeout(forceKillTimer)
     }
 
+    const collectOutput = (target, chunk) => {
+      outputBytes += chunk.length
+      if (options.maxOutputBytes !== undefined && outputBytes > options.maxOutputBytes) {
+        if (!outputExceeded) {
+          outputExceeded = true
+          child.kill("SIGTERM")
+          forceKillTimer = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+          }, 250)
+          forceKillTimer.unref()
+        }
+        return target
+      }
+      return target + chunk
+    }
     child.stdout?.on("data", (chunk) => {
-      stdout += chunk
+      stdout = collectOutput(stdout, chunk)
     })
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk
+      stderr = collectOutput(stderr, chunk)
     })
     child.on("error", (error) => {
       cleanupTimers()
@@ -594,6 +779,15 @@ export async function run(command, args, options = {}) {
       cleanupTimers()
       if (timedOut) {
         rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr))
+        return
+      }
+      if (outputExceeded) {
+        const error = new Error(
+          `${command} ${args.join(" ")} exceeded its ${options.maxOutputBytes}-byte output limit`,
+        )
+        error.code = "EOUTPUTLIMIT"
+        error.maxOutputBytes = options.maxOutputBytes
+        rejectOnce(error)
         return
       }
 

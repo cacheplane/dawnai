@@ -121,7 +121,10 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
     await dependencies.startPgvector(containerName)
     const databaseUrl = await dependencies.databaseUrlForPgvector(containerName)
     await dependencies.waitForPgvector(containerName)
-    await dependencies.runRuntimeSmoke(tempDir, { databaseUrl, openai: options.openai })
+    await dependencies.runRuntimeSmoke(tempDir, {
+      databaseUrl,
+      openai: options.openai,
+    })
   } finally {
     if (containerCleanupNeeded) {
       await dependencies.removeContainer(containerName)
@@ -195,7 +198,10 @@ async function selectedPackageVersions(options) {
 
   for (const packageName of packageNames) {
     const { versions, tags } = await npmView(packageName)
-    const version = resolveRequestedVersion({ requested: options.version, tags })
+    const version = resolveRequestedVersion({
+      requested: options.version,
+      tags,
+    })
     if (!versions.includes(version)) {
       throw new Error(`${packageName}@${version} is not present in npm versions`)
     }
@@ -212,7 +218,9 @@ export async function runInstallSmoke(tempDir, packages, overrides = {}) {
   await command("npm", ["pkg", "set", "type=module"], { cwd: tempDir })
 
   const specs = packages.map((pkg) => `${pkg.name}@${pkg.version}`)
-  const install = await command("npm", selectedPackageInstallArgs(packages), { cwd: tempDir })
+  const install = await command("npm", selectedPackageInstallArgs(packages), {
+    cwd: tempDir,
+  })
   const installOutput = `${install.stdout}\n${install.stderr}`
   assertNoNativeInstallOutput(installOutput)
 
@@ -280,7 +288,7 @@ async function assertInstalledPackageIdentities(tempDir, expectedVersions) {
   }
 }
 
-async function runAgUiInstalledProbe(tempDir) {
+export async function runAgUiInstalledProbe(tempDir, overrides = {}) {
   await Promise.all([
     writeFile(resolve(tempDir, "smoke-ag-ui.mjs"), agUiEsmProbeSource(), "utf8"),
     writeFile(resolve(tempDir, "smoke-ag-ui.ts"), agUiTypeProbeSource(), "utf8"),
@@ -292,7 +300,7 @@ async function runAgUiInstalledProbe(tempDir) {
   ])
 
   for (const { command, args } of agUiProbeCommands()) {
-    await runCommand(command, args, { cwd: tempDir })
+    await (overrides.runCommand ?? runCommand)(command, args, { cwd: tempDir })
   }
 
   console.log("T-AG-UI PASS")
@@ -690,13 +698,15 @@ async function removeContainer(containerName) {
   }
 }
 
-export async function runDockerSandboxInstalledProbe(tempDir) {
+export async function runDockerSandboxInstalledProbe(tempDir, overrides = {}) {
   await writeFile(
     resolve(tempDir, "smoke-docker-sandbox.mjs"),
     dockerSandboxInstalledProbeSource(),
     "utf8",
   )
-  const result = await runCommand("node", ["smoke-docker-sandbox.mjs"], { cwd: tempDir })
+  const result = await (overrides.runCommand ?? runCommand)("node", ["smoke-docker-sandbox.mjs"], {
+    cwd: tempDir,
+  })
   process.stdout.write(result.stdout)
   process.stderr.write(result.stderr)
 }
@@ -829,9 +839,9 @@ try {
 `
 }
 
-async function runRuntimeSmoke(tempDir, options) {
+export async function runRuntimeSmoke(tempDir, options, overrides = {}) {
   await writeFile(resolve(tempDir, "smoke-runtime.mjs"), runtimeSmokeSource(), "utf8")
-  const runtime = await runCommand("node", ["smoke-runtime.mjs"], {
+  const runtime = await (overrides.runCommand ?? runCommand)("node", ["smoke-runtime.mjs"], {
     cwd: tempDir,
     env: runtimeEnv(
       {
@@ -856,7 +866,7 @@ function runtimeEnv(extra, options = {}) {
   }
 }
 
-function runtimeSmokeSource() {
+export function runtimeSmokeSource() {
   return `import assert from "node:assert/strict"
 
 import { openaiEmbedder } from "@dawn-ai/langchain"
@@ -976,7 +986,9 @@ export async function runCommand(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: childProcessEnv(options.env ?? process.env, { includeOpenAi: options.includeOpenAi }),
+      env: childProcessEnv(options.env ?? process.env, {
+        includeOpenAi: options.includeOpenAi,
+      }),
       shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
     })
