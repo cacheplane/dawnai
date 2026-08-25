@@ -13,19 +13,23 @@ const COMMANDS = Object.freeze({
   "abandonment-context": Object.freeze(["version", "commit-sha", "output"]),
   observe: Object.freeze(["event", "report", "github-output"]),
   tag: Object.freeze(["candidate"]),
-  prepare: Object.freeze([
-    "candidate",
-    "inventory",
-    "root",
-    "output-dir",
-    "ci-receipt",
-    "prepare-run",
-    "preparation-authority",
-    "source-ref",
-  ]),
+  prepare: Object.freeze(["handoff", "root", "output-dir", "candidate-output"]),
   "record-artifact": Object.freeze(["candidate", "manifest", "artifact-upload-result", "output"]),
   "attestation-input": Object.freeze(["record", "artifact-dir", "output"]),
-  escrow: Object.freeze(["candidate", "record", "artifact-dir", "attestation-bundle"]),
+  "attestation-output": Object.freeze([
+    "record",
+    "artifact-dir",
+    "bundle",
+    "attestation-set",
+    "attestation-bundles-dir",
+  ]),
+  escrow: Object.freeze([
+    "candidate",
+    "record",
+    "artifact-dir",
+    "attestation-set",
+    "attestation-bundles-dir",
+  ]),
   "reconcile-npm": Object.freeze(["candidate", "record", "manifest", "npm-evidence"]),
   "reconcile-smokes": Object.freeze([
     "candidate",
@@ -71,6 +75,9 @@ export async function runReleaseCli(argv, dependencies = {}) {
   }
   if (parsed.command === "attestation-input") {
     return runAttestationInput(parsed.options, runtime)
+  }
+  if (parsed.command === "attestation-output") {
+    return runAttestationOutput(parsed.options, runtime)
   }
   if (parsed.command === "escrow") {
     return runEscrow(parsed.options, runtime)
@@ -480,7 +487,7 @@ function terminalObservePlan({ state, disposition, reason }) {
 }
 
 async function runEscrow(options, runtime) {
-  const [candidate, verified, limitsModule] = await Promise.all([
+  const [candidate, verified, limitsModule, metadataModule] = await Promise.all([
     readCandidate(runtime, options.candidate),
     readVerifiedArtifact({
       runtime,
@@ -488,6 +495,7 @@ async function runEscrow(options, runtime) {
       artifactDirectory: options["artifact-dir"],
     }),
     runtime.importModule(new URL("./limits.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./metadata.mjs", import.meta.url).href),
   ])
   if (
     verified.record.version !== candidate.version ||
@@ -508,29 +516,84 @@ async function runEscrow(options, runtime) {
     limits.attestationBundleBytes,
     Math.floor(limits.attestationBundlesBytes / 22),
   )
-  const bundleBytes = await readRegularFile(
+  const attestationSetBytes = await readRegularFile(
     runtime.fileSystem,
-    resolveCliPath(options["attestation-bundle"], runtime.cwd),
-    maximumBundleBytes,
-    "attestation bundle",
+    resolveCliPath(options["attestation-set"], runtime.cwd),
+    MAX_JSON_BYTES,
+    "attestation set",
   )
-  validateAttestationBundleBytes(bundleBytes)
-  const attestationSet = attestationSetFromEnvironment({
-    candidate,
-    manifest: verified.manifest,
-    manifestSha256: verified.record.manifestSha256,
-    bundleBytes,
-    environment: runtime.environment,
-  })
-  const bundles = attestationSet.subjects.map(({ bundleName }) => ({
-    name: bundleName,
-    bytes: Buffer.from(bundleBytes),
-  }))
-  const [github, npm, attestations, metadataModule] = await Promise.all([
+  const parseAttestationSet = moduleFunction(
+    metadataModule,
+    "parseAttestationSet",
+    "attestation-set parser",
+  )
+  const attestationSet = parseAttestationSet(
+    parseJsonBytes(attestationSetBytes, "attestation set"),
+    {
+      candidate,
+      manifest: verified.manifest,
+      repository: "cacheplane/dawnai",
+    },
+  )
+  if (!Buffer.from(attestationSetBytes).equals(canonicalJsonBytes(attestationSet))) {
+    throw new Error("Release CLI attestation set bytes must be canonical")
+  }
+  const bundleDirectory = resolveCliPath(options["attestation-bundles-dir"], runtime.cwd)
+  const pinnedBundles = await openPinnedDirectory(
+    runtime.fileSystem,
+    bundleDirectory,
+    "attestation bundles directory",
+  )
+  let bundles
+  try {
+    const expectedNames = attestationSet.subjects.map(({ bundleName }) => bundleName)
+    const actualNames = await runtime.fileSystem.readdir(pinnedBundles.readPath)
+    if (
+      !Array.isArray(actualNames) ||
+      actualNames.some((name) => typeof name !== "string") ||
+      !arraysEqual(actualNames.slice().sort(compareText), expectedNames.slice().sort(compareText))
+    ) {
+      throw new Error("Release CLI attestation bundle directory is not the exact 22-file set")
+    }
+    let totalBytes = 0
+    bundles = []
+    let anchor = null
+    for (const subject of attestationSet.subjects) {
+      const bytes = await readRegularFile(
+        runtime.fileSystem,
+        path.join(pinnedBundles.readPath, subject.bundleName),
+        maximumBundleBytes,
+        `attestation bundle ${subject.bundleName}`,
+      )
+      validateAttestationBundleBytes(bytes)
+      totalBytes += bytes.byteLength
+      if (totalBytes > limits.attestationBundlesBytes) {
+        throw new Error("Release CLI attestation bundle set exceeds its shared byte limit")
+      }
+      if (digest(bytes, "sha256") !== subject.bundleSha256) {
+        throw new Error(`Release CLI attestation bundle ${subject.bundleName} digest drifted`)
+      }
+      if (anchor !== null && !Buffer.from(bytes).equals(anchor)) {
+        throw new Error("Release CLI attestation bundle set must replicate one exact bundle")
+      }
+      anchor ??= Buffer.from(bytes)
+      bundles.push({ name: subject.bundleName, bytes: Buffer.from(bytes) })
+    }
+    await assertPinnedDirectoryUnchanged(
+      runtime.fileSystem,
+      pinnedBundles,
+      "attestation bundles directory",
+    )
+  } finally {
+    await pinnedBundles.handle.close()
+  }
+  if (!Array.isArray(bundles) || bundles.length !== 22) {
+    throw new Error("Release CLI attestation bundle set must contain exactly 22 files")
+  }
+  const [github, npm, attestations] = await Promise.all([
     requireGitHub(runtime),
     requireNpm(runtime),
     requireAttestations(runtime),
-    runtime.importModule(new URL("./metadata.mjs", import.meta.url).href),
   ])
   const escrow = moduleFunction(metadataModule, "escrowCandidate", "candidate escrow")
   const publicationState = await capturePublicationState({
@@ -580,6 +643,242 @@ async function runAttestationInput(options, runtime) {
     manifestSha256: verified.record.manifestSha256,
     subjectCount: lines.length,
   })
+}
+
+async function runAttestationOutput(options, runtime) {
+  const [verified, limitsModule, metadataModule] = await Promise.all([
+    readVerifiedArtifact({
+      runtime,
+      recordPath: options.record,
+      artifactDirectory: options["artifact-dir"],
+    }),
+    runtime.importModule(new URL("./limits.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./metadata.mjs", import.meta.url).href),
+  ])
+  const limits = moduleValue(limitsModule, "RELEASE_PAYLOAD_LIMITS", "payload limits")
+  if (
+    limits === null ||
+    typeof limits !== "object" ||
+    !Number.isSafeInteger(limits.attestationBundleBytes) ||
+    !Number.isSafeInteger(limits.attestationBundlesBytes)
+  ) {
+    throw new TypeError("Release CLI payload limits module is invalid")
+  }
+  const maximumBundleBytes = Math.min(
+    limits.attestationBundleBytes,
+    Math.floor(limits.attestationBundlesBytes / 22),
+  )
+  const bundleBytes = await readRegularFile(
+    runtime.fileSystem,
+    resolveCliPath(options.bundle, runtime.cwd),
+    maximumBundleBytes,
+    "attestation action bundle",
+  )
+  validateAttestationBundleBytes(bundleBytes)
+  const attestationSetPath = resolveCliPath(options["attestation-set"], runtime.cwd)
+  const bundlesDirectory = resolveCliPath(options["attestation-bundles-dir"], runtime.cwd)
+  assertAttestationSetOutsideBundleDirectory(attestationSetPath, bundlesDirectory)
+  const expectedNames = [
+    "manifest.json",
+    ...verified.manifest.packages.map(({ filename }) => filename),
+  ].map((name) => `${name}.intoto.jsonl`)
+  const pinnedBundles = await openPinnedDirectory(
+    runtime.fileSystem,
+    bundlesDirectory,
+    "attestation bundles output directory",
+  )
+  try {
+    await inspectPinnedAttestationOutputDirectory({
+      runtime,
+      pinned: pinnedBundles,
+      expectedNames,
+      bundleBytes,
+      maximumBundleBytes,
+      complete: false,
+      unchanged: true,
+    })
+    const attestations = await requireAttestations(runtime)
+    const verifyAnchor = moduleFunction(
+      metadataModule,
+      "verifyReleaseAttestationAnchor",
+      "attestation anchor verifier",
+    )
+    const verifiedAnchor = await verifyAnchor({
+      candidate: verified.candidate,
+      record: verified.record,
+      artifact: verified.artifact,
+      bundleBytes,
+      attestations,
+    })
+    await assertPinnedDirectoryStillCurrent(
+      runtime.fileSystem,
+      pinnedBundles,
+      "attestation bundles output directory",
+    )
+    if (
+      !arraysEqual(
+        verifiedAnchor.attestationSet.subjects.map(({ bundleName }) => bundleName),
+        expectedNames,
+      )
+    ) {
+      throw new Error("Release CLI verified attestation bundle names are inexact")
+    }
+    await assertCanonicalOutputReplayable(
+      runtime.fileSystem,
+      attestationSetPath,
+      canonicalJsonBytes(verifiedAnchor.attestationSet),
+      MAX_JSON_BYTES,
+      "attestation set",
+    )
+    await materializeAttestationEvidence({
+      runtime,
+      pinnedBundles,
+      attestationSet: verifiedAnchor.attestationSet,
+      bundleBytes,
+      attestationSetPath,
+      bundlesDirectory,
+      maximumBundleBytes,
+    })
+    return verifiedAnchor
+  } finally {
+    await pinnedBundles.handle.close()
+  }
+}
+
+async function assertCanonicalOutputReplayable(
+  fileSystem,
+  filePath,
+  expectedBytes,
+  maximumBytes,
+  label,
+) {
+  let metadata
+  try {
+    metadata = await fileSystem.lstat(filePath)
+  } catch (error) {
+    if (error?.code === "ENOENT") return
+    throw error
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
+    throw new TypeError(`Release CLI ${label} output must be one regular file`)
+  }
+  const existing = await readRegularFile(fileSystem, filePath, maximumBytes, label)
+  if (!Buffer.from(existing).equals(Buffer.from(expectedBytes))) {
+    throw new Error(`Release CLI ${label} output already exists with different bytes`)
+  }
+}
+
+async function materializeAttestationEvidence({
+  runtime,
+  pinnedBundles,
+  attestationSet,
+  bundleBytes,
+  attestationSetPath,
+  bundlesDirectory,
+  maximumBundleBytes,
+}) {
+  const expectedNames = attestationSet.subjects.map(({ bundleName }) => bundleName)
+  for (const bundleName of expectedNames) {
+    await assertPinnedDirectoryStillCurrent(
+      runtime.fileSystem,
+      pinnedBundles,
+      "attestation bundles output directory",
+    )
+    await writeContainedCanonicalOutput(
+      runtime.fileSystem,
+      path.join(bundlesDirectory, bundleName),
+      `attestation bundle ${bundleName}`,
+      async () => Buffer.from(bundleBytes),
+      maximumBundleBytes,
+    )
+    await assertPinnedDirectoryStillCurrent(
+      runtime.fileSystem,
+      pinnedBundles,
+      "attestation bundles output directory",
+    )
+  }
+  await inspectPinnedAttestationOutputDirectory({
+    runtime,
+    pinned: pinnedBundles,
+    expectedNames,
+    bundleBytes,
+    maximumBundleBytes,
+    complete: true,
+    unchanged: false,
+  })
+  await writeContainedCanonicalOutput(
+    runtime.fileSystem,
+    attestationSetPath,
+    "attestation set",
+    async () => canonicalJsonBytes(attestationSet),
+  )
+  await assertPinnedDirectoryStillCurrent(
+    runtime.fileSystem,
+    pinnedBundles,
+    "attestation bundles output directory",
+  )
+}
+
+function assertAttestationSetOutsideBundleDirectory(attestationSetPath, bundlesDirectory) {
+  const relativeSetPath = path.relative(bundlesDirectory, attestationSetPath)
+  if (
+    relativeSetPath === "" ||
+    (!relativeSetPath.startsWith(`..${path.sep}`) &&
+      relativeSetPath !== ".." &&
+      !path.isAbsolute(relativeSetPath))
+  ) {
+    throw new TypeError("Release CLI attestation set must be outside the bundle directory")
+  }
+}
+
+async function inspectPinnedAttestationOutputDirectory({
+  runtime,
+  pinned,
+  expectedNames,
+  bundleBytes,
+  maximumBundleBytes,
+  complete,
+  unchanged,
+}) {
+  await assertPinnedDirectoryStillCurrent(
+    runtime.fileSystem,
+    pinned,
+    "attestation bundles output directory",
+  )
+  const names = await runtime.fileSystem.readdir(pinned.readPath)
+  if (
+    !Array.isArray(names) ||
+    names.some((name) => typeof name !== "string") ||
+    names.some((name) => !expectedNames.includes(name)) ||
+    (complete &&
+      !arraysEqual(names.slice().sort(compareText), expectedNames.slice().sort(compareText)))
+  ) {
+    throw new Error("Release CLI attestation bundle output directory has an inexact file set")
+  }
+  for (const name of names) {
+    const bytes = await readRegularFile(
+      runtime.fileSystem,
+      path.join(pinned.readPath, name),
+      maximumBundleBytes,
+      `existing attestation bundle ${name}`,
+    )
+    if (!Buffer.from(bytes).equals(Buffer.from(bundleBytes))) {
+      throw new Error(`Release CLI existing attestation bundle ${name} conflicts`)
+    }
+  }
+  if (unchanged) {
+    await assertPinnedDirectoryUnchanged(
+      runtime.fileSystem,
+      pinned,
+      "attestation bundles output directory",
+    )
+  } else {
+    await assertPinnedDirectoryStillCurrent(
+      runtime.fileSystem,
+      pinned,
+      "attestation bundles output directory",
+    )
+  }
 }
 
 async function readVerifiedArtifact({ runtime, recordPath, artifactDirectory }) {
@@ -693,57 +992,6 @@ function validateAttestationBundleBytes(bytes) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Release CLI attestation bundle is not one JSON object")
   }
-}
-
-function attestationSetFromEnvironment({
-  candidate,
-  manifest,
-  manifestSha256,
-  bundleBytes,
-  environment,
-}) {
-  const expected = {
-    GITHUB_REPOSITORY: "cacheplane/dawnai",
-    GITHUB_REF: `refs/tags/v${candidate.version}`,
-    GITHUB_SHA: candidate.commitSha,
-    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${candidate.version}`,
-  }
-  for (const [name, value] of Object.entries(expected)) {
-    if (environment[name] !== value) {
-      throw new Error(`Release CLI attestation identity ${name} does not match the candidate`)
-    }
-  }
-  const workflowRunId = positiveEnvironmentInteger(environment.GITHUB_RUN_ID, "workflow run ID")
-  const runAttempt = positiveEnvironmentInteger(
-    environment.GITHUB_RUN_ATTEMPT,
-    "workflow run attempt",
-  )
-  const bundleSha256 = digest(bundleBytes, "sha256")
-  const subjects = [
-    { name: "manifest.json", sha256: manifestSha256 },
-    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
-  ]
-  if (subjects.length !== 22) {
-    throw new Error("Release CLI attestation set must contain exactly 22 subjects")
-  }
-  return Object.freeze({
-    repository: "cacheplane/dawnai",
-    workflow: ".github/workflows/release.yml",
-    sourceRef: `refs/tags/v${candidate.version}`,
-    commitSha: candidate.commitSha,
-    workflowRunId,
-    runAttempt,
-    subjects: Object.freeze(
-      subjects.map((subject) =>
-        Object.freeze({
-          subjectName: subject.name,
-          subjectSha256: subject.sha256,
-          bundleName: `${subject.name}.intoto.jsonl`,
-          bundleSha256,
-        }),
-      ),
-    ),
-  })
 }
 
 async function capturePublicationState({
@@ -1250,42 +1498,39 @@ async function runTag(options, runtime) {
 }
 
 async function runPrepare(options, runtime) {
-  const candidate = await readCandidate(runtime, options.candidate)
-  const inventory = await readJsonFile(
+  const handoffBytes = await readRegularFile(
     runtime.fileSystem,
-    resolveCliPath(options.inventory, runtime.cwd),
-    MAX_MANIFEST_BYTES,
-    "inventory",
-  )
-  const ci = await readJsonFile(
-    runtime.fileSystem,
-    resolveCliPath(options["ci-receipt"], runtime.cwd),
+    resolveCliPath(options.handoff, runtime.cwd),
     MAX_JSON_BYTES,
-    "CI receipt",
+    "preparation handoff",
   )
-  const prepareRun = await readJsonFile(
+  const [handoffModule, prepareModule] = await Promise.all([
+    runtime.importModule(new URL("./workflow-handoff.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./prepare.mjs", import.meta.url).href),
+  ])
+  const parseHandoff = moduleFunction(
+    handoffModule,
+    "parsePreparationHandoff",
+    "preparation handoff parser",
+  )
+  const handoff = parseHandoff(handoffBytes)
+  const candidate = candidateDocument(handoff.candidate)
+  const prepare = moduleFunction(prepareModule, "prepareReleaseArtifacts", "release preparation")
+  await writeContainedCanonicalOutput(
     runtime.fileSystem,
-    resolveCliPath(options["prepare-run"], runtime.cwd),
-    MAX_JSON_BYTES,
-    "prepare run receipt",
+    resolveCliPath(options["candidate-output"], runtime.cwd),
+    "candidate",
+    async () => canonicalJsonBytes(candidate),
   )
-  const preparationAuthority = await readJsonFile(
-    runtime.fileSystem,
-    resolveCliPath(options["preparation-authority"], runtime.cwd),
-    MAX_JSON_BYTES,
-    "preparation authority",
-  )
-  const module = await runtime.importModule(new URL("./prepare.mjs", import.meta.url).href)
-  const prepare = moduleFunction(module, "prepareReleaseArtifacts", "release preparation")
   return prepare({
     candidate,
-    inventory,
+    inventory: handoff.inventory,
     root: resolveCliPath(options.root, runtime.cwd),
     outputDir: resolveCliPath(options["output-dir"], runtime.cwd),
-    ci,
-    prepareRun,
-    preparationAuthority,
-    sourceRef: options["source-ref"],
+    ci: handoff.ciReceipt,
+    prepareRun: handoff.prepareRun,
+    preparationAuthority: handoff.preparationAuthority,
+    sourceRef: handoff.sourceRef,
   })
 }
 
@@ -1791,6 +2036,10 @@ function normalizeArtifactUpload(value, manifest) {
 
 async function readJsonFile(fileSystem, filePath, maximumBytes, label) {
   const bytes = await readRegularFile(fileSystem, filePath, maximumBytes, label)
+  return parseJsonBytes(bytes, label)
+}
+
+function parseJsonBytes(bytes, label) {
   let value
   try {
     value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
@@ -1897,6 +2146,22 @@ async function assertPinnedDirectoryUnchanged(fileSystem, pinned, label) {
   }
 }
 
+async function assertPinnedDirectoryStillCurrent(fileSystem, pinned, label) {
+  const opened = await pinned.handle.stat({ bigint: true })
+  const current = await fileSystem.lstat(pinned.originalPath, { bigint: true })
+  if (
+    !opened.isDirectory() ||
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    opened.dev !== pinned.before.dev ||
+    opened.ino !== pinned.before.ino ||
+    current.dev !== pinned.before.dev ||
+    current.ino !== pinned.before.ino
+  ) {
+    throw new Error(`Release CLI ${label} path changed while it was used`)
+  }
+}
+
 function sameOpenedDirectory(before, after) {
   return (
     after.isDirectory() &&
@@ -2000,13 +2265,21 @@ async function writeCanonicalFile(fileSystem, filePath, bytes, label) {
   }
 }
 
-async function writeContainedCanonicalOutput(fileSystem, filePath, label, produceBytes) {
+async function writeContainedCanonicalOutput(
+  fileSystem,
+  filePath,
+  label,
+  produceBytes,
+  maximumBytes = MAX_JSON_BYTES,
+) {
   if (
     typeof fileSystem?.open !== "function" ||
     typeof fileSystem?.lstat !== "function" ||
     typeof fileSystem?.link !== "function" ||
     typeof fileSystem?.unlink !== "function" ||
     typeof produceBytes !== "function" ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 1 ||
     !Number.isInteger(fsConstants.O_DIRECTORY) ||
     !Number.isInteger(fsConstants.O_NOFOLLOW)
   ) {
@@ -2043,11 +2316,7 @@ async function writeContainedCanonicalOutput(fileSystem, filePath, label, produc
     await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
 
     const bytes = await produceBytes()
-    if (
-      !(bytes instanceof Uint8Array) ||
-      bytes.byteLength < 1 ||
-      bytes.byteLength > MAX_JSON_BYTES
-    ) {
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength < 1 || bytes.byteLength > maximumBytes) {
       throw new TypeError(`Release CLI ${label} output bytes are invalid`)
     }
     expected = Buffer.from(bytes)
@@ -2087,12 +2356,7 @@ async function writeContainedCanonicalOutput(fileSystem, filePath, label, produc
         await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
         throw error
       }
-      const existing = await readExistingContainedOutput(
-        fileSystem,
-        filePath,
-        MAX_JSON_BYTES,
-        label,
-      )
+      const existing = await readExistingContainedOutput(fileSystem, filePath, maximumBytes, label)
       if (!existing.bytes.equals(expected)) {
         throw new Error(`Release CLI ${label} output already exists with different bytes`)
       }
@@ -2353,17 +2617,6 @@ function hasExactDataFields(value, fields) {
     Object.keys(value).length === fields.length &&
     fields.every((field) => Object.hasOwn(value, field))
   )
-}
-
-function positiveEnvironmentInteger(value, label) {
-  if (typeof value !== "string" || !DECIMAL_ID_PATTERN.test(value)) {
-    throw new TypeError(`Release CLI ${label} environment value is invalid`)
-  }
-  const result = Number(value)
-  if (!Number.isSafeInteger(result) || result < 1) {
-    throw new TypeError(`Release CLI ${label} environment value is invalid`)
-  }
-  return result
 }
 
 function timestamp(now) {

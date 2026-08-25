@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
 import * as nodeFileSystem from "node:fs/promises"
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -21,6 +21,7 @@ import {
   parseSmokeResult,
   REQUIRED_RELEASE_SMOKE_LANES,
 } from "../smoke-result.mjs"
+import { canonicalPreparationHandoffBytes } from "../workflow-handoff.mjs"
 import {
   candidate as markerCandidate,
   observationForMarker,
@@ -503,99 +504,116 @@ test("CLI input reads stay pinned to the opened file across a path replacement r
   assert.deepEqual(tagged, [CANDIDATE.commitSha])
 })
 
-test("prepare route supplies every authority receipt and exact tag ref without defaults", async (t) => {
+test("prepare consumes only the canonical trusted handoff and emits its exact candidate", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-release-prepare-cli-"))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const outputDir = join(tmpdir(), `dawn-release-prepare-output-${process.pid}`)
-  const inputFiles = {
-    candidate: CANDIDATE,
-    inventory: { status: "valid", packages: [] },
-    ci: {
-      status: "success",
-      retryable: false,
-      commitSha: CANDIDATE.commitSha,
-      workflow: "CI",
-      check: "validate",
-      runId: 101,
-      runAttempt: 1,
-    },
-    run: { id: 102, attempt: 2 },
-    authority: { state: "CANDIDATE_TAGGED", releaseRecord: null, npm: [] },
-  }
-  const paths = Object.fromEntries(
-    await Promise.all(
-      Object.entries(inputFiles).map(async ([name, value]) => {
-        const target = join(directory, `${name}.json`)
-        await writeFile(target, JSON.stringify(value))
-        return [name, target]
-      }),
-    ),
-  )
+  const handoff = preparationHandoff()
+  const handoffPath = join(directory, "preparation-handoff.json")
+  const candidateOutput = join(directory, "candidate.json")
+  await writeFile(handoffPath, canonicalPreparationHandoffBytes(handoff))
   let received
   const result = await runReleaseCli(
     [
       "prepare",
-      "--candidate",
-      paths.candidate,
-      "--inventory",
-      paths.inventory,
+      "--handoff",
+      handoffPath,
       "--root",
       directory,
       "--output-dir",
       outputDir,
-      "--ci-receipt",
-      paths.ci,
-      "--prepare-run",
-      paths.run,
-      "--preparation-authority",
-      paths.authority,
-      "--source-ref",
-      `refs/tags/v${CANDIDATE.version}`,
+      "--candidate-output",
+      candidateOutput,
     ],
     {
       cwd: directory,
-      importModule: async () => ({
-        async prepareReleaseArtifacts(input) {
-          received = input
-          return { artifactName: "exact-artifact", manifestSha256: "a".repeat(64) }
-        },
-      }),
+      importModule: async (specifier) => {
+        const name = new URL(specifier).pathname.split("/").at(-1)
+        if (name !== "prepare.mjs") return import(specifier)
+        return {
+          async prepareReleaseArtifacts(input) {
+            received = input
+            return { artifactName: "exact-artifact", manifestSha256: "a".repeat(64) }
+          },
+        }
+      },
     },
   )
   assert.deepEqual(result, {
     artifactName: "exact-artifact",
     manifestSha256: "a".repeat(64),
   })
-  assert.deepEqual(received.candidate, inputFiles.candidate)
-  assert.deepEqual(received.inventory, inputFiles.inventory)
-  assert.deepEqual(received.ci, inputFiles.ci)
-  assert.deepEqual(received.prepareRun, inputFiles.run)
-  assert.deepEqual(received.preparationAuthority, inputFiles.authority)
+  assert.deepEqual(received.candidate, handoff.candidate)
+  assert.deepEqual(received.inventory, handoff.inventory)
+  assert.deepEqual(received.ci, handoff.ciReceipt)
+  assert.deepEqual(received.prepareRun, handoff.prepareRun)
+  assert.deepEqual(received.preparationAuthority, handoff.preparationAuthority)
   assert.equal(received.root, directory)
   assert.equal(received.outputDir, outputDir)
-  assert.equal(received.sourceRef, `refs/tags/v${CANDIDATE.version}`)
+  assert.equal(received.sourceRef, handoff.sourceRef)
   assert.equal(received.fileSystem, undefined)
+  assert.deepEqual(JSON.parse(await readFile(candidateOutput, "utf8")), CANDIDATE)
+  assert.equal((await readFile(candidateOutput)).at(-1), 10)
 
   await assert.rejects(
     runReleaseCli([
       "prepare",
-      "--candidate",
-      paths.candidate,
-      "--inventory",
-      paths.inventory,
+      "--handoff",
+      handoffPath,
       "--root",
       directory,
       "--output-dir",
       outputDir,
-      "--ci-receipt",
-      paths.ci,
-      "--prepare-run",
-      paths.run,
-      "--preparation-authority",
-      paths.authority,
+      "--source-ref",
+      `refs/tags/v${CANDIDATE.version}`,
     ]),
-    /usage|argument|source-ref/iu,
+    /usage|argument|flag/iu,
   )
+})
+
+test("prepare rejects noncanonical handoff bytes and never clobbers candidate output", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-prepare-input-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const handoffPath = join(directory, "preparation-handoff.json")
+  const candidateOutput = join(directory, "candidate.json")
+  const victim = join(directory, "victim.json")
+  const outputDir = join(tmpdir(), `dawn-release-prepare-input-output-${process.pid}`)
+  const argv = [
+    "prepare",
+    "--handoff",
+    handoffPath,
+    "--root",
+    directory,
+    "--output-dir",
+    outputDir,
+    "--candidate-output",
+    candidateOutput,
+  ]
+  let preparations = 0
+  const dependencies = {
+    cwd: directory,
+    async importModule(specifier) {
+      const name = new URL(specifier).pathname.split("/").at(-1)
+      if (name !== "prepare.mjs") return import(specifier)
+      return {
+        async prepareReleaseArtifacts() {
+          preparations += 1
+          return { status: "prepared" }
+        },
+      }
+    },
+  }
+
+  await writeFile(handoffPath, JSON.stringify(preparationHandoff()))
+  await assert.rejects(runReleaseCli(argv, dependencies), /canonical|handoff/iu)
+  await assert.rejects(readFile(candidateOutput), { code: "ENOENT" })
+
+  await writeFile(handoffPath, canonicalPreparationHandoffBytes(preparationHandoff()))
+  await writeFile(victim, "unchanged\n")
+  await symlink(victim, candidateOutput)
+  await assert.rejects(runReleaseCli(argv, dependencies), /regular|output|symbolic/iu)
+  assert.equal(await readFile(victim, "utf8"), "unchanged\n")
+  assert.equal(preparations, 0)
 })
 
 test("record-artifact rejects missing, discoverable-name, and mismatched URL outputs", async (t) => {
@@ -1676,22 +1694,115 @@ test("attestation-input writes one exact 22-subject checksum set from verified a
   )
 })
 
-test("escrow derives exact multi-subject bundles and captures fresh publication absence", async (t) => {
+test("attestation-output verifies the action bundle and materializes exact write-once evidence", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-attestation-output-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const artifactDirectory = join(directory, "artifact")
+  const bundlesDirectory = join(directory, "attestation-bundles")
+  await mkdir(artifactDirectory)
+  await mkdir(bundlesDirectory)
+  const { manifest, record } = await materializeArtifactFixture(artifactDirectory)
+  const recordPath = join(directory, "record.json")
+  const bundlePath = join(directory, "attestation.jsonl")
+  const attestationSetPath = join(directory, "attestation-set.json")
+  const bundle = multiSubjectAttestationBundle(manifest, {
+    workflowRunId: 701,
+    runAttempt: 2,
+  })
+  await Promise.all([
+    writeFile(recordPath, canonicalReleaseRecordBytes(record)),
+    writeFile(bundlePath, bundle),
+  ])
+  let verificationCount = 0
+  let swapDuringVerification = false
+  const argv = [
+    "attestation-output",
+    "--record",
+    recordPath,
+    "--artifact-dir",
+    artifactDirectory,
+    "--bundle",
+    bundlePath,
+    "--attestation-set",
+    attestationSetPath,
+    "--attestation-bundles-dir",
+    bundlesDirectory,
+  ]
+  const dependencies = {
+    cwd: directory,
+    attestations: {
+      async verify(input) {
+        verificationCount += 1
+        assert.equal(input.subjects.length, 22)
+        assert.equal(input.bundles.length, 22)
+        assert.equal(
+          input.bundles.every(({ bytes }) => Buffer.from(bytes).equals(bundle)),
+          true,
+        )
+        if (swapDuringVerification) {
+          await rename(bundlesDirectory, `${bundlesDirectory}-moved`)
+          await mkdir(bundlesDirectory)
+        }
+        return { status: "VERIFIED", subjects: input.subjects }
+      },
+    },
+  }
+  await writeFile(attestationSetPath, "{}\n")
+  await assert.rejects(runReleaseCli(argv, dependencies), /conflict|different|attestation set/iu)
+  assert.deepEqual(await readdir(bundlesDirectory), [])
+  await rm(attestationSetPath)
+
+  const result = await runReleaseCli(argv, dependencies)
+  assert.equal(verificationCount, 2)
+  assert.equal(result.attestationSet.workflowRunId, 701)
+  assert.equal(result.attestationSet.runAttempt, 2)
+  assert.match(result.baseAssetSetSha256, /^[0-9a-f]{64}$/u)
+  const setBytes = await readFile(attestationSetPath)
+  const attestationSet = parseAttestationSet(JSON.parse(setBytes), {
+    candidate: CANDIDATE,
+    manifest,
+    repository: "cacheplane/dawnai",
+  })
+  assert.deepEqual(setBytes, canonicalTestJsonBytes(attestationSet))
+  const names = (await readdir(bundlesDirectory)).sort()
+  assert.deepEqual(names, attestationSet.subjects.map(({ bundleName }) => bundleName).sort())
+  for (const name of names) {
+    assert.deepEqual(await readFile(join(bundlesDirectory, name)), bundle)
+  }
+
+  const replay = await runReleaseCli(argv, dependencies)
+  assert.deepEqual(replay, result)
+  assert.equal(verificationCount, 3)
+
+  swapDuringVerification = true
+  await assert.rejects(runReleaseCli(argv, dependencies), /directory|changed|containment/iu)
+})
+
+test("escrow reads one canonical attestation set and its exact pinned 22-bundle directory", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-release-escrow-cli-"))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const artifactDirectory = join(directory, "artifact")
+  const bundlesDirectory = join(directory, "attestation-bundles")
   await mkdir(artifactDirectory)
+  await mkdir(bundlesDirectory)
   const { manifest, record } = await materializeArtifactFixture(artifactDirectory)
   const paths = {
     candidate: join(directory, "candidate.json"),
     record: join(directory, "record.json"),
-    bundle: join(directory, "attestation.jsonl"),
+    attestationSet: join(directory, "attestation-set.json"),
   }
   const bundle = Buffer.from('{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}\n')
+  const attestationSet = attestationSetFixture(manifest, bundle, {
+    workflowRunId: 701,
+    runAttempt: 2,
+  })
   await Promise.all([
     writeFile(paths.candidate, JSON.stringify(CANDIDATE)),
     writeFile(paths.record, canonicalReleaseRecordBytes(record)),
-    writeFile(paths.bundle, bundle),
+    writeFile(paths.attestationSet, canonicalTestJsonBytes(attestationSet)),
+    ...attestationSet.subjects.map(({ bundleName }) =>
+      writeFile(join(bundlesDirectory, bundleName), bundle),
+    ),
   ])
   const githubCalls = []
   let publishJob = {
@@ -1771,6 +1882,7 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
     const name = new URL(specifier).pathname.split("/").at(-1)
     if (name !== "metadata.mjs") return import(specifier)
     return {
+      parseAttestationSet,
       async escrowCandidate(input) {
         received = input
         return { phase: "ESCROWED", status: "escrowed" }
@@ -1786,8 +1898,10 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
       paths.record,
       "--artifact-dir",
       artifactDirectory,
-      "--attestation-bundle",
-      paths.bundle,
+      "--attestation-set",
+      paths.attestationSet,
+      "--attestation-bundles-dir",
+      bundlesDirectory,
     ],
     {
       cwd: directory,
@@ -1816,7 +1930,7 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
     ["runs", { workflow: "release.yml", commitSha: CANDIDATE.commitSha }],
     ["jobs", { runId: 701 }],
   ])
-  assert.equal(received.attestationSet.subjects.length, 22)
+  assert.deepEqual(received.attestationSet, attestationSet)
   assert.deepEqual(
     received.attestationSet.subjects.map(({ subjectName }) => subjectName),
     ["manifest.json", ...manifest.packages.map(({ filename }) => filename)],
@@ -1875,8 +1989,10 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
         paths.record,
         "--artifact-dir",
         artifactDirectory,
-        "--attestation-bundle",
-        paths.bundle,
+        "--attestation-set",
+        paths.attestationSet,
+        "--attestation-bundles-dir",
+        bundlesDirectory,
       ],
       {
         cwd: directory,
@@ -1899,6 +2015,88 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
     /publish-npm already started/iu,
   )
   assert.equal(received, null)
+})
+
+test("escrow rejects attestation-set and bundle-directory drift before publication reads", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-escrow-inputs-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const artifactDirectory = join(directory, "artifact")
+  const bundlesDirectory = join(directory, "attestation-bundles")
+  await mkdir(artifactDirectory)
+  await mkdir(bundlesDirectory)
+  const { manifest, record } = await materializeArtifactFixture(artifactDirectory)
+  const candidatePath = join(directory, "candidate.json")
+  const recordPath = join(directory, "record.json")
+  const attestationSetPath = join(directory, "attestation-set.json")
+  const bundleSource = join(directory, "bundle-source.jsonl")
+  const bundle = Buffer.from('{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}\n')
+  const attestationSet = attestationSetFixture(manifest, bundle)
+  await Promise.all([
+    writeFile(candidatePath, JSON.stringify(CANDIDATE)),
+    writeFile(recordPath, canonicalReleaseRecordBytes(record)),
+    writeFile(attestationSetPath, canonicalTestJsonBytes(attestationSet)),
+    writeFile(bundleSource, bundle),
+    ...attestationSet.subjects.map(({ bundleName }) =>
+      writeFile(join(bundlesDirectory, bundleName), bundle),
+    ),
+  ])
+  const argv = [
+    "escrow",
+    "--candidate",
+    candidatePath,
+    "--record",
+    recordPath,
+    "--artifact-dir",
+    artifactDirectory,
+    "--attestation-set",
+    attestationSetPath,
+    "--attestation-bundles-dir",
+    bundlesDirectory,
+  ]
+  let publicationReads = 0
+  const dependencies = {
+    cwd: directory,
+    github: {
+      reader: {
+        async listWorkflowRuns() {
+          publicationReads += 1
+          throw new Error("publication state must not be read")
+        },
+      },
+      writer: {},
+    },
+    npm: {
+      async observePackageVersion() {
+        publicationReads += 1
+        throw new Error("npm must not be read")
+      },
+    },
+    attestations: {
+      async verify() {
+        assert.fail("escrow must not run before local evidence is exact")
+      },
+    },
+  }
+
+  await writeFile(attestationSetPath, JSON.stringify(attestationSet))
+  await assert.rejects(runReleaseCli(argv, dependencies), /canonical/iu)
+  await writeFile(attestationSetPath, canonicalTestJsonBytes(attestationSet))
+
+  const extraPath = join(bundlesDirectory, "unexpected.intoto.jsonl")
+  await writeFile(extraPath, bundle)
+  await assert.rejects(runReleaseCli(argv, dependencies), /exact|22|file set/iu)
+  await rm(extraPath)
+
+  const firstBundle = join(bundlesDirectory, attestationSet.subjects[0].bundleName)
+  await rm(firstBundle)
+  await symlink(bundleSource, firstBundle)
+  await assert.rejects(runReleaseCli(argv, dependencies), /regular|bundle|symbolic/iu)
+  await rm(firstBundle)
+  await writeFile(firstBundle, bundle)
+
+  await writeFile(firstBundle, Buffer.from('{"drifted":true}\n'))
+  await assert.rejects(runReleaseCli(argv, dependencies), /digest|drift/iu)
+  assert.equal(publicationReads, 0)
 })
 
 function observer(values) {
@@ -2027,6 +2225,111 @@ function sealedManifest() {
       }
     }),
   }
+}
+
+function preparationHandoff() {
+  const inventory = {
+    fixedGroups: [[...CANONICAL_RELEASE_PACKAGE_ORDER]],
+    workspacePackages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name, index) => ({
+      name,
+      version: CANDIDATE.version,
+      path: `packages/package-${index}/package.json`,
+    })),
+  }
+  return {
+    schemaVersion: 1,
+    candidate: CANDIDATE,
+    inventory,
+    ciReceipt: {
+      status: "success",
+      retryable: false,
+      commitSha: CANDIDATE.commitSha,
+      workflow: "CI",
+      check: "validate",
+      runId: 101,
+      runAttempt: 1,
+    },
+    prepareRun: { id: 102, attempt: 2 },
+    preparationAuthority: {
+      state: "CANDIDATE_TAGGED",
+      releaseRecord: "absent",
+      npm: "absent",
+    },
+    sourceRef: `refs/tags/v${CANDIDATE.version}`,
+  }
+}
+
+function attestationSetFixture(
+  manifest,
+  bundleBytes,
+  { workflowRunId = 701, runAttempt = 2 } = {},
+) {
+  const subjects = [
+    { name: "manifest.json", sha256: manifestSha256(manifest) },
+    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+  ]
+  const bundleSha256 = digest(bundleBytes, "sha256")
+  return {
+    repository: "cacheplane/dawnai",
+    workflow: ".github/workflows/release.yml",
+    sourceRef: `refs/tags/v${CANDIDATE.version}`,
+    commitSha: CANDIDATE.commitSha,
+    workflowRunId,
+    runAttempt,
+    subjects: subjects.map((subject) => ({
+      subjectName: subject.name,
+      subjectSha256: subject.sha256,
+      bundleName: `${subject.name}.intoto.jsonl`,
+      bundleSha256,
+    })),
+  }
+}
+
+function multiSubjectAttestationBundle(manifest, { workflowRunId, runAttempt }) {
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: [
+      { name: "manifest.json", digest: { sha256: manifestSha256(manifest) } },
+      ...manifest.packages.map((pkg) => ({
+        name: pkg.filename,
+        digest: { sha256: pkg.sha256 },
+      })),
+    ],
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      runDetails: {
+        metadata: {
+          invocationId: `https://github.com/cacheplane/dawnai/actions/runs/${workflowRunId}/attempts/${runAttempt}`,
+        },
+      },
+    },
+  }
+  return Buffer.from(
+    `${JSON.stringify({
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      dsseEnvelope: {
+        payloadType: "application/vnd.in-toto+json",
+        payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
+        signatures: [{ sig: Buffer.from("verified-signature", "utf8").toString("base64") }],
+      },
+      verificationMaterial: {},
+    })}\n`,
+    "utf8",
+  )
+}
+
+function canonicalTestJsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(canonicalTestJson(value), null, 2)}\n`, "utf8")
+}
+
+function canonicalTestJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalTestJson)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalTestJson(value[key])]),
+  )
 }
 
 function smokeResult(lane, workflowRunId, runAttempt) {
