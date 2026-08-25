@@ -31,6 +31,7 @@ const COMMANDS = Object.freeze({
   ]),
   "dispatch-audit": Object.freeze(["version", "commit-sha", "manifest-sha256", "output"]),
   "record-audit-dispatch": Object.freeze(["candidate", "dispatch-result"]),
+  "wait-audit": Object.freeze(["candidate", "dispatch-result", "output"]),
   "correlate-audit": Object.freeze(["candidate", "dispatch-result", "audit-result"]),
   "publish-release": Object.freeze(["candidate", "record", "audit-result"]),
 })
@@ -74,6 +75,9 @@ export async function runReleaseCli(argv, dependencies = {}) {
   }
   if (parsed.command === "record-audit-dispatch") {
     return runRecordAuditDispatch(parsed.options, runtime)
+  }
+  if (parsed.command === "wait-audit") {
+    return runWaitAudit(parsed.options, runtime)
   }
   if (parsed.command === "correlate-audit") {
     return runCorrelateAudit(parsed.options, runtime)
@@ -751,6 +755,68 @@ async function runRecordAuditDispatch(options, runtime) {
   })
 }
 
+async function runWaitAudit(options, runtime) {
+  const github = await requireGitHub(runtime)
+  const [candidate, dispatch] = await Promise.all([
+    readCandidate(runtime, options.candidate),
+    readJsonFile(
+      runtime.fileSystem,
+      resolveCliPath(options["dispatch-result"], runtime.cwd),
+      MAX_JSON_BYTES,
+      "audit dispatch result",
+    ),
+  ])
+  const runId = auditDispatchRunId(dispatch)
+  const module = await runtime.importModule(new URL("./audit.mjs", import.meta.url).href)
+  const observed = await moduleFunction(
+    module,
+    "waitForAudit",
+    "audit wait",
+  )({
+    runId,
+    candidate,
+    github: github.reader,
+    attempts: 181,
+    delayMs: 10_000,
+    delay: runtime.wait ?? defaultWait,
+    now: runtime.now,
+  })
+  if (observed?.status !== "terminal" || observed.workflowRunId !== runId) {
+    const error = new Error("Independent audit did not reach a terminal state within its deadline")
+    Object.defineProperty(error, "code", { value: "AUDIT_PENDING", enumerable: true })
+    throw error
+  }
+  const terminalModule = await runtime.importModule(
+    new URL("./terminal-records.mjs", import.meta.url).href,
+  )
+  const result = moduleFunction(
+    terminalModule,
+    "parseAuditResult",
+    "audit-result parser",
+  )(observed.result)
+  if (
+    result.version !== candidate.version ||
+    result.commitSha !== candidate.commitSha ||
+    result.workflowRunId !== runId ||
+    observed.runAttempt !== result.runAttempt ||
+    observed.conclusion !== result.conclusion
+  ) {
+    throw new Error("Independent audit terminal result does not match its exact run and candidate")
+  }
+  const bytes = moduleFunction(
+    terminalModule,
+    "canonicalAuditResultBytes",
+    "audit-result canonicalizer",
+  )(result)
+  await writeCanonicalFile(
+    runtime.fileSystem,
+    resolveCliPath(options.output, runtime.cwd),
+    bytes,
+    "audit result",
+  )
+  return result
+}
+
 async function runCorrelateAudit(options, runtime) {
   const github = await requireGitHub(runtime)
   const [candidate, dispatch, auditResult] = await Promise.all([
@@ -1119,6 +1185,30 @@ function candidateDocument(value) {
     throw new TypeError("Release CLI candidate has an invalid exact-key identity")
   }
   return Object.freeze({ ...candidate })
+}
+
+function auditDispatchRunId(value) {
+  const fields = ["workflow", "workflowRunId", "runUrl", "htmlUrl"]
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== fields.length ||
+    !fields.every((field) => Object.hasOwn(value, field)) ||
+    value.workflow !== ".github/workflows/published-artifact-verify.yml" ||
+    !Number.isSafeInteger(value.workflowRunId) ||
+    value.workflowRunId < 1 ||
+    value.runUrl !==
+      `https://api.github.com/repos/cacheplane/dawnai/actions/runs/${value.workflowRunId}` ||
+    value.htmlUrl !== `https://github.com/cacheplane/dawnai/actions/runs/${value.workflowRunId}`
+  ) {
+    throw new TypeError("Release CLI audit dispatch result is invalid")
+  }
+  return value.workflowRunId
+}
+
+function defaultWait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 function isExactSemver(value) {

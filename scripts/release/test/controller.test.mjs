@@ -731,6 +731,7 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
     audit: join(directory, "audit.json"),
     record: join(directory, "record.json"),
     output: join(directory, "dispatch-output.json"),
+    waitOutput: join(directory, "wait-output.json"),
   }
   const dispatchReceipt = {
     workflow: ".github/workflows/published-artifact-verify.yml",
@@ -761,7 +762,10 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
   const importModule = async (specifier) => {
     const name = new URL(specifier).pathname.split("/").at(-1)
     if (name === "terminal-records.mjs") {
-      return { parseAuditResult: (value) => value }
+      return {
+        parseAuditResult: (value) => value,
+        canonicalAuditResultBytes: (value) => Buffer.from(`${JSON.stringify(value)}\n`),
+      }
     }
     if (name === "metadata.mjs") {
       return {
@@ -780,6 +784,16 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
       async recordAuditDispatch(input) {
         calls.push(["record-dispatch", input])
         return { phase: "AUDIT_DISPATCHED" }
+      },
+      async waitForAudit(input) {
+        calls.push(["wait", input])
+        return {
+          status: "terminal",
+          workflowRunId: 501,
+          runAttempt: 1,
+          conclusion: "success",
+          result: audit,
+        }
       },
       async recordAuditAttempt(input) {
         calls.push(["record-attempt", input])
@@ -811,6 +825,20 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
     ["record-audit-dispatch", "--candidate", paths.candidate, "--dispatch-result", paths.dispatch],
     { cwd: directory, github, importModule },
   )
+  const wait = async () => {}
+  await runReleaseCli(
+    [
+      "wait-audit",
+      "--candidate",
+      paths.candidate,
+      "--dispatch-result",
+      paths.dispatch,
+      "--output",
+      paths.waitOutput,
+    ],
+    { cwd: directory, github, importModule, wait },
+  )
+  assert.deepEqual(JSON.parse(await readFile(paths.waitOutput, "utf8")), audit)
   await runReleaseCli(
     [
       "correlate-audit",
@@ -838,17 +866,75 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
 
   assert.deepEqual(
     calls.map(([name]) => name),
-    ["dispatch", "record-dispatch", "record-attempt", "verify-success", "publish"],
+    ["dispatch", "record-dispatch", "wait", "record-attempt", "verify-success", "publish"],
   )
   assert.equal(calls[0][1].github, github.writer)
   assert.equal(calls[1][1].github, github)
-  assert.equal(calls[2][1].github, github)
+  assert.equal(calls[2][1].github, github.reader)
+  assert.equal(calls[2][1].runId, dispatchReceipt.workflowRunId)
+  assert.deepEqual(calls[2][1].candidate, CANDIDATE)
+  assert.equal(calls[2][1].attempts, 181)
+  assert.equal(calls[2][1].delayMs, 10_000)
+  assert.equal(calls[2][1].delay, wait)
+  assert.equal(typeof calls[2][1].now, "function")
   assert.equal(calls[3][1].github, github)
   assert.equal(calls[4][1].github, github)
+  assert.equal(calls[5][1].github, github)
   assert.equal(
     calls.some(([name], index) => name === "publish" && index < calls.length - 1),
     false,
   )
+})
+
+test("wait-audit fails closed without writing a result when the exact run stays pending", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-audit-wait-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidatePath = join(directory, "candidate.json")
+  const dispatchPath = join(directory, "dispatch.json")
+  const outputPath = join(directory, "audit.json")
+  const dispatch = {
+    workflow: ".github/workflows/published-artifact-verify.yml",
+    workflowRunId: 777,
+    runUrl: "https://api.github.com/repos/cacheplane/dawnai/actions/runs/777",
+    htmlUrl: "https://github.com/cacheplane/dawnai/actions/runs/777",
+  }
+  await Promise.all([
+    writeFile(candidatePath, JSON.stringify(CANDIDATE)),
+    writeFile(dispatchPath, JSON.stringify(dispatch)),
+  ])
+  let calls = 0
+  const github = { reader: { capability: "actions-read" }, writer: {} }
+  const wait = async () => {}
+  const now = () => 42
+  const importModule = async () => ({
+    async waitForAudit(input) {
+      calls += 1
+      assert.equal(input.runId, 777)
+      assert.equal(input.github, github.reader)
+      assert.equal(input.wait, undefined)
+      assert.equal(input.delay, wait)
+      assert.equal(input.now, now)
+      return { status: "pending", workflowRunId: 777 }
+    },
+  })
+
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "wait-audit",
+        "--candidate",
+        candidatePath,
+        "--dispatch-result",
+        dispatchPath,
+        "--output",
+        outputPath,
+      ],
+      { cwd: directory, github, importModule, wait, now },
+    ),
+    (error) => error?.code === "AUDIT_PENDING",
+  )
+  assert.equal(calls, 1)
+  await assert.rejects(readFile(outputPath), (error) => error?.code === "ENOENT")
 })
 
 test("npm and smoke reconciliation CLI routes remain separate manifest-bound transitions", async (t) => {
