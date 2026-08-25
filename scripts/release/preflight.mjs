@@ -15,6 +15,8 @@ import {
 import { redactCredentialText } from "./report-render.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
+export { runOwnerPreflightCli } from "./preflight-owner-cli.mjs"
+
 const STATUSES = new Set(["PASS", "FAIL", "WARN", "UNPROVABLE"])
 const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u
@@ -696,4 +698,11 @@ class PreflightInputError extends Error {}
 
 const executedPath =
   process.argv[1] === undefined ? null : pathToFileURL(path.resolve(process.argv[1])).href
-if (executedPath === import.meta.url) process.exitCode = await runReleasePreflight()
+if (executedPath === import.meta.url) {
+  if (["capture", "verify"].includes(process.argv[2])) {
+    const { runOwnerPreflightCli } = await import("./preflight-owner-cli.mjs")
+    process.exitCode = await runOwnerPreflightCli()
+  } else {
+    process.exitCode = await runReleasePreflight()
+  }
+}
