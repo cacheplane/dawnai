@@ -6,6 +6,7 @@ import { resolveTemplateDir } from "../templates.js"
 import { writeTemplate } from "../write-template.js"
 
 export interface GeneratedAppSpecifiers {
+  readonly dawnAgUi: string
   readonly dawnCli: string
   readonly dawnConfigTypescript: string
   readonly dawnCore: string
@@ -46,6 +47,7 @@ export async function createGeneratedApp(
   await writeTemplate({
     replacements: {
       appName: options.appName,
+      dawnAgUiSpecifier: specifiers.dawnAgUi,
       dawnCliSpecifier: specifiers.dawnCli,
       dawnConfigTypescriptSpecifier: specifiers.dawnConfigTypescript,
       dawnCoreSpecifier: specifiers.dawnCore,
@@ -74,6 +76,7 @@ function normalizeSpecifiers(
   specifiers: Partial<GeneratedAppSpecifiers> | undefined,
 ): GeneratedAppSpecifiers {
   return {
+    dawnAgUi: specifiers?.dawnAgUi ?? "workspace:*",
     dawnCli: specifiers?.dawnCli ?? "workspace:*",
     dawnConfigTypescript: specifiers?.dawnConfigTypescript ?? "workspace:*",
     dawnCore: specifiers?.dawnCore ?? "workspace:*",

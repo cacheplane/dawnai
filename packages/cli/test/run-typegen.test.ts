@@ -295,7 +295,13 @@ describe("runTypegen", () => {
   test.each(["app-basic", "app-research"] as const)(
     "keeps the %s template declaration pair in sync with typegen",
     async (templateName) => {
-      const templateDir = join(repoRoot, "packages", "devkit", "templates", templateName)
+      // The research template is an npm workspace: its Dawn app (routes, tools,
+      // and the tracked `.dawn` declarations) lives in `server/`, while the root
+      // only orchestrates. Pointing at `server/` also keeps the `web/` package
+      // out of `installTemplateTypegenDependencies`.
+      const templateRoot = join(repoRoot, "packages", "devkit", "templates", templateName)
+      const templateDir =
+        templateName === "app-research" ? join(templateRoot, "server") : templateRoot
       const trackedPaths = generatedDeclarationFiles.map((fileName) =>
         join(templateDir, ".dawn", fileName),
       )
@@ -348,6 +354,7 @@ async function materializeDevkitTemplate(templateDir: string, appRoot: string): 
   await writeTemplate({
     replacements: {
       appName: "typegen-drift-check",
+      dawnAgUiSpecifier: "workspace:*",
       dawnCliSpecifier: "workspace:*",
       dawnConfigTypescriptSpecifier: "workspace:*",
       dawnCoreSpecifier: "workspace:*",

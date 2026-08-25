@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -59,15 +59,17 @@ function printNextSteps(options: CliOptions): void {
     changeDirectoryStep,
     "  npm install",
     isWindows
-      ? "  Copy-Item -LiteralPath .env.example -Destination .env"
-      : "  cp .env.example .env",
+      ? "  Copy-Item -LiteralPath server/.env.example -Destination server/.env"
+      : "  cp server/.env.example server/.env",
     "  # add OPENAI_API_KEY",
     "  npm run verify",
-    "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+    "",
+    "Then start both processes, one per terminal:",
+    "  npm run dev:server  # agent server on http://127.0.0.1:3002",
+    "  npm run dev:web     # web UI on http://localhost:3010",
     "",
     "See your agent:",
-    "  npx dawn inspect  # memory Inspector (browser UI), in a second terminal",
-    "  # chat UI: https://dawnai.org/docs/recipes/research-web-ui",
+    "  npx dawn inspect  # memory Inspector (browser UI), in a third terminal",
   ]
   const basicSteps = [
     changeDirectoryStep,
@@ -122,6 +124,7 @@ async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<vo
 
   const requiredPaths = [
     resolve(repoRoot, "pnpm-workspace.yaml"),
+    resolve(repoRoot, "packages/ag-ui/package.json"),
     resolve(repoRoot, "packages/core/package.json"),
     resolve(repoRoot, "packages/cli/package.json"),
     resolve(repoRoot, "packages/langchain/package.json"),
@@ -305,6 +308,16 @@ function createTemplateReplacements(
   }
 }
 
+/**
+ * Point every `@dawn-ai/*` edge at the local checkout by APPENDING an
+ * `overrides:` block to the `pnpm-workspace.yaml` the template just wrote.
+ *
+ * It reads and extends rather than emitting the whole file, because the
+ * template owns `packages:` (the research app is a two-package npm workspace:
+ * `server` and `web`) plus its build allowlist. Re-emitting from a literal here
+ * silently replaced those members with a single `.`, leaving pnpm nothing to
+ * install and the overrides applying to nothing.
+ */
 async function applyInternalModePackageOverrides(
   appRoot: string,
   replacements: ReturnType<typeof createTemplateReplacements>,
@@ -326,24 +339,25 @@ async function applyInternalModePackageOverrides(
     "@dawn-ai/testing": replacements.dawnTestingSpecifier,
     "@dawn-ai/workspace": replacements.dawnWorkspaceSpecifier,
   }
-  const lines = [
-    "packages:",
-    "  - .",
-    "",
-    "onlyBuiltDependencies:",
-    "  - esbuild",
-    "",
-    "allowBuilds:",
-    "  esbuild: true",
-    "",
+  const workspacePath = resolve(appRoot, "pnpm-workspace.yaml")
+  const scaffolded = await readFile(workspacePath, "utf8")
+
+  if (/^overrides:/m.test(scaffolded)) {
+    throw new Error(
+      `${workspacePath} already declares "overrides:" — internal mode would append a duplicate ` +
+        "YAML key. Merge the override block into the template instead.",
+    )
+  }
+
+  const overrideBlock = [
     "overrides:",
     ...Object.entries(overrides).map(([name, specifier]) => {
       return `  ${JSON.stringify(name)}: ${JSON.stringify(specifier)}`
     }),
     "",
-  ]
+  ].join("\n")
 
-  await writeFile(resolve(appRoot, "pnpm-workspace.yaml"), lines.join("\n"), "utf8")
+  await writeFile(workspacePath, `${scaffolded.trimEnd()}\n\n${overrideBlock}`, "utf8")
 }
 
 async function pathExists(path: string): Promise<boolean> {
