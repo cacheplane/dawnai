@@ -1,6 +1,7 @@
 # CopilotKit V2 Example Migration — Design
 
 **Date:** 2026-08-18
+**Updated:** 2026-08-25
 **Status:** Implementation complete; verification and WIP reconciliation pending
 
 ## Summary
@@ -8,12 +9,12 @@
 Move the chat and research web examples onto CopilotKit's supported V2 surface
 before completing the dependency-security remediation. Both React frontends
 already imported `@copilotkit/react-core/v2`; this prerequisite selects stable
-CopilotKit `1.68.3` and replaces the two legacy backend endpoint adapters with
+CopilotKit `1.69.0` and replaces the two legacy backend endpoint adapters with
 the V2 Fetch handler.
 
 CopilotKit V2 is an API surface within the stable `@copilotkit/*` 1.x packages.
 It is not a supported `@copilotkit/*@2.x` release. The migration therefore uses
-selected stable `1.68.3` and `/v2` imports. It does not use the deprecated
+selected stable `1.69.0` and `/v2` imports. It does not use the deprecated
 `2.0.0-next.1` publication or the retired `@copilotkitnext/*` packages.
 
 This is the first implementation phase of the revised dependency-security
@@ -35,25 +36,25 @@ and recommends `createCopilotRuntimeHandler` from `@copilotkit/runtime/v2` for
 new Fetch-native integrations. Dawn does not need compatibility with the old
 transport, so retaining both paths would add complexity without product value.
 
-Updating from the installed `1.66.x` line to selected stable `1.68.3` also gives
+Updating from the installed `1.66.x` line to selected stable `1.69.0` also gives
 the security work a cleaner direct-owner baseline. Compatible transitive ranges
 can resolve patched Hono-family and UUID releases without Dawn forcing versions
 through package-manager overrides.
 
 ## Verified Upstream Facts
 
-- `1.68.3` was the selected stable release of `@copilotkit/react-core` and
-  `@copilotkit/runtime` when implementation began.
+- `1.69.0` was the latest stable release of `@copilotkit/react-core` and
+  `@copilotkit/runtime` when the release candidate was refreshed on 2026-08-25.
 - CopilotKit's supported V2 imports are
   `@copilotkit/react-core/v2` and `@copilotkit/runtime/v2`.
 - `@copilotkit/runtime@2.0.0-next.1` is deprecated as an accidental CI
   publication and is not a migration target.
 - `@copilotkitnext/runtime` and `@copilotkitnext/react` are deprecated in favor
   of the normal-package `/v2` exports.
-- Stable `@copilotkit/runtime@1.68.3` still declares
+- Stable `@copilotkit/runtime@1.69.0` still declares
   `@ai-sdk/google-vertex`, so changing the import path does not remove the
   outstanding `@ai-sdk/provider-utils` advisory from the installed graph.
-- CopilotKit `1.68.3` pins its direct AG-UI client/core dependencies to
+- CopilotKit `1.69.0` pins its direct AG-UI client/core dependencies to
   `0.0.57`. Dawn's type-facing `HttpAgent` dependency must stay on that exact
   version to avoid loading a second, potentially type-incompatible
   `AbstractAgent` generation. A separate `@ag-ui/client@0.0.54` remains
@@ -64,14 +65,14 @@ References:
 
 - [Copilot Runtime guidance](https://docs.copilotkit.ai/backend/copilot-runtime)
 - [V2 React migration guide](https://docs.copilotkit.ai/llamaindex/migrate/v2)
-- [CopilotKit v1.68.3 release](https://github.com/CopilotKit/CopilotKit/releases/tag/v1.68.3)
+- [CopilotKit v1.69.0 release](https://github.com/CopilotKit/CopilotKit/releases/tag/v1.69.0)
 
 ## Decisions
 
 1. **Use the selected stable packages.** Raise both examples to
-   `@copilotkit/react-core@^1.68.3` and `@copilotkit/runtime@^1.68.3`. Keep
+   `@copilotkit/react-core@^1.69.0` and `@copilotkit/runtime@^1.69.0`. Keep
    `@ag-ui/client` exactly pinned at `0.0.57` because it remains pre-1.0 and
-   CopilotKit `1.68.3` depends on that exact generation. Do not independently
+   CopilotKit `1.69.0` depends on that exact generation. Do not independently
    update it to `0.0.58`.
 2. **Use V2 imports throughout.** All CopilotKit React imports remain on
    `@copilotkit/react-core/v2`; both server routes move to
@@ -92,7 +93,7 @@ References:
    fallback endpoint, or old-client compatibility layer.
 7. **Align Dawn's React integration owner without raising its consumer floor.**
    Update `packages/ag-ui`'s development dependency on
-   `@copilotkit/react-core` to `^1.68.3`, while preserving its optional peer range
+   `@copilotkit/react-core` to `^1.69.0`, while preserving its optional peer range
    `>=1.66.0`. The package tests against the selected implementation without
    imposing an unnecessary breaking peer requirement on consumers.
 8. **Keep browser verification side-effect free and auditable.** Set
@@ -191,7 +192,7 @@ as a complete audit fix:
   resolve patched versions; their browser behavior remains covered by a Dawn
   integration test.
 - `@ai-sdk/provider-utils` remains under CopilotKit's Google Vertex dependency
-  in stable `1.68.3`. The import migration does not remove it, and Dawn will not
+  in stable `1.69.0`. The import migration does not remove it, and Dawn will not
   force an incompatible transitive version.
 - The Vercel CLI is required by Dawn's native deployment verification lane. Its
   upstream findings remain in the full, development audit only; neither the
@@ -262,8 +263,8 @@ against an integration Dawn immediately intends to replace.
 
 ## Acceptance Criteria
 
-- Both examples use selected stable CopilotKit `1.68.3` package ranges.
-- `packages/ag-ui` tests against `@copilotkit/react-core@^1.68.3` while retaining
+- Both examples use selected stable CopilotKit `1.69.0` package ranges.
+- `packages/ag-ui` tests against `@copilotkit/react-core@^1.69.0` while retaining
   the optional peer range `>=1.66.0`.
 - Every CopilotKit product import uses a supported `/v2` entry point.
 - Neither example contains `ExperimentalEmptyAdapter` or

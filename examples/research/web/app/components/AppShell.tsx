@@ -376,7 +376,7 @@ export function AppShell({
   // like it would apply and does not. `copilotkit.connectAgent()` asks the
   // runtime to replay a thread's historic events, but the only two callers of
   // it live inside `<CopilotChat>`, which this app does not mount, and
-  // `useAgent`'s own thread effect does exactly one thing in 1.68.3:
+  // `useAgent`'s own thread effect does exactly one thing in 1.69.0:
   // `agent.threadId = resolvedThreadId`. Verified live: switching away from a
   // three-message thread and back leaves it empty and fires no network request
   // at all. The server holds that history and this client has to ask for it

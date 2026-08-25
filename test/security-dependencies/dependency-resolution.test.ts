@@ -507,7 +507,7 @@ function providerUtilsRootPathFailure(
     return `${targetIdentity} starts at unexpected importer ${path[0] ?? "<missing>"}`
   }
   const runtimeIndex = path.findIndex((identity) =>
-    isPackageIdentity(identity, "@copilotkit/runtime", (candidate) => candidate === "1.68.3"),
+    isPackageIdentity(identity, "@copilotkit/runtime", (candidate) => candidate === "1.69.0"),
   )
   const vertexIndex = path.findIndex((identity) =>
     isPackageIdentity(
@@ -609,13 +609,13 @@ describe("dependency security graph invariants", () => {
         manifest.dependencies,
         `${manifestPath}.dependencies`,
       )
-      expect(manifestDependencies["@copilotkit/react-core"]).toBe("^1.68.3")
-      expect(manifestDependencies["@copilotkit/runtime"]).toBe("^1.68.3")
+      expect(manifestDependencies["@copilotkit/react-core"]).toBe("^1.69.0")
+      expect(manifestDependencies["@copilotkit/runtime"]).toBe("^1.69.0")
       expect(manifestDependencies["@ag-ui/client"]).toBe("0.0.57")
 
       for (const dependency of ["@copilotkit/react-core", "@copilotkit/runtime"] as const) {
         const owned = importerDependency(workspace, importerName, "dependencies", dependency)
-        expect(owned.specifier).toBe("^1.68.3")
+        expect(owned.specifier).toBe("^1.69.0")
         const target = importerDependencyLocator(
           workspace,
           importerName,
@@ -624,7 +624,7 @@ describe("dependency security graph invariants", () => {
         )
         expect({ name: target.name, version: target.version }).toEqual({
           name: dependency,
-          version: "1.68.3",
+          version: "1.69.0",
         })
       }
       expect(importerDependency(workspace, importerName, "dependencies", "@ag-ui/client")).toEqual({
@@ -653,7 +653,7 @@ describe("dependency security graph invariants", () => {
       `${agUiManifestPath}.devDependencies`,
     )
     expect(agUiDevDependencies["@ag-ui/client"]).toBe("0.0.57")
-    expect(agUiDevDependencies["@copilotkit/react-core"]).toBe("^1.68.3")
+    expect(agUiDevDependencies["@copilotkit/react-core"]).toBe("^1.69.0")
     expect(
       requireStringMap(agUiManifest.peerDependencies, `${agUiManifestPath}.peerDependencies`)[
         "@copilotkit/react-core"
@@ -678,7 +678,7 @@ describe("dependency security graph invariants", () => {
       "devDependencies",
       "@copilotkit/react-core",
     )
-    expect(agUiOwner.specifier).toBe("^1.68.3")
+    expect(agUiOwner.specifier).toBe("^1.69.0")
     const agUiReactCoreOwner = importerDependencyLocator(
       workspace,
       "packages/ag-ui",
@@ -687,14 +687,14 @@ describe("dependency security graph invariants", () => {
     )
     expect({ name: agUiReactCoreOwner.name, version: agUiReactCoreOwner.version }).toEqual({
       name: "@copilotkit/react-core",
-      version: "1.68.3",
+      version: "1.69.0",
     })
   })
 
-  it("contains only CopilotKit 1.68.3 package identities", () => {
+  it("contains only React Core and runtime 1.69.0 package identities", () => {
     const workspace = readWorkspace()
     for (const name of ["@copilotkit/react-core", "@copilotkit/runtime"] as const) {
-      expect(packageVersions(workspace, name)).toEqual(["1.68.3"])
+      expect(packageVersions(workspace, name)).toEqual(["1.69.0"])
     }
   })
 
@@ -783,10 +783,10 @@ describe("dependency security graph invariants", () => {
   it("rejects balanced peer groups whose contents are not locators", () => {
     expect(
       parseLocatorIdentity(
-        "@copilotkit/runtime@1.68.3(@langchain/core@1.2.5(openai@6.45.0(zod@4.4.3)))(vitest@4.1.10)",
+        "@copilotkit/runtime@1.69.0(@langchain/core@1.2.5(openai@6.45.0(zod@4.4.3)))(vitest@4.1.10)",
         "valid real-shape peers",
       ),
-    ).toEqual({ name: "@copilotkit/runtime", version: "1.68.3" })
+    ).toEqual({ name: "@copilotkit/runtime", version: "1.69.0" })
     for (const [label, malformed] of [
       ["missing peer version", "package@1.0.0(peer)"],
       ["invalid peer name", "package@1.0.0(peer!@1.0.0)"],
@@ -879,14 +879,14 @@ describe("dependency security graph invariants", () => {
         "examples/chat/web": {
           dependencies: {
             "@copilotkit/runtime": {
-              specifier: "^1.68.3",
-              version: "1.68.3(zod@4.4.3)",
+              specifier: "^1.69.0",
+              version: "1.69.0(zod@4.4.3)",
             },
           },
         },
       },
       manifestOverrides: {},
-      packages: { "@copilotkit/runtime@1.68.3": {} },
+      packages: { "@copilotkit/runtime@1.69.0": {} },
       snapshots: {},
     }
     expect(() =>
@@ -927,7 +927,7 @@ describe("dependency security graph invariants", () => {
 
   it("rejects malformed provider-utils root paths", () => {
     const target = "@ai-sdk/provider-utils@3.0.50(zod@3.25.76)"
-    const runtime = "@copilotkit/runtime@1.68.3(zod@3.25.76)"
+    const runtime = "@copilotkit/runtime@1.69.0(zod@3.25.76)"
     const vertex = "@ai-sdk/google-vertex@3.0.1(zod@3.25.76)"
     expect(
       providerUtilsRootPathFailure(target, ["examples/chat/web", runtime, vertex, target]),
@@ -962,8 +962,8 @@ describe("dependency security graph invariants", () => {
         "examples/chat/web": {
           dependencies: {
             "@copilotkit/runtime": {
-              specifier: "^1.68.3",
-              version: "1.68.3(zod@3.25.76)",
+              specifier: "^1.69.0",
+              version: "1.69.0(zod@3.25.76)",
             },
           },
         },
@@ -972,7 +972,7 @@ describe("dependency security graph invariants", () => {
       packages: {
         "@ai-sdk/google-vertex@3.0.1": {},
         "@ai-sdk/provider-utils@3.0.50": {},
-        "@copilotkit/runtime@1.68.3": {},
+        "@copilotkit/runtime@1.69.0": {},
       },
       snapshots: {
         "@ai-sdk/google-vertex@3.0.1(zod@3.25.76)": {
@@ -982,7 +982,7 @@ describe("dependency security graph invariants", () => {
         },
         [approvedProvider]: {},
         [orphanProvider]: {},
-        "@copilotkit/runtime@1.68.3(zod@3.25.76)": {
+        "@copilotkit/runtime@1.69.0(zod@3.25.76)": {
           dependencies: {
             "@ai-sdk/google-vertex": "3.0.1(zod@3.25.76)",
           },

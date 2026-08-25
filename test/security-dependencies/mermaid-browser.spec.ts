@@ -186,7 +186,7 @@ function resolveAppGraph(appRelativePath: string): AppGraph {
   const appRoot = resolve(repositoryRoot, appRelativePath)
   const appManifestPath = resolve(appRoot, "package.json")
   const appManifest = readManifest(appManifestPath)
-  if (dependencyRange(appManifest, "@copilotkit/react-core") !== "^1.68.3") {
+  if (dependencyRange(appManifest, "@copilotkit/react-core") !== "^1.69.0") {
     throw new Error("example does not declare the reviewed React Core range")
   }
 
