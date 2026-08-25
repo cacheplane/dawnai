@@ -13,7 +13,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises"
-import { createServer } from "node:http"
+import { createServer, request as httpRequest } from "node:http"
 import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import test from "node:test"
@@ -535,9 +535,15 @@ test("the production npm reader distinguishes exact absence and every determinis
   })
   t.after(() => harness.close())
   await harness.packAndPublish()
+  const registryOrigin = new URL(harness.registry.url).origin
   const reader = createNpmReader({
-    registryUrl: harness.proxy.url,
-    trustedRegistryOrigins: [new URL(harness.proxy.url).origin],
+    registryUrl: harness.registry.url,
+    trustedRegistryOrigins: [registryOrigin],
+    fetchImpl(url, options) {
+      const target = new URL(url)
+      assert.equal(target.origin, registryOrigin)
+      return fetch(new URL(`${target.pathname}${target.search}`, harness.proxy.url), options)
+    },
     timeoutMs: 100,
   })
 
@@ -626,6 +632,148 @@ test("the production npm reader distinguishes exact absence and every determinis
     await stalledClient
   }
   assert.ok(harness.proxy.snapshot().abortedRequests >= 1)
+})
+
+test("the fault proxy preserves an ordinary relative path and exact query", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const target = "/ordinary/%40dawn/package?tag=a%2Fb&empty=&tag=second"
+  const response = await rawHttpRequest(proxy.url, target, {
+    Accept: "application/vnd.npm.install-v1+json",
+  })
+
+  assert.deepEqual(upstream.requests, [
+    {
+      method: "GET",
+      target,
+      host: new URL(upstream.url).host,
+      accept: "application/vnd.npm.install-v1+json",
+      authorization: undefined,
+    },
+  ])
+  assert.deepEqual(response, {
+    statusCode: 200,
+    body: JSON.stringify({ target }),
+  })
+})
+
+test("the fault proxy accepts configured same-origin absolute-form without URL credentials or fragments", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const upstreamUrl = new URL(upstream.url)
+  const target = `${upstreamUrl.protocol}//attacker:secret@${upstreamUrl.host}/absolute?value=a%2Fb#discarded`
+  const response = await rawHttpRequest(proxy.url, target, {
+    Accept: "application/json",
+  })
+
+  assert.deepEqual(upstream.requests, [
+    {
+      method: "GET",
+      target: "/absolute?value=a%2Fb",
+      host: upstreamUrl.host,
+      accept: "application/json",
+      authorization: undefined,
+    },
+  ])
+  assert.deepEqual(response, {
+    statusCode: 200,
+    body: JSON.stringify({ target: "/absolute?value=a%2Fb" }),
+  })
+})
+
+test("the fault proxy rejects a scheme-relative target", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const response = await rawHttpRequest(
+    proxy.url,
+    `//${new URL(upstream.url).host}/scheme-relative`,
+  )
+
+  assert.deepEqual(upstream.requests, [])
+  assert.deepEqual(response, {
+    statusCode: 400,
+    body: JSON.stringify({ code: "INVALID_TARGET" }),
+  })
+})
+
+test("the fault proxy rejects an absolute target on a different loopback port", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const upstreamUrl = new URL(upstream.url)
+  const differentPort =
+    upstreamUrl.port === "65535" ? "65534" : String(Number(upstreamUrl.port) + 1)
+  const response = await rawHttpRequest(
+    proxy.url,
+    `http://127.0.0.1:${differentPort}/different-port`,
+  )
+
+  assert.deepEqual(upstream.requests, [])
+  assert.deepEqual(response, {
+    statusCode: 400,
+    body: JSON.stringify({ code: "INVALID_TARGET" }),
+  })
+})
+
+test("the fault proxy rejects an absolute metadata-service target", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const response = await rawHttpRequest(
+    proxy.url,
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+  )
+
+  assert.deepEqual(upstream.requests, [])
+  assert.deepEqual(response, {
+    statusCode: 400,
+    body: JSON.stringify({ code: "INVALID_TARGET" }),
+  })
+})
+
+test("the fault proxy returns an upstream redirect without following it", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const response = await rawHttpRequest(proxy.url, "/redirect", {
+    Accept: "application/json",
+  })
+
+  assert.deepEqual(upstream.requests, [
+    {
+      method: "GET",
+      target: "/redirect",
+      host: new URL(upstream.url).host,
+      accept: "application/json",
+      authorization: undefined,
+    },
+  ])
+  assert.deepEqual(response, {
+    statusCode: 302,
+    body: "redirected",
+  })
+})
+
+test("the fault proxy rejects an invalid configured upstream", async () => {
+  await assert.rejects(
+    startFaultProxy({ upstreamUrl: "http://169.254.169.254/" }),
+    (error) => error instanceof TypeError && error.message === "Invalid fault proxy upstream",
+  )
+})
+
+test("the fault proxy replaces an attacker-supplied inbound Host with the configured upstream", async (t) => {
+  const { upstream, proxy } = await startRecordedFaultProxy(t)
+  const target = "/host-isolation?exact=true"
+  const response = await rawHttpRequest(proxy.url, target, {
+    Host: "169.254.169.254",
+    Accept: "application/json",
+    Authorization: "Bearer attacker-secret",
+  })
+
+  assert.deepEqual(upstream.requests, [
+    {
+      method: "GET",
+      target,
+      host: new URL(upstream.url).host,
+      accept: "application/json",
+      authorization: undefined,
+    },
+  ])
+  assert.deepEqual(response, {
+    statusCode: 200,
+    body: JSON.stringify({ target }),
+  })
 })
 
 test("the fault proxy is loopback-only, has no network control endpoint, and resets in process", async (t) => {
@@ -1427,6 +1575,99 @@ async function startBoundedUpstream() {
       return closePromise
     },
   }
+}
+
+async function startRecordedFaultProxy(t) {
+  const upstream = await startRecordingUpstream()
+  let proxy
+  t.after(async () => {
+    await proxy?.close()
+    await upstream.close()
+  })
+  proxy = await startFaultProxy({ upstreamUrl: upstream.url })
+  return { upstream, proxy }
+}
+
+async function startRecordingUpstream() {
+  const requests = []
+  const sockets = new Set()
+  const server = createServer((request, response) => {
+    requests.push({
+      method: request.method,
+      target: request.url,
+      host: request.headers.host,
+      accept: request.headers.accept,
+      authorization: request.headers.authorization,
+    })
+    if (request.url === "/redirect") {
+      response.writeHead(302, {
+        Location: "/must-not-follow",
+        "Content-Type": "text/plain",
+        "Content-Length": Buffer.byteLength("redirected"),
+      })
+      response.end("redirected")
+      return
+    }
+    const body = JSON.stringify({ target: request.url })
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    })
+    response.end(body)
+  })
+  server.on("connection", (socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  assert.notEqual(address, null)
+  assert.equal(typeof address, "object")
+  return {
+    url: `http://127.0.0.1:${address.port}/`,
+    requests,
+    async close() {
+      for (const socket of sockets) socket.destroy()
+      await new Promise((resolve, reject) => {
+        server.close((error) =>
+          error === undefined || error?.code === "ERR_SERVER_NOT_RUNNING"
+            ? resolve()
+            : reject(error),
+        )
+      })
+    },
+  }
+}
+
+async function rawHttpRequest(proxyUrl, target, headers = {}) {
+  const proxy = new URL(proxyUrl)
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        protocol: proxy.protocol,
+        hostname: proxy.hostname,
+        port: proxy.port,
+        method: "GET",
+        path: target,
+        headers,
+      },
+      (response) => {
+        const chunks = []
+        response.on("data", (chunk) => chunks.push(chunk))
+        response.once("end", () => {
+          resolve({
+            statusCode: response.statusCode,
+            body: Buffer.concat(chunks).toString("utf8"),
+          })
+        })
+      },
+    )
+    request.once("error", reject)
+    request.end()
+  })
 }
 
 async function startTrackedLoopbackResource({ failClose = false } = {}) {

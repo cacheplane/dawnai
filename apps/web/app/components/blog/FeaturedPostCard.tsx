@@ -19,7 +19,7 @@ export function FeaturedPostCard({ post }: { readonly post: Post }) {
   }
   return (
     <Link
-      href={`/blog/${post.slug}`}
+      href={`/blog/${encodeURIComponent(post.slug)}`}
       className="block p-8 rounded-2xl border border-accent-saas/35 mb-6 transition-transform hover:scale-[1.005]"
       style={{ background: "linear-gradient(180deg,#fff7e0 0%,#ffeec2 100%)" }}
     >

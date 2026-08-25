@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { type CompileOptions, compile, evaluate } from "@mdx-js/mdx"
+import { createElement } from "react"
+import { Fragment, jsx, jsxs } from "react/jsx-runtime"
+import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
 import {
   ALL_DOCS_PAGES,
@@ -164,6 +169,67 @@ interface DocLinkGuardAnalysis {
   readonly canonicalViolations: readonly string[]
 }
 
+interface HastNode {
+  readonly type: string
+  readonly tagName?: string
+  readonly properties?: Record<string, unknown>
+  readonly children?: readonly HastNode[]
+}
+
+type PluginList = NonNullable<CompileOptions["rehypePlugins"]>
+type DocumentationFormat = "md" | "mdx"
+
+async function resolvePlugins(specs: readonly (readonly [string, unknown])[]): Promise<PluginList> {
+  return await Promise.all(
+    specs.map(async ([name, options]) => {
+      const module = (await import(name)) as { default: unknown }
+      return [module.default, options] as unknown as PluginList[number]
+    }),
+  )
+}
+
+const renderedHeadingRemarkPlugins = resolvePlugins(MDX_REMARK_PLUGINS)
+const renderedHeadingRehypePlugins = resolvePlugins(
+  MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
+)
+
+async function renderedHeadingIds(
+  source: string,
+  format: DocumentationFormat = "mdx",
+): Promise<readonly string[]> {
+  const ids: string[] = []
+  const collect = () => (tree: HastNode) => {
+    const visit = (node: HastNode): void => {
+      if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
+        const id = node.properties?.id
+        if (typeof id === "string") ids.push(id)
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(tree)
+  }
+
+  await compile(source, {
+    format,
+    remarkPlugins: await renderedHeadingRemarkPlugins,
+    // Syntax highlighting cannot affect heading identity and is intentionally
+    // omitted from this otherwise shipped MDX/rehype-slug pipeline.
+    rehypePlugins: [...(await renderedHeadingRehypePlugins), collect],
+  })
+  return ids
+}
+
+async function renderedMdxMarkup(source: string): Promise<string> {
+  const module = await evaluate(source, {
+    Fragment,
+    jsx,
+    jsxs,
+    remarkPlugins: await renderedHeadingRemarkPlugins,
+    rehypePlugins: await renderedHeadingRehypePlugins,
+  })
+  return renderToStaticMarkup(createElement(module.default))
+}
+
 let docTitleAnalysisProcessCount = 0
 
 function analyzeCompatibilityStub(
@@ -230,6 +296,32 @@ function analyzeDocLinkGuards(fixture: Record<string, unknown>): DocLinkGuardAna
   expect(result.stderr).toBe("")
   expect(result.stdout).toMatch(/^\{/)
   return JSON.parse(result.stdout) as DocLinkGuardAnalysis
+}
+
+function analyzeMaintainedHeadingIds(source: string, file = "fixture.mdx"): readonly string[] {
+  const result = spawnSync(
+    process.execPath,
+    [CHECK_DOCS_PATH, "--analyze-maintained-heading-ids"],
+    {
+      encoding: "utf8",
+      input: JSON.stringify({ file, source }),
+    },
+  )
+  const stderr = result.stderr ?? ""
+
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `Maintained heading analysis failed with status ${String(result.status)}`,
+        `signal: ${result.signal ?? "none"}`,
+        `error: ${result.error?.message ?? "none"}`,
+        `stderr: ${stderr.slice(0, 2_000) || "none"}`,
+      ].join("\n"),
+    )
+  }
+  expect(stderr).toBe("")
+  expect(result.stdout).toMatch(/^\[/)
+  return JSON.parse(result.stdout) as readonly string[]
 }
 
 function filesUnder(
@@ -571,6 +663,19 @@ export const metadata: Metadata = { title: "Real Title" }
     })
   })
 
+  it("flushes a stdin batch response larger than the stdout pipe buffer", () => {
+    const title = `Large title ${"x".repeat(50_000)}`
+    const [analysis] = analyzeDocTitlesBatch([
+      {
+        mdxSource: `# ${title}\n`,
+        wrapperSource: `export const metadata = { title: ${JSON.stringify(title)} }\n`,
+      },
+    ])
+
+    expect(analysis?.firstH1).toBe(title)
+    expect(analysis?.metadataTitle).toBe(title)
+  })
+
   it("ignores fenced pseudo-H1s before the first rendered H1", () => {
     const analysis = analyzeDocTitles(
       `\`\`\`md
@@ -830,6 +935,108 @@ ${pageSource}`,
   })
 })
 
+describe("maintained documentation heading identity analysis", () => {
+  it("accepts analyzer input larger than an argv payload", () => {
+    const source = `## Large fixture\n${" ".repeat(1_100_000)}`
+
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(["large-fixture"])
+  })
+
+  it("surfaces analyzer subprocess diagnostics", () => {
+    expect(() => analyzeMaintainedHeadingIds("## Invalid <scr<script>ipt> fixture\n")).toThrow(
+      /Maintained heading analysis failed with status 1\nsignal: none\nerror: none\nstderr: /,
+    )
+  })
+
+  it.each([
+    ["inline code", "## Use `@dawn-ai/cli/fetch`\n", ["use-dawn-aiclifetch"]],
+    [
+      "an ordinary Markdown link",
+      "## Read the [deployment guide](/docs/deployment)\n",
+      ["read-the-deployment-guide"],
+    ],
+    ["inline JSX", "## Hello <span>world</span>\n", ["hello-world"]],
+    [
+      "comment-like text in a JSX attribute",
+      '## Heading <span title="<!--">world</span>\n',
+      ["heading-world"],
+    ],
+    [
+      "a link with a nested label",
+      "## [Outer [inner] end](/docs/deployment)\n",
+      ["outer-inner-end"],
+    ],
+    ["repeated headings", "## Repeat\n## Repeat\n", ["repeat", "repeat-1"]],
+    [
+      "masked pseudo-headings",
+      "## Visible\n```md\n## Fenced\n```\n{/* ## Commented */}\n",
+      ["visible"],
+    ],
+  ])("matches rendered heading IDs for %s", async (_label, source, expectedIds) => {
+    const runtimeIds = await renderedHeadingIds(source)
+
+    expect(runtimeIds).toEqual(expectedIds)
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
+  })
+
+  it("preserves nested tag-like text inside rendered inline code", async () => {
+    const source = "## Nested `<scr<script>ipt>` identity\n"
+    const runtimeIds = await renderedHeadingIds(source)
+
+    expect(runtimeIds).toEqual(["nested-scrscriptipt-identity"])
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
+  })
+
+  it("parses standard HTML comments in README Markdown mode", async () => {
+    const source = "<!-- ## Hidden -->\n# @dawn-ai/ag-ui\n"
+    const runtimeIds = await renderedHeadingIds(source, "md")
+
+    expect(runtimeIds).toEqual(["dawn-aiag-ui"])
+    expect(analyzeMaintainedHeadingIds(source, "packages/ag-ui/README.md")).toEqual(runtimeIds)
+  })
+
+  it("collects a literal span ID after comment-like JSX attribute text", async () => {
+    const source = '## Heading <span title="<!--">world</span>\n\n<span id="legacy"></span>\n'
+    const runtimeIds = await renderedHeadingIds(source)
+    const markup = await renderedMdxMarkup(source)
+
+    expect(runtimeIds).toEqual(["heading-world"])
+    expect(markup).toContain('id="heading-world"')
+    expect(markup).toContain('<span id="legacy"></span>')
+    expect(analyzeMaintainedHeadingIds(source)).toEqual([...runtimeIds, "legacy"])
+  })
+
+  it.each([
+    [
+      "the last direct literal id",
+      '<span id="first" id="second"></span>\n',
+      '<span id="second"></span>',
+      ["second"],
+    ],
+    [
+      "no id before a later spread",
+      '<span id="legacy" {...{ id: "actual" }}></span>\n',
+      '<span id="actual"></span>',
+      [],
+    ],
+    [
+      "a final literal id after a spread",
+      '<span {...{ id: "spread" }} id="literal"></span>\n',
+      '<span id="literal"></span>',
+      ["literal"],
+    ],
+    [
+      "no id before a later dynamic id",
+      '<span id="legacy" id={"actual"}></span>\n',
+      '<span id="actual"></span>',
+      [],
+    ],
+  ])("collects %s", async (_label, source, expectedMarkup, expectedIds) => {
+    expect(await renderedMdxMarkup(source)).toBe(expectedMarkup)
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(expectedIds)
+  })
+})
+
 describe("compatibility stub analysis", () => {
   const canonicalHref = "/docs/canonical"
 
@@ -996,12 +1203,30 @@ ${"x".repeat(650)}
 })
 
 describe("canonical docs link guard analysis", () => {
+  it("uses standard Markdown grammar for README ownership guards", () => {
+    const requiredHref = "/docs/ag-ui"
+    const source = `<!-- README ownership note -->
+# @dawn-ai/ag-ui
+
+[AG-UI guide](${requiredHref})
+`
+
+    expect(
+      analyzeDocLinkGuards({
+        file: "packages/ag-ui/README.md",
+        source,
+        movedContracts: [],
+        canonicalContracts: [{ heading: "@dawn-ai/ag-ui", required: [requiredHref] }],
+      }),
+    ).toEqual({ movedViolations: [], canonicalViolations: [] })
+  })
+
   it("uses only active destinations and scopes focused ownership to its subject section", () => {
     const legacyHref = "/docs/memory#how-recall-ranks"
     const ignoredSource = [
       `The former destination was ${legacyHref}.`,
       `\`${legacyHref}\``,
-      `<!-- [comment](${legacyHref}) -->`,
+      `{/* [comment](${legacyHref}) */}`,
       "```md",
       `[fenced](${legacyHref})`,
       "```",

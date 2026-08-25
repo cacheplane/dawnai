@@ -1,4 +1,5 @@
-import { expect, it } from "vitest"
+import { spawnSync } from "node:child_process"
+import { describe, expect, it } from "vitest"
 import {
   expectFinalMessage,
   expectInterrupt,
@@ -12,7 +13,24 @@ import {
   expectToolCalled,
   expectToolSequence,
 } from "../src/matchers.js"
+import { createSafeRegexTester } from "../src/regex-safety.js"
 import type { AgentRunResult } from "../src/run-result.js"
+
+const REGEX_TIMEOUT_PROBE = `
+const { createSafeRegexTester } = await import(process.argv[1])
+
+try {
+  createSafeRegexTester(/(a|aa)+$/u)("a".repeat(40) + "!")
+  process.stdout.write(JSON.stringify({ result: "completed" }))
+} catch (error) {
+  process.stdout.write(
+    JSON.stringify({
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  )
+}
+`
 
 const base: AgentRunResult = {
   threadId: "t",
@@ -267,4 +285,168 @@ it("expectNoToolErrors treats a HITL interrupt as NOT a tool error", () => {
     toolResults: [],
   }
   expectNoToolErrors(run)
+})
+
+const publicRegexMatchers = [
+  {
+    match(input: string, expression: RegExp) {
+      expectFinalMessage({ ...base, finalMessage: input }).toMatch(expression)
+    },
+    name: "expectFinalMessage.toMatch",
+  },
+  {
+    match(input: string, expression: RegExp) {
+      expectSystemPrompt({ ...base, systemPrompt: input }).toMatch(expression)
+    },
+    name: "expectSystemPrompt.toMatch",
+  },
+]
+
+describe.each(publicRegexMatchers)("$name safety policy", ({ match }) => {
+  it("preserves ordinary alternation semantics", () => {
+    match("abba", /^(a|b)+$/u)
+    expect(() => match("abca", /^(a|b)+$/u)).toThrow()
+  })
+
+  it("rejects oversized inputs before evaluation", () => {
+    const matchOversizedInput = () => match("a".repeat(65_537), /^a+$/u)
+
+    expect(matchOversizedInput).toThrow(RangeError)
+    expect(matchOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
+  })
+
+  it("preserves ordinary flags and matching semantics", () => {
+    match("12 ITEMS", /\d+ items/iu)
+    expect(() => match("none", /\d+ items/iu)).toThrow()
+  })
+
+  it.each([
+    { createExpression: () => /items/gu, name: "global" },
+    { createExpression: () => /items/uy, name: "sticky" },
+  ])(
+    "keeps $name expressions deterministic without changing caller state",
+    ({ createExpression }) => {
+      const expression = createExpression()
+      expression.lastIndex = 2
+
+      match("items", expression)
+      match("items", expression)
+      expect(expression.lastIndex).toBe(2)
+    },
+  )
+})
+
+describe("private regex safety adapter", () => {
+  it("interrupts catastrophic matching with the exact bounded error", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        REGEX_TIMEOUT_PROBE,
+        new URL("../src/regex-safety.ts", import.meta.url).href,
+      ],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 2_000,
+      },
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.signal).toBeNull()
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({
+      message: "Regular expression evaluation exceeded 100ms execution limit",
+      name: "RangeError",
+    })
+  })
+
+  it("rejects sources over 4,096 UTF-16 code units with the exact error", () => {
+    const createTester = () => createSafeRegexTester(new RegExp("a".repeat(4_097), "u"))
+
+    expect(createTester).toThrow(RangeError)
+    expect(createTester).toThrow("Regular expression source exceeds 4096 UTF-16 code units")
+  })
+
+  it("accepts sources at the 4,096-code-unit boundary", () => {
+    expect(() => createSafeRegexTester(new RegExp("a".repeat(4_096), "u"))).not.toThrow()
+  })
+
+  it("snapshots source and flags through intrinsic RegExp accessors", () => {
+    class RegExpWithThrowingAccessors extends RegExp {
+      override get source(): string {
+        throw new Error("caller source getter must not run")
+      }
+
+      override get flags(): string {
+        throw new Error("caller flags getter must not run")
+      }
+    }
+
+    const expression = new RegExpWithThrowingAccessors("^safe$", "iu")
+    const test = createSafeRegexTester(expression)
+
+    expect(test("SAFE")).toBe(true)
+  })
+
+  it("rejects RegExp proxies without invoking their property traps", () => {
+    let propertyReads = 0
+    const expression = new Proxy(/^safe$/u, {
+      get(target, property) {
+        propertyReads += 1
+        return Reflect.get(target, property, target)
+      },
+    })
+
+    expect(() => createSafeRegexTester(expression)).toThrow(TypeError)
+    expect(propertyReads).toBe(0)
+  })
+
+  it.each([
+    { expected: true, input: "12 ITEMS", name: "matching input" },
+    { expected: false, input: "none", name: "non-matching input" },
+  ])("preserves ordinary flags for $name", ({ expected, input }) => {
+    const test = createSafeRegexTester(/\d+ items/iu)
+
+    expect(test(input)).toBe(expected)
+  })
+
+  it("accepts 65,536 UTF-16 code units", () => {
+    const test = createSafeRegexTester(/^a+$/u)
+
+    expect(test("a".repeat(65_536))).toBe(true)
+  })
+
+  it("rejects 65,537 UTF-16 code units with the exact error", () => {
+    const test = createSafeRegexTester(/^a+$/u)
+    const testOversizedInput = () => test("a".repeat(65_537))
+
+    expect(testOversizedInput).toThrow(RangeError)
+    expect(testOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
+  })
+
+  it("retains the validated source and flags after caller-owned expression mutation", () => {
+    const expression = /^safe$/iu
+    const test = createSafeRegexTester(expression)
+
+    RegExp.prototype.compile.call(expression, "^(a+)+$", "u")
+    expression.lastIndex = 2
+
+    expect(test("SAFE")).toBe(true)
+    expect(test("SAFE")).toBe(true)
+    expect(expression.lastIndex).toBe(2)
+  })
+
+  it.each([
+    { expression: /items/gu, name: "global" },
+    { expression: /items/uy, name: "sticky" },
+  ])("keeps $name expressions deterministic without changing caller state", ({ expression }) => {
+    expression.lastIndex = 2
+    const test = createSafeRegexTester(expression)
+
+    expect(test("items")).toBe(true)
+    expect(test("items")).toBe(true)
+    expect(expression.lastIndex).toBe(2)
+  })
 })

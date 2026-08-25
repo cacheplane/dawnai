@@ -8453,15 +8453,13 @@ describe("native orchestration and evidence closure", () => {
 
     if (process.platform !== "win32") {
       const sentinel = join(root, "grandchild-leak.txt")
-      const grandchildScript = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "leaked"), 250)`
-      const parentScript = [
-        'const { spawn } = require("node:child_process")',
-        `spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}])`,
-        "setInterval(() => {}, 1000)",
-      ].join(";")
+      const grandchildScript =
+        'setTimeout(() => require("node:fs").writeFileSync(process.argv[1], "leaked"), 250)'
+      const parentScript =
+        'const { spawn } = require("node:child_process"); const grandchildScript = process.argv[1]; const sentinel = process.argv[2]; spawn(process.execPath, ["-e", grandchildScript, sentinel]); setInterval(() => {}, 1000)'
       await expect(
         runNativeLocalChild({
-          args: ["-e", parentScript],
+          args: ["-e", parentScript, grandchildScript, sentinel],
           cwd: root,
           env: {},
           executable: process.execPath,
