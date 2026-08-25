@@ -26,12 +26,22 @@ missing approval before its first writer call, but the workflow would already
 have issued mutation authority. The release cutover must not depend on that
 code-level rejection.
 
+Manual dispatch is also ref-sensitive. The release controller deliberately
+relays reconciliation to `refs/tags/vX.Y.Z`, so GitHub executes the workflow
+graph committed at that tag. Removing abandonment only from `main` would not
+disable an older tagged workflow that still contains the protected job. At this
+initial cutover the controller namespace is clean: no `v*` controller tag
+exists, no nonterminal Release run exists, and the abandonment job has never
+reached `main`. Strict evidence must preserve and verify those facts instead of
+assuming that the current local workflow is the only reachable graph.
+
 ## Goals
 
 - Allow normal reconcile, publish, audit, and verification paths to operate
   without a configured abandonment reviewer.
-- Ensure no workflow invocation can issue write authority for abandonment while
-  the capability is disabled.
+- Ensure no dispatchable controller tag can start the terminal abandonment job
+  or receive that job's write token while the capability is disabled. The
+  reconcile coordinator retains its existing narrowly scoped tag writer.
 - Keep the existing abandonment authority, tombstone format, recovery parser,
   and tests available for a later reviewed reactivation.
 - Make strict owner evidence prove that abandonment is unreachable, rather than
@@ -57,8 +67,8 @@ retaining the underlying controller implementation. Strict preflight derives
 the disabled state from the exact workflow bytes and accepts canonical disabled
 evidence.
 
-This is the only option that both unblocks normal publishing and prevents an
-abandonment dispatch from receiving a write token.
+This is the only option that both unblocks normal publishing and prevents the
+terminal abandonment job from receiving its write token.
 
 ### Keep the job and rely on runtime rejection — rejected
 
@@ -95,35 +105,65 @@ The CLI abandonment commands and their authority, record, candidate, observe,
 and terminal-evidence modules remain in source. They have no workflow entrypoint
 and receive no GitHub token during normal release operation.
 
+GitHub executes the workflow version stored at a manual dispatch's branch or
+tag. The selected disabled mode is therefore an aggregate property of the exact
+deployed default-branch workflow and every controller-owned `v*` tag, not merely
+of the local checkout. A workflow file may classify as:
+
+1. **Absent:** the ref has no dispatchable release workflow;
+2. **Disabled:** the exact reconcile-only surface described above; or
+3. **Protected:** the existing exact abandonment job, environment, gates, and
+   executables are all present.
+
+Classification is structural YAML parsing with duplicate-key and alias
+rejection. Substring or regular-expression matching is not sufficient. Any
+partial topology, unexpected abandonment executable, or malformed workflow is
+invalid and fails closed. Different refs may legitimately be disabled or
+protected, but the aggregate mode is protected whenever any reachable ref is
+protected.
+
 ### Owner preflight and evidence
 
-Owner preflight classifies abandonment reachability from the exact local
-`release.yml` bytes that are already hashed into owner evidence.
+Owner evidence becomes `schemaVersion: 2`. Version 1 evidence is rejected, not
+upgraded, because evidence lasts only 15 minutes and can be recaptured. The
+owner-preflight report remains schema version 1 because its shape does not
+change. `controller-schema.json` remains schema version 1, and the workflow
+fixture schema versions remain unchanged.
 
-The classifier has only two valid modes:
+In addition to the existing exact file hashes and repository checks, v2 evidence
+records canonical, sorted proof of ref-aware reachability:
 
-1. **Disabled:** the workflow exposes only reconcile, contains no abandonment
-   input, job, gate, or executable, and therefore cannot issue abandonment write
-   authority.
-2. **Protected:** the workflow exposes the existing exact protected abandonment
-   surface and names the controller schema's environment. This mode retains the
-   existing required-reviewer and prevent-self-review checks.
+- `github.abandonmentMode` is the explicit aggregate `disabled` or `protected`
+  result;
+- `github.remoteDefaultBranch` records `refs/heads/main`, its exact commit SHA,
+  the release workflow path and SHA-256, and that workflow's structural mode;
+- `github.managedCandidateRefs` records the complete paginated `refs/tags/v*`
+  inventory, including each ref object, peeled commit SHA, workflow status and
+  SHA-256, and structural mode;
+- `github.nonterminalReleaseRuns` records the complete bounded query for
+  queued, requested, waiting, pending, and in-progress Release runs; and
+- `github.abandonmentEnvironment` is canonical `null` only when the aggregate
+  mode is disabled, otherwise it is the existing exact environment evidence
+  object.
 
-Any partial or mixed surface is invalid and fails closed.
+The remote default-branch SHA must equal the evidence HEAD, and its fetched
+workflow bytes must equal the locally hashed workflow bytes. Ref enumeration,
+workflow retrieval, or run-state retrieval that is incomplete or unreadable is
+`UNPROVABLE`, never disabled. Invalid per-ref topology or a mismatch between the
+explicit mode, ref evidence, environment evidence, and current bytes is `FAIL`.
+Capture aborts without writing evidence when structural classification fails.
 
-Owner evidence is versioned for the nullable representation:
+For this initial cutover, strict pre-enable and post-enable verification require
+the aggregate disabled mode, an empty `managedCandidateRefs` array, and no
+nonterminal Release run. Disabled capture makes no GitHub environment request.
+Protected classification remains implemented and tested with synthetic exact
+workflow bytes for a later reviewed activation; it retains the existing
+required-reviewer and prevent-self-review checks.
 
-- disabled mode records `github.abandonmentEnvironment: null` and does not call
-  the GitHub environment endpoint;
-- protected mode records the existing exact environment evidence object;
-- an unavailable environment is never reclassified as disabled;
-- evidence mode and current workflow mode must agree exactly during
-  verification.
-
-Strict pre-enable and post-enable verification pass for disabled mode only when
-the exact current workflow remains unreachable. If a future change restores any
-abandonment surface, strict evidence again requires a present protected
-environment with at least one reviewer and self-review prevention.
+After protected tags ever exist, their historical workflow graphs remain
+dispatchable. The aggregate mode therefore stays protected—and the environment
+must remain correctly protected—even if a later `main` workflow removes the
+job. An unavailable environment is never reclassified as disabled.
 
 The controller marker keeps
 `abandonmentEnvironment: "release-abandonment"`. That field remains part of the
@@ -131,15 +171,19 @@ historical evidence format and must not be overloaded as a live feature flag.
 
 ### Operational behavior
 
-Normal release activation follows the existing order:
+Normal release activation follows this order:
 
-1. capture fresh strict pre-enable evidence at the exact reviewed SHA;
-2. merge the ownership switch;
-3. enable and re-read Immutable Releases;
-4. activate the release, chart, verification, and version workflows;
-5. capture strict post-enable evidence at the unchanged main SHA;
-6. run the required no-candidate reconciliation;
-7. merge the generated Version Packages pull request and let the controller
+1. keep the Release, chart, verification, and version workflows disabled;
+2. merge the ownership switch containing the disabled workflow;
+3. synchronize the local checkout to the exact remote `main` SHA;
+4. capture fresh strict pre-enable evidence proving matching local/remote
+   workflow bytes, zero `v*` controller tags, and zero nonterminal Release runs;
+5. enable and re-read Immutable Releases;
+6. activate the release, chart, verification, and version workflows;
+7. immediately capture strict post-enable evidence at the same `main` SHA and
+   unchanged empty ref/run snapshot;
+8. run the required no-candidate reconciliation;
+9. merge the generated Version Packages pull request and let the controller
    publish, audit, and verify the fixed group.
 
 No `release-abandonment` environment is created during this cutover.
@@ -147,8 +191,17 @@ No `release-abandonment` environment is created during this cutover.
 Reactivation is a separate reviewed change. Before restoring the workflow
 entrypoint, an owner must configure the protected environment with an
 independent reviewer and self-review prevention. The reactivation pull request
-must restore the exact workflow contract and pass strict owner evidence in
-protected mode.
+must restore the exact workflow contract and pass ref-aware strict owner
+evidence in protected mode. Once a protected controller tag exists, that
+environment is a permanent protection requirement for the tag's lifetime.
+
+Restoring abandonment on `main` affects only candidates tagged after that
+restoration. It cannot retrofit the job into a disabled-era tag. A disabled-era
+candidate remains reconcile-capable, but an irrecoverable one is permanently
+non-abandonable under this workflow. Supporting terminal recovery for such a
+candidate would require a separate reviewed design for a protected
+default-branch recovery workflow and revised authority binding. Moving,
+deleting, or reusing the immutable candidate tag is never an alternative.
 
 ### Failure behavior
 
@@ -156,8 +209,9 @@ Disabled mode has one intentional liveness cost: an irrecoverable tagged
 pre-publication candidate cannot be tombstoned. The controller continues to
 recover any valid resumable candidate, and an incomplete older candidate still
 wins arbitration and blocks newer candidates. Operators must not delete, reuse,
-or skip such a version. Restoring protected abandonment would then require a
-reviewed change based on a state assessment.
+or skip such a version. Simply restoring protected abandonment on `main` does
+not change the tagged workflow; a separately designed protected recovery path
+would be required.
 
 This liveness cost is preferable to granting unreviewed terminal mutation
 authority.
@@ -174,12 +228,22 @@ Required coverage:
   entrypoints or safe-executable fixtures;
 - disabled owner capture records canonical null and never reads a GitHub
   environment;
+- owner evidence is canonical schema v2 and rejects schema v1 without migration;
+- remote `main` SHA and workflow bytes match the exact local HEAD and file;
+- complete `v*` ref evidence is sorted, peeled, content-bound, and initially
+  empty;
+- nonterminal Release run evidence is complete and initially empty;
 - disabled mode passes strict pre-enable and post-enable verification;
 - protected mode retains the current exact reviewer requirements;
 - disabled, protected, unavailable, and mixed evidence cannot be confused;
 - any partial abandonment workflow surface fails closed;
+- malformed YAML, duplicate keys, aliases, and placeholder workflow bytes cannot
+  pass structural classification;
 - existing runtime abandonment authority and tombstone tests remain green;
-- generated workflow inventories are refreshed from the final workflow;
+- the byte-exact `workflow-entrypoints.json` and
+  `workflow-safe-executables.json` fixtures are manually transcribed and
+  reviewed from the final workflow, including all affected step indexes and run
+  bodies; their schema versions do not change;
 - release-controller tests, workflow contracts, documentation checks, and the
   full repository validation lane pass at the new exact head.
 
@@ -188,11 +252,25 @@ it reviews the new head. All Copilot findings are triaged before merge. Copilot
 leaves a comment review and is not treated as a required human approval or as a
 substitute for the independent release artifact audit.
 
+The same implementation commit updates the live operating contract:
+
+- `docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md` removes
+  the environment prerequisite and runnable abandonment procedure, records
+  owner evidence v2, and replaces them with the disabled-mode stop-and-preserve
+  incident procedure;
+- `docs/thread-handoff.md` states that workflow abandonment is unreachable and
+  that the retained parsers support only dormant or historical evidence; and
+- the original controller design and PR2 plan receive partial-supersession
+  banners pointing to this design rather than having their historical records
+  rewritten.
+
 ## Rollback and reversibility
 
 Before npm publication, the cutover may stop with the mutating workflows
 disabled. After any package publishes, rollback or unpublish is forbidden; the
 controller must resume from the exact durable artifacts.
 
-Re-enabling abandonment requires a new reviewed commit and fresh owner evidence.
-No live setting silently changes the workflow from disabled to protected mode.
+Re-enabling abandonment for future tags requires a new reviewed commit, a
+protected environment, and fresh ref-aware owner evidence. It does not alter an
+existing tag's workflow bytes. No live setting silently changes the workflow
+from disabled to protected mode.
