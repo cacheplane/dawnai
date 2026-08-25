@@ -116,6 +116,7 @@ export function publicNpmEnvironment({ home, extra = {}, env = process.env } = {
     USERPROFILE: home,
     npm_config_registry: "https://registry.npmjs.org",
     npm_config_userconfig: join(home, ".npmrc"),
+    npm_config_globalconfig: join(home, "global.npmrc"),
     npm_config_cache: join(home, ".npm-cache"),
     npm_config_always_auth: "false",
   }
@@ -685,6 +686,36 @@ export async function removeDir(path) {
   await rm(path, { recursive: true, force: true })
 }
 
+function acceptedExitCodeSet(exitCodes) {
+  if (!Array.isArray(exitCodes) || exitCodes.length === 0 || exitCodes.length > 16) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+
+  const values = []
+  for (let index = 0; index < exitCodes.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(exitCodes, String(index))
+    if (
+      descriptor === undefined ||
+      !Object.hasOwn(descriptor, "value") ||
+      !Number.isSafeInteger(descriptor.value) ||
+      descriptor.value < 0 ||
+      descriptor.value > 255
+    ) {
+      throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+    }
+    values.push(descriptor.value)
+  }
+
+  if (Reflect.ownKeys(exitCodes).length !== exitCodes.length + 1) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+  const accepted = new Set(values)
+  if (accepted.size !== values.length) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+  return accepted
+}
+
 export async function run(command, args, options = {}) {
   if (
     options.timeoutMs !== undefined &&
@@ -701,10 +732,18 @@ export async function run(command, args, options = {}) {
   if (options.maxOutputBytes !== undefined && options.stdio !== "pipe") {
     throw new TypeError("maxOutputBytes requires stdio pipe")
   }
+  if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) {
+    throw new TypeError("signal must be an AbortSignal")
+  }
+  const accepted = acceptedExitCodeSet(options.acceptedExitCodes ?? [0])
+  if (options.signal?.aborted) {
+    throw commandAbortError(command, args, "")
+  }
 
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
+      detached: process.platform !== "win32",
       env: childProcessEnv(
         options.replaceEnv ? (options.env ?? {}) : { ...process.env, ...options.env },
         { includeOpenAi: options.includeOpenAi },
@@ -715,48 +754,87 @@ export async function run(command, args, options = {}) {
 
     let stdout = ""
     let stderr = ""
-    let timedOut = false
-    let outputExceeded = false
     let outputBytes = 0
     let settled = false
+    let terminationReason = null
+    let terminationReady = false
+    let pendingTerminationError
     let forceKillTimer
-    const timeoutTimer =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true
-            child.kill("SIGTERM")
-            forceKillTimer = setTimeout(() => {
-              if (child.exitCode === null && child.signalCode === null) {
-                child.kill("SIGKILL")
-              }
-            }, 250)
-            forceKillTimer.unref()
-          }, options.timeoutMs)
-
-    const rejectOnce = (error) => {
-      if (!settled) {
-        settled = true
-        reject(error)
-      }
-    }
+    let hardKillTimer
+    let timeoutTimer
+    let abortListener
 
     const cleanupTimers = () => {
       clearTimeout(timeoutTimer)
       clearTimeout(forceKillTimer)
+      clearTimeout(hardKillTimer)
+      if (abortListener !== undefined) {
+        options.signal?.removeEventListener("abort", abortListener)
+      }
     }
 
+    const rejectOnce = (error) => {
+      if (!settled) {
+        settled = true
+        cleanupTimers()
+        reject(error)
+      }
+    }
+
+    const terminationError = (cause) => {
+      if (terminationReason === "timeout") {
+        return commandTimeoutError(command, args, options.timeoutMs, stderr, cause)
+      }
+      if (terminationReason === "abort") {
+        return commandAbortError(command, args, stderr, cause)
+      }
+      const error = new Error(
+        `${command} ${args.join(" ")} exceeded its ${options.maxOutputBytes}-byte output limit`,
+        cause === undefined ? undefined : { cause },
+      )
+      error.code = "EOUTPUTLIMIT"
+      error.maxOutputBytes = options.maxOutputBytes
+      return error
+    }
+
+    const finishTermination = (error) => {
+      pendingTerminationError = error
+      if (terminationReady) rejectOnce(error)
+    }
+
+    const beginTermination = (reason) => {
+      if (terminationReason !== null) return
+      terminationReason = reason
+      clearTimeout(timeoutTimer)
+      void signalProcessTree(child, "SIGTERM")
+      forceKillTimer = setTimeout(() => {
+        void signalProcessTree(child, "SIGKILL").then(() => {
+          terminationReady = true
+          if (pendingTerminationError !== undefined) {
+            rejectOnce(pendingTerminationError)
+            return
+          }
+          hardKillTimer = setTimeout(() => {
+            child.stdout?.destroy()
+            child.stderr?.destroy()
+            rejectOnce(terminationError())
+          }, 250)
+        })
+      }, 250)
+    }
+
+    timeoutTimer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            beginTermination("timeout")
+          }, options.timeoutMs)
+
     const collectOutput = (target, chunk) => {
+      if (terminationReason !== null) return target
       outputBytes += chunk.length
       if (options.maxOutputBytes !== undefined && outputBytes > options.maxOutputBytes) {
-        if (!outputExceeded) {
-          outputExceeded = true
-          child.kill("SIGTERM")
-          forceKillTimer = setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
-          }, 250)
-          forceKillTimer.unref()
-        }
+        beginTermination("output")
         return target
       }
       return target + chunk
@@ -768,32 +846,20 @@ export async function run(command, args, options = {}) {
       stderr = collectOutput(stderr, chunk)
     })
     child.on("error", (error) => {
-      cleanupTimers()
-      if (timedOut) {
-        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr, error))
-      } else {
-        rejectOnce(error)
-      }
+      if (terminationReason !== null) finishTermination(terminationError(error))
+      else rejectOnce(error)
     })
     child.on("close", (code) => {
-      cleanupTimers()
-      if (timedOut) {
-        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr))
-        return
-      }
-      if (outputExceeded) {
-        const error = new Error(
-          `${command} ${args.join(" ")} exceeded its ${options.maxOutputBytes}-byte output limit`,
-        )
-        error.code = "EOUTPUTLIMIT"
-        error.maxOutputBytes = options.maxOutputBytes
-        rejectOnce(error)
+      clearTimeout(timeoutTimer)
+      if (terminationReason !== null) {
+        finishTermination(terminationError())
         return
       }
 
-      if (code === 0) {
+      if (accepted.has(code)) {
         if (!settled) {
           settled = true
+          cleanupTimers()
           resolvePromise(stdout)
         }
         return
@@ -807,6 +873,55 @@ export async function run(command, args, options = {}) {
       error.stderr = stderr
       rejectOnce(error)
     })
+    if (options.signal !== undefined) {
+      abortListener = () => beginTermination("abort")
+      options.signal.addEventListener("abort", abortListener, { once: true })
+      if (options.signal.aborted) abortListener()
+    }
+  })
+}
+
+function signalProcessTree(child, signal) {
+  if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+    child.kill(signal)
+    return Promise.resolve()
+  }
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal)
+    } catch (error) {
+      if (error?.code !== "ESRCH") child.kill(signal)
+    }
+    return Promise.resolve()
+  }
+
+  return new Promise((resolvePromise) => {
+    const args = ["/pid", String(child.pid), "/T"]
+    if (signal === "SIGKILL") args.push("/F")
+    const killer = spawn("taskkill", args, {
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    })
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      killer.kill()
+      child.kill(signal)
+      resolvePromise()
+    }, 250)
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise()
+    }
+    killer.once("error", () => {
+      child.kill(signal)
+      finish()
+    })
+    killer.once("close", finish)
   })
 }
 
@@ -818,6 +933,16 @@ function commandTimeoutError(command, args, timeoutMs, stderr, cause) {
   error.command = command
   error.stderr = stderr
   error.timeoutMs = timeoutMs
+  return error
+}
+
+function commandAbortError(command, args, stderr, cause) {
+  const error = new Error(`${command} ${args.join(" ")} was aborted`, {
+    ...(cause !== undefined ? { cause } : {}),
+  })
+  error.name = "AbortError"
+  error.code = "ABORT_ERR"
+  error.stderr = stderr
   return error
 }
 

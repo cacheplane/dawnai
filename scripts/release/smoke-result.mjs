@@ -131,6 +131,12 @@ export function correlateSmokeResults(results, options) {
     ) {
       throw new Error(`Smoke result identity mismatch for lane ${result.lane}`)
     }
+    if (result.workflowRunId !== identity.workflowRunId) {
+      throw new Error(`Smoke result workflow run mismatch for lane ${result.lane}`)
+    }
+    if (result.runAttempt !== identity.runAttempt) {
+      throw new Error(`Smoke result run attempt mismatch for lane ${result.lane}`)
+    }
     byLane.set(result.lane, result)
   }
 
@@ -265,6 +271,7 @@ export function parseSmokeLaneArgs(args) {
     ["--version", "version"],
     ["--commit-sha", "commitSha"],
     ["--manifest-sha256", "manifestSha256"],
+    ["--manifest", "manifest"],
     ["--result", "result"],
   ])
   const seen = new Set()
@@ -478,10 +485,12 @@ function parseCorrelationOptions(options) {
   assertRecord(value, "smoke correlation options")
   assertExactFields(
     value,
-    ["version", "commitSha", "manifestSha256", "requiredLanes"],
+    ["version", "commitSha", "manifestSha256", "workflowRunId", "runAttempt", "requiredLanes"],
     "smoke correlation options",
   )
   assertIdentity(value)
+  assertPositiveInteger(value.workflowRunId, "workflowRunId")
+  assertPositiveInteger(value.runAttempt, "runAttempt")
   if (
     !Array.isArray(value.requiredLanes) ||
     value.requiredLanes.length === 0 ||

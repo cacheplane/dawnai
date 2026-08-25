@@ -20,6 +20,7 @@ const identity = Object.freeze({
   commitSha: "a".repeat(40),
   manifestSha256: "b".repeat(64),
 })
+const trustedRun = Object.freeze({ workflowRunId: 123, runAttempt: 2 })
 
 function result(lane, overrides = {}) {
   return {
@@ -189,10 +190,11 @@ test("rejects a lane success that hides a failed check", () => {
 })
 
 test("correlates required lanes in stable order", () => {
-  const correlated = correlateSmokeResults(
-    [result("storage", { workflowRunId: 125 }), result("metadata", { workflowRunId: 124 })],
-    { ...identity, requiredLanes: ["metadata", "storage"] },
-  )
+  const correlated = correlateSmokeResults([result("storage"), result("metadata")], {
+    ...identity,
+    ...trustedRun,
+    requiredLanes: ["metadata", "storage"],
+  })
 
   assert.deepEqual(
     correlated.map(({ lane }) => lane),
@@ -206,6 +208,7 @@ test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", 
     () =>
       correlateSmokeResults([result("metadata"), result("metadata")], {
         ...identity,
+        ...trustedRun,
         requiredLanes: ["metadata"],
       }),
     /duplicate.*metadata/i,
@@ -214,6 +217,7 @@ test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", 
     () =>
       correlateSmokeResults([result("metadata")], {
         ...identity,
+        ...trustedRun,
         requiredLanes: ["metadata", "storage"],
       }),
     /missing.*storage/i,
@@ -222,6 +226,7 @@ test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", 
     () =>
       correlateSmokeResults([result("metadata"), result("other")], {
         ...identity,
+        ...trustedRun,
         requiredLanes: ["metadata"],
       }),
     /unexpected.*other/i,
@@ -230,18 +235,35 @@ test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", 
     () =>
       correlateSmokeResults([result("metadata", { commitSha: "c".repeat(40) })], {
         ...identity,
+        ...trustedRun,
         requiredLanes: ["metadata"],
       }),
     /identity.*metadata/i,
   )
+  assert.throws(
+    () =>
+      correlateSmokeResults([result("metadata", { workflowRunId: 124 })], {
+        ...identity,
+        ...trustedRun,
+        requiredLanes: ["metadata"],
+      }),
+    /workflow run.*metadata/i,
+  )
+  assert.throws(
+    () =>
+      correlateSmokeResults([result("metadata", { runAttempt: 3 })], {
+        ...identity,
+        ...trustedRun,
+        requiredLanes: ["metadata"],
+      }),
+    /run attempt.*metadata/i,
+  )
 })
 
-test("aggregates source run identities and derives every check and conclusion", () => {
+test("aggregates one trusted run identity and derives every check and conclusion", () => {
   const aggregate = aggregateSmokeResults(
     [
       result("storage", {
-        workflowRunId: 202,
-        runAttempt: 3,
         checks: [
           {
             name: "postgres",
@@ -251,9 +273,9 @@ test("aggregates source run identities and derives every check and conclusion", 
         ],
         conclusion: "failure",
       }),
-      result("metadata", { workflowRunId: 201, runAttempt: 1 }),
+      result("metadata"),
     ],
-    { ...identity, requiredLanes: ["metadata", "storage"] },
+    { ...identity, ...trustedRun, requiredLanes: ["metadata", "storage"] },
   )
 
   assert.deepEqual(
@@ -263,8 +285,8 @@ test("aggregates source run identities and derives every check and conclusion", 
       runAttempt,
     })),
     [
-      { lane: "metadata", workflowRunId: 201, runAttempt: 1 },
-      { lane: "storage", workflowRunId: 202, runAttempt: 3 },
+      { lane: "metadata", workflowRunId: 123, runAttempt: 2 },
+      { lane: "storage", workflowRunId: 123, runAttempt: 2 },
     ],
   )
   assert.deepEqual(
@@ -281,6 +303,7 @@ test("aggregates source run identities and derives every check and conclusion", 
   ])
   const first = aggregateSmokeResults([result("metadata")], {
     ...identity,
+    ...trustedRun,
     requiredLanes: ["metadata"],
   })
   const reordered = Object.fromEntries(Object.entries(first).reverse())
@@ -295,12 +318,14 @@ test("parses the common exact-version lane arguments", () => {
       "--version=0.8.22",
       `--commit-sha=${"a".repeat(40)}`,
       `--manifest-sha256=${"b".repeat(64)}`,
+      "--manifest=/tmp/manifest.json",
       "--result=/tmp/result.json",
     ]),
     {
       version: "0.8.22",
       commitSha: "a".repeat(40),
       manifestSha256: "b".repeat(64),
+      manifest: "/tmp/manifest.json",
       result: "/tmp/result.json",
     },
   )

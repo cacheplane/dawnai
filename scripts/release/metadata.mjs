@@ -10,6 +10,7 @@ import {
   releaseRecordSha256,
 } from "./release-record.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
+import { aggregateSmokeResults, canonicalAggregateSmokeResultBytes } from "./smoke-result.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
 const MARKER_START = "<!-- DAWN_RELEASE_CONTROLLER_MARKER\n"
@@ -893,9 +894,21 @@ export async function reconcileSmokeEvidence({
   manifest,
   npmEvidence,
   smokeResults,
+  requiredLanes,
+  workflowRunId,
+  runAttempt,
   github,
 }) {
-  const snapshot = snapshotJson({ candidate, record, manifest, npmEvidence, smokeResults })
+  const snapshot = snapshotJson({
+    candidate,
+    record,
+    manifest,
+    npmEvidence,
+    smokeResults,
+    requiredLanes,
+    workflowRunId,
+    runAttempt,
+  })
   const identity = validateCandidate(snapshot.candidate)
   const releaseRecord = parseReleaseRecord(snapshot.record)
   assertRecordIdentity(releaseRecord, identity)
@@ -906,8 +919,18 @@ export async function reconcileSmokeEvidence({
     snapshot.manifest,
   )
   const npmDigest = normalizedNpmEvidence.sha256
-  const smokes = validateSmokeResults(snapshot.smokeResults, identity, releaseRecord)
-  const smokeDigest = canonicalEvidenceSha256(smokes)
+  const smokeAggregate = aggregateSmokeResults(snapshot.smokeResults, {
+    version: identity.version,
+    commitSha: identity.commitSha,
+    manifestSha256: releaseRecord.manifestSha256,
+    workflowRunId: snapshot.workflowRunId,
+    runAttempt: snapshot.runAttempt,
+    requiredLanes: snapshot.requiredLanes,
+  })
+  if (smokeAggregate.conclusion !== "success") {
+    throw new Error("Smoke aggregate conclusion must be success")
+  }
+  const smokeDigest = sha256(canonicalAggregateSmokeResultBytes(smokeAggregate))
   const effects = snapshotGitHubBoundary(github)
   await verifyAnnotatedCandidateTag(effects.reader, identity)
   let release = await requireDraftRelease(effects.reader, identity)
@@ -1458,45 +1481,6 @@ function normalizeNpmEvidence(value, candidate, record, manifest) {
     evidence,
     sha256: sha256(canonicalNpmEvidenceBytes(evidence, context)),
   })
-}
-
-function validateSmokeResults(value, candidate, record) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 256) {
-    throw new TypeError("Smoke results must be a non-empty bounded array")
-  }
-  const fields = [
-    "name",
-    "status",
-    "version",
-    "commitSha",
-    "manifestSha256",
-    "workflowRunId",
-    "runAttempt",
-  ]
-  const names = new Set()
-  const results = value.map((smoke) => {
-    if (
-      !hasExactFields(smoke, fields) ||
-      typeof smoke.name !== "string" ||
-      smoke.name.length === 0 ||
-      smoke.status !== "passed" ||
-      smoke.version !== candidate.version ||
-      smoke.commitSha !== candidate.commitSha ||
-      smoke.manifestSha256 !== record.manifestSha256 ||
-      !isPositiveInteger(smoke.workflowRunId) ||
-      !isPositiveInteger(smoke.runAttempt) ||
-      names.has(smoke.name)
-    ) {
-      throw new TypeError("Smoke result is failed, duplicate, or not correlated")
-    }
-    names.add(smoke.name)
-    return smoke
-  })
-  return results.sort((left, right) => compareText(left.name, right.name))
-}
-
-function canonicalEvidenceSha256(value) {
-  return sha256(Buffer.from(`${JSON.stringify(canonicalize(value))}\n`, "utf8"))
 }
 
 function transitionResult(release, marker, status) {

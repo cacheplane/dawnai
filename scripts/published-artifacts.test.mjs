@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, it } from "node:test"
@@ -2367,6 +2367,134 @@ describe("run", () => {
     assert.ok(Date.now() - startedAt < 1_000, "timed-out child must be terminated promptly")
   })
 
+  it("terminates the full descendant tree and returns within the timeout bound", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-run-descendants-"))
+    tempRoots.push(root)
+    const pidPath = join(root, "grandchild.pid")
+    const grandchildLifetimeMs = 3_000
+    const source = `
+      const { spawn } = require("node:child_process")
+      const { writeFileSync } = require("node:fs")
+      const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, ${grandchildLifetimeMs})"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      })
+      writeFileSync(process.argv[1], String(grandchild.pid))
+      setInterval(() => {}, 1_000)
+    `
+    const startedAt = Date.now()
+    let grandchildPid
+
+    try {
+      await assert.rejects(
+        run(process.execPath, ["-e", source, pidPath], {
+          stdio: "pipe",
+          timeoutMs: 200,
+        }),
+        { code: "ETIMEDOUT" },
+      )
+      const elapsedMs = Date.now() - startedAt
+      grandchildPid = Number.parseInt(await readFile(pidPath, "utf8"), 10)
+      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      assert.ok(elapsedMs < 1_500, `descendant cleanup took ${elapsedMs}ms`)
+      assert.equal(
+        await waitForProcessExit(grandchildPid, 750),
+        true,
+        `grandchild ${grandchildPid} survived timeout cleanup`,
+      )
+    } finally {
+      if (grandchildPid !== undefined && processExists(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL")
+      }
+    }
+  })
+
+  it("terminates the full descendant tree when an AbortSignal cancels the command", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-run-abort-descendants-"))
+    tempRoots.push(root)
+    const pidPath = join(root, "grandchild.pid")
+    const source = `
+      const { spawn } = require("node:child_process")
+      const { writeFileSync } = require("node:fs")
+      const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      })
+      writeFileSync(process.argv[1], String(grandchild.pid))
+      setInterval(() => {}, 1_000)
+    `
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    let grandchildPid
+
+    try {
+      const command = run(process.execPath, ["-e", source, pidPath], {
+        signal: controller.signal,
+        stdio: "pipe",
+        timeoutMs: 5_000,
+      })
+      grandchildPid = Number.parseInt(await waitForFile(pidPath, 750), 10)
+      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      controller.abort()
+      await assert.rejects(command, { code: "ABORT_ERR", name: "AbortError" })
+      assert.ok(Date.now() - startedAt < 1_500, "aborted child tree must terminate promptly")
+      assert.equal(
+        await waitForProcessExit(grandchildPid, 750),
+        true,
+        `grandchild ${grandchildPid} survived abort cleanup`,
+      )
+    } finally {
+      if (grandchildPid !== undefined && processExists(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL")
+      }
+    }
+  })
+
+  it("accepts only explicitly allowlisted nonzero exit codes", async () => {
+    assert.equal(
+      await run(
+        process.execPath,
+        ["-e", "process.stdout.write('structured evidence'); process.exitCode = 1"],
+        { stdio: "pipe", acceptedExitCodes: [0, 1] },
+      ),
+      "structured evidence",
+    )
+    await assert.rejects(
+      run(
+        process.execPath,
+        ["-e", "process.stdout.write('structured evidence'); process.exitCode = 1"],
+        { stdio: "pipe" },
+      ),
+      { exitCode: 1 },
+    )
+    for (const acceptedExitCodes of [[], [0, 0], [-1], [256], ["1"]]) {
+      await assert.rejects(
+        run(process.execPath, ["--version"], { acceptedExitCodes }),
+        /acceptedExitCodes/iu,
+      )
+    }
+
+    const sparseExitCodes = [0, 1]
+    sparseExitCodes.length = 3
+    await assert.rejects(
+      run(process.execPath, ["--version"], { acceptedExitCodes: sparseExitCodes }),
+      /acceptedExitCodes/iu,
+    )
+
+    let accessorInvoked = false
+    const accessorExitCodes = [0]
+    Object.defineProperty(accessorExitCodes, "0", {
+      enumerable: true,
+      get() {
+        accessorInvoked = true
+        throw new Error("acceptedExitCodes accessor must not run")
+      },
+    })
+    await assert.rejects(
+      run(process.execPath, ["--version"], { acceptedExitCodes: accessorExitCodes }),
+      /acceptedExitCodes/iu,
+    )
+    assert.equal(accessorInvoked, false)
+  })
+
   it("removes OPENAI_API_KEY from child process environments by default", async () => {
     const previousOpenAiApiKey = process.env.OPENAI_API_KEY
     process.env.OPENAI_API_KEY = "sk-test-secret"
@@ -2403,6 +2531,38 @@ describe("run", () => {
   })
 })
 
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === "ESRCH") return false
+    throw error
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return true
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
+  }
+  return !processExists(pid)
+}
+
+async function waitForFile(path, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, "utf8")
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
+  }
+  return readFile(path, "utf8")
+}
+
 describe("public npm file and environment boundaries", () => {
   it("constructs an isolated public-registry environment without inherited credentials", () => {
     const environment = publicNpmEnvironment({
@@ -2423,6 +2583,7 @@ describe("public npm file and environment boundaries", () => {
       USERPROFILE: "/tmp/isolated-public-npm",
       npm_config_registry: "https://registry.npmjs.org",
       npm_config_userconfig: "/tmp/isolated-public-npm/.npmrc",
+      npm_config_globalconfig: "/tmp/isolated-public-npm/global.npmrc",
       npm_config_cache: "/tmp/isolated-public-npm/.npm-cache",
       npm_config_always_auth: "false",
     })

@@ -28,6 +28,8 @@ const CANDIDATE = Object.freeze({
   publisherWorkflow: ".github/workflows/release.yml",
 })
 const REPOSITORY = "cacheplane/dawnai"
+const SMOKE_RUN = Object.freeze({ workflowRunId: 200, runAttempt: 1 })
+const SMOKE_LANES = Object.freeze(["published-harness", "runtime-targets", "scaffold", "storage"])
 
 test("release bodies contain one canonical exact marker and reject phase-invalid or noncanonical markers", () => {
   const fixture = releaseFixture()
@@ -440,23 +442,15 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   assert.equal(npmResult.phase, "NPM_COMPLETE")
   assert.equal(parseReleaseMarker(remote.release.body).phase, "NPM_COMPLETE")
 
-  const smokeResults = [
-    {
-      name: "published-install",
-      status: "passed",
-      version: VERSION,
-      commitSha: COMMIT_SHA,
-      manifestSha256: fixture.record.manifestSha256,
-      workflowRunId: 200,
-      runAttempt: 1,
-    },
-  ]
+  const smokeResults = completeSmokeResults(fixture)
   const smokeResult = await reconcileSmokeEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
     manifest: fixture.manifest,
     npmEvidence,
     smokeResults,
+    requiredLanes: SMOKE_LANES,
+    ...SMOKE_RUN,
     github: remote.github,
   })
   assert.equal(smokeResult.phase, "SMOKES_COMPLETE")
@@ -465,6 +459,88 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   assert.match(marker.npmEvidenceSha256, /^[0-9a-f]{64}$/u)
   assert.match(marker.smokeAggregateSha256, /^[0-9a-f]{64}$/u)
   assert.equal(remote.updateCount, 3)
+})
+
+test("smoke reconciliation rejects replayed, mixed, incomplete, failed, or foreign receipts with zero mutation", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+  const npmEvidence = completeNpmEvidence(fixture)
+  await reconcileNpmEvidence({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    manifest: fixture.manifest,
+    npmEvidence,
+    github: remote.github,
+  })
+  const valid = completeSmokeResults(fixture)
+  const cases = [
+    [
+      valid.map((receipt, index) => (index === 0 ? { ...receipt, workflowRunId: 199 } : receipt)),
+      /workflow run|correlat/iu,
+    ],
+    [
+      valid.map((receipt, index) => (index === 0 ? { ...receipt, runAttempt: 2 } : receipt)),
+      /run attempt|correlat/iu,
+    ],
+    [valid.slice(1), /missing.*published-harness/iu],
+    [[valid[0], ...valid], /duplicate.*published-harness/iu],
+    [
+      [{ ...valid[0], lane: "foreign" }, ...valid.slice(1)],
+      /unexpected.*foreign|missing.*published/iu,
+    ],
+    [
+      valid.map((receipt, index) =>
+        index === 0
+          ? {
+              ...receipt,
+              checks: [{ name: "exact-install", conclusion: "failure", detail: "failed" }],
+              conclusion: "failure",
+            }
+          : receipt,
+      ),
+      /smoke.*success|conclusion/iu,
+    ],
+    [
+      valid.map((receipt, index) =>
+        index === 0 ? { ...receipt, commitSha: "f".repeat(40) } : receipt,
+      ),
+      /identity|commit/iu,
+    ],
+    [
+      valid.map((receipt, index) =>
+        index === 0 ? { ...receipt, manifestSha256: "e".repeat(64) } : receipt,
+      ),
+      /identity|manifest/iu,
+    ],
+  ]
+  const updates = remote.updateCount
+
+  for (const [smokeResults, expected] of cases) {
+    await assert.rejects(
+      reconcileSmokeEvidence({
+        candidate: CANDIDATE,
+        record: fixture.record,
+        manifest: fixture.manifest,
+        npmEvidence,
+        smokeResults,
+        requiredLanes: SMOKE_LANES,
+        ...SMOKE_RUN,
+        github: remote.github,
+      }),
+      expected,
+    )
+    assert.equal(remote.updateCount, updates)
+  }
 })
 
 test("npm reconciliation rejects skeletal evidence before mutating the Release", async () => {
@@ -592,17 +668,9 @@ test("consolidated publication accepts only attached canonical audit bytes and p
     record: fixture.record,
     manifest: fixture.manifest,
     npmEvidence,
-    smokeResults: [
-      {
-        name: "published-install",
-        status: "passed",
-        version: VERSION,
-        commitSha: COMMIT_SHA,
-        manifestSha256: fixture.record.manifestSha256,
-        workflowRunId: 200,
-        runAttempt: 1,
-      },
-    ],
+    smokeResults: completeSmokeResults(fixture),
+    requiredLanes: SMOKE_LANES,
+    ...SMOKE_RUN,
     github: remote.github,
   })
   const auditResult = {
@@ -932,7 +1000,10 @@ function completeNpmEvidence(fixture) {
       tarballSha512: pkg.sha512,
       integrity: pkg.npmIntegrity,
       latest: { status: "present", version: VERSION },
-      signature: { status: "valid", keyid: "SHA256:dGVzdA==" },
+      signature: {
+        status: "valid",
+        verifier: "npm-audit-signatures@11",
+      },
       provenance: {
         predicateType: "https://slsa.dev/provenance/v1",
         workflow: ".github/workflows/release.yml",
@@ -942,6 +1013,21 @@ function completeNpmEvidence(fixture) {
       },
     })),
   }
+}
+
+function completeSmokeResults(fixture) {
+  return SMOKE_LANES.map((lane) => ({
+    schemaVersion: 1,
+    lane,
+    version: VERSION,
+    commitSha: COMMIT_SHA,
+    manifestSha256: fixture.record.manifestSha256,
+    ...SMOKE_RUN,
+    startedAt: "2026-08-24T00:10:00.000Z",
+    finishedAt: "2026-08-24T00:11:00.000Z",
+    checks: [{ name: "exact-install", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
+  }))
 }
 
 function sha256(bytes) {

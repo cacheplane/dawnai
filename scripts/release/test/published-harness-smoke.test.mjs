@@ -1,17 +1,22 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import test from "node:test"
 
-import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import {
   runPublishedHarnessSmoke,
   validateNpmAuditSignatures,
 } from "../smoke/published-harness.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
 
+const VERSION = "0.8.22"
+const COMMIT_SHA = "a".repeat(40)
+const manifest = releaseManifest(VERSION, COMMIT_SHA)
 const options = Object.freeze({
-  version: "0.8.22",
-  commitSha: "a".repeat(40),
-  manifestSha256: "b".repeat(64),
+  version: VERSION,
+  commitSha: COMMIT_SHA,
+  manifestSha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
+  manifest: "/inputs/manifest.json",
   result: "/results/published-harness.json",
 })
 
@@ -26,12 +31,20 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
     async makeTempDir() {
       return "/tmp/published-harness"
     },
+    async readManifest() {
+      return manifest
+    },
     async removeDir() {
       cleaned = true
     },
     async runCommand(command, args, runOptions) {
-      commands.push({ command, args, cwd: runOptions.cwd })
-      if (args[0] === "audit") return { stdout: auditOutput(options.version), stderr: "" }
+      commands.push({
+        command,
+        args,
+        cwd: runOptions.cwd,
+        acceptedExitCodes: runOptions.acceptedExitCodes,
+      })
+      if (args[0] === "audit") return { stdout: auditOutput(manifest), stderr: "" }
       return { stdout: "", stderr: "" }
     },
     async runHarnessAssertion(_root, lane, version) {
@@ -64,6 +77,8 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
     ),
     true,
   )
+  const audit = commands.find(({ command, args }) => command === "npm" && args[0] === "audit")
+  assert.deepEqual(audit.acceptedExitCodes, [0, 1])
   assert.equal(
     commands.some(({ args }) => /verdaccio|workspace:|file:|publish/u.test(args.join(" "))),
     false,
@@ -87,8 +102,10 @@ test("fails closed on malformed, missing, duplicate, or wrong-version npm audit 
       validateNpmAuditSignatures("{}", {
         version: options.version,
         requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
       }),
-    /malformed/i,
+    /malformed|missing|unknown/i,
   )
   assert.throws(
     () =>
@@ -98,38 +115,80 @@ test("fails closed on malformed, missing, duplicate, or wrong-version npm audit 
           missing: [{ name: "@dawn-ai/sdk", version: options.version }],
           verified: [],
         }),
-        { version: options.version, requiredPackages: ["@dawn-ai/sdk"] },
+        {
+          version: options.version,
+          requiredPackages: ["@dawn-ai/sdk"],
+          candidate: candidate(),
+          manifest,
+        },
       ),
     /missing.*signature/i,
   )
-  const duplicate = JSON.parse(auditOutput(options.version, ["@dawn-ai/sdk"]))
+  const duplicate = JSON.parse(auditOutput(manifest, ["@dawn-ai/sdk"]))
   duplicate.verified.push(duplicate.verified[0])
   assert.throws(
     () =>
       validateNpmAuditSignatures(JSON.stringify(duplicate), {
         version: options.version,
         requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
       }),
     /duplicate/i,
   )
   assert.throws(
     () =>
-      validateNpmAuditSignatures(auditOutput("0.8.21", ["@dawn-ai/sdk"]), {
+      validateNpmAuditSignatures(auditOutput(manifest, ["@dawn-ai/sdk"], { version: "0.8.21" }), {
         version: options.version,
         requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
       }),
     /exact.*0\.8\.22/i,
   )
 })
 
 test("accepts the exact npm 11 production shape and rejects verified-entry shape drift", () => {
-  const production = auditOutput(options.version, ["@dawn-ai/sdk"])
+  const production = auditOutput(manifest, ["@dawn-ai/sdk"])
   assert.deepEqual(
     validateNpmAuditSignatures(production, {
       version: options.version,
       requiredPackages: ["@dawn-ai/sdk"],
+      candidate: candidate(),
+      manifest,
     }),
     ["@dawn-ai/sdk"],
+  )
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(production, {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+      }),
+    /candidate|manifest/i,
+  )
+  const trailingSlash = JSON.parse(production)
+  trailingSlash.verified[0].registry = "https://registry.npmjs.org/"
+  assert.deepEqual(
+    validateNpmAuditSignatures(JSON.stringify(trailingSlash), {
+      version: options.version,
+      requiredPackages: ["@dawn-ai/sdk"],
+      candidate: candidate(),
+      manifest,
+    }),
+    ["@dawn-ai/sdk"],
+  )
+  const registryPath = structuredClone(trailingSlash)
+  registryPath.verified[0].registry = "https://registry.npmjs.org/private"
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(JSON.stringify(registryPath), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /registry|provenance/i,
   )
 
   const unexpected = JSON.parse(production)
@@ -139,8 +198,10 @@ test("accepts the exact npm 11 production shape and rejects verified-entry shape
       validateNpmAuditSignatures(JSON.stringify(unexpected), {
         version: options.version,
         requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
       }),
-    /verified entry is malformed/i,
+    /verified entry.*(?:malformed|missing|unknown)/i,
   )
 
   const missingLocation = JSON.parse(production)
@@ -150,9 +211,44 @@ test("accepts the exact npm 11 production shape and rejects verified-entry shape
       validateNpmAuditSignatures(JSON.stringify(missingLocation), {
         version: options.version,
         requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
       }),
-    /verified entry is malformed/i,
+    /verified entry.*(?:malformed|missing|unknown)/i,
   )
+})
+
+test("binds npm-verified provenance to the exact repository, workflow, ref, commit, and subject", () => {
+  const cases = [
+    [
+      {
+        attestations: {
+          publish: {
+            predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+          },
+        },
+      },
+      /attestation|provenance/i,
+    ],
+    [{ repository: "https://github.com/fork/dawnai" }, /repository/i],
+    [{ workflow: ".github/workflows/other.yml" }, /workflow/i],
+    [{ ref: "refs/heads/main" }, /ref/i],
+    [{ commitSha: "c".repeat(40) }, /commit/i],
+    [{ subjectName: "pkg:npm/%40dawn-ai/sdk@0.8.21" }, /subject/i],
+    [{ subjectSha512: "d".repeat(128) }, /subject|integrity/i],
+  ]
+  for (const [drift, expected] of cases) {
+    assert.throws(
+      () =>
+        validateNpmAuditSignatures(auditOutput(manifest, ["@dawn-ai/sdk"], drift), {
+          version: options.version,
+          requiredPackages: ["@dawn-ai/sdk"],
+          candidate: candidate(),
+          manifest,
+        }),
+      expected,
+    )
+  }
 })
 
 test("writes a receipt and cleans when an installed-package harness assertion fails", async () => {
@@ -165,12 +261,15 @@ test("writes a receipt and cleans when an installed-package harness assertion fa
       async makeTempDir() {
         return "/tmp/published-harness-failure"
       },
+      async readManifest() {
+        return manifest
+      },
       async removeDir() {
         events.push("cleanup")
       },
       async runCommand(_command, args) {
         return {
-          stdout: args[0] === "audit" ? auditOutput(options.version) : "",
+          stdout: args[0] === "audit" ? auditOutput(manifest) : "",
           stderr: "",
         }
       },
@@ -193,21 +292,114 @@ test("writes a receipt and cleans when an installed-package harness assertion fa
   assert.equal(receipt.conclusion, "failure")
 })
 
-function auditOutput(version, packages = CANONICAL_RELEASE_PACKAGE_ORDER) {
+function auditOutput(release, packages = CANONICAL_RELEASE_PACKAGE_ORDER, drift = {}) {
+  const version = drift.version ?? release.version
   return JSON.stringify({
     invalid: [],
     missing: [],
-    verified: packages.map((name) => ({
-      name,
-      version,
-      location: `node_modules/${name}`,
-      registry: "https://registry.npmjs.org/",
-      attestations: {
-        provenance: { predicateType: "https://slsa.dev/provenance/v1" },
-      },
-      attestationBundles: [{ mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2" }],
-    })),
+    verified: packages.map((name) => {
+      const entry = release.packages.find((item) => item.name === name)
+      const repository = drift.repository ?? "https://github.com/cacheplane/dawnai"
+      const workflow = drift.workflow ?? ".github/workflows/release.yml"
+      const ref = drift.ref ?? `refs/tags/v${release.version}`
+      const commitSha = drift.commitSha ?? release.commitSha
+      const subjectName = drift.subjectName ?? npmSubjectName(name, version)
+      const subjectSha512 = drift.subjectSha512 ?? entry.sha512
+      const statement = {
+        _type: "https://in-toto.io/Statement/v1",
+        subject: [{ name: subjectName, digest: { sha512: subjectSha512 } }],
+        predicateType: "https://slsa.dev/provenance/v1",
+        predicate: {
+          buildDefinition: {
+            buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+            externalParameters: { workflow: { ref, repository, path: workflow } },
+            internalParameters: { github: { event_name: "push" } },
+            resolvedDependencies: [
+              {
+                uri: `git+${repository}@${ref}`,
+                digest: { gitCommit: commitSha },
+              },
+            ],
+          },
+          runDetails: {
+            builder: { id: "https://github.com/actions/runner/github-hosted" },
+            metadata: {
+              invocationId: "https://github.com/cacheplane/dawnai/actions/runs/801/attempts/1",
+            },
+          },
+        },
+      }
+      return {
+        name,
+        version,
+        location: `node_modules/${name}`,
+        // npm 11.17.0 serializes the exact public registry without a trailing slash.
+        registry: "https://registry.npmjs.org",
+        attestations: drift.attestations ?? {
+          url: `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(name)}@${version}`,
+          provenance: { predicateType: "https://slsa.dev/provenance/v1" },
+        },
+        attestationBundles: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+              verificationMaterial: { certificate: { rawBytes: "verified-by-npm" } },
+              dsseEnvelope: {
+                payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
+                payloadType: "application/vnd.in-toto+json",
+                signatures: [{ sig: "verified-by-npm", keyid: "" }],
+              },
+            },
+            signedAccessSignatureUrl: "",
+          },
+        ],
+      }
+    }),
   })
+}
+
+function candidate() {
+  return {
+    version: options.version,
+    commitSha: options.commitSha,
+    publisherWorkflow: ".github/workflows/release.yml",
+  }
+}
+
+function releaseManifest(version, commitSha) {
+  return {
+    schemaVersion: 1,
+    version,
+    commitSha,
+    ci: { workflow: "CI", runId: 100, runAttempt: 1 },
+    artifact: {
+      name: `release-v${version}-${commitSha.slice(0, 12)}`,
+      prepareRunId: 200,
+      prepareRunAttempt: 1,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+      const bytes = Buffer.from(`published-${name}`)
+      const sha512 = createHash("sha512").update(bytes).digest("hex")
+      return {
+        name,
+        version,
+        filename: `${name.startsWith("@") ? name.slice(1).replace("/", "-") : name}-${version}.tgz`,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sha512,
+        npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+        access: "public",
+      }
+    }),
+  }
+}
+
+function npmSubjectName(name, version) {
+  if (!name.startsWith("@")) return `pkg:npm/${name}@${version}`
+  const [scope, packageName] = name.split("/")
+  return `pkg:npm/${encodeURIComponent(scope)}/${packageName}@${version}`
 }
 
 function clock() {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -8,6 +9,7 @@ import {
   assertInstalledCoreResolution,
   makeTempDir,
   publicNpmEnvironment,
+  readBoundedRegularFile,
   removeDir,
   run,
 } from "../../lib/published-artifacts.mjs"
@@ -19,17 +21,23 @@ import {
   TYPESCRIPT_VERSION,
 } from "../../published-artifact-smoke.mjs"
 import { snapshotJson } from "../adapter-normalize.mjs"
-import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
+import {
+  CANONICAL_RELEASE_PACKAGE_ORDER,
+  canonicalManifestBytes,
+  parseSealedReleaseManifest,
+} from "../manifest.mjs"
+import { parseNpmAuditSignatures as parseVerifiedNpmAuditSignatures } from "../npm-audit.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
 const AUDIT_OUTPUT_BYTES = 2 * 1024 * 1024
-const PUBLIC_REGISTRY = "https://registry.npmjs.org"
 
 export async function runPublishedHarnessSmoke(options, overrides = {}) {
   const dependencies = {
     makeTempDir,
+    readManifest: defaultReadManifest,
     removeDir,
     runCommand: defaultRunCommand,
     runHarnessAssertion: defaultRunHarnessAssertion,
@@ -47,6 +55,11 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
   return executeSmokeLane(
     { lane: "published-harness", ...options },
     async ({ check, deferCleanup }) => {
+      const manifest = await check(
+        "manifest",
+        "canonical sealed manifest matched the exact release candidate",
+        () => dependencies.readManifest(options),
+      )
       const root = await check(
         "temporary-project",
         "clean published harness consumer created",
@@ -79,11 +92,21 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
           const audit = await dependencies.runCommand(
             "npm",
             ["audit", "signatures", "--json", "--include-attestations"],
-            { cwd: root },
+            {
+              cwd: root,
+              maxOutputBytes: AUDIT_OUTPUT_BYTES,
+              acceptedExitCodes: [0, 1],
+            },
           )
           validateNpmAuditSignatures(audit.stdout, {
             version: options.version,
             requiredPackages: CANONICAL_RELEASE_PACKAGE_ORDER,
+            candidate: {
+              version: options.version,
+              commitSha: options.commitSha,
+              publisherWorkflow: ".github/workflows/release.yml",
+            },
+            manifest,
           })
         },
       )
@@ -106,6 +129,28 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
   )
 }
 
+async function defaultReadManifest(options) {
+  if (typeof options.manifest !== "string" || options.manifest.length === 0) {
+    throw new Error("--manifest is required for the published harness smoke")
+  }
+  const bytes = await readBoundedRegularFile(
+    options.manifest,
+    RELEASE_PAYLOAD_LIMITS.manifestBytes,
+    "Published harness manifest",
+  )
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  if (digest !== options.manifestSha256) {
+    throw new Error("Published harness manifest digest does not match --manifest-sha256")
+  }
+  const manifest = parseSealedReleaseManifest(bytes, {
+    candidate: { version: options.version, commitSha: options.commitSha },
+  })
+  if (!bytes.equals(canonicalManifestBytes(manifest))) {
+    throw new Error("Published harness manifest bytes must be canonical")
+  }
+  return manifest
+}
+
 async function runInstalledTypeScriptProbe(root, runCommand, version) {
   await installTypeScriptTooling(root, { runCommand })
   await assertInstalledCoreResolution({
@@ -119,87 +164,72 @@ async function runInstalledTypeScriptProbe(root, runCommand, version) {
   })
 }
 
-export function validateNpmAuditSignatures(output, { version, requiredPackages }) {
-  if (typeof output !== "string" || Buffer.byteLength(output, "utf8") > AUDIT_OUTPUT_BYTES) {
-    throw new Error("npm audit signatures output is missing or exceeds its byte limit")
-  }
-  let parsed
+export function validateNpmAuditSignatures(output, options) {
+  let context
   try {
-    parsed = snapshotJson(JSON.parse(output))
+    context = snapshotJson(options)
   } catch (error) {
-    throw new Error("npm audit signatures output is malformed", {
+    throw new Error("npm audit signature candidate or manifest context is malformed", {
       cause: error,
     })
   }
   if (
-    parsed === null ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    !Array.isArray(parsed.invalid) ||
-    !Array.isArray(parsed.missing) ||
-    !Array.isArray(parsed.verified) ||
-    Object.keys(parsed).sort().join(",") !== "invalid,missing,verified"
+    context === null ||
+    typeof context !== "object" ||
+    Array.isArray(context) ||
+    Object.keys(context).sort().join(",") !== "candidate,manifest,requiredPackages,version" ||
+    context.candidate === null ||
+    typeof context.candidate !== "object" ||
+    Array.isArray(context.candidate) ||
+    Object.keys(context.candidate).sort().join(",") !== "commitSha,publisherWorkflow,version" ||
+    context.candidate.version !== context.version ||
+    context.candidate.publisherWorkflow !== ".github/workflows/release.yml"
   ) {
-    throw new Error("npm audit signatures output is malformed")
+    throw new Error("npm audit signature candidate or manifest context is malformed")
   }
-  if (parsed.invalid.length > 0) {
-    throw new Error(
-      `npm audit signatures reported invalid evidence for ${auditNames(parsed.invalid)}`,
-    )
-  }
-  if (parsed.missing.length > 0) {
-    throw new Error(
-      `npm audit signatures reported missing signature for ${auditNames(parsed.missing)}`,
-    )
-  }
-  if (!Array.isArray(requiredPackages) || requiredPackages.length === 0) {
+  const requiredPackages = context.requiredPackages
+  if (
+    !Array.isArray(requiredPackages) ||
+    requiredPackages.length === 0 ||
+    requiredPackages.some((name) => typeof name !== "string" || name.length === 0)
+  ) {
     throw new Error("Required npm audit package set is empty")
   }
   const required = new Set(requiredPackages)
   if (required.size !== requiredPackages.length)
     throw new Error("Required npm audit package set is duplicate")
-  const verified = new Map()
-  for (const item of parsed.verified) {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error("npm audit signatures verified entry is malformed")
+  let manifest
+  try {
+    manifest = parseSealedReleaseManifest(canonicalManifestBytes(context.manifest), {
+      candidate: context.candidate,
+    })
+  } catch (error) {
+    throw new Error("npm audit signature manifest does not match the exact release candidate", {
+      cause: error,
+    })
+  }
+  if (manifest.version !== context.version) {
+    throw new Error("npm audit signature manifest does not match the exact release version")
+  }
+  const entries = new Map(manifest.packages.map((entry) => [entry.name, entry]))
+  const verified = []
+  for (const name of requiredPackages) {
+    const entry = entries.get(name)
+    if (entry === undefined) {
+      throw new Error(`Required npm audit package ${name} is absent from the release manifest`)
     }
-    if (!required.has(item.name)) continue
-    if (
-      Object.keys(item).sort().join(",") !==
-        "attestationBundles,attestations,location,name,registry,version" ||
-      typeof item.name !== "string" ||
-      typeof item.version !== "string" ||
-      typeof item.location !== "string" ||
-      typeof item.registry !== "string" ||
-      item.location !== `node_modules/${item.name}`
-    ) {
-      throw new Error("npm audit signatures verified entry is malformed")
-    }
-    if (verified.has(item.name)) throw new Error(`npm audit signatures duplicate ${item.name}`)
-    if (item.version !== version) {
-      throw new Error(`${item.name} was not verified at exact ${version}`)
-    }
-    if (
-      item.registry !== `${PUBLIC_REGISTRY}/` ||
-      item.attestations === null ||
-      typeof item.attestations !== "object" ||
-      Array.isArray(item.attestations) ||
-      Object.keys(item.attestations).length === 0 ||
-      !Array.isArray(item.attestationBundles) ||
-      item.attestationBundles.length === 0 ||
-      item.attestationBundles.some(
-        (bundle) => bundle === null || typeof bundle !== "object" || Array.isArray(bundle),
+    const result = parseVerifiedNpmAuditSignatures(output, {
+      entry,
+      candidate: context.candidate,
+    })
+    if (result.status !== "verified") {
+      throw new Error(
+        `npm audit signatures did not verify exact ${name}@${context.version} provenance`,
       )
-    ) {
-      throw new Error(`${item.name}@${version} lacks verified provenance attestation bundles`)
     }
-    verified.set(item.name, item)
+    verified.push(name)
   }
-  const absent = requiredPackages.filter((name) => !verified.has(name))
-  if (absent.length > 0) {
-    throw new Error(`npm audit signatures did not verify exact ${version} for ${absent.join(", ")}`)
-  }
-  return Object.freeze([...verified.keys()].sort())
+  return Object.freeze(verified.sort())
 }
 
 async function defaultRunHarnessAssertion(root, lane, version) {
@@ -238,15 +268,9 @@ async function defaultRunCommand(command, args, options = {}) {
     replaceEnv: true,
     stdio: "pipe",
     timeoutMs: COMMAND_TIMEOUT_MS,
-    maxOutputBytes: COMMAND_OUTPUT_BYTES,
+    maxOutputBytes: options.maxOutputBytes ?? COMMAND_OUTPUT_BYTES,
   })
   return { stdout, stderr: "" }
-}
-
-function auditNames(entries) {
-  return entries
-    .map((entry) => `${entry?.name ?? "<unknown>"}@${entry?.version ?? "<unknown>"}`)
-    .join(", ")
 }
 
 async function main() {
