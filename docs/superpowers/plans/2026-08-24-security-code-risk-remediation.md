@@ -4,9 +4,9 @@
 
 **Goal:** Close the seven live Dawn-owned CodeQL findings on exact `main` without weakening the real Vercel deployment lane, muting scanners, or adding broad dependency overrides.
 
-**Architecture:** Keep the fixes at the boundaries Dawn owns. Evals and testing use identical private synchronous-regex adapters backed by `safe-regex2` plus a hard 65,536-code-unit input limit; the release fault proxy constructs requests only from a validated loopback upstream and a normalized relative path; blog slugs are canonicalized at ingestion and encoded at both URL sinks; test-only source construction is replaced with data arguments; and the docs checker reuses one canonical heading parser instead of deleting tag-like substrings.
+**Architecture:** Keep the fixes at the boundaries Dawn owns. Evals and testing use identical private synchronous-regex adapters that snapshot the caller's expression through intrinsic accessors, cap the source at 4,096 UTF-16 code units and input at 65,536, and compile and match inside a fresh Node VM context with a hard 100 ms execution deadline; the release fault proxy constructs requests only from a validated loopback upstream and a normalized relative path; blog slugs are canonicalized at ingestion and encoded at both URL sinks; test-only source construction is replaced with data arguments; and the docs checker reuses one canonical heading parser instead of deleting tag-like substrings.
 
-**Tech Stack:** Node.js 24, TypeScript 7, Vitest 4, `node:test`, React server rendering, CodeQL, pnpm 10.33, `safe-regex2` 5.1.1
+**Tech Stack:** Node.js 24 and `node:vm`, TypeScript 7, Vitest 4, `node:test`, React server rendering, CodeQL, pnpm 10.33
 
 **Approved design:** `docs/superpowers/specs/2026-08-09-security-backlog-release-recovery-design.md`, Pull request 2
 
@@ -33,26 +33,30 @@ No alert may be dismissed or muted. PR CodeQL must make all seven absent from th
 
 ### Synchronous regular-expression policy
 
-- Create `packages/evals/src/regex-safety.ts`: private evals adapter around `safe-regex2` with the shared bound and errors.
+- Create `packages/evals/src/regex-safety.ts`: private evals adapter with shared source/input caps, a VM execution deadline, and stable errors.
 - Create `packages/testing/src/regex-safety.ts`: private testing adapter with byte-for-byte equivalent behavior.
 - Modify `packages/evals/src/scorers.ts`: compile the safe tester when `regex()` is constructed.
 - Modify `packages/testing/src/matchers.ts`: route both public `toMatch()` helpers through the safe tester.
-- Modify both package manifests and `pnpm-lock.yaml`: add `safe-regex2@^5.1.1` as a normal dependency.
-- Modify `packages/evals/test/scorers.test.ts` and `packages/testing/test/matchers.test.ts`: policy, bound, flag, and statefulness regressions.
+- Modify `packages/evals/test/scorers.test.ts` and `packages/testing/test/matchers.test.ts`: deadline, source/input-bound, intrinsic-accessor, flag, mutation, and statefulness regressions.
 - Create `.changeset/bounded-regex-evaluation.md`: patch changes for `@dawn-ai/evals` and `@dawn-ai/testing`.
 
 The adapters stay private; this change must not invent a public regex-safety API. Both define:
 
 ```ts
 const MAX_REGEX_INPUT_CODE_UNITS = 65_536
-const UNSAFE_REGEX_MESSAGE = "Regular expression is unsafe for synchronous matching"
+const MAX_REGEX_SOURCE_CODE_UNITS = 4_096
+const REGEX_EXECUTION_TIMEOUT_MS = 100
+const OVERSIZED_REGEX_SOURCE_MESSAGE =
+  "Regular expression source exceeds 4096 UTF-16 code units"
 const OVERSIZED_REGEX_INPUT_MESSAGE =
   "Regular expression input exceeds 65536 UTF-16 code units"
+const REGEX_TIMEOUT_MESSAGE =
+  "Regular expression evaluation exceeded 100ms execution limit"
 
 export function createSafeRegexTester(expression: RegExp): (input: string) => boolean
 ```
 
-Construction calls `safe-regex2` and throws `TypeError(UNSAFE_REGEX_MESSAGE)` on rejection. The returned function rejects an oversized string with `RangeError(OVERSIZED_REGEX_INPUT_MESSAGE)` before invoking the engine, then tests a fresh `RegExp(expression.source, expression.flags)` so caller-owned `lastIndex` never changes and `g`/`y` behavior is deterministic. The implementation must not claim that structural analysis proves every JavaScript regular expression safe.
+Construction snapshots the source and each supported flag through intrinsic `RegExp.prototype` accessors, so caller overrides and property traps cannot change the validated expression, then rejects an oversized source with `RangeError(OVERSIZED_REGEX_SOURCE_MESSAGE)`. The returned function rejects an oversized string with `RangeError(OVERSIZED_REGEX_INPUT_MESSAGE)` before invoking the engine. It compiles and tests a fresh expression in a fresh Node VM context using one constant script, disabled string/Wasm code generation, and the hard timeout. Only `ERR_SCRIPT_EXECUTION_TIMEOUT` is normalized to `RangeError(REGEX_TIMEOUT_MESSAGE)`; other failures propagate. This preserves JavaScript `RegExp` semantics while hard-bounding compile and match execution and leaving caller-owned `lastIndex` unchanged.
 
 ### Request, content, and scanner boundaries
 
@@ -69,18 +73,18 @@ Construction calls `safe-regex2` and throws `TypeError(UNSAFE_REGEX_MESSAGE)` on
 - Create: `packages/testing/src/regex-safety.ts`
 - Modify: `packages/evals/test/scorers.test.ts`
 - Modify: `packages/testing/test/matchers.test.ts`
-- Modify: `packages/evals/package.json`
-- Modify: `packages/testing/package.json`
-- Modify: `pnpm-lock.yaml`
 
 - [ ] **Step 1: Write the failing policy tests**
 
-In both packages, add table-driven cases that require:
+In both packages, add a child-process regression using the overlapping-alternative expression `/(a|aa)+$/u` and a rejecting input long enough to exceed the VM deadline. The child must use a constant `--eval` program, receive the module path as an argument, have its own outer process timeout, and require the exact stable timeout error:
 
 ```ts
-expect(() => createSafeRegexTester(/^(a+)+$/u)).toThrow(
-  "Regular expression is unsafe for synchronous matching",
-)
+expect(result.error).toBeUndefined()
+expect(result.status).toBe(0)
+expect(JSON.parse(result.stdout)).toEqual({
+  name: "RangeError",
+  message: "Regular expression evaluation exceeded 100ms execution limit",
+})
 
 const test = createSafeRegexTester(/\d+ items/iu)
 expect(test("12 ITEMS")).toBe(true)
@@ -92,7 +96,7 @@ expect(() => createSafeRegexTester(/a+/u)(oversized)).toThrow(
 )
 ```
 
-Also require a `g` expression and a `y` expression to return the same result across repeated calls while preserving a nonzero caller-owned `lastIndex`. Mirror the same table-driven contract in each package and assert the exact error classes and messages, the 65,536/65,537 boundary, ordinary flags, and stateful-expression behavior locally. Do not cross-import either private adapter from the other package and do not export an adapter merely for parity testing.
+Also require the 4,096/4,097 source boundary; the 65,536/65,537 input boundary; ordinary flags; intrinsic source/flag snapshots despite overridden instance accessors; fail-closed RegExp proxy handling without property-trap reads; mutation snapshots; and `g`/`y` expressions that return the same result across repeated calls while preserving a nonzero caller-owned `lastIndex`. Mirror the same contract in each package and assert exact error classes and messages. Do not cross-import either private adapter from the other package and do not export an adapter merely for parity testing.
 
 - [ ] **Step 2: Run RED**
 
@@ -105,17 +109,13 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
     test/scorers.test.ts
 ```
 
-Expected: fail because the private adapters do not exist.
+Expected: fail because the private adapters do not exist; when replayed against the previous heuristic implementation, the child process exceeds its outer timeout for the accepted false-negative expression.
 
-- [ ] **Step 3: Add the maintained analyzer dependency**
+- [ ] **Step 3: Implement the two private adapters**
 
-Add `"safe-regex2": "^5.1.1"` to the normal `dependencies` of both published packages and update only the necessary lockfile importers and package snapshots with a frozen-compatible pnpm install. Do not add an override.
+Use the exact constants, exceptions, intrinsic snapshots, constant VM script, fresh-context behavior, and order of checks above. Keep the files byte-for-byte equivalent. Add no runtime dependency, native addon, override, or heuristic pattern allow/deny list.
 
-- [ ] **Step 4: Implement the two private adapters**
-
-Use the exact constants, exceptions, fresh-expression behavior, and order of checks above. Keep the files structurally equivalent and add a comment that `safe-regex2` is a structural screen complemented by the input bound, not a proof of runtime complexity.
-
-- [ ] **Step 5: Run GREEN and package checks**
+- [ ] **Step 4: Run GREEN and package checks**
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm install --frozen-lockfile
@@ -127,12 +127,11 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm --filter @dawn-ai
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add packages/evals/src/regex-safety.ts packages/testing/src/regex-safety.ts \
-  packages/evals/test/scorers.test.ts packages/testing/test/matchers.test.ts \
-  packages/evals/package.json packages/testing/package.json pnpm-lock.yaml
+  packages/evals/test/scorers.test.ts packages/testing/test/matchers.test.ts
 git commit -m "fix(security): bound synchronous regex evaluation"
 ```
 
@@ -149,7 +148,8 @@ git commit -m "fix(security): bound synchronous regex evaluation"
 
 Test the public APIs, not only the adapters:
 
-- `regex(/^(a+)+$/u)` throws during scorer construction;
+- ordinary overlapping-alternative expressions preserve normal JavaScript matching semantics when they finish within the budget;
+- both public API paths invoke the same private hard-bounded tester whose catastrophic-match regression runs in a child process;
 - eval scoring rejects oversized `finalMessage` before evaluation;
 - `expectFinalMessage(...).toMatch()` and `expectSystemPrompt(...).toMatch()` enforce the same policy;
 - ordinary flags and matching semantics remain intact; and
@@ -171,9 +171,9 @@ In `regex()`, create the tester once before returning the scorer. In both testin
 "@dawn-ai/testing": patch
 ---
 
-Reject structurally unsafe regular expressions and over-limit matcher inputs
-before evaluation, and make global and sticky expression matching deterministic
-across repeated calls.
+Evaluate regular expression compilation and matching inside a fresh, time-bounded
+Node context, reject over-limit expression sources and matcher inputs, and make
+global and sticky expression matching deterministic across repeated calls.
 ```
 
 - [ ] **Step 5: Verify and commit**
