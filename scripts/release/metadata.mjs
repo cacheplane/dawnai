@@ -553,6 +553,110 @@ export function preflightPublicationAssetMetadata(value, { marker }) {
   return deepFreeze(assets)
 }
 
+export function preflightAuditDraftAssetMetadata(value, { marker }) {
+  const releaseMarker = validateMarker(marker)
+  if (
+    !["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+      releaseMarker.phase,
+    )
+  ) {
+    throw new TypeError("Audit asset metadata requires a smoke-complete audit phase")
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length < BASE_ASSET_COUNT ||
+    value.length > MAX_PUBLICATION_ASSETS
+  ) {
+    throw new TypeError("Audit draft asset count is outside its bound")
+  }
+  const listed = snapshotJson(value)
+  const expectedBase = markerBaseAssets(releaseMarker)
+  const expectedBaseByName = new Map(expectedBase.map((asset) => [asset.name, asset.sha256]))
+  const names = new Set()
+  const ids = new Set()
+  const totals = { base: 0, prepared: 0, bundles: 0, audit: 0 }
+  let auditCount = 0
+  const assets = listed.map((item) => {
+    if (!isRecord(item) || typeof item.name !== "string" || !ASSET_NAME_PATTERN.test(item.name)) {
+      throw new TypeError("Audit draft asset identity is malformed")
+    }
+    const id = positiveId(item.id, "Audit draft asset ID")
+    if (!Number.isSafeInteger(item.size) || item.size < 1) {
+      throw new TypeError("Audit draft asset declared size is invalid")
+    }
+    if (names.has(item.name) || ids.has(id)) {
+      throw new TypeError("Audit draft asset identity is duplicate")
+    }
+    names.add(item.name)
+    ids.add(id)
+
+    const expectedSha256 = expectedBaseByName.get(item.name) ?? null
+    const limits = publicationAssetLimits(item.name, expectedSha256 !== null)
+    assertPayloadByteLength(item.size, limits.maximumBytes, `${item.name} declared size`)
+    if (limits.group === "audit") {
+      auditCount += 1
+      totals.audit = addPublicationBytes(
+        totals.audit,
+        item.size,
+        RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes,
+        "Audit draft evidence",
+      )
+    } else {
+      totals.base = addPublicationBytes(
+        totals.base,
+        item.size,
+        RELEASE_PAYLOAD_LIMITS.escrowBytes,
+        "Audit draft base assets",
+      )
+      if (limits.group === "prepared") {
+        totals.prepared = addPublicationBytes(
+          totals.prepared,
+          item.size,
+          RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+          "Audit draft prepared assets",
+        )
+      } else if (limits.group === "bundles") {
+        totals.bundles = addPublicationBytes(
+          totals.bundles,
+          item.size,
+          RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+          "Audit draft attestation bundles",
+        )
+      }
+    }
+    return {
+      id,
+      name: item.name,
+      size: item.size,
+      maximumBytes: limits.maximumBytes,
+      group: limits.group,
+      expectedSha256,
+    }
+  })
+  if (auditCount > MAX_AUDIT_ATTEMPTS + 1) {
+    throw new TypeError("Audit draft evidence count is outside its bound")
+  }
+  if ([...expectedBaseByName.keys()].some((name) => !names.has(name))) {
+    throw new TypeError("Audit draft base asset set is incomplete")
+  }
+  if (releaseMarker.phase === "SMOKES_COMPLETE" && auditCount !== 0) {
+    throw new TypeError("Smoke-complete draft contains premature audit evidence")
+  }
+  if (
+    releaseMarker.phase === "AUDIT_RETRYABLE" &&
+    (!names.has(releaseMarker.audit.attemptAssetName) || names.has("audit-result.json"))
+  ) {
+    throw new TypeError("Retryable audit draft evidence is incomplete or canonicalized")
+  }
+  if (
+    releaseMarker.phase === "AUDIT_VERIFIED" &&
+    (!names.has(releaseMarker.audit.attemptAssetName) || !names.has("audit-result.json"))
+  ) {
+    throw new TypeError("Verified audit draft evidence is incomplete")
+  }
+  return deepFreeze(assets)
+}
+
 export async function escrowCandidate(input) {
   const argumentsSnapshot = snapshotEscrowInput(input)
   const candidate = validateCandidate(argumentsSnapshot.candidate)
