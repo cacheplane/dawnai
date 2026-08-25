@@ -1,4 +1,10 @@
+#!/usr/bin/env node
+
+import { randomUUID as defaultRandomUUID } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
+import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
@@ -47,7 +53,16 @@ const AUTHORITY_FIELDS = Object.freeze(["state", "releaseRecord", "npm"])
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const MAX_CANONICAL_BYTES = 256 * 1024
 const MAX_ROOT_BYTES = 4_096
+const MAX_PATH_BYTES = 4_096
+const MAX_REPORT_BYTES = 1024 * 1024
 const OPTION_FIELDS = Object.freeze(["report", "root", "environment", "readInventory"])
+const CLI_FIELDS = Object.freeze(["--report", "--root", "--output"])
+const CLI_RUNTIME_FIELDS = Object.freeze([
+  "environment",
+  "fileSystem",
+  "readInventory",
+  "randomUUID",
+])
 
 export async function createPreparationHandoff(options) {
   validateOptions(options)
@@ -202,6 +217,383 @@ export function parsePreparationHandoff(value) {
 
 export function canonicalPreparationHandoffBytes(value) {
   return encodeCanonical(parsePreparationHandoff(value))
+}
+
+export function parsePreparationHandoffCliArguments(argv) {
+  let values
+  try {
+    values = snapshotJson(argv)
+  } catch {
+    throw new TypeError("Preparation handoff CLI arguments are invalid")
+  }
+  if (!Array.isArray(values) || values.length !== CLI_FIELDS.length * 2) {
+    throw new TypeError("Preparation handoff CLI requires exactly three path flags")
+  }
+  const parsed = new Map()
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index]
+    const value = values[index + 1]
+    if (
+      !CLI_FIELDS.includes(flag) ||
+      parsed.has(flag) ||
+      typeof value !== "string" ||
+      value.length === 0 ||
+      Buffer.byteLength(value, "utf8") > MAX_PATH_BYTES ||
+      hasControlCharacters(value) ||
+      !path.isAbsolute(value) ||
+      path.resolve(value) !== value
+    ) {
+      throw new TypeError("Preparation handoff CLI flag or path is invalid")
+    }
+    parsed.set(flag, value)
+  }
+  if (CLI_FIELDS.some((flag) => !parsed.has(flag))) {
+    throw new TypeError("Preparation handoff CLI flags are incomplete")
+  }
+  const report = parsed.get("--report")
+  const root = parsed.get("--root")
+  const output = parsed.get("--output")
+  if (report === output) {
+    throw new TypeError("Preparation handoff CLI report and output paths must be distinct")
+  }
+  return Object.freeze({ report, root, output })
+}
+
+export async function runPreparationHandoffCli(argv, runtime = {}) {
+  validateCliRuntime(runtime)
+  const options = parsePreparationHandoffCliArguments(argv)
+  const fileSystem = cliRuntimeOption(runtime, "fileSystem") ?? defaultFileSystem
+  const environment = cliRuntimeOption(runtime, "environment") ?? process.env
+  const readInventory = cliRuntimeOption(runtime, "readInventory") ?? readReleaseInventory
+  const randomUUID = cliRuntimeOption(runtime, "randomUUID") ?? defaultRandomUUID
+  const reportBytes = await readBoundedRegularFile(
+    fileSystem,
+    options.report,
+    MAX_REPORT_BYTES,
+    "production report",
+  )
+  let report
+  try {
+    report = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(reportBytes))
+  } catch {
+    throw new TypeError("Preparation handoff production report is not valid UTF-8 JSON")
+  }
+  const handoff = await createPreparationHandoff({
+    report,
+    root: options.root,
+    environment,
+    readInventory,
+  })
+  await writeCanonicalPreparationHandoff(options.output, handoff, {
+    fileSystem,
+    randomUUID,
+  })
+  return handoff
+}
+
+export async function writeCanonicalPreparationHandoff(target, value, runtime = {}) {
+  validateCliRuntime(runtime, ["fileSystem", "randomUUID"])
+  const bytes = canonicalPreparationHandoffBytes(value)
+  const fileSystem = cliRuntimeOption(runtime, "fileSystem") ?? defaultFileSystem
+  const randomUUID = cliRuntimeOption(runtime, "randomUUID") ?? defaultRandomUUID
+  const operations = fileSystemOperations(fileSystem, ["link", "lstat", "open", "unlink"])
+  if (
+    typeof target !== "string" ||
+    !path.isAbsolute(target) ||
+    path.resolve(target) !== target ||
+    path.basename(target).length === 0 ||
+    Buffer.byteLength(target, "utf8") > MAX_PATH_BYTES ||
+    hasControlCharacters(target) ||
+    typeof randomUUID !== "function"
+  ) {
+    throw new TypeError("Preparation handoff output path or runtime is invalid")
+  }
+  const identifier = randomUUID()
+  if (typeof identifier !== "string" || !/^[0-9a-f-]{36}$/u.test(identifier)) {
+    throw new TypeError("Preparation handoff temporary identity is invalid")
+  }
+  const directory = path.dirname(target)
+  const guard = await openOutputDirectory(operations, directory)
+  const temporary = path.join(directory, `.${path.basename(target)}.${identifier}.tmp`)
+  let temporaryCreated = false
+  let linkedIdentity = null
+  let primaryError = null
+  try {
+    await assertOutputDirectoryCurrent(operations, directory, guard.identity)
+    const handle = await operations.open(
+      temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    )
+    temporaryCreated = true
+    try {
+      await handle.writeFile(bytes)
+      await handle.sync()
+      linkedIdentity = await handle.stat({ bigint: true })
+      if (
+        !linkedIdentity.isFile() ||
+        linkedIdentity.nlink !== 1n ||
+        linkedIdentity.size !== BigInt(bytes.byteLength)
+      ) {
+        throw new Error("Preparation handoff temporary output was not durably written")
+      }
+    } finally {
+      await handle.close()
+    }
+    await assertOutputDirectoryCurrent(operations, directory, guard.identity)
+    try {
+      await operations.link(temporary, target)
+      await assertLinkedOutput(operations, target, linkedIdentity, false)
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      const existing = await readBoundedRegularFile(
+        operations,
+        target,
+        MAX_CANONICAL_BYTES,
+        "existing output",
+      )
+      if (!existing.equals(bytes)) {
+        throw new Error("Existing preparation handoff output conflicts with canonical bytes")
+      }
+      linkedIdentity = null
+    }
+    await guard.handle.sync()
+    await assertOutputDirectoryCurrent(operations, directory, guard.identity)
+  } catch (error) {
+    primaryError = error
+  }
+  let cleanupError = null
+  if (temporaryCreated) {
+    try {
+      await operations.unlink(temporary)
+      await guard.handle.sync()
+    } catch (error) {
+      cleanupError = error
+    }
+  }
+  if (primaryError === null && cleanupError === null) {
+    try {
+      await assertOutputDirectoryCurrent(operations, directory, guard.identity)
+      if (linkedIdentity === null) {
+        const existing = await readBoundedRegularFile(
+          operations,
+          target,
+          MAX_CANONICAL_BYTES,
+          "existing output",
+        )
+        if (!existing.equals(bytes)) {
+          throw new Error("Existing preparation handoff output changed after replay")
+        }
+      } else {
+        await assertLinkedOutput(operations, target, linkedIdentity, true)
+      }
+    } catch (error) {
+      primaryError = error
+    }
+  }
+  let closeError = null
+  try {
+    await guard.handle.close()
+  } catch (error) {
+    closeError = error
+  }
+  const secondary = [cleanupError, closeError].filter((error) => error !== null)
+  if (primaryError !== null && secondary.length > 0) {
+    throw new AggregateError(
+      [primaryError, ...secondary],
+      "Preparation handoff write and cleanup both failed",
+    )
+  }
+  if (primaryError !== null) throw primaryError
+  if (secondary.length > 1) {
+    throw new AggregateError(secondary, "Preparation handoff cleanup failed")
+  }
+  if (secondary.length === 1) throw secondary[0]
+  return Buffer.from(bytes)
+}
+
+function validateCliRuntime(runtime, allowedFields = CLI_RUNTIME_FIELDS) {
+  if (
+    runtime === null ||
+    typeof runtime !== "object" ||
+    Array.isArray(runtime) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(runtime))
+  ) {
+    throw new TypeError("Preparation handoff CLI runtime is invalid")
+  }
+  for (const key of Reflect.ownKeys(runtime)) {
+    const descriptor =
+      typeof key === "string" ? Object.getOwnPropertyDescriptor(runtime, key) : undefined
+    if (
+      typeof key !== "string" ||
+      !allowedFields.includes(key) ||
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError("Preparation handoff CLI runtime contains an unsafe field")
+    }
+  }
+}
+
+function cliRuntimeOption(runtime, name) {
+  const descriptor = Object.getOwnPropertyDescriptor(runtime, name)
+  if (descriptor === undefined) return undefined
+  if (!descriptor.enumerable || !("value" in descriptor)) {
+    throw new TypeError(`Preparation handoff CLI runtime ${name} is invalid`)
+  }
+  return descriptor.value
+}
+
+function fileSystemOperations(fileSystem, methods) {
+  if (fileSystem === null || (typeof fileSystem !== "object" && typeof fileSystem !== "function")) {
+    throw new TypeError("Preparation handoff filesystem is invalid")
+  }
+  const operations = Object.create(null)
+  for (const method of methods) {
+    const descriptor = Object.getOwnPropertyDescriptor(fileSystem, method)
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      typeof descriptor.value !== "function"
+    ) {
+      throw new TypeError(`Preparation handoff filesystem must expose ${method}`)
+    }
+    operations[method] = descriptor.value.bind(fileSystem)
+  }
+  return Object.freeze(operations)
+}
+
+async function readBoundedRegularFile(fileSystem, filePath, maximumBytes, label) {
+  const operations = fileSystemOperations(fileSystem, ["lstat", "open"])
+  if (
+    typeof filePath !== "string" ||
+    !path.isAbsolute(filePath) ||
+    path.resolve(filePath) !== filePath ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 1 ||
+    !Number.isInteger(fsConstants.O_NOFOLLOW)
+  ) {
+    throw new TypeError(`Preparation handoff ${label} path or bound is invalid`)
+  }
+  let handle
+  try {
+    handle = await operations.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError(`Preparation handoff ${label} must be one bounded regular file`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (
+      !before.isFile() ||
+      before.nlink < 1n ||
+      before.size < 1n ||
+      before.size > BigInt(maximumBytes) ||
+      before.size > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new TypeError(`Preparation handoff ${label} must be one bounded regular file`)
+    }
+    const bytes = Buffer.allocUnsafe(Number(before.size))
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat({ bigint: true })
+    const current = await operations.lstat(filePath, { bigint: true })
+    if (
+      offset !== bytes.byteLength ||
+      !sameFileIdentity(before, after) ||
+      current.isSymbolicLink() ||
+      !sameFileIdentity(after, current)
+    ) {
+      throw new Error(`Preparation handoff ${label} changed while it was read`)
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
+async function openOutputDirectory(fileSystem, directory) {
+  const operations = fileSystemOperations(fileSystem, ["lstat", "open"])
+  if (!Number.isInteger(fsConstants.O_DIRECTORY) || !Number.isInteger(fsConstants.O_NOFOLLOW)) {
+    throw new TypeError("Preparation handoff output-directory containment is unavailable")
+  }
+  let handle
+  try {
+    handle = await operations.open(
+      directory,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    )
+  } catch (error) {
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError("Preparation handoff output parent must be one regular directory", {
+        cause: error,
+      })
+    }
+    throw error
+  }
+  try {
+    const identity = await handle.stat({ bigint: true })
+    if (!identity.isDirectory()) {
+      throw new TypeError("Preparation handoff output parent must be one regular directory")
+    }
+    await assertOutputDirectoryCurrent(operations, directory, identity)
+    return { handle, identity }
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+async function assertOutputDirectoryCurrent(fileSystem, directory, expected) {
+  const operations = fileSystemOperations(fileSystem, ["lstat"])
+  const actual = await operations.lstat(directory, { bigint: true })
+  if (
+    !actual.isDirectory() ||
+    actual.isSymbolicLink() ||
+    actual.dev !== expected.dev ||
+    actual.ino !== expected.ino
+  ) {
+    throw new Error("Preparation handoff output parent changed during containment")
+  }
+}
+
+async function assertLinkedOutput(fileSystem, target, expected, temporaryUnlinked) {
+  const operations = fileSystemOperations(fileSystem, ["lstat"])
+  const actual = await operations.lstat(target, { bigint: true })
+  if (
+    !actual.isFile() ||
+    actual.isSymbolicLink() ||
+    actual.dev !== expected.dev ||
+    actual.ino !== expected.ino ||
+    actual.size !== expected.size ||
+    (temporaryUnlinked ? actual.nlink !== 1n : actual.nlink < 2n)
+  ) {
+    throw new Error("Preparation handoff output changed during containment")
+  }
+}
+
+function sameFileIdentity(before, after) {
+  return (
+    after.isFile() &&
+    after.dev === before.dev &&
+    after.ino === before.ino &&
+    after.size === before.size &&
+    after.nlink === before.nlink &&
+    after.mtimeNs === before.mtimeNs &&
+    after.ctimeNs === before.ctimeNs
+  )
 }
 
 function validateCandidate(candidate) {
@@ -437,4 +829,15 @@ function deepFreeze(value) {
     Object.freeze(value)
   }
   return value
+}
+
+const executedPath =
+  process.argv[1] === undefined ? null : pathToFileURL(path.resolve(process.argv[1])).href
+if (executedPath === import.meta.url) {
+  try {
+    await runPreparationHandoffCli(process.argv.slice(2))
+  } catch {
+    process.stderr.write("Preparation handoff failed\n")
+    process.exitCode = 1
+  }
 }

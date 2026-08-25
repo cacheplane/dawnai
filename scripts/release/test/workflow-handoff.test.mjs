@@ -1,4 +1,18 @@
 import assert from "node:assert/strict"
+import {
+  link,
+  lstat,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
@@ -7,6 +21,8 @@ import {
   canonicalPreparationHandoffBytes,
   createPreparationHandoff,
   parsePreparationHandoff,
+  parsePreparationHandoffCliArguments,
+  runPreparationHandoffCli,
 } from "../workflow-handoff.mjs"
 
 const VERSION = "0.8.22"
@@ -343,6 +359,208 @@ test("canonical encoding is stable across object key order and parser snapshots 
     canonicalPreparationHandoffBytes(valid),
   )
   assertRecursivelyFrozen(parsed)
+})
+
+test("the executable creates one canonical write-once handoff from exactly three path flags", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-preparation-handoff-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const reportPath = path.join(directory, "production-report.json")
+  const outputPath = path.join(directory, "preparation-handoff.json")
+  await writeFile(reportPath, `${JSON.stringify(productionReport())}\n`, "utf8")
+  const argv = ["--report", reportPath, "--root", ROOT, "--output", outputPath]
+
+  const result = await runPreparationHandoffCli(argv, {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+  })
+
+  assert.deepEqual(parsePreparationHandoff(await readFile(outputPath)), result)
+  assert.deepEqual(await readFile(outputPath), canonicalPreparationHandoffBytes(result))
+  await runPreparationHandoffCli(argv, {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+  })
+})
+
+test("the executable rejects unknown, duplicate, missing, unsafe, and aliased paths", async () => {
+  const valid = ["--report", "/tmp/report.json", "--root", ROOT, "--output", "/tmp/output.json"]
+  for (const argv of [
+    [],
+    valid.slice(0, -2),
+    [...valid, "--extra", "value"],
+    ["--report", "/tmp/report.json", "--report", "/tmp/other.json", "--root", ROOT],
+    ["--report", "/tmp/report.json\n", "--root", ROOT, "--output", "/tmp/output.json"],
+    ["--report", "/tmp/same.json", "--root", ROOT, "--output", "/tmp/same.json"],
+    ["--report", "/tmp/report.json", "--root", "relative", "--output", "/tmp/output.json"],
+  ]) {
+    assert.throws(() => parsePreparationHandoffCliArguments(argv), /argument|flag|path|root/iu)
+  }
+})
+
+test("the executable never clobbers conflicting files or follows output symlinks", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-preparation-handoff-output-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const reportPath = path.join(directory, "production-report.json")
+  const outputPath = path.join(directory, "preparation-handoff.json")
+  const targetPath = path.join(directory, "target.json")
+  await writeFile(reportPath, `${JSON.stringify(productionReport())}\n`, "utf8")
+  await writeFile(outputPath, "conflicting bytes\n", "utf8")
+  const runtime = {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+  }
+  await assert.rejects(
+    runPreparationHandoffCli(
+      ["--report", reportPath, "--root", ROOT, "--output", outputPath],
+      runtime,
+    ),
+    /conflict|different|existing/iu,
+  )
+  assert.equal(await readFile(outputPath, "utf8"), "conflicting bytes\n")
+
+  await rm(outputPath)
+  await writeFile(targetPath, "unchanged\n", "utf8")
+  await symlink(targetPath, outputPath)
+  await assert.rejects(
+    runPreparationHandoffCli(
+      ["--report", reportPath, "--root", ROOT, "--output", outputPath],
+      runtime,
+    ),
+    /regular|symbolic|output|existing/iu,
+  )
+  assert.equal(await readFile(targetPath, "utf8"), "unchanged\n")
+})
+
+test("the executable rejects unsafe runtime accessors and report or parent symlinks", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-preparation-handoff-input-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const reportPath = path.join(directory, "production-report.json")
+  const reportLink = path.join(directory, "report-link.json")
+  const outputDirectory = path.join(directory, "output")
+  const outputLink = path.join(directory, "output-link")
+  const outputPath = path.join(outputDirectory, "preparation-handoff.json")
+  await writeFile(reportPath, `${JSON.stringify(productionReport())}\n`, "utf8")
+  await symlink(reportPath, reportLink)
+  await symlink(directory, outputLink)
+
+  let accessorReads = 0
+  const unsafeRuntime = {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+  }
+  Object.defineProperty(unsafeRuntime, "fileSystem", {
+    enumerable: true,
+    get() {
+      accessorReads += 1
+      return null
+    },
+  })
+  await assert.rejects(
+    runPreparationHandoffCli(
+      ["--report", reportPath, "--root", ROOT, "--output", outputPath],
+      unsafeRuntime,
+    ),
+    /runtime|unsafe/iu,
+  )
+  assert.equal(accessorReads, 0)
+
+  const runtime = {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+  }
+  await assert.rejects(
+    runPreparationHandoffCli(
+      ["--report", reportLink, "--root", ROOT, "--output", outputPath],
+      runtime,
+    ),
+    /regular|report/iu,
+  )
+  await assert.rejects(
+    runPreparationHandoffCli(
+      [
+        "--report",
+        reportPath,
+        "--root",
+        ROOT,
+        "--output",
+        path.join(outputLink, "preparation-handoff.json"),
+      ],
+      runtime,
+    ),
+    /directory|parent/iu,
+  )
+  await assert.rejects(readFile(outputPath), { code: "ENOENT" })
+})
+
+test("the write-once executable cleans temporary files after write or link failure", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-preparation-handoff-failure-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const reportPath = path.join(directory, "production-report.json")
+  const outputPath = path.join(directory, "preparation-handoff.json")
+  await writeFile(reportPath, `${JSON.stringify(productionReport())}\n`, "utf8")
+  const argv = ["--report", reportPath, "--root", ROOT, "--output", outputPath]
+  const baseRuntime = {
+    environment: productionEnvironment(),
+    async readInventory() {
+      return rawInventory()
+    },
+    randomUUID() {
+      return "01234567-89ab-cdef-0123-456789abcdef"
+    },
+  }
+
+  const writeFailure = Object.assign(new Error("injected write failure"), { code: "EIO" })
+  await assert.rejects(
+    runPreparationHandoffCli(argv, {
+      ...baseRuntime,
+      fileSystem: {
+        link,
+        lstat,
+        async open(filePath, ...arguments_) {
+          const handle = await open(filePath, ...arguments_)
+          if (!filePath.endsWith(".tmp")) return handle
+          return {
+            close: handle.close.bind(handle),
+            stat: handle.stat.bind(handle),
+            sync: handle.sync.bind(handle),
+            async writeFile() {
+              throw writeFailure
+            },
+          }
+        },
+        unlink,
+      },
+    }),
+    /write failure/iu,
+  )
+  assert.deepEqual(await readdir(directory), ["production-report.json"])
+
+  const linkFailure = Object.assign(new Error("injected link failure"), { code: "EIO" })
+  await assert.rejects(
+    runPreparationHandoffCli(argv, {
+      ...baseRuntime,
+      fileSystem: {
+        async link() {
+          throw linkFailure
+        },
+        lstat,
+        open,
+        unlink,
+      },
+    }),
+    /link failure/iu,
+  )
+  assert.deepEqual(await readdir(directory), ["production-report.json"])
 })
 
 async function createWith({
