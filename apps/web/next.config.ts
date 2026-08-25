@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   experimental: { useTypeScriptCli: true },
   reactStrictMode: true,
   pageExtensions: ["ts", "tsx", "md", "mdx"],
+  typescript: { tsconfigPath: "./tsconfig.build.json" },
 }
 
 const withMDX = createMDX({
