@@ -1,3 +1,9 @@
+import { createHash } from "node:crypto"
+
+import { canonicalAbandonmentBytes } from "./abandonment.mjs"
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
+import { canonicalReleaseBody, parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
@@ -20,6 +26,13 @@ const ACTIVE_MARKER = Object.freeze({
   abandonmentEnvironment: "release-abandonment",
 })
 const ACTIVE_MARKER_FIELDS = Object.freeze(Object.keys(ACTIVE_MARKER).sort())
+const TERMINAL_ABANDONMENT_ASSET = "abandonment.json"
+const RELEASE_MARKER_TOKEN = "<!-- DAWN_RELEASE_CONTROLLER_MARKER\n"
+const MAX_ABANDONMENT_ASSETS = 46
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+const CANONICAL_PACKAGE_NAMES = Object.freeze(
+  [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText),
+)
 
 export async function discoverManagedCandidate({ ref, inventory, git, marker }) {
   return (
@@ -360,19 +373,38 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
 
     const assetResult = await github.listReleaseAssets({ releaseId: release.id })
     const assets = presentList(assetResult, `assets for ${tag}`)
+    const abandonmentState = await inspectAbandonmentRelease({
+      release,
+      assets,
+      tagIdentity,
+      abandonmentEnvironment: marker.abandonmentEnvironment,
+      github,
+    })
+    if (abandonmentState !== null) {
+      releases.push(
+        candidateSelection({
+          candidate: discovery.candidate,
+          state: abandonmentState.state,
+          disposition: abandonmentState.disposition,
+          tag,
+          conflicts: abandonmentState.conflicts,
+        }),
+      )
+      continue
+    }
     const records = assets.filter((asset) => asset?.name === "release-record.json")
     if (records.length !== 1) {
       throw new Error(`Managed GitHub Release ${tag} must contain exactly one release-record.json`)
     }
-    const record = await downloadJsonAsset(github, records[0], `release record for ${tag}`)
+    const record = await downloadJsonAsset(github, records[0], `release record for ${tag}`, {
+      maximumBytes: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+    })
     validateReleaseRecordIdentity(record, tagIdentity)
     const state = await releaseStateFromAssets({
       release,
       releaseRecord: record,
       assets,
       tagIdentity,
-      expectedPackageNames: candidate.packageNames,
-      abandonmentEnvironment: marker.abandonmentEnvironment,
       github,
     })
     releases.push(
@@ -388,47 +420,16 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
   return releases
 }
 
-async function releaseStateFromAssets({
-  release,
-  releaseRecord,
-  assets,
-  tagIdentity,
-  expectedPackageNames,
-  abandonmentEnvironment,
-  github,
-}) {
+async function releaseStateFromAssets({ release, releaseRecord, assets, tagIdentity, github }) {
   const auditAssets = assets.filter((asset) => asset?.name === "audit-result.json")
-  const abandonmentAssets = assets.filter((asset) => asset?.name === "abandonment.json")
-  if (auditAssets.length > 1 || abandonmentAssets.length > 1) {
+  if (auditAssets.length > 1) {
     throw new Error(`Managed GitHub Release ${tagIdentity.tag} has duplicate terminal evidence`)
-  }
-  if (auditAssets.length === 1 && abandonmentAssets.length === 1) {
-    throw new Error(`Managed GitHub Release ${tagIdentity.tag} has conflicting terminal evidence`)
-  }
-  if (abandonmentAssets.length === 1) {
-    const record = parseAbandonmentRecord(
-      await downloadJsonAsset(
-        github,
-        abandonmentAssets[0],
-        `abandonment record for ${tagIdentity.tag}`,
-      ),
-      {
-        candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
-        environment: abandonmentEnvironment,
-        packageNames: expectedPackageNames,
-      },
-    )
-    if (record.tag !== tagIdentity.tag) {
-      throw new Error(`Managed abandonment record identity does not match ${tagIdentity.tag}`)
-    }
-    if (release.draft !== true) {
-      throw new Error(`Managed abandonment record for ${tagIdentity.tag} requires a draft Release`)
-    }
-    return ReleaseState.ABANDONED_PREPUBLICATION
   }
   if (auditAssets.length === 1) {
     const record = parseAuditResult(
-      await downloadJsonAsset(github, auditAssets[0], `audit result for ${tagIdentity.tag}`),
+      await downloadJsonAsset(github, auditAssets[0], `audit result for ${tagIdentity.tag}`, {
+        maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
+      }),
     )
     validateTerminalIdentity(record, tagIdentity, {
       label: "audit result",
@@ -443,6 +444,219 @@ async function releaseStateFromAssets({
     }
   }
   return ReleaseState.CANDIDATE_TAGGED
+}
+
+async function inspectAbandonmentRelease({
+  release,
+  assets,
+  tagIdentity,
+  abandonmentEnvironment,
+  github,
+}) {
+  const marker = releaseMarkerIfPresent(release.body)
+  const abandonmentRelated =
+    marker?.phase === "ABANDONED_PREPUBLICATION" ||
+    assets.some((asset) => asset?.name === TERMINAL_ABANDONMENT_ASSET)
+  if (!abandonmentRelated) return null
+
+  const inventory = normalizeAbandonmentAssetInventory(assets, tagIdentity.tag)
+  const tombstones = inventory.filter((asset) => asset.name === TERMINAL_ABANDONMENT_ASSET)
+  const auditAssets = inventory.filter(
+    (asset) =>
+      asset.name === "audit-result.json" ||
+      /^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(asset.name),
+  )
+  if (tombstones.length > 1) {
+    throw new Error(`Managed GitHub Release ${tagIdentity.tag} has duplicate abandonment evidence`)
+  }
+  if (auditAssets.length > 0) {
+    throw new Error(`Managed GitHub Release ${tagIdentity.tag} has conflicting terminal evidence`)
+  }
+  if (release.draft !== true || release.immutable !== false) {
+    throw new Error(`Managed abandonment for ${tagIdentity.tag} requires an exact mutable draft`)
+  }
+
+  if (marker === null) {
+    throw new Error(
+      `Managed abandonment evidence for ${tagIdentity.tag} has no exact Release marker`,
+    )
+  }
+  if (
+    marker.version !== tagIdentity.version ||
+    marker.commitSha !== tagIdentity.commitSha ||
+    marker.tag !== tagIdentity.tag
+  ) {
+    throw new Error(`Managed abandonment marker identity does not match ${tagIdentity.tag}`)
+  }
+
+  const terminal = marker.phase === "ABANDONED_PREPUBLICATION"
+  if (!terminal && !["ESCROWING", "ESCROWED"].includes(marker.phase)) {
+    throw new Error(
+      `Managed abandonment evidence for ${tagIdentity.tag} has an illegal predecessor`,
+    )
+  }
+  if (terminal) {
+    const expectedBody = canonicalReleaseBody({ marker, manifest: null })
+    const expectedTitle = `Dawn v${tagIdentity.version} (abandoned before publication)`
+    if (release.body !== expectedBody || release.name !== expectedTitle) {
+      throw new Error(`Managed abandonment Release metadata for ${tagIdentity.tag} is not exact`)
+    }
+  }
+
+  const baseAssets = validateAbandonmentAssetNamespace({
+    inventory,
+    marker,
+    requireCompleteBase: marker.phase === "ESCROWED",
+  })
+
+  let tombstoneBytes = null
+  let tombstone = null
+  if (tombstones.length === 1) {
+    const downloaded = await downloadJsonAsset(
+      github,
+      tombstones[0],
+      `abandonment record for ${tagIdentity.tag}`,
+      { maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes, includeBytes: true },
+    )
+    tombstone = parseAbandonmentRecord(downloaded.value, {
+      candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
+      environment: abandonmentEnvironment,
+      packageNames: CANONICAL_PACKAGE_NAMES,
+    })
+    tombstoneBytes = canonicalAbandonmentBytes(tombstone)
+    if (!tombstoneBytes.equals(downloaded.bytes) || tombstone.tag !== tagIdentity.tag) {
+      throw new Error(`Managed abandonment record for ${tagIdentity.tag} is not canonical`)
+    }
+  }
+
+  await verifyAbandonmentAssetBytes({ baseAssets, tombstoneBytes, github })
+
+  if (terminal && tombstoneBytes !== null) {
+    if (marker.abandonmentSha256 !== sha256(tombstoneBytes)) {
+      throw new Error(`Managed abandonment marker digest conflicts with ${tagIdentity.tag}`)
+    }
+    return {
+      state: ReleaseState.ABANDONED_PREPUBLICATION,
+      disposition: "selected",
+      conflicts: [],
+    }
+  }
+  if (!terminal && tombstoneBytes === null) return null
+  return {
+    state: ReleaseState.CANDIDATE_TAGGED,
+    disposition: "blocked",
+    conflicts: [
+      terminal
+        ? "abandonment-asset-reconciliation-required"
+        : "abandonment-marker-reconciliation-required",
+    ],
+  }
+}
+
+function releaseMarkerIfPresent(body) {
+  if (typeof body !== "string" || !body.includes(RELEASE_MARKER_TOKEN)) return null
+  return parseReleaseMarker(body)
+}
+
+function normalizeAbandonmentAssetInventory(assets, tag) {
+  if (!Array.isArray(assets) || assets.length > MAX_ABANDONMENT_ASSETS) {
+    throw new Error(`Managed abandonment asset inventory for ${tag} is malformed or unbounded`)
+  }
+  const ids = new Set()
+  const names = new Set()
+  return assets.map((asset) => {
+    if (
+      asset === null ||
+      Array.isArray(asset) ||
+      typeof asset !== "object" ||
+      !isPositiveId(asset.id) ||
+      typeof asset.name !== "string" ||
+      Buffer.byteLength(asset.name, "utf8") > 512 ||
+      ids.has(String(asset.id)) ||
+      names.has(asset.name)
+    ) {
+      throw new Error(`Managed abandonment asset identity for ${tag} is invalid or duplicate`)
+    }
+    ids.add(String(asset.id))
+    names.add(asset.name)
+    return { id: asset.id, name: asset.name }
+  })
+}
+
+function validateAbandonmentAssetNamespace({ inventory, marker, requireCompleteBase }) {
+  const expectedBase = abandonmentMarkerBaseAssets(marker)
+  const expectedByName = new Map(expectedBase.map((asset) => [asset.name, asset]))
+  const baseAssets = []
+  for (const asset of inventory) {
+    if (asset.name === TERMINAL_ABANDONMENT_ASSET) continue
+    const expected = expectedByName.get(asset.name)
+    if (expected === undefined) {
+      throw new Error("Managed abandonment Release contains an unexpected asset namespace member")
+    }
+    assetLimit(asset.name)
+    baseAssets.push({ ...asset, expected })
+  }
+  if (requireCompleteBase && baseAssets.length !== expectedBase.length) {
+    throw new Error("Escrowed abandonment runner-loss state has an incomplete base asset set")
+  }
+  return baseAssets
+}
+
+async function verifyAbandonmentAssetBytes({ baseAssets, tombstoneBytes, github }) {
+  let cumulativeBytes = tombstoneBytes?.byteLength ?? 0
+  for (const asset of baseAssets) {
+    const bytes = await downloadAssetBytes(github, asset, assetLimit(asset.name))
+    cumulativeBytes += bytes.byteLength
+    assertPayloadByteLength(
+      cumulativeBytes,
+      RELEASE_PAYLOAD_LIMITS.escrowBytes + RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
+      "Managed abandonment evidence",
+    )
+    if (sha256(bytes) !== asset.expected.sha256) {
+      throw new Error(`Managed abandonment base asset ${asset.name} conflicts with its marker`)
+    }
+  }
+}
+
+function abandonmentMarkerBaseAssets(marker) {
+  if (marker.attestationSet === null) return []
+  const assets = [
+    { name: "release-record.json", sha256: marker.releaseRecordSha256 },
+    { name: "manifest.json", sha256: marker.manifestSha256 },
+    ...marker.attestationSet.subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...marker.attestationSet.subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  if (
+    assets.length !== 45 ||
+    new Set(assets.map((asset) => asset.name)).size !== 45 ||
+    assets.some((asset) => !SHA256_PATTERN.test(asset.sha256))
+  ) {
+    throw new Error("Managed abandonment marker base asset set is invalid")
+  }
+  const digest = sha256(
+    Buffer.from(
+      `${JSON.stringify(assets.map(({ name, sha256: assetSha256 }) => ({ name, sha256: assetSha256 })))}\n`,
+      "utf8",
+    ),
+  )
+  if (digest !== marker.baseAssetSetSha256) {
+    throw new Error("Managed abandonment marker base asset-set digest is invalid")
+  }
+  return assets
+}
+
+function assetLimit(name) {
+  if (name === "release-record.json") return RELEASE_PAYLOAD_LIMITS.releaseRecordBytes
+  if (name === "manifest.json") return RELEASE_PAYLOAD_LIMITS.manifestBytes
+  if (name.endsWith(".tgz")) return RELEASE_PAYLOAD_LIMITS.tarballBytes
+  if (name.endsWith(".intoto.jsonl")) return RELEASE_PAYLOAD_LIMITS.attestationBundleBytes
+  throw new Error("Managed abandonment Release contains an unexpected asset namespace member")
 }
 
 async function normalizeManagedTags(records, git) {
@@ -540,21 +754,22 @@ function failedCi(sha, reason) {
   }
 }
 
-async function downloadJsonAsset(github, asset, label) {
+async function downloadJsonAsset(github, asset, label, { maximumBytes, includeBytes = false }) {
   if (!isPositiveId(asset?.id)) throw new TypeError(`${label} asset identity is invalid`)
   const result = await github.downloadReleaseAsset({ assetId: asset.id })
-  if (result?.status !== "PRESENT" || typeof result.contentBase64 !== "string") {
+  if (!isExactAssetDownload(result)) {
     throw new Error(`${label} could not be read exactly`)
   }
-  let bytes
-  try {
-    bytes = Buffer.from(result.contentBase64, "base64")
-  } catch (error) {
-    throw new TypeError(`${label} is not valid base64`, { cause: error })
-  }
+  assertPayloadByteLength(
+    Buffer.byteLength(result.contentBase64, "utf8"),
+    Math.ceil(maximumBytes / 3) * 4,
+    `${label} base64`,
+  )
+  const bytes = Buffer.from(result.contentBase64, "base64")
   if (bytes.toString("base64") !== result.contentBase64) {
     throw new TypeError(`${label} is not canonical base64`)
   }
+  assertPayloadByteLength(bytes.byteLength, maximumBytes, label)
   let value
   try {
     value = JSON.parse(UTF8_DECODER.decode(bytes))
@@ -564,7 +779,42 @@ async function downloadJsonAsset(github, asset, label) {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
     throw new TypeError(`${label} must contain a JSON object`)
   }
-  return value
+  return includeBytes ? { value, bytes } : value
+}
+
+async function downloadAssetBytes(github, asset, maximumBytes) {
+  const result = await github.downloadReleaseAsset({ assetId: asset.id })
+  if (!isExactAssetDownload(result)) {
+    throw new Error(`Managed abandonment asset ${asset.name} could not be read exactly`)
+  }
+  assertPayloadByteLength(
+    Buffer.byteLength(result.contentBase64, "utf8"),
+    Math.ceil(maximumBytes / 3) * 4,
+    `Managed abandonment asset ${asset.name} base64`,
+  )
+  const bytes = Buffer.from(result.contentBase64, "base64")
+  if (bytes.toString("base64") !== result.contentBase64) {
+    throw new Error(`Managed abandonment asset ${asset.name} is not canonical base64`)
+  }
+  assertPayloadByteLength(bytes.byteLength, maximumBytes, `Managed abandonment asset ${asset.name}`)
+  return bytes
+}
+
+function isExactAssetDownload(value) {
+  return (
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value === "object" &&
+    Object.keys(value).length === 5 &&
+    ["status", "operation", "httpStatus", "code", "contentBase64"].every((field) =>
+      Object.hasOwn(value, field),
+    ) &&
+    value.status === "PRESENT" &&
+    value.operation === "release-asset-download" &&
+    value.httpStatus === 200 &&
+    value.code === null &&
+    typeof value.contentBase64 === "string"
+  )
 }
 
 function validateReleaseRecordIdentity(record, expected) {
@@ -808,6 +1058,10 @@ function deepFreeze(value) {
 
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex")
 }
 
 function wait(milliseconds) {

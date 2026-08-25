@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import {
   abandonmentReleaseMarker,
   canonicalReleaseBody,
@@ -63,6 +64,14 @@ const BASE_ASSET_NAME_PATTERN =
   /^(?:release-record\.json|manifest\.json|[A-Za-z0-9@._+-]+\.tgz(?:\.intoto\.jsonl)?|manifest\.json\.intoto\.jsonl)$/u
 const TERMINAL_ASSET_NAME = "abandonment.json"
 const MAX_RELEASES = 10_000
+const MIN_REGISTRY_OBSERVATION_GAP_MS = 60_000
+const MAX_FRESH_AUTHORIZATION_AGE_MS = 10 * 60_000
+const MAX_FRESH_RECORD_AGE_MS = 60_000
+const MAX_FRESH_SECOND_OBSERVATION_AGE_MS = 2 * 60_000
+const MAX_CLOCK_SKEW_MS = 5_000
+const CANONICAL_PACKAGE_NAMES = Object.freeze(
+  [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText),
+)
 
 export async function evaluateAbandonment(input) {
   const source = snapshotJson(input)
@@ -73,38 +82,23 @@ export async function evaluateAbandonment(input) {
   if (artifactContext.newerReleaseInterleaved !== false) {
     throw new Error("A newer Release interleaved before abandonment")
   }
-  const packageNames = packageInventory(source.observations)
-  const tombstone = parseAbandonmentRecord(
-    {
-      schemaVersion: 1,
-      version: candidate.version,
-      commitSha: candidate.commitSha,
-      tag: `v${candidate.version}`,
-      reason: source.reason,
-      actor: approval.actor,
-      recordedAt: approval.recordedAt,
-      approval: {
-        environment: approval.environment,
-        deploymentId: approval.deploymentId,
-        reviewer: approval.reviewer,
-        approvedAt: approval.approvedAt,
-      },
-      actionsHistory: source.actionsHistory,
-      observations: source.observations,
-    },
-    { candidate, environment: EXPECTED_ENVIRONMENT, packageNames },
-  )
+  const tombstone = buildAbandonmentRecord({
+    candidate,
+    reason: source.reason,
+    actionsHistory: source.actionsHistory,
+    observations: source.observations,
+    approval,
+  })
   validateTerminalContext(artifactContext, sha256(canonicalAbandonmentBytes(tombstone)))
   return tombstone
 }
 
 export function canonicalAbandonmentBytes(value) {
   const source = snapshotJson(value)
-  const packageNames = packageInventory(source.observations)
   const record = parseAbandonmentRecord(source, {
     candidate: { version: source.version, commitSha: source.commitSha },
     environment: EXPECTED_ENVIRONMENT,
-    packageNames,
+    packageNames: CANONICAL_PACKAGE_NAMES,
   })
   const bytes = Buffer.from(`${JSON.stringify(canonicalize(record), null, 2)}\n`, "utf8")
   assertPayloadByteLength(
@@ -119,11 +113,10 @@ export async function recordAbandonment(input) {
   const boundary = snapshotRecordInput(input)
   const candidate = validateCandidate(boundary.candidate)
   const tombstoneBytes = canonicalAbandonmentBytes(boundary.tombstone)
-  const packageNames = packageInventory(boundary.tombstone.observations)
   parseAbandonmentRecord(boundary.tombstone, {
     candidate,
     environment: EXPECTED_ENVIRONMENT,
-    packageNames,
+    packageNames: CANONICAL_PACKAGE_NAMES,
   })
   const tombstoneSha256 = sha256(tombstoneBytes)
   const context = validateArtifactContext(boundary.artifactContext, candidate)
@@ -173,6 +166,7 @@ export async function recordAbandonment(input) {
   let release = observedRelease
   let created = false
   if (release === null) {
+    await authorizeFreshMutation(boundary.authorization, candidate, boundary.tombstone.reason)
     const receipt = await boundary.github.writer.createDraftRelease({
       tag: `v${candidate.version}`,
       targetSha: candidate.commitSha,
@@ -195,6 +189,9 @@ export async function recordAbandonment(input) {
   if (alreadyTerminal && canonicalText(currentMarker) !== canonicalText(terminalMarker)) {
     throw new Error("Existing terminal abandonment marker conflicts with exact evidence")
   }
+  if (alreadyTerminal && (release.body !== terminalBody || release.name !== title)) {
+    throw new Error("Existing terminal abandonment Release metadata is not exact")
+  }
 
   const currentAssets = await readAssetInventory(boundary.github.reader, release.id)
   assertCurrentAssetInventory(currentAssets, context.release.assets)
@@ -207,7 +204,13 @@ export async function recordAbandonment(input) {
       tombstoneSha256,
       RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
     )
-  } else {
+  }
+
+  const mutationRequired = abandonmentAssets.length === 0 || !alreadyTerminal
+  if (mutationRequired && !created) {
+    await authorizeFreshMutation(boundary.authorization, candidate, boundary.tombstone.reason)
+  }
+  if (abandonmentAssets.length === 0) {
     await boundary.github.writer.uploadAssetIfAbsentAndEqual({
       releaseId: release.id,
       tag: `v${candidate.version}`,
@@ -257,7 +260,12 @@ export async function recordAbandonment(input) {
 
 function snapshotRecordInput(input) {
   if (!isPlainDataObject(input)) throw new TypeError("Abandonment recording input is invalid")
-  assertOwnDataFields(input, ["candidate", "tombstone", "artifactContext", "github"], "recording")
+  assertOwnDataFields(
+    input,
+    ["candidate", "tombstone", "artifactContext", "authorization", "github"],
+    "recording",
+  )
+  const authorizationValue = dataField(input, "authorization")
   const githubValue = dataField(input, "github")
   if (!isPlainDataObject(githubValue)) throw new TypeError("GitHub effect boundary is invalid")
   assertOwnDataFields(githubValue, ["reader", "writer"], "GitHub effect boundary")
@@ -265,6 +273,11 @@ function snapshotRecordInput(input) {
     candidate: snapshotJson(dataField(input, "candidate")),
     tombstone: snapshotJson(dataField(input, "tombstone")),
     artifactContext: snapshotJson(dataField(input, "artifactContext")),
+    authorization: bindMethods(
+      authorizationValue,
+      ["readFreshAbandonmentEvidence"],
+      "Abandonment authorization reader",
+    ),
     github: {
       reader: bindMethods(
         dataField(githubValue, "reader"),
@@ -668,6 +681,72 @@ function validateApprovalInput(value) {
   return value
 }
 
+function buildAbandonmentRecord({ candidate, reason, actionsHistory, observations, approval }) {
+  return parseAbandonmentRecord(
+    {
+      schemaVersion: 1,
+      version: candidate.version,
+      commitSha: candidate.commitSha,
+      tag: `v${candidate.version}`,
+      reason,
+      actor: approval.actor,
+      recordedAt: approval.recordedAt,
+      approval: {
+        environment: approval.environment,
+        deploymentId: approval.deploymentId,
+        reviewer: approval.reviewer,
+        approvedAt: approval.approvedAt,
+      },
+      actionsHistory,
+      observations,
+    },
+    {
+      candidate,
+      environment: EXPECTED_ENVIRONMENT,
+      packageNames: CANONICAL_PACKAGE_NAMES,
+    },
+  )
+}
+
+async function authorizeFreshMutation(authorization, candidate, reason) {
+  const evidence = snapshotJson(
+    await authorization.readFreshAbandonmentEvidence({ candidate: snapshotJson(candidate) }),
+  )
+  assertExactFields(
+    evidence,
+    ["actionsHistory", "observations", "approval"],
+    "fresh abandonment authorization",
+  )
+  const approval = validateApprovalInput(evidence.approval)
+  const record = buildAbandonmentRecord({
+    candidate,
+    reason,
+    actionsHistory: evidence.actionsHistory,
+    observations: evidence.observations,
+    approval,
+  })
+  assertFreshAuthorization(record, Date.now())
+}
+
+function assertFreshAuthorization(record, now) {
+  const approvalTime = Date.parse(record.approval.approvedAt)
+  const historyTime = Date.parse(record.actionsHistory.observedAt)
+  const firstTime = Date.parse(record.observations[0].observedAt)
+  const secondTime = Date.parse(record.observations[1].observedAt)
+  const recordedTime = Date.parse(record.recordedAt)
+  const oldest = Math.min(approvalTime, historyTime, firstTime, secondTime, recordedTime)
+  const newest = Math.max(approvalTime, historyTime, firstTime, secondTime, recordedTime)
+  if (
+    secondTime - firstTime < MIN_REGISTRY_OBSERVATION_GAP_MS ||
+    oldest < now - MAX_FRESH_AUTHORIZATION_AGE_MS ||
+    recordedTime < now - MAX_FRESH_RECORD_AGE_MS ||
+    secondTime < now - MAX_FRESH_SECOND_OBSERVATION_AGE_MS ||
+    newest > now + MAX_CLOCK_SKEW_MS
+  ) {
+    throw new Error("Fresh abandonment authorization is stale or insufficiently separated")
+  }
+}
+
 function validateCandidate(value) {
   if (!isRecord(value)) throw new TypeError("Abandonment candidate is invalid")
   const keys = Object.keys(value)
@@ -688,15 +767,6 @@ function validateCandidate(value) {
     throw new TypeError("Abandonment candidate policy identity is invalid")
   }
   return deepFreeze(value)
-}
-
-function packageInventory(observations) {
-  if (!Array.isArray(observations) || observations.length === 0) {
-    throw new TypeError("Abandonment registry observations are invalid")
-  }
-  const packages = observations[0]?.packages
-  if (!Array.isArray(packages)) throw new TypeError("Abandonment package inventory is invalid")
-  return packages.map((pkg) => pkg?.name)
 }
 
 async function verifyAnnotatedTag(reader, candidate) {

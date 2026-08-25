@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import test from "node:test"
 
+import { canonicalAbandonmentBytes } from "../abandonment.mjs"
 import {
   arbitrateCandidate,
   decideInvocation,
@@ -8,6 +10,8 @@ import {
   discoverScheduledCandidate,
   waitForRequiredCi,
 } from "../candidate.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
+import { abandonmentReleaseMarker, canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
 const ACTIVE_MARKER = Object.freeze({
@@ -24,9 +28,7 @@ const SHA_22 = "4".repeat(40)
 const SHA_23 = "5".repeat(40)
 const SHA_24 = "6".repeat(40)
 const OTHER_SHA = "a".repeat(40)
-const PACKAGE_NAMES = Array.from({ length: 21 }, (_, index) =>
-  index === 20 ? "create-dawn-ai-app" : `@dawn-ai/package-${String(index).padStart(2, "0")}`,
-)
+const PACKAGE_NAMES = [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText)
 
 test("the ownership-switch marker without a fixed-group version delta is NO_CANDIDATE", async () => {
   const repository = repositoryFixture([
@@ -193,7 +195,7 @@ test("scheduled discovery enumerates managed Releases and standalone tags before
       .filter(([operation]) => operation === "downloadReleaseAsset")
       .map(([, assetId]) => assetId)
       .sort((left, right) => left - right),
-    [221, 231, 233, 241, 242],
+    [221, 233, 241, 242],
   )
   assert.ok(github.calls.every(([operation, id]) => operation !== "listReleaseAssets" || id !== 99))
 })
@@ -384,18 +386,21 @@ test("only a draft Release with a complete protected abandonment tombstone is te
       name: "skeletal tombstone",
       mutate(release) {
         delete release.abandonment.actor
+        release.abandonmentBytes = Buffer.from(JSON.stringify(release.abandonment))
       },
     },
     {
       name: "publish history started",
       mutate(release) {
         release.abandonment.actionsHistory.publishJobStarted = true
+        release.abandonmentBytes = Buffer.from(JSON.stringify(release.abandonment))
       },
     },
     {
       name: "incomplete package observation",
       mutate(release) {
         release.abandonment.observations[1].packages.pop()
+        release.abandonmentBytes = Buffer.from(JSON.stringify(release.abandonment))
       },
     },
   ]
@@ -419,6 +424,157 @@ test("only a draft Release with a complete protected abandonment tombstone is te
       fixture.name,
     )
   }
+})
+
+test("scheduled recovery recognizes tagged-only canonical abandonment before release-record gating", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+    commit(SHA_21, "0.8.21", { parent: CUTOVER_SHA, marker: true }),
+    commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
+  ])
+  const abandoned = managedRelease(21, "0.8.21", SHA_21, {
+    abandoned: true,
+    releaseRecord: false,
+  })
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [abandoned],
+    }),
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"))
+})
+
+test("scheduled recovery accepts an exact terminal attested abandonment with a retained subset", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+    commit(SHA_21, "0.8.21", { parent: CUTOVER_SHA, marker: true }),
+    commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
+  ])
+  const abandoned = terminalAttestedAbandonmentRelease(21, "0.8.21", SHA_21)
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [abandoned],
+    }),
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"))
+})
+
+test("scheduled recovery keeps both abandonment runner-loss boundaries nonterminal", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20", { marker: true }),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const markerBeforeAsset = managedRelease(21, "0.8.21", SHA_21, {
+    abandoned: true,
+    releaseRecord: false,
+  })
+  markerBeforeAsset.assets = []
+  const assetBeforeMarker = interruptedAbandonmentRelease(21, "0.8.21", SHA_21)
+
+  for (const [release, conflict] of [
+    [markerBeforeAsset, "abandonment-asset-reconciliation-required"],
+    [assetBeforeMarker, "abandonment-marker-reconciliation-required"],
+  ]) {
+    const result = await discoverScheduledCandidate({
+      inventory: repository.inventory,
+      git: repository.git,
+      github: githubFixture({
+        tags: [tagRef("0.8.21", SHA_21)],
+        releases: [release],
+      }),
+      marker: ACTIVE_MARKER,
+    })
+    assert.deepEqual(result, {
+      ...selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"),
+      disposition: "blocked",
+      conflicts: [conflict],
+    })
+  }
+})
+
+test("terminal abandonment requires exact canonical bytes, marker digest, metadata, and namespace", async () => {
+  const cases = [
+    [
+      "noncanonical tombstone",
+      (release) => (release.abandonmentBytes = Buffer.from(JSON.stringify(release.abandonment))),
+    ],
+    ["wrong title", (release) => (release.name = "conflicting title")],
+    ["unknown asset", (release) => release.assets.push({ id: 999, name: "notes.txt" })],
+  ]
+
+  for (const [name, mutate] of cases) {
+    const repository = repositoryFixture([
+      commit(BASE_SHA, "0.8.20", { marker: true }),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ])
+    const release = managedRelease(21, "0.8.21", SHA_21, {
+      abandoned: true,
+      releaseRecord: false,
+    })
+    mutate(release)
+    await assert.rejects(
+      discoverScheduledCandidate({
+        inventory: repository.inventory,
+        git: repository.git,
+        github: githubFixture({
+          tags: [tagRef("0.8.21", SHA_21)],
+          releases: [release],
+        }),
+        marker: ACTIVE_MARKER,
+      }),
+      /abandonment|canonical|metadata|namespace|asset/iu,
+      name,
+    )
+  }
+})
+
+test("abandonment asset metadata is bounded before the first download", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20", { marker: true }),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const release = managedRelease(21, "0.8.21", SHA_21, {
+    abandoned: true,
+    releaseRecord: false,
+  })
+  release.assets.push(
+    ...Array.from({ length: 46 }, (_, index) => ({
+      id: 1_000 + index,
+      name: `unexpected-${index}.json`,
+    })),
+  )
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [release],
+  })
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      inventory: repository.inventory,
+      git: repository.git,
+      github,
+      marker: ACTIVE_MARKER,
+    }),
+    /asset|bounded|namespace/iu,
+  )
+  assert.equal(
+    github.calls.some(([operation]) => operation === "downloadReleaseAsset"),
+    false,
+  )
 })
 
 test("scheduled discovery chooses the newest unsuperseded untagged first-parent candidate", async () => {
@@ -857,16 +1013,45 @@ function managedRelease(
   id,
   version,
   commitSha,
-  { auditComplete = false, abandoned = false, published = false } = {},
+  {
+    auditComplete = false,
+    abandoned = false,
+    published = false,
+    releaseRecord: includeReleaseRecordOption,
+  } = {},
 ) {
+  const includeReleaseRecord = includeReleaseRecordOption ?? !abandoned
   const recordId = id * 10 + 1
-  const assets = [releaseRecordAsset(recordId)]
+  const assets = includeReleaseRecord ? [releaseRecordAsset(recordId)] : []
   if (auditComplete) assets.push({ id: id * 10 + 2, name: "audit-result.json" })
   if (abandoned) assets.push({ id: id * 10 + 3, name: "abandonment.json" })
+  const abandonment = abandoned ? abandonmentRecord(version, commitSha) : null
+  const abandonmentBytes = abandonment === null ? null : canonicalAbandonmentBytes(abandonment)
+  const abandonmentMarker =
+    abandonmentBytes === null
+      ? null
+      : abandonmentReleaseMarker({
+          candidate: { version, commitSha },
+          artifact: {
+            manifestSha256: null,
+            releaseRecordSha256: null,
+            baseAssetSetSha256: null,
+            attestationSet: null,
+          },
+          abandonmentSha256: sha256(abandonmentBytes),
+        })
   return {
     id,
+    version,
     tag_name: `v${version}`,
     draft: !published,
+    immutable: published,
+    ...(abandonmentMarker === null
+      ? {}
+      : {
+          name: `Dawn v${version} (abandoned before publication)`,
+          body: canonicalReleaseBody({ marker: abandonmentMarker, manifest: null }),
+        }),
     assets,
     record: releaseRecord(version, commitSha),
     ...(auditComplete
@@ -891,12 +1076,85 @@ function managedRelease(
           },
         }
       : {}),
-    ...(abandoned
-      ? {
-          abandonment: abandonmentRecord(version, commitSha),
-        }
-      : {}),
+    ...(abandonment === null ? {} : { abandonment, abandonmentBytes }),
   }
+}
+
+function interruptedAbandonmentRelease(id, version, commitSha) {
+  const release = managedRelease(id, version, commitSha, {
+    abandoned: true,
+    releaseRecord: true,
+  })
+  const recordBytes = Buffer.from(JSON.stringify(release.record))
+  const subjects = [
+    "manifest.json",
+    ...Array.from({ length: 21 }, (_, index) => `package-${String(index).padStart(2, "0")}.tgz`),
+  ].map((subjectName) => ({
+    subjectName,
+    subjectSha256: sha256(Buffer.from(`fixture bytes for ${subjectName}\n`)),
+    bundleName: `${subjectName}.intoto.jsonl`,
+    bundleSha256: sha256(Buffer.from(`fixture bytes for ${subjectName}.intoto.jsonl\n`)),
+  }))
+  const attestationSet = {
+    repository: "cacheplane/dawnai",
+    workflow: ".github/workflows/release.yml",
+    sourceRef: `refs/tags/v${version}`,
+    commitSha,
+    workflowRunId: 400,
+    runAttempt: 1,
+    subjects,
+  }
+  const baseAssets = [
+    { name: "release-record.json", sha256: sha256(recordBytes) },
+    { name: "manifest.json", sha256: subjects[0].subjectSha256 },
+    ...subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  const marker = {
+    schemaVersion: 1,
+    epoch: "fixed-group-v1",
+    revision: 1,
+    phase: "ESCROWING",
+    version,
+    commitSha,
+    tag: `v${version}`,
+    manifestSha256: subjects[0].subjectSha256,
+    releaseRecordSha256: sha256(recordBytes),
+    baseAssetSetSha256: sha256(Buffer.from(`${JSON.stringify(baseAssets)}\n`)),
+    attestationSet,
+    npmEvidenceSha256: null,
+    smokeAggregateSha256: null,
+    audit: null,
+    abandonmentSha256: null,
+  }
+  release.name = `Dawn v${version}`
+  release.body = canonicalReleaseBody({ marker, manifest: null })
+  return release
+}
+
+function terminalAttestedAbandonmentRelease(id, version, commitSha) {
+  const release = interruptedAbandonmentRelease(id, version, commitSha)
+  const previousMarker = parseReleaseMarker(release.body)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version, commitSha },
+    artifact: {
+      manifestSha256: previousMarker.manifestSha256,
+      releaseRecordSha256: previousMarker.releaseRecordSha256,
+      baseAssetSetSha256: previousMarker.baseAssetSetSha256,
+      attestationSet: previousMarker.attestationSet,
+    },
+    abandonmentSha256: sha256(release.abandonmentBytes),
+    previousMarker,
+  })
+  release.name = `Dawn v${version} (abandoned before publication)`
+  release.body = canonicalReleaseBody({ marker, manifest: null, previousMarker })
+  return release
 }
 
 function abandonmentRecord(version, commitSha) {
@@ -975,7 +1233,9 @@ function githubFixture({ tags = [], releases = [] } = {}) {
     const auditAsset = release.assets.find((asset) => asset.name === "audit-result.json")
     if (auditAsset !== undefined) assetBytes.set(auditAsset.id, release.auditResult)
     const abandonmentAsset = release.assets.find((asset) => asset.name === "abandonment.json")
-    if (abandonmentAsset !== undefined) assetBytes.set(abandonmentAsset.id, release.abandonment)
+    if (abandonmentAsset !== undefined) {
+      assetBytes.set(abandonmentAsset.id, release.abandonmentBytes ?? release.abandonment)
+    }
   }
   return {
     calls,
@@ -987,7 +1247,9 @@ function githubFixture({ tags = [], releases = [] } = {}) {
       calls.push(["listReleases"])
       return present(
         "releases",
-        releases.map(({ record, auditResult, abandonment, assets, ...release }) => release),
+        releases.map(
+          ({ record, auditResult, abandonment, abandonmentBytes, assets, ...release }) => release,
+        ),
       )
     },
     async listReleaseAssets({ releaseId }) {
@@ -996,12 +1258,14 @@ function githubFixture({ tags = [], releases = [] } = {}) {
     },
     async downloadReleaseAsset({ assetId }) {
       calls.push(["downloadReleaseAsset", assetId])
+      const value = assetBytes.get(assetId)
+      const bytes = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value))
       return {
         status: "PRESENT",
         operation: "release-asset-download",
         httpStatus: 200,
         code: null,
-        contentBase64: Buffer.from(JSON.stringify(assetBytes.get(assetId))).toString("base64"),
+        contentBase64: bytes.toString("base64"),
       }
     },
   }
@@ -1009,6 +1273,14 @@ function githubFixture({ tags = [], releases = [] } = {}) {
 
 function present(operation, value) {
   return { status: "PRESENT", operation, httpStatus: 200, code: null, value }
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex")
+}
+
+function compareText(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1
 }
 
 function ciAttempt({
