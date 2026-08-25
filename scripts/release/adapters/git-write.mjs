@@ -8,6 +8,9 @@ const MAX_ROOT_BYTES = 4_096
 const MAX_MESSAGE_BYTES = 4_096
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const COMMAND_TIMEOUT_MS = 15_000
+const PRODUCTION_MAIN_REF = "refs/remotes/origin/main"
+const RELEASE_TAGGER_NAME = "Dawn Release Bot"
+const RELEASE_TAGGER_EMAIL = "dawn-release-bot@users.noreply.github.com"
 
 export function createCandidateTagWriter({ root, run = runCommand }) {
   validateRoot(root)
@@ -43,7 +46,18 @@ export function createCandidateTagWriter({ root, run = runCommand }) {
         return Object.freeze({ status: "present", tag, sha })
       }
 
-      await execute(["tag", "--annotate", tag, "--message", message, sha])
+      await execute([
+        "-c",
+        `user.name=${RELEASE_TAGGER_NAME}`,
+        "-c",
+        `user.email=${RELEASE_TAGGER_EMAIL}`,
+        "tag",
+        "--annotate",
+        tag,
+        "--message",
+        message,
+        sha,
+      ])
       return Object.freeze({ status: "created", tag, sha })
     },
 
@@ -76,7 +90,7 @@ export function createCandidateTagWriter({ root, run = runCommand }) {
 
 async function requireMainAncestry(execute, sha) {
   try {
-    await execute(["merge-base", "--is-ancestor", sha, "refs/heads/main"])
+    await execute(["merge-base", "--is-ancestor", sha, PRODUCTION_MAIN_REF])
   } catch (error) {
     if (exitCode(error) === 1) {
       throw new Error(`Candidate SHA ${sha} is not reachable from main`)

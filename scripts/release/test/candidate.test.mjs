@@ -197,7 +197,10 @@ test("scheduled discovery enumerates managed Releases and standalone tags before
       tagRef("0.8.21", SHA_21),
     ],
     releases: [
-      managedRelease(24, "0.8.24", SHA_24, { auditComplete: true, published: true }),
+      managedRelease(24, "0.8.24", SHA_24, {
+        auditComplete: true,
+        published: true,
+      }),
       unmanagedRelease(99),
       managedRelease(23, "0.8.23", SHA_23, { abandoned: true }),
       managedRelease(22, "0.8.22", SHA_22),
@@ -256,7 +259,10 @@ test("a markerless legacy v* Release is audit-only and does not block active dis
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
     git: repository.git,
-    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [legacy] }),
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [legacy],
+    }),
     marker: ACTIVE_MARKER,
   })
 
@@ -291,7 +297,10 @@ test("a managed v* Release without exactly one release record fails closed", asy
     ])
     const release = managedRelease(21, "0.8.21", SHA_21)
     release.assets = assets
-    const github = githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] })
+    const github = githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [release],
+    })
 
     await assert.rejects(
       discoverScheduledCandidate({
@@ -312,7 +321,10 @@ test("scheduled discovery rejects a release-record identity that conflicts with 
   ])
   const release = managedRelease(21, "0.8.21", SHA_21)
   release.record.commitSha = OTHER_SHA
-  const github = githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] })
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [release],
+  })
 
   await assert.rejects(
     discoverScheduledCandidate({
@@ -335,7 +347,10 @@ test("scheduled discovery rejects terminal audit evidence for another manifest",
     published: true,
   })
   release.auditResult.manifestSha256 = "d".repeat(64)
-  const github = githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] })
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [release],
+  })
 
   await assert.rejects(
     discoverScheduledCandidate({
@@ -363,7 +378,10 @@ test("scheduled discovery never excludes an audit-looking Release without durabl
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
     git: repository.git,
-    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [older] }),
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [older],
+    }),
     marker: ACTIVE_MARKER,
   })
 
@@ -380,7 +398,10 @@ test("scheduled discovery admits an exact AUDIT_VERIFIED draft for production ob
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
     git: repository.git,
-    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [release],
+    }),
     marker: ACTIVE_MARKER,
   })
 
@@ -432,7 +453,10 @@ test("scheduled discovery rejects successful audit evidence on any inexact draft
             conclusion: "failure",
           },
         }
-        release.body = canonicalReleaseBody({ marker: retryable, manifest: null })
+        release.body = canonicalReleaseBody({
+          marker: retryable,
+          manifest: null,
+        })
       },
     },
     {
@@ -447,7 +471,10 @@ test("scheduled discovery rejects successful audit evidence on any inexact draft
             attemptAssetName: `audit-attempt-${marker.audit.workflowRunId}-${marker.audit.runAttempt + 1}.json`,
           },
         }
-        release.body = canonicalReleaseBody({ marker: mismatched, manifest: null })
+        release.body = canonicalReleaseBody({
+          marker: mismatched,
+          manifest: null,
+        })
       },
     },
     {
@@ -471,7 +498,10 @@ test("scheduled discovery rejects successful audit evidence on any inexact draft
       discoverScheduledCandidate({
         inventory: repository.inventory,
         git: repository.git,
-        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        github: githubFixture({
+          tags: [tagRef("0.8.21", SHA_21)],
+          releases: [release],
+        }),
         marker: ACTIVE_MARKER,
       }),
       /audit|canonical|candidate draft|managed Release/iu,
@@ -523,7 +553,10 @@ test("only a published Release with a strict consistent successful audit is term
       discoverScheduledCandidate({
         inventory: repository.inventory,
         git: repository.git,
-        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        github: githubFixture({
+          tags: [tagRef("0.8.21", SHA_21)],
+          releases: [release],
+        }),
         marker: ACTIVE_MARKER,
       }),
       /audit result|published Release/iu,
@@ -575,7 +608,10 @@ test("only a draft Release with a complete protected abandonment tombstone is te
       discoverScheduledCandidate({
         inventory: repository.inventory,
         git: repository.git,
-        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        github: githubFixture({
+          tags: [tagRef("0.8.21", SHA_21)],
+          releases: [release],
+        }),
         marker: ACTIVE_MARKER,
       }),
       /abandonment|draft Release/iu,
@@ -774,7 +810,10 @@ test("scheduled discovery keeps an audit-looking release selected until smoke au
     auditComplete: true,
     published: true,
   })
-  const github = githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [audited] })
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [audited],
+  })
 
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
@@ -1214,6 +1253,7 @@ function repositoryFixture(commits, { ancestry = true, ancestryError = null } = 
       },
       async isAncestor({ ancestor, descendant }) {
         calls.push(["isAncestor", ancestor, descendant])
+        assert.equal(descendant, "refs/remotes/origin/main")
         if (ancestryError !== null) throw ancestryError
         return ancestry
       },
@@ -1361,7 +1401,9 @@ function managedRelease(
 }
 
 function auditVerifiedDraftRelease(id, version, commitSha) {
-  const release = managedRelease(id, version, commitSha, { auditComplete: true })
+  const release = managedRelease(id, version, commitSha, {
+    auditComplete: true,
+  })
   release.record.actionsArtifact.id = String(release.record.actionsArtifact.id)
   release.record.actionsArtifact.prepareRunId = String(release.record.actionsArtifact.prepareRunId)
   const template = observationForMarker({ phase: "AUDIT_VERIFIED" }).release.marker
@@ -1521,7 +1563,10 @@ function terminalAttestedAbandonmentRelease(id, version, commitSha) {
     audit: null,
     abandonmentSha256: null,
   }
-  const previousBody = canonicalReleaseBody({ marker: previousMarker, manifest: null })
+  const previousBody = canonicalReleaseBody({
+    marker: previousMarker,
+    manifest: null,
+  })
   release.abandonment = {
     ...release.abandonment,
     predecessor: {
@@ -1551,7 +1596,10 @@ function terminalAttestedAbandonmentRelease(id, version, commitSha) {
     previousMarker,
   })
   release.assets = [
-    ...baseAssets.map((asset, index) => ({ id: id * 1_000 + index + 1, name: asset.name })),
+    ...baseAssets.map((asset, index) => ({
+      id: id * 1_000 + index + 1,
+      name: asset.name,
+    })),
     { id: id * 1_000 + 100, name: "abandonment.json" },
   ]
   release.assetBytes = new Map([

@@ -53,7 +53,7 @@ test("createAnnotatedTag validates exact v<SemVer>, SHA, message, and main ances
     /reachable from main/u,
   )
   assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0][1], ["merge-base", "--is-ancestor", SHA, "refs/heads/main"])
+  assert.deepEqual(calls[0][1], ["merge-base", "--is-ancestor", SHA, "refs/remotes/origin/main"])
 })
 
 test("createAnnotatedTag is idempotent only when the existing tag resolves to the exact SHA", async () => {
@@ -79,14 +79,18 @@ test("createAnnotatedTag is idempotent only when the existing tag resolves to th
     })
 
     if (existingSha === SHA) {
-      assert.deepEqual(await operation, { status: "present", tag: "v0.8.22", sha: SHA })
+      assert.deepEqual(await operation, {
+        status: "present",
+        tag: "v0.8.22",
+        sha: SHA,
+      })
     } else {
       await assert.rejects(operation, /another commit/u)
     }
     assert.deepEqual(
       calls.map(([, args]) => args),
       [
-        ["merge-base", "--is-ancestor", SHA, "refs/heads/main"],
+        ["merge-base", "--is-ancestor", SHA, "refs/remotes/origin/main"],
         ["show-ref", "--verify", "--quiet", "refs/tags/v0.8.22"],
         ["cat-file", "-t", "refs/tags/v0.8.22"],
         ["rev-parse", "--verify", "refs/tags/v0.8.22"],
@@ -106,7 +110,7 @@ test("createAnnotatedTag creates one annotated tag with argument arrays when it 
       if (args[0] === "show-ref") {
         throw Object.assign(new Error("unknown revision"), { code: 1 })
       }
-      if (args[0] === "tag") return ""
+      if (args.includes("tag")) return ""
       assert.fail(`unexpected Git operation ${args[0]}`)
     },
   })
@@ -119,6 +123,10 @@ test("createAnnotatedTag creates one annotated tag with argument arrays when it 
 
   assert.deepEqual(result, { status: "created", tag: "v0.8.22", sha: SHA })
   assert.deepEqual(calls.at(-1)[1], [
+    "-c",
+    "user.name=Dawn Release Bot",
+    "-c",
+    "user.email=dawn-release-bot@users.noreply.github.com",
     "tag",
     "--annotate",
     "v0.8.22",
@@ -138,9 +146,11 @@ test("a local tag lookup failure is never reclassified as exact absence", async 
       if (args[0] === "merge-base" || args[0] === "show-ref") return ""
       if (args[0] === "cat-file") return "tag\n"
       if (args[0] === "rev-parse") {
-        throw Object.assign(new Error("local object database failed"), { code: 128 })
+        throw Object.assign(new Error("local object database failed"), {
+          code: 128,
+        })
       }
-      if (args[0] === "tag") {
+      if (args.includes("tag")) {
         mutated = true
         return ""
       }
@@ -193,7 +203,7 @@ test("pushTag validates local and remote identity, then uses one non-force exact
       ["cat-file", "-t", "refs/tags/v0.8.22"],
       ["rev-parse", "--verify", "refs/tags/v0.8.22"],
       ["rev-parse", "--verify", "refs/tags/v0.8.22^{commit}"],
-      ["merge-base", "--is-ancestor", SHA, "refs/heads/main"],
+      ["merge-base", "--is-ancestor", SHA, "refs/remotes/origin/main"],
       ["ls-remote", "--tags", "origin", "refs/tags/v0.8.22", "refs/tags/v0.8.22^{}"],
       ["push", "origin", "refs/tags/v0.8.22:refs/tags/v0.8.22"],
       ["ls-remote", "--tags", "origin", "refs/tags/v0.8.22", "refs/tags/v0.8.22^{}"],
@@ -224,7 +234,11 @@ test("pushTag is a no-op for exact remote identity and conflicts for another com
     const operation = writer.pushTag({ tag: "v0.8.22" })
 
     if (remoteSha === SHA) {
-      assert.deepEqual(await operation, { status: "present", tag: "v0.8.22", sha: SHA })
+      assert.deepEqual(await operation, {
+        status: "present",
+        tag: "v0.8.22",
+        sha: SHA,
+      })
     } else {
       await assert.rejects(operation, /another commit/u)
     }
@@ -243,7 +257,7 @@ test("candidate tag writer rejects a local lightweight tag", async () => {
       if (args[0] === "merge-base" || args[0] === "show-ref") return ""
       if (args[0] === "cat-file") return "commit\n"
       if (args[0] === "rev-parse") return `${SHA}\n`
-      if (args[0] === "tag" || args[0] === "push") mutated = true
+      if (args.includes("tag") || args[0] === "push") mutated = true
       return ""
     },
   })

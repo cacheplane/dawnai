@@ -52,7 +52,9 @@ test("production event classification distinguishes exact refs from schedules", 
     expectedVersion: null,
   })
   assert.deepEqual(
-    classifyProductionEvent({ inputs: { version: VERSION, commitSha: COMMIT_SHA } }),
+    classifyProductionEvent({
+      inputs: { version: VERSION, commitSha: COMMIT_SHA },
+    }),
     { kind: "exact-ref", ref: COMMIT_SHA, expectedVersion: VERSION },
   )
   assert.throws(
@@ -141,7 +143,10 @@ test("production exact no-candidate dispatch rejects inventory version drift", a
         async read() {
           return {
             status: "valid",
-            packages: inventory().packages.map((pkg) => ({ ...pkg, version: "0.8.21" })),
+            packages: inventory().packages.map((pkg) => ({
+              ...pkg,
+              version: "0.8.21",
+            })),
           }
         },
       },
@@ -226,7 +231,10 @@ test("production candidate resolution rejects a mixed or extended discovery sele
       marker: MARKER,
       discovery: {
         async discoverManagedCandidate() {
-          return { ...selection(), candidate: { ...candidate(), commitSha: PARENT_SHA } }
+          return {
+            ...selection(),
+            candidate: { ...candidate(), commitSha: PARENT_SHA },
+          }
         },
         async discoverScheduledCandidate() {
           throw new Error("scheduled discovery must not run")
@@ -277,13 +285,20 @@ test("production observation proves an early tagged candidate without fabricatin
         pkg.tarballSha256 === null && pkg.attestationSha256 === null && pkg.integrity === null,
     ),
   )
-  assert.deepEqual(observation.tag, { status: "present", commitSha: COMMIT_SHA })
+  assert.deepEqual(observation.tag, {
+    status: "present",
+    commitSha: COMMIT_SHA,
+  })
   assert.ok(observation.registry.packages.every((pkg) => pkg.status === "e404"))
   assert.ok(
     observation.smokes.every((smoke) => smoke.workflowRunId === null && smoke.runAttempt === null),
   )
 
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "CANDIDATE_TAGGED")
   assert.equal(plan.disposition, "would-transition")
   assert.equal(plan.nextTransition, "prepare-artifacts")
@@ -313,7 +328,11 @@ test("production observation maps adapter authorization and timeout failures to 
   assert.ok(observation.registry.packages.every((pkg) => pkg.status === "ambiguous"))
   assert.ok(diagnostics.some((entry) => entry.code === "HTTP_403"))
   assert.ok(diagnostics.some((entry) => entry.code === "TIMEOUT"))
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.disposition, "blocked")
   assert.ok(plan.conflicts.includes("candidate-tag-ambiguous"))
   assert.ok(plan.conflicts.includes("registry-package-ambiguous"))
@@ -370,7 +389,11 @@ test("production CI correlation ignores unrelated commit checks", async () => {
     workflowRunId: 30,
     runAttempt: 1,
   })
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.disposition, "would-transition")
   assert.deepEqual(plan.conflicts, [])
 })
@@ -565,7 +588,12 @@ test("production publication history ignores the branch coordinator and schedule
     conclusion: "failure",
     run_attempt: 1,
   }
-  const coordinator = { ...tagRun, id: 39, head_branch: "main", conclusion: "success" }
+  const coordinator = {
+    ...tagRun,
+    id: 39,
+    head_branch: "main",
+    conclusion: "success",
+  }
   const github = githubReader({
     async listWorkflowRuns({ workflow }) {
       return present("workflow-runs", workflow === "ci.yml" ? ciRuns() : [coordinator, tagRun])
@@ -632,7 +660,7 @@ test("production observation binds a prepared artifact to its exact run and rele
     },
   })
 
-  const { observation, diagnostics } = await observeProductionCandidate({
+  const { observation, diagnostics, recovery } = await observeProductionCandidate({
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -640,6 +668,7 @@ test("production observation binds a prepared artifact to its exact run and rele
     github,
     npm: npmReader(),
     attestations: attestationVerifier([]),
+    includeRecovery: true,
   })
 
   assert.deepEqual(diagnostics, [])
@@ -647,7 +676,17 @@ test("production observation binds a prepared artifact to its exact run and rele
   assert.equal(observation.artifacts.manifestSha256, prepared.record.manifestSha256)
   assert.equal(observation.artifacts.releaseRecordAsset.sha256, prepared.recordSha256)
   assert.ok(observation.inventory.packages.every((pkg) => pkg.tarballSha256 !== null))
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.deepEqual(recovery.candidate, candidate())
+  assert.deepEqual(recovery.manifest, prepared.manifest)
+  assert.deepEqual(recovery.releaseRecord, prepared.record)
+  assert.equal(recovery.npmEvidence, null)
+  assert.equal(recovery.auditDispatch, null)
+  assert.equal(recovery.auditResult, null)
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "ARTIFACTS_PREPARED")
   assert.equal(plan.nextTransition, "attest-artifacts")
   assert.deepEqual(plan.conflicts, [])
@@ -804,7 +843,9 @@ test("production observation deliberately ignores remote attestations until exac
         discoveryCalls += 1
         return present(
           "attestations",
-          Array.from({ length: remoteCount }, (_unused, index) => ({ id: index + 1 })),
+          Array.from({ length: remoteCount }, (_unused, index) => ({
+            id: index + 1,
+          })),
         )
       },
       async downloadAttestationBundle() {
@@ -827,7 +868,11 @@ test("production observation deliberately ignores remote attestations until exac
     assert.equal(downloadCalls, 0)
     assert.equal(observation.artifacts.status, "prepared")
     assert.ok(observation.inventory.packages.every((pkg) => pkg.attestationSha256 === null))
-    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    const plan = planRelease({
+      candidate: candidate(),
+      observation,
+      mode: "controller",
+    })
     assert.equal(plan.state, "ARTIFACTS_PREPARED")
     assert.equal(plan.nextTransition, "attest-artifacts")
     assert.deepEqual(plan.conflicts, [])
@@ -835,7 +880,11 @@ test("production observation deliberately ignores remote attestations until exac
 })
 
 test("production observation permits replacement of an orphaned pre-escrow payload", async () => {
-  const orphaned = preparedArtifactFixture({ artifactId: 90, prepareRunId: 190, recordId: 91 })
+  const orphaned = preparedArtifactFixture({
+    artifactId: 90,
+    prepareRunId: 190,
+    recordId: 91,
+  })
   const github = githubReader({
     async listActionsArtifacts() {
       return present("actions-artifacts", [orphaned.payloadMetadata])
@@ -866,14 +915,22 @@ test("production observation permits replacement of an orphaned pre-escrow paylo
   assert.deepEqual(diagnostics, [])
   assert.equal(observation.artifacts.status, "absent")
   assert.ok(observation.inventory.packages.every((pkg) => pkg.tarballSha256 === null))
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "CANDIDATE_TAGGED")
   assert.equal(plan.nextTransition, "prepare-artifacts")
   assert.deepEqual(plan.conflicts, [])
 })
 
 test("production observation permits replacement after an expired payload proves no handoff", async () => {
-  const orphaned = preparedArtifactFixture({ artifactId: 90, prepareRunId: 190, recordId: 91 })
+  const orphaned = preparedArtifactFixture({
+    artifactId: 90,
+    prepareRunId: 190,
+    recordId: 91,
+  })
   const expired = { ...orphaned.payloadMetadata, expired: true }
   const github = githubReader({
     async listActionsArtifacts() {
@@ -899,7 +956,11 @@ test("production observation permits replacement after an expired payload proves
 
   assert.deepEqual(diagnostics, [])
   assert.equal(observation.artifacts.status, "absent")
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "CANDIDATE_TAGGED")
   assert.equal(plan.nextTransition, "prepare-artifacts")
 })
@@ -1035,7 +1096,11 @@ test("production observation rejects duplicate canonical release-record handoffs
 })
 
 test("production observation correlates one replacement handoff despite an older orphan", async () => {
-  const orphaned = preparedArtifactFixture({ artifactId: 90, prepareRunId: 190, recordId: 91 })
+  const orphaned = preparedArtifactFixture({
+    artifactId: 90,
+    prepareRunId: 190,
+    recordId: 91,
+  })
   const replacement = preparedArtifactFixture()
   const github = githubReader({
     async listActionsArtifacts() {
@@ -1074,7 +1139,11 @@ test("production observation correlates one replacement handoff despite an older
   assert.deepEqual(diagnostics, [])
   assert.equal(observation.artifacts.status, "prepared")
   assert.equal(observation.artifacts.releaseRecordAsset.sha256, replacement.recordSha256)
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "ARTIFACTS_PREPARED")
   assert.equal(plan.nextTransition, "attest-artifacts")
 })
@@ -1121,7 +1190,10 @@ test("production observation rejects live prepared evidence from a pull-request 
       return present("actions-artifacts", [prepared.payloadMetadata])
     },
     async getActionsRunAttempt() {
-      return present("actions-run-attempt", { ...prepareRun(), event: "pull_request" })
+      return present("actions-run-attempt", {
+        ...prepareRun(),
+        event: "pull_request",
+      })
     },
     async listActionsRunArtifacts() {
       throw new Error("invalid prepare-run event must block before handoff discovery")
@@ -1153,7 +1225,10 @@ test("production observation rejects retained prepared evidence from a pull-requ
       return present("actions-artifacts", [expired])
     },
     async getActionsRunAttempt() {
-      return present("actions-run-attempt", { ...prepareRun(), event: "pull_request" })
+      return present("actions-run-attempt", {
+        ...prepareRun(),
+        event: "pull_request",
+      })
     },
     async listActionsRunArtifacts() {
       return present("actions-run-artifacts", [expired, prepared.recordMetadata])
@@ -1333,7 +1408,11 @@ test("production observation partitions and binds the exact draft Release base n
   assert.equal(observation.escrow.status, "present")
   assert.equal(observation.artifacts.status, "attested")
   assert.ok(observation.inventory.packages.every((pkg) => pkg.attestationSha256 !== null))
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "CANDIDATE_ESCROWED")
   assert.equal(plan.nextTransition, "publish-npm-packages")
   assert.deepEqual(plan.conflicts, [])
@@ -1531,7 +1610,11 @@ test("production observation uses durable escrow after exact Actions retention e
   assert.deepEqual(diagnostics, [])
   assert.equal(observation.artifacts.status, "attested")
   assert.equal(observation.escrow.status, "present")
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "CANDIDATE_ESCROWED")
   assert.equal(plan.nextTransition, "publish-npm-packages")
   assert.deepEqual(plan.conflicts, [])
@@ -1632,7 +1715,11 @@ test("production observation preserves the prepared-to-attested phase boundary w
 
     assert.deepEqual(diagnostics, [])
     assert.equal(observation.escrow.status, "absent")
-    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    const plan = planRelease({
+      candidate: candidate(),
+      observation,
+      mode: "controller",
+    })
     assert.deepEqual(plan.conflicts, [])
     if (retainedNames === "all") {
       assert.equal(observation.artifacts.status, "attested")
@@ -1709,7 +1796,7 @@ test("production observation accepts npm presence only through exact tarball and
     },
   })
 
-  const { observation, diagnostics } = await observeProductionCandidate({
+  const { observation, diagnostics, recovery } = await observeProductionCandidate({
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1725,7 +1812,10 @@ test("production observation accepts npm presence only through exact tarball and
             verified.push(entry.name)
             return {
               status: "verified",
-              signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+              signature: {
+                status: "valid",
+                verifier: "npm-audit-signatures@11.17.0",
+              },
               provenance: {
                 predicateType: "https://slsa.dev/provenance/v1",
                 workflow: ".github/workflows/release.yml",
@@ -1741,6 +1831,7 @@ test("production observation accepts npm presence only through exact tarball and
         }
       },
     },
+    includeRecovery: true,
   })
 
   assert.deepEqual(diagnostics, [])
@@ -1748,7 +1839,14 @@ test("production observation accepts npm presence only through exact tarball and
   assert.equal(disposed, true)
   assert.ok(observation.registry.packages.every((pkg) => pkg.status === "present"))
   assert.ok(observation.registry.packages.every((pkg) => pkg.signature.status === "valid"))
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(recovery.npmEvidence.status, "NPM_COMPLETE")
+  assert.equal(recovery.npmEvidence.packages.length, CANONICAL_RELEASE_PACKAGE_ORDER.length)
+  assert.equal(recovery.npmEvidence.manifestSha256, escrow.marker.manifestSha256)
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "NPM_COMPLETE")
   assert.equal(plan.nextTransition, "reconcile-npm-evidence")
   assert.deepEqual(plan.conflicts, [])
@@ -1823,7 +1921,11 @@ test("production observation resumes a markerless partial smoke receipt set from
       .filter((asset) => partialNames.has(asset.name))
       .every((asset) => asset.status === "matching"),
   )
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "RELEASE_DRAFT_COMPLETE")
   assert.equal(plan.nextTransition, "run-release-smokes")
   assert.deepEqual(plan.conflicts, [])
@@ -1857,7 +1959,11 @@ test("production observation verifies the exact durable five-lane receipt set fo
       runAttempt: fixture.marker.smoke.runAttempt,
     })),
   )
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "SMOKES_COMPLETE")
   assert.equal(plan.nextTransition, "dispatch-release-audit")
   assert.deepEqual(plan.conflicts, [])
@@ -1897,7 +2003,13 @@ test("production observation fails closed on marker-selected smoke receipt byte,
           runAttempt: 1,
           startedAt: "2026-08-25T08:00:00.000Z",
           finishedAt: "2026-08-25T08:01:00.000Z",
-          checks: [{ name: "published-artifacts", conclusion: "success", detail: "exact" }],
+          checks: [
+            {
+              name: "published-artifacts",
+              conclusion: "success",
+              detail: "exact",
+            },
+          ],
           conclusion: "success",
         })
         const receiptSha256 = digest(bytes)
@@ -1911,7 +2023,10 @@ test("production observation fails closed on marker-selected smoke receipt byte,
           ),
         }
         fixture.marker = { ...fixture.marker, smoke }
-        fixture.release.body = canonicalReleaseBody({ marker: fixture.marker, manifest: null })
+        fixture.release.body = canonicalReleaseBody({
+          marker: fixture.marker,
+          manifest: null,
+        })
         asset.digest = `sha256:${receiptSha256}`
         asset.size = bytes.byteLength
         fixture.bytesById.set(asset.id, bytes)
@@ -1938,7 +2053,11 @@ test("production observation fails closed on marker-selected smoke receipt byte,
       diagnostics.some(({ code }) => code === expectedCode),
       label,
     )
-    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    const plan = planRelease({
+      candidate: candidate(),
+      observation,
+      mode: "controller",
+    })
     assert.equal(plan.nextTransition, null, label)
     assert.ok(plan.conflicts.length > 0, label)
   }
@@ -1960,7 +2079,13 @@ test("production observation rejects a marker-bound smoke namespace with an extr
         runAttempt: 1,
         startedAt: "2026-08-25T09:00:00.000Z",
         finishedAt: "2026-08-25T09:01:00.000Z",
-        checks: [{ name: "published-artifacts", conclusion: "success", detail: "exact" }],
+        checks: [
+          {
+            name: "published-artifacts",
+            conclusion: "success",
+            detail: "exact",
+          },
+        ],
         conclusion: "success",
       })
       fixture.assets.push({
@@ -1987,7 +2112,11 @@ test("production observation rejects a marker-bound smoke namespace with an extr
       diagnostics.some(({ code }) => code === "SMOKE_RECEIPT_SET_MISMATCH"),
       variant,
     )
-    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    const plan = planRelease({
+      candidate: candidate(),
+      observation,
+      mode: "controller",
+    })
     assert.equal(plan.nextTransition, null, variant)
     assert.ok(plan.conflicts.length > 0, variant)
   }
@@ -2052,7 +2181,7 @@ test("production observation binds terminal audit assets to the exact run, attem
     },
   })
 
-  const { observation, diagnostics } = await observeProductionCandidate({
+  const { observation, diagnostics, recovery } = await observeProductionCandidate({
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2061,6 +2190,7 @@ test("production observation binds terminal audit assets to the exact run, attem
     npm: npmFixture.npm,
     npmAuditFactory: npmFixture.npmAuditFactory,
     attestations: attestationVerifier([]),
+    includeRecovery: true,
   })
 
   assert.deepEqual(diagnostics, [])
@@ -2075,6 +2205,13 @@ test("production observation binds terminal audit assets to the exact run, attem
     workflowRunId: audited.auditResult.workflowRunId,
     runAttempt: audited.auditResult.runAttempt,
     conclusion: "success",
+  })
+  assert.deepEqual(recovery.auditResult, audited.auditResult)
+  assert.deepEqual(recovery.auditDispatch, {
+    workflow: ".github/workflows/published-artifact-verify.yml",
+    workflowRunId: audited.auditResult.workflowRunId,
+    runUrl: `https://api.github.com/repos/cacheplane/dawnai/actions/runs/${audited.auditResult.workflowRunId}`,
+    htmlUrl: `https://github.com/cacheplane/dawnai/actions/runs/${audited.auditResult.workflowRunId}`,
   })
 })
 
@@ -2256,7 +2393,12 @@ test("production audit validation accepts a terminal non-success retry attempt",
   )
 
   assert.deepEqual(
-    validateProductionAuditRun({ value, jobs, candidate: candidate(), marker: audited.marker }),
+    validateProductionAuditRun({
+      value,
+      jobs,
+      candidate: candidate(),
+      marker: audited.marker,
+    }),
     { status: "completed", conclusion: "timed_out", runAttempt: 2 },
   )
 })
@@ -2306,7 +2448,11 @@ test("production observation maps allowlisted non-success audit conclusions to a
     runAttempt: retryable.auditResult.runAttempt,
     conclusion: "failure",
   })
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "AUDIT_RETRYABLE")
   assert.equal(plan.nextTransition, "dispatch-release-audit")
   assert.deepEqual(plan.conflicts, [])
@@ -2340,7 +2486,11 @@ test("production observation blocks a published Release whose terminal marker is
     npm: npmReader(),
     attestations: attestationVerifier([]),
   })
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
 
   assert.equal(plan.disposition, "blocked")
   assert.ok(plan.conflicts.includes("github-release-published-without-audit"))
@@ -2349,7 +2499,10 @@ test("production observation blocks a published Release whose terminal marker is
 
 test("production observation recognizes a protected tagged-only abandonment from its canonical durable tombstone", async () => {
   const abandoned = abandonedReleaseFixture()
-  const expired = { ...preparedArtifactFixture().payloadMetadata, expired: true }
+  const expired = {
+    ...preparedArtifactFixture().payloadMetadata,
+    expired: true,
+  }
   const github = githubReader({
     async listActionsArtifacts() {
       return present("actions-artifacts", [expired])
@@ -2395,7 +2548,11 @@ test("production observation recognizes a protected tagged-only abandonment from
   assert.deepEqual(observation.release.assets, [
     { name: "abandonment.json", status: "matching", sha256: abandoned.sha256 },
   ])
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
   assert.equal(plan.disposition, "noop")
   assert.deepEqual(plan.conflicts, [])
@@ -2443,7 +2600,11 @@ test("production observation retains a prepared predecessor after exact Actions 
     recorded: true,
     predecessor: "ARTIFACTS_PREPARED",
   })
-  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  const plan = planRelease({
+    candidate: candidate(),
+    observation,
+    mode: "controller",
+  })
   assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
   assert.equal(plan.disposition, "noop")
   assert.deepEqual(plan.conflicts, [])
@@ -2457,7 +2618,10 @@ test("production observation requires complete verified escrow for attested aban
     "all",
   ]) {
     const abandoned = strongAbandonedReleaseFixture(retainedNames)
-    const expired = { ...preparedArtifactFixture().payloadMetadata, expired: true }
+    const expired = {
+      ...preparedArtifactFixture().payloadMetadata,
+      expired: true,
+    }
     const github = githubReader({
       async listActionsArtifacts() {
         return present("actions-artifacts", [expired])
@@ -2490,7 +2654,11 @@ test("production observation requires complete verified escrow for attested aban
       attestations: attestationVerifier([]),
     })
 
-    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    const plan = planRelease({
+      candidate: candidate(),
+      observation,
+      mode: "controller",
+    })
     const retainedLabel = retainedNames === "all" ? "all" : retainedNames.join(",")
     if (retainedNames === "all") {
       assert.deepEqual(diagnostics, [])
@@ -2594,6 +2762,66 @@ test("observe CLI resolves the immutable candidate, runs the dry one-transition 
         "",
       ].join("\n"),
     )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("observe CLI waits within a fixed budget for the exact main CI before authorizing tagging", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-observe-cli-ci-wait-"))
+  try {
+    const eventPath = path.join(directory, "event.json")
+    const reportPath = path.join(directory, "report.json")
+    const outputPath = path.join(directory, "github-output")
+    await Promise.all([
+      writeFile(eventPath, `${JSON.stringify({ ref: "refs/heads/main", after: COMMIT_SHA })}\n`),
+      writeFile(outputPath, ""),
+    ])
+    const dependencies = cliCandidateDependencies(directory)
+    let checkReads = 0
+    let workflowReads = 0
+    const base = githubReader()
+    dependencies.githubReader = {
+      ...base,
+      async getCommitCheckRuns() {
+        checkReads += 1
+        const terminal = checkReads > 1
+        return present("commit-check-runs", [
+          {
+            id: 10,
+            name: "validate",
+            head_sha: COMMIT_SHA,
+            status: terminal ? "completed" : "in_progress",
+            conclusion: terminal ? "success" : null,
+            check_suite: { id: 20 },
+          },
+        ])
+      },
+      async listWorkflowRuns({ workflow }) {
+        if (workflow !== "ci.yml") return present("workflow-runs", [])
+        workflowReads += 1
+        const terminal = workflowReads > 1
+        return present("workflow-runs", [
+          {
+            ...ciRuns()[0],
+            status: terminal ? "completed" : "in_progress",
+            conclusion: terminal ? "success" : null,
+          },
+        ])
+      },
+    }
+    const delays = []
+    dependencies.wait = async (milliseconds) => delays.push(milliseconds)
+
+    const result = await runReleaseCli(
+      ["observe", "--event", eventPath, "--report", reportPath, "--github-output", outputPath],
+      dependencies,
+    )
+
+    assert.equal(result.before.plan.nextTransition, "prepare-artifacts")
+    assert.deepEqual(delays, [10_000])
+    assert.ok(checkReads >= 3, "CI is polled to success and then independently re-observed")
+    assert.ok(workflowReads >= 3, "the exact workflow/check-suite correlation is re-observed")
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -2833,7 +3061,10 @@ function githubReader(overrides = {}) {
       return present("workflow-runs", workflow === "ci.yml" ? ciRuns() : [])
     },
     async getRef() {
-      return present("ref", { ref: `refs/tags/v${VERSION}`, object: { type: "tag", sha: TAG_SHA } })
+      return present("ref", {
+        ref: `refs/tags/v${VERSION}`,
+        object: { type: "tag", sha: TAG_SHA },
+      })
     },
     async listTagRefs() {
       return present("tag-refs", [
@@ -3093,7 +3324,10 @@ function publishedNpmFixture(manifest) {
           async verifyPackage() {
             return {
               status: "verified",
-              signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+              signature: {
+                status: "valid",
+                verifier: "npm-audit-signatures@11.17.0",
+              },
               provenance: {
                 predicateType: "https://slsa.dev/provenance/v1",
                 workflow: ".github/workflows/release.yml",
@@ -3129,7 +3363,10 @@ function completeNpmEvidenceFixture(manifest) {
         tarballSha512: entry.sha512,
         integrity: entry.npmIntegrity,
         latest: { status: "present", version: VERSION },
-        signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+        signature: {
+          status: "valid",
+          verifier: "npm-audit-signatures@11.17.0",
+        },
         provenance: {
           predicateType: "https://slsa.dev/provenance/v1",
           workflow: ".github/workflows/release.yml",
@@ -3182,7 +3419,10 @@ function preparedArtifactFixture({
   const manifestBytes = canonicalManifestBytes(manifest)
   const payloadArchive = storedZip([
     { name: "manifest.json", bytes: manifestBytes },
-    ...manifest.packages.map((pkg) => ({ name: pkg.filename, bytes: packageBytes(pkg.name) })),
+    ...manifest.packages.map((pkg) => ({
+      name: pkg.filename,
+      bytes: packageBytes(pkg.name),
+    })),
   ])
   const payloadDigest = `sha256:${digest(payloadArchive)}`
   const record = JSON.parse(
@@ -3237,7 +3477,10 @@ function productionAttestationBundle(
   const statement = {
     _type: "https://in-toto.io/Statement/v1",
     subject: [
-      { name: "manifest.json", digest: { sha256: prepared.record.manifestSha256 } },
+      {
+        name: "manifest.json",
+        digest: { sha256: prepared.record.manifestSha256 },
+      },
       ...prepared.manifest.packages.map((pkg) => ({
         name: pkg.filename,
         digest: { sha256: pkg.sha256 },
@@ -3252,7 +3495,10 @@ function productionAttestationBundle(
         },
         internalParameters: { github: { event_name: "workflow_dispatch" } },
         resolvedDependencies: [
-          { uri: `git+${repository}@${ref}`, digest: { gitCommit: COMMIT_SHA } },
+          {
+            uri: `git+${repository}@${ref}`,
+            digest: { gitCommit: COMMIT_SHA },
+          },
         ],
       },
       runDetails: {
@@ -3291,7 +3537,9 @@ function attestationVerifier(calls, status = "VERIFIED") {
 }
 
 function attestedReleaseFixture({ ci } = {}) {
-  const prepared = preparedArtifactFixture({ ...(ci === undefined ? {} : { ci }) })
+  const prepared = preparedArtifactFixture({
+    ...(ci === undefined ? {} : { ci }),
+  })
   const bundleBytes = new Map()
   const bundle = productionAttestationBundle(prepared)
   const subjects = [
@@ -3316,7 +3564,10 @@ function attestedReleaseFixture({ ci } = {}) {
       name: subject.subjectName,
       sha256: subject.subjectSha256,
     })),
-    ...subjects.map((subject) => ({ name: subject.bundleName, sha256: subject.bundleSha256 })),
+    ...subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
   ]
   const marker = {
     schemaVersion: 1,
@@ -3586,7 +3837,12 @@ function auditedReleaseFixture() {
   const terminal = [marker.audit.attemptAssetName, "audit-result.json"].map((name, index) => {
     const id = 2_000 + index
     bytesById.set(id, auditBytes)
-    return { id, name, digest: `sha256:${auditSha256}`, size: auditBytes.length }
+    return {
+      id,
+      name,
+      digest: `sha256:${auditSha256}`,
+      size: auditBytes.length,
+    }
   })
   return {
     ...escrow,
@@ -3638,7 +3894,13 @@ function retryableReleaseFixture() {
   const auditResult = {
     ...audited.auditResult,
     conclusion: "failure",
-    checks: [{ name: "published-artifacts", conclusion: "failure", detail: "timed out" }],
+    checks: [
+      {
+        name: "published-artifacts",
+        conclusion: "failure",
+        detail: "timed out",
+      },
+    ],
   }
   const auditBytes = canonicalAuditResultBytes(auditResult)
   const auditSha256 = digest(auditBytes)
@@ -3767,7 +4029,12 @@ function abandonedReleaseFixture() {
     bytes,
     sha256,
     assets: [
-      { id: 3_000, name: "abandonment.json", digest: `sha256:${sha256}`, size: bytes.length },
+      {
+        id: 3_000,
+        name: "abandonment.json",
+        digest: `sha256:${sha256}`,
+        size: bytes.length,
+      },
     ],
     release: {
       id: 901,
@@ -3814,7 +4081,12 @@ function preparedAbandonedReleaseFixture(prepared) {
     bytes,
     sha256,
     assets: [
-      { id: 3_002, name: "abandonment.json", digest: `sha256:${sha256}`, size: bytes.length },
+      {
+        id: 3_002,
+        name: "abandonment.json",
+        digest: `sha256:${sha256}`,
+        size: bytes.length,
+      },
     ],
     release: {
       id: 902,

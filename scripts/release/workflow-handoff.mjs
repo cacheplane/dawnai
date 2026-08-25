@@ -28,6 +28,7 @@ const REPORT_FIELDS = Object.freeze([
   "before",
   "transition",
   "after",
+  "recovery",
   "diagnostics",
 ])
 const BEFORE_FIELDS = Object.freeze(["observation", "plan"])
@@ -754,12 +755,16 @@ function parseInput(value) {
   try {
     source = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
   } catch (error) {
-    throw new TypeError("Preparation handoff bytes must be valid UTF-8", { cause: error })
+    throw new TypeError("Preparation handoff bytes must be valid UTF-8", {
+      cause: error,
+    })
   }
   try {
     return { decoded: JSON.parse(source), inputBytes: bytes }
   } catch (error) {
-    throw new TypeError("Preparation handoff must contain valid JSON", { cause: error })
+    throw new TypeError("Preparation handoff must contain valid JSON", {
+      cause: error,
+    })
   }
 }
 

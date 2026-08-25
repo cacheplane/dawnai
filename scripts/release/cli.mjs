@@ -198,7 +198,9 @@ async function runAbandon(options, runtime) {
     "abandonment artifact context parser",
   )
   const record = moduleFunction(abandonmentModule, "recordAbandonment", "abandonment recorder")
-  const artifactContext = parseArtifactContext(artifactContextBytes, { candidate })
+  const artifactContext = parseArtifactContext(artifactContextBytes, {
+    candidate,
+  })
   const packageOrder = moduleValue(
     manifestModule,
     "CANONICAL_RELEASE_PACKAGE_ORDER",
@@ -254,10 +256,11 @@ async function runObserve(options, runtime) {
     MAX_JSON_BYTES,
     "production event",
   )
-  const [observeModule, controllerModule, plannerModule] = await Promise.all([
+  const [observeModule, controllerModule, plannerModule, candidateModule] = await Promise.all([
     runtime.importModule(new URL("./observe.mjs", import.meta.url).href),
     runtime.importModule(new URL("./controller.mjs", import.meta.url).href),
     runtime.importModule(new URL("./planner.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./candidate.mjs", import.meta.url).href),
   ])
   const classifyEvent = moduleFunction(
     observeModule,
@@ -285,6 +288,11 @@ async function runObserve(options, runtime) {
     "one-transition controller",
   )
   const planRelease = moduleFunction(plannerModule, "planRelease", "release planner")
+  const waitForRequiredCi = moduleFunction(
+    candidateModule,
+    "waitForRequiredCi",
+    "required CI waiter",
+  )
   classifyEvent(event)
 
   const [git, github, npm, attestations, marker] = await Promise.all([
@@ -300,6 +308,7 @@ async function runObserve(options, runtime) {
   let selection
   let resolutionFailure = null
   let observationDiagnostics = []
+  let observationRecovery = null
   try {
     selection = await resolveCandidate({
       event,
@@ -324,10 +333,31 @@ async function runObserve(options, runtime) {
     }
   }
 
+  if (
+    resolutionFailure === null &&
+    selection.candidate !== null &&
+    selection.disposition === "selected"
+  ) {
+    const ci = await waitForRequiredCi({
+      sha: selection.candidate.commitSha,
+      github,
+      attempts: 61,
+      delayMs: 10_000,
+      delay: runtime.wait ?? defaultWait,
+    })
+    if (ci.status !== "success") {
+      const code = ci.status === "timeout" ? "REQUIRED_CI_TIMEOUT" : "REQUIRED_CI_FAILED"
+      resolutionFailure = Object.freeze({ code })
+      observationDiagnostics = [observationDiagnostic("github", "required-ci", code)]
+    }
+  }
+
   let immutableInventory = null
   if (selection.candidate !== null) {
     try {
-      immutableInventory = await inventory.read({ ref: selection.candidate.commitSha })
+      immutableInventory = await inventory.read({
+        ref: selection.candidate.commitSha,
+      })
     } catch (error) {
       resolutionFailure = safeObservationFailure(error, "IMMUTABLE_INVENTORY_AMBIGUOUS")
       observationDiagnostics = [
@@ -354,8 +384,10 @@ async function runObserve(options, runtime) {
           npm,
           npmAuditFactory,
           attestations,
+          includeRecovery: true,
         })
         observationDiagnostics = normalizeObservationDiagnostics(result.diagnostics)
+        observationRecovery = snapshotCliData(result.recovery, "production recovery evidence")
         return result.observation
       } catch (error) {
         const failure = safeObservationFailure(error, "PRODUCTION_OBSERVATION_AMBIGUOUS")
@@ -386,7 +418,10 @@ async function runObserve(options, runtime) {
         })
       }
       if (selection.disposition === "blocked") {
-        return blockedObservePlan({ state: selection.state, conflicts: selection.conflicts })
+        return blockedObservePlan({
+          state: selection.state,
+          conflicts: selection.conflicts,
+        })
       }
       if (["audit-only", "noop"].includes(selection.disposition)) {
         return terminalObservePlan({
@@ -403,7 +438,11 @@ async function runObserve(options, runtime) {
     async write(report) {
       emittedReport = canonicalize(
         snapshotCliData(
-          { ...report, diagnostics: observationDiagnostics },
+          {
+            ...report,
+            recovery: observationRecovery,
+            diagnostics: observationDiagnostics,
+          },
           "production observation report",
         ),
       )
@@ -937,7 +976,10 @@ async function readVerifiedArtifact({ runtime, recordPath, artifactDirectory }) 
     if (!Buffer.from(recordBytes).equals(Buffer.from(canonicalRecord(record)))) {
       throw new Error("Release CLI release record bytes must be canonical")
     }
-    const candidate = candidateDocument({ version: record.version, commitSha: record.commitSha })
+    const candidate = candidateDocument({
+      version: record.version,
+      commitSha: record.commitSha,
+    })
     const manifest = parseManifest(manifestBytes, { candidate })
     if (
       !Buffer.from(manifestBytes).equals(Buffer.from(canonicalManifest(manifest))) ||
@@ -975,7 +1017,12 @@ async function readVerifiedArtifact({ runtime, recordPath, artifactDirectory }) 
       files.push({ name: pkg.filename, bytes })
     }
     await assertPinnedDirectoryUnchanged(runtime.fileSystem, pinned, "artifact directory")
-    return Object.freeze({ record, candidate, manifest, artifact: { manifest, files } })
+    return Object.freeze({
+      record,
+      candidate,
+      manifest,
+      artifact: { manifest, files },
+    })
   } finally {
     await pinned.handle.close()
   }
@@ -1013,7 +1060,10 @@ async function capturePublicationState({
   const listActionsRunJobs = requiredMethod(github, "listActionsRunJobs", "GitHub reader")
   const observePackageVersion = requiredMethod(npm, "observePackageVersion", "npm reader")
   const runs = await readPresentValue(
-    listWorkflowRuns({ workflow: "release.yml", commitSha: candidate.commitSha }),
+    listWorkflowRuns({
+      workflow: "release.yml",
+      commitSha: candidate.commitSha,
+    }),
     "workflow-runs",
   )
   if (!Array.isArray(runs) || runs.length < 1 || runs.length > 100) {
@@ -1055,7 +1105,10 @@ async function capturePublicationState({
   const packages = await Promise.all(
     manifest.packages.map(async (pkg) => {
       const result = snapshotCliData(
-        await observePackageVersion({ name: pkg.name, version: candidate.version }),
+        await observePackageVersion({
+          name: pkg.name,
+          version: candidate.version,
+        }),
         "npm package observation",
       )
       if (
@@ -1243,7 +1296,9 @@ async function readSmokeResults(runtime, value) {
   const directory = resolveCliPath(value, runtime.cwd)
   const pinned = await openPinnedDirectory(runtime.fileSystem, directory, "smoke results")
   try {
-    const entries = await runtime.fileSystem.readdir(pinned.readPath, { withFileTypes: true })
+    const entries = await runtime.fileSystem.readdir(pinned.readPath, {
+      withFileTypes: true,
+    })
     if (!Array.isArray(entries) || entries.length !== REQUIRED_RELEASE_SMOKE_LANES.length) {
       throw new TypeError(
         "Release CLI smoke result directory must contain the exact required lanes",
@@ -1372,7 +1427,10 @@ async function runWaitAudit(options, runtime) {
   })
   if (observed?.status !== "terminal" || observed.workflowRunId !== runId) {
     const error = new Error("Independent audit did not reach a terminal state within its deadline")
-    Object.defineProperty(error, "code", { value: "AUDIT_PENDING", enumerable: true })
+    Object.defineProperty(error, "code", {
+      value: "AUDIT_PENDING",
+      enumerable: true,
+    })
     throw error
   }
   const terminalModule = await runtime.importModule(
@@ -1500,7 +1558,12 @@ async function runTag(options, runtime) {
     message: `Dawn release ${tag}`,
   })
   const pushed = await pushTag({ tag })
-  return Object.freeze({ tag, commitSha: candidate.commitSha, created, pushed })
+  return Object.freeze({
+    tag,
+    commitSha: candidate.commitSha,
+    created,
+    pushed,
+  })
 }
 
 async function runPrepare(options, runtime) {
@@ -2050,7 +2113,9 @@ function parseJsonBytes(bytes, label) {
   try {
     value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
   } catch (error) {
-    throw new TypeError(`Release CLI ${label} JSON is invalid`, { cause: error })
+    throw new TypeError(`Release CLI ${label} JSON is invalid`, {
+      cause: error,
+    })
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`Release CLI ${label} must be one JSON object`)
@@ -2140,7 +2205,9 @@ async function assertPinnedDirectoryUnchanged(fileSystem, pinned, label) {
     throw new Error(`Release CLI ${label} changed while it was read`)
   }
   if (process.platform !== "linux") {
-    const current = await fileSystem.lstat(pinned.originalPath, { bigint: true })
+    const current = await fileSystem.lstat(pinned.originalPath, {
+      bigint: true,
+    })
     if (
       !current.isDirectory() ||
       current.isSymbolicLink() ||
@@ -2261,7 +2328,10 @@ async function writeCanonicalFile(fileSystem, filePath, bytes, label) {
     throw new TypeError(`Release CLI ${label} bytes are invalid`)
   }
   try {
-    await fileSystem.writeFile(filePath, Buffer.from(bytes), { flag: "wx", mode: 0o600 })
+    await fileSystem.writeFile(filePath, Buffer.from(bytes), {
+      flag: "wx",
+      mode: 0o600,
+    })
   } catch (error) {
     if (error?.code !== "EEXIST") throw error
     const existing = await readRegularFile(fileSystem, filePath, MAX_JSON_BYTES, label)
@@ -2341,7 +2411,9 @@ async function writeContainedCanonicalOutput(
     if (!parentIdentity.isDirectory()) {
       throw new TypeError(`Release CLI ${label} output parent must be one regular directory`)
     }
-    temporaryParentIdentity = await temporaryParentHandle.stat({ bigint: true })
+    temporaryParentIdentity = await temporaryParentHandle.stat({
+      bigint: true,
+    })
     if (!temporaryParentIdentity.isDirectory()) {
       throw new TypeError(`Release CLI ${label} temporary parent must be one regular directory`)
     }

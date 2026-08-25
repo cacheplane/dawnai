@@ -72,6 +72,7 @@ jobs:
     permissions:
       actions: read
       attestations: read
+      checks: read
       contents: read
     steps:
       - name: Checkout exact candidate
@@ -121,6 +122,7 @@ jobs:
     permissions:
       actions: read
       attestations: read
+      checks: read
       contents: read
     steps:
       - name: Checkout exact annotated tag

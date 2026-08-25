@@ -92,7 +92,11 @@ export function classifyProductionEvent(value) {
     if (event.ref !== "refs/heads/main" || !isSha(event.after)) {
       throw new TypeError("Production release push event is not exact main")
     }
-    return deepFreeze({ kind: "exact-ref", ref: event.after, expectedVersion: null })
+    return deepFreeze({
+      kind: "exact-ref",
+      ref: event.after,
+      expectedVersion: null,
+    })
   }
   if (
     !isRecord(event.inputs) ||
@@ -131,7 +135,9 @@ export async function resolveProductionCandidate({
     npm !== undefined && attestations !== undefined
       ? async ({ candidate, release }) => {
           try {
-            const immutableInventory = await inventory.read({ ref: candidate.commitSha })
+            const immutableInventory = await inventory.read({
+              ref: candidate.commitSha,
+            })
             const verified = await observeProductionCandidate({
               candidate,
               inventory: immutableInventory,
@@ -323,7 +329,11 @@ export async function observeProductionCandidate({
   npm,
   npmAuditFactory,
   attestations,
+  includeRecovery = false,
 }) {
+  if (typeof includeRecovery !== "boolean") {
+    throw new TypeError("Production recovery inclusion flag is invalid")
+  }
   const identity = normalizeCandidate(candidate)
   const managedInventory = normalizeProductionInventory(inventory, identity)
   normalizeControllerMarker(marker)
@@ -364,7 +374,11 @@ export async function observeProductionCandidate({
         diagnostics,
       }),
       observeAdapter(
-        () => github.listWorkflowRuns({ workflow: "ci.yml", commitSha: identity.commitSha }),
+        () =>
+          github.listWorkflowRuns({
+            workflow: "ci.yml",
+            commitSha: identity.commitSha,
+          }),
         {
           source: "github",
           operation: "workflow-runs",
@@ -394,7 +408,11 @@ export async function observeProductionCandidate({
         },
       ),
       observeAdapter(
-        () => github.listWorkflowRuns({ workflow: "release.yml", commitSha: identity.commitSha }),
+        () =>
+          github.listWorkflowRuns({
+            workflow: "release.yml",
+            commitSha: identity.commitSha,
+          }),
         {
           source: "github",
           operation: "workflow-runs",
@@ -443,7 +461,11 @@ export async function observeProductionCandidate({
   const registryResults = []
   for (const pkg of observedInventory.packages) {
     const result = await observeAdapter(
-      () => npm.observePackageVersion({ name: pkg.name, version: identity.version }),
+      () =>
+        npm.observePackageVersion({
+          name: pkg.name,
+          version: identity.version,
+        }),
       {
         source: "npm",
         operation: "package-version",
@@ -527,14 +549,25 @@ export async function observeProductionCandidate({
   })
   const artifacts = observedArtifactState.artifacts
   let release = releaseState.release
+  const observedNpmEvidence = createObservedNpmEvidence({
+    candidate: identity,
+    manifest: observedArtifactState.manifest,
+    registryPackages,
+  })
   if (release.marker !== null && release.marker.npmEvidenceSha256 !== null) {
     try {
-      validateObservedNpmEvidenceDigest({
-        candidate: identity,
-        manifest: observedArtifactState.manifest,
-        registryPackages,
-        expectedSha256: release.marker.npmEvidenceSha256,
-      })
+      if (
+        observedNpmEvidence === null ||
+        sha256(
+          canonicalNpmEvidenceBytes(observedNpmEvidence, {
+            candidate: identity,
+            manifest: observedArtifactState.manifest,
+            manifestSha256: manifestSha256(observedArtifactState.manifest),
+          }),
+        ) !== release.marker.npmEvidenceSha256
+      ) {
+        throw observationError("NPM_EVIDENCE_DIGEST_MISMATCH")
+      }
     } catch (error) {
       addDiagnostic(
         diagnostics,
@@ -577,7 +610,16 @@ export async function observeProductionCandidate({
     abandonment: releaseState.abandonment,
   }
   diagnostics.sort(compareDiagnostics)
-  return deepFreeze({ observation, diagnostics })
+  const result = { observation, diagnostics }
+  if (includeRecovery) {
+    result.recovery = productionRecovery({
+      candidate: identity,
+      artifactState: observedArtifactState,
+      releaseState,
+      npmEvidence: observedNpmEvidence,
+    })
+  }
+  return deepFreeze(result)
 }
 
 export async function discoverShadowCandidate({ ref, git, inventory }) {
@@ -626,7 +668,9 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   const tagName = `v${normalizedCandidate.version}`
   const diagnostics = []
   const ciResult = normalizeEnvelope(
-    await github.getCommitCheckRuns({ commitSha: normalizedCandidate.commitSha }),
+    await github.getCommitCheckRuns({
+      commitSha: normalizedCandidate.commitSha,
+    }),
     { source: "github", operation: "commit-check-runs", payloadKey: "value" },
     diagnostics,
   )
@@ -685,7 +729,10 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   let rawNpmPresent = false
   for (const pkg of normalizedInventory.packages) {
     const result = normalizeEnvelope(
-      await npm.observePackageVersion({ name: pkg.name, version: normalizedCandidate.version }),
+      await npm.observePackageVersion({
+        name: pkg.name,
+        version: normalizedCandidate.version,
+      }),
       { source: "npm", operation: "package-version", payloadKey: "package" },
       diagnostics,
     )
@@ -887,7 +934,11 @@ async function mapProductionTag({ result, candidate, git, github, diagnostics })
 async function mapProductionArtifacts({ result, inventory, candidate, github, diagnostics }) {
   const absent = emptyProductionArtifacts(inventory)
   if (result.status !== "PRESENT" || !Array.isArray(result.value)) {
-    return { artifacts: { ...absent, status: "ambiguous" }, inventory, manifest: null }
+    return {
+      artifacts: { ...absent, status: "ambiguous" },
+      inventory,
+      manifest: null,
+    }
   }
   if (result.value.length === 0) return { artifacts: absent, inventory, manifest: null }
   if (result.value.length > MAX_ACTIONS_ARTIFACT_CANDIDATES) {
@@ -898,7 +949,11 @@ async function mapProductionArtifacts({ result, inventory, candidate, github, di
       "AMBIGUOUS",
       "ARTIFACT_CANDIDATE_LIMIT_EXCEEDED",
     )
-    return { artifacts: { ...absent, status: "ambiguous" }, inventory, manifest: null }
+    return {
+      artifacts: { ...absent, status: "ambiguous" },
+      inventory,
+      manifest: null,
+    }
   }
 
   const deferredDiagnostics = []
@@ -953,7 +1008,12 @@ async function mapProductionArtifacts({ result, inventory, candidate, github, di
         deferredDiagnostics,
       }
     }
-    return { artifacts: absent, inventory, manifest: null, replacementRequired: true }
+    return {
+      artifacts: absent,
+      inventory,
+      manifest: null,
+      replacementRequired: true,
+    }
   } catch (error) {
     addDiagnostic(
       deferredDiagnostics,
@@ -980,7 +1040,9 @@ async function inspectProductionArtifactCandidate({
   workBudget,
   diagnostics,
 }) {
-  const payload = normalizeActionsArtifactMetadata(metadata, candidate, { allowExpired: true })
+  const payload = normalizeActionsArtifactMetadata(metadata, candidate, {
+    allowExpired: true,
+  })
   if (payload.expired) {
     return await inspectExpiredProductionArtifactCandidate({
       payload,
@@ -1121,7 +1183,10 @@ async function inspectProductionArtifactCandidate({
       manifest,
       record,
       ci: sealedCi,
-      files: payloadFiles.map((file) => ({ name: file.name, bytes: Buffer.from(file.bytes) })),
+      files: payloadFiles.map((file) => ({
+        name: file.name,
+        bytes: Buffer.from(file.bytes),
+      })),
     },
   }
 }
@@ -1155,8 +1220,9 @@ async function inspectExpiredProductionArtifactCandidate({
   )
   if (
     runPayloads.length !== 1 ||
-    normalizeActionsArtifactMetadata(runPayloads[0], candidate, { allowExpired: true }).digest !==
-      payload.digest
+    normalizeActionsArtifactMetadata(runPayloads[0], candidate, {
+      allowExpired: true,
+    }).digest !== payload.digest
   ) {
     throw observationError("ACTIONS_ARTIFACT_RUN_MISMATCH")
   }
@@ -1252,7 +1318,10 @@ function validatePreparationRun({ result, candidate, runId, runAttempt }) {
 function canonicalAttestationSubjects(manifest) {
   return [
     { name: "manifest.json", sha256: manifestSha256(manifest) },
-    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+    ...manifest.packages.map((pkg) => ({
+      name: pkg.filename,
+      sha256: pkg.sha256,
+    })),
   ]
 }
 
@@ -1505,7 +1574,10 @@ function preparedArtifacts({ inventory, manifest, recordSha256 }) {
     })),
     manifestAsset: { name: "manifest.json", sha256: digest },
     releaseRecordAsset: { name: "release-record.json", sha256: recordSha256 },
-    manifestAttestationAsset: { name: "manifest.json.intoto.jsonl", sha256: null },
+    manifestAttestationAsset: {
+      name: "manifest.json.intoto.jsonl",
+      sha256: null,
+    },
     attestations: [
       ...inventory.packages.map((pkg) => ({
         name: pkg.attestationFilename,
@@ -1554,7 +1626,10 @@ function emptyProductionArtifacts(inventory) {
     })),
     manifestAsset: { name: "manifest.json", sha256: null },
     releaseRecordAsset: { name: "release-record.json", sha256: null },
-    manifestAttestationAsset: { name: "manifest.json.intoto.jsonl", sha256: null },
+    manifestAttestationAsset: {
+      name: "manifest.json.intoto.jsonl",
+      sha256: null,
+    },
     attestations: [
       ...inventory.packages.map((pkg) => ({
         name: pkg.attestationFilename,
@@ -1815,7 +1890,13 @@ async function mapProductionRelease({
         marker: releaseMarker,
         assets: releaseAssets,
       },
-      artifactState: { artifacts, inventory: observedInventory, manifest, ci: sealedCi },
+      artifactState: {
+        artifacts,
+        inventory: observedInventory,
+        manifest,
+        record,
+        ci: sealedCi,
+      },
       escrow: baseExact
         ? {
             status: "present",
@@ -1824,6 +1905,7 @@ async function mapProductionRelease({
           }
         : { status: "absent", manifestSha256: null, assets: [] },
       audit: terminal.audit,
+      auditResult: terminal.auditResult,
       abandonment: terminal.abandonment,
       smokes: smokeEvidence.smokes,
     })
@@ -1878,7 +1960,12 @@ async function mapProductionAttachingRelease({
       throw observationError("ATTACHING_ARTIFACT_CONTEXT_DIGEST_MISMATCH")
     }
     manifest = parseProductionManifest(manifestBytes, { candidate })
-    sealedCi = await validateProductionManifestCi({ manifest, candidate, github, diagnostics })
+    sealedCi = await validateProductionManifestCi({
+      manifest,
+      candidate,
+      github,
+      diagnostics,
+    })
     record = parseReleaseRecord(recordBytes)
     if (
       !manifestBytes.equals(canonicalManifestBytes(manifest)) ||
@@ -1894,7 +1981,11 @@ async function mapProductionAttachingRelease({
   if (record === null) {
     const recordAsset = remoteAssets.find((asset) => asset.name === "release-record.json")
     if (recordAsset !== undefined) {
-      const recordBytes = await downloadReleaseBytes({ github, asset: recordAsset, diagnostics })
+      const recordBytes = await downloadReleaseBytes({
+        github,
+        asset: recordAsset,
+        diagnostics,
+      })
       if (recordBytes !== null) record = parseReleaseRecord(recordBytes)
     }
   }
@@ -1909,7 +2000,10 @@ async function mapProductionAttachingRelease({
   const expectedPrepared = [
     { name: "release-record.json", sha256: marker.releaseRecordSha256 },
     { name: "manifest.json", sha256: marker.manifestSha256 },
-    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+    ...manifest.packages.map((pkg) => ({
+      name: pkg.filename,
+      sha256: pkg.sha256,
+    })),
   ]
   const preparedByName = new Map(expectedPrepared.map((asset) => [asset.name, asset]))
   const bundleNames = new Set(
@@ -1960,7 +2054,9 @@ async function mapProductionAttachingRelease({
   const remoteRecordBytes = downloaded.get("release-record.json")
   const remoteManifestBytes = downloaded.get("manifest.json")
   const remoteRecord = parseReleaseRecord(remoteRecordBytes)
-  const remoteManifest = parseProductionManifest(remoteManifestBytes, { candidate })
+  const remoteManifest = parseProductionManifest(remoteManifestBytes, {
+    candidate,
+  })
   sealedCi ??= await validateProductionManifestCi({
     manifest: remoteManifest,
     candidate,
@@ -2205,7 +2301,11 @@ async function mapProductionAbandonmentRelease({
     const retainedRecord = baseAssets.find((asset) => asset.name === "release-record.json")
     let durableRecord = null
     if (retainedRecord !== undefined) {
-      const bytes = await downloadReleaseBytes({ github, asset: retainedRecord, diagnostics })
+      const bytes = await downloadReleaseBytes({
+        github,
+        asset: retainedRecord,
+        diagnostics,
+      })
       if (bytes === null || sha256(bytes) !== marker.releaseRecordSha256) {
         throw observationError("ABANDONMENT_RELEASE_RECORD_DIGEST_MISMATCH")
       }
@@ -2729,6 +2829,7 @@ async function observeReleaseTerminal({
     if (terminalAssets.length !== 0) throw observationError("RELEASE_AUDIT_ASSET_PREMATURE")
     return {
       audit: emptyAudit(),
+      auditResult: null,
       abandonment: { requested: false, recorded: false, predecessor: null },
       assets: [],
     }
@@ -2815,8 +2916,12 @@ async function observeReleaseTerminal({
       runAttempt: run.runAttempt,
       conclusion,
     },
+    auditResult: downloaded.find((asset) => asset.name === "audit-result.json")?.result ?? null,
     abandonment: { requested: false, recorded: false, predecessor: null },
-    assets: downloaded.map((asset) => ({ name: asset.name, sha256: asset.sha256 })),
+    assets: downloaded.map((asset) => ({
+      name: asset.name,
+      sha256: asset.sha256,
+    })),
   }
 }
 
@@ -2934,7 +3039,11 @@ export function validateProductionAuditRun({ value, jobs, candidate, marker }) {
   ) {
     throw observationError("RELEASE_AUDIT_JOB_TERMINAL_MISMATCH")
   }
-  return { status: value.status, conclusion: value.conclusion, runAttempt: value.run_attempt }
+  return {
+    status: value.status,
+    conclusion: value.conclusion,
+    runAttempt: value.run_attempt,
+  }
 }
 
 function validateAuditAssetPhase({ marker, downloaded }) {
@@ -3015,10 +3124,45 @@ function productionReleaseState({
   artifactState,
   escrow,
   audit = emptyAudit(),
+  auditResult = null,
   abandonment = { requested: false, recorded: false, predecessor: null },
   smokes = [],
 }) {
-  return { release, artifactState, escrow, audit, abandonment, smokes }
+  return {
+    release,
+    artifactState,
+    escrow,
+    audit,
+    auditResult,
+    abandonment,
+    smokes,
+  }
+}
+
+function productionRecovery({ candidate, artifactState, releaseState, npmEvidence }) {
+  const audit = releaseState.release.marker?.audit
+  const auditDispatch =
+    isRecord(audit) &&
+    audit.workflow === ".github/workflows/published-artifact-verify.yml" &&
+    isPositiveId(audit.workflowRunId) &&
+    typeof audit.runUrl === "string" &&
+    typeof audit.htmlUrl === "string"
+      ? {
+          workflow: audit.workflow,
+          workflowRunId: Number(audit.workflowRunId),
+          runUrl: audit.runUrl,
+          htmlUrl: audit.htmlUrl,
+        }
+      : null
+  return {
+    schemaVersion: 1,
+    candidate,
+    manifest: artifactState.manifest ?? null,
+    releaseRecord: artifactState.record ?? null,
+    npmEvidence,
+    auditDispatch,
+    auditResult: releaseState.auditResult,
+  }
 }
 
 async function mapProductionRegistryPackage({
@@ -3120,18 +3264,12 @@ async function mapProductionRegistryPackage({
   }
 }
 
-function validateObservedNpmEvidenceDigest({
-  candidate,
-  manifest,
-  registryPackages,
-  expectedSha256,
-}) {
-  if (!isRecord(manifest) || !SHA256_PATTERN.test(expectedSha256)) {
-    throw observationError("NPM_EVIDENCE_DIGEST_MISMATCH")
-  }
+function createObservedNpmEvidence({ candidate, manifest, registryPackages }) {
+  if (!isRecord(manifest)) return null
   const entries = new Map(manifest.packages.map((entry) => [entry.name, entry]))
   const observed = new Map(registryPackages.map((pkg) => [pkg.name, pkg]))
-  const packages = CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+  const packages = []
+  for (const name of CANONICAL_RELEASE_PACKAGE_ORDER) {
     const entry = entries.get(name)
     const pkg = observed.get(name)
     if (
@@ -3147,9 +3285,9 @@ function validateObservedNpmEvidenceDigest({
       pkg.provenance?.workflow !== candidate.publisherWorkflow ||
       pkg.provenance.commitSha !== candidate.commitSha
     ) {
-      throw observationError("NPM_EVIDENCE_DIGEST_MISMATCH")
+      return null
     }
-    return {
+    packages.push({
       name,
       version: candidate.version,
       status: "present",
@@ -3166,8 +3304,8 @@ function validateObservedNpmEvidenceDigest({
         repository: "https://github.com/cacheplane/dawnai",
         ref: `refs/tags/v${candidate.version}`,
       },
-    }
-  })
+    })
+  }
   const bytes = canonicalNpmEvidenceBytes(
     {
       schemaVersion: 1,
@@ -3184,9 +3322,7 @@ function validateObservedNpmEvidenceDigest({
       manifestSha256: manifestSha256(manifest),
     },
   )
-  if (sha256(bytes) !== expectedSha256) {
-    throw observationError("NPM_EVIDENCE_DIGEST_MISMATCH")
-  }
+  return JSON.parse(bytes.toString("utf8"))
 }
 
 function isExactRegistryTarballUrl(value, entry) {
@@ -3508,7 +3644,10 @@ function mapArtifacts(result, inventory, diagnostics) {
     })),
     manifestAsset: { name: "manifest.json", sha256: null },
     releaseRecordAsset: { name: "release-record.json", sha256: null },
-    manifestAttestationAsset: { name: "manifest.json.intoto.jsonl", sha256: null },
+    manifestAttestationAsset: {
+      name: "manifest.json.intoto.jsonl",
+      sha256: null,
+    },
     attestations: [
       ...inventory.packages.map((pkg) => ({
         name: pkg.attestationFilename,
@@ -3706,8 +3845,14 @@ function expectedReleaseAssets(inventory, marker) {
   return [
     { name: "release-record.json", sha256: inventory.releaseRecordSha256 },
     { name: "manifest.json", sha256: inventory.manifestSha256 },
-    { name: "manifest.json.intoto.jsonl", sha256: inventory.manifestAttestationSha256 },
-    ...inventory.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+    {
+      name: "manifest.json.intoto.jsonl",
+      sha256: inventory.manifestAttestationSha256,
+    },
+    ...inventory.packages.map((pkg) => ({
+      name: pkg.filename,
+      sha256: pkg.tarballSha256,
+    })),
     ...inventory.packages.map((pkg) => ({
       name: pkg.attestationFilename,
       sha256: pkg.attestationSha256,
@@ -3739,7 +3884,10 @@ export async function observeDurableSmokeReceipts({
   const duplicateIds = new Set([...idCounts].filter(([, count]) => count > 1).map(([id]) => id))
   const observed = new Map()
   const smokeAssets = rawAssets
-    .map((asset) => ({ asset, identity: parseSmokeReleaseAssetName(asset.name) }))
+    .map((asset) => ({
+      asset,
+      identity: parseSmokeReleaseAssetName(asset.name),
+    }))
     .filter(({ identity }) => identity !== null)
   if (smokeAssets.length === 0) {
     return marker.smoke === null ? { assets: observed, smokes: [] } : null

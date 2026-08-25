@@ -30,12 +30,12 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Approve pull request",
                 "env": {
+                  "GH_REPO": "${{ github.repository }}",
                   "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
-                  "PR_NUMBER": "${{ github.event.pull_request.number }}",
-                  "GH_REPO": "${{ github.repository }}"
+                  "PR_NUMBER": "${{ github.event.pull_request.number }}"
                 },
+                "name": "Approve pull request",
                 "run": "gh pr review \"$PR_NUMBER\" --approve \\\n  --body \"Automated approval: this PR received an intelligent (AI) code review. See the review comments on this PR.\"\n"
               }
             }
@@ -80,12 +80,12 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Require changeset for user-facing changes",
                 "env": {
                   "BASE_REF": "origin/${{ github.event.pull_request.base.ref }}",
                   "HEAD_REF": "${{ github.event.pull_request.head.ref }}",
                   "PR_AUTHOR": "${{ github.event.pull_request.user.login }}"
                 },
+                "name": "Require changeset for user-facing changes",
                 "run": "node scripts/check-changesets.mjs"
               }
             }
@@ -126,9 +126,9 @@
                 "name": "Create kind cluster",
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
-                  "version": "v0.31.0",
                   "kubectl_version": "v1.35.0",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
+                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
+                  "version": "v0.31.0"
                 }
               }
             },
@@ -266,8 +266,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -401,8 +401,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -467,8 +467,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -510,8 +510,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Upload Playwright traces",
                 "if": "failure()",
+                "name": "Upload Playwright traces",
                 "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 "with": {
                   "name": "inspector-playwright-traces",
@@ -553,8 +553,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -612,8 +612,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -678,8 +678,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -747,8 +747,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -790,8 +790,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Diagnostics + cleanup",
                 "if": "always()",
+                "name": "Diagnostics + cleanup",
                 "run": "echo \"----- containers -----\"\ndocker ps -a || true\necho \"----- app logs -----\"\ndocker logs dawn-smoke-app --tail=120 || true\necho \"----- teardown -----\"\ndocker rm -f dawn-smoke-app dawn-smoke-aimock || true\nfor c in $(docker ps -aq --filter name=dawn-sbx-); do docker rm -f \"$c\" || true; done\nfor v in $(docker volume ls -q --filter name=dawn-sbx-); do docker volume rm \"$v\" || true; done\ndocker network rm dawn-smoke-net || true\n"
               }
             }
@@ -828,8 +828,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -867,10 +867,10 @@
                 "name": "Create kind cluster (no default CNI)",
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
-                  "version": "v0.31.0",
-                  "kubectl_version": "v1.35.0",
                   "config": ".github/kind/kind-calico.yaml",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
+                  "kubectl_version": "v1.35.0",
+                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
+                  "version": "v0.31.0"
                 }
               }
             },
@@ -905,10 +905,10 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Real-cluster sandbox conformance + e2e",
                 "env": {
                   "DAWN_TEST_K8S_EGRESS_CONTROL_URL": "http://dawn-egress-control:8080/"
                 },
+                "name": "Real-cluster sandbox conformance + e2e",
                 "run": "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration"
               }
             },
@@ -956,8 +956,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -995,11 +995,11 @@
                 "name": "Create kind cluster (no default CNI)",
                 "uses": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc",
                 "with": {
-                  "version": "v0.31.0",
-                  "kubectl_version": "v1.35.0",
-                  "config": ".github/kind/kind-calico.yaml",
                   "cluster_name": "dawn-smoke",
-                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661"
+                  "config": ".github/kind/kind-calico.yaml",
+                  "kubectl_version": "v1.35.0",
+                  "node_image": "kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661",
+                  "version": "v0.31.0"
                 }
               }
             },
@@ -1069,8 +1069,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Diagnostics + cleanup",
                 "if": "always()",
+                "name": "Diagnostics + cleanup",
                 "run": "echo \"----- app -----\"\nkubectl -n dawn-app get pods,svc -o wide || true\nkubectl -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm uninstall dawn-app -n dawn-app || true\nhelm uninstall dawn-sandbox-infra -n dawn-sandboxes || true\nkubectl delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
               }
             }
@@ -1107,8 +1107,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -1173,8 +1173,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -1216,10 +1216,10 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Source Tests",
                 "env": {
                   "DAWN_REQUIRE_DOCKER": "1"
                 },
+                "name": "Source Tests",
                 "run": "pnpm test"
               }
             },
@@ -1289,8 +1289,8 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Upload Harness Artifacts",
                 "if": "failure()",
+                "name": "Upload Harness Artifacts",
                 "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 "with": {
                   "name": "harness-artifacts",
@@ -1334,8 +1334,8 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
                 }
               }
             },
@@ -1363,72 +1363,220 @@
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Run native Vercel previews",
-                "id": "native-vercel",
                 "env": {
                   "DAWN_TEST_VERCEL": "1",
-                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}",
+                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native",
+                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
                   "DAWN_VERCEL_ORG_ID": "${{ secrets.DAWN_VERCEL_ORG_ID }}",
                   "DAWN_VERCEL_PROJECT_ID": "${{ secrets.DAWN_VERCEL_PROJECT_ID }}",
-                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
-                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native"
+                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}"
                 },
+                "id": "native-vercel",
+                "name": "Run native Vercel previews",
                 "run": "pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts --reporter=json --outputFile.json=\"${{ runner.temp }}/vercel-native/vitest.json\""
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Reconcile and remove native Vercel resources",
-                "id": "native-vercel-cleanup",
-                "if": "always()",
                 "env": {
-                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}",
+                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native",
+                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
                   "DAWN_VERCEL_ORG_ID": "${{ secrets.DAWN_VERCEL_ORG_ID }}",
                   "DAWN_VERCEL_PROJECT_ID": "${{ secrets.DAWN_VERCEL_PROJECT_ID }}",
-                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
-                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native"
+                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}"
                 },
+                "id": "native-vercel-cleanup",
+                "if": "always()",
+                "name": "Reconcile and remove native Vercel resources",
                 "run": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --cleanup"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Assert closed native Vercel receipt",
                 "env": {
                   "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native"
                 },
+                "name": "Assert closed native Vercel receipt",
                 "run": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --assert-receipt"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Prepare native Vercel diagnostics",
-                "id": "native_vercel_diagnostics",
-                "if": "always()",
                 "env": {
-                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}",
+                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native",
+                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
                   "DAWN_VERCEL_ORG_ID": "${{ secrets.DAWN_VERCEL_ORG_ID }}",
                   "DAWN_VERCEL_PROJECT_ID": "${{ secrets.DAWN_VERCEL_PROJECT_ID }}",
-                  "DAWN_VERCEL_DATABASE_URL": "${{ secrets.DAWN_VERCEL_DATABASE_URL }}",
-                  "DAWN_VERCEL_ARTIFACT_DIR": "${{ runner.temp }}/vercel-native"
+                  "DAWN_VERCEL_TOKEN": "${{ secrets.DAWN_VERCEL_TOKEN }}"
                 },
+                "id": "native_vercel_diagnostics",
+                "if": "always()",
+                "name": "Prepare native Vercel diagnostics",
                 "run": "node packages/cli/test/helpers/vercel-native-cleanup.mjs --prepare-artifacts"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Upload native Vercel diagnostics",
                 "if": "failure() && steps.native_vercel_diagnostics.outcome == 'success'",
+                "name": "Upload native Vercel diagnostics",
                 "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 "with": {
+                  "if-no-files-found": "error",
                   "name": "vercel-native-diagnostics",
                   "path": "${{ runner.temp }}/vercel-native/upload/",
-                  "if-no-files-found": "error",
                   "retention-days": 3
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "claude-review.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "name": "Claude Review",
+        "on": {
+          "pull_request": {
+            "types": ["opened", "synchronize", "reopened", "ready_for_review"]
+          }
+        },
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "review",
+          "descriptor": {
+            "if": "github.actor != 'dependabot[bot]'",
+            "permissions": {
+              "contents": "read",
+              "pull-requests": "write"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 25
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 1
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "ANTHROPIC_API_KEY": "${{ secrets.ANTHROPIC_API_KEY }}",
+                  "REVIEW_MODEL": "claude-sonnet-4-6"
+                },
+                "id": "preflight",
+                "name": "Preflight — Anthropic credentials and model",
+                "run": "set -uo pipefail\nif [ -z \"${ANTHROPIC_API_KEY}\" ]; then\n  echo \"::warning::ANTHROPIC_API_KEY is unavailable (fork PR — secrets are not exposed to fork \\`pull_request\\` runs). Skipping review.\"\n  echo \"skip=true\" >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\necho \"skip=false\" >> \"$GITHUB_OUTPUT\"\n\n# Keep the key out of argv (and therefore out of the process list) by\n# passing it through a 0600 curl config file rather than -H.\nrc=\"$(mktemp)\"; body=\"$(mktemp)\"\ntrap 'rm -f \"$rc\" \"$body\"' EXIT\nprintf 'header = \"x-api-key: %s\"\\n' \"${ANTHROPIC_API_KEY}\" > \"$rc\"\n\ncode=\"$(curl -sS -o \"$body\" -w '%{http_code}' \\\n  --config \"$rc\" \\\n  -H 'anthropic-version: 2023-06-01' \\\n  -H 'content-type: application/json' \\\n  -d \"{\\\"model\\\":\\\"${REVIEW_MODEL}\\\",\\\"max_tokens\\\":1,\\\"messages\\\":[{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"ping\\\"}]}\" \\\n  https://api.anthropic.com/v1/messages)\" || {\n    echo \"::warning::Preflight request could not be sent; continuing and letting the review step report.\"\n    exit 0\n  }\n\ncase \"$code\" in\n  200)\n    echo \"Anthropic API reachable; key valid; model ${REVIEW_MODEL} available.\"\n    ;;\n  429|5??)\n    echo \"::warning::Preflight got HTTP ${code} (rate limit / transient). Key looks valid; continuing.\"\n    ;;\n  *)\n    echo \"::error::Anthropic preflight failed with HTTP ${code} for model ${REVIEW_MODEL} — the review agent cannot run.\"\n    jq -r '.error | \"\\(.type): \\(.message)\"' < \"$body\" 2>/dev/null || head -c 500 \"$body\"\n    echo\n    echo \"401 => rotate ANTHROPIC_API_KEY. 400 mentioning credit balance => top up the Anthropic org. 404 => REVIEW_MODEL is no longer available to this org.\"\n    exit 1\n    ;;\nesac\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "claude",
+                "if": "steps.preflight.outputs.skip != 'true'",
+                "name": "Claude review",
+                "uses": "anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79",
+                "with": {
+                  "anthropic_api_key": "${{ secrets.ANTHROPIC_API_KEY }}",
+                  "claude_args": "--model claude-sonnet-4-6\n--max-turns 40\n--allowedTools \"Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)\"\n",
+                  "github_token": "${{ secrets.GITHUB_TOKEN }}",
+                  "prompt": "REPO: ${{ github.repository }}\nPR NUMBER: ${{ github.event.pull_request.number }}\n\nReview this pull request and post your findings as ONE top-level\nGitHub PR comment via `gh pr comment`. Do NOT post inline review\ncomments (they create review threads that block auto-merge under\nthis repo's branch protection).\nRead the diff with `gh pr diff` and the description with `gh pr view`.\nFocus on:\n- Correctness bugs\n- Security issues (injection, secrets, unsafe input handling)\n- TypeScript type-safety problems\n- Missing or weak test coverage for the change\n\nIn the comment, reference specific locations as `path/to/file.ts:123`\ncode-formatted paths with a short quoted snippet, so findings are easy\nto locate without inline threads. Order findings most-severe first.\nBe brief; skip nitpicks and style unless they affect correctness. If\nthe PR looks good, say so briefly. If a prior review comment of yours\nexists on this PR, post a fresh comment covering only what changed\nsince (do not repeat findings that were addressed).\n",
+                  "track_progress": true
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "EXECUTION_FILE": "${{ steps.claude.outputs.execution_file }}"
+                },
+                "if": "always() && steps.claude.conclusion != 'skipped'",
+                "name": "Verify the review actually ran",
+                "run": "set -uo pipefail\nif [ -z \"${EXECUTION_FILE}\" ] || [ ! -f \"${EXECUTION_FILE}\" ]; then\n  echo \"::error::No Claude execution log was produced — the review agent never reported a result.\"\n  exit 1\nfi\n\nresult=\"$(jq -c '[.[] | select(.type == \"result\")] | last // empty' \"${EXECUTION_FILE}\")\"\nif [ -z \"${result}\" ]; then\n  echo \"::error::Claude execution log contains no result message — the agent did not finish.\"\n  exit 1\nfi\n\nis_error=\"$(jq -r '.is_error // false' <<<\"${result}\")\"\nsubtype=\"$(jq -r '.subtype // \"unknown\"' <<<\"${result}\")\"\nif [ \"${is_error}\" = \"true\" ] || [ \"${subtype}\" != \"success\" ]; then\n  echo \"::error::Claude review failed (subtype=${subtype}, is_error=${is_error}). No review was posted.\"\n  echo \"--- agent error detail (truncated) ---\"\n  jq -r '.result // .error // \"no detail in result message\"' <<<\"${result}\" | head -c 2000\n  echo\n  exit 1\nfi\n\nturns=\"$(jq -r '.num_turns // 0' <<<\"${result}\")\"\ncost=\"$(jq -r '.total_cost_usd // 0' <<<\"${result}\")\"\necho \"Review completed: ${turns} turn(s), \\$${cost}.\"\n"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "codeql.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "name": "CodeQL",
+        "on": {
+          "pull_request": {
+            "branches": ["main"]
+          },
+          "push": {
+            "branches": ["main"]
+          },
+          "schedule": [
+            {
+              "cron": "23 4 * * 1"
+            }
+          ]
+        },
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "analyze",
+          "descriptor": {
+            "name": "Analyze (javascript-typescript)",
+            "permissions": {
+              "actions": "read",
+              "contents": "read",
+              "security-events": "write"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Initialize CodeQL",
+                "uses": "github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3",
+                "with": {
+                  "build-mode": "none",
+                  "languages": "javascript-typescript"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Perform CodeQL Analysis",
+                "uses": "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3",
+                "with": {
+                  "category": "/language:javascript-typescript"
                 }
               }
             }
@@ -1587,154 +1735,6 @@
         }
       ]
     },
-    "claude-review.yml": {
-      "classification": "safe",
-      "descriptor": {
-        "name": "Claude Review",
-        "on": {
-          "pull_request": {
-            "types": ["opened", "synchronize", "reopened", "ready_for_review"]
-          }
-        },
-        "permissions": {
-          "contents": "read"
-        }
-      },
-      "jobs": [
-        {
-          "classification": "safe",
-          "id": "review",
-          "descriptor": {
-            "if": "github.actor != 'dependabot[bot]'",
-            "permissions": {
-              "contents": "read",
-              "pull-requests": "write"
-            },
-            "runs-on": "ubuntu-latest",
-            "timeout-minutes": 25
-          },
-          "steps": [
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Checkout",
-                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-                "with": {
-                  "fetch-depth": 1
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Preflight — Anthropic credentials and model",
-                "id": "preflight",
-                "env": {
-                  "ANTHROPIC_API_KEY": "${{ secrets.ANTHROPIC_API_KEY }}",
-                  "REVIEW_MODEL": "claude-sonnet-4-6"
-                },
-                "run": "set -uo pipefail\nif [ -z \"${ANTHROPIC_API_KEY}\" ]; then\n  echo \"::warning::ANTHROPIC_API_KEY is unavailable (fork PR — secrets are not exposed to fork \\`pull_request\\` runs). Skipping review.\"\n  echo \"skip=true\" >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\necho \"skip=false\" >> \"$GITHUB_OUTPUT\"\n\n# Keep the key out of argv (and therefore out of the process list) by\n# passing it through a 0600 curl config file rather than -H.\nrc=\"$(mktemp)\"; body=\"$(mktemp)\"\ntrap 'rm -f \"$rc\" \"$body\"' EXIT\nprintf 'header = \"x-api-key: %s\"\\n' \"${ANTHROPIC_API_KEY}\" > \"$rc\"\n\ncode=\"$(curl -sS -o \"$body\" -w '%{http_code}' \\\n  --config \"$rc\" \\\n  -H 'anthropic-version: 2023-06-01' \\\n  -H 'content-type: application/json' \\\n  -d \"{\\\"model\\\":\\\"${REVIEW_MODEL}\\\",\\\"max_tokens\\\":1,\\\"messages\\\":[{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"ping\\\"}]}\" \\\n  https://api.anthropic.com/v1/messages)\" || {\n    echo \"::warning::Preflight request could not be sent; continuing and letting the review step report.\"\n    exit 0\n  }\n\ncase \"$code\" in\n  200)\n    echo \"Anthropic API reachable; key valid; model ${REVIEW_MODEL} available.\"\n    ;;\n  429|5??)\n    echo \"::warning::Preflight got HTTP ${code} (rate limit / transient). Key looks valid; continuing.\"\n    ;;\n  *)\n    echo \"::error::Anthropic preflight failed with HTTP ${code} for model ${REVIEW_MODEL} — the review agent cannot run.\"\n    jq -r '.error | \"\\(.type): \\(.message)\"' < \"$body\" 2>/dev/null || head -c 500 \"$body\"\n    echo\n    echo \"401 => rotate ANTHROPIC_API_KEY. 400 mentioning credit balance => top up the Anthropic org. 404 => REVIEW_MODEL is no longer available to this org.\"\n    exit 1\n    ;;\nesac\n"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Claude review",
-                "id": "claude",
-                "if": "steps.preflight.outputs.skip != 'true'",
-                "uses": "anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79",
-                "with": {
-                  "github_token": "${{ secrets.GITHUB_TOKEN }}",
-                  "anthropic_api_key": "${{ secrets.ANTHROPIC_API_KEY }}",
-                  "track_progress": true,
-                  "prompt": "REPO: ${{ github.repository }}\nPR NUMBER: ${{ github.event.pull_request.number }}\n\nReview this pull request and post your findings as ONE top-level\nGitHub PR comment via `gh pr comment`. Do NOT post inline review\ncomments (they create review threads that block auto-merge under\nthis repo's branch protection).\nRead the diff with `gh pr diff` and the description with `gh pr view`.\nFocus on:\n- Correctness bugs\n- Security issues (injection, secrets, unsafe input handling)\n- TypeScript type-safety problems\n- Missing or weak test coverage for the change\n\nIn the comment, reference specific locations as `path/to/file.ts:123`\ncode-formatted paths with a short quoted snippet, so findings are easy\nto locate without inline threads. Order findings most-severe first.\nBe brief; skip nitpicks and style unless they affect correctness. If\nthe PR looks good, say so briefly. If a prior review comment of yours\nexists on this PR, post a fresh comment covering only what changed\nsince (do not repeat findings that were addressed).\n",
-                  "claude_args": "--model claude-sonnet-4-6\n--max-turns 40\n--allowedTools \"Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)\"\n"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Verify the review actually ran",
-                "if": "always() && steps.claude.conclusion != 'skipped'",
-                "env": {
-                  "EXECUTION_FILE": "${{ steps.claude.outputs.execution_file }}"
-                },
-                "run": "set -uo pipefail\nif [ -z \"${EXECUTION_FILE}\" ] || [ ! -f \"${EXECUTION_FILE}\" ]; then\n  echo \"::error::No Claude execution log was produced — the review agent never reported a result.\"\n  exit 1\nfi\n\nresult=\"$(jq -c '[.[] | select(.type == \"result\")] | last // empty' \"${EXECUTION_FILE}\")\"\nif [ -z \"${result}\" ]; then\n  echo \"::error::Claude execution log contains no result message — the agent did not finish.\"\n  exit 1\nfi\n\nis_error=\"$(jq -r '.is_error // false' <<<\"${result}\")\"\nsubtype=\"$(jq -r '.subtype // \"unknown\"' <<<\"${result}\")\"\nif [ \"${is_error}\" = \"true\" ] || [ \"${subtype}\" != \"success\" ]; then\n  echo \"::error::Claude review failed (subtype=${subtype}, is_error=${is_error}). No review was posted.\"\n  echo \"--- agent error detail (truncated) ---\"\n  jq -r '.result // .error // \"no detail in result message\"' <<<\"${result}\" | head -c 2000\n  echo\n  exit 1\nfi\n\nturns=\"$(jq -r '.num_turns // 0' <<<\"${result}\")\"\ncost=\"$(jq -r '.total_cost_usd // 0' <<<\"${result}\")\"\necho \"Review completed: ${turns} turn(s), \\$${cost}.\"\n"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    "codeql.yml": {
-      "classification": "safe",
-      "descriptor": {
-        "name": "CodeQL",
-        "on": {
-          "push": {
-            "branches": ["main"]
-          },
-          "pull_request": {
-            "branches": ["main"]
-          },
-          "schedule": [
-            {
-              "cron": "23 4 * * 1"
-            }
-          ]
-        },
-        "permissions": {
-          "contents": "read"
-        }
-      },
-      "jobs": [
-        {
-          "classification": "safe",
-          "id": "analyze",
-          "descriptor": {
-            "name": "Analyze (javascript-typescript)",
-            "permissions": {
-              "contents": "read",
-              "security-events": "write",
-              "actions": "read"
-            },
-            "runs-on": "ubuntu-latest",
-            "timeout-minutes": 30
-          },
-          "steps": [
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Checkout",
-                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Initialize CodeQL",
-                "uses": "github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3",
-                "with": {
-                  "languages": "javascript-typescript",
-                  "build-mode": "none"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Perform CodeQL Analysis",
-                "uses": "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3",
-                "with": {
-                  "category": "/language:javascript-typescript"
-                }
-              }
-            }
-          ]
-        }
-      ]
-    },
     "publish-chart.yml": {
       "classification": "safe",
       "descriptor": {
@@ -1801,36 +1801,27 @@
       "descriptor": {
         "name": "Published Artifact Verification",
         "on": {
+          "schedule": [
+            {
+              "cron": "43 8 * * *"
+            }
+          ],
           "workflow_dispatch": {
             "inputs": {
+              "commitSha": {
+                "description": "Exact 40-character release commit SHA",
+                "required": true,
+                "type": "string"
+              },
+              "manifestSha256": {
+                "description": "Exact sealed manifest SHA-256",
+                "required": true,
+                "type": "string"
+              },
               "version": {
-                "description": "npm version or dist-tag to verify",
+                "description": "Exact release version",
                 "required": true,
-                "default": "latest"
-              },
-              "packageSet": {
-                "description": "Package set to verify",
-                "required": true,
-                "default": "memory-pgvector-core",
-                "type": "choice",
-                "options": [
-                  "memory-pgvector-core",
-                  "typescript-tooling",
-                  "docker-sandbox",
-                  "public"
-                ]
-              },
-              "runPgvector": {
-                "description": "Run Docker pgvector smoke",
-                "required": true,
-                "default": true,
-                "type": "boolean"
-              },
-              "runOpenAI": {
-                "description": "Run real OpenAI embedding smoke",
-                "required": true,
-                "default": false,
-                "type": "boolean"
+                "type": "string"
               }
             }
           }
@@ -1842,31 +1833,84 @@
       "jobs": [
         {
           "classification": "safe",
-          "id": "verify",
+          "id": "coordinate",
           "descriptor": {
-            "env": {
-              "DAWN_PACKAGE_SET": "${{ inputs.packageSet }}",
-              "DAWN_PUBLISHED_VERSION": "${{ inputs.version }}",
-              "DAWN_RUN_PGVECTOR": "${{ inputs.runPgvector }}"
+            "if": "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' &&\n  (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||\n    github.ref == format('refs/tags/v{0}', inputs.version)))",
+            "outputs": {
+              "mode": "${{ steps.route.outputs.mode }}"
             },
-            "runs-on": "ubuntu-latest",
+            "permissions": {
+              "actions": "write",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 5
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout trusted default-branch coordinator",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ github.event.repository.default_branch }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_COMMIT_SHA": "${{ inputs.commitSha }}",
+                  "INPUT_MANIFEST_SHA256": "${{ inputs.manifestSha256 }}",
+                  "INPUT_VERSION": "${{ inputs.version }}"
+                },
+                "id": "route",
+                "name": "Route exact independent audit",
+                "run": "node scripts/release/independent-audit-coordinator.mjs \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "verify-draft",
+          "descriptor": {
+            "if": "github.event_name == 'workflow_dispatch' && needs.coordinate.outputs.mode == 'draft' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == inputs.commitSha",
+            "name": "verify",
+            "needs": "coordinate",
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
             "timeout-minutes": 30
           },
           "steps": [
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Checkout",
-                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Setup pnpm",
-                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
-                  "version": "10.33.0"
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.ref }}"
                 }
               }
             },
@@ -1876,108 +1920,69 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "node-version": "24.19.0"
                 }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install",
-                "run": "pnpm install --frozen-lockfile"
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Registry and tarball verification",
-                "run": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\""
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Published install/runtime smoke",
-                "if": "${{ !inputs.runOpenAI }}",
-                "shell": "bash",
-                "run": "args=(--version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\")\nif [ \"$DAWN_RUN_PGVECTOR\" = \"true\" ] && [ \"$DAWN_PACKAGE_SET\" != \"typescript-tooling\" ] && [ \"$DAWN_PACKAGE_SET\" != \"docker-sandbox\" ]; then\n  args+=(--pgvector)\nfi\npnpm published:smoke -- \"${args[@]}\"\n"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Published install/runtime smoke with OpenAI",
-                "if": "${{ inputs.runOpenAI }}",
                 "env": {
-                  "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}"
+                  "GITHUB_TOKEN": "${{ github.token }}"
                 },
-                "shell": "bash",
-                "run": "if [ \"$DAWN_PACKAGE_SET\" = \"typescript-tooling\" ] || [ \"$DAWN_PACKAGE_SET\" = \"docker-sandbox\" ]; then\n  echo \"$DAWN_PACKAGE_SET does not support the OpenAI runtime smoke\" >&2\n  exit 1\nfi\n\nif [ \"$DAWN_RUN_PGVECTOR\" != \"true\" ]; then\n  echo \"runOpenAI=true requires runPgvector=true\" >&2\n  exit 1\nfi\n\nif [ -z \"${OPENAI_API_KEY}\" ]; then\n  echo \"OPENAI_API_KEY secret is required when runOpenAI=true\" >&2\n  exit 1\nfi\n\nargs=(--version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\" --pgvector --openai)\npnpm published:smoke -- \"${args[@]}\"\n"
+                "name": "Independently audit the exact draft release",
+                "run": "node scripts/release/independent-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
               }
-            }
-          ]
-        }
-      ]
-    },
-    "release-shadow.yml": {
-      "classification": "safe",
-      "descriptor": {
-        "name": "Release Shadow",
-        "on": {
-          "workflow_dispatch": {
-            "inputs": {
-              "version": {
-                "description": "Optional exact release version; must be paired with commitSha",
-                "required": false,
-                "type": "string"
-              },
-              "commitSha": {
-                "description": "Optional 40-character candidate SHA; must be paired with version",
-                "required": false,
-                "type": "string"
-              }
-            }
-          },
-          "schedule": [
+            },
             {
-              "cron": "17 7 * * *"
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload exact audit result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "audit-result-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/audit-result.json"
+                }
+              }
             }
           ]
         },
-        "permissions": {
-          "contents": "read",
-          "actions": "read"
-        }
-      },
-      "jobs": [
         {
           "classification": "safe",
-          "id": "shadow",
+          "id": "verify-published",
           "descriptor": {
-            "runs-on": "ubuntu-latest",
-            "timeout-minutes": 15
+            "if": "github.event_name == 'workflow_dispatch' && needs.coordinate.outputs.mode == 'published' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == inputs.commitSha",
+            "needs": "coordinate",
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 30
           },
           "steps": [
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Checkout",
+                "name": "Checkout exact annotated tag",
                 "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
                   "fetch-depth": 0,
-                  "ref": "main",
-                  "persist-credentials": false
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Setup pnpm",
-                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
-                "with": {
-                  "version": "10.33.0"
+                  "persist-credentials": false,
+                  "ref": "${{ github.ref }}"
                 }
               }
             },
@@ -1987,46 +1992,40 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "node-version": "24.19.0"
                 }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install root release tooling",
-                "run": "pnpm install --filter . --frozen-lockfile --ignore-scripts"
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Validate release inventory",
-                "run": "pnpm check:release-inventory"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Reconcile release state in shadow mode",
                 "env": {
-                  "VERSION": "${{ inputs.version || '' }}",
-                  "COMMIT_SHA": "${{ inputs.commitSha || '' }}",
                   "GITHUB_TOKEN": "${{ github.token }}"
                 },
-                "run": "if [[ -n \"$VERSION\" && -z \"$COMMIT_SHA\" ]] || [[ -z \"$VERSION\" && -n \"$COMMIT_SHA\" ]]; then\n  echo \"version and commitSha must be supplied together\" >&2\n  exit 2\nfi\nargs=(--repository cacheplane/dawnai --format markdown)\nif [[ -n \"$VERSION\" ]]; then\n  args+=(--version \"$VERSION\" --commit-sha \"$COMMIT_SHA\")\nfi\npnpm release:shadow \"${args[@]}\" >> \"$GITHUB_STEP_SUMMARY\"\n"
+                "name": "Audit the published immutable release",
+                "run": "node scripts/release/post-publication-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Collect release preflight evidence",
-                "env": {
-                  "VERSION": "${{ inputs.version || '' }}",
-                  "GITHUB_TOKEN": "${{ github.token }}"
-                },
-                "run": "args=(--repository cacheplane/dawnai --workflow .github/workflows/release.yml --format markdown)\nif [[ -n \"$VERSION\" ]]; then\n  args+=(--version \"$VERSION\")\nfi\npnpm release:preflight \"${args[@]}\" >> \"$GITHUB_STEP_SUMMARY\"\n"
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload exact post-publication audit result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "audit-result-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/audit-result.json"
+                }
               }
             }
           ]
@@ -2036,11 +2035,46 @@
     "release.yml": {
       "classification": "safe",
       "descriptor": {
-        "concurrency": "${{ github.workflow }}-${{ github.ref }}",
+        "concurrency": {
+          "cancel-in-progress": false,
+          "group": "dawn-release-controller",
+          "queue": "max"
+        },
         "name": "Release",
         "on": {
           "push": {
             "branches": ["main"]
+          },
+          "schedule": [
+            {
+              "cron": "17 7 * * *"
+            }
+          ],
+          "workflow_dispatch": {
+            "inputs": {
+              "commitSha": {
+                "description": "Exact 40-character candidate SHA",
+                "required": true,
+                "type": "string"
+              },
+              "operation": {
+                "default": "reconcile",
+                "description": "Reconcile or permanently abandon this candidate",
+                "options": ["reconcile", "abandon"],
+                "required": true,
+                "type": "choice"
+              },
+              "reason": {
+                "description": "Required only for protected abandonment",
+                "required": false,
+                "type": "string"
+              },
+              "version": {
+                "description": "Exact release version",
+                "required": true,
+                "type": "string"
+              }
+            }
           }
         },
         "permissions": {
@@ -2050,28 +2084,681 @@
       "jobs": [
         {
           "classification": "safe",
-          "id": "release",
+          "id": "abandon",
           "descriptor": {
-            "env": {
-              "NPM_CONFIG_PROVENANCE": "true"
-            },
+            "environment": "release-abandonment",
+            "if": "github.event_name == 'workflow_dispatch' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'abandon' && contains(fromJSON('[\"CANDIDATE_TAGGED\",\"ARTIFACTS_PREPARED\",\"ARTIFACTS_ATTESTED\",\"CANDIDATE_ESCROWED\"]'), needs.detect.outputs.state)",
+            "needs": ["detect", "tag"],
             "permissions": {
-              "contents": "write",
-              "pull-requests": "write",
-              "id-token": "write",
-              "attestations": "write"
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
             },
-            "runs-on": "ubuntu-latest",
-            "timeout-minutes": 30
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 20
           },
           "steps": [
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Checkout",
+                "name": "Checkout exact candidate",
                 "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "with": {
-                  "fetch-depth": 0
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Derive fresh protected abandonment context",
+                "run": "node scripts/release/cli.mjs abandonment-context \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --output \"$RUNNER_TEMP/artifact-context.json\"\n"
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "REASON": "${{ inputs.reason }}"
+                },
+                "name": "Permanently abandon pre-publication candidate",
+                "run": "node scripts/release/cli.mjs abandon \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --reason \"$REASON\" \\\n  --artifact-context \"$RUNNER_TEMP/artifact-context.json\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "attest",
+          "descriptor": {
+            "if": "needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
+            "needs": ["detect", "hydrate", "tag"],
+            "outputs": {
+              "attestation_artifact_id": "${{ steps.evidence.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "write",
+              "contents": "read",
+              "id-token": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 15
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Seal provenance subjects",
+                "run": "node scripts/release/cli.mjs attestation-input \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --output \"$RUNNER_TEMP/attestation-input.txt\"\n"
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "id": "attest",
+                "name": "Attest exact release payload",
+                "uses": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+                "with": {
+                  "subject-checksums": "${{ runner.temp }}/attestation-input.txt"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Materialize canonical attestation evidence",
+                "run": "install -d -m 0700 -- \"$RUNNER_TEMP/attestation-evidence\"\ninstall -d -m 0700 -- \"$RUNNER_TEMP/attestation-evidence/bundles\"\nnode scripts/release/cli.mjs attestation-output \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --bundle \"${{ steps.attest.outputs.bundle-path }}\" \\\n  --attestation-set \"$RUNNER_TEMP/attestation-evidence/attestation-set.json\" \\\n  --attestation-bundles-dir \"$RUNNER_TEMP/attestation-evidence/bundles\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "evidence",
+                "name": "Upload canonical attestation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "release-attestation-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/attestation-evidence"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "correlate-audit",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'complete-release-audit' || needs.record-audit-dispatch.result == 'success')",
+            "needs": ["detect", "hydrate", "record-audit-dispatch", "tag"],
+            "outputs": {
+              "audit_artifact_id": "${{ steps.audit-result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 35
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'complete-release-audit' }}",
+                "name": "Download new audit dispatch receipt by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.record-audit-dispatch.outputs.dispatch_artifact_id }}",
+                  "path": "${{ runner.temp }}/new-dispatch"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'complete-release-audit' }}",
+                "name": "Select new audit dispatch receipt",
+                "run": "cp -- \"$RUNNER_TEMP/new-dispatch/audit-dispatch.json\" \"$RUNNER_TEMP/runtime/audit-dispatch.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Wait for the exact audit run",
+                "run": "node scripts/release/cli.mjs wait-audit \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/runtime/audit-dispatch.json\" \\\n  --output \"$RUNNER_TEMP/audit-result.json\"\n"
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Correlate and attach exact audit result",
+                "run": "node scripts/release/cli.mjs correlate-audit \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/runtime/audit-dispatch.json\" \\\n  --audit-result \"$RUNNER_TEMP/audit-result.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "audit-result",
+                "name": "Upload exact correlated audit result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "correlated-audit-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/audit-result.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Require successful independent audit",
+                "run": "node -e 'const r=require(process.argv[1]);if(r.conclusion!==\"success\")process.exit(1)' \"$RUNNER_TEMP/audit-result.json\""
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "detect",
+          "descriptor": {
+            "outputs": {
+              "candidate_sha": "${{ steps.observe.outputs.candidate_sha }}",
+              "candidate_version": "${{ steps.observe.outputs.candidate_version }}",
+              "disposition": "${{ steps.observe.outputs.disposition }}",
+              "next_transition": "${{ steps.observe.outputs.next_transition }}",
+              "observation_artifact_id": "${{ steps.observation.outputs.artifact-id }}",
+              "state": "${{ steps.observe.outputs.state }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.event.repository.default_branch }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "COMMIT_SHA": "${{ inputs.commitSha }}",
+                  "VERSION": "${{ inputs.version }}"
+                },
+                "name": "Seal the production event",
+                "run": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" ]]; then\n  node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA}}))' \"$RUNNER_TEMP/release-event.json\"\nelse\n  cp \"$GITHUB_EVENT_PATH\" \"$RUNNER_TEMP/release-event.json\"\nfi\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "observe",
+                "name": "Observe one production transition",
+                "run": "node scripts/release/cli.mjs observe \\\n  --event \"$RUNNER_TEMP/release-event.json\" \\\n  --report \"$RUNNER_TEMP/production-observation.json\" \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "observation",
+                "name": "Preserve production observation",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "production-observation-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/production-observation.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "DISPOSITION": "${{ steps.observe.outputs.disposition }}"
+                },
+                "name": "Require a non-ambiguous route",
+                "run": "test \"$DISPOSITION\" != \"blocked\""
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "dispatch-audit",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'dispatch-release-audit' || needs.reconcile-smokes.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-smokes", "tag"],
+            "outputs": {
+              "dispatch_artifact_id": "${{ steps.receipt.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "write",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Dispatch exact independent audit",
+                "run": "node scripts/release/cli.mjs dispatch-audit \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --output \"$RUNNER_TEMP/audit-dispatch.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "receipt",
+                "name": "Upload direct audit dispatch receipt",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "audit-dispatch-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/audit-dispatch.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "escrow",
+          "descriptor": {
+            "if": "needs.attest.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
+            "needs": ["attest", "detect", "hydrate", "tag"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download attestation evidence by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.attest.outputs.attestation_artifact_id }}",
+                  "path": "${{ runner.temp }}/attestation"
+                }
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Escrow exact base assets in draft Release",
+                "run": "node scripts/release/cli.mjs escrow \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --attestation-set \"$RUNNER_TEMP/attestation/attestation-set.json\" \\\n  --attestation-bundles-dir \"$RUNNER_TEMP/attestation/bundles\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "hydrate",
+          "descriptor": {
+            "if": "always() && needs.detect.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition != 'prepare-artifacts' || needs.prepare.result == 'success')",
+            "needs": ["detect", "prepare", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.runtime.outputs.artifact-id }}",
+              "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}",
+                "name": "Download newly prepared payload",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.prepare.outputs.payload_artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime/payload"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}",
+                "name": "Download newly prepared release record",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.prepare.outputs.handoff_artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "COMMIT_SHA": "${{ needs.detect.outputs.candidate_sha }}",
+                  "VERSION": "${{ needs.detect.outputs.candidate_version }}"
+                },
+                "if": "${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}",
+                "name": "Write newly prepared candidate identity",
+                "run": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1],JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:\"CI\",ciCheck:\"validate\",publisherWorkflow:\".github/workflows/release.yml\"})+\"\\n\")' \"$RUNNER_TEMP/runtime/candidate.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'prepare-artifacts' }}",
+                "name": "Download durable production observation",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.detect.outputs.observation_artifact_id }}",
+                  "path": "${{ runner.temp }}/observation"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'prepare-artifacts' }}",
+                "name": "Recover exact durable transition inputs",
+                "run": "node scripts/release/workflow-recovery.mjs \\\n  --report \"$RUNNER_TEMP/observation/production-observation.json\" \\\n  --output-dir \"$RUNNER_TEMP/runtime\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "recovered-artifact",
+                "if": "${{ needs.detect.outputs.next_transition == 'attest-artifacts' }}",
+                "name": "Read recovered prepared artifact identity",
+                "run": "node -e 'const fs=require(\"node:fs\"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,\"artifact_id=\"+r.actionsArtifact.id+\"\\nprepare_run_id=\"+r.actionsArtifact.prepareRunId+\"\\n\")' \"$RUNNER_TEMP/runtime/release-record.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition == 'attest-artifacts' }}",
+                "name": "Download recovered un-attested payload by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ steps.recovered-artifact.outputs.artifact_id }}",
+                  "github-token": "${{ github.token }}",
+                  "path": "${{ runner.temp }}/runtime/payload",
+                  "run-id": "${{ steps.recovered-artifact.outputs.prepare_run_id }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "if": "needs.detect.outputs.next_transition != 'prepare-artifacts' && needs.detect.outputs.next_transition != 'attest-artifacts'",
+                "name": "Resolve recovered attested payload",
+                "run": "node scripts/release/artifact-store.mjs resolve \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --output-dir \"$RUNNER_TEMP/runtime/payload\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "identity",
+                "name": "Verify recovered runtime identity",
+                "run": "node scripts/release/cli.mjs attestation-input \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --output \"$RUNNER_TEMP/runtime-subjects.txt\"\nnode -e 'const fs=require(\"node:fs\"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,\"manifest_sha256=\"+r.manifestSha256+\"\\n\")' \"$RUNNER_TEMP/runtime/release-record.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "runtime",
+                "name": "Upload exact runtime inputs",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "release-runtime-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "prepare",
+          "descriptor": {
+            "if": "needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && needs.detect.outputs.next_transition == 'prepare-artifacts'",
+            "needs": ["detect", "tag"],
+            "outputs": {
+              "handoff_artifact_id": "${{ steps.handoff.outputs.artifact-id }}",
+              "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}",
+              "payload_artifact_id": "${{ steps.payload.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 40
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
                 }
               }
             },
@@ -2079,7 +2766,7 @@
               "classification": "safe",
               "descriptor": {
                 "name": "Setup pnpm",
-                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
                 "with": {
                   "version": "10.33.0"
                 }
@@ -2091,127 +2778,1000 @@
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
-                  "cache": "pnpm"
+                  "cache": "pnpm",
+                  "node-version": "24.19.0"
                 }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Install",
-                "run": "pnpm install --frozen-lockfile"
+                "name": "Install exact workspace",
+                "run": "\"$PNPM_HOME/pnpm\" install --frozen-lockfile"
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Validate Release Candidate",
-                "run": "pnpm ci:validate"
+                "name": "Download production observation",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.detect.outputs.observation_artifact_id }}",
+                  "path": "${{ runner.temp }}/observation"
+                }
               }
             },
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Setup Node.js for publishing",
+                "name": "Derive trusted preparation handoff",
+                "run": "node scripts/release/workflow-handoff.mjs \\\n  --report \"$RUNNER_TEMP/observation/production-observation.json\" \\\n  --root \"$GITHUB_WORKSPACE\" \\\n  --output \"$RUNNER_TEMP/preparation-handoff.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Prepare and verify immutable package payload",
+                "run": "node scripts/release/cli.mjs prepare \\\n  --handoff \"$RUNNER_TEMP/preparation-handoff.json\" \\\n  --root \"$GITHUB_WORKSPACE\" \\\n  --output-dir \"$RUNNER_TEMP/release-payload\" \\\n  --candidate-output \"$RUNNER_TEMP/candidate.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "identity",
+                "name": "Read sealed payload identity",
+                "run": "node -e 'const fs=require(\"node:fs\"),c=require(\"node:crypto\"),m=fs.readFileSync(process.argv[1]),j=JSON.parse(m),s=j.commitSha.slice(0,12);fs.appendFileSync(process.env.GITHUB_OUTPUT,\"artifact_name=\"+j.artifact.name+\"\\nhandoff_name=release-record-v\"+j.version+\"-\"+s+\"\\nmanifest_sha256=\"+c.createHash(\"sha256\").update(m).digest(\"hex\")+\"\\n\")' \"$RUNNER_TEMP/release-payload/manifest.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "payload",
+                "name": "Upload immutable payload",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.identity.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/release-payload"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Record immutable artifact identity",
+                "run": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1],JSON.stringify({artifactId:process.argv[2],artifactUrl:process.argv[3],artifactDigest:process.argv[4]}))' \\\n  \"$RUNNER_TEMP/artifact-upload-result.json\" \\\n  \"${{ steps.payload.outputs.artifact-id }}\" \\\n  \"${{ steps.payload.outputs.artifact-url }}\" \\\n  \"${{ steps.payload.outputs.artifact-digest }}\"\nnode scripts/release/cli.mjs record-artifact \\\n  --candidate \"$RUNNER_TEMP/candidate.json\" \\\n  --manifest \"$RUNNER_TEMP/release-payload/manifest.json\" \\\n  --artifact-upload-result \"$RUNNER_TEMP/artifact-upload-result.json\" \\\n  --output \"$GITHUB_WORKSPACE/release-record.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "handoff",
+                "name": "Upload exact release handoff",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.identity.outputs.handoff_name }}",
+                  "overwrite": false,
+                  "path": "release-record.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "publish-npm",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\"]'), needs.detect.outputs.next_transition) && (!contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition) || needs.escrow.result == 'success')",
+            "needs": ["detect", "escrow", "hydrate", "tag"],
+            "outputs": {
+              "npm_artifact_id": "${{ steps.npm.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read",
+              "id-token": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout sparse publisher",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}",
+                  "sparse-checkout": "scripts/release/adapter-normalize.mjs\nscripts/release/adapters/github.mjs\nscripts/release/adapters/http.mjs\nscripts/release/adapters/npm.mjs\nscripts/release/artifact-store.mjs\nscripts/release/limits.mjs\nscripts/release/manifest.mjs\nscripts/release/npm-audit.mjs\nscripts/release/npm-evidence.mjs\nscripts/release/process-runner.mjs\nscripts/release/publisher.mjs\nscripts/release/release-record.mjs\nscripts/release/semver.mjs\nscripts/release/topology.mjs\n",
+                  "sparse-checkout-cone-mode": false
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
-                  "node-version": "24.17.0",
+                  "node-version": "24.19.0",
                   "registry-url": "https://registry.npmjs.org"
                 }
               }
             },
             {
-              "classification": "publication",
+              "classification": "safe",
               "descriptor": {
-                "name": "Create Release Pull Request or Publish",
-                "id": "changesets",
-                "uses": "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+                "name": "Assert exact npm runtime",
+                "run": "ACTUAL_NPM_VERSION=\"$(npm --version)\"\n[[ \"$ACTUAL_NPM_VERSION\" == \"11.17.0\" ]]\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                 "with": {
-                  "version": "pnpm run version",
-                  "publish": "pnpm release:publish",
-                  "title": "Version Packages",
-                  "commit": "Version Packages",
-                  "createGithubReleases": true
-                },
-                "env": {
-                  "GITHUB_TOKEN": "${{ secrets.RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
                 }
               }
             },
             {
               "classification": "publication",
               "descriptor": {
-                "name": "Attest release tarballs",
-                "id": "attest",
-                "if": "${{ hashFiles('release-artifacts/*.tgz') != '' }}",
-                "uses": "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "NPM_CONFIG_PROVENANCE": "true"
+                },
+                "name": "Publish and verify npm serially",
+                "run": "node scripts/release/publisher.mjs \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --report \"$RUNNER_TEMP/npm-evidence.json\" \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "npm",
+                "name": "Upload exact npm evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 "with": {
-                  "subject-path": "release-artifacts/*.tgz"
+                  "if-no-files-found": "error",
+                  "name": "npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/npm-evidence.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "publish-release",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'publish-github-release' || needs.correlate-audit.result == 'success')",
+            "needs": ["correlate-audit", "detect", "hydrate", "tag"],
+            "permissions": {
+              "actions": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'publish-github-release' }}",
+                "name": "Download newly correlated audit by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.correlate-audit.outputs.audit_artifact_id }}",
+                  "path": "${{ runner.temp }}/new-audit"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'publish-github-release' }}",
+                "name": "Select newly correlated audit result",
+                "run": "cp -- \"$RUNNER_TEMP/new-audit/audit-result.json\" \"$RUNNER_TEMP/runtime/audit-result.json\""
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Publish one immutable consolidated Release",
+                "run": "node scripts/release/cli.mjs publish-release \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --audit-result \"$RUNNER_TEMP/runtime/audit-result.json\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "reconcile-npm",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'reconcile-npm-evidence' || needs.publish-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "publish-npm", "tag"],
+            "permissions": {
+              "actions": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'reconcile-npm-evidence' }}",
+                "name": "Download newly published npm evidence by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.publish-npm.outputs.npm_artifact_id }}",
+                  "path": "${{ runner.temp }}/published-npm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ needs.detect.outputs.next_transition != 'reconcile-npm-evidence' }}",
+                "name": "Select newly published npm evidence",
+                "run": "cp -- \"$RUNNER_TEMP/published-npm/npm-evidence.json\" \"$RUNNER_TEMP/runtime/npm-evidence.json\""
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Reconcile verified npm evidence",
+                "run": "node scripts/release/cli.mjs reconcile-npm \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --npm-evidence \"$RUNNER_TEMP/runtime/npm-evidence.json\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "reconcile-smokes",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && needs.smoke-metadata.result == 'success' && needs.smoke-published-harness.result == 'success' && needs.smoke-runtime-targets.result == 'success' && needs.smoke-scaffold.result == 'success' && needs.smoke-storage.result == 'success'",
+            "needs": [
+              "detect",
+              "hydrate",
+              "publish-npm",
+              "reconcile-npm",
+              "smoke-metadata",
+              "smoke-published-harness",
+              "smoke-runtime-targets",
+              "smoke-scaffold",
+              "smoke-storage",
+              "tag"
+            ],
+            "permissions": {
+              "actions": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 15
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact smoke results by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.smoke-metadata.outputs.artifact_id }}, ${{ needs.smoke-published-harness.outputs.artifact_id }}, ${{ needs.smoke-runtime-targets.outputs.artifact_id }}, ${{ needs.smoke-scaffold.outputs.artifact_id }}, ${{ needs.smoke-storage.outputs.artifact_id }}",
+                  "merge-multiple": true,
+                  "path": "${{ runner.temp }}/smoke-results"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\"]'), needs.detect.outputs.next_transition) }}",
+                "name": "Download newly published npm evidence by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.publish-npm.outputs.npm_artifact_id }}",
+                  "path": "${{ runner.temp }}/published-npm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "${{ contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\"]'), needs.detect.outputs.next_transition) }}",
+                "name": "Select newly published npm evidence",
+                "run": "cp -- \"$RUNNER_TEMP/published-npm/npm-evidence.json\" \"$RUNNER_TEMP/runtime/npm-evidence.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Isolate the exact five smoke receipts",
+                "run": "test -f \"$RUNNER_TEMP/smoke-results/metadata.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/published-harness.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/runtime-targets.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/scaffold.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/storage.json\"\n"
+              }
+            },
+            {
+              "classification": "publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Reconcile exact smoke evidence",
+                "run": "node scripts/release/cli.mjs reconcile-smokes \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --npm-evidence \"$RUNNER_TEMP/runtime/npm-evidence.json\" \\\n  --smoke-results \"$RUNNER_TEMP/smoke-results\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "record-audit-dispatch",
+          "descriptor": {
+            "if": "needs.dispatch-audit.result == 'success' && needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition)",
+            "needs": ["detect", "dispatch-audit", "hydrate", "tag"],
+            "outputs": {
+              "dispatch_artifact_id": "${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download audit dispatch receipt by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}",
+                  "path": "${{ runner.temp }}/dispatch"
                 }
               }
             },
             {
               "classification": "publication",
               "descriptor": {
-                "name": "Upload signed release assets",
-                "if": "${{ steps.attest.outputs.bundle-path != '' }}",
                 "env": {
-                  "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
-                  "ATTESTATION_BUNDLE": "${{ steps.attest.outputs.bundle-path }}"
+                  "GITHUB_TOKEN": "${{ github.token }}"
                 },
-                "run": "node scripts/upload-release-assets.mjs"
+                "name": "Record exact audit dispatch",
+                "run": "node scripts/release/cli.mjs record-audit-dispatch \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/dispatch/audit-dispatch.json\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "smoke-metadata",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 25
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "name": "Verify exact public metadata",
+                "run": "node scripts/published-artifact-verify.mjs \\\n  --release-mode \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --result \"$RUNNER_TEMP/metadata.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload raw metadata result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "smoke-result-metadata-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/metadata.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "smoke-published-harness",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Smoke the published harness",
+                "run": "node scripts/release/smoke/published-harness.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/published-harness.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload raw published-harness result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "smoke-result-published-harness-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/published-harness.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "smoke-runtime-targets",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 25
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Smoke published runtime targets",
+                "run": "node scripts/release/smoke/runtime-targets.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/runtime-targets.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload raw runtime-targets result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "smoke-result-runtime-targets-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/runtime-targets.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "smoke-scaffold",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 25
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Smoke exact public scaffold",
+                "run": "node scripts/release/smoke/scaffold.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/scaffold.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload raw scaffold result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "smoke-result-scaffold-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/scaffold.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "smoke-storage",
+          "descriptor": {
+            "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
+            "outputs": {
+              "artifact_id": "${{ steps.result.outputs.artifact-id }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 40
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert exact npm runtime",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download exact runtime inputs by ID",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.hydrate.outputs.artifact_id }}",
+                  "path": "${{ runner.temp }}/runtime"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Smoke published storage backends",
+                "run": "node scripts/release/smoke/storage.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/storage.json\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "result",
+                "if": "${{ always() }}",
+                "name": "Upload raw storage result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "smoke-result-storage-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/storage.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "tag",
+          "descriptor": {
+            "if": "needs.detect.outputs.candidate_version != '' && needs.detect.outputs.disposition == 'would-transition'",
+            "needs": "detect",
+            "outputs": {
+              "continue": "${{ steps.route.outputs.continue }}"
+            },
+            "permissions": {
+              "actions": "write",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact candidate",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "OPERATION": "${{ inputs.operation }}",
+                  "REASON": "${{ inputs.reason }}"
+                },
+                "name": "Validate manual intent",
+                "run": "if [[ \"$OPERATION\" == \"reconcile\" && -n \"$REASON\" ]]; then\n  echo \"reason is forbidden for reconcile\" >&2\n  exit 2\nfi\nif [[ \"$OPERATION\" == \"abandon\" && -z \"$REASON\" ]]; then\n  echo \"reason is required for abandon\" >&2\n  exit 2\nfi\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "COMMIT_SHA": "${{ needs.detect.outputs.candidate_sha }}",
+                  "VERSION": "${{ needs.detect.outputs.candidate_version }}"
+                },
+                "name": "Write exact candidate identity",
+                "run": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:\"CI\",ciCheck:\"validate\",publisherWorkflow:\".github/workflows/release.yml\"}))' \"$RUNNER_TEMP/candidate.json\"\n"
               }
             },
             {
               "classification": "publication",
               "descriptor": {
-                "name": "Backfill tags/releases for bootstrapped packages",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
+                "if": "${{ needs.detect.outputs.next_transition == 'create-candidate-tag' }}",
+                "name": "Create or validate annotated candidate tag",
+                "run": "node scripts/release/cli.mjs tag --candidate \"$RUNNER_TEMP/candidate.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
                 "env": {
-                  "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
+                  "COMMIT_SHA": "${{ needs.detect.outputs.candidate_sha }}",
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "OPERATION": "${{ inputs.operation }}",
+                  "VERSION": "${{ needs.detect.outputs.candidate_version }}"
                 },
-                "run": "node scripts/backfill-release-tags.mjs"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Read published version",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
-                "run": "DAWN_PUBLISHED_VERSION=\"$(node -p \"require('./packages/core/package.json').version\")\"\nprintf 'DAWN_PUBLISHED_VERSION=%s\\n' \"$DAWN_PUBLISHED_VERSION\" >> \"$GITHUB_ENV\"\n"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Verify published TypeScript tooling",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
-                "run": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Smoke published TypeScript tooling",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
-                "run": "pnpm published:smoke -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set typescript-tooling"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Verify published Docker sandbox",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
-                "run": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Smoke published Docker sandbox PID recovery",
-                "if": "${{ steps.changesets.outputs.published == 'true' }}",
-                "run": "pnpm published:smoke -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set docker-sandbox"
+                "id": "route",
+                "name": "Continue at the exact tag or relay once",
+                "run": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\nif [[ \"$OPERATION\" == \"abandon\" ]]; then\n  echo \"abandonment must be dispatched at refs/tags/v${VERSION}\" >&2\n  exit 2\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
               }
             }
           ]
@@ -2269,9 +3829,9 @@
                 "name": "Run Scorecard",
                 "uses": "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc",
                 "with": {
+                  "publish_results": true,
                   "results_file": "scorecard.sarif",
-                  "results_format": "sarif",
-                  "publish_results": true
+                  "results_format": "sarif"
                 }
               }
             },
@@ -2282,6 +3842,90 @@
                 "uses": "github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3",
                 "with": {
                   "sarif_file": "scorecard.sarif"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "version-pr.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "name": "Version Packages",
+        "on": {
+          "push": {
+            "branches": ["main"]
+          }
+        },
+        "permissions": {
+          "contents": "write",
+          "pull-requests": "write"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "version",
+          "descriptor": {
+            "permissions": {
+              "contents": "write",
+              "pull-requests": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "\"$PNPM_HOME/pnpm\" install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ secrets.RELEASE_GITHUB_TOKEN }}"
+                },
+                "name": "Open or update Version Packages pull request",
+                "uses": "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+                "with": {
+                  "commit": "Version Packages",
+                  "title": "Version Packages",
+                  "version": "pnpm run version"
                 }
               }
             }

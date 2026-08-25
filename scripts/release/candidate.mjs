@@ -15,6 +15,7 @@ import {
 } from "./terminal-records.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
+const PRODUCTION_MAIN_REF = "refs/remotes/origin/main"
 const EXPECTED_PACKAGE_COUNT = 21
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
@@ -65,7 +66,10 @@ async function discoverManagedCandidateDetails({ ref, inventory, git, marker }) 
     throw new TypeError("Candidate ref did not resolve to one exact commit")
   }
   const commitSha = history[0]
-  const onMain = await git.isAncestor({ ancestor: commitSha, descendant: "refs/heads/main" })
+  const onMain = await git.isAncestor({
+    ancestor: commitSha,
+    descendant: PRODUCTION_MAIN_REF,
+  })
   if (onMain !== true) throw new Error(`Candidate SHA ${commitSha} is not reachable from main`)
   const parentSha = await git.firstParent(commitSha)
   if (!isSha(parentSha)) throw new TypeError("Candidate first parent is not an exact commit")
@@ -204,7 +208,10 @@ export async function discoverScheduledCandidate({
     })
   }
 
-  const history = await git.listFirstParentHistory({ ref: "main", maxCount: 1000 })
+  const history = await git.listFirstParentHistory({
+    ref: "main",
+    maxCount: 1000,
+  })
   if (!Array.isArray(history) || !history.every(isSha)) {
     throw new TypeError("First-parent main history is malformed")
   }
@@ -216,7 +223,12 @@ export async function discoverScheduledCandidate({
       continue
     }
     activeEpochStarted = true
-    const discovery = await discoverManagedCandidate({ ref: sha, inventory, git, marker })
+    const discovery = await discoverManagedCandidate({
+      ref: sha,
+      inventory,
+      git,
+      marker,
+    })
     if (discovery.state === ReleaseState.CANDIDATE_VALIDATED) versionCandidates.push(discovery)
   }
   versionCandidates.sort((left, right) => {
@@ -238,7 +250,11 @@ export async function discoverScheduledCandidate({
 
   const newest = versionCandidates[0]
   if (newest === undefined || tagsByName.has(`v${newest.candidate.version}`)) return noCandidate()
-  return arbitrateCandidate({ candidate: newest, managedReleases: tagged, registryLatest: [] })
+  return arbitrateCandidate({
+    candidate: newest,
+    managedReleases: tagged,
+    registryLatest: [],
+  })
 }
 
 export async function waitForRequiredCi({ sha, github, attempts, delayMs, delay = wait }) {
@@ -271,7 +287,11 @@ export async function waitForRequiredCi({ sha, github, attempts, delayMs, delay 
 }
 
 export function arbitrateCandidate({ candidate, managedReleases, registryLatest }) {
-  return planCandidateArbitration({ candidate, managedReleases, registryLatest })
+  return planCandidateArbitration({
+    candidate,
+    managedReleases,
+    registryLatest,
+  })
 }
 
 export function decideInvocation({
@@ -402,7 +422,9 @@ async function inspectManagedReleases({
       throw new Error(`Managed GitHub Release ${tag} is not an active release candidate`)
     }
 
-    const assetResult = await github.listReleaseAssets({ releaseId: release.id })
+    const assetResult = await github.listReleaseAssets({
+      releaseId: release.id,
+    })
     const assets = presentList(assetResult, `assets for ${tag}`)
     const abandonmentState = await inspectAbandonmentRelease({
       release,
@@ -648,10 +670,16 @@ async function inspectAbandonmentRelease({
       github,
       tombstones[0],
       `abandonment record for ${tagIdentity.tag}`,
-      { maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes, includeBytes: true },
+      {
+        maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
+        includeBytes: true,
+      },
     )
     tombstone = parseAbandonmentRecord(downloaded.value, {
-      candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
+      candidate: {
+        version: tagIdentity.version,
+        commitSha: tagIdentity.commitSha,
+      },
       environment: abandonmentEnvironment,
       packageNames: CANONICAL_PACKAGE_NAMES,
     })
@@ -684,7 +712,10 @@ async function inspectAbandonmentRelease({
         verifyTerminalAbandonment === undefined
           ? false
           : await verifyTerminalAbandonment({
-              candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
+              candidate: {
+                version: tagIdentity.version,
+                commitSha: tagIdentity.commitSha,
+              },
               release: {
                 id: release.id,
                 tag: tagIdentity.tag,
@@ -1037,7 +1068,10 @@ function failedCi(sha, reason) {
 
 async function downloadJsonAsset(github, asset, label, { maximumBytes, includeBytes = false }) {
   if (!isPositiveId(asset?.id)) throw new TypeError(`${label} asset identity is invalid`)
-  const result = await github.downloadReleaseAsset({ assetId: asset.id, maximumBytes })
+  const result = await github.downloadReleaseAsset({
+    assetId: asset.id,
+    maximumBytes,
+  })
   if (!isExactAssetDownload(result)) {
     throw new Error(`${label} could not be read exactly`)
   }
@@ -1064,7 +1098,10 @@ async function downloadJsonAsset(github, asset, label, { maximumBytes, includeBy
 }
 
 async function downloadAssetBytes(github, asset, maximumBytes) {
-  const result = await github.downloadReleaseAsset({ assetId: asset.id, maximumBytes })
+  const result = await github.downloadReleaseAsset({
+    assetId: asset.id,
+    maximumBytes,
+  })
   if (!isExactAssetDownload(result)) {
     throw new Error(`Managed abandonment asset ${asset.name} could not be read exactly`)
   }
@@ -1137,7 +1174,9 @@ async function commitHasActiveMarker({ commitSha, git, marker }) {
   try {
     commitMarker = JSON.parse(source)
   } catch (error) {
-    throw new TypeError("Candidate controller marker is invalid JSON", { cause: error })
+    throw new TypeError("Candidate controller marker is invalid JSON", {
+      cause: error,
+    })
   }
   if (!markersEqual(commitMarker, marker)) {
     throw new Error("Candidate controller marker does not match the active release owner")
@@ -1262,7 +1301,10 @@ function presentList(result, label) {
   if (result?.status !== "PRESENT" || !Array.isArray(result.value)) {
     const error = new Error(`${label} could not be enumerated exactly`)
     if (typeof result?.code === "string" && /^[A-Z][A-Z0-9_-]{0,127}$/u.test(result.code)) {
-      Object.defineProperty(error, "code", { value: result.code, enumerable: true })
+      Object.defineProperty(error, "code", {
+        value: result.code,
+        enumerable: true,
+      })
     }
     throw error
   }
@@ -1278,7 +1320,10 @@ function presentObject(result, label) {
   ) {
     const error = new Error(`${label} could not be observed exactly`)
     if (typeof result?.code === "string" && /^[A-Z][A-Z0-9_-]{0,127}$/u.test(result.code)) {
-      Object.defineProperty(error, "code", { value: result.code, enumerable: true })
+      Object.defineProperty(error, "code", {
+        value: result.code,
+        enumerable: true,
+      })
     }
     throw error
   }

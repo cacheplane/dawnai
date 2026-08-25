@@ -519,7 +519,9 @@ test("the write-once executable cleans temporary files after write or link failu
     },
   }
 
-  const writeFailure = Object.assign(new Error("injected write failure"), { code: "EIO" })
+  const writeFailure = Object.assign(new Error("injected write failure"), {
+    code: "EIO",
+  })
   await assert.rejects(
     runPreparationHandoffCli(argv, {
       ...baseRuntime,
@@ -545,7 +547,9 @@ test("the write-once executable cleans temporary files after write or link failu
   )
   assert.deepEqual(await readdir(directory), ["production-report.json"])
 
-  const linkFailure = Object.assign(new Error("injected link failure"), { code: "EIO" })
+  const linkFailure = Object.assign(new Error("injected link failure"), {
+    code: "EIO",
+  })
   await assert.rejects(
     runPreparationHandoffCli(argv, {
       ...baseRuntime,
@@ -594,6 +598,7 @@ function productionReport() {
       error: null,
     },
     after: null,
+    recovery: null,
     diagnostics: [],
   }
 }
@@ -626,7 +631,10 @@ function taggedObservation() {
       })),
       manifestAsset: { name: "manifest.json", sha256: null },
       releaseRecordAsset: { name: "release-record.json", sha256: null },
-      manifestAttestationAsset: { name: "manifest.json.intoto.jsonl", sha256: null },
+      manifestAttestationAsset: {
+        name: "manifest.json.intoto.jsonl",
+        sha256: null,
+      },
       attestations: [
         ...packages.map((pkg) => ({
           name: pkg.attestationFilename,
@@ -718,7 +726,11 @@ function rawInventory() {
         path: `packages/package-${index}/package.json`,
         description: `retained raw manifest ${index}`,
         ...(index === 1
-          ? { dependencies: { [CANONICAL_RELEASE_PACKAGE_ORDER[0]]: "workspace:*" } }
+          ? {
+              dependencies: {
+                [CANONICAL_RELEASE_PACKAGE_ORDER[0]]: "workspace:*",
+              },
+            }
           : {}),
       })),
       {

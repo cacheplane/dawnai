@@ -86,8 +86,9 @@ Confirm all of the following:
 
 - `RELEASE_GITHUB_TOKEN` can create or update the Version Packages branch and
   pull request. `version-pr.yml` has no standard-token fallback.
-- `RELEASE_ADMIN_READ_TOKEN` can read the repository Immutable Releases setting;
-  it is exposed only to the exact guard step that needs it.
+- an owner verifies the repository Immutable Releases setting during the strict
+  preflight; release jobs do not receive a separate administrative token, and
+  final publication re-reads the resulting immutable Release;
 - the repository default Actions token is read-only, with job-local permissions
   granting each release effect;
 - the `release-abandonment` environment exists and requires owner approval;
