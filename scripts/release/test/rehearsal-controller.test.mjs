@@ -341,6 +341,29 @@ test("a missing controller-selected rehearsal route fails closed", async () => {
   )
 })
 
+test("the rehearsal reports the selected production route and nested failure cause", async () => {
+  const candidate = markerCandidate()
+
+  await assert.rejects(
+    driveRehearsalController({
+      candidate,
+      observer: {
+        async observe() {
+          return observationForMarker({ phase: "ESCROWED" })
+        },
+      },
+      effects: {
+        async "publish-npm-packages"() {
+          throw new Error("nested executor failure")
+        },
+      },
+      reporter: { async write() {} },
+      maximumAttempts: 1,
+    }),
+    /publish-npm-packages.*RELEASE_TRANSITION_FAILED.*nested executor failure/iu,
+  )
+})
+
 test("the rehearsal resumes a controller-selected accepted transition and terminates from observation", async () => {
   const candidate = markerCandidate()
   const gate = createOrderedFaultGate(["after-release-publication"])

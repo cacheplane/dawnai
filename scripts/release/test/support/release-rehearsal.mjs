@@ -166,7 +166,14 @@ export async function driveRehearsalController({
       report = await runRehearsalControllerStep({ candidate, observer, effects, reporter })
     } catch (error) {
       const crash = rehearsalCrashCause(error)
-      if (crash === null) throw error
+      if (crash === null) {
+        const route = error?.report?.transition?.name ?? "unknown-route"
+        const code = typeof error?.code === "string" ? error.code : "UNKNOWN_FAILURE"
+        const causes = nestedErrorMessages(error).join(" <- ") || "unknown cause"
+        throw new Error(`Release rehearsal production route ${route} failed (${code}): ${causes}`, {
+          cause: error,
+        })
+      }
       recoveredFaults.push(crash.point)
       continue
     }
@@ -727,7 +734,13 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
         result.conclusion !== expectedConclusion ||
         (expectedConclusion === "success") !== (executionError === null)
       ) {
-        throw new Error("Release rehearsal independent auditor conclusion conflicts")
+        const executionDetail =
+          executionError === null
+            ? "none"
+            : `${executionError.code ?? "UNKNOWN"}:${executionError.message ?? "unknown error"}`
+        throw new Error(
+          `Release rehearsal independent auditor conclusion conflicts (expected ${expectedConclusion}, observed ${result.conclusion}, execution ${executionDetail})`,
+        )
       }
       independentAuditResults.set(workflowRunId, result)
       return result
@@ -1813,6 +1826,25 @@ function rehearsalCrashCause(error) {
     current = current.cause
   }
   return null
+}
+
+function nestedErrorMessages(error) {
+  const messages = []
+  const seen = new Set()
+  let current = error
+  while (
+    current !== null &&
+    typeof current === "object" &&
+    !seen.has(current) &&
+    messages.length < 16
+  ) {
+    seen.add(current)
+    if (typeof current.message === "string" && current.message.length > 0) {
+      messages.push(current.message)
+    }
+    current = current.cause
+  }
+  return messages
 }
 
 function currentMarker(remote) {
