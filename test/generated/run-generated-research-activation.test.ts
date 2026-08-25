@@ -1029,6 +1029,12 @@ test("activates the default research scaffold through the complete npm lifecycle
       transcriptPath: commandsTranscriptPath,
     })
     expect(verifyResult.stdout).not.toContain("Missing environment variables")
+    // The workspace restructure hoisted every dependency to the root
+    // node_modules while appRoot stayed at <app>/server, so verify's package
+    // probe warned "Missing packages: @langchain/core, ..." on a fully installed
+    // app — and this lane ran green through all of it because nothing asserted
+    // on the deps warning. It does now.
+    expect(verifyResult.stdout).not.toContain("Missing packages")
     await runGeneratedAppNpmCommand({
       args: ["run", "build"],
       cwd: appRoot,

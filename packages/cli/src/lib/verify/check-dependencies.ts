@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { BuiltInModelProviderId } from "@dawn-ai/sdk"
 import { resolveEnvPath } from "../dev/resolve-env-path.js"
 import { loadDawnConfig } from "../node-config.js"
@@ -45,6 +45,40 @@ const PROVIDER_ENV_VAR: Record<BuiltInModelProviderId, string | null> = {
   ollama: null,
 }
 
+/**
+ * Is `pkg` installed somewhere Node would find it from `appRoot`?
+ *
+ * Walks `<dir>/node_modules/<pkg>` up from `appRoot` to the filesystem root, the
+ * way Node's own resolution walk does. The upward walk is the point: in an npm
+ * workspace the generated app's `dawn.config.ts` lives in `<app>/server`, so
+ * `appRoot` is the workspace MEMBER, while npm hoists dependencies to
+ * `<app>/node_modules` one level up. A probe that looks only in
+ * `appRoot/node_modules` reports every hoisted package as missing.
+ *
+ * Deliberately `existsSync` rather than `require.resolve(pkg)` or
+ * `require.resolve(`${pkg}/package.json`)`: both consult the package's `exports`
+ * map and throw ERR_PACKAGE_PATH_NOT_EXPORTED for packages that are genuinely
+ * installed but do not export that subpath — trading a false "missing" warning
+ * for a worse failure. A directory probe sidesteps `exports` entirely.
+ *
+ * pnpm needs no special casing: its public `node_modules/<pkg>` entries are
+ * symlinks into the `.pnpm` store and `existsSync` follows symlinks, so a linked
+ * package resolves true exactly as a copied one does. Packages that pnpm's
+ * strict layout deliberately hides (transitive deps reachable only inside
+ * `.pnpm`) stay hidden here — but Node would not resolve them from `appRoot`
+ * either, so matching the resolution walk is the honest answer.
+ */
+function isPackageInstalled(appRoot: string, pkg: string): boolean {
+  let dir = resolve(appRoot)
+  for (;;) {
+    if (existsSync(join(dir, "node_modules", pkg))) return true
+    const parent = dirname(dir)
+    // dirname() is a fixed point at the filesystem root ("/" → "/", "C:\" → "C:\").
+    if (parent === dir) return false
+    dir = parent
+  }
+}
+
 /** Derive the deduped set of required API-key env vars from the app's providers. */
 function requiredEnvVars(providers: readonly string[]): readonly string[] {
   const vars = new Set<string>()
@@ -81,9 +115,9 @@ export async function checkDependencies(
 
   for (const pkg of REQUIRED_PACKAGES) {
     if (!declaredDeps.has(pkg)) {
-      // Also check if it's resolvable (might be a transitive dep)
-      const modulePath = join(appRoot, "node_modules", pkg)
-      if (!existsSync(modulePath)) {
+      // Also check if it's resolvable (might be a transitive dep, or hoisted to
+      // a workspace root above appRoot) — hence the upward walk.
+      if (!isPackageInstalled(appRoot, pkg)) {
         missingPackages.push(pkg)
       }
     }
