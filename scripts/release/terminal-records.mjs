@@ -18,6 +18,7 @@ const CHECK_FIELDS = Object.freeze(["conclusion", "detail", "name"])
 const ABANDONMENT_FIELDS = Object.freeze([
   "actionsHistory",
   "actor",
+  "actorId",
   "approval",
   "commitSha",
   "observations",
@@ -27,7 +28,16 @@ const ABANDONMENT_FIELDS = Object.freeze([
   "tag",
   "version",
 ])
-const APPROVAL_FIELDS = Object.freeze(["approvedAt", "deploymentId", "environment", "reviewer"])
+const APPROVAL_FIELDS = Object.freeze([
+  "environment",
+  "environmentId",
+  "reviewerId",
+  "reviewer",
+  "state",
+  "observedAt",
+  "workflowRunId",
+  "runAttempt",
+])
 const ACTIONS_HISTORY_FIELDS = Object.freeze([
   "observedAt",
   "publishJobStarted",
@@ -44,6 +54,7 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const MAX_CHECKS = 256
 const MAX_NAME_BYTES = 256
 const MAX_DETAIL_BYTES = 8_192
+const MIN_REGISTRY_OBSERVATION_GAP_MS = 60_000
 
 export function parseAuditResult(value) {
   const record = snapshotRecord(value, "audit result")
@@ -127,6 +138,7 @@ export function parseAbandonmentRecord(value, options) {
     record.tag !== `v${candidate.version}` ||
     !isBoundedText(record.reason, MAX_DETAIL_BYTES) ||
     !isBoundedText(record.actor, MAX_NAME_BYTES) ||
+    !isPositiveInteger(record.actorId) ||
     !isTimestamp(record.recordedAt)
   ) {
     throw new TypeError("Invalid abandonment record")
@@ -136,9 +148,15 @@ export function parseAbandonmentRecord(value, options) {
   if (
     !hasExactFields(approval, APPROVAL_FIELDS) ||
     approval.environment !== expected.environment ||
-    !isPositiveInteger(approval.deploymentId) ||
+    !isPositiveInteger(approval.environmentId) ||
+    !isPositiveInteger(approval.reviewerId) ||
     !isBoundedText(approval.reviewer, MAX_NAME_BYTES) ||
-    !isTimestamp(approval.approvedAt)
+    approval.reviewerId === record.actorId ||
+    approval.reviewer.toLowerCase() === record.actor.toLowerCase() ||
+    approval.state !== "approved" ||
+    !isTimestamp(approval.observedAt) ||
+    !isPositiveInteger(approval.workflowRunId) ||
+    !isPositiveInteger(approval.runAttempt)
   ) {
     throw new TypeError("Invalid abandonment approval evidence")
   }
@@ -189,11 +207,16 @@ export function parseAbandonmentRecord(value, options) {
 
   const [first, second] = record.observations
   if (
-    new Set([history.workflowRunId, first.workflowRunId, second.workflowRunId]).size !== 3 ||
-    Date.parse(first.observedAt) >= Date.parse(second.observedAt) ||
-    Date.parse(approval.approvedAt) > Date.parse(history.observedAt) ||
-    Date.parse(history.observedAt) > Date.parse(first.observedAt) ||
-    Date.parse(second.observedAt) > Date.parse(record.recordedAt)
+    [history, first, second].some(
+      (evidence) =>
+        evidence.workflowRunId !== approval.workflowRunId ||
+        evidence.runAttempt !== approval.runAttempt,
+    ) ||
+    Date.parse(second.observedAt) - Date.parse(first.observedAt) <
+      MIN_REGISTRY_OBSERVATION_GAP_MS ||
+    Date.parse(approval.observedAt) > Date.parse(first.observedAt) ||
+    Date.parse(second.observedAt) > Date.parse(history.observedAt) ||
+    Date.parse(history.observedAt) > Date.parse(record.recordedAt)
   ) {
     throw new TypeError("Invalid abandonment evidence ordering")
   }

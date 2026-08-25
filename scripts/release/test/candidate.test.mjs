@@ -1192,23 +1192,28 @@ function abandonmentRecord(version, commitSha) {
     tag: `v${version}`,
     reason: "Candidate preparation is deterministically defective",
     actor: "release-operator",
+    actorId: 200,
     recordedAt: "2026-08-24T12:04:00Z",
     approval: {
       environment: "release-abandonment",
-      deploymentId: 200,
+      environmentId: 200,
+      reviewerId: 201,
       reviewer: "release-reviewer",
-      approvedAt: "2026-08-24T11:59:00Z",
+      state: "approved",
+      observedAt: "2026-08-24T11:59:00Z",
+      workflowRunId: 300,
+      runAttempt: 1,
     },
     actionsHistory: {
       workflowRunId: 300,
       runAttempt: 1,
-      observedAt: "2026-08-24T12:00:00Z",
+      observedAt: "2026-08-24T12:03:30Z",
       publishJobStarted: false,
       registryMutationStarted: false,
     },
     observations: [
-      observation(301, "2026-08-24T12:01:00Z"),
-      observation(302, "2026-08-24T12:03:00Z"),
+      observation(300, "2026-08-24T12:01:00Z"),
+      observation(300, "2026-08-24T12:03:00Z"),
     ],
   }
 }

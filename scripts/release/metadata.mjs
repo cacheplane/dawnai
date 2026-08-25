@@ -1719,7 +1719,7 @@ function validateAbandonedArtifactShape([manifestDigest, recordDigest, baseDiges
   }
 }
 
-function validateAllAttemptJobs(jobs, currentAttempt) {
+export function validateAllAttemptJobs(jobs, currentAttempt) {
   const attempts = new Set()
   const identities = new Set()
   let previousAttempt = 0

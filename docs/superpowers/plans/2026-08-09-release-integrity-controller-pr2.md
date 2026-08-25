@@ -191,9 +191,15 @@ Audit verification requires canonical success and aggregate/check consistency;
 terminal audit completion additionally requires the same consolidated Release to
 be published and immutable. Abandonment requires a draft Release,
 protected-environment approval evidence, publish/registry-mutation absence,
-distinct run receipts, and two time-ordered exact-E404 observations covering the
-full 21-package inventory. Tasks 5 and 7 import these parsers for their canonical
-writers; they may not redefine looser shapes.
+one exact authorizing workflow run/attempt, and two time-ordered exact-E404
+observations covering the full 21-package inventory while that run holds the
+shared non-cancelling release lock. The GitHub approval-history response proves
+the approved state, environment ID/name, and reviewer numeric identity; the run
+response and `GITHUB_ACTOR_ID` bind the independent workflow actor; the record stores
+the API observation time because that response exposes neither an approval
+timestamp nor a deployment ID. Tasks 5 and 7 import these parsers for their
+canonical writers; they may not redefine looser shapes or synthesize unavailable
+fields.
 
 Expose and test:
 
@@ -785,7 +791,14 @@ Reject abandonment when:
 
 - [ ] **Step 2: Write the successful terminal transition test**
 
-Require protected-environment approval evidence, actor, timestamp, reason, run IDs, two package-observation sets, and exact tag identity. Assert `abandonment.json` canonical bytes, draft Release title/body, preservation of every existing asset/attestation, permanent non-reactivation, and newer-candidate unblocking.
+Require protected-environment approval evidence (approved state, environment
+ID/name, reviewer ID/login, and API observation time), an independent actor ID/login, one
+exact run/attempt, reason, two package-observation sets separated by at least 60
+seconds, and exact tag identity. The same non-cancelling global release lock must
+cover the Actions read, both registry observations, and final mutation. Assert
+`abandonment.json` canonical bytes, draft Release title/body, preservation of
+every existing asset/attestation, permanent non-reactivation, and newer-candidate
+unblocking.
 
 Cover every legal predecessor and its one exact marker shape:
 
@@ -821,6 +834,9 @@ export async function recordAbandonment({ candidate, tombstone, artifactContext,
 ```
 
 No automatic caller may invoke it. The workflow command is manual-only and the job must name the protected abandonment environment configured during preflight.
+It derives approval history from `GET /actions/runs/{run_id}/approvals`; it must
+not accept caller-authored approval timestamps, deployment IDs, or registry
+absence evidence.
 The canonical writer must round-trip its output through Task 1's
 `parseAbandonmentRecord`; it may not define or accept a second tombstone schema.
 The exact-key, deeply frozen `artifactContext` carries the observed predecessor,

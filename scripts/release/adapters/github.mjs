@@ -198,6 +198,14 @@ export function createGitHubReader({
         operation: "actions-run-attempt",
       })
     },
+    getWorkflowRunApprovals({ runId }) {
+      const id = normalizeId(runId)
+      return readObject(context, {
+        url: `${base}/actions/runs/${id}/approvals`,
+        operation: "workflow-run-approvals",
+        validate: (value) => Array.isArray(value) && value.length <= context.maxRecords,
+      })
+    },
     getActionsArtifact({ artifactId }) {
       const id = normalizeId(artifactId)
       return readObject(context, {

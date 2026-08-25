@@ -30,10 +30,15 @@ const INPUT_FIELDS = Object.freeze([
 ])
 const APPROVAL_INPUT_FIELDS = Object.freeze([
   "environment",
-  "deploymentId",
+  "environmentId",
+  "reviewerId",
   "reviewer",
-  "approvedAt",
+  "state",
+  "observedAt",
+  "workflowRunId",
+  "runAttempt",
   "actor",
+  "actorId",
   "recordedAt",
 ])
 const ARTIFACT_CONTEXT_FIELDS = Object.freeze([
@@ -876,12 +881,17 @@ function buildAbandonmentRecord({ candidate, reason, actionsHistory, observation
       tag: `v${candidate.version}`,
       reason,
       actor: approval.actor,
+      actorId: approval.actorId,
       recordedAt: approval.recordedAt,
       approval: {
         environment: approval.environment,
-        deploymentId: approval.deploymentId,
+        environmentId: approval.environmentId,
+        reviewerId: approval.reviewerId,
         reviewer: approval.reviewer,
-        approvedAt: approval.approvedAt,
+        state: approval.state,
+        observedAt: approval.observedAt,
+        workflowRunId: approval.workflowRunId,
+        runAttempt: approval.runAttempt,
       },
       actionsHistory,
       observations,
@@ -949,7 +959,7 @@ function parseCanonicalAbandonmentBytes(bytes) {
 }
 
 function assertFreshAuthorization(record, now) {
-  const approvalTime = Date.parse(record.approval.approvedAt)
+  const approvalTime = Date.parse(record.approval.observedAt)
   const historyTime = Date.parse(record.actionsHistory.observedAt)
   const firstTime = Date.parse(record.observations[0].observedAt)
   const secondTime = Date.parse(record.observations[1].observedAt)

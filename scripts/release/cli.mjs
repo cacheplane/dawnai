@@ -6,6 +6,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 
 const COMMANDS = Object.freeze({
+  abandon: Object.freeze(["version", "commit-sha", "reason", "artifact-context"]),
   tag: Object.freeze(["candidate"]),
   prepare: Object.freeze([
     "candidate",
@@ -44,6 +45,9 @@ const SEMVER_PATTERN =
 export async function runReleaseCli(argv, dependencies = {}) {
   const parsed = parseArguments(argv)
   const runtime = normalizeDependencies(dependencies)
+  if (parsed.command === "abandon") {
+    return runAbandon(parsed.options, runtime)
+  }
   if (parsed.command === "tag") {
     return runTag(parsed.options, runtime)
   }
@@ -78,6 +82,74 @@ export async function runReleaseCli(argv, dependencies = {}) {
     return runPublishRelease(parsed.options, runtime)
   }
   throw new TypeError("Release CLI command is unsupported")
+}
+
+async function runAbandon(options, runtime) {
+  const candidate = candidateDocument({
+    version: options.version,
+    commitSha: options["commit-sha"],
+  })
+  const artifactContext = await readJsonFile(
+    runtime.fileSystem,
+    resolveCliPath(options["artifact-context"], runtime.cwd),
+    MAX_MANIFEST_BYTES,
+    "abandonment artifact context",
+  )
+  const [github, npm, authorityModule, abandonmentModule, manifestModule] = await Promise.all([
+    requireGitHub(runtime),
+    requireNpm(runtime),
+    runtime.importModule(new URL("./abandonment-authority.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./abandonment.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./manifest.mjs", import.meta.url).href),
+  ])
+  const capture = moduleFunction(
+    authorityModule,
+    "captureFreshAbandonmentEvidence",
+    "abandonment authority",
+  )
+  const record = moduleFunction(abandonmentModule, "recordAbandonment", "abandonment recorder")
+  const packageOrder = moduleValue(
+    manifestModule,
+    "CANONICAL_RELEASE_PACKAGE_ORDER",
+    "release package inventory",
+  )
+  if (!Array.isArray(packageOrder)) {
+    throw new TypeError("Release CLI abandonment package inventory is invalid")
+  }
+  const packageNames = Object.freeze([...packageOrder].sort(compareText))
+  const authorityEnvironment = projectEnvironment(runtime.environment, [
+    "GITHUB_REPOSITORY",
+    "GITHUB_REF",
+    "GITHUB_SHA",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_ACTOR",
+    "GITHUB_ACTOR_ID",
+  ])
+  const authorization = Object.freeze({
+    async readFreshAbandonmentEvidence({ candidate: requestedCandidate }) {
+      const requested = candidateDocument(requestedCandidate)
+      if (requested.version !== candidate.version || requested.commitSha !== candidate.commitSha) {
+        throw new Error("Release CLI abandonment authorization candidate changed")
+      }
+      return capture({
+        candidate,
+        packageNames,
+        environment: authorityEnvironment,
+        github: github.reader,
+        npm,
+        now: runtime.now,
+        ...(runtime.wait === undefined ? {} : { wait: runtime.wait }),
+      })
+    },
+  })
+  return record({
+    candidate,
+    reason: options.reason,
+    artifactContext,
+    authorization,
+    github,
+  })
 }
 
 async function runEscrow(options, runtime) {
@@ -944,7 +1016,11 @@ function normalizeDependencies(value) {
   const npm = optionalDataDependency(value, "npm", "npm reader")
   const attestations = optionalDataDependency(value, "attestations", "attestation verifier")
   const now = optionalDataDependency(value, "now", "clock") ?? Date.now
+  const wait = optionalDataDependency(value, "wait", "waiter")
   if (typeof now !== "function") throw new TypeError("Release CLI clock is invalid")
+  if (wait !== undefined && typeof wait !== "function") {
+    throw new TypeError("Release CLI waiter is invalid")
+  }
   return Object.freeze({
     cwd,
     importModule,
@@ -955,6 +1031,7 @@ function normalizeDependencies(value) {
     npm,
     attestations,
     now,
+    wait,
   })
 }
 
@@ -967,8 +1044,23 @@ function snapshotEnvironment(environment) {
     "GITHUB_SHA",
     "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT",
+    "GITHUB_ACTOR",
+    "GITHUB_ACTOR_ID",
     "GITHUB_WORKFLOW_REF",
   ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(environment, name)
+    if (descriptor === undefined) continue
+    if (!("value" in descriptor) || typeof descriptor.value !== "string") {
+      throw new TypeError(`Release CLI environment ${name} must be a string data property`)
+    }
+    result[name] = descriptor.value
+  }
+  return Object.freeze(result)
+}
+
+function projectEnvironment(environment, names) {
+  const result = Object.create(null)
+  for (const name of names) {
     const descriptor = Object.getOwnPropertyDescriptor(environment, name)
     if (descriptor === undefined) continue
     if (!("value" in descriptor) || typeof descriptor.value !== "string") {

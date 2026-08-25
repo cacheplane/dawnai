@@ -523,8 +523,12 @@ means `AUDIT_COMPLETE` only after that same Release is published and re-read as
 immutable. An abandonment tombstone requires the Release to remain draft,
 protected-environment approval, proof that neither the publish job nor a registry
 mutation started, and two time-ordered exact-E404 observations covering all 21
-packages. The audit and abandonment writers reuse the same parsers; skeletal
-identity-only JSON never unblocks a newer candidate.
+packages while one exact manual run/attempt holds the shared non-cancelling
+release lock. Approval history stores only facts GitHub exposes: approved state,
+environment ID/name, reviewer ID/login, the run actor ID/login, and the API observation time. It never
+invents an approval timestamp or deployment ID. The audit and abandonment
+writers reuse the same parsers; skeletal identity-only JSON never unblocks a
+newer candidate.
 
 The state machine is:
 

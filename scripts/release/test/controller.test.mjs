@@ -616,6 +616,112 @@ test("release CLI rejects unknown, duplicate, missing, and unpaired command argu
   }
 })
 
+test("abandon CLI derives fresh protected evidence inside each requested mutation authorization", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandon-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const contextPath = join(directory, "artifact-context.json")
+  const artifactContext = { predecessor: "CANDIDATE_TAGGED", exact: true }
+  await writeFile(contextPath, JSON.stringify(artifactContext))
+  const calls = []
+  const reader = Object.freeze({ kind: "reader" })
+  const writer = Object.freeze({ kind: "writer" })
+  const github = Object.freeze({ reader, writer })
+  const npm = Object.freeze({
+    async observePackageVersion() {
+      assert.fail("stub authority owns this boundary")
+    },
+  })
+  const environment = Object.freeze({
+    GITHUB_TOKEN: "must-not-cross-abandonment-authority-boundary",
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_RUN_ID: "700",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_ACTOR: "release-operator",
+    GITHUB_ACTOR_ID: "7001",
+    GITHUB_REF: `refs/tags/v${CANDIDATE.version}`,
+    GITHUB_SHA: CANDIDATE.commitSha,
+  })
+  const wait = async () => assert.fail("stub authority owns this boundary")
+  const now = () => Date.parse("2026-08-25T12:00:00Z")
+  let captureCount = 0
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    if (name === "abandonment-authority.mjs") {
+      return {
+        async captureFreshAbandonmentEvidence(input) {
+          captureCount += 1
+          calls.push(["capture", input])
+          return { authorization: captureCount }
+        },
+      }
+    }
+    if (name === "manifest.mjs") {
+      return { CANONICAL_RELEASE_PACKAGE_ORDER }
+    }
+    assert.equal(name, "abandonment.mjs")
+    return {
+      async recordAbandonment(input) {
+        calls.push(["record", input])
+        const first = await input.authorization.readFreshAbandonmentEvidence({
+          candidate: input.candidate,
+        })
+        const second = await input.authorization.readFreshAbandonmentEvidence({
+          candidate: input.candidate,
+        })
+        return { phase: "ABANDONED_PREPUBLICATION", first, second }
+      },
+    }
+  }
+
+  const result = await runReleaseCli(
+    [
+      "abandon",
+      "--version",
+      CANDIDATE.version,
+      "--commit-sha",
+      CANDIDATE.commitSha,
+      "--reason",
+      "Candidate preparation is deterministically defective",
+      "--artifact-context",
+      contextPath,
+    ],
+    { cwd: directory, github, npm, environment, wait, now, importModule },
+  )
+
+  assert.deepEqual(result, {
+    phase: "ABANDONED_PREPUBLICATION",
+    first: { authorization: 1 },
+    second: { authorization: 2 },
+  })
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["record", "capture", "capture"],
+  )
+  assert.deepEqual(calls[0][1].candidate, CANDIDATE)
+  assert.equal(calls[0][1].reason, "Candidate preparation is deterministically defective")
+  assert.deepEqual(calls[0][1].artifactContext, artifactContext)
+  assert.equal(calls[0][1].github, github)
+  for (const [, input] of calls.slice(1)) {
+    assert.deepEqual(input.candidate, CANDIDATE)
+    assert.deepEqual(input.packageNames, [...CANONICAL_RELEASE_PACKAGE_ORDER].sort())
+    assert.equal(input.github, reader)
+    assert.equal(input.npm, npm)
+    assert.equal(input.environment.GITHUB_ACTOR, "release-operator")
+    assert.equal(input.environment.GITHUB_ACTOR_ID, "7001")
+    assert.deepEqual(Object.keys(input.environment).sort(), [
+      "GITHUB_ACTOR",
+      "GITHUB_ACTOR_ID",
+      "GITHUB_REF",
+      "GITHUB_REPOSITORY",
+      "GITHUB_RUN_ATTEMPT",
+      "GITHUB_RUN_ID",
+      "GITHUB_SHA",
+    ])
+    assert.equal(input.wait, wait)
+    assert.equal(input.now, now)
+  }
+})
+
 test("audit CLI routes keep dispatch, marker recording, correlation, and publication distinct", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-release-audit-cli-"))
   t.after(() => rm(directory, { recursive: true, force: true }))

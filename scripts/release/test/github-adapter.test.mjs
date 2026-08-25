@@ -25,6 +25,7 @@ const ALLOWED_METHODS = [
   "getReleaseByTag",
   "getWorkflow",
   "getWorkflowPermissions",
+  "getWorkflowRunApprovals",
   "listActionsArtifacts",
   "listActionsRunArtifacts",
   "listActionsRunJobs",
@@ -34,6 +35,31 @@ const ALLOWED_METHODS = [
   "listTagRefs",
   "listWorkflowRuns",
 ]
+
+test("GitHub reads the exact protected-environment approval history for one workflow run", async () => {
+  const approvals = [
+    {
+      state: "approved",
+      comment: "Abandon candidate",
+      environments: [{ id: 161_088_068, name: "release-abandonment" }],
+      user: { id: 9_001, login: "release-reviewer" },
+    },
+  ]
+  const { fetchImpl, calls } = recordingFetch([jsonResponse(approvals)])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+
+  assert.deepEqual(await github.getWorkflowRunApprovals({ runId: 55 }), {
+    status: "PRESENT",
+    operation: "workflow-run-approvals",
+    httpStatus: 200,
+    code: null,
+    value: approvals,
+  })
+  assert.deepEqual(
+    calls.map(({ url, init }) => [url, init.method]),
+    [[`${BASE}/actions/runs/55/approvals`, "GET"]],
+  )
+})
 
 test("GitHub exact-run reads expose annotated tags, Releases, artifacts, and every job attempt", async () => {
   const nextJobs = `${BASE}/actions/runs/55/jobs?filter=all&per_page=100&page=2`

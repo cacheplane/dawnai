@@ -163,9 +163,13 @@ test("records the final fresh authorization as the durable abandonment tombstone
   assert.deepEqual(persisted.observations, fresh.evidence.observations)
   assert.deepEqual(persisted.approval, {
     environment: fresh.evidence.approval.environment,
-    deploymentId: fresh.evidence.approval.deploymentId,
+    environmentId: fresh.evidence.approval.environmentId,
+    reviewerId: fresh.evidence.approval.reviewerId,
     reviewer: fresh.evidence.approval.reviewer,
-    approvedAt: fresh.evidence.approval.approvedAt,
+    state: fresh.evidence.approval.state,
+    observedAt: fresh.evidence.approval.observedAt,
+    workflowRunId: fresh.evidence.approval.workflowRunId,
+    runAttempt: fresh.evidence.approval.runAttempt,
   })
   assert.equal(persisted.actor, fresh.evidence.approval.actor)
   assert.equal(persisted.recordedAt, fresh.evidence.approval.recordedAt)
@@ -192,8 +196,9 @@ test("resumes marker-first abandonment after a real process restart without call
   const restarted = fakeGitHub({ context: restartedContext, source: remote })
   const secondAuthorization = freshAuthorization(input)
   secondAuthorization.evidence.actionsHistory.workflowRunId = 910
-  secondAuthorization.evidence.observations[0].workflowRunId = 911
-  secondAuthorization.evidence.observations[1].workflowRunId = 912
+  secondAuthorization.evidence.observations[0].workflowRunId = 910
+  secondAuthorization.evidence.observations[1].workflowRunId = 910
+  secondAuthorization.evidence.approval.workflowRunId = 910
 
   const result = await recordAbandonment({
     candidate: input.candidate,
@@ -227,8 +232,9 @@ test("resumes asset-first abandonment after a real process restart without calle
   const restarted = fakeGitHub({ context: restartedContext, source: remote })
   const secondAuthorization = freshAuthorization(input)
   secondAuthorization.evidence.actionsHistory.workflowRunId = 920
-  secondAuthorization.evidence.observations[0].workflowRunId = 921
-  secondAuthorization.evidence.observations[1].workflowRunId = 922
+  secondAuthorization.evidence.observations[0].workflowRunId = 920
+  secondAuthorization.evidence.observations[1].workflowRunId = 920
+  secondAuthorization.evidence.approval.workflowRunId = 920
 
   const result = await recordAbandonment({
     candidate: input.candidate,
@@ -666,20 +672,25 @@ function validInput({ predecessor = "CANDIDATE_TAGGED", escrowCount } = {}) {
     actionsHistory: {
       workflowRunId: 300,
       runAttempt: 1,
-      observedAt: "2026-08-24T12:00:00Z",
+      observedAt: "2026-08-24T12:03:30Z",
       publishJobStarted: false,
       registryMutationStarted: false,
     },
     observations: [
-      observation(301, "2026-08-24T12:01:00Z"),
-      observation(302, "2026-08-24T12:03:00Z"),
+      observation(300, "2026-08-24T12:01:00Z"),
+      observation(300, "2026-08-24T12:03:00Z"),
     ],
     approval: {
       environment: "release-abandonment",
-      deploymentId: 200,
+      environmentId: 200,
+      reviewerId: 201,
       reviewer: "release-reviewer",
-      approvedAt: "2026-08-24T11:59:00Z",
+      state: "approved",
+      observedAt: "2026-08-24T11:59:00Z",
+      workflowRunId: 300,
+      runAttempt: 1,
       actor: "release-operator",
+      actorId: 200,
       recordedAt: "2026-08-24T12:04:00Z",
     },
     artifactContext: artifactContext(predecessor, escrowCount),
@@ -705,17 +716,22 @@ function freshAuthorization(input, { ageMinutes = 0 } = {}) {
     actionsHistory: {
       workflowRunId: 900,
       runAttempt: 1,
-      observedAt: timestamp(4),
+      observedAt: timestamp(0),
       publishJobStarted: false,
       registryMutationStarted: false,
     },
-    observations: [observation(901, 3), observation(902, 1)],
+    observations: [observation(900, 2), observation(900, 1)],
     approval: {
       environment: "release-abandonment",
-      deploymentId: 800,
+      environmentId: 800,
+      reviewerId: 801,
       reviewer: "release-reviewer",
-      approvedAt: timestamp(5),
+      state: "approved",
+      observedAt: timestamp(3),
+      workflowRunId: 900,
+      runAttempt: 1,
       actor: input.approval.actor,
+      actorId: input.approval.actorId,
       recordedAt: timestamp(0),
     },
   }
