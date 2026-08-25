@@ -5,7 +5,9 @@ import test from "node:test"
 import { composeGitHubEffects, createGitHubWriter } from "../adapters/github-write.mjs"
 import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { releaseBodySha256 } from "../metadata.mjs"
+import { canonicalSmokeResultBytes } from "../smoke-result.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
+import { SMOKE_LANES, smokeDescriptor } from "./support/marker-observation.mjs"
 
 const OWNER = "cacheplane"
 const REPO = "dawnai"
@@ -743,6 +745,22 @@ function verifiedPublicationFixture() {
     conclusion: "success",
   })
   const auditDigest = sha256(auditBytes)
+  const smokeAssets = SMOKE_LANES.map((lane) => ({
+    name: `smoke-result-${lane}-400-1.json`,
+    bytes: canonicalSmokeResultBytes({
+      schemaVersion: 1,
+      lane,
+      version: VERSION,
+      commitSha: SHA,
+      manifestSha256: subjects[0].digest,
+      workflowRunId: 400,
+      runAttempt: 1,
+      startedAt: "2026-08-24T00:10:00.000Z",
+      finishedAt: "2026-08-24T00:11:00.000Z",
+      checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+      conclusion: "success",
+    }),
+  }))
   const marker = {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
@@ -768,7 +786,11 @@ function verifiedPublicationFixture() {
       subjects: attestationSubjects,
     },
     npmEvidenceSha256: "4".repeat(64),
-    smokeAggregateSha256: "5".repeat(64),
+    smoke: smokeDescriptor({
+      aggregateSha256: "5".repeat(64),
+      releaseAssetIdStart: 46,
+      receiptSha256s: smokeAssets.map((asset) => sha256(asset.bytes)),
+    }),
     audit: {
       workflow: ".github/workflows/published-artifact-verify.yml",
       workflowRunId: 101,
@@ -785,6 +807,7 @@ function verifiedPublicationFixture() {
   const body = markerBody(marker)
   const bytesByName = new Map([
     ...baseAssets.map((asset) => [asset.name, asset.bytes]),
+    ...smokeAssets.map((asset) => [asset.name, asset.bytes]),
     ["audit-attempt-101-1.json", auditBytes],
     ["audit-result.json", auditBytes],
   ])

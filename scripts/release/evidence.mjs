@@ -285,7 +285,17 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
   }
   const expectedNames = new Set(expected.map(({ name }) => name))
   const baseAssets = releaseAssets.filter(({ name }) => expectedNames.has(name))
-  const evidenceAssets = releaseAssets.filter(({ name }) => !expectedNames.has(name))
+  const expectedSmokeAssets = Array.isArray(marker?.smoke?.receiptAssets)
+    ? marker.smoke.receiptAssets.map(({ releaseAssetName, receiptSha256 }) => ({
+        name: releaseAssetName,
+        sha256: receiptSha256,
+      }))
+    : []
+  const expectedSmokeNames = new Set(expectedSmokeAssets.map(({ name }) => name))
+  const smokeAssets = releaseAssets.filter(({ name }) => expectedSmokeNames.has(name))
+  const evidenceAssets = releaseAssets.filter(
+    ({ name }) => !expectedNames.has(name) && !expectedSmokeNames.has(name),
+  )
   const escrowResumable =
     release.status === "draft" &&
     marker?.phase === "ATTACHING" &&
@@ -298,6 +308,10 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
     releaseExists && !["ATTACHING", "ABANDONED_PREPUBLICATION"].includes(marker?.phase)
       ? exactAssetSet(baseAssets, expected, "github", conflicts)
       : false
+  const smokeAssetsExact =
+    marker?.smoke === null || marker?.smoke === undefined
+      ? smokeAssets.length === 0
+      : exactAssetSet(smokeAssets, expectedSmokeAssets, "github", conflicts)
   const terminalEvidence = analyzeTerminalAssets(evidenceAssets, marker, conflicts)
   for (const asset of releaseAssets) {
     if (asset.status === "different") conflicts.add("github-asset-bytes-mismatch")
@@ -314,6 +328,7 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
   const draftExact =
     release.status === "draft" &&
     escrowComplete &&
+    smokeAssetsExact &&
     [
       "ESCROWED",
       "NPM_COMPLETE",
@@ -333,6 +348,7 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
     ].includes(marker?.phase)
   const smokesReconciled =
     escrowComplete &&
+    smokeAssetsExact &&
     ["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
       marker?.phase,
     )

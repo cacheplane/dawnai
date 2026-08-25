@@ -11,7 +11,9 @@ import {
   waitForAudit,
 } from "../audit.mjs"
 import { canonicalReleaseBody, parseReleaseMarker, releaseBodySha256 } from "../metadata.mjs"
+import { canonicalSmokeResultBytes } from "../smoke-result.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
+import { SMOKE_LANES, smokeDescriptor } from "./support/marker-observation.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -716,8 +718,8 @@ function baseFixture() {
     bytes: Buffer.from("one-exact-multi-subject-bundle"),
   }))
   const record = { name: "release-record.json", bytes: Buffer.from("record") }
-  const assets = [record, ...subjects, ...bundles]
-  const described = assets.map((asset) => ({ name: asset.name, sha256: sha256(asset.bytes) }))
+  const baseAssets = [record, ...subjects, ...bundles]
+  const described = baseAssets.map((asset) => ({ name: asset.name, sha256: sha256(asset.bytes) }))
   const attestationSet = {
     repository: REPOSITORY,
     workflow: ".github/workflows/release.yml",
@@ -732,6 +734,22 @@ function baseFixture() {
       bundleSha256: sha256(bundles[index].bytes),
     })),
   }
+  const smokeAssets = SMOKE_LANES.map((lane) => ({
+    name: `smoke-result-${lane}-400-1.json`,
+    bytes: canonicalSmokeResultBytes({
+      schemaVersion: 1,
+      lane,
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256: sha256(manifest.bytes),
+      workflowRunId: 400,
+      runAttempt: 1,
+      startedAt: "2026-08-24T00:10:00.000Z",
+      finishedAt: "2026-08-24T00:11:00.000Z",
+      checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+      conclusion: "success",
+    }),
+  }))
   const marker = {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
@@ -745,11 +763,14 @@ function baseFixture() {
     baseAssetSetSha256: sha256(Buffer.from(`${JSON.stringify(described)}\n`)),
     attestationSet,
     npmEvidenceSha256: "e".repeat(64),
-    smokeAggregateSha256: "f".repeat(64),
+    smoke: smokeDescriptor({
+      releaseAssetIdStart: 145,
+      receiptSha256s: smokeAssets.map((asset) => sha256(asset.bytes)),
+    }),
     audit: null,
     abandonmentSha256: null,
   }
-  return { marker, assets }
+  return { marker, assets: [...baseAssets, ...smokeAssets] }
 }
 
 function actionsRemote({

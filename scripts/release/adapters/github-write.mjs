@@ -571,9 +571,15 @@ function validatePublicationMarker(marker, args, assets) {
   }
   const baseAssets = markerBaseAssets(marker)
   const baseNames = new Set(baseAssets.map(({ name }) => name))
+  const smokeAssets = marker.smoke.receiptAssets.map((asset) => ({
+    name: asset.releaseAssetName,
+    sha256: asset.receiptSha256,
+  }))
+  const smokeNames = new Set(smokeAssets.map(({ name }) => name))
   const assetNames = new Set(assets.map(({ name }) => name))
   if (
     [...baseNames].some((name) => !assetNames.has(name)) ||
+    [...smokeNames].some((name) => !assetNames.has(name)) ||
     !assetNames.has(marker.audit.attemptAssetName) ||
     !assetNames.has("audit-result.json")
   ) {
@@ -582,6 +588,7 @@ function validatePublicationMarker(marker, args, assets) {
   for (const name of assetNames) {
     if (
       !baseNames.has(name) &&
+      !smokeNames.has(name) &&
       name !== "audit-result.json" &&
       !/^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(name)
     ) {
@@ -591,6 +598,9 @@ function validatePublicationMarker(marker, args, assets) {
   const byName = new Map(assets.map((asset) => [asset.name, asset.sha256]))
   if (baseAssets.some((asset) => byName.get(asset.name) !== asset.sha256)) {
     throw new Error("Release publication base asset digests do not match its marker")
+  }
+  if (smokeAssets.some((asset) => byName.get(asset.name) !== asset.sha256)) {
+    throw new Error("Release publication smoke receipt digests do not match its marker")
   }
   if (
     byName.get(marker.audit.attemptAssetName) !== marker.audit.attemptSha256 ||

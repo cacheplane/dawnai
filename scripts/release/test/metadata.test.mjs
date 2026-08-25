@@ -17,6 +17,11 @@ import {
   validatePublicationAuditAssets,
 } from "../metadata.mjs"
 import { createReleaseRecord, releaseRecordSha256 } from "../release-record.mjs"
+import {
+  canonicalSmokeResultBytes,
+  parseSmokeResult,
+  REQUIRED_RELEASE_SMOKE_LANES,
+} from "../smoke-result.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -29,7 +34,7 @@ const CANDIDATE = Object.freeze({
 })
 const REPOSITORY = "cacheplane/dawnai"
 const SMOKE_RUN = Object.freeze({ workflowRunId: 200, runAttempt: 1 })
-const SMOKE_LANES = Object.freeze(["published-harness", "runtime-targets", "scaffold", "storage"])
+const SMOKE_LANES = REQUIRED_RELEASE_SMOKE_LANES
 
 test("release bodies contain one canonical exact marker and reject phase-invalid or noncanonical markers", () => {
   const fixture = releaseFixture()
@@ -368,7 +373,7 @@ test("publication audit history has independent count and aggregate byte bounds"
     revision: 7,
     phase: "AUDIT_VERIFIED",
     npmEvidenceSha256: "4".repeat(64),
-    smokeAggregateSha256: "5".repeat(64),
+    smoke: smokeDescriptor("5".repeat(64)),
     audit: {
       workflow: ".github/workflows/published-artifact-verify.yml",
       workflowRunId: 300,
@@ -594,13 +599,13 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   assert.equal(parseReleaseMarker(remote.release.body).phase, "NPM_COMPLETE")
 
   const smokeResults = completeSmokeResults(fixture)
+  remote.setSmokeArtifacts(smokeResults)
   const smokeResult = await reconcileSmokeEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
     manifest: fixture.manifest,
     npmEvidence,
     smokeResults,
-    requiredLanes: SMOKE_LANES,
     ...SMOKE_RUN,
     github: remote.github,
   })
@@ -608,7 +613,30 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   const marker = parseReleaseMarker(remote.release.body)
   assert.equal(marker.phase, "SMOKES_COMPLETE")
   assert.match(marker.npmEvidenceSha256, /^[0-9a-f]{64}$/u)
-  assert.match(marker.smokeAggregateSha256, /^[0-9a-f]{64}$/u)
+  assert.equal(marker.smoke.workflow, ".github/workflows/release.yml")
+  assert.equal(marker.smoke.workflowRunId, SMOKE_RUN.workflowRunId)
+  assert.equal(marker.smoke.runAttempt, SMOKE_RUN.runAttempt)
+  assert.deepEqual(marker.smoke.requiredLanes, SMOKE_LANES)
+  assert.equal(marker.smoke.artifacts.length, SMOKE_LANES.length)
+  assert.equal(marker.smoke.receiptAssets.length, SMOKE_LANES.length)
+  assert.match(marker.smoke.aggregateSha256, /^[0-9a-f]{64}$/u)
+  for (const [index, lane] of SMOKE_LANES.entries()) {
+    const locator = marker.smoke.artifacts[index]
+    assert.deepEqual(locator, {
+      lane,
+      actionsArtifactId: String(900 + index),
+      actionsArtifactName: `smoke-result-${lane}-200-1`,
+      actionsArtifactUrl: `https://github.com/cacheplane/dawnai/actions/runs/200/artifacts/${900 + index}`,
+      actionsArtifactServiceDigest: remote.actionsArtifacts[index].digest,
+      releaseAssetId: 46 + index,
+      releaseAssetName: `smoke-result-${lane}-200-1.json`,
+      receiptSha256: sha256(smokeResults[index]),
+    })
+    assert.deepEqual(remote.assets.get(locator.releaseAssetName).bytes, smokeResults[index])
+  }
+  assert.match(remote.release.body, /Smoke workflow run: `200` attempt `1`/u)
+  assert.match(remote.release.body, /smoke-result-metadata-200-1\.json/u)
+  assert.equal(remote.assets.size, 50)
   assert.equal(remote.updateCount, 3)
 })
 
@@ -633,7 +661,8 @@ test("smoke reconciliation rejects replayed, mixed, incomplete, failed, or forei
     npmEvidence,
     github: remote.github,
   })
-  const valid = completeSmokeResults(fixture)
+  const validBytes = completeSmokeResults(fixture)
+  const valid = validBytes.map((bytes) => parseSmokeResult(bytes))
   const cases = [
     [
       valid.map((receipt, index) => (index === 0 ? { ...receipt, workflowRunId: 199 } : receipt)),
@@ -643,8 +672,8 @@ test("smoke reconciliation rejects replayed, mixed, incomplete, failed, or forei
       valid.map((receipt, index) => (index === 0 ? { ...receipt, runAttempt: 2 } : receipt)),
       /run attempt|correlat/iu,
     ],
-    [valid.slice(1), /missing.*published-harness/iu],
-    [[valid[0], ...valid], /duplicate.*published-harness/iu],
+    [valid.slice(1), /exactly five|missing|receipt/iu],
+    [[valid[0], ...valid], /exactly five|duplicate|receipt/iu],
     [
       [{ ...valid[0], lane: "foreign" }, ...valid.slice(1)],
       /unexpected.*foreign|missing.*published/iu,
@@ -683,14 +712,324 @@ test("smoke reconciliation rejects replayed, mixed, incomplete, failed, or forei
         record: fixture.record,
         manifest: fixture.manifest,
         npmEvidence,
-        smokeResults,
-        requiredLanes: SMOKE_LANES,
+        smokeResults: smokeResults.map((receipt) => canonicalSmokeResultBytes(receipt)),
         ...SMOKE_RUN,
         github: remote.github,
       }),
       expected,
     )
     assert.equal(remote.updateCount, updates)
+  }
+})
+
+test("smoke reconciliation accepts raw canonical bytes only and owns copies before remote reads", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+  const bytes = completeSmokeResults(fixture)
+  remote.setSmokeArtifacts(bytes)
+  const originalDigests = bytes.map(sha256)
+  const promise = reconcileSmokeEvidence({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    manifest: fixture.manifest,
+    npmEvidence,
+    smokeResults: bytes,
+    ...SMOKE_RUN,
+    github: remote.github,
+  })
+  for (const receipt of bytes) receipt.fill(0)
+  await promise
+  assert.deepEqual(
+    parseReleaseMarker(remote.release.body).smoke.artifacts.map(
+      ({ receiptSha256 }) => receiptSha256,
+    ),
+    originalDigests,
+  )
+
+  const foreign = inMemoryGitHub()
+  const foreignNpmEvidence = await prepareSmokeReconciliation(fixture, foreign)
+  const objects = completeSmokeResults(fixture).map((receipt) => parseSmokeResult(receipt))
+  const mutations = foreign.uploadCount + foreign.updateCount
+  await assert.rejects(
+    reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence: foreignNpmEvidence,
+      smokeResults: objects,
+      ...SMOKE_RUN,
+      github: foreign.github,
+    }),
+    /raw receipt bytes only/iu,
+  )
+  assert.equal(foreign.uploadCount + foreign.updateCount, mutations)
+  assert.equal(foreign.actionsReadCount, 0)
+})
+
+test("smoke reconciliation derives exact Actions identities and rejects every drift before mutation", async () => {
+  const cases = [
+    ["wrong workflow", (remote) => (remote.actionsRun.path = ".github/workflows/other.yml")],
+    ["wrong ref", (remote) => (remote.actionsRun.head_branch = "main")],
+    ["wrong commit", (remote) => (remote.actionsRun.head_sha = "f".repeat(40))],
+    ["missing artifact", (remote) => remote.actionsArtifacts.shift()],
+    [
+      "duplicate artifact",
+      (remote) => remote.actionsArtifacts.push({ ...remote.actionsArtifacts[0], id: 999 }),
+    ],
+    [
+      "re-read name drift",
+      (remote) =>
+        remote.actionsArtifactOverrides.set(900, {
+          ...remote.actionsArtifacts[0],
+          name: "smoke-result-metadata-200-2",
+        }),
+    ],
+    [
+      "expired artifact",
+      (remote) =>
+        remote.actionsArtifactOverrides.set(900, {
+          ...remote.actionsArtifacts[0],
+          expired: true,
+        }),
+    ],
+    [
+      "service digest drift",
+      (remote) =>
+        remote.actionsArtifactOverrides.set(900, {
+          ...remote.actionsArtifacts[0],
+          digest: `sha256:${"0".repeat(64)}`,
+        }),
+    ],
+    [
+      "receipt archive drift",
+      (remote) =>
+        remote.actionsArchives.set(
+          900,
+          zip([{ name: "metadata.json", bytes: Buffer.from("{}\n") }]),
+        ),
+    ],
+  ]
+  for (const [name, mutate] of cases) {
+    const fixture = releaseFixture()
+    const remote = inMemoryGitHub()
+    const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+    const smokeResults = completeSmokeResults(fixture)
+    remote.setSmokeArtifacts(smokeResults)
+    mutate(remote)
+    const mutationCount = remote.uploadCount + remote.updateCount
+    await assert.rejects(
+      reconcileSmokeEvidence({
+        candidate: CANDIDATE,
+        record: fixture.record,
+        manifest: fixture.manifest,
+        npmEvidence,
+        smokeResults,
+        ...SMOKE_RUN,
+        github: remote.github,
+      }),
+      /smoke|workflow|artifact|digest|receipt/iu,
+      name,
+    )
+    assert.equal(remote.uploadCount + remote.updateCount, mutationCount, name)
+    assert.equal(remote.assets.size, 45, name)
+  }
+})
+
+test("smoke receipt escrow resumes every partial upload and survives loss after marker CAS", async () => {
+  for (let completed = 0; completed < SMOKE_LANES.length; completed += 1) {
+    const fixture = releaseFixture()
+    const remote = inMemoryGitHub()
+    const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+    const smokeResults = completeSmokeResults(fixture)
+    remote.setSmokeArtifacts(smokeResults)
+    remote.failAfterUploads = 45 + completed
+    await assert.rejects(
+      reconcileSmokeEvidence({
+        candidate: CANDIDATE,
+        record: fixture.record,
+        manifest: fixture.manifest,
+        npmEvidence,
+        smokeResults,
+        ...SMOKE_RUN,
+        github: remote.github,
+      }),
+      /injected runner loss/iu,
+    )
+    assert.equal(parseReleaseMarker(remote.release.body).phase, "NPM_COMPLETE")
+    assert.equal(remote.assets.size, 45 + completed)
+    remote.failAfterUploads = null
+    const result = await reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence,
+      smokeResults,
+      ...SMOKE_RUN,
+      github: remote.github,
+    })
+    assert.equal(result.phase, "SMOKES_COMPLETE")
+    assert.equal(remote.assets.size, 50)
+  }
+
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+  const smokeResults = completeSmokeResults(fixture)
+  remote.setSmokeArtifacts(smokeResults)
+  remote.failAfterBodyUpdate = true
+  await assert.rejects(
+    reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence,
+      smokeResults,
+      ...SMOKE_RUN,
+      github: remote.github,
+    }),
+    /loss after marker CAS/iu,
+  )
+  assert.equal(parseReleaseMarker(remote.release.body).phase, "SMOKES_COMPLETE")
+  const actionsReads = remote.actionsReadCount
+  remote.failAfterBodyUpdate = false
+  remote.actionsRun = null
+  remote.actionsArtifacts = []
+  remote.actionsArchives.clear()
+  const replay = await reconcileSmokeEvidence({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    manifest: fixture.manifest,
+    npmEvidence,
+    smokeResults,
+    ...SMOKE_RUN,
+    github: remote.github,
+  })
+  assert.equal(replay.status, "unchanged")
+  assert.equal(remote.actionsReadCount, actionsReads)
+})
+
+test("a later smoke attempt retains and binds a prior partial attempt", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+  const first = completeSmokeResults(fixture)
+  remote.setSmokeArtifacts(first)
+  remote.failAfterUploads = 47
+  await assert.rejects(
+    reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence,
+      smokeResults: first,
+      ...SMOKE_RUN,
+      github: remote.github,
+    }),
+    /runner loss/iu,
+  )
+  const laterRun = { workflowRunId: 201, runAttempt: 2 }
+  const second = completeSmokeResults(fixture, laterRun)
+  remote.failAfterUploads = null
+  remote.setSmokeArtifacts(second, laterRun)
+  await reconcileSmokeEvidence({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    manifest: fixture.manifest,
+    npmEvidence,
+    smokeResults: second,
+    ...laterRun,
+    github: remote.github,
+  })
+  const smoke = parseReleaseMarker(remote.release.body).smoke
+  assert.equal(smoke.workflowRunId, 201)
+  assert.equal(smoke.runAttempt, 2)
+  assert.equal(smoke.artifacts.length, 5)
+  assert.equal(smoke.receiptAssets.length, 7)
+  assert.deepEqual(
+    smoke.receiptAssets.slice(0, 2).map(({ workflowRunId, runAttempt }) => ({
+      workflowRunId,
+      runAttempt,
+    })),
+    [
+      { workflowRunId: 200, runAttempt: 1 },
+      { workflowRunId: 200, runAttempt: 1 },
+    ],
+  )
+})
+
+test("smoke reconciliation revalidates the exact base asset set before mutation", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+  const smokeResults = completeSmokeResults(fixture)
+  remote.setSmokeArtifacts(smokeResults)
+  remote.assets.get("manifest.json").bytes = Buffer.from("{}\n")
+  const mutations = remote.uploadCount + remote.updateCount
+
+  await assert.rejects(
+    reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence,
+      smokeResults,
+      ...SMOKE_RUN,
+      github: remote.github,
+    }),
+    /base asset|canonical base|manifest/iu,
+  )
+  assert.equal(remote.uploadCount + remote.updateCount, mutations)
+  assert.equal(parseReleaseMarker(remote.release.body).phase, "NPM_COMPLETE")
+})
+
+test("completed smoke evidence rejects unbound or changed durable receipt assets", async () => {
+  for (const mutate of [
+    (remote, fixture) => {
+      const prior = completeSmokeResults(fixture, { workflowRunId: 199, runAttempt: 1 })[0]
+      remote.addAsset("smoke-result-metadata-199-1.json", prior)
+    },
+    (remote, fixture) => {
+      const receipt = parseSmokeResult(completeSmokeResults(fixture)[0])
+      const changed = canonicalSmokeResultBytes({
+        ...receipt,
+        checks: receipt.checks.map((check, index) =>
+          index === 0 ? { ...check, detail: "changed after marker CAS" } : check,
+        ),
+      })
+      remote.assets.get("smoke-result-metadata-200-1.json").bytes = changed
+    },
+  ]) {
+    const fixture = releaseFixture()
+    const remote = inMemoryGitHub()
+    const npmEvidence = await prepareSmokeReconciliation(fixture, remote)
+    const smokeResults = completeSmokeResults(fixture)
+    remote.setSmokeArtifacts(smokeResults)
+    await reconcileSmokeEvidence({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      manifest: fixture.manifest,
+      npmEvidence,
+      smokeResults,
+      ...SMOKE_RUN,
+      github: remote.github,
+    })
+    mutate(remote, fixture)
+    const mutations = remote.uploadCount + remote.updateCount
+
+    await assert.rejects(
+      reconcileSmokeEvidence({
+        candidate: CANDIDATE,
+        record: fixture.record,
+        manifest: fixture.manifest,
+        npmEvidence,
+        smokeResults,
+        ...SMOKE_RUN,
+        github: remote.github,
+      }),
+      /smoke receipt assets|marker descriptor|conflict/iu,
+    )
+    assert.equal(remote.uploadCount + remote.updateCount, mutations)
   }
 })
 
@@ -814,13 +1153,13 @@ test("consolidated publication accepts only attached canonical audit bytes and p
     npmEvidence,
     github: remote.github,
   })
+  remote.setSmokeArtifacts(completeSmokeResults(fixture))
   await reconcileSmokeEvidence({
     candidate: CANDIDATE,
     record: fixture.record,
     manifest: fixture.manifest,
     npmEvidence,
     smokeResults: completeSmokeResults(fixture),
-    requiredLanes: SMOKE_LANES,
     ...SMOKE_RUN,
     github: remote.github,
   })
@@ -1105,7 +1444,7 @@ function escrowMarker(fixture) {
     baseAssetSetSha256: base.sha256,
     attestationSet: fixture.attestationSet,
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: null,
   }
@@ -1230,23 +1569,115 @@ function completeNpmEvidence(fixture) {
   }
 }
 
-function completeSmokeResults(fixture) {
-  return SMOKE_LANES.map((lane) => ({
-    schemaVersion: 1,
+async function prepareSmokeReconciliation(fixture, remote) {
+  await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+  const npmEvidence = completeNpmEvidence(fixture)
+  await reconcileNpmEvidence({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    manifest: fixture.manifest,
+    npmEvidence,
+    github: remote.github,
+  })
+  return npmEvidence
+}
+
+function completeSmokeResults(fixture, run = SMOKE_RUN) {
+  return SMOKE_LANES.map((lane) =>
+    canonicalSmokeResultBytes({
+      schemaVersion: 1,
+      lane,
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256: fixture.record.manifestSha256,
+      ...run,
+      startedAt: "2026-08-24T00:10:00.000Z",
+      finishedAt: "2026-08-24T00:11:00.000Z",
+      checks: [{ name: "exact-install", conclusion: "success", detail: "verified" }],
+      conclusion: "success",
+    }),
+  )
+}
+
+function smokeDescriptor(aggregateSha256 = "f".repeat(64)) {
+  const receiptAssets = SMOKE_LANES.map((lane, index) => ({
     lane,
-    version: VERSION,
-    commitSha: COMMIT_SHA,
-    manifestSha256: fixture.record.manifestSha256,
-    ...SMOKE_RUN,
-    startedAt: "2026-08-24T00:10:00.000Z",
-    finishedAt: "2026-08-24T00:11:00.000Z",
-    checks: [{ name: "exact-install", conclusion: "success", detail: "verified" }],
-    conclusion: "success",
+    workflowRunId: SMOKE_RUN.workflowRunId,
+    runAttempt: SMOKE_RUN.runAttempt,
+    releaseAssetId: 46 + index,
+    releaseAssetName: `smoke-result-${lane}-${SMOKE_RUN.workflowRunId}-${SMOKE_RUN.runAttempt}.json`,
+    receiptSha256: (index + 1).toString(16).padStart(64, "0"),
   }))
+  return {
+    workflow: ".github/workflows/release.yml",
+    ...SMOKE_RUN,
+    requiredLanes: [...SMOKE_LANES],
+    artifacts: receiptAssets.map((receipt, index) => ({
+      lane: receipt.lane,
+      actionsArtifactId: String(900 + index),
+      actionsArtifactName: `smoke-result-${receipt.lane}-${SMOKE_RUN.workflowRunId}-${SMOKE_RUN.runAttempt}`,
+      actionsArtifactUrl: `https://github.com/cacheplane/dawnai/actions/runs/${SMOKE_RUN.workflowRunId}/artifacts/${900 + index}`,
+      actionsArtifactServiceDigest: `sha256:${"9".repeat(64)}`,
+      releaseAssetId: receipt.releaseAssetId,
+      releaseAssetName: receipt.releaseAssetName,
+      receiptSha256: receipt.receiptSha256,
+    })),
+    receiptAssets,
+    aggregateSha256,
+  }
 }
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
+}
+
+function zip(files) {
+  const locals = []
+  const centrals = []
+  let offset = 0
+  for (const file of files) {
+    const name = Buffer.from(file.name)
+    const bytes = Buffer.from(file.bytes)
+    const local = Buffer.alloc(30 + name.length + bytes.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt32LE(bytes.length, 18)
+    local.writeUInt32LE(bytes.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    name.copy(local, 30)
+    bytes.copy(local, 30 + name.length)
+    locals.push(local)
+
+    const central = Buffer.alloc(46 + name.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt32LE(bytes.length, 20)
+    central.writeUInt32LE(bytes.length, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt32LE(offset, 42)
+    name.copy(central, 46)
+    centrals.push(central)
+    offset += local.length
+  }
+  const centralOffset = offset
+  const centralSize = centrals.reduce((total, entry) => total + entry.length, 0)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(files.length, 8)
+  end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(centralSize, 12)
+  end.writeUInt32LE(centralOffset, 16)
+  return Buffer.concat([...locals, ...centrals, end])
 }
 
 function inMemoryGitHub() {
@@ -1264,6 +1695,12 @@ function inMemoryGitHub() {
     tagTargetSha: COMMIT_SHA,
     tagReadCount: 0,
     downloadCount: 0,
+    actionsArtifacts: [],
+    actionsArchives: new Map(),
+    actionsRun: null,
+    actionsReadCount: 0,
+    actionsArtifactOverrides: new Map(),
+    failAfterBodyUpdate: false,
   }
   const reader = Object.freeze({
     async getRef() {
@@ -1311,6 +1748,37 @@ function inMemoryGitHub() {
         contentBase64: asset.bytes.toString("base64"),
       }
     },
+    async listActionsRunArtifacts({ runId }) {
+      remote.actionsReadCount += 1
+      assert.equal(runId, remote.actionsRun.id)
+      return present("actions-run-artifacts", remote.actionsArtifacts)
+    },
+    async getActionsRunAttempt({ runId, attempt }) {
+      remote.actionsReadCount += 1
+      assert.equal(runId, remote.actionsRun.id)
+      assert.equal(attempt, remote.actionsRun.run_attempt)
+      return present("actions-run-attempt", remote.actionsRun)
+    },
+    async getActionsArtifact({ artifactId }) {
+      remote.actionsReadCount += 1
+      const artifact =
+        remote.actionsArtifactOverrides.get(artifactId) ??
+        remote.actionsArtifacts.find(({ id }) => id === artifactId)
+      assert.ok(artifact)
+      return present("actions-artifact", artifact)
+    },
+    async downloadActionsArtifact({ artifactId }) {
+      remote.actionsReadCount += 1
+      const archive = remote.actionsArchives.get(artifactId)
+      assert.ok(archive)
+      return {
+        status: "PRESENT",
+        operation: "actions-artifact-download",
+        httpStatus: 200,
+        code: null,
+        contentBase64: archive.toString("base64"),
+      }
+    },
   })
   const writer = Object.freeze({
     async createDraftRelease({ tag, title, body }) {
@@ -1338,6 +1806,7 @@ function inMemoryGitHub() {
       remote.release.name = title
       remote.release.body = body
       remote.updateCount += 1
+      if (remote.failAfterBodyUpdate) throw new Error("injected loss after marker CAS")
       return { releaseId: 7, status: "updated", bodySha256: releaseBodySha256(body) }
     },
     async uploadAssetIfAbsentAndEqual({ name, bytes, sha256: digest }) {
@@ -1376,6 +1845,33 @@ function inMemoryGitHub() {
   remote.addAsset = (name, bytes) => {
     remote.assets.set(name, { id: remote.nextAssetId, bytes: Buffer.from(bytes) })
     remote.nextAssetId += 1
+  }
+  remote.setSmokeArtifacts = (smokeResults, run = SMOKE_RUN) => {
+    remote.actionsRun = {
+      id: run.workflowRunId,
+      run_attempt: run.runAttempt,
+      path: ".github/workflows/release.yml",
+      head_branch: `v${VERSION}`,
+      head_sha: COMMIT_SHA,
+    }
+    remote.actionsArtifacts = smokeResults.map((bytes, index) => {
+      const receipt = parseSmokeResult(bytes)
+      const id = 900 + index
+      const archive = zip([{ name: `${receipt.lane}.json`, bytes }])
+      remote.actionsArchives.set(id, archive)
+      return {
+        id,
+        name: `smoke-result-${receipt.lane}-${run.workflowRunId}-${run.runAttempt}`,
+        digest: `sha256:${sha256(archive)}`,
+        expired: false,
+        url: "https://attacker.invalid/caller-controlled",
+        workflow_run: {
+          id: run.workflowRunId,
+          head_sha: COMMIT_SHA,
+          head_branch: `v${VERSION}`,
+        },
+      }
+    })
   }
   return remote
 }

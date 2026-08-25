@@ -483,8 +483,9 @@ function validateAggregateSmokeResult(value) {
   validateChecks(aggregate.checks, "aggregate checks", MAX_AGGREGATE_CHECKS, 193)
   const expectedChecks = aggregate.lanes.flatMap((lane) =>
     lane.checks.map((check) => ({
-      ...check,
       name: `${lane.lane}:${check.name}`,
+      conclusion: check.conclusion,
+      detail: check.detail,
     })),
   )
   if (JSON.stringify(aggregate.checks) !== JSON.stringify(expectedChecks)) {

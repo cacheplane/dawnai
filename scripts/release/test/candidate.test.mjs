@@ -1334,7 +1334,7 @@ function terminalAttestedAbandonmentRelease(id, version, commitSha) {
     baseAssetSetSha256: sha256(Buffer.from(`${JSON.stringify(baseAssets)}\n`)),
     attestationSet,
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: null,
   }

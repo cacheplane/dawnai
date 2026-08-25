@@ -517,7 +517,7 @@ test("resumes both safe runner-loss boundaries without replacing retained eviden
     baseAssetSetSha256: null,
     attestationSet: null,
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: sha256(taggedTombstoneBytes),
   }
@@ -572,7 +572,7 @@ test("conflicting terminal metadata is rejected before a missing tombstone can b
     baseAssetSetSha256: null,
     attestationSet: null,
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: sha256(tombstoneBytes),
   }
@@ -859,7 +859,7 @@ function releaseMarker(phase, artifact) {
     tag: `v${VERSION}`,
     ...structuredClone(artifact),
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: null,
   }

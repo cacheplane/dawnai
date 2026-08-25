@@ -870,6 +870,12 @@ function releaseEvidenceAssetIsAllowed(asset, marker) {
   if (marker?.phase === "ABANDONED_PREPUBLICATION") {
     return asset.name === "abandonment.json" && asset.sha256 === marker.abandonmentSha256
   }
+  const smokeReceipt = marker?.smoke?.receiptAssets?.find(
+    ({ releaseAssetName }) => releaseAssetName === asset.name,
+  )
+  if (smokeReceipt !== undefined) {
+    return asset.sha256 === smokeReceipt.receiptSha256
+  }
   if (!["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(marker?.phase)) {
     return false
   }

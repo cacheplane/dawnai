@@ -4,6 +4,7 @@ import test from "node:test"
 import { canonicalReleaseBody } from "../metadata.mjs"
 import { planRelease } from "../planner.mjs"
 import { classifyObservedRelease, findReleaseConflicts, ReleaseState } from "../state.mjs"
+import { smokeDescriptor } from "./support/marker-observation.mjs"
 
 const VERSION = "0.8.20"
 const NEWER_VERSION = "0.8.21"
@@ -1960,13 +1961,10 @@ function releaseMarker(phase) {
     ].includes(phase)
       ? "6".repeat(64)
       : null,
-    smokeAggregateSha256: [
-      "SMOKES_COMPLETE",
-      "AUDIT_DISPATCHED",
-      "AUDIT_RETRYABLE",
-      "AUDIT_VERIFIED",
-    ].includes(phase)
-      ? "7".repeat(64)
+    smoke: ["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+      phase,
+    )
+      ? smokeDescriptor({ aggregateSha256: "7".repeat(64) })
       : null,
     audit,
     abandonmentSha256: null,
@@ -1974,8 +1972,17 @@ function releaseMarker(phase) {
 }
 
 function releaseEvidenceAssets(marker) {
+  const smokeAssets =
+    marker?.smoke === null || marker?.smoke === undefined
+      ? []
+      : marker.smoke.receiptAssets.map((asset) => ({
+          name: asset.releaseAssetName,
+          sha256: asset.receiptSha256,
+          status: "matching",
+        }))
   if (marker?.phase === "AUDIT_RETRYABLE") {
     return [
+      ...smokeAssets,
       {
         name: marker.audit.attemptAssetName,
         sha256: marker.audit.attemptSha256,
@@ -1985,6 +1992,7 @@ function releaseEvidenceAssets(marker) {
   }
   if (marker?.phase === "AUDIT_VERIFIED") {
     return [
+      ...smokeAssets,
       {
         name: marker.audit.attemptAssetName,
         sha256: marker.audit.attemptSha256,
@@ -1993,7 +2001,7 @@ function releaseEvidenceAssets(marker) {
       { name: "audit-result.json", sha256: marker.audit.canonicalSha256, status: "matching" },
     ]
   }
-  return []
+  return smokeAssets
 }
 
 function baseAssetSetSha256() {

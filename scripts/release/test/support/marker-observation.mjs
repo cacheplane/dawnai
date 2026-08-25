@@ -8,6 +8,13 @@ export const MANIFEST_SHA256 = "a".repeat(64)
 export const RELEASE_RECORD_SHA256 = "b".repeat(64)
 export const MANIFEST_BUNDLE_SHA256 = "c".repeat(64)
 export const AUDIT_SHA256 = "d".repeat(64)
+export const SMOKE_LANES = Object.freeze([
+  "metadata",
+  "published-harness",
+  "runtime-targets",
+  "scaffold",
+  "storage",
+])
 
 export function candidate() {
   return {
@@ -135,18 +142,16 @@ export function observationForMarker({
         ...terminalAssets(marker),
       ],
     },
-    requiredSmokeLanes: ["published-install"],
-    smokes: [
-      {
-        name: "published-install",
-        status: smokesComplete ? "passed" : "pending",
-        version: VERSION,
-        commitSha: COMMIT_SHA,
-        manifestSha256: MANIFEST_SHA256,
-        workflowRunId: 400,
-        runAttempt: 1,
-      },
-    ],
+    requiredSmokeLanes: [...SMOKE_LANES],
+    smokes: SMOKE_LANES.map((lane) => ({
+      name: lane,
+      status: smokesComplete ? "passed" : "pending",
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256: MANIFEST_SHA256,
+      workflowRunId: 400,
+      runAttempt: 1,
+    })),
     audit: auditObservation(phase),
     abandonment: {
       requested: phase === "ABANDONED_PREPUBLICATION",
@@ -233,16 +238,48 @@ function releaseMarker(phase, packages) {
     ].includes(phase)
       ? "e".repeat(64)
       : null,
-    smokeAggregateSha256: [
-      "SMOKES_COMPLETE",
-      "AUDIT_DISPATCHED",
-      "AUDIT_RETRYABLE",
-      "AUDIT_VERIFIED",
-    ].includes(phase)
-      ? "f".repeat(64)
+    smoke: ["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+      phase,
+    )
+      ? smokeDescriptor()
       : null,
     audit,
     abandonmentSha256: phase === "ABANDONED_PREPUBLICATION" ? "7".repeat(64) : null,
+  }
+}
+
+export function smokeDescriptor({
+  workflowRunId = 400,
+  runAttempt = 1,
+  aggregateSha256 = "f".repeat(64),
+  releaseAssetIdStart = 1_000,
+  receiptSha256s = SMOKE_LANES.map((_lane, index) => (index + 1).toString(16).padStart(64, "0")),
+} = {}) {
+  const receiptAssets = SMOKE_LANES.map((lane, index) => ({
+    lane,
+    workflowRunId,
+    runAttempt,
+    releaseAssetId: releaseAssetIdStart + index,
+    releaseAssetName: `smoke-result-${lane}-${workflowRunId}-${runAttempt}.json`,
+    receiptSha256: receiptSha256s[index],
+  }))
+  return {
+    workflow: ".github/workflows/release.yml",
+    workflowRunId,
+    runAttempt,
+    requiredLanes: [...SMOKE_LANES],
+    artifacts: receiptAssets.map((receipt, index) => ({
+      lane: receipt.lane,
+      actionsArtifactId: String(900 + index),
+      actionsArtifactName: `smoke-result-${receipt.lane}-${workflowRunId}-${runAttempt}`,
+      actionsArtifactUrl: `https://github.com/cacheplane/dawnai/actions/runs/${workflowRunId}/artifacts/${900 + index}`,
+      actionsArtifactServiceDigest: `sha256:${"8".repeat(64)}`,
+      releaseAssetId: receipt.releaseAssetId,
+      releaseAssetName: receipt.releaseAssetName,
+      receiptSha256: receipt.receiptSha256,
+    })),
+    receiptAssets,
+    aggregateSha256,
   }
 }
 
@@ -275,8 +312,17 @@ function terminalAssets(marker) {
       },
     ]
   }
+  const smokeAssets =
+    marker.smoke === null
+      ? []
+      : marker.smoke.receiptAssets.map((asset) => ({
+          name: asset.releaseAssetName,
+          status: "matching",
+          sha256: asset.receiptSha256,
+        }))
   if (marker.phase === "AUDIT_RETRYABLE") {
     return [
+      ...smokeAssets,
       {
         name: marker.audit.attemptAssetName,
         status: "matching",
@@ -286,6 +332,7 @@ function terminalAssets(marker) {
   }
   if (marker.phase === "AUDIT_VERIFIED") {
     return [
+      ...smokeAssets,
       {
         name: marker.audit.attemptAssetName,
         status: "matching",
@@ -294,7 +341,7 @@ function terminalAssets(marker) {
       { name: "audit-result.json", status: "matching", sha256: marker.audit.canonicalSha256 },
     ]
   }
-  return []
+  return smokeAssets
 }
 
 function auditObservation(phase) {
