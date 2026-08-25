@@ -5,6 +5,8 @@ import { createCandidateTagWriter } from "../adapters/git-write.mjs"
 
 const SHA = "0123456789abcdef0123456789abcdef01234567"
 const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+const TAG_OBJECT_SHA = "b".repeat(40)
+const OTHER_TAG_OBJECT_SHA = "c".repeat(40)
 const ROOT = "/tmp/dawn-release-writer-test"
 
 test("candidate tag writer exposes only annotated creation and push", () => {
@@ -63,7 +65,10 @@ test("createAnnotatedTag is idempotent only when the existing tag resolves to th
         calls.push([command, args, options])
         if (args[0] === "merge-base") return ""
         if (args[0] === "show-ref") return ""
-        if (args[0] === "rev-parse") return `${existingSha}\n`
+        if (args[0] === "cat-file") return "tag\n"
+        if (args[0] === "rev-parse") {
+          return args.at(-1).endsWith("^{commit}") ? `${existingSha}\n` : `${TAG_OBJECT_SHA}\n`
+        }
         assert.fail("an existing tag must never be recreated")
       },
     })
@@ -83,6 +88,8 @@ test("createAnnotatedTag is idempotent only when the existing tag resolves to th
       [
         ["merge-base", "--is-ancestor", SHA, "refs/heads/main"],
         ["show-ref", "--verify", "--quiet", "refs/tags/v0.8.22"],
+        ["cat-file", "-t", "refs/tags/v0.8.22"],
+        ["rev-parse", "--verify", "refs/tags/v0.8.22"],
         ["rev-parse", "--verify", "refs/tags/v0.8.22^{commit}"],
       ],
     )
@@ -129,6 +136,7 @@ test("a local tag lookup failure is never reclassified as exact absence", async 
     root: ROOT,
     run: async (_command, args) => {
       if (args[0] === "merge-base" || args[0] === "show-ref") return ""
+      if (args[0] === "cat-file") return "tag\n"
       if (args[0] === "rev-parse") {
         throw Object.assign(new Error("local object database failed"), { code: 128 })
       }
@@ -153,14 +161,23 @@ test("a local tag lookup failure is never reclassified as exact absence", async 
 
 test("pushTag validates local and remote identity, then uses one non-force exact refspec", async () => {
   const calls = []
+  let remoteRead = 0
   const writer = createCandidateTagWriter({
     root: ROOT,
     run: async (command, args, options) => {
       calls.push([command, args, options])
       if (args[0] === "show-ref") return ""
-      if (args[0] === "rev-parse") return `${SHA}\n`
+      if (args[0] === "cat-file") return "tag\n"
+      if (args[0] === "rev-parse") {
+        return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+      }
       if (args[0] === "merge-base") return ""
-      if (args[0] === "ls-remote") return ""
+      if (args[0] === "ls-remote") {
+        remoteRead += 1
+        return remoteRead === 1
+          ? ""
+          : `${TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n${SHA}\trefs/tags/v0.8.22^{}\n`
+      }
       if (args[0] === "push") return ""
       assert.fail(`unexpected Git operation ${args[0]}`)
     },
@@ -173,10 +190,13 @@ test("pushTag validates local and remote identity, then uses one non-force exact
     calls.map(([, args]) => args),
     [
       ["show-ref", "--verify", "--quiet", "refs/tags/v0.8.22"],
+      ["cat-file", "-t", "refs/tags/v0.8.22"],
+      ["rev-parse", "--verify", "refs/tags/v0.8.22"],
       ["rev-parse", "--verify", "refs/tags/v0.8.22^{commit}"],
       ["merge-base", "--is-ancestor", SHA, "refs/heads/main"],
       ["ls-remote", "--tags", "origin", "refs/tags/v0.8.22", "refs/tags/v0.8.22^{}"],
       ["push", "origin", "refs/tags/v0.8.22:refs/tags/v0.8.22"],
+      ["ls-remote", "--tags", "origin", "refs/tags/v0.8.22", "refs/tags/v0.8.22^{}"],
     ],
   )
   assert.ok(calls.every(([, args]) => !args.includes("--force") && !args.includes("-f")))
@@ -190,7 +210,10 @@ test("pushTag is a no-op for exact remote identity and conflicts for another com
       run: async (_command, args) => {
         calls.push(args)
         if (args[0] === "show-ref") return ""
-        if (args[0] === "rev-parse") return `${SHA}\n`
+        if (args[0] === "cat-file") return "tag\n"
+        if (args[0] === "rev-parse") {
+          return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+        }
         if (args[0] === "merge-base") return ""
         if (args[0] === "ls-remote") {
           return `${"b".repeat(40)}\trefs/tags/v0.8.22\n${remoteSha}\trefs/tags/v0.8.22^{}\n`
@@ -209,6 +232,156 @@ test("pushTag is a no-op for exact remote identity and conflicts for another com
       calls.some((args) => args[0] === "push"),
       false,
     )
+  }
+})
+
+test("candidate tag writer rejects a local lightweight tag", async () => {
+  let mutated = false
+  const writer = createCandidateTagWriter({
+    root: ROOT,
+    run: async (_command, args) => {
+      if (args[0] === "merge-base" || args[0] === "show-ref") return ""
+      if (args[0] === "cat-file") return "commit\n"
+      if (args[0] === "rev-parse") return `${SHA}\n`
+      if (args[0] === "tag" || args[0] === "push") mutated = true
+      return ""
+    },
+  })
+
+  await assert.rejects(
+    writer.createAnnotatedTag({
+      tag: "v0.8.22",
+      sha: SHA,
+      message: "Dawn v0.8.22 candidate",
+    }),
+    /annotated.*tag|tag.*object/iu,
+  )
+  assert.equal(mutated, false)
+})
+
+test("pushTag rejects direct-only lightweight and peeled-only remote refs", async () => {
+  const remoteRecords = [`${SHA}\trefs/tags/v0.8.22\n`, `${SHA}\trefs/tags/v0.8.22^{}\n`]
+
+  for (const remote of remoteRecords) {
+    let pushed = false
+    const writer = createCandidateTagWriter({
+      root: ROOT,
+      run: async (_command, args) => {
+        if (args[0] === "show-ref" || args[0] === "merge-base") return ""
+        if (args[0] === "cat-file") return "tag\n"
+        if (args[0] === "rev-parse") {
+          return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+        }
+        if (args[0] === "ls-remote") return remote
+        if (args[0] === "push") pushed = true
+        return ""
+      },
+    })
+
+    await assert.rejects(writer.pushTag({ tag: "v0.8.22" }), /remote.*tag|tag.*identity/iu)
+    assert.equal(pushed, false)
+  }
+})
+
+test("pushTag rejects duplicate direct and peeled remote records", async () => {
+  const direct = `${TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n`
+  const peeled = `${SHA}\trefs/tags/v0.8.22^{}\n`
+
+  for (const remote of [`${direct}${direct}${peeled}`, `${direct}${peeled}${peeled}`]) {
+    let pushed = false
+    const writer = createCandidateTagWriter({
+      root: ROOT,
+      run: async (_command, args) => {
+        if (args[0] === "show-ref" || args[0] === "merge-base") return ""
+        if (args[0] === "cat-file") return "tag\n"
+        if (args[0] === "rev-parse") {
+          return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+        }
+        if (args[0] === "ls-remote") return remote
+        if (args[0] === "push") pushed = true
+        return ""
+      },
+    })
+
+    await assert.rejects(writer.pushTag({ tag: "v0.8.22" }), /ambiguous|exact.*pair/iu)
+    assert.equal(pushed, false)
+  }
+})
+
+test("pushTag rejects a remote tag-object pair whose peel does not match the local tag", async () => {
+  let pushed = false
+  const writer = createCandidateTagWriter({
+    root: ROOT,
+    run: async (_command, args) => {
+      if (args[0] === "show-ref" || args[0] === "merge-base") return ""
+      if (args[0] === "cat-file") return "tag\n"
+      if (args[0] === "rev-parse") {
+        return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+      }
+      if (args[0] === "ls-remote") {
+        return `${TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n${OTHER_SHA}\trefs/tags/v0.8.22^{}\n`
+      }
+      if (args[0] === "push") pushed = true
+      return ""
+    },
+  })
+
+  await assert.rejects(writer.pushTag({ tag: "v0.8.22" }), /another commit|peel|identity/iu)
+  assert.equal(pushed, false)
+})
+
+test("pushTag rejects a remote tag object that differs from the exact local annotated tag", async () => {
+  let pushed = false
+  const writer = createCandidateTagWriter({
+    root: ROOT,
+    run: async (_command, args) => {
+      if (args[0] === "show-ref" || args[0] === "merge-base") return ""
+      if (args[0] === "cat-file") return "tag\n"
+      if (args[0] === "rev-parse") {
+        return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+      }
+      if (args[0] === "ls-remote") {
+        return `${OTHER_TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n${SHA}\trefs/tags/v0.8.22^{}\n`
+      }
+      if (args[0] === "push") pushed = true
+      return ""
+    },
+  })
+
+  await assert.rejects(writer.pushTag({ tag: "v0.8.22" }), /another.*tag|tag.*identity/iu)
+  assert.equal(pushed, false)
+})
+
+test("pushTag re-reads and rejects a changed or invalid exact remote pair after push", async () => {
+  const changed = `${OTHER_TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n${SHA}\trefs/tags/v0.8.22^{}\n`
+  const invalid = `${TAG_OBJECT_SHA}\trefs/tags/v0.8.22\n`
+
+  for (const afterPush of [changed, invalid]) {
+    let remoteRead = 0
+    let pushed = false
+    const writer = createCandidateTagWriter({
+      root: ROOT,
+      run: async (_command, args) => {
+        if (args[0] === "show-ref" || args[0] === "merge-base") return ""
+        if (args[0] === "cat-file") return "tag\n"
+        if (args[0] === "rev-parse") {
+          return args.at(-1).endsWith("^{commit}") ? `${SHA}\n` : `${TAG_OBJECT_SHA}\n`
+        }
+        if (args[0] === "ls-remote") {
+          remoteRead += 1
+          return remoteRead === 1 ? "" : afterPush
+        }
+        if (args[0] === "push") {
+          pushed = true
+          return ""
+        }
+        assert.fail(`unexpected Git operation ${args[0]}`)
+      },
+    })
+
+    await assert.rejects(writer.pushTag({ tag: "v0.8.22" }), /remote.*tag|tag.*identity/iu)
+    assert.equal(pushed, true)
+    assert.equal(remoteRead, 2)
   }
 })
 

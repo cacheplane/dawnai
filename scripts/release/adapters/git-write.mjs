@@ -39,7 +39,7 @@ export function createCandidateTagWriter({ root, run = runCommand }) {
 
       const existingSha = await resolveLocalTag(execute, tag)
       if (existingSha !== null) {
-        if (existingSha !== sha) throw tagConflict(tag)
+        if (existingSha.commitSha !== sha) throw tagConflict(tag)
         return Object.freeze({ status: "present", tag, sha })
       }
 
@@ -49,21 +49,27 @@ export function createCandidateTagWriter({ root, run = runCommand }) {
 
     async pushTag({ tag }) {
       validateCandidateTag(tag)
-      const sha = await resolveLocalTag(execute, tag)
-      if (sha === null) throw new Error(`Candidate tag ${tag} does not exist locally`)
-      await requireMainAncestry(execute, sha)
+      const local = await resolveLocalTag(execute, tag)
+      if (local === null) throw new Error(`Candidate tag ${tag} does not exist locally`)
+      await requireMainAncestry(execute, local.commitSha)
 
       const remote = parseRemoteTag(
         await execute(["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]),
         tag,
       )
       if (remote !== null) {
-        if (remote !== sha) throw tagConflict(tag)
-        return Object.freeze({ status: "present", tag, sha })
+        requireExactRemoteTag(remote, local, tag)
+        return Object.freeze({ status: "present", tag, sha: local.commitSha })
       }
 
       await execute(["push", "origin", `refs/tags/${tag}:refs/tags/${tag}`])
-      return Object.freeze({ status: "pushed", tag, sha })
+      const pushed = parseRemoteTag(
+        await execute(["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]),
+        tag,
+      )
+      if (pushed === null) throw new Error(`Remote candidate tag ${tag} is absent after push`)
+      requireExactRemoteTag(pushed, local, tag)
+      return Object.freeze({ status: "pushed", tag, sha: local.commitSha })
     },
   })
 }
@@ -80,13 +86,20 @@ async function requireMainAncestry(execute, sha) {
 }
 
 async function resolveLocalTag(execute, tag) {
+  const ref = `refs/tags/${tag}`
   try {
-    await execute(["show-ref", "--verify", "--quiet", `refs/tags/${tag}`])
+    await execute(["show-ref", "--verify", "--quiet", ref])
   } catch (error) {
     if (exitCode(error) === 1) return null
     throw error
   }
-  return exactSha(await execute(["rev-parse", "--verify", `refs/tags/${tag}^{commit}`]))
+  const objectType = (await execute(["cat-file", "-t", ref])).trim()
+  if (objectType !== "tag") {
+    throw new Error(`Candidate tag ${tag} must be an annotated Git tag object`)
+  }
+  const objectSha = exactSha(await execute(["rev-parse", "--verify", ref]))
+  const commitSha = exactSha(await execute(["rev-parse", "--verify", `${ref}^{commit}`]))
+  return Object.freeze({ objectSha, commitSha })
 }
 
 function parseRemoteTag(output, tag) {
@@ -101,18 +114,24 @@ function parseRemoteTag(output, tag) {
       throw new Error("Remote candidate tag identity is malformed")
     }
     if (match[2] === directRef) {
-      if (direct !== null && direct !== match[1]) {
-        throw new Error("Remote candidate tag identity is ambiguous")
-      }
+      if (direct !== null) throw new Error("Remote candidate tag identity is ambiguous")
       direct = match[1]
     } else {
-      if (peeled !== null && peeled !== match[1]) {
-        throw new Error("Remote candidate tag identity is ambiguous")
-      }
+      if (peeled !== null) throw new Error("Remote candidate tag identity is ambiguous")
       peeled = match[1]
     }
   }
-  return peeled ?? direct
+  if (direct === null || peeled === null) {
+    throw new Error("Remote candidate tag identity must be one exact direct/peeled pair")
+  }
+  return Object.freeze({ objectSha: direct, commitSha: peeled })
+}
+
+function requireExactRemoteTag(remote, local, tag) {
+  if (remote.objectSha !== local.objectSha) {
+    throw new Error(`Remote candidate tag ${tag} resolves to another annotated tag object`)
+  }
+  if (remote.commitSha !== local.commitSha) throw tagConflict(tag)
 }
 
 function validateCandidateTag(tag) {
