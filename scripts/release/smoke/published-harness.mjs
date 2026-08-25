@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto"
+import { createHash, randomUUID as defaultRandomUUID } from "node:crypto"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -32,6 +32,7 @@ import {
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
+import { dockerUuidToken } from "./docker-identity.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -46,22 +47,26 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
     strictRunner.runCommand(command, args, productionCommandOptions(runOptions))
   const dependencies = {
     makeTempDir,
+    randomUUID: defaultRandomUUID,
     readManifest: defaultReadManifest,
     removeDir,
     runHarnessAssertion: (root, lane, version) =>
       defaultRunHarnessAssertion(root, lane, version, runCommand),
     ...overrides,
+    cleanupDockerProbe: (identity) => cleanupDockerSandboxResources(identity, { runCommand }),
     probeContainment: strictRunner.probe,
     runCommand,
   }
   dependencies.runAgUiProbe ??= (root) =>
     runAgUiInstalledProbe(root, { runCommand: dependencies.runCommand })
-  dependencies.runDockerProbe ??= (root) =>
+  dependencies.runDockerProbe ??= (root, identity) =>
     runDockerSandboxInstalledProbe(root, {
       runCommand: dependencies.runCommand,
+      threadId: identity.threadId,
     })
   dependencies.runTypeScriptProbe ??= (root) =>
     runInstalledTypeScriptProbe(root, dependencies.runCommand, options.version)
+  const dockerIdentity = publishedDockerProbeIdentity(dependencies.randomUUID)
 
   return executeSmokeLane(
     { lane: "published-harness", ...options },
@@ -84,6 +89,9 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
       deferCleanup("cleanup", "published harness consumer removed", () =>
         dependencies.removeDir(root),
       )
+      deferCleanup("cleanup-docker-probe", "installed Docker probe resources removed", () =>
+        dependencies.cleanupDockerProbe(dockerIdentity),
+      )
 
       await check(
         "exact-install",
@@ -94,6 +102,7 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
             "npm",
             [
               "install",
+              "--ignore-scripts",
               "--save-exact",
               ...CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => `${name}@${options.version}`),
             ],
@@ -133,7 +142,7 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
         dependencies.runTypeScriptProbe(root),
       )
       await check("docker-pid-recovery", "installed Docker PID recovery probe passed", () =>
-        dependencies.runDockerProbe(root),
+        dependencies.runDockerProbe(root, dockerIdentity),
       )
       for (const lane of ["framework", "runtime", "smoke"]) {
         await check(`${lane}-assertions`, `${lane} installed-package assertions passed`, () =>
@@ -143,6 +152,63 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
     },
     overrides,
   )
+}
+
+export function publishedDockerProbeIdentity(randomUUID = defaultRandomUUID) {
+  const token = dockerUuidToken(randomUUID, "Published Docker probe")
+  const threadId = `published-uuid-${token}`
+  return Object.freeze({
+    threadId,
+    containerName: `dawn-sbx-${threadId}`,
+    volumeName: `dawn-sbx-vol-${threadId}`,
+  })
+}
+
+export async function cleanupDockerSandboxResources(identity, { runCommand } = {}) {
+  assertDockerProbeIdentity(identity)
+  if (typeof runCommand !== "function") {
+    throw new TypeError("Published Docker cleanup requires a strict runner")
+  }
+  await runCommand("docker", ["rm", "-f", identity.containerName], {
+    acceptedExitCodes: [0, 1],
+  })
+  await runCommand("docker", ["volume", "rm", "--force", identity.volumeName], {
+    acceptedExitCodes: [0, 1],
+  })
+  const containers = await runCommand("docker", [
+    "container",
+    "ls",
+    "--all",
+    "--filter",
+    `name=^/${identity.containerName}$`,
+    "--format",
+    "{{.Names}}",
+  ])
+  const volumes = await runCommand("docker", [
+    "volume",
+    "ls",
+    "--filter",
+    `name=^${identity.volumeName}$`,
+    "--format",
+    "{{.Name}}",
+  ])
+  if (containers.stdout.trim() !== "" || volumes.stdout.trim() !== "") {
+    throw new Error("Published Docker probe resources remain after cleanup")
+  }
+}
+
+function assertDockerProbeIdentity(identity) {
+  if (
+    identity === null ||
+    typeof identity !== "object" ||
+    Array.isArray(identity) ||
+    Object.keys(identity).sort().join(",") !== "containerName,threadId,volumeName" ||
+    !/^published-uuid-[0-9a-f]{32}$/u.test(identity.threadId) ||
+    identity.containerName !== `dawn-sbx-${identity.threadId}` ||
+    identity.volumeName !== `dawn-sbx-vol-${identity.threadId}`
+  ) {
+    throw new TypeError("Published Docker probe identity is invalid")
+  }
 }
 
 async function defaultReadManifest(options) {

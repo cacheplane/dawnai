@@ -10,8 +10,13 @@ import {
   verifyAuditSuccess,
   waitForAudit,
 } from "../audit.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { canonicalReleaseBody, parseReleaseMarker, releaseBodySha256 } from "../metadata.mjs"
-import { canonicalSmokeResultBytes } from "../smoke-result.mjs"
+import {
+  aggregateSmokeResults,
+  canonicalAggregateSmokeResultBytes,
+  canonicalSmokeResultBytes,
+} from "../smoke-result.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
 import { SMOKE_LANES, smokeDescriptor } from "./support/marker-observation.mjs"
 
@@ -111,6 +116,44 @@ test("dispatch recording CASes only an exact mutable SMOKES_COMPLETE draft", asy
     }),
     /dispatch|phase|conflict/iu,
   )
+})
+
+test("audit observation parses durable smoke receipts and recomputes their selected aggregate", async () => {
+  const malformed = auditRemote()
+  const malformedMarker = structuredClone(parseReleaseMarker(malformed.release.body))
+  const receipt = malformedMarker.smoke.receiptAssets[0]
+  const malformedBytes = Buffer.from("{}")
+  const malformedDigest = sha256(malformedBytes)
+  malformed.assets.get(receipt.releaseAssetName).bytes = malformedBytes
+  receipt.receiptSha256 = malformedDigest
+  malformedMarker.smoke.artifacts[0].receiptSha256 = malformedDigest
+  malformed.release.body = canonicalReleaseBody({ marker: malformedMarker, manifest: null })
+  await assert.rejects(
+    recordAuditDispatch({
+      candidate: CANDIDATE,
+      dispatch: dispatch(501),
+      github: malformed.releaseGitHub,
+    }),
+    /smoke|canonical|result|receipt/iu,
+  )
+  assert.equal(malformed.updateCount, 0)
+
+  const aggregateMismatch = auditRemote()
+  const aggregateMarker = structuredClone(parseReleaseMarker(aggregateMismatch.release.body))
+  aggregateMarker.smoke.aggregateSha256 = "0".repeat(64)
+  aggregateMismatch.release.body = canonicalReleaseBody({
+    marker: aggregateMarker,
+    manifest: null,
+  })
+  await assert.rejects(
+    recordAuditDispatch({
+      candidate: CANDIDATE,
+      dispatch: dispatch(501),
+      github: aggregateMismatch.releaseGitHub,
+    }),
+    /smoke|aggregate|digest/iu,
+  )
+  assert.equal(aggregateMismatch.updateCount, 0)
 })
 
 test("a failed audit is attempt-scoped, retryable, idempotent, and preserves base escrow", async () => {
@@ -663,9 +706,10 @@ function auditRemote() {
         })),
       )
     },
-    async downloadReleaseAsset({ assetId }) {
+    async downloadReleaseAsset({ assetId, maximumBytes }) {
       const asset = [...remote.assets.values()].find((entry) => entry.id === assetId)
       assert.ok(asset)
+      assert.equal(maximumBytes, asset.bytes.byteLength)
       return {
         status: "PRESENT",
         operation: "release-asset-download",
@@ -750,6 +794,16 @@ function baseFixture() {
       conclusion: "success",
     }),
   }))
+  const aggregate = aggregateSmokeResults(
+    smokeAssets.map(({ bytes }) => bytes),
+    {
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256: sha256(manifest.bytes),
+      workflowRunId: 400,
+      runAttempt: 1,
+    },
+  )
   const marker = {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
@@ -764,6 +818,7 @@ function baseFixture() {
     attestationSet,
     npmEvidenceSha256: "e".repeat(64),
     smoke: smokeDescriptor({
+      aggregateSha256: sha256(canonicalAggregateSmokeResultBytes(aggregate)),
       releaseAssetIdStart: 145,
       receiptSha256s: smokeAssets.map((asset) => sha256(asset.bytes)),
     }),
@@ -822,7 +877,8 @@ function actionsRemote({
       const artifact = remote.artifacts.find(({ id }) => id === artifactId)
       return present("actions-artifact", artifact)
     },
-    async downloadActionsArtifact({ artifactId }) {
+    async downloadActionsArtifact({ artifactId, maximumBytes }) {
+      assert.equal(maximumBytes, RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes)
       remote.calls.push(["downloadActionsArtifact", artifactId])
       return {
         status: "PRESENT",

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { runStorageSmoke, startDisposableDatabase } from "../smoke/storage.mjs"
+import {
+  runStorageSmoke,
+  startDisposableDatabase,
+  storageDockerIdentities,
+} from "../smoke/storage.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
 
 const options = Object.freeze({
@@ -10,12 +14,32 @@ const options = Object.freeze({
   result: "/results/storage.json",
 })
 
+test("storage Docker identities use one validated UUID without cross-lane collisions", () => {
+  const first = storageDockerIdentities(() => "123e4567-e89b-42d3-a456-426614174000")
+  const second = storageDockerIdentities(() => "123e4567-e89b-42d3-b456-426614174001")
+  assert.deepEqual(first, {
+    pgvector: "dawn-storage-pgvector-123e4567e89b42d3a456426614174000",
+    postgres: "dawn-storage-postgres-123e4567e89b42d3a456426614174000",
+  })
+  assert.notEqual(first.pgvector, first.postgres)
+  assert.notEqual(first.pgvector, second.pgvector)
+  assert.notEqual(first.postgres, second.postgres)
+  for (const invalid of [
+    "123E4567-E89B-42D3-A456-426614174000",
+    "123e4567-e89b-12d3-a456-426614174000",
+    "not-a-uuid",
+  ]) {
+    assert.throws(() => storageDockerIdentities(() => invalid), /UUID/u)
+  }
+})
+
 test("runs exact pgvector and Postgres packages against separate disposable databases", async () => {
   const events = []
   let receipt
   await runStorageSmoke(options, {
     env: releaseEnv("601", "1"),
     now: clock(),
+    randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
     async makeTempDir() {
       return "/tmp/storage-consumer"
     },
@@ -82,6 +106,7 @@ test("records probe failure and removes each started container and project", asy
     runStorageSmoke(options, {
       env: releaseEnv("602", "2"),
       now: clock(),
+      randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
       async makeTempDir() {
         return "/tmp/storage-failure"
       },
@@ -145,6 +170,64 @@ test("self-cleans a container when readiness fails before lane cleanup registrat
     ["run", "exec", "rm"],
   )
   assert.deepEqual(calls.at(-1), ["rm", "-f", "dawn-startup-failure"])
+})
+
+test("pre-registers both exact container cleanups before the first Docker start", async () => {
+  const events = []
+  await assert.rejects(
+    runStorageSmoke(options, {
+      env: releaseEnv("603", "1"),
+      now: clock(),
+      randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
+      async makeTempDir() {
+        return "/tmp/storage-start-failure"
+      },
+      async removeDir() {
+        events.push("remove-project")
+      },
+      strictRunner: fakeStrictRunner(async () => ({ stdout: "", stderr: "" })),
+      async startDatabase({ kind }) {
+        events.push(`start:${kind}`)
+        throw new Error("Docker start lost its response")
+      },
+      async stopContainer(name) {
+        events.push(`stop:${name}`)
+      },
+      async writeFile() {
+        events.push("receipt")
+      },
+      async mkdir() {},
+    }),
+    /Docker start lost its response/,
+  )
+  assert.deepEqual(
+    events.slice(0, 3).map((event) => event.split(":")[0]),
+    ["start", "stop", "stop"],
+  )
+  assert.match(events[1], /^stop:dawn-storage-postgres-/u)
+  assert.match(events[2], /^stop:dawn-storage-pgvector-/u)
+  assert.deepEqual(events.slice(3), ["remove-project", "receipt"])
+})
+
+test("database startup attempts cleanup even when docker run loses its response", async () => {
+  const calls = []
+  await assert.rejects(
+    startDisposableDatabase(
+      { containerName: "dawn-run-response-lost", image: "postgres:16" },
+      {
+        async runCommand(_command, args) {
+          calls.push(args)
+          if (args[0] === "run") throw new Error("response lost")
+          return { stdout: "", stderr: "" }
+        },
+      },
+    ),
+    /response lost/,
+  )
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ["run", "rm"],
+  )
 })
 
 function clock() {

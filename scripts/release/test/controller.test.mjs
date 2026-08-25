@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
+import * as nodeFileSystem from "node:fs/promises"
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -463,6 +465,42 @@ test("tag route creates and pushes only the exact candidate annotated tag", asyn
     imports.map((specifier) => new URL(specifier).pathname.split("/").at(-1)),
     ["git-write.mjs"],
   )
+})
+
+test("CLI input reads stay pinned to the opened file across a path replacement race", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-pinned-input-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidatePath = join(directory, "candidate.json")
+  await writeFile(candidatePath, JSON.stringify(CANDIDATE))
+  const racedCandidate = JSON.stringify({ ...CANDIDATE, commitSha: "b".repeat(40) })
+  assert.equal(Buffer.byteLength(racedCandidate), (await nodeFileSystem.lstat(candidatePath)).size)
+  const tagged = []
+  await runReleaseCli(["tag", "--candidate", candidatePath], {
+    cwd: directory,
+    fileSystem: {
+      ...nodeFileSystem,
+      async readFile(target, ...args) {
+        if (target === candidatePath) return Buffer.from(racedCandidate)
+        return nodeFileSystem.readFile(target, ...args)
+      },
+    },
+    async importModule() {
+      return {
+        createCandidateTagWriter() {
+          return {
+            async createAnnotatedTag(input) {
+              tagged.push(input.sha)
+              return { status: "created", tag: input.tag, sha: input.sha }
+            },
+            async pushTag({ tag }) {
+              return { status: "pushed", tag, sha: CANDIDATE.commitSha }
+            },
+          }
+        },
+      }
+    },
+  })
+  assert.deepEqual(tagged, [CANDIDATE.commitSha])
 })
 
 test("prepare route supplies every authority receipt and exact tag ref without defaults", async (t) => {
@@ -1025,6 +1063,14 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
   )
   const calls = []
   const github = { reader: {}, writer: {} }
+  const directoryOpenFlags = []
+  const pinnedFileSystem = {
+    ...nodeFileSystem,
+    async open(target, flags, ...args) {
+      if (target === smokeDirectory) directoryOpenFlags.push(flags)
+      return nodeFileSystem.open(target, flags, ...args)
+    },
+  }
   const importModule = async (specifier) => {
     const name = new URL(specifier).pathname.split("/").at(-1)
     if (name === "manifest.mjs") {
@@ -1077,6 +1123,7 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
     ],
     {
       cwd: directory,
+      fileSystem: pinnedFileSystem,
       github,
       importModule,
       environment: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "2" },
@@ -1096,6 +1143,9 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
   assert.equal(calls[1][1].smokeResults.every(Buffer.isBuffer), true)
   assert.equal(calls[1][1].workflowRunId, 701)
   assert.equal(calls[1][1].runAttempt, 2)
+  assert.equal(directoryOpenFlags.length, 1)
+  assert.notEqual(directoryOpenFlags[0] & fsConstants.O_DIRECTORY, 0)
+  assert.notEqual(directoryOpenFlags[0] & fsConstants.O_NOFOLLOW, 0)
   for (const [index, lane] of REQUIRED_RELEASE_SMOKE_LANES.entries()) {
     const received = calls[1][1].smokeResults[index]
     assert.deepEqual(received, smokeBytes.get(lane))
@@ -1333,16 +1383,27 @@ test("attestation-input writes one exact 22-subject checksum set from verified a
   const recordPath = join(directory, "record.json")
   const outputPath = join(directory, "subjects.sha256")
   await writeFile(recordPath, canonicalReleaseRecordBytes(record))
+  const directoryOpenFlags = []
+  const pinnedFileSystem = {
+    ...nodeFileSystem,
+    async open(target, flags, ...args) {
+      if (target === artifactDirectory) directoryOpenFlags.push(flags)
+      return nodeFileSystem.open(target, flags, ...args)
+    },
+  }
 
-  const result = await runReleaseCli([
-    "attestation-input",
-    "--record",
-    recordPath,
-    "--artifact-dir",
-    artifactDirectory,
-    "--output",
-    outputPath,
-  ])
+  const result = await runReleaseCli(
+    [
+      "attestation-input",
+      "--record",
+      recordPath,
+      "--artifact-dir",
+      artifactDirectory,
+      "--output",
+      outputPath,
+    ],
+    { fileSystem: pinnedFileSystem },
+  )
   const lines = (await readFile(outputPath, "utf8")).trimEnd().split("\n")
   assert.equal(lines.length, 22)
   assert.deepEqual(
@@ -1357,6 +1418,9 @@ test("attestation-input writes one exact 22-subject checksum set from verified a
     manifestSha256: record.manifestSha256,
     subjectCount: 22,
   })
+  assert.equal(directoryOpenFlags.length, 1)
+  assert.notEqual(directoryOpenFlags[0] & fsConstants.O_DIRECTORY, 0)
+  assert.notEqual(directoryOpenFlags[0] & fsConstants.O_NOFOLLOW, 0)
 
   await writeFile(join(artifactDirectory, manifest.packages[4].filename), "corrupt")
   await assert.rejects(

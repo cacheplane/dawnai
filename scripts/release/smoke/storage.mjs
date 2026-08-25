@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID as defaultRandomUUID } from "node:crypto"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -15,6 +16,7 @@ import {
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
+import { dockerUuidToken } from "./docker-identity.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -28,6 +30,7 @@ export async function runStorageSmoke(options, overrides = {}) {
     strictRunner.runCommand(command, args, productionCommandOptions(runOptions))
   const dependencies = {
     makeTempDir,
+    randomUUID: defaultRandomUUID,
     removeDir,
     runPgvectorProbe: (root, databaseUrl) => defaultPgvectorProbe(root, databaseUrl, runCommand),
     runPostgresProbe: (root, databaseUrl) => defaultPostgresProbe(root, databaseUrl, runCommand),
@@ -37,7 +40,9 @@ export async function runStorageSmoke(options, overrides = {}) {
     probeContainment: strictRunner.probe,
     runCommand,
   }
-  const nonce = `${process.pid}-${Date.now()}`
+  const identities = storageDockerIdentities(dependencies.randomUUID)
+  const pgvectorContainer = identities.pgvector
+  const postgresContainer = identities.postgres
 
   return executeSmokeLane(
     { lane: "storage", ...options },
@@ -52,6 +57,12 @@ export async function runStorageSmoke(options, overrides = {}) {
       )
       deferCleanup("cleanup-project", "storage consumer removed", () =>
         dependencies.removeDir(root),
+      )
+      deferCleanup("cleanup-pgvector", "pgvector container removed", () =>
+        dependencies.stopContainer(pgvectorContainer),
+      )
+      deferCleanup("cleanup-postgres", "Postgres container removed", () =>
+        dependencies.stopContainer(postgresContainer),
       )
 
       await check("docker", "Docker daemon is available", () =>
@@ -73,7 +84,6 @@ export async function runStorageSmoke(options, overrides = {}) {
         )
       })
 
-      const pgvectorContainer = `dawn-storage-pgvector-${nonce}`
       const pgvectorUrl = await check(
         "pgvector-database",
         "disposable pgvector database ready",
@@ -84,14 +94,10 @@ export async function runStorageSmoke(options, overrides = {}) {
             image: "pgvector/pgvector:pg16",
           }),
       )
-      deferCleanup("cleanup-pgvector", "pgvector container removed", () =>
-        dependencies.stopContainer(pgvectorContainer),
-      )
       await check("pgvector-runtime", "pgvector exact-package runtime passed", () =>
         dependencies.runPgvectorProbe(root, pgvectorUrl),
       )
 
-      const postgresContainer = `dawn-storage-postgres-${nonce}`
       const postgresUrl = await check(
         "postgres-database",
         "disposable Postgres database ready",
@@ -102,15 +108,20 @@ export async function runStorageSmoke(options, overrides = {}) {
             image: "postgres:16",
           }),
       )
-      deferCleanup("cleanup-postgres", "Postgres container removed", () =>
-        dependencies.stopContainer(postgresContainer),
-      )
       await check("postgres-runtime", "Postgres storage exact-package runtime passed", () =>
         dependencies.runPostgresProbe(root, postgresUrl),
       )
     },
     overrides,
   )
+}
+
+export function storageDockerIdentities(randomUUID = defaultRandomUUID) {
+  const token = dockerUuidToken(randomUUID, "Storage Docker probe")
+  return Object.freeze({
+    pgvector: `dawn-storage-pgvector-${token}`,
+    postgres: `dawn-storage-postgres-${token}`,
+  })
 }
 
 export async function startDisposableDatabase(
@@ -123,7 +134,7 @@ export async function startDisposableDatabase(
   if (typeof runCommand !== "function") {
     throw new TypeError("Database command execution requires a strict runner")
   }
-  let started = false
+  assertDatabaseDockerIdentity(containerName, image)
   try {
     await runCommand("docker", [
       "run",
@@ -136,7 +147,6 @@ export async function startDisposableDatabase(
       "127.0.0.1::5432",
       image,
     ])
-    started = true
     let lastError
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
@@ -150,9 +160,8 @@ export async function startDisposableDatabase(
     }
     throw new Error(`Database container did not become ready: ${lastError?.message ?? "unknown"}`)
   } catch (error) {
-    if (!started) throw error
     try {
-      await runCommand("docker", ["rm", "-f", containerName])
+      await runCommand("docker", ["rm", "-f", containerName], { acceptedExitCodes: [0, 1] })
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -168,7 +177,32 @@ function defaultSleep(milliseconds) {
 }
 
 async function defaultStopContainer(name, runCommand) {
-  await runCommand("docker", ["rm", "-f", name])
+  if (!/^dawn-storage-(?:pgvector|postgres)-[0-9a-f]{32}$/u.test(name)) {
+    throw new TypeError("Storage Docker container identity is invalid")
+  }
+  await runCommand("docker", ["rm", "-f", name], { acceptedExitCodes: [0, 1] })
+  const remaining = await runCommand("docker", [
+    "container",
+    "ls",
+    "--all",
+    "--filter",
+    `name=^/${name}$`,
+    "--format",
+    "{{.Names}}",
+  ])
+  if (remaining.stdout.trim() !== "") {
+    throw new Error(`Storage Docker container ${name} remains after cleanup`)
+  }
+}
+
+function assertDatabaseDockerIdentity(containerName, image) {
+  if (
+    typeof containerName !== "string" ||
+    !/^[a-z0-9][a-z0-9_.-]{0,127}$/u.test(containerName) ||
+    !["postgres:16", "pgvector/pgvector:pg16"].includes(image)
+  ) {
+    throw new TypeError("Disposable database Docker identity is invalid")
+  }
 }
 
 async function defaultPgvectorProbe(root, databaseUrl, runCommand) {

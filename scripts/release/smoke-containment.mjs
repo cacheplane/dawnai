@@ -48,7 +48,7 @@ export function createSystemdCgroupContainment(overrides = {}) {
     shimPath: SHIM_PATH,
     sleep: (milliseconds) =>
       new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
-    spawnClient: defaultSpawnClient,
+    spawnClient: spawnPrivilegedClient,
     uid: typeof process.getuid === "function" ? process.getuid() : null,
     ...overrides,
   }
@@ -694,8 +694,23 @@ function canonicalDescriptor({ command, args, cwd, env, gatePath, readyPath }) {
   )
 }
 
-function defaultSpawnClient({ args, command, cwd, input, maxOutputBytes, outerTimeoutMs }) {
-  const child = spawn(command, args, {
+export function spawnPrivilegedClient(
+  { args, command, cwd, input, maxOutputBytes, outerTimeoutMs },
+  overrides = {},
+) {
+  const spawnImpl = overrides.spawnImpl ?? spawn
+  const setTimer = overrides.setTimer ?? setTimeout
+  const clearTimer = overrides.clearTimer ?? clearTimeout
+  const signalTree = overrides.signalTree ?? signalClientTree
+  if (
+    typeof spawnImpl !== "function" ||
+    typeof setTimer !== "function" ||
+    typeof clearTimer !== "function" ||
+    typeof signalTree !== "function"
+  ) {
+    throw new TypeError("Privileged client process dependencies are invalid")
+  }
+  const child = spawnImpl(command, args, {
     cwd,
     detached: true,
     env: { PATH: "/usr/bin:/bin" },
@@ -711,7 +726,10 @@ function defaultSpawnClient({ args, command, cwd, input, maxOutputBytes, outerTi
     outputLimitResolve = resolvePromise
   })
   let settled = false
+  let terminationStarted = false
+  let hardKillSent = false
   let outerTimer
+  let hardKillTimer
   let doneResolve
   let doneReject
   const done = new Promise((resolvePromise, rejectPromise) => {
@@ -743,13 +761,19 @@ function defaultSpawnClient({ args, command, cwd, input, maxOutputBytes, outerTi
   child.once("error", (error) => {
     if (settled) return
     settled = true
-    clearTimeout(outerTimer)
+    clearTimer(outerTimer)
+    if (hardKillTimer !== undefined) clearTimer(hardKillTimer)
     doneReject(error)
   })
   child.once("close", (exitCode, signal) => {
     if (settled) return
     settled = true
-    clearTimeout(outerTimer)
+    clearTimer(outerTimer)
+    if (hardKillTimer !== undefined) clearTimer(hardKillTimer)
+    if (terminationStarted && !hardKillSent) {
+      hardKillSent = true
+      signalTree(child, "SIGKILL")
+    }
     doneResolve({
       stdout,
       stderr,
@@ -758,17 +782,29 @@ function defaultSpawnClient({ args, command, cwd, input, maxOutputBytes, outerTi
     })
   })
   if (input !== undefined) child.stdin.end(input)
-  outerTimer = setTimeout(() => {
+  const terminateTree = () => {
+    if (settled || terminationStarted) return
+    terminationStarted = true
+    signalTree(child, "SIGTERM")
     if (settled) return
-    signalClientTree(child, "SIGTERM")
-    setTimeout(() => signalClientTree(child, "SIGKILL"), 5_000).unref()
+    hardKillTimer = setTimer(() => {
+      hardKillTimer = undefined
+      if (!settled && !hardKillSent) {
+        hardKillSent = true
+        signalTree(child, "SIGKILL")
+      }
+    }, 5_000)
+    hardKillTimer.unref()
+  }
+  outerTimer = setTimer(() => {
+    terminateTree()
   }, outerTimeoutMs)
 
   return Object.freeze({
     done,
     outputLimit,
     async terminateAndReap() {
-      if (!settled) signalClientTree(child, "SIGTERM")
+      terminateTree()
       return done
     },
   })

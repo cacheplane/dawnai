@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
 import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -516,103 +517,96 @@ async function runAttestationInput(options, runtime) {
 
 async function readVerifiedArtifact({ runtime, recordPath, artifactDirectory }) {
   const requestedDirectory = resolveCliPath(artifactDirectory, runtime.cwd)
-  for (const method of ["readdir", "realpath"]) {
-    if (typeof runtime.fileSystem[method] !== "function") {
-      throw new TypeError(`Release CLI filesystem method ${method} is invalid`)
-    }
-  }
-  const directory = await runtime.fileSystem.realpath(requestedDirectory)
-  const directoryBefore = await runtime.fileSystem.lstat(directory)
-  if (!directoryBefore.isDirectory() || directoryBefore.isSymbolicLink()) {
-    throw new TypeError("Release CLI artifact directory must be a regular directory")
-  }
-  const [recordBytes, manifestBytes] = await Promise.all([
-    readRegularFile(
-      runtime.fileSystem,
-      resolveCliPath(recordPath, runtime.cwd),
-      MAX_JSON_BYTES,
-      "release record",
-    ),
-    readRegularFile(
-      runtime.fileSystem,
-      path.join(directory, "manifest.json"),
-      MAX_MANIFEST_BYTES,
-      "manifest",
-    ),
-  ])
-  const recordModule = await runtime.importModule(
-    new URL("./release-record.mjs", import.meta.url).href,
+  const pinned = await openPinnedDirectory(
+    runtime.fileSystem,
+    requestedDirectory,
+    "artifact directory",
   )
-  const manifestModule = await runtime.importModule(new URL("./manifest.mjs", import.meta.url).href)
-  const parseRecord = moduleFunction(recordModule, "parseReleaseRecord", "release-record parser")
-  const canonicalRecord = moduleFunction(
-    recordModule,
-    "canonicalReleaseRecordBytes",
-    "release-record encoder",
-  )
-  const parseManifest = moduleFunction(
-    manifestModule,
-    "parseSealedReleaseManifest",
-    "manifest parser",
-  )
-  const canonicalManifest = moduleFunction(
-    manifestModule,
-    "canonicalManifestBytes",
-    "manifest encoder",
-  )
-  const manifestDigest = moduleFunction(manifestModule, "manifestSha256", "manifest digest")
-  const record = parseRecord(recordBytes)
-  if (!Buffer.from(recordBytes).equals(Buffer.from(canonicalRecord(record)))) {
-    throw new Error("Release CLI release record bytes must be canonical")
-  }
-  const candidate = candidateDocument({ version: record.version, commitSha: record.commitSha })
-  const manifest = parseManifest(manifestBytes, { candidate })
-  if (
-    !Buffer.from(manifestBytes).equals(Buffer.from(canonicalManifest(manifest))) ||
-    manifestDigest(manifest) !== record.manifestSha256
-  ) {
-    throw new Error("Release CLI artifact manifest is noncanonical or conflicts with the record")
-  }
-  const expectedNames = [
-    "manifest.json",
-    ...manifest.packages.map(({ filename }) => filename),
-  ].sort(compareText)
-  const names = await runtime.fileSystem.readdir(directory)
-  if (
-    !Array.isArray(names) ||
-    names.some((name) => typeof name !== "string") ||
-    !arraysEqual(names.slice().sort(compareText), expectedNames)
-  ) {
-    throw new Error("Release CLI artifact directory does not match the sealed manifest")
-  }
-  const files = [{ name: "manifest.json", bytes: Buffer.from(manifestBytes) }]
-  for (const pkg of manifest.packages) {
-    const bytes = await readRegularFile(
-      runtime.fileSystem,
-      path.join(directory, pkg.filename),
-      pkg.size,
-      `artifact tarball ${pkg.name}`,
+  const directory = pinned.readPath
+  try {
+    const [recordBytes, manifestBytes] = await Promise.all([
+      readRegularFile(
+        runtime.fileSystem,
+        resolveCliPath(recordPath, runtime.cwd),
+        MAX_JSON_BYTES,
+        "release record",
+      ),
+      readRegularFile(
+        runtime.fileSystem,
+        path.join(directory, "manifest.json"),
+        MAX_MANIFEST_BYTES,
+        "manifest",
+      ),
+    ])
+    const recordModule = await runtime.importModule(
+      new URL("./release-record.mjs", import.meta.url).href,
     )
-    if (
-      bytes.byteLength !== pkg.size ||
-      digest(bytes, "sha256") !== pkg.sha256 ||
-      digest(bytes, "sha512") !== pkg.sha512
-    ) {
-      throw new Error(`Release CLI artifact tarball ${pkg.name} does not match the manifest`)
+    const manifestModule = await runtime.importModule(
+      new URL("./manifest.mjs", import.meta.url).href,
+    )
+    const parseRecord = moduleFunction(recordModule, "parseReleaseRecord", "release-record parser")
+    const canonicalRecord = moduleFunction(
+      recordModule,
+      "canonicalReleaseRecordBytes",
+      "release-record encoder",
+    )
+    const parseManifest = moduleFunction(
+      manifestModule,
+      "parseSealedReleaseManifest",
+      "manifest parser",
+    )
+    const canonicalManifest = moduleFunction(
+      manifestModule,
+      "canonicalManifestBytes",
+      "manifest encoder",
+    )
+    const manifestDigest = moduleFunction(manifestModule, "manifestSha256", "manifest digest")
+    const record = parseRecord(recordBytes)
+    if (!Buffer.from(recordBytes).equals(Buffer.from(canonicalRecord(record)))) {
+      throw new Error("Release CLI release record bytes must be canonical")
     }
-    files.push({ name: pkg.filename, bytes })
+    const candidate = candidateDocument({ version: record.version, commitSha: record.commitSha })
+    const manifest = parseManifest(manifestBytes, { candidate })
+    if (
+      !Buffer.from(manifestBytes).equals(Buffer.from(canonicalManifest(manifest))) ||
+      manifestDigest(manifest) !== record.manifestSha256
+    ) {
+      throw new Error("Release CLI artifact manifest is noncanonical or conflicts with the record")
+    }
+    const expectedNames = [
+      "manifest.json",
+      ...manifest.packages.map(({ filename }) => filename),
+    ].sort(compareText)
+    const names = await runtime.fileSystem.readdir(directory)
+    if (
+      !Array.isArray(names) ||
+      names.some((name) => typeof name !== "string") ||
+      !arraysEqual(names.slice().sort(compareText), expectedNames)
+    ) {
+      throw new Error("Release CLI artifact directory does not match the sealed manifest")
+    }
+    const files = [{ name: "manifest.json", bytes: Buffer.from(manifestBytes) }]
+    for (const pkg of manifest.packages) {
+      const bytes = await readRegularFile(
+        runtime.fileSystem,
+        path.join(directory, pkg.filename),
+        pkg.size,
+        `artifact tarball ${pkg.name}`,
+      )
+      if (
+        bytes.byteLength !== pkg.size ||
+        digest(bytes, "sha256") !== pkg.sha256 ||
+        digest(bytes, "sha512") !== pkg.sha512
+      ) {
+        throw new Error(`Release CLI artifact tarball ${pkg.name} does not match the manifest`)
+      }
+      files.push({ name: pkg.filename, bytes })
+    }
+    await assertPinnedDirectoryUnchanged(runtime.fileSystem, pinned, "artifact directory")
+    return Object.freeze({ record, candidate, manifest, artifact: { manifest, files } })
+  } finally {
+    await pinned.handle.close()
   }
-  const directoryAfter = await runtime.fileSystem.lstat(directory)
-  if (
-    !directoryAfter.isDirectory() ||
-    directoryAfter.isSymbolicLink() ||
-    directoryAfter.dev !== directoryBefore.dev ||
-    directoryAfter.ino !== directoryBefore.ino ||
-    directoryAfter.mtimeMs !== directoryBefore.mtimeMs
-  ) {
-    throw new Error("Release CLI artifact directory changed while it was verified")
-  }
-  return Object.freeze({ record, candidate, manifest, artifact: { manifest, files } })
 }
 
 function validateAttestationBundleBytes(bytes) {
@@ -926,71 +920,62 @@ async function readReconciliationInputs(options, runtime) {
 
 async function readSmokeResults(runtime, value) {
   const directory = resolveCliPath(value, runtime.cwd)
-  if (typeof runtime.fileSystem.readdir !== "function") {
-    throw new TypeError("Release CLI filesystem directory reader is invalid")
-  }
-  const before = await runtime.fileSystem.lstat(directory)
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    throw new TypeError("Release CLI smoke results must be one regular directory")
-  }
-  const entries = await runtime.fileSystem.readdir(directory, { withFileTypes: true })
-  if (!Array.isArray(entries) || entries.length !== REQUIRED_RELEASE_SMOKE_LANES.length) {
-    throw new TypeError("Release CLI smoke result directory must contain the exact required lanes")
-  }
-  const names = entries.map((entry) => {
-    if (
-      entry === null ||
-      typeof entry !== "object" ||
-      typeof entry.name !== "string" ||
-      entry.name.length === 0 ||
-      entry.name.includes("/") ||
-      entry.name.includes("\\") ||
-      entry.name.includes("\0") ||
-      !entry.name.endsWith(".json") ||
-      typeof entry.isFile !== "function" ||
-      !entry.isFile() ||
-      (typeof entry.isSymbolicLink === "function" && entry.isSymbolicLink())
-    ) {
-      throw new TypeError("Release CLI smoke result directory contains an invalid entry")
-    }
-    return entry.name
-  })
-  names.sort(compareText)
-  if (new Set(names).size !== names.length) {
-    throw new TypeError("Release CLI smoke result directory contains duplicate entries")
-  }
-  const expectedNames = REQUIRED_RELEASE_SMOKE_LANES.map((lane) => `${lane}.json`)
-  if (!arraysEqual(names, expectedNames)) {
-    throw new TypeError(
-      "Release CLI smoke result directory does not match the exact required lanes",
-    )
-  }
-  const results = await Promise.all(
-    names.map(async (name, index) => {
-      const bytes = await readRegularFile(
-        runtime.fileSystem,
-        path.join(directory, name),
-        MAX_JSON_BYTES,
-        `smoke result ${name}`,
+  const pinned = await openPinnedDirectory(runtime.fileSystem, directory, "smoke results")
+  try {
+    const entries = await runtime.fileSystem.readdir(pinned.readPath, { withFileTypes: true })
+    if (!Array.isArray(entries) || entries.length !== REQUIRED_RELEASE_SMOKE_LANES.length) {
+      throw new TypeError(
+        "Release CLI smoke result directory must contain the exact required lanes",
       )
-      const result = parseSmokeResult(bytes)
-      if (result.lane !== REQUIRED_RELEASE_SMOKE_LANES[index]) {
-        throw new Error(`Release CLI smoke result ${name} does not match its required lane`)
+    }
+    const names = entries.map((entry) => {
+      if (
+        entry === null ||
+        typeof entry !== "object" ||
+        typeof entry.name !== "string" ||
+        entry.name.length === 0 ||
+        entry.name.includes("/") ||
+        entry.name.includes("\\") ||
+        entry.name.includes("\0") ||
+        !entry.name.endsWith(".json") ||
+        typeof entry.isFile !== "function" ||
+        !entry.isFile() ||
+        (typeof entry.isSymbolicLink === "function" && entry.isSymbolicLink())
+      ) {
+        throw new TypeError("Release CLI smoke result directory contains an invalid entry")
       }
-      return Buffer.from(bytes)
-    }),
-  )
-  const after = await runtime.fileSystem.lstat(directory)
-  if (
-    !after.isDirectory() ||
-    after.isSymbolicLink() ||
-    after.dev !== before.dev ||
-    after.ino !== before.ino ||
-    after.mtimeMs !== before.mtimeMs
-  ) {
-    throw new Error("Release CLI smoke result directory changed while it was read")
+      return entry.name
+    })
+    names.sort(compareText)
+    if (new Set(names).size !== names.length) {
+      throw new TypeError("Release CLI smoke result directory contains duplicate entries")
+    }
+    const expectedNames = REQUIRED_RELEASE_SMOKE_LANES.map((lane) => `${lane}.json`)
+    if (!arraysEqual(names, expectedNames)) {
+      throw new TypeError(
+        "Release CLI smoke result directory does not match the exact required lanes",
+      )
+    }
+    const results = await Promise.all(
+      names.map(async (name, index) => {
+        const bytes = await readRegularFile(
+          runtime.fileSystem,
+          path.join(pinned.readPath, name),
+          MAX_JSON_BYTES,
+          `smoke result ${name}`,
+        )
+        const result = parseSmokeResult(bytes)
+        if (result.lane !== REQUIRED_RELEASE_SMOKE_LANES[index]) {
+          throw new Error(`Release CLI smoke result ${name} does not match its required lane`)
+        }
+        return Buffer.from(bytes)
+      }),
+    )
+    await assertPinnedDirectoryUnchanged(runtime.fileSystem, pinned, "smoke result directory")
+    return Object.freeze(results)
+  } finally {
+    await pinned.handle.close()
   }
-  return Object.freeze(results)
 }
 
 async function runDispatchAudit(options, runtime) {
@@ -1338,7 +1323,7 @@ function normalizeDependencies(value) {
     throw new TypeError("Release CLI module loader is invalid")
   }
   const fileSystem = value.fileSystem ?? defaultFileSystem
-  for (const method of ["lstat", "readFile", "writeFile"]) {
+  for (const method of ["lstat", "open", "readdir", "writeFile"]) {
     if (typeof fileSystem?.[method] !== "function") {
       throw new TypeError(`Release CLI filesystem method ${method} is invalid`)
     }
@@ -1752,33 +1737,119 @@ async function readJsonFile(fileSystem, filePath, maximumBytes, label) {
 }
 
 async function readRegularFile(fileSystem, filePath, maximumBytes, label) {
-  const before = await fileSystem.lstat(filePath)
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.nlink !== 1 ||
-    !Number.isSafeInteger(before.size) ||
-    before.size < 1 ||
-    before.size > maximumBytes
-  ) {
-    throw new TypeError(`Release CLI ${label} must be one bounded regular file`)
+  let handle
+  try {
+    handle = await fileSystem.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === "ELOOP") {
+      throw new TypeError(`Release CLI ${label} must be one bounded regular file`, {
+        cause: error,
+      })
+    }
+    throw error
   }
-  const bytes = await fileSystem.readFile(filePath)
-  const after = await fileSystem.lstat(filePath)
-  if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength !== before.size ||
-    after.size !== before.size ||
-    after.dev !== before.dev ||
-    after.ino !== before.ino ||
-    after.nlink !== 1 ||
-    after.mtimeMs !== before.mtimeMs ||
-    !after.isFile() ||
-    after.isSymbolicLink()
-  ) {
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      before.size < 1n ||
+      before.size > BigInt(maximumBytes) ||
+      before.size > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new TypeError(`Release CLI ${label} must be one bounded regular file`)
+    }
+    const size = Number(before.size)
+    const bytes = Buffer.allocUnsafe(size)
+    let offset = 0
+    while (offset < size) {
+      const { bytesRead } = await handle.read(bytes, offset, size - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat({ bigint: true })
+    if (offset !== size || !sameOpenedFile(before, after)) {
+      throw new Error(`Release CLI ${label} changed while it was read`)
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
+async function openPinnedDirectory(fileSystem, directory, label) {
+  if (!Number.isInteger(fsConstants.O_DIRECTORY) || !Number.isInteger(fsConstants.O_NOFOLLOW)) {
+    throw new Error("Release CLI directory descriptor containment is unavailable")
+  }
+  let handle
+  try {
+    handle = await fileSystem.open(
+      directory,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    )
+  } catch (error) {
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError(`Release CLI ${label} must be one regular directory`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isDirectory()) {
+      throw new TypeError(`Release CLI ${label} must be one regular directory`)
+    }
+    return {
+      handle,
+      before,
+      originalPath: directory,
+      readPath: process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : directory,
+    }
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+async function assertPinnedDirectoryUnchanged(fileSystem, pinned, label) {
+  const after = await pinned.handle.stat({ bigint: true })
+  if (!sameOpenedDirectory(pinned.before, after)) {
     throw new Error(`Release CLI ${label} changed while it was read`)
   }
-  return Buffer.from(bytes)
+  if (process.platform !== "linux") {
+    const current = await fileSystem.lstat(pinned.originalPath, { bigint: true })
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.dev !== pinned.before.dev ||
+      current.ino !== pinned.before.ino
+    ) {
+      throw new Error(`Release CLI ${label} path changed while it was read`)
+    }
+  }
+}
+
+function sameOpenedDirectory(before, after) {
+  return (
+    after.isDirectory() &&
+    after.dev === before.dev &&
+    after.ino === before.ino &&
+    after.mtimeNs === before.mtimeNs &&
+    after.ctimeNs === before.ctimeNs
+  )
+}
+
+function sameOpenedFile(before, after) {
+  return (
+    after.isFile() &&
+    after.size === before.size &&
+    after.dev === before.dev &&
+    after.ino === before.ino &&
+    after.nlink === 1n &&
+    after.mtimeNs === before.mtimeNs &&
+    after.ctimeNs === before.ctimeNs
+  )
 }
 
 async function appendGitHubOutputs(fileSystem, filePath, values) {

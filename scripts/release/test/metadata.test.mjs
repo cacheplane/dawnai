@@ -638,6 +638,23 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
   assert.match(remote.release.body, /smoke-result-metadata-200-1\.json/u)
   assert.equal(remote.assets.size, 50)
   assert.equal(remote.updateCount, 3)
+  assert.equal(remote.actionsDownloadRequests.length, SMOKE_LANES.length)
+  assert.ok(
+    remote.actionsDownloadRequests.every(
+      ({ maximumBytes }) => maximumBytes === RELEASE_PAYLOAD_LIMITS.smokeArchiveBytes,
+    ),
+  )
+  const smokeAssetIds = new Set(
+    marker.smoke.receiptAssets.map(({ releaseAssetId }) => releaseAssetId),
+  )
+  assert.ok(
+    remote.releaseDownloadRequests
+      .filter(({ assetId }) => smokeAssetIds.has(assetId))
+      .every(({ maximumBytes, assetId }) => {
+        const asset = [...remote.assets.values()].find(({ id }) => id === assetId)
+        return maximumBytes === asset.bytes.byteLength
+      }),
+  )
 })
 
 test("smoke reconciliation rejects replayed, mixed, incomplete, failed, or foreign receipts with zero mutation", async () => {
@@ -1700,6 +1717,8 @@ function inMemoryGitHub() {
     actionsRun: null,
     actionsReadCount: 0,
     actionsArtifactOverrides: new Map(),
+    actionsDownloadRequests: [],
+    releaseDownloadRequests: [],
     failAfterBodyUpdate: false,
   }
   const reader = Object.freeze({
@@ -1736,8 +1755,9 @@ function inMemoryGitHub() {
         })),
       )
     },
-    async downloadReleaseAsset({ assetId }) {
+    async downloadReleaseAsset({ assetId, maximumBytes }) {
       remote.downloadCount += 1
+      remote.releaseDownloadRequests.push({ assetId, maximumBytes })
       const asset = [...remote.assets.values()].find((entry) => entry.id === assetId)
       assert.ok(asset)
       return {
@@ -1767,8 +1787,9 @@ function inMemoryGitHub() {
       assert.ok(artifact)
       return present("actions-artifact", artifact)
     },
-    async downloadActionsArtifact({ artifactId }) {
+    async downloadActionsArtifact({ artifactId, maximumBytes }) {
       remote.actionsReadCount += 1
+      remote.actionsDownloadRequests.push({ artifactId, maximumBytes })
       const archive = remote.actionsArchives.get(artifactId)
       assert.ok(archive)
       return {

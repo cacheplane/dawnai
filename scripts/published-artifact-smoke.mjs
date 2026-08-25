@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -699,9 +700,13 @@ async function removeContainer(containerName) {
 }
 
 export async function runDockerSandboxInstalledProbe(tempDir, overrides = {}) {
+  const threadId = overrides.threadId ?? `published-uuid-${randomUUID().replaceAll("-", "")}`
+  if (!/^published-uuid-[0-9a-f]{32}$/u.test(threadId)) {
+    throw new TypeError("Docker sandbox installed probe thread identity is invalid")
+  }
   await writeFile(
     resolve(tempDir, "smoke-docker-sandbox.mjs"),
-    dockerSandboxInstalledProbeSource(),
+    dockerSandboxInstalledProbeSource(threadId),
     "utf8",
   )
   const result = await (overrides.runCommand ?? runCommand)("node", ["smoke-docker-sandbox.mjs"], {
@@ -711,7 +716,12 @@ export async function runDockerSandboxInstalledProbe(tempDir, overrides = {}) {
   process.stderr.write(result.stderr)
 }
 
-export function dockerSandboxInstalledProbeSource() {
+export function dockerSandboxInstalledProbeSource(
+  threadId = `published-uuid-${randomUUID().replaceAll("-", "")}`,
+) {
+  if (!/^published-uuid-[0-9a-f]{32}$/u.test(threadId)) {
+    throw new TypeError("Docker sandbox installed probe thread identity is invalid")
+  }
   return `import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { readFile, rm } from "node:fs/promises"
@@ -722,7 +732,7 @@ import { dockerSandbox } from "@dawn-ai/sandbox"
 const execFileAsync = promisify(execFile)
 const pidsLimit = 32
 const recoveryCommands = 24
-const threadId = "published-pid-" + process.pid + "-" + Date.now()
+const threadId = ${JSON.stringify(threadId)}
 const container = "dawn-sbx-" + threadId
 const readinessPath = "/workspace/.published-pids-ready.json"
 const readinessTemporaryPath = readinessPath + ".tmp"

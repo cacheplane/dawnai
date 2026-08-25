@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { PassThrough } from "node:stream"
 import test from "node:test"
 import { runPublishedHarnessSmoke } from "../smoke/published-harness.mjs"
 import { runRuntimeTargetsSmoke } from "../smoke/runtime-targets.mjs"
@@ -12,6 +14,7 @@ import {
   canonicalSmokeCommandDescriptor,
   parseSmokeCommandDescriptor,
 } from "../smoke-command-shim.mjs"
+import * as containmentModule from "../smoke-containment.mjs"
 import {
   buildControlClientInvocation,
   buildSystemdRunArguments,
@@ -60,6 +63,95 @@ test("privileged control and workload clients use fixed timeout and hard-kill pr
     ],
     outerTimeoutMs: 25 * 60_000 + 15_000,
   })
+})
+
+test("a reaped privileged client hard-kills TERM-ignoring descendants before cancelling escalation", async () => {
+  assert.equal(typeof containmentModule.spawnPrivilegedClient, "function")
+  const child = new EventEmitter()
+  child.pid = 42_424
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  const timers = []
+  const cleared = []
+  const signals = []
+  const handle = containmentModule.spawnPrivilegedClient(
+    {
+      command: "/usr/bin/true",
+      args: [],
+      cwd: "/tmp",
+      maxOutputBytes: 1_024,
+      outerTimeoutMs: 1_000,
+    },
+    {
+      spawnImpl() {
+        return child
+      },
+      signalTree(_child, signal) {
+        signals.push(signal)
+      },
+      setTimer(callback) {
+        const token = { callback, unref() {} }
+        timers.push(token)
+        return token
+      },
+      clearTimer(token) {
+        cleared.push(token)
+      },
+    },
+  )
+  timers[0].callback()
+  assert.deepEqual(signals, ["SIGTERM"])
+  assert.equal(timers.length, 2)
+  child.emit("close", 143, "SIGTERM")
+  assert.equal((await handle.done).signal, "SIGTERM")
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"])
+  assert.equal(cleared.includes(timers[0]), true)
+  assert.equal(cleared.includes(timers[1]), true)
+  timers[1].callback()
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"])
+})
+
+test("explicit privileged-client teardown escalates when the process group ignores TERM", async () => {
+  const child = new EventEmitter()
+  child.pid = 42_425
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  const timers = []
+  const signals = []
+  const handle = containmentModule.spawnPrivilegedClient(
+    {
+      command: "/usr/bin/true",
+      args: [],
+      cwd: "/tmp",
+      maxOutputBytes: 1_024,
+      outerTimeoutMs: 1_000,
+    },
+    {
+      spawnImpl() {
+        return child
+      },
+      signalTree(_child, signal) {
+        signals.push(signal)
+      },
+      setTimer(callback) {
+        const token = { callback, unref() {} }
+        timers.push(token)
+        return token
+      },
+      clearTimer() {},
+    },
+  )
+
+  const reaped = handle.terminateAndReap()
+  assert.deepEqual(signals, ["SIGTERM"])
+  assert.equal(timers.length, 2)
+  timers[1].callback()
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"])
+  child.emit("close", null, "SIGKILL")
+  assert.equal((await reaped).signal, "SIGKILL")
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"])
 })
 
 test("transient units use the exact hardened gated service policy", () => {

@@ -157,9 +157,9 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
 const ATTESTATION_REPOSITORY = "cacheplane/dawnai"
 export const MAX_AUDIT_ATTEMPTS = 128
-const MAX_SMOKE_ATTEMPTS = 128
+export const MAX_SMOKE_ATTEMPTS = 128
 const BASE_ASSET_COUNT = 45
-const MAX_SMOKE_ASSETS = MAX_SMOKE_ATTEMPTS * REQUIRED_RELEASE_SMOKE_LANES.length
+export const MAX_SMOKE_ASSETS = MAX_SMOKE_ATTEMPTS * REQUIRED_RELEASE_SMOKE_LANES.length
 const MAX_PUBLICATION_ASSETS = BASE_ASSET_COUNT + MAX_SMOKE_ASSETS + MAX_AUDIT_ATTEMPTS + 1
 const SMOKE_WORKFLOW = ".github/workflows/release.yml"
 const ACTIONS_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u
@@ -1551,7 +1551,12 @@ async function observeExactSmokeActionsArtifacts({
 }
 
 async function readActionsArtifactBytes(reader, artifactId) {
-  const download = snapshotJson(await reader.downloadActionsArtifact({ artifactId }))
+  const download = snapshotJson(
+    await reader.downloadActionsArtifact({
+      artifactId,
+      maximumBytes: RELEASE_PAYLOAD_LIMITS.smokeArchiveBytes,
+    }),
+  )
   if (
     !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
     download.status !== "PRESENT" ||
@@ -1676,7 +1681,9 @@ async function observeSmokeReceiptAssets(reader, releaseId, marker, identity) {
 
 async function downloadExactReleaseAssetBytes(reader, assetId, declaredSize, maximumBytes, label) {
   assertPayloadByteLength(declaredSize, maximumBytes, `${label} declared size`)
-  const download = snapshotJson(await reader.downloadReleaseAsset({ assetId }))
+  const download = snapshotJson(
+    await reader.downloadReleaseAsset({ assetId, maximumBytes: declaredSize }),
+  )
   if (
     !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
     download.status !== "PRESENT" ||
@@ -1694,7 +1701,7 @@ async function downloadExactReleaseAssetBytes(reader, assetId, declaredSize, max
   return bytes
 }
 
-function parseSmokeReleaseAssetName(name) {
+export function parseSmokeReleaseAssetName(name) {
   const match = SMOKE_ASSET_PATTERN.exec(name)
   if (match === null) return null
   const workflowRunId = Number(match[2])

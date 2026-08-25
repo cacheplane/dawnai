@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { canonicalReleaseBody } from "./metadata.mjs"
+import { canonicalReleaseBody, parseSmokeReleaseAssetName } from "./metadata.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const PLANNER_FIELDS = Object.freeze(["candidate", "observation", "mode"])
@@ -875,6 +875,13 @@ function releaseEvidenceAssetIsAllowed(asset, marker) {
   )
   if (smokeReceipt !== undefined) {
     return asset.sha256 === smokeReceipt.receiptSha256
+  }
+  if (
+    marker?.phase === "NPM_COMPLETE" &&
+    marker.smoke === null &&
+    parseSmokeReleaseAssetName(asset.name) !== null
+  ) {
+    return true
   }
   if (!["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(marker?.phase)) {
     return false

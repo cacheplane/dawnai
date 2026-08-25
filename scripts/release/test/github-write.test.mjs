@@ -287,6 +287,74 @@ test("asset uploads accept only absent bytes or downloaded byte equality", async
   )
 })
 
+test("asset uploads admit only exact bounded smoke receipt names", async () => {
+  const bytes = canonicalSmokeResultBytes({
+    schemaVersion: 1,
+    lane: "metadata",
+    version: VERSION,
+    commitSha: SHA,
+    manifestSha256: "a".repeat(64),
+    workflowRunId: 400,
+    runAttempt: 1,
+    startedAt: "2026-08-24T00:10:00.000Z",
+    finishedAt: "2026-08-24T00:11:00.000Z",
+    checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
+  })
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release: draftRelease("body"),
+      assets: [{ id: 90, name: "smoke-result-metadata-400-1.json" }],
+      downloads: new Map([[90, bytes]]),
+    }),
+    fetchImpl: assert.fail,
+  })
+
+  assert.deepEqual(
+    await writer.uploadAssetIfAbsentAndEqual({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      name: "smoke-result-metadata-400-1.json",
+      bytes,
+      sha256: sha256(bytes),
+    }),
+    { assetId: 90, status: "existing", sha256: sha256(bytes) },
+  )
+  for (const name of [
+    "smoke-result-other-400-1.json",
+    "smoke-result-metadata-0-1.json",
+    "smoke-result-metadata-400-0.json",
+    "smoke-result-metadata-400-1.json.extra",
+  ]) {
+    await assert.rejects(
+      writer.uploadAssetIfAbsentAndEqual({
+        releaseId: 7,
+        tag: TAG,
+        targetSha: SHA,
+        name,
+        bytes,
+        sha256: sha256(bytes),
+      }),
+      /namespace|allowed|asset/iu,
+      name,
+    )
+  }
+  await assert.rejects(
+    writer.uploadAssetIfAbsentAndEqual({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      name: "smoke-result-metadata-400-1.json",
+      bytes: Buffer.alloc(RELEASE_PAYLOAD_LIMITS.smokeReceiptBytes + 1),
+      sha256: sha256(Buffer.alloc(RELEASE_PAYLOAD_LIMITS.smokeReceiptBytes + 1)),
+    }),
+    /byte|limit|smoke/iu,
+  )
+})
+
 test("asset uploads admit valid tarballs above the JSON request limit", async () => {
   const bytes = Buffer.alloc(5 * 1024 * 1024, 0x61)
   const digest = sha256(bytes)

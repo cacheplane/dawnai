@@ -6,11 +6,17 @@ import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import {
   canonicalReleaseBody,
   parseReleaseMarker,
+  parseSmokeReleaseAssetName,
   preflightAuditDraftAssetMetadata,
   releaseBodySha256,
   validatePublicationAuditAssets,
 } from "./metadata.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
+import {
+  aggregateSmokeResults,
+  canonicalAggregateSmokeResultBytes,
+  parseSmokeResult,
+} from "./smoke-result.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
@@ -396,7 +402,10 @@ async function readTerminalAudit({ actions, run, runId, candidate, deadline, clo
   }
   const download = await withinAuditDeadline(
     readBinary(
-      actions.downloadActionsArtifact({ artifactId: artifact.id }),
+      actions.downloadActionsArtifact({
+        artifactId: artifact.id,
+        maximumBytes: RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
+      }),
       "actions-artifact-download",
     ),
     deadline,
@@ -486,9 +495,13 @@ async function observeAuditAssets(reader, releaseId, marker) {
   const descriptors = preflightAuditDraftAssetMetadata(listed, { marker })
   const byName = new Map()
   const auditFiles = []
+  const smokeFiles = []
   for (const descriptor of descriptors) {
     const bytes = await readBinary(
-      reader.downloadReleaseAsset({ assetId: descriptor.id }),
+      reader.downloadReleaseAsset({
+        assetId: descriptor.id,
+        maximumBytes: descriptor.size,
+      }),
       "release-asset-download",
     )
     if (bytes.byteLength !== descriptor.size) {
@@ -522,11 +535,62 @@ async function observeAuditAssets(reader, releaseId, marker) {
         }
       }
       auditFiles.push({ name: descriptor.name, bytes })
+    } else if (descriptor.group === "smoke") {
+      const result = parseSmokeResult(bytes)
+      const filenameIdentity = parseSmokeReleaseAssetName(descriptor.name)
+      if (
+        filenameIdentity === null ||
+        result.lane !== filenameIdentity.lane ||
+        result.workflowRunId !== filenameIdentity.workflowRunId ||
+        result.runAttempt !== filenameIdentity.runAttempt ||
+        result.version !== marker.version ||
+        result.commitSha !== marker.commitSha ||
+        result.manifestSha256 !== marker.manifestSha256 ||
+        result.conclusion !== "success"
+      ) {
+        throw new Error("Durable smoke receipt is not correlated to its filename and candidate")
+      }
+      smokeFiles.push({ name: descriptor.name, bytes, result })
     }
     byName.set(descriptor.name, { ...descriptor, bytes, sha256: digest })
   }
+  validateDurableSmokeReceipts({ marker, smokeFiles })
   validateAuditPhaseAssets({ marker, auditFiles })
   return { byName, auditFiles }
+}
+
+function validateDurableSmokeReceipts({ marker, smokeFiles }) {
+  if (smokeFiles.length !== marker.smoke.receiptAssets.length) {
+    throw new Error("Durable smoke receipt set is incomplete")
+  }
+  const selected = smokeFiles.filter(
+    ({ result }) =>
+      result.workflowRunId === marker.smoke.workflowRunId &&
+      result.runAttempt === marker.smoke.runAttempt,
+  )
+  if (selected.length !== marker.smoke.requiredLanes.length) {
+    throw new Error("Durable smoke receipt set does not contain one exact selected lane set")
+  }
+  let aggregate
+  try {
+    aggregate = aggregateSmokeResults(
+      selected.map(({ bytes }) => bytes),
+      {
+        version: marker.version,
+        commitSha: marker.commitSha,
+        manifestSha256: marker.manifestSha256,
+        workflowRunId: marker.smoke.workflowRunId,
+        runAttempt: marker.smoke.runAttempt,
+      },
+    )
+  } catch (error) {
+    throw new Error("Durable smoke receipts do not form the exact selected lane aggregate", {
+      cause: error,
+    })
+  }
+  if (sha256(canonicalAggregateSmokeResultBytes(aggregate)) !== marker.smoke.aggregateSha256) {
+    throw new Error("Durable smoke receipt aggregate digest conflicts with the Release marker")
+  }
 }
 
 function validateAuditPhaseAssets({ marker, auditFiles }) {

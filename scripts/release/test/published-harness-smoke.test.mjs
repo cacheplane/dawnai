@@ -4,6 +4,7 @@ import test from "node:test"
 
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import {
+  publishedDockerProbeIdentity,
   runPublishedHarnessSmoke,
   validateNpmAuditSignatures,
 } from "../smoke/published-harness.mjs"
@@ -19,6 +20,26 @@ const options = Object.freeze({
   manifestSha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
   manifest: "/inputs/manifest.json",
   result: "/results/published-harness.json",
+})
+
+test("published Docker probe identities use one validated collision-resistant UUID", () => {
+  const first = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const second = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-b456-426614174001")
+  assert.deepEqual(first, {
+    threadId: "published-uuid-123e4567e89b42d3a456426614174000",
+    containerName: "dawn-sbx-published-uuid-123e4567e89b42d3a456426614174000",
+    volumeName: "dawn-sbx-vol-published-uuid-123e4567e89b42d3a456426614174000",
+  })
+  assert.notEqual(first.threadId, second.threadId)
+  assert.notEqual(first.containerName, second.containerName)
+  assert.notEqual(first.volumeName, second.volumeName)
+  for (const invalid of [
+    "123E4567-E89B-42D3-A456-426614174000",
+    "123e4567-e89b-12d3-a456-426614174000",
+    "not-a-uuid",
+  ]) {
+    assert.throws(() => publishedDockerProbeIdentity(() => invalid), /UUID/u)
+  }
 })
 
 test("installs the exact public fixed group, verifies npm signatures, and runs clean harness lanes", async () => {
@@ -71,6 +92,7 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
     install.args.filter((argument) => argument.includes("@0.8.22")).sort(),
     CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => `${name}@0.8.22`).sort(),
   )
+  assert.equal(install.args.includes("--ignore-scripts"), true)
   assert.equal(
     commands.some(
       ({ command, args }) =>
@@ -81,7 +103,10 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
   const audit = commands.find(({ command, args }) => command === "npm" && args[0] === "audit")
   assert.deepEqual(audit.acceptedExitCodes, [0, 1])
   assert.equal(
-    commands.some(({ args }) => /verdaccio|workspace:|file:|publish/u.test(args.join(" "))),
+    commands.some(
+      ({ command, args }) =>
+        command === "npm" && /verdaccio|workspace:|file:|publish/u.test(args.join(" ")),
+    ),
     false,
   )
   assert.deepEqual(lanes, [
@@ -253,13 +278,14 @@ test("binds npm-verified provenance to the exact repository, workflow, ref, comm
   }
 })
 
-test("writes a receipt and cleans when an installed-package harness assertion fails", async () => {
+test("writes a receipt and outer-cleans Docker identities when the installed probe fails", async () => {
   const events = []
   let receipt
   await assert.rejects(
     runPublishedHarnessSmoke(options, {
       env: releaseEnv("802", "2"),
       now: clock(),
+      randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
       async makeTempDir() {
         return "/tmp/published-harness-failure"
       },
@@ -269,28 +295,38 @@ test("writes a receipt and cleans when an installed-package harness assertion fa
       async removeDir() {
         events.push("cleanup")
       },
-      strictRunner: fakeStrictRunner(async (_command, args) => {
+      strictRunner: fakeStrictRunner(async (command, args) => {
+        if (command === "docker") events.push(`cleanup-command:${args.join(" ")}`)
         return {
           stdout: args[0] === "audit" ? auditOutput(manifest) : "",
           stderr: "",
         }
       }),
-      async runHarnessAssertion(_root, lane) {
-        if (lane === "runtime") throw new Error("runtime assertion failed")
-      },
+      async runHarnessAssertion() {},
       async runAgUiProbe() {},
       async runTypeScriptProbe() {},
-      async runDockerProbe() {},
+      async runDockerProbe(_root, identity) {
+        events.push(`probe:${identity?.containerName}:${identity?.volumeName}`)
+        throw new Error("Docker installed probe failed")
+      },
       async writeFile(_path, bytes) {
         events.push("receipt")
         receipt = parseSmokeResult(bytes)
       },
       async mkdir() {},
     }),
-    /runtime assertion failed/,
+    /Docker installed probe failed/,
   )
 
-  assert.deepEqual(events, ["cleanup", "receipt"])
+  assert.match(
+    events[0],
+    /^probe:dawn-sbx-published-uuid-[0-9a-f]{32}:dawn-sbx-vol-published-uuid-/u,
+  )
+  assert.match(events[1], /^cleanup-command:rm -f dawn-sbx-published-uuid-/u)
+  assert.match(events[2], /^cleanup-command:volume rm --force dawn-sbx-vol-published-uuid-/u)
+  assert.match(events[3], /^cleanup-command:container ls --all --filter name=\^\/dawn-sbx-/u)
+  assert.match(events[4], /^cleanup-command:volume ls --filter name=\^dawn-sbx-vol-/u)
+  assert.deepEqual(events.slice(5), ["cleanup", "receipt"])
   assert.equal(receipt.conclusion, "failure")
 })
 

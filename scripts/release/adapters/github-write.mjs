@@ -4,6 +4,7 @@ import { normalizeAdapterEnvelope, snapshotJson } from "../adapter-normalize.mjs
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import {
   parseReleaseMarker,
+  parseSmokeReleaseAssetName,
   preflightPublicationAssetMetadata,
   releaseBodySha256,
   validatePublicationAuditAssets,
@@ -457,7 +458,7 @@ function findOneAsset(assets, name) {
 async function assertAssetEquality(context, asset, expectedSha256, maximumBytes) {
   assertPayloadByteLength(asset.size, maximumBytes, `${asset.name} declared size`)
   const envelope = normalizeAdapterEnvelope(
-    await context.reads.downloadReleaseAsset({ assetId: asset.id }),
+    await context.reads.downloadReleaseAsset({ assetId: asset.id, maximumBytes: asset.size }),
     {
       source: "github",
       operation: "release-asset-download",
@@ -833,6 +834,9 @@ function assetUploadLimit(name) {
   if (name.endsWith(".tgz")) return RELEASE_PAYLOAD_LIMITS.tarballBytes
   if (name === "manifest.json.intoto.jsonl" || name.endsWith(".tgz.intoto.jsonl")) {
     return RELEASE_PAYLOAD_LIMITS.attestationBundleBytes
+  }
+  if (parseSmokeReleaseAssetName(name) !== null) {
+    return RELEASE_PAYLOAD_LIMITS.smokeReceiptBytes
   }
   if (
     name === "audit-result.json" ||

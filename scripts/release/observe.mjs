@@ -4,7 +4,7 @@ import { normalizeAdapterEnvelope, snapshotJson } from "./adapter-normalize.mjs"
 import { extractActionsArtifactZip } from "./artifact-store.mjs"
 import { discoverManagedCandidate, discoverScheduledCandidate } from "./candidate.mjs"
 import { assertValidReleaseInventory, readReleaseInventory } from "./inventory.mjs"
-import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import {
   CANONICAL_RELEASE_PACKAGE_ORDER,
   canonicalManifestBytes,
@@ -14,7 +14,10 @@ import {
 import {
   canonicalReleaseBody,
   MAX_AUDIT_ATTEMPTS,
+  MAX_SMOKE_ASSETS,
+  MAX_SMOKE_ATTEMPTS,
   parseReleaseMarker,
+  parseSmokeReleaseAssetName,
   validatePublicationAuditAssets,
   verifyReleaseAttestationAnchor,
 } from "./metadata.mjs"
@@ -26,6 +29,12 @@ import {
   releaseRecordSha256,
 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import {
+  aggregateSmokeResults,
+  canonicalAggregateSmokeResultBytes,
+  parseSmokeResult,
+  REQUIRED_RELEASE_SMOKE_LANES,
+} from "./smoke-result.mjs"
 import { ReleaseState } from "./state.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
@@ -56,12 +65,7 @@ const DEFAULT_CANDIDATE_POLICY = Object.freeze({
   ciCheck: "validate",
   publisherWorkflow: ".github/workflows/release.yml",
 })
-const REQUIRED_SMOKE_LANES = Object.freeze([
-  "published-harness",
-  "runtime-targets",
-  "scaffold",
-  "storage",
-])
+const REQUIRED_SMOKE_LANES = REQUIRED_RELEASE_SMOKE_LANES
 const ACTIVE_PACKAGE_NAMES = Object.freeze([...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText))
 const PRODUCTION_SELECTION_STATES = new Set(Object.values(ReleaseState))
 const PRODUCTION_SELECTION_DISPOSITIONS = new Set(["selected", "blocked", "audit-only", "noop"])
@@ -667,14 +671,20 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
     artifacts.status === "ambiguous"
       ? { status: "ambiguous", manifestSha256: null, assets: [] }
       : { status: "absent", manifestSha256: null, assets: [] }
+  const observedSmokes = []
   const release = await mapRelease(
     releaseResult,
     normalizedInventory,
     normalizedCandidate,
     github,
     diagnostics,
+    observedSmokes,
   )
   const published = rawNpmPresent || publicationRunStarted(publisherRunsResult, normalizedCandidate)
+  const smokes =
+    observedSmokes.length > 0
+      ? observedSmokes
+      : pendingSmokeObservations(normalizedCandidate, normalizedInventory)
   const observation = {
     inventory: {
       status: normalizedInventory.status,
@@ -692,7 +702,7 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
     },
     release,
     requiredSmokeLanes: normalizedInventory.requiredSmokeLanes,
-    smokes: [],
+    smokes,
     audit: {
       status: "none",
       version: null,
@@ -3207,6 +3217,18 @@ function isSha(value) {
   return typeof value === "string" && SHA_PATTERN.test(value)
 }
 
+function pendingSmokeObservations(candidate, inventory) {
+  return inventory.requiredSmokeLanes.map((name) => ({
+    name,
+    status: "pending",
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    manifestSha256: inventory.manifestSha256,
+    workflowRunId: null,
+    runAttempt: null,
+  }))
+}
+
 function normalizeDiscoveryInventory(value, label) {
   if (!isRecord(value) || value.status !== "valid" || !Array.isArray(value.packages)) {
     throw new TypeError(`${label} release inventory must be valid`)
@@ -3479,7 +3501,7 @@ function mapRegistryPackage(result, expected, candidate, diagnostics) {
   return ambiguousRegistryPackage(expected.name)
 }
 
-async function mapRelease(result, inventory, candidate, github, diagnostics) {
+async function mapRelease(result, inventory, candidate, github, diagnostics, observedSmokes) {
   if (result.status !== "PRESENT") {
     return nonPresentRelease(result.status === "ABSENT" ? "absent" : "ambiguous")
   }
@@ -3525,7 +3547,7 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
   if (assetsResult.status !== "PRESENT" || !Array.isArray(assetsResult.value)) {
     return ambiguousRelease()
   }
-  const expectedAssets = expectedReleaseAssets(inventory)
+  const expectedAssets = expectedReleaseAssets(inventory, marker)
   if (expectedAssets === null) {
     addDiagnostic(
       diagnostics,
@@ -3566,18 +3588,30 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
       assetId,
     })
   }
+  const resumableSmoke = await observeDurableSmokeReceipts({
+    marker,
+    candidate,
+    github,
+    rawAssets,
+    diagnostics,
+  })
+  if (resumableSmoke === null) return ambiguousRelease()
+  observedSmokes.push(...resumableSmoke.smokes)
   const assets = rawAssets.map((actual) => {
     const expected = expectedByName.get(actual?.name)
     const digest = normalizeAssetDigest(actual?.digest)
+    const resumable = resumableSmoke.assets.get(String(actual.id))
     return {
       name: actual?.name,
       status:
         duplicateIds.has(String(actual?.id)) || digest === null
           ? "ambiguous"
-          : expected !== undefined && digest === expected.sha256
-            ? "matching"
-            : "different",
-      sha256: digest,
+          : resumable !== undefined
+            ? resumable.status
+            : expected !== undefined && digest === expected.sha256
+              ? "matching"
+              : "different",
+      sha256: resumable?.sha256 ?? digest,
     }
   })
   return {
@@ -3591,7 +3625,7 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
   }
 }
 
-function expectedReleaseAssets(inventory) {
+function expectedReleaseAssets(inventory, marker) {
   if (inventory.releaseRecordSha256 === null || inventory.manifestAttestationSha256 === null) {
     return null
   }
@@ -3604,7 +3638,223 @@ function expectedReleaseAssets(inventory) {
       name: pkg.attestationFilename,
       sha256: pkg.attestationSha256,
     })),
+    ...(Array.isArray(marker?.smoke?.receiptAssets)
+      ? marker.smoke.receiptAssets.map((asset) => ({
+          name: asset.releaseAssetName,
+          sha256: asset.receiptSha256,
+        }))
+      : []),
   ]
+}
+
+export async function observeDurableSmokeReceipts({
+  marker,
+  candidate,
+  github,
+  rawAssets,
+  diagnostics = [],
+}) {
+  if (!Array.isArray(rawAssets) || !Array.isArray(diagnostics)) {
+    throw new TypeError("Durable smoke observation inputs are invalid")
+  }
+  const idCounts = new Map()
+  for (const asset of rawAssets) {
+    const id = String(asset?.id)
+    idCounts.set(id, (idCounts.get(id) ?? 0) + 1)
+  }
+  const duplicateIds = new Set([...idCounts].filter(([, count]) => count > 1).map(([id]) => id))
+  const observed = new Map()
+  const smokeAssets = rawAssets
+    .map((asset) => ({ asset, identity: parseSmokeReleaseAssetName(asset.name) }))
+    .filter(({ identity }) => identity !== null)
+  if (smokeAssets.length === 0) {
+    return marker.smoke === null ? { assets: observed, smokes: [] } : null
+  }
+  if (smokeAssets.length > MAX_SMOKE_ASSETS) {
+    addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "SMOKE_RECEIPTS_UNBOUNDED")
+    return null
+  }
+  let totalBytes = 0
+  const attempts = new Set()
+  for (const { asset, identity } of smokeAssets) {
+    if (duplicateIds.has(String(asset.id)) || !Number.isSafeInteger(asset.size) || asset.size < 1) {
+      addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "MALFORMED_VALUE")
+      return null
+    }
+    try {
+      assertPayloadByteLength(
+        asset.size,
+        RELEASE_PAYLOAD_LIMITS.smokeReceiptBytes,
+        `Smoke Release asset ${asset.name}`,
+      )
+      totalBytes += asset.size
+      assertPayloadByteLength(
+        totalBytes,
+        RELEASE_PAYLOAD_LIMITS.smokeReceiptsBytes,
+        "Smoke Release receipts",
+      )
+    } catch {
+      addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "PAYLOAD_LIMIT_EXCEEDED")
+      return null
+    }
+    attempts.add(`${identity.workflowRunId}:${identity.runAttempt}`)
+  }
+  if (attempts.size > MAX_SMOKE_ATTEMPTS) {
+    addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "SMOKE_ATTEMPTS_UNBOUNDED")
+    return null
+  }
+  const markerBound = marker.smoke !== null
+  if (!markerBound && marker.phase !== "NPM_COMPLETE") {
+    return { assets: observed, smokes: [] }
+  }
+  if (typeof github.downloadReleaseAsset !== "function") {
+    addDiagnostic(diagnostics, "github", "release-assets", "ERROR", "METHOD_UNAVAILABLE")
+    return null
+  }
+  if (markerBound) {
+    const expectedById = new Map(
+      marker.smoke.receiptAssets.map((receipt) => [String(receipt.releaseAssetId), receipt]),
+    )
+    if (
+      smokeAssets.length !== marker.smoke.receiptAssets.length ||
+      smokeAssets.some(({ asset }) => {
+        const expected = expectedById.get(String(asset.id))
+        return (
+          expected === undefined ||
+          asset.name !== expected.releaseAssetName ||
+          normalizeAssetDigest(asset.digest) !== expected.receiptSha256
+        )
+      })
+    ) {
+      addDiagnostic(
+        diagnostics,
+        "github",
+        "release-assets",
+        "AMBIGUOUS",
+        "SMOKE_RECEIPT_SET_MISMATCH",
+      )
+      return null
+    }
+  }
+  const parsedReceipts = []
+  for (const { asset, identity } of smokeAssets) {
+    const digest = normalizeAssetDigest(asset.digest)
+    if (digest === null) {
+      observed.set(String(asset.id), { status: "ambiguous", sha256: null })
+      continue
+    }
+    try {
+      const envelope = normalizeAdapterEnvelope(
+        await github.downloadReleaseAsset({
+          assetId: asset.id,
+          maximumBytes: asset.size,
+        }),
+        {
+          source: "github",
+          operation: "release-asset-download",
+          payloadKey: "contentBase64",
+        },
+      )
+      if (envelope.status !== "PRESENT" || typeof envelope.contentBase64 !== "string") {
+        throw new Error("Smoke receipt download is not exact")
+      }
+      const bytes = Buffer.from(envelope.contentBase64, "base64")
+      if (bytes.toString("base64") !== envelope.contentBase64 || bytes.byteLength !== asset.size) {
+        throw new Error("Smoke receipt bytes are not exact")
+      }
+      const receipt = parseSmokeResult(bytes)
+      const bytesSha256 = sha256(bytes)
+      const matching =
+        bytesSha256 === digest &&
+        receipt.lane === identity.lane &&
+        receipt.workflowRunId === identity.workflowRunId &&
+        receipt.runAttempt === identity.runAttempt &&
+        receipt.version === candidate.version &&
+        receipt.commitSha === candidate.commitSha &&
+        receipt.manifestSha256 === marker.manifestSha256 &&
+        receipt.conclusion === "success"
+      observed.set(String(asset.id), {
+        status: matching ? "matching" : "different",
+        sha256: bytesSha256,
+      })
+      if (matching) parsedReceipts.push({ bytes, receipt })
+      if (markerBound && !matching) {
+        addDiagnostic(
+          diagnostics,
+          "github",
+          "release-asset-download",
+          "AMBIGUOUS",
+          "SMOKE_RECEIPT_IDENTITY_MISMATCH",
+        )
+        return null
+      }
+    } catch {
+      if (markerBound) {
+        addDiagnostic(
+          diagnostics,
+          "github",
+          "release-asset-download",
+          "AMBIGUOUS",
+          "SMOKE_RECEIPT_UNREADABLE",
+        )
+        return null
+      }
+      observed.set(String(asset.id), { status: "ambiguous", sha256: digest })
+      addDiagnostic(
+        diagnostics,
+        "github",
+        "release-asset-download",
+        "AMBIGUOUS",
+        "SMOKE_RECEIPT_UNREADABLE",
+      )
+    }
+  }
+  if (!markerBound) return { assets: observed, smokes: [] }
+  const selected = parsedReceipts.filter(
+    ({ receipt }) =>
+      receipt.workflowRunId === marker.smoke.workflowRunId &&
+      receipt.runAttempt === marker.smoke.runAttempt,
+  )
+  try {
+    const aggregate = aggregateSmokeResults(
+      selected.map(({ bytes }) => bytes),
+      {
+        version: candidate.version,
+        commitSha: candidate.commitSha,
+        manifestSha256: marker.manifestSha256,
+        workflowRunId: marker.smoke.workflowRunId,
+        runAttempt: marker.smoke.runAttempt,
+      },
+    )
+    if (sha256(canonicalAggregateSmokeResultBytes(aggregate)) !== marker.smoke.aggregateSha256) {
+      throw new Error("Smoke aggregate digest does not match its marker")
+    }
+  } catch {
+    addDiagnostic(
+      diagnostics,
+      "github",
+      "release-assets",
+      "AMBIGUOUS",
+      "SMOKE_RECEIPT_AGGREGATE_MISMATCH",
+    )
+    return null
+  }
+  const selectedByLane = new Map(selected.map(({ receipt }) => [receipt.lane, receipt]))
+  return {
+    assets: observed,
+    smokes: REQUIRED_RELEASE_SMOKE_LANES.map((name) => {
+      const receipt = selectedByLane.get(name)
+      return {
+        name,
+        status: "passed",
+        version: receipt.version,
+        commitSha: receipt.commitSha,
+        manifestSha256: receipt.manifestSha256,
+        workflowRunId: receipt.workflowRunId,
+        runAttempt: receipt.runAttempt,
+      }
+    }),
+  }
 }
 
 function normalizeEnvelope(value, options, diagnostics) {

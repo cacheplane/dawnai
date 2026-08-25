@@ -1,3 +1,4 @@
+import { MAX_SMOKE_ASSETS, MAX_SMOKE_ATTEMPTS, parseSmokeReleaseAssetName } from "./metadata.mjs"
 import {
   abandonmentBaseAssetsFromMarker,
   findObservationSchemaConflicts,
@@ -292,9 +293,20 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
       }))
     : []
   const expectedSmokeNames = new Set(expectedSmokeAssets.map(({ name }) => name))
-  const smokeAssets = releaseAssets.filter(({ name }) => expectedSmokeNames.has(name))
+  const resumableSmokeNames =
+    marker?.phase === "NPM_COMPLETE" && marker.smoke === null
+      ? new Set(
+          releaseAssets
+            .filter(({ name }) => parseSmokeReleaseAssetName(name) !== null)
+            .map(({ name }) => name),
+        )
+      : new Set()
+  const smokeAssets = releaseAssets.filter(
+    ({ name }) => expectedSmokeNames.has(name) || resumableSmokeNames.has(name),
+  )
   const evidenceAssets = releaseAssets.filter(
-    ({ name }) => !expectedNames.has(name) && !expectedSmokeNames.has(name),
+    ({ name }) =>
+      !expectedNames.has(name) && !expectedSmokeNames.has(name) && !resumableSmokeNames.has(name),
   )
   const escrowResumable =
     release.status === "draft" &&
@@ -310,7 +322,9 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
       : false
   const smokeAssetsExact =
     marker?.smoke === null || marker?.smoke === undefined
-      ? smokeAssets.length === 0
+      ? marker?.phase === "NPM_COMPLETE"
+        ? resumableSmokeAssetSubset(smokeAssets, conflicts)
+        : smokeAssets.length === 0
       : exactAssetSet(smokeAssets, expectedSmokeAssets, "github", conflicts)
   const terminalEvidence = analyzeTerminalAssets(evidenceAssets, marker, conflicts)
   for (const asset of releaseAssets) {
@@ -461,6 +475,35 @@ function analyzeTerminalAssets(assets, marker, conflicts) {
     if (!canonicalExact) conflicts.add("github-audit-result-missing")
   }
   return { currentAttemptExact, canonicalExact }
+}
+
+function resumableSmokeAssetSubset(assets, conflicts) {
+  if (!Array.isArray(assets) || assets.length > MAX_SMOKE_ASSETS) {
+    conflicts.add("github-managed-asset-unexpected")
+    return false
+  }
+  const names = new Set()
+  const attempts = new Set()
+  let exact = true
+  for (const asset of assets) {
+    const identity = parseSmokeReleaseAssetName(asset.name)
+    if (
+      identity === null ||
+      asset.status !== "matching" ||
+      !isSha256(asset.sha256) ||
+      names.has(asset.name)
+    ) {
+      exact = false
+    }
+    if (names.has(asset.name)) conflicts.add("github-asset-duplicate")
+    names.add(asset.name)
+    if (identity !== null) {
+      attempts.add(`${identity.workflowRunId}:${identity.runAttempt}`)
+    }
+  }
+  if (attempts.size > MAX_SMOKE_ATTEMPTS) exact = false
+  if (!exact) conflicts.add("github-managed-asset-unexpected")
+  return exact
 }
 
 function exactAssetSet(actual, expected, prefix, conflicts) {
