@@ -69,7 +69,7 @@ function printNextSteps(options: CliOptions): void {
     "  npm run dev:web     # web UI on http://localhost:3010",
     "",
     "See your agent:",
-    "  npx dawn inspect  # memory Inspector (browser UI), in a third terminal",
+    "  npx dawn inspect --cwd server  # memory Inspector (browser UI), in a third terminal",
   ]
   const basicSteps = [
     changeDirectoryStep,

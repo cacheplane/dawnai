@@ -114,8 +114,11 @@ The proxy forwards with no authentication, and this scaffold installs no
 `threadAccess` policy on the server, so anything that can reach this app can
 read a thread's saved transcript by guessing its id and can permanently delete
 memory candidates. Before you expose this beyond your own machine, add a
-`threadAccess` policy in `server/dawn.config.ts` so a request for someone else's
-thread is refused where the data lives.
+[`threadAccess` policy](https://dawnai.org/docs/thread-access) so a request for
+someone else's thread is refused where the data lives. The server package
+scaffolds one inert, at `server/src/thread-access.ts.example`: drop the
+`.example` suffix on it and on the `server/src/auth.ts.example` it imports, then
+fill in how you authenticate a caller.
 
 ## Known limits
 

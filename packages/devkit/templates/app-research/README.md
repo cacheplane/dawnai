@@ -9,6 +9,7 @@ shipped as an npm workspace with two packages:
 - **`web/`** — the Dawn Workbench: an [AG-UI](https://github.com/ag-ui-protocol/ag-ui)
   client built on CopilotKit, with a thread rail, streaming chat, plan and
   subagent activity cards, tool cards, permission prompts, and memory review.
+  [`web/README.md`](./web/README.md) covers restyling it and its known limits.
 
 Requires Node.js 24 or later and npm 11.
 

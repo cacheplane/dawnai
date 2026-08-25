@@ -231,7 +231,7 @@ describe("create-dawn-ai-app", () => {
         "  npm run dev:web     # web UI on http://localhost:3010",
         "",
         "See your agent:",
-        "  npx dawn inspect  # memory Inspector (browser UI), in a third terminal",
+        "  npx dawn inspect --cwd server  # memory Inspector (browser UI), in a third terminal",
       ].join("\n"),
     )
     expect(scaffoldResult.stdout).toContain("See README.md for the full tour")
@@ -265,7 +265,7 @@ describe("create-dawn-ai-app", () => {
         "  npm run dev:web     # web UI on http://localhost:3010",
         "",
         "See your agent:",
-        "  npx dawn inspect  # memory Inspector (browser UI), in a third terminal",
+        "  npx dawn inspect --cwd server  # memory Inspector (browser UI), in a third terminal",
       ].join("\n"),
     )
     expect(stdout).not.toContain("docs/recipes/research-web-ui")
@@ -298,7 +298,7 @@ describe("create-dawn-ai-app", () => {
         "  npm run dev:web     # web UI on http://localhost:3010",
         "",
         "See your agent:",
-        "  npx dawn inspect  # memory Inspector (browser UI), in a third terminal",
+        "  npx dawn inspect --cwd server  # memory Inspector (browser UI), in a third terminal",
       ].join("\n"),
     )
     expect(stdout).not.toContain("  cp server/.env.example server/.env")
