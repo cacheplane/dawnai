@@ -727,8 +727,12 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       } catch (error) {
         executionError = error
       }
-      const result = parseAuditResult(await readFile(output))
+      const outputBytes = await readFile(output)
+      const result = parseAuditResult(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(outputBytes)),
+      )
       if (
+        !outputBytes.equals(canonicalAuditResultBytes(result)) ||
         result.workflowRunId !== workflowRunId ||
         result.runAttempt !== 1 ||
         result.conclusion !== expectedConclusion ||
