@@ -63,7 +63,15 @@ const PUBLICATION_FIELDS = Object.freeze([
   "registryMutationReceipts",
   "packages",
 ])
-const RUN_FIELDS = Object.freeze(["runId", "runAttempt", "headSha", "headBranch", "jobs"])
+const RUN_FIELDS = Object.freeze([
+  "runId",
+  "runAttempt",
+  "headSha",
+  "headBranch",
+  "workflowPath",
+  "event",
+  "jobs",
+])
 const JOB_FIELDS = Object.freeze([
   "id",
   "runAttempt",
@@ -88,7 +96,7 @@ const CANDIDATE_FIELDS = Object.freeze([
   "publisherWorkflow",
 ])
 const PHASES = Object.freeze([
-  "ESCROWING",
+  "ATTACHING",
   "ESCROWED",
   "NPM_COMPLETE",
   "SMOKES_COMPLETE",
@@ -98,7 +106,7 @@ const PHASES = Object.freeze([
   "ABANDONED_PREPUBLICATION",
 ])
 const PHASE_TRANSITIONS = Object.freeze({
-  ESCROWING: Object.freeze(["ESCROWED", "ABANDONED_PREPUBLICATION"]),
+  ATTACHING: Object.freeze(["ESCROWED"]),
   ESCROWED: Object.freeze(["NPM_COMPLETE", "ABANDONED_PREPUBLICATION"]),
   NPM_COMPLETE: Object.freeze(["SMOKES_COMPLETE"]),
   SMOKES_COMPLETE: Object.freeze(["AUDIT_DISPATCHED"]),
@@ -115,7 +123,7 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
 const ATTESTATION_REPOSITORY = "cacheplane/dawnai"
-const MAX_AUDIT_ATTEMPTS = 128
+export const MAX_AUDIT_ATTEMPTS = 128
 const BASE_ASSET_COUNT = 45
 const MAX_PUBLICATION_ASSETS = BASE_ASSET_COUNT + MAX_AUDIT_ATTEMPTS + 1
 
@@ -166,7 +174,10 @@ export function canonicalReleaseBody(input) {
         repository: marker.attestationSet.repository,
       })
     }
-  } else if (marker.phase !== "ABANDONED_PREPUBLICATION" && marker.attestationSet === null) {
+  } else if (
+    !["ATTACHING", "ABANDONED_PREPUBLICATION"].includes(marker.phase) &&
+    marker.attestationSet === null
+  ) {
     throw new TypeError("Canonical Release body requires exact artifact metadata")
   }
 
@@ -227,7 +238,7 @@ export function abandonmentReleaseMarker({
   const previous = previousMarker === null ? null : validateMarker(previousMarker)
   if (
     previous !== null &&
-    (!["ESCROWING", "ESCROWED"].includes(previous.phase) ||
+    (previous.phase !== "ESCROWED" ||
       previous.version !== identity.version ||
       previous.commitSha !== identity.commitSha ||
       previous.tag !== `v${identity.version}`)
@@ -294,6 +305,7 @@ export function parseAttestationSet(value, { candidate, manifest, repository }) 
   ]
   const names = new Set()
   const bundleNames = new Set()
+  let bundleSha256 = null
   for (const [index, subject] of attestation.subjects.entries()) {
     assertExactFields(subject, SUBJECT_FIELDS, `attestation subject ${index}`)
     const expectedSubject = expected[index]
@@ -302,6 +314,7 @@ export function parseAttestationSet(value, { candidate, manifest, repository }) 
       subject.subjectSha256 !== expectedSubject.sha256 ||
       subject.bundleName !== `${expectedSubject.name}.intoto.jsonl` ||
       !SHA256_PATTERN.test(subject.bundleSha256) ||
+      (bundleSha256 !== null && subject.bundleSha256 !== bundleSha256) ||
       names.has(subject.subjectName) ||
       bundleNames.has(subject.bundleName)
     ) {
@@ -309,6 +322,7 @@ export function parseAttestationSet(value, { candidate, manifest, repository }) 
     }
     names.add(subject.subjectName)
     bundleNames.add(subject.bundleName)
+    bundleSha256 = subject.bundleSha256
   }
   return deepFreeze(attestation)
 }
@@ -384,6 +398,86 @@ export function canonicalBaseAssetSet({ record, artifact, attestationSet, bundle
   return deepFreeze({ assets, sha256: sha256(digestBytes) })
 }
 
+export async function verifyReleaseAttestationAnchor({
+  candidate,
+  record,
+  artifact,
+  bundleBytes,
+  attestations,
+}) {
+  const identity = validateCandidate(snapshotJson(candidate), { policyFieldsOptional: true })
+  const releaseRecord = parseReleaseRecord(record)
+  if (
+    releaseRecord.version !== identity.version ||
+    releaseRecord.commitSha !== identity.commitSha
+  ) {
+    throw new Error("Release attestation anchor record does not match the candidate")
+  }
+  const normalizedArtifact = snapshotArtifact(artifact)
+  const manifest = parseSealedReleaseManifest(
+    canonicalManifestBytes(snapshotJson(normalizedArtifact.manifest)),
+    { candidate: identity },
+  )
+  if (releaseRecord.manifestSha256 !== sha256(canonicalManifestBytes(manifest))) {
+    throw new Error("Release attestation anchor manifest does not match the release record")
+  }
+  if (!(bundleBytes instanceof Uint8Array)) {
+    throw new TypeError("Release attestation anchor bytes are invalid")
+  }
+  assertPayloadByteLength(
+    bundleBytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.attestationBundleBytes,
+    "Release attestation anchor",
+  )
+  const bundle = Buffer.from(bundleBytes)
+  const invocation = validateMultiSubjectAttestationBundle(bundle, { manifest })
+  const subjects = [
+    { name: "manifest.json", sha256: releaseRecord.manifestSha256 },
+    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+  ]
+  const bundleSha256 = sha256(bundle)
+  const attestationSet = parseAttestationSet(
+    {
+      repository: ATTESTATION_REPOSITORY,
+      workflow: ".github/workflows/release.yml",
+      sourceRef: `refs/tags/v${identity.version}`,
+      commitSha: identity.commitSha,
+      workflowRunId: invocation.workflowRunId,
+      runAttempt: invocation.runAttempt,
+      subjects: subjects.map((subject) => ({
+        subjectName: subject.name,
+        subjectSha256: subject.sha256,
+        bundleName: `${subject.name}.intoto.jsonl`,
+        bundleSha256,
+      })),
+    },
+    { candidate: identity, manifest, repository: ATTESTATION_REPOSITORY },
+  )
+  const bundles = attestationSet.subjects.map(({ bundleName }) => ({
+    name: bundleName,
+    bytes: Buffer.from(bundle),
+  }))
+  await verifyAttestationBundles({
+    attestations: bindMethods(attestations, ["verify"], "Attestation verifier"),
+    record: releaseRecord,
+    artifact: normalizedArtifact,
+    attestationSet,
+    bundles,
+    candidate: identity,
+    manifest,
+  })
+  const base = canonicalBaseAssetSet({
+    record: releaseRecord,
+    artifact: normalizedArtifact,
+    attestationSet,
+    bundles,
+  })
+  return deepFreeze({
+    attestationSet,
+    baseAssetSetSha256: base.sha256,
+  })
+}
+
 export function parsePublicationState(value, { candidate, inventory }) {
   const expectations = snapshotJson({ candidate, inventory })
   const identity = validateCandidate(expectations.candidate)
@@ -415,6 +509,8 @@ export function parsePublicationState(value, { candidate, inventory }) {
       runIds.has(run.runId) ||
       run.headSha !== identity.commitSha ||
       run.headBranch !== `v${identity.version}` ||
+      run.workflowPath !== ".github/workflows/release.yml" ||
+      !["push", "workflow_dispatch", "schedule"].includes(run.event) ||
       !Array.isArray(run.jobs) ||
       run.jobs.length === 0
     ) {
@@ -731,28 +827,30 @@ export async function escrowCandidate(input) {
     candidate,
     manifest,
   })
-  parsePublicationState(argumentsSnapshot.publicationState, {
+  const publicationState = parsePublicationState(argumentsSnapshot.publicationState, {
     candidate,
     inventory: { packages: manifest.packages.map(({ name }) => ({ name })) },
   })
+  const inputAttestationSet = parseAttestationSet(argumentsSnapshot.attestationSet, {
+    candidate,
+    manifest,
+    repository: ATTESTATION_REPOSITORY,
+  })
+  assertAttestationRunAuthorized(inputAttestationSet, publicationState)
   const github = argumentsSnapshot.github
   const title = `Dawn v${candidate.version}`
   const desiredMarker = {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
     revision: 1,
-    phase: "ESCROWING",
+    phase: "ATTACHING",
     version: candidate.version,
     commitSha: candidate.commitSha,
     tag: `v${candidate.version}`,
     manifestSha256: record.manifestSha256,
     releaseRecordSha256: releaseRecordSha256(record),
-    baseAssetSetSha256: base.sha256,
-    attestationSet: parseAttestationSet(argumentsSnapshot.attestationSet, {
-      candidate,
-      manifest,
-      repository: ATTESTATION_REPOSITORY,
-    }),
+    baseAssetSetSha256: null,
+    attestationSet: null,
     npmEvidenceSha256: null,
     smokeAggregateSha256: null,
     audit: null,
@@ -773,65 +871,167 @@ export async function escrowCandidate(input) {
   }
   assertMutableCandidateRelease(release, candidate, title)
   let marker = parseReleaseMarker(release.body)
-  assertEscrowMarkerMatches(marker, desiredMarker)
-
-  const expectedByName = new Map(base.assets.map((asset) => [asset.name, asset]))
-  let observed = await observeExactAssets(github.reader, release.id, expectedByName, {
-    allowSubset: marker.phase === "ESCROWING",
-  })
-  if (marker.phase === "ESCROWED" && observed.size !== base.assets.length) {
-    throw new Error("An ESCROWED marker has an incomplete base asset set")
+  assertEscrowMarkerMatches(marker, desiredMarker, { candidate, manifest })
+  if (release.body !== canonicalReleaseBody({ marker, manifest })) {
+    throw new Error("Existing Release escrow body is not canonical")
   }
-  if (marker.phase === "ESCROWING") {
-    for (const asset of base.assets) {
-      if (observed.has(asset.name)) continue
-      await github.writer.uploadAssetIfAbsentAndEqual({
-        releaseId: release.id,
-        tag: desiredMarker.tag,
-        targetSha: candidate.commitSha,
-        name: asset.name,
-        bytes: Buffer.from(asset.contentBase64, "base64"),
-        sha256: asset.sha256,
-      })
-    }
-    observed = await observeExactAssets(github.reader, release.id, expectedByName, {
-      allowSubset: false,
-    })
-    if (observed.size !== 45) throw new Error("Release escrow did not re-read exactly 45 assets")
-    const nextMarker = validateMarker({
-      ...marker,
-      revision: marker.revision + 1,
-      phase: "ESCROWED",
-    })
-    const nextBody = canonicalReleaseBody({ marker: nextMarker, manifest, previousMarker: marker })
-    await github.writer.updateDraftReleaseIfCurrent({
+
+  if (marker.phase === "ESCROWED") {
+    const observed = await loadReleaseBaseAssets({
+      reader: github.reader,
       releaseId: release.id,
-      tag: desiredMarker.tag,
-      targetSha: candidate.commitSha,
-      expectedBodySha256: releaseBodySha256(release.body),
-      title,
-      body: nextBody,
+      marker,
+      manifest,
+      candidate,
+      attestations: argumentsSnapshot.attestations,
     })
-    release = await readManagedRelease(github.reader, release.id)
-    marker = parseReleaseMarker(release.body)
-    if (marker.phase !== "ESCROWED" || marker.revision !== nextMarker.revision) {
-      throw new Error("Release escrow marker did not advance after exact asset re-read")
-    }
     await verifyAnnotatedCandidateTag(github.reader, candidate)
     return deepFreeze({
       releaseId: release.id,
       phase: marker.phase,
-      status: "escrowed",
+      status: "unchanged",
       assetCount: observed.size,
       bodySha256: releaseBodySha256(release.body),
     })
   }
 
+  const preparedAssets = base.assets.filter((asset) => !asset.name.endsWith(".intoto.jsonl"))
+  if (preparedAssets.length !== 23) {
+    throw new Error("Release attaching namespace must contain exactly 23 prepared assets")
+  }
+  const bundleNames = inputAttestationSet.subjects.map(({ bundleName }) => bundleName)
+  let observed = await loadAttachingAssets({
+    reader: github.reader,
+    releaseId: release.id,
+    preparedAssets,
+    bundleNames,
+  })
+  for (const asset of preparedAssets) {
+    if (observed.has(asset.name)) continue
+    await github.writer.uploadAssetIfAbsentAndEqual({
+      releaseId: release.id,
+      tag: desiredMarker.tag,
+      targetSha: candidate.commitSha,
+      name: asset.name,
+      bytes: Buffer.from(asset.contentBase64, "base64"),
+      sha256: asset.sha256,
+    })
+  }
+  observed = await loadAttachingAssets({
+    reader: github.reader,
+    releaseId: release.id,
+    preparedAssets,
+    bundleNames,
+  })
+  assertPreparedAssetsComplete(observed, preparedAssets)
+
+  const anchorName = bundleNames[0]
+  let anchor = firstObservedBundle(observed, bundleNames)
+  if (anchor === null) {
+    const inputAnchor = argumentsSnapshot.bundles.find((bundle) => bundle.name === anchorName)
+    let uploadError = null
+    try {
+      await github.writer.uploadAssetIfAbsentAndEqual({
+        releaseId: release.id,
+        tag: desiredMarker.tag,
+        targetSha: candidate.commitSha,
+        name: anchorName,
+        bytes: Buffer.from(inputAnchor.bytes),
+        sha256: sha256(inputAnchor.bytes),
+      })
+    } catch (error) {
+      uploadError = error
+    }
+    observed = await loadAttachingAssets({
+      reader: github.reader,
+      releaseId: release.id,
+      preparedAssets,
+      bundleNames,
+    })
+    anchor = firstObservedBundle(observed, bundleNames)
+    if (anchor === null) {
+      throw new Error("Release attestation anchor upload did not converge", {
+        cause: uploadError,
+      })
+    }
+  }
+
+  const remoteMaterial = materializePreparedReleaseAssets({
+    observed,
+    candidate,
+    expectedRecord: record,
+    expectedManifest: manifest,
+  })
+  const anchored = await verifyReleaseAttestationAnchor({
+    candidate,
+    record: remoteMaterial.record,
+    artifact: remoteMaterial.artifact,
+    bundleBytes: anchor.bytes,
+    attestations: argumentsSnapshot.attestations,
+  })
+  const adoptedAttestationSet = anchored.attestationSet
+  assertAttestationRunAuthorized(adoptedAttestationSet, publicationState)
+  const adoptedBundles = adoptedAttestationSet.subjects.map(({ bundleName }) => ({
+    name: bundleName,
+    bytes: Buffer.from(anchor.bytes),
+  }))
+  const adoptedBase = canonicalBaseAssetSet({
+    record: remoteMaterial.record,
+    artifact: remoteMaterial.artifact,
+    attestationSet: adoptedAttestationSet,
+    bundles: adoptedBundles,
+  })
+  for (const subject of adoptedAttestationSet.subjects) {
+    if (observed.has(subject.bundleName)) continue
+    await github.writer.uploadAssetIfAbsentAndEqual({
+      releaseId: release.id,
+      tag: desiredMarker.tag,
+      targetSha: candidate.commitSha,
+      name: subject.bundleName,
+      bytes: Buffer.from(anchor.bytes),
+      sha256: anchor.sha256,
+    })
+  }
+  observed = await loadAttachingAssets({
+    reader: github.reader,
+    releaseId: release.id,
+    preparedAssets,
+    bundleNames,
+  })
+  if (observed.size !== 45) throw new Error("Release escrow did not re-read exactly 45 assets")
+  await verifyObservedBaseAssets({
+    observed,
+    base: adoptedBase,
+    candidate,
+    attestations: argumentsSnapshot.attestations,
+    attestationSet: adoptedAttestationSet,
+  })
+  const nextMarker = validateMarker({
+    ...marker,
+    revision: marker.revision + 1,
+    phase: "ESCROWED",
+    baseAssetSetSha256: adoptedBase.sha256,
+    attestationSet: adoptedAttestationSet,
+  })
+  const nextBody = canonicalReleaseBody({ marker: nextMarker, manifest, previousMarker: marker })
+  await github.writer.updateDraftReleaseIfCurrent({
+    releaseId: release.id,
+    tag: desiredMarker.tag,
+    targetSha: candidate.commitSha,
+    expectedBodySha256: releaseBodySha256(release.body),
+    title,
+    body: nextBody,
+  })
+  release = await readManagedRelease(github.reader, release.id)
+  marker = parseReleaseMarker(release.body)
+  if (marker.phase !== "ESCROWED" || marker.revision !== nextMarker.revision) {
+    throw new Error("Release escrow marker did not advance after exact asset re-read")
+  }
   await verifyAnnotatedCandidateTag(github.reader, candidate)
   return deepFreeze({
     releaseId: release.id,
     phase: marker.phase,
-    status: "unchanged",
+    status: "escrowed",
     assetCount: observed.size,
     bodySha256: releaseBodySha256(release.body),
   })
@@ -1099,6 +1299,14 @@ async function verifyAttestationBundles({
     name: bundleName,
     bytes: Buffer.from(fileBytes(bundles, bundleName)),
   }))
+  const anchorBytes = orderedBundles[0]?.bytes
+  if (
+    !(anchorBytes instanceof Uint8Array) ||
+    orderedBundles.some((bundle) => !Buffer.from(bundle.bytes).equals(anchorBytes))
+  ) {
+    throw new Error("Attestation bundle set must replicate one exact multi-subject bundle")
+  }
+  validateMultiSubjectAttestationBundle(anchorBytes, { manifest, attestationSet: parsed })
   let result
   try {
     result = snapshotJson(
@@ -1127,6 +1335,291 @@ async function verifyAttestationBundles({
   ) {
     throw new Error("Attestation bundle verification did not prove all 22 subjects")
   }
+}
+
+function validateMultiSubjectAttestationBundle(bytes, { manifest, attestationSet = null }) {
+  let statement
+  try {
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    const bundle = JSON.parse(source)
+    if (
+      !isRecord(bundle) ||
+      !isRecord(bundle.dsseEnvelope) ||
+      bundle.dsseEnvelope.payloadType !== "application/vnd.in-toto+json" ||
+      typeof bundle.dsseEnvelope.payload !== "string"
+    ) {
+      throw new Error("invalid attestation bundle")
+    }
+    const payload = Buffer.from(bundle.dsseEnvelope.payload, "base64")
+    if (payload.length === 0 || payload.toString("base64") !== bundle.dsseEnvelope.payload) {
+      throw new Error("invalid attestation payload")
+    }
+    statement = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload))
+  } catch (error) {
+    throw new Error("Attestation bundle is not one valid DSSE JSON statement", { cause: error })
+  }
+  const expected = [
+    { name: "manifest.json", sha256: sha256(canonicalManifestBytes(manifest)) },
+    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+  ]
+  if (
+    !hasExactFields(statement, ["_type", "subject", "predicateType", "predicate"]) ||
+    statement._type !== "https://in-toto.io/Statement/v1" ||
+    statement.predicateType !== "https://slsa.dev/provenance/v1" ||
+    !Array.isArray(statement.subject) ||
+    statement.subject.length !== expected.length ||
+    statement.subject.some(
+      (subject, index) =>
+        !hasExactFields(subject, ["name", "digest"]) ||
+        !hasExactFields(subject.digest, ["sha256"]) ||
+        subject.name !== expected[index].name ||
+        subject.digest.sha256 !== expected[index].sha256,
+    )
+  ) {
+    throw new Error("Attestation bundle does not cover the exact ordered 22-subject set")
+  }
+  const invocationId = statement.predicate?.runDetails?.metadata?.invocationId
+  const invocation =
+    typeof invocationId === "string"
+      ? /^https:\/\/github\.com\/cacheplane\/dawnai\/actions\/runs\/([1-9][0-9]*)\/attempts\/([1-9][0-9]*)$/u.exec(
+          invocationId,
+        )
+      : null
+  const workflowRunId = invocation === null ? null : Number(invocation[1])
+  const runAttempt = invocation === null ? null : Number(invocation[2])
+  if (
+    !isPositiveInteger(workflowRunId) ||
+    !isPositiveInteger(runAttempt) ||
+    (attestationSet !== null &&
+      (workflowRunId !== attestationSet.workflowRunId || runAttempt !== attestationSet.runAttempt))
+  ) {
+    throw new Error("Attestation bundle workflow run identity does not match preparation")
+  }
+  return { workflowRunId, runAttempt }
+}
+
+async function loadAttachingAssets({ reader, releaseId, preparedAssets, bundleNames }) {
+  const listed = await readGitHubValue(reader.listReleaseAssets({ releaseId }), "release-assets")
+  if (!Array.isArray(listed) || listed.length > 45) {
+    throw new Error("GitHub Release attaching asset list is malformed")
+  }
+  const preparedByName = new Map(preparedAssets.map((asset) => [asset.name, asset]))
+  const allowedBundles = new Set(bundleNames)
+  const observed = new Map()
+  const ids = new Set()
+  let preparedBytes = 0
+  let bundleBytes = 0
+  let anchorBytes = null
+  for (const asset of listed) {
+    if (
+      !isRecord(asset) ||
+      typeof asset.name !== "string" ||
+      !ASSET_NAME_PATTERN.test(asset.name) ||
+      !isPositiveInteger(asset.id) ||
+      !isPositiveInteger(asset.size) ||
+      observed.has(asset.name) ||
+      ids.has(asset.id)
+    ) {
+      throw new Error("GitHub Release attaching asset identity is malformed")
+    }
+    const prepared = preparedByName.get(asset.name)
+    const isBundle = allowedBundles.has(asset.name)
+    if (prepared === undefined && !isBundle) {
+      throw new Error("Unexpected Release attaching namespace member")
+    }
+    const maximumBytes = isBundle
+      ? RELEASE_PAYLOAD_LIMITS.attestationBundleBytes
+      : asset.name === "release-record.json"
+        ? RELEASE_PAYLOAD_LIMITS.releaseRecordBytes
+        : asset.name === "manifest.json"
+          ? RELEASE_PAYLOAD_LIMITS.manifestBytes
+          : RELEASE_PAYLOAD_LIMITS.tarballBytes
+    if (asset.size > maximumBytes) throw new Error("Release attaching asset exceeds its byte bound")
+    const bytes = await downloadExactReleaseAsset(reader, asset, maximumBytes)
+    const digest = sha256(bytes)
+    if (prepared !== undefined) {
+      if (digest !== prepared.sha256) {
+        throw new Error("Release prepared asset conflicts with the candidate")
+      }
+      preparedBytes += bytes.byteLength
+      assertPayloadByteLength(
+        preparedBytes,
+        RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+        "Release prepared assets",
+      )
+    } else {
+      bundleBytes += bytes.byteLength
+      assertPayloadByteLength(
+        bundleBytes,
+        RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+        "Release attestation bundles",
+      )
+      if (anchorBytes !== null && !anchorBytes.equals(bytes)) {
+        throw new Error("Release attaching assets mix different attestation anchors")
+      }
+      anchorBytes = Buffer.from(bytes)
+    }
+    observed.set(asset.name, { name: asset.name, bytes, sha256: digest })
+    ids.add(asset.id)
+  }
+  return observed
+}
+
+async function downloadExactReleaseAsset(reader, asset, maximumBytes) {
+  const download = snapshotJson(
+    await reader.downloadReleaseAsset({ assetId: asset.id, maximumBytes: asset.size }),
+  )
+  if (
+    !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
+    download.status !== "PRESENT" ||
+    download.operation !== "release-asset-download" ||
+    download.httpStatus !== 200 ||
+    download.code !== null ||
+    typeof download.contentBase64 !== "string"
+  ) {
+    throw new Error("Release asset download is not exact")
+  }
+  const bytes = Buffer.from(download.contentBase64, "base64")
+  if (
+    bytes.length !== asset.size ||
+    bytes.length > maximumBytes ||
+    bytes.toString("base64") !== download.contentBase64
+  ) {
+    throw new Error("Release asset bytes conflict with declared size or bound")
+  }
+  return bytes
+}
+
+function assertPreparedAssetsComplete(observed, preparedAssets) {
+  if (preparedAssets.some((asset) => !observed.has(asset.name))) {
+    throw new Error("Release attaching prepared asset set is incomplete")
+  }
+}
+
+function firstObservedBundle(observed, bundleNames) {
+  for (const name of bundleNames) {
+    const asset = observed.get(name)
+    if (asset !== undefined) return asset
+  }
+  return null
+}
+
+function materializePreparedReleaseAssets({
+  observed,
+  candidate,
+  expectedRecord = null,
+  expectedManifest,
+}) {
+  const recordAsset = observed.get("release-record.json")
+  const manifestAsset = observed.get("manifest.json")
+  if (recordAsset === undefined || manifestAsset === undefined) {
+    throw new Error("Release prepared record or manifest is missing")
+  }
+  const record = parseReleaseRecord(recordAsset.bytes)
+  const manifest = parseSealedReleaseManifest(manifestAsset.bytes, { candidate })
+  if (
+    !recordAsset.bytes.equals(canonicalReleaseRecordBytes(record)) ||
+    !manifestAsset.bytes.equals(canonicalManifestBytes(manifest)) ||
+    record.version !== candidate.version ||
+    record.commitSha !== candidate.commitSha ||
+    record.manifestSha256 !== sha256(manifestAsset.bytes) ||
+    (expectedRecord !== null &&
+      !canonicalReleaseRecordBytes(record).equals(canonicalReleaseRecordBytes(expectedRecord))) ||
+    !canonicalManifestBytes(manifest).equals(canonicalManifestBytes(expectedManifest))
+  ) {
+    throw new Error("Release prepared record or manifest identity is invalid")
+  }
+  const files = [
+    { name: "manifest.json", bytes: Buffer.from(manifestAsset.bytes) },
+    ...manifest.packages.map((pkg) => {
+      const asset = observed.get(pkg.filename)
+      if (asset === undefined) throw new Error("Release prepared tarball set is incomplete")
+      return { name: pkg.filename, bytes: Buffer.from(asset.bytes) }
+    }),
+  ]
+  return { record, manifest, artifact: { manifest, files } }
+}
+
+async function verifyObservedBaseAssets({
+  observed,
+  base,
+  candidate,
+  attestations,
+  attestationSet,
+}) {
+  const expectedByName = new Map(base.assets.map((asset) => [asset.name, asset]))
+  if (
+    observed.size !== expectedByName.size ||
+    [...observed].some(([name, asset]) => expectedByName.get(name)?.sha256 !== asset.sha256)
+  ) {
+    throw new Error("Release escrow base assets do not exactly match their anchor")
+  }
+  const manifestAsset = observed.get("manifest.json")
+  const expectedManifest = parseSealedReleaseManifest(manifestAsset.bytes, { candidate })
+  const material = materializePreparedReleaseAssets({
+    observed,
+    candidate,
+    expectedManifest,
+  })
+  const bundles = attestationSet.subjects.map(({ bundleName }) => ({
+    name: bundleName,
+    bytes: Buffer.from(observed.get(bundleName).bytes),
+  }))
+  await verifyAttestationBundles({
+    attestations,
+    record: material.record,
+    artifact: material.artifact,
+    attestationSet,
+    bundles,
+    candidate,
+    manifest: material.manifest,
+  })
+  const reconstructed = canonicalBaseAssetSet({
+    record: material.record,
+    artifact: material.artifact,
+    attestationSet,
+    bundles,
+  })
+  if (reconstructed.sha256 !== base.sha256) {
+    throw new Error("Release escrow base asset-set digest is not reproducible")
+  }
+}
+
+async function loadReleaseBaseAssets({
+  reader,
+  releaseId,
+  marker,
+  manifest,
+  candidate,
+  attestations,
+}) {
+  const expected = markerBaseAssets(marker)
+  const preparedAssets = expected.filter((asset) => !asset.name.endsWith(".intoto.jsonl"))
+  const bundleNames = marker.attestationSet.subjects.map(({ bundleName }) => bundleName)
+  const observed = await loadAttachingAssets({
+    reader,
+    releaseId,
+    preparedAssets,
+    bundleNames,
+  })
+  const base = {
+    sha256: marker.baseAssetSetSha256,
+    assets: expected,
+  }
+  await verifyObservedBaseAssets({
+    observed,
+    base,
+    candidate,
+    attestations,
+    attestationSet: marker.attestationSet,
+  })
+  const recoveredManifest = parseSealedReleaseManifest(observed.get("manifest.json").bytes, {
+    candidate,
+  })
+  if (!canonicalManifestBytes(recoveredManifest).equals(canonicalManifestBytes(manifest))) {
+    throw new Error("Release escrow manifest changed during recovery")
+  }
+  return observed
 }
 
 function snapshotGitHubBoundary(value) {
@@ -1237,47 +1730,6 @@ async function readGitHubValue(promise, operation) {
     throw new Error(`GitHub ${operation} observation is not exact`)
   }
   return snapshot.value
-}
-
-async function observeExactAssets(reader, releaseId, expectedByName, { allowSubset }) {
-  const assets = await readGitHubValue(reader.listReleaseAssets({ releaseId }), "release-assets")
-  if (!Array.isArray(assets)) throw new Error("GitHub Release asset list is malformed")
-  const observed = new Map()
-  const ids = new Set()
-  for (const asset of assets) {
-    if (
-      !isRecord(asset) ||
-      typeof asset.name !== "string" ||
-      !ASSET_NAME_PATTERN.test(asset.name)
-    ) {
-      throw new Error("GitHub Release asset identity is malformed")
-    }
-    const id = positiveId(asset.id, "Release asset ID")
-    if (observed.has(asset.name) || ids.has(id)) throw new Error("Duplicate Release asset identity")
-    const expected = expectedByName.get(asset.name)
-    if (expected === undefined) throw new Error("Unexpected Release asset namespace member")
-    const download = snapshotJson(await reader.downloadReleaseAsset({ assetId: id }))
-    if (
-      !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
-      download.status !== "PRESENT" ||
-      download.operation !== "release-asset-download" ||
-      download.httpStatus !== 200 ||
-      download.code !== null ||
-      typeof download.contentBase64 !== "string"
-    ) {
-      throw new Error("Release asset download is not exact")
-    }
-    const bytes = Buffer.from(download.contentBase64, "base64")
-    if (bytes.toString("base64") !== download.contentBase64 || sha256(bytes) !== expected.sha256) {
-      throw new Error("Release asset bytes conflict with the canonical base set")
-    }
-    observed.set(asset.name, expected.sha256)
-    ids.add(id)
-  }
-  if (!allowSubset && observed.size !== expectedByName.size) {
-    throw new Error("Release asset base set is incomplete")
-  }
-  return observed
 }
 
 async function observePublicationAssets(reader, releaseId, marker, auditBytes) {
@@ -1427,6 +1879,8 @@ function addPublicationBytes(current, size, maximum, label) {
 function assertMutableCandidateRelease(release, candidate, title) {
   if (
     release.tag_name !== `v${candidate.version}` ||
+    release.target_commitish !== "main" ||
+    release.prerelease !== false ||
     release.name !== title ||
     typeof release.body !== "string" ||
     release.draft !== true ||
@@ -1436,17 +1890,14 @@ function assertMutableCandidateRelease(release, candidate, title) {
   }
 }
 
-function assertEscrowMarkerMatches(actual, expected) {
+function assertEscrowMarkerMatches(actual, expected, { candidate, manifest }) {
   if (
-    !["ESCROWING", "ESCROWED"].includes(actual.phase) ||
+    !["ATTACHING", "ESCROWED"].includes(actual.phase) ||
     actual.version !== expected.version ||
     actual.commitSha !== expected.commitSha ||
     actual.tag !== expected.tag ||
     actual.manifestSha256 !== expected.manifestSha256 ||
     actual.releaseRecordSha256 !== expected.releaseRecordSha256 ||
-    actual.baseAssetSetSha256 !== expected.baseAssetSetSha256 ||
-    JSON.stringify(canonicalize(actual.attestationSet)) !==
-      JSON.stringify(canonicalize(expected.attestationSet)) ||
     actual.npmEvidenceSha256 !== null ||
     actual.smokeAggregateSha256 !== null ||
     actual.audit !== null ||
@@ -1454,6 +1905,18 @@ function assertEscrowMarkerMatches(actual, expected) {
   ) {
     throw new Error("Existing Release escrow marker conflicts with the candidate")
   }
+  if (actual.phase === "ATTACHING") {
+    if (actual.baseAssetSetSha256 !== null || actual.attestationSet !== null) {
+      throw new Error("Existing attaching marker contains a premature attestation anchor")
+    }
+    return
+  }
+  parseAttestationSet(actual.attestationSet, {
+    candidate,
+    manifest,
+    repository: ATTESTATION_REPOSITORY,
+  })
+  markerBaseAssets(actual)
 }
 
 function assertRecordIdentity(record, candidate) {
@@ -1523,7 +1986,16 @@ function validateMarker(value) {
     marker.baseAssetSetSha256,
     marker.attestationSet,
   ]
-  if (marker.phase === "ABANDONED_PREPUBLICATION") {
+  if (marker.phase === "ATTACHING") {
+    if (
+      !SHA256_PATTERN.test(marker.manifestSha256) ||
+      !SHA256_PATTERN.test(marker.releaseRecordSha256) ||
+      marker.baseAssetSetSha256 !== null ||
+      marker.attestationSet !== null
+    ) {
+      throw new TypeError("Attaching Release marker artifact fields are invalid")
+    }
+  } else if (marker.phase === "ABANDONED_PREPUBLICATION") {
     validateAbandonedArtifactShape(artifactFields)
   } else if (
     !SHA256_PATTERN.test(marker.manifestSha256) ||
@@ -1553,11 +2025,18 @@ function validateMarkerTransition(previous, next) {
     "tag",
     "manifestSha256",
     "releaseRecordSha256",
-    "baseAssetSetSha256",
-    "attestationSet",
   ]
   for (const field of immutableFields) {
     if (canonicalJsonText(previous[field]) !== canonicalJsonText(next[field])) {
+      throw new TypeError("Release marker transition changed immutable candidate evidence")
+    }
+  }
+  const anchorsMayBeEstablished = previous.phase === "ATTACHING" && next.phase === "ESCROWED"
+  for (const field of ["baseAssetSetSha256", "attestationSet"]) {
+    if (
+      !anchorsMayBeEstablished &&
+      canonicalJsonText(previous[field]) !== canonicalJsonText(next[field])
+    ) {
       throw new TypeError("Release marker transition changed immutable candidate evidence")
     }
   }
@@ -1685,6 +2164,7 @@ function validateEmbeddedAttestation(attestation, marker) {
     throw new TypeError("Embedded attestation identity is invalid")
   }
   const names = new Set()
+  let bundleSha256 = null
   for (const subject of attestation.subjects) {
     assertExactFields(subject, SUBJECT_FIELDS, "attestation subject")
     if (
@@ -1692,11 +2172,13 @@ function validateEmbeddedAttestation(attestation, marker) {
       !isSha256(subject.subjectSha256) ||
       subject.bundleName !== `${subject.subjectName}.intoto.jsonl` ||
       !isSha256(subject.bundleSha256) ||
+      (bundleSha256 !== null && subject.bundleSha256 !== bundleSha256) ||
       names.has(subject.subjectName)
     ) {
       throw new TypeError("Embedded attestation subject is invalid")
     }
     names.add(subject.subjectName)
+    bundleSha256 = subject.bundleSha256
   }
 }
 
@@ -1722,6 +2204,7 @@ function validateAbandonedArtifactShape([manifestDigest, recordDigest, baseDiges
 export function validateAllAttemptJobs(jobs, currentAttempt) {
   const attempts = new Set()
   const identities = new Set()
+  const publisherJobsByAttempt = new Map()
   let previousAttempt = 0
   let previousId = 0
   for (const [index, job] of jobs.entries()) {
@@ -1740,6 +2223,14 @@ export function validateAllAttemptJobs(jobs, currentAttempt) {
     ) {
       throw new TypeError("Candidate job schema or attempt identity is invalid")
     }
+    const terminal = job.status === "completed"
+    if (
+      terminal !== (job.conclusion !== null) ||
+      terminal !== (job.completedAt !== null) ||
+      (job.completedAt !== null && job.startedAt === null)
+    ) {
+      throw new TypeError("Candidate job terminal timestamps or conclusion are incoherent")
+    }
     if (
       job.runAttempt < previousAttempt ||
       (job.runAttempt === previousAttempt && job.id <= previousId)
@@ -1748,8 +2239,12 @@ export function validateAllAttemptJobs(jobs, currentAttempt) {
     }
     const identity = `${job.runAttempt}:${job.id}`
     if (identities.has(identity)) throw new TypeError("Duplicate candidate attempt/job identity")
-    if (job.name === "publish-npm" && job.startedAt !== null) {
-      throw new Error("A publish-npm job already started before escrow")
+    if (job.name === "publish-npm") {
+      const count = publisherJobsByAttempt.get(job.runAttempt) ?? 0
+      publisherJobsByAttempt.set(job.runAttempt, count + 1)
+      if (publisherJobExecuted(job)) {
+        throw new Error("A publish-npm job already started before escrow")
+      }
     }
     previousAttempt = job.runAttempt
     previousId = job.id
@@ -1758,6 +2253,31 @@ export function validateAllAttemptJobs(jobs, currentAttempt) {
   }
   if (attempts.size !== currentAttempt)
     throw new TypeError("Candidate job attempt coverage is incomplete")
+  for (let attempt = 1; attempt <= currentAttempt; attempt += 1) {
+    if (publisherJobsByAttempt.get(attempt) !== 1) {
+      throw new TypeError("Candidate attempt must contain exactly one publish-npm job")
+    }
+  }
+}
+
+function publisherJobExecuted(job) {
+  if (job.status === "completed" && job.conclusion === "skipped") {
+    if (job.startedAt === null || job.completedAt === null) {
+      throw new TypeError("Skipped publish-npm job timestamps are incomplete")
+    }
+    return false
+  }
+  return job.startedAt !== null
+}
+
+function assertAttestationRunAuthorized(attestationSet, publicationState) {
+  const matchingRuns = publicationState.candidateRuns.filter(
+    (run) =>
+      run.runId === attestationSet.workflowRunId && run.runAttempt === attestationSet.runAttempt,
+  )
+  if (matchingRuns.length !== 1) {
+    throw new Error("Attestation workflow run is not an exact enumerated authorized release run")
+  }
 }
 
 function snapshotArtifact(value) {

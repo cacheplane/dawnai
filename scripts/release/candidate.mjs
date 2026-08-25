@@ -107,7 +107,13 @@ async function discoverManagedCandidateDetails({ ref, inventory, git, marker }) 
   )
 }
 
-export async function discoverScheduledCandidate({ inventory, git, github, marker }) {
+export async function discoverScheduledCandidate({
+  inventory,
+  git,
+  github,
+  marker,
+  verifyTerminalAbandonment,
+}) {
   normalizeActiveMarker(marker)
   assertMethods(
     git,
@@ -115,9 +121,20 @@ export async function discoverScheduledCandidate({ inventory, git, github, marke
     "Git reader",
   )
   assertMethods(inventory, ["read"], "inventory reader")
+  if (verifyTerminalAbandonment !== undefined && typeof verifyTerminalAbandonment !== "function") {
+    throw new TypeError("Terminal abandonment verifier is invalid")
+  }
   assertMethods(
     github,
-    ["listTagRefs", "listReleases", "listReleaseAssets", "downloadReleaseAsset"],
+    [
+      "listTagRefs",
+      "getRef",
+      "getGitTag",
+      "listReleases",
+      "getReleaseByTag",
+      "listReleaseAssets",
+      "downloadReleaseAsset",
+    ],
     "GitHub reader",
   )
 
@@ -127,7 +144,7 @@ export async function discoverScheduledCandidate({ inventory, git, github, marke
   ])
   const tagRecords = presentList(tagResult, "managed tag refs")
   const releaseRecords = presentList(releaseResult, "GitHub Releases")
-  const tags = await normalizeManagedTags(tagRecords, git)
+  const tags = await normalizeManagedTags(tagRecords, git, github)
   const tagsByName = new Map(tags.map((tag) => [tag.tag, tag]))
   const releases = await inspectManagedReleases({
     records: releaseRecords,
@@ -136,6 +153,7 @@ export async function discoverScheduledCandidate({ inventory, git, github, marke
     git,
     github,
     marker,
+    verifyTerminalAbandonment,
   })
   const releasesByTag = new Map(releases.map((release) => [release.tag, release]))
   const standalone = []
@@ -340,7 +358,15 @@ function normalizeGithubRef(value) {
   return value
 }
 
-async function inspectManagedReleases({ records, tagsByName, inventory, git, github, marker }) {
+async function inspectManagedReleases({
+  records,
+  tagsByName,
+  inventory,
+  git,
+  github,
+  marker,
+  verifyTerminalAbandonment,
+}) {
   const managed = records.filter((record) => managedVersionFromTag(record?.tag_name) !== null)
   const seenTags = new Set()
   const releases = []
@@ -379,6 +405,7 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
       tagIdentity,
       abandonmentEnvironment: marker.abandonmentEnvironment,
       github,
+      verifyTerminalAbandonment,
     })
     if (abandonmentState !== null) {
       releases.push(
@@ -440,7 +467,12 @@ async function releaseStateFromAssets({ release, releaseRecord, assets, tagIdent
       if (release.draft !== false) {
         throw new Error(`Managed audit result for ${tagIdentity.tag} requires a published Release`)
       }
-      return ReleaseState.AUDIT_COMPLETE
+      // Candidate discovery cannot prove the durable smoke descriptor, exact
+      // terminal namespace, or cryptographic Release authority. Keep the
+      // candidate nonterminal until the production observer can apply that
+      // complete contract; otherwise a plausible audit receipt could let a
+      // newer candidate leapfrog an older unproven release.
+      return ReleaseState.CANDIDATE_TAGGED
     }
   }
   return ReleaseState.CANDIDATE_TAGGED
@@ -452,6 +484,7 @@ async function inspectAbandonmentRelease({
   tagIdentity,
   abandonmentEnvironment,
   github,
+  verifyTerminalAbandonment,
 }) {
   const marker = releaseMarkerIfPresent(release.body)
   const abandonmentRelated =
@@ -490,7 +523,7 @@ async function inspectAbandonmentRelease({
   }
 
   const terminal = marker.phase === "ABANDONED_PREPUBLICATION"
-  if (!terminal && !["ESCROWING", "ESCROWED"].includes(marker.phase)) {
+  if (!terminal && !["ATTACHING", "ESCROWED"].includes(marker.phase)) {
     throw new Error(
       `Managed abandonment evidence for ${tagIdentity.tag} has an illegal predecessor`,
     )
@@ -500,15 +533,46 @@ async function inspectAbandonmentRelease({
     bodyTombstone === null ? null : canonicalAbandonmentBytes(bodyTombstone)
   if (terminal) {
     const expectedTitle = `Dawn v${tagIdentity.version} (abandoned before publication)`
-    if (release.name !== expectedTitle) {
+    if (
+      release.name !== expectedTitle ||
+      release.target_commitish !== "main" ||
+      release.prerelease !== false
+    ) {
       throw new Error(`Managed abandonment Release metadata for ${tagIdentity.tag} is not exact`)
+    }
+    const terminalArtifact = {
+      manifestSha256: marker.manifestSha256,
+      releaseRecordSha256: marker.releaseRecordSha256,
+      baseAssetSetSha256: marker.baseAssetSetSha256,
+      attestationSet: marker.attestationSet,
+    }
+    if (!jsonValuesEqual(bodyTombstone.predecessor.artifact, terminalArtifact)) {
+      throw new Error(`Managed abandonment predecessor for ${tagIdentity.tag} is not exact`)
+    }
+    if (marker.attestationSet === null) {
+      if (
+        !["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED"].includes(bodyTombstone.predecessor.state) ||
+        bodyTombstone.predecessor.releaseStatus !== "absent" ||
+        bodyTombstone.predecessor.releaseId !== null ||
+        bodyTombstone.predecessor.bodySha256 !== null ||
+        bodyTombstone.predecessor.marker !== null
+      ) {
+        throw new Error(`Managed early abandonment predecessor for ${tagIdentity.tag} is invalid`)
+      }
+    } else if (
+      bodyTombstone.predecessor.state !== "CANDIDATE_ESCROWED" ||
+      bodyTombstone.predecessor.releaseStatus !== "draft" ||
+      String(bodyTombstone.predecessor.releaseId) !== String(release.id) ||
+      bodyTombstone.predecessor.marker?.phase !== "ESCROWED"
+    ) {
+      throw new Error(`Managed escrowed abandonment predecessor for ${tagIdentity.tag} is invalid`)
     }
   }
 
   const baseAssets = validateAbandonmentAssetNamespace({
     inventory,
     marker,
-    requireCompleteBase: marker.phase === "ESCROWED",
+    requireCompleteBase: terminal && marker.attestationSet !== null,
   })
 
   let tombstoneBytes = null
@@ -549,6 +613,34 @@ async function inspectAbandonmentRelease({
     if (marker.abandonmentSha256 !== sha256(tombstoneBytes)) {
       throw new Error(`Managed abandonment marker digest conflicts with ${tagIdentity.tag}`)
     }
+    if (marker.attestationSet !== null) {
+      const verified =
+        verifyTerminalAbandonment === undefined
+          ? false
+          : await verifyTerminalAbandonment({
+              candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
+              release: {
+                id: release.id,
+                tag: tagIdentity.tag,
+                bodySha256: sha256(Buffer.from(release.body, "utf8")),
+                abandonmentSha256: marker.abandonmentSha256,
+                baseAssetSetSha256: marker.baseAssetSetSha256,
+              },
+            })
+      if (verified !== true) {
+        return {
+          state: ReleaseState.CANDIDATE_TAGGED,
+          disposition: "blocked",
+          conflicts: ["abandonment-cryptographic-reverification-required"],
+        }
+      }
+    }
+    await revalidateTerminalAbandonmentBoundary({
+      release,
+      inventory,
+      tagIdentity,
+      github,
+    })
     return {
       state: ReleaseState.ABANDONED_PREPUBLICATION,
       disposition: "selected",
@@ -565,6 +657,81 @@ async function inspectAbandonmentRelease({
         : "abandonment-marker-reconciliation-required",
     ],
   }
+}
+
+async function revalidateTerminalAbandonmentBoundary({ release, inventory, tagIdentity, github }) {
+  const [ref, tagObject, exactRelease, exactAssets] = await Promise.all([
+    github
+      .getRef({ ref: `tags/${tagIdentity.tag}` })
+      .then((result) => presentObject(result, `final ref for ${tagIdentity.tag}`)),
+    github
+      .getGitTag({ tagSha: tagIdentity.tagObjectSha })
+      .then((result) => presentObject(result, `final annotated tag for ${tagIdentity.tag}`)),
+    github
+      .getReleaseByTag({ tag: tagIdentity.tag })
+      .then((result) => presentObject(result, `final Release for ${tagIdentity.tag}`)),
+    github
+      .listReleaseAssets({ releaseId: release.id })
+      .then((result) => presentList(result, `final assets for ${tagIdentity.tag}`)),
+  ])
+  if (
+    ref.ref !== `refs/tags/${tagIdentity.tag}` ||
+    ref.object?.type !== "tag" ||
+    ref.object.sha !== tagIdentity.tagObjectSha ||
+    tagObject.tag !== tagIdentity.tag ||
+    tagObject.object?.type !== "commit" ||
+    tagObject.object.sha !== tagIdentity.commitSha
+  ) {
+    throw new Error(`Managed terminal tag ${tagIdentity.tag} changed during arbitration`)
+  }
+  for (const field of [
+    "id",
+    "tag_name",
+    "name",
+    "body",
+    "target_commitish",
+    "draft",
+    "immutable",
+    "prerelease",
+  ]) {
+    if (exactRelease[field] !== release[field]) {
+      throw new Error(`Managed terminal Release ${tagIdentity.tag} changed during arbitration`)
+    }
+  }
+  const finalInventory = normalizeAbandonmentAssetInventory(exactAssets, tagIdentity.tag)
+  const identity = (assets) =>
+    assets.map((asset) => `${String(asset.id)}\0${asset.name}`).sort(compareText)
+  if (!arraysEqual(identity(inventory), identity(finalInventory))) {
+    throw new Error(`Managed terminal assets for ${tagIdentity.tag} changed during arbitration`)
+  }
+}
+
+function jsonValuesEqual(left, right) {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    )
+  }
+  if (
+    left === null ||
+    Array.isArray(left) ||
+    typeof left !== "object" ||
+    right === null ||
+    Array.isArray(right) ||
+    typeof right !== "object"
+  ) {
+    return false
+  }
+  const leftKeys = Object.keys(left).sort(compareText)
+  const rightKeys = Object.keys(right).sort(compareText)
+  return (
+    arraysEqual(leftKeys, rightKeys) &&
+    leftKeys.every((key) => jsonValuesEqual(left[key], right[key]))
+  )
 }
 
 function releaseMarkerIfPresent(body) {
@@ -673,7 +840,8 @@ function assetLimit(name) {
   throw new Error("Managed abandonment Release contains an unexpected asset namespace member")
 }
 
-async function normalizeManagedTags(records, git) {
+async function normalizeManagedTags(records, git, github) {
+  if (records.length > 10_000) throw new Error("Managed tag ref inventory exceeds its bound")
   const seen = new Set()
   const tags = []
   for (const record of records) {
@@ -686,17 +854,43 @@ async function normalizeManagedTags(records, git) {
       record.object === null ||
       Array.isArray(record.object) ||
       typeof record.object !== "object" ||
-      !["commit", "tag"].includes(record.object.type) ||
+      record.object.type !== "tag" ||
       !isSha(record.object.sha)
     ) {
-      throw new TypeError(`Managed tag ref ${tag} is malformed`)
+      throw new TypeError(`Managed tag ref ${tag} is not one exact annotated tag`)
+    }
+    const exactRefResult = await github.getRef({ ref: `tags/${tag}` })
+    const exactRef = presentObject(exactRefResult, `exact ref for ${tag}`)
+    if (
+      exactRef.ref !== record.ref ||
+      exactRef.object === null ||
+      Array.isArray(exactRef.object) ||
+      typeof exactRef.object !== "object" ||
+      exactRef.object.type !== "tag" ||
+      exactRef.object.sha !== record.object.sha
+    ) {
+      throw new Error(`Managed tag ref ${tag} changed during arbitration`)
+    }
+    const tagObject = presentObject(
+      await github.getGitTag({ tagSha: record.object.sha }),
+      `annotated tag for ${tag}`,
+    )
+    if (
+      tagObject.tag !== tag ||
+      tagObject.object === null ||
+      Array.isArray(tagObject.object) ||
+      typeof tagObject.object !== "object" ||
+      tagObject.object.type !== "commit" ||
+      !isSha(tagObject.object.sha)
+    ) {
+      throw new Error(`Managed annotated tag ${tag} does not peel to one exact commit`)
     }
     const commitSha = await git.resolveTag({ tag })
     if (!isSha(commitSha)) throw new TypeError(`Managed tag ref ${tag} did not resolve exactly`)
-    if (record.object.type === "commit" && record.object.sha !== commitSha) {
+    if (tagObject.object.sha !== commitSha) {
       throw new Error(`Managed tag ref ${tag} conflicts with local tag identity`)
     }
-    tags.push({ tag, version, commitSha })
+    tags.push({ tag, version, commitSha, tagObjectSha: record.object.sha })
   }
   tags.sort((left, right) => compareSemver(left.version, right.version))
   return tags
@@ -712,28 +906,35 @@ function classifyRequiredCi({ sha, checkResult, workflowResult }) {
   if (checkResult.value.length === 0 && workflowResult.value.length === 0) {
     return { status: "pending" }
   }
-  const checks = checkResult.value.filter(
+  const namedChecks = checkResult.value.filter(
     (check) => check?.name === "validate" && check?.head_sha === sha,
   )
   const workflows = workflowResult.value.filter(
     (run) =>
-      run?.name === "CI" && run?.path === ".github/workflows/ci.yml" && run?.head_sha === sha,
+      run?.name === "CI" &&
+      run?.path === ".github/workflows/ci.yml" &&
+      run?.head_sha === sha &&
+      run?.head_branch === "main" &&
+      run?.event === "push",
   )
-  if (checks.length !== 1 || workflows.length !== 1) {
+  if (workflows.length !== 1) {
     return failedCi(sha, "required-ci-identity-conflict")
   }
-  const [check] = checks
   const [workflow] = workflows
   if (
     !isPositiveId(workflow.id) ||
     !Number.isSafeInteger(workflow.run_attempt) ||
     workflow.run_attempt < 1 ||
     !isPositiveId(workflow.check_suite_id) ||
-    !isPositiveId(check?.check_suite?.id) ||
-    String(workflow.check_suite_id) !== String(check.check_suite.id)
+    namedChecks.some((check) => !isPositiveId(check?.check_suite?.id))
   ) {
     return failedCi(sha, "required-ci-identity-conflict")
   }
+  const checks = namedChecks.filter(
+    (check) => String(check.check_suite.id) === String(workflow.check_suite_id),
+  )
+  if (checks.length !== 1) return failedCi(sha, "required-ci-identity-conflict")
+  const [check] = checks
   if (
     (workflow.status === "completed" && workflow.conclusion !== "success") ||
     (check.status === "completed" && check.conclusion !== "success")
@@ -993,7 +1194,27 @@ function invocationDecision(value) {
 
 function presentList(result, label) {
   if (result?.status !== "PRESENT" || !Array.isArray(result.value)) {
-    throw new Error(`${label} could not be enumerated exactly`)
+    const error = new Error(`${label} could not be enumerated exactly`)
+    if (typeof result?.code === "string" && /^[A-Z][A-Z0-9_-]{0,127}$/u.test(result.code)) {
+      Object.defineProperty(error, "code", { value: result.code, enumerable: true })
+    }
+    throw error
+  }
+  return result.value
+}
+
+function presentObject(result, label) {
+  if (
+    result?.status !== "PRESENT" ||
+    result.value === null ||
+    Array.isArray(result.value) ||
+    typeof result.value !== "object"
+  ) {
+    const error = new Error(`${label} could not be observed exactly`)
+    if (typeof result?.code === "string" && /^[A-Z][A-Z0-9_-]{0,127}$/u.test(result.code)) {
+      Object.defineProperty(error, "code", { value: result.code, enumerable: true })
+    }
+    throw error
   }
   return result.value
 }

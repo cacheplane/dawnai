@@ -6,7 +6,7 @@ import { candidate, observationForMarker } from "./support/marker-observation.mj
 
 const CASES = [
   {
-    phase: "ESCROWING",
+    phase: "ATTACHING",
     options: { npmComplete: false, smokesComplete: false, partialBase: true },
     state: "ARTIFACTS_ATTESTED",
   },
@@ -36,7 +36,7 @@ const CASES = [
   },
   {
     phase: "ABANDONED_PREPUBLICATION",
-    options: { partialBase: true },
+    options: {},
     state: "ABANDONED_PREPUBLICATION",
   },
 ]

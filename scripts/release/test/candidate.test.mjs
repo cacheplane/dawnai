@@ -155,10 +155,33 @@ test("scheduled standalone recovery rejects an off-main candidate tag", async ()
   )
 })
 
-test("scheduled discovery enumerates managed Releases and standalone tags before choosing the oldest incomplete tag", async () => {
+test("scheduled arbitration rejects a lightweight managed tag before terminal selection", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20", { marker: true }),
     commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const lightweight = {
+    ref: "refs/tags/v0.8.21",
+    object: { type: "commit", sha: SHA_21 },
+    peeledCommitSha: SHA_21,
+  }
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      inventory: repository.inventory,
+      git: repository.git,
+      github: githubFixture({ tags: [lightweight] }),
+      marker: ACTIVE_MARKER,
+    }),
+    /annotated/u,
+  )
+})
+
+test("scheduled discovery enumerates managed Releases and standalone tags before choosing the oldest incomplete tag", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+    commit(SHA_21, "0.8.21", { parent: CUTOVER_SHA, marker: true }),
     commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
     commit(SHA_23, "0.8.23", { parent: SHA_22, marker: true }),
     commit(SHA_24, "0.8.24", { parent: SHA_23, marker: true }),
@@ -322,6 +345,28 @@ test("scheduled discovery rejects terminal audit evidence for another manifest",
   )
 })
 
+test("scheduled discovery never excludes an audit-looking Release without durable smoke authority", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+    commit(SHA_21, "0.8.21", { parent: CUTOVER_SHA, marker: true }),
+    commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
+  ])
+  const older = managedRelease(21, "0.8.21", SHA_21, {
+    auditComplete: true,
+    published: true,
+  })
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [older] }),
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+})
+
 test("only a published Release with a strict consistent successful audit is terminal", async () => {
   const cases = [
     {
@@ -451,7 +496,7 @@ test("scheduled recovery recognizes tagged-only canonical abandonment before rel
   assert.deepEqual(result, selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"))
 })
 
-test("scheduled recovery accepts an exact terminal attested abandonment with a retained subset", async () => {
+test("scheduled recovery requires strong verification before excluding exact attested abandonment", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20"),
     commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
@@ -459,6 +504,21 @@ test("scheduled recovery accepts an exact terminal attested abandonment with a r
     commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
   ])
   const abandoned = terminalAttestedAbandonmentRelease(21, "0.8.21", SHA_21)
+
+  const blocked = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({
+      tags: [tagRef("0.8.21", SHA_21)],
+      releases: [abandoned],
+    }),
+    marker: ACTIVE_MARKER,
+  })
+  assert.deepEqual(blocked, {
+    ...selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"),
+    disposition: "blocked",
+    conflicts: ["abandonment-cryptographic-reverification-required"],
+  })
 
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
@@ -468,6 +528,11 @@ test("scheduled recovery accepts an exact terminal attested abandonment with a r
       releases: [abandoned],
     }),
     marker: ACTIVE_MARKER,
+    async verifyTerminalAbandonment(input) {
+      assert.equal(input.candidate.commitSha, SHA_21)
+      assert.equal(input.release.bodySha256, sha256(Buffer.from(abandoned.body, "utf8")))
+      return true
+    },
   })
 
   assert.deepEqual(result, selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"))
@@ -585,7 +650,7 @@ test("abandonment asset metadata is bounded before the first download", async ()
   )
 })
 
-test("scheduled discovery chooses the newest unsuperseded untagged first-parent candidate", async () => {
+test("scheduled discovery keeps an audit-looking release selected until smoke authority exists", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20"),
     commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
@@ -605,13 +670,13 @@ test("scheduled discovery chooses the newest unsuperseded untagged first-parent 
     marker: ACTIVE_MARKER,
   })
 
-  assert.deepEqual(result, selectedCandidate("0.8.23", SHA_23, "CANDIDATE_VALIDATED"))
-  assert.deepEqual(
-    repository.calls.filter(
+  assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+  assert.equal(
+    repository.calls.some(
       ([operation, ref, maxCount]) =>
         operation === "history" && ref === "main" && maxCount === 1000,
     ),
-    [["history", "main", 1000]],
+    false,
   )
 })
 
@@ -753,6 +818,84 @@ test("exact CI / validate success at the candidate SHA gates tagging", async () 
   assert.deepEqual(delays, [25])
 })
 
+test("required CI correlates validate to the unique workflow check suite", async () => {
+  const attempt = ciAttempt({ status: "completed", conclusion: "success" })
+  const github = {
+    async getCommitCheckRuns() {
+      return present("commit-check-runs", [
+        attempt.check,
+        { ...attempt.check, check_suite: { id: 99 } },
+      ])
+    },
+    async listWorkflowRuns() {
+      return present("workflow-runs", [attempt.workflow])
+    },
+  }
+
+  const result = await waitForRequiredCi({
+    sha: SHA_22,
+    github,
+    attempts: 1,
+    delayMs: 0,
+    delay: async () => assert.fail("terminal CI must not poll"),
+  })
+
+  assert.equal(result.status, "success")
+  assert.equal(result.runId, attempt.workflow.id)
+})
+
+test("required CI cannot authorize a pull-request run at the candidate SHA", async () => {
+  const result = await waitForRequiredCi({
+    sha: SHA_22,
+    github: ciFixture([
+      ciAttempt({
+        status: "completed",
+        conclusion: "success",
+        workflowBranch: "feature",
+        workflowEvent: "pull_request",
+      }),
+    ]),
+    attempts: 1,
+    delayMs: 0,
+    delay: async () => assert.fail("terminal CI identity conflict must not poll"),
+  })
+
+  assert.equal(result.status, "failed")
+  assert.equal(result.reason, "required-ci-identity-conflict")
+})
+
+test("required CI selects the exact main push when a PR suite shares its SHA", async () => {
+  const main = ciAttempt({ status: "completed", conclusion: "success" })
+  const pullRequest = ciAttempt({
+    status: "completed",
+    conclusion: "success",
+    workflowBranch: "feature",
+    workflowEvent: "pull_request",
+    workflowSuiteId: 78,
+  })
+  pullRequest.workflow.id = 102
+  pullRequest.check.check_suite.id = 78
+  const github = {
+    async getCommitCheckRuns() {
+      return present("commit-check-runs", [pullRequest.check, main.check])
+    },
+    async listWorkflowRuns() {
+      return present("workflow-runs", [pullRequest.workflow, main.workflow])
+    },
+  }
+
+  const result = await waitForRequiredCi({
+    sha: SHA_22,
+    github,
+    attempts: 1,
+    delayMs: 0,
+    delay: async () => assert.fail("successful CI must not poll"),
+  })
+
+  assert.equal(result.status, "success")
+  assert.equal(result.runId, main.workflow.id)
+})
+
 test("pending CI polls within budget, terminal failure stops, and timeout is retryable", async () => {
   const failedGithub = ciFixture([
     ciAttempt({ status: "completed", conclusion: "failure" }),
@@ -802,6 +945,8 @@ test("a successful check with any other CI identity cannot gate tagging", async 
     { checkName: "other" },
     { headSha: OTHER_SHA },
     { workflowSuiteId: 88 },
+    { workflowBranch: "feature" },
+    { workflowEvent: "pull_request" },
   ]) {
     const result = await waitForRequiredCi({
       sha: SHA_22,
@@ -1014,7 +1159,15 @@ function selectedCandidate(version, commitSha, state) {
 }
 
 function tagRef(version, commitSha) {
-  return { ref: `refs/tags/v${version}`, object: { type: "commit", sha: commitSha } }
+  return {
+    ref: `refs/tags/v${version}`,
+    object: { type: "tag", sha: tagObjectSha(version) },
+    peeledCommitSha: commitSha,
+  }
+}
+
+function tagObjectSha(version) {
+  return createHash("sha1").update(`annotated tag v${version}\n`).digest("hex")
 }
 
 function managedRelease(
@@ -1052,8 +1205,11 @@ function managedRelease(
     id,
     version,
     tag_name: `v${version}`,
+    name: `Dawn v${version}`,
+    target_commitish: "main",
     draft: !published,
     immutable: published,
+    prerelease: false,
     ...(abandonmentMarker === null
       ? {}
       : {
@@ -1094,18 +1250,56 @@ function managedRelease(
 function interruptedAbandonmentRelease(id, version, commitSha) {
   const release = managedRelease(id, version, commitSha, {
     abandoned: true,
-    releaseRecord: true,
+    releaseRecord: false,
   })
   const recordBytes = Buffer.from(JSON.stringify(release.record))
+  const marker = {
+    schemaVersion: 1,
+    epoch: "fixed-group-v1",
+    revision: 1,
+    phase: "ATTACHING",
+    version,
+    commitSha,
+    tag: `v${version}`,
+    manifestSha256: "b".repeat(64),
+    releaseRecordSha256: sha256(recordBytes),
+    baseAssetSetSha256: null,
+    attestationSet: null,
+    npmEvidenceSha256: null,
+    smokeAggregateSha256: null,
+    audit: null,
+    abandonmentSha256: null,
+  }
+  release.name = `Dawn v${version}`
+  release.body = canonicalReleaseBody({ marker, manifest: null })
+  return release
+}
+
+function terminalAttestedAbandonmentRelease(id, version, commitSha) {
+  const release = managedRelease(id, version, commitSha, {
+    abandoned: true,
+    releaseRecord: false,
+  })
+  const bytesByName = new Map()
+  const recordBytes = Buffer.from(JSON.stringify(release.record))
+  bytesByName.set("release-record.json", recordBytes)
+  const anchoredBundleBytes = Buffer.from("fixture bytes for the anchored attestation bundle\n")
   const subjects = [
     "manifest.json",
     ...Array.from({ length: 21 }, (_, index) => `package-${String(index).padStart(2, "0")}.tgz`),
-  ].map((subjectName) => ({
-    subjectName,
-    subjectSha256: sha256(Buffer.from(`fixture bytes for ${subjectName}\n`)),
-    bundleName: `${subjectName}.intoto.jsonl`,
-    bundleSha256: sha256(Buffer.from(`fixture bytes for ${subjectName}.intoto.jsonl\n`)),
-  }))
+  ].map((subjectName) => {
+    const subjectBytes = Buffer.from(`fixture bytes for ${subjectName}\n`)
+    const bundleName = `${subjectName}.intoto.jsonl`
+    const bundleBytes = anchoredBundleBytes
+    bytesByName.set(subjectName, subjectBytes)
+    bytesByName.set(bundleName, bundleBytes)
+    return {
+      subjectName,
+      subjectSha256: sha256(subjectBytes),
+      bundleName,
+      bundleSha256: sha256(bundleBytes),
+    }
+  })
   const attestationSet = {
     repository: "cacheplane/dawnai",
     workflow: ".github/workflows/release.yml",
@@ -1127,11 +1321,11 @@ function interruptedAbandonmentRelease(id, version, commitSha) {
       sha256: subject.bundleSha256,
     })),
   ]
-  const marker = {
+  const previousMarker = {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
-    revision: 1,
-    phase: "ESCROWING",
+    revision: 2,
+    phase: "ESCROWED",
     version,
     commitSha,
     tag: `v${version}`,
@@ -1144,14 +1338,24 @@ function interruptedAbandonmentRelease(id, version, commitSha) {
     audit: null,
     abandonmentSha256: null,
   }
-  release.name = `Dawn v${version}`
-  release.body = canonicalReleaseBody({ marker, manifest: null })
-  return release
-}
-
-function terminalAttestedAbandonmentRelease(id, version, commitSha) {
-  const release = interruptedAbandonmentRelease(id, version, commitSha)
-  const previousMarker = parseReleaseMarker(release.body)
+  const previousBody = canonicalReleaseBody({ marker: previousMarker, manifest: null })
+  release.abandonment = {
+    ...release.abandonment,
+    predecessor: {
+      state: "CANDIDATE_ESCROWED",
+      releaseStatus: "draft",
+      releaseId: id,
+      bodySha256: sha256(Buffer.from(previousBody, "utf8")),
+      marker: previousMarker,
+      artifact: {
+        manifestSha256: previousMarker.manifestSha256,
+        releaseRecordSha256: previousMarker.releaseRecordSha256,
+        baseAssetSetSha256: previousMarker.baseAssetSetSha256,
+        attestationSet: previousMarker.attestationSet,
+      },
+    },
+  }
+  release.abandonmentBytes = canonicalAbandonmentBytes(release.abandonment)
   const marker = abandonmentReleaseMarker({
     candidate: { version, commitSha },
     artifact: {
@@ -1163,6 +1367,16 @@ function terminalAttestedAbandonmentRelease(id, version, commitSha) {
     abandonmentSha256: sha256(release.abandonmentBytes),
     previousMarker,
   })
+  release.assets = [
+    ...baseAssets.map((asset, index) => ({ id: id * 1_000 + index + 1, name: asset.name })),
+    { id: id * 1_000 + 100, name: "abandonment.json" },
+  ]
+  release.assetBytes = new Map([
+    ...release.assets
+      .filter((asset) => asset.name !== "abandonment.json")
+      .map((asset) => [asset.id, bytesByName.get(asset.name)]),
+    [id * 1_000 + 100, release.abandonmentBytes],
+  ])
   release.name = `Dawn v${version} (abandoned before publication)`
   release.body = canonicalAbandonmentReleaseBody({
     marker,
@@ -1190,6 +1404,19 @@ function abandonmentRecord(version, commitSha) {
     version,
     commitSha,
     tag: `v${version}`,
+    predecessor: {
+      state: "CANDIDATE_TAGGED",
+      releaseStatus: "absent",
+      releaseId: null,
+      bodySha256: null,
+      marker: null,
+      artifact: {
+        manifestSha256: null,
+        releaseRecordSha256: null,
+        baseAssetSetSha256: null,
+        attestationSet: null,
+      },
+    },
     reason: "Candidate preparation is deterministically defective",
     actor: "release-operator",
     actorId: 200,
@@ -1248,6 +1475,9 @@ function githubFixture({ tags = [], releases = [] } = {}) {
   const releasesById = new Map(releases.map((release) => [release.id, release]))
   const assetBytes = new Map()
   for (const release of releases) {
+    if (release.assetBytes instanceof Map) {
+      for (const [assetId, bytes] of release.assetBytes) assetBytes.set(assetId, bytes)
+    }
     const recordAsset = release.assets.find((asset) => asset.name === "release-record.json")
     if (recordAsset !== undefined) assetBytes.set(recordAsset.id, release.record)
     const auditAsset = release.assets.find((asset) => asset.name === "audit-result.json")
@@ -1261,16 +1491,50 @@ function githubFixture({ tags = [], releases = [] } = {}) {
     calls,
     async listTagRefs() {
       calls.push(["listTagRefs"])
-      return present("tag-refs", tags)
+      return present(
+        "tag-refs",
+        tags.map(({ peeledCommitSha, ...tag }) => tag),
+      )
+    },
+    async getRef({ ref }) {
+      calls.push(["getRef", ref])
+      const tag = tags.find((item) => item.ref === `refs/${ref}`)
+      if (tag === undefined) throw new Error(`unknown fixture ref ${ref}`)
+      return present("ref", { ref: tag.ref, object: tag.object })
+    },
+    async getGitTag({ tagSha }) {
+      calls.push(["getGitTag", tagSha])
+      const tag = tags.find((item) => item.object.sha === tagSha)
+      if (tag === undefined) throw new Error(`unknown fixture annotated tag ${tagSha}`)
+      return present("git-tag", {
+        tag: tag.ref.slice("refs/tags/".length),
+        object: { type: "commit", sha: tag.peeledCommitSha },
+      })
     },
     async listReleases() {
       calls.push(["listReleases"])
       return present(
         "releases",
         releases.map(
-          ({ record, auditResult, abandonment, abandonmentBytes, assets, ...release }) => release,
+          ({
+            record,
+            auditResult,
+            abandonment,
+            abandonmentBytes,
+            assets,
+            assetBytes,
+            ...release
+          }) => release,
         ),
       )
+    },
+    async getReleaseByTag({ tag }) {
+      calls.push(["getReleaseByTag", tag])
+      const release = releases.find((item) => item.tag_name === tag)
+      if (release === undefined) throw new Error(`unknown fixture Release ${tag}`)
+      const { record, auditResult, abandonment, abandonmentBytes, assets, assetBytes, ...value } =
+        release
+      return present("release", value)
     },
     async listReleaseAssets({ releaseId }) {
       calls.push(["listReleaseAssets", releaseId])
@@ -1308,6 +1572,8 @@ function ciAttempt({
   conclusion = null,
   workflowName = "CI",
   workflowPath = ".github/workflows/ci.yml",
+  workflowBranch = "main",
+  workflowEvent = "push",
   checkName = "validate",
   headSha = SHA_22,
   workflowSuiteId = 77,
@@ -1319,6 +1585,8 @@ function ciAttempt({
       name: workflowName,
       path: workflowPath,
       head_sha: headSha,
+      head_branch: workflowBranch,
+      event: workflowEvent,
       check_suite_id: workflowSuiteId,
       status,
       conclusion,

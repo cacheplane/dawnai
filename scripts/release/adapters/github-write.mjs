@@ -437,6 +437,8 @@ function assertReleaseIdentity(release, args) {
     positiveId(release.id, "Release ID") !==
       positiveId(args.releaseId ?? release.id, "Release ID") ||
     release.tag_name !== args.tag ||
+    release.target_commitish !== "main" ||
+    release.prerelease !== false ||
     typeof release.name !== "string" ||
     typeof release.body !== "string" ||
     typeof release.draft !== "boolean" ||

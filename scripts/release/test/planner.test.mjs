@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-
+import { canonicalReleaseBody } from "../metadata.mjs"
 import { planRelease } from "../planner.mjs"
 import { classifyObservedRelease, findReleaseConflicts, ReleaseState } from "../state.mjs"
 
@@ -33,7 +33,7 @@ const PACKAGE_IDENTITIES = [
     filename: `dawn-ai-core-${VERSION}.tgz`,
     tarballSha256: "1".repeat(64),
     attestationFilename: `dawn-ai-core-${VERSION}.tgz.intoto.jsonl`,
-    attestationSha256: "d".repeat(64),
+    attestationSha256: MANIFEST_ATTESTATION_SHA256,
     integrity: "sha512-core",
   },
   {
@@ -42,7 +42,7 @@ const PACKAGE_IDENTITIES = [
     filename: `dawn-ai-sdk-${VERSION}.tgz`,
     tarballSha256: "2".repeat(64),
     attestationFilename: `dawn-ai-sdk-${VERSION}.tgz.intoto.jsonl`,
-    attestationSha256: "e".repeat(64),
+    attestationSha256: MANIFEST_ATTESTATION_SHA256,
     integrity: "sha512-sdk",
   },
   ...Array.from({ length: 19 }, (_unused, index) => {
@@ -54,7 +54,7 @@ const PACKAGE_IDENTITIES = [
       filename,
       tarballSha256: (index + 3).toString(16).padStart(64, "0"),
       attestationFilename: `${filename}.intoto.jsonl`,
-      attestationSha256: (index + 35).toString(16).padStart(64, "0"),
+      attestationSha256: MANIFEST_ATTESTATION_SHA256,
       integrity: "sha512-ZXh0cmE=",
     }
   }),
@@ -357,6 +357,8 @@ for (const [status, overrides, conflict] of invalidCiCases) {
       workflow: CI_WORKFLOW,
       check: CI_CHECK,
       commitSha: COMMIT_SHA,
+      workflowRunId: status === "missing" ? null : 10,
+      runAttempt: status === "missing" ? null : 1,
       ...overrides,
     }
 
@@ -902,7 +904,9 @@ const malformedImmutableIdentityCases = [
     "integrity",
   ].flatMap((field) => [
     [`missing inventory package ${field}`, (o) => delete o.inventory.packages[0][field]],
-    [`null inventory package ${field}`, (o) => (o.inventory.packages[0][field] = null)],
+    ...(field === "attestationSha256"
+      ? []
+      : [[`null inventory package ${field}`, (o) => (o.inventory.packages[0][field] = null)]]),
     [`wrong-type inventory package ${field}`, (o) => (o.inventory.packages[0][field] = 1)],
   ]),
 ]
@@ -936,6 +940,19 @@ for (const [variant, createObservation] of activeManagedAssetVariants) {
     })
   }
 }
+
+test("a prepared nullable attestation digest blocks any later escrow signal without becoming malformed", () => {
+  const observation = observationFor("CANDIDATE_ESCROWED")
+  observation.release = releaseRecord("absent")
+  observation.inventory.packages[0].attestationSha256 = null
+
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+
+  assert.equal(plan.state, "ARTIFACTS_PREPARED")
+  assert.equal(plan.disposition, "blocked")
+  assert.ok(plan.conflicts.includes("inventory-attestation-digests-missing"))
+  assert.ok(!plan.conflicts.includes("observation-schema-invalid"))
+})
 
 for (const [name, mutate] of [
   [
@@ -1626,6 +1643,8 @@ function baseObservation() {
       workflow: CI_WORKFLOW,
       check: CI_CHECK,
       commitSha: COMMIT_SHA,
+      workflowRunId: 10,
+      runAttempt: 1,
     },
     otherCandidates: [],
     tag: {
@@ -1690,6 +1709,7 @@ function baseObservation() {
     abandonment: {
       requested: false,
       recorded: false,
+      predecessor: null,
     },
   }
 }
@@ -1794,7 +1814,11 @@ function observationFor(state) {
 
   if (state === "ABANDONED_PREPUBLICATION") {
     const abandoned = observationFor("CANDIDATE_TAGGED")
-    abandoned.abandonment = { requested: true, recorded: true }
+    abandoned.abandonment = {
+      requested: true,
+      recorded: true,
+      predecessor: "CANDIDATE_TAGGED",
+    }
     return abandoned
   }
   throw new Error(`Unknown test state ${state}`)
@@ -1849,6 +1873,12 @@ function releaseRecord(status, { phase = "ESCROWED" } = {}) {
     tag: status === "absent" ? null : `v${VERSION}`,
     commitSha: status === "absent" ? null : COMMIT_SHA,
     immutable: status === "absent" ? null : status === "published",
+    bodySha256:
+      marker === null
+        ? null
+        : createHash("sha256")
+            .update(canonicalReleaseBody({ marker, manifest: null }))
+            .digest("hex"),
     marker,
     assets:
       status === "absent"
@@ -1880,7 +1910,7 @@ function releaseMarker(phase) {
     schemaVersion: 1,
     epoch: "fixed-group-v1",
     revision:
-      phase === "ESCROWING"
+      phase === "ATTACHING"
         ? 1
         : phase === "ESCROWED"
           ? 2
@@ -1895,29 +1925,32 @@ function releaseMarker(phase) {
     tag: `v${VERSION}`,
     manifestSha256: MANIFEST_SHA256,
     releaseRecordSha256: RELEASE_RECORD_SHA256,
-    baseAssetSetSha256: baseAssetSetSha256(),
-    attestationSet: {
-      repository: "cacheplane/dawnai",
-      workflow: ".github/workflows/release.yml",
-      sourceRef: `refs/tags/v${VERSION}`,
-      commitSha: COMMIT_SHA,
-      workflowRunId: 200,
-      runAttempt: 1,
-      subjects: [
-        {
-          subjectName: "manifest.json",
-          subjectSha256: MANIFEST_SHA256,
-          bundleName: MANIFEST_ATTESTATION_NAME,
-          bundleSha256: MANIFEST_ATTESTATION_SHA256,
-        },
-        ...PACKAGE_IDENTITIES.map((pkg) => ({
-          subjectName: pkg.filename,
-          subjectSha256: pkg.tarballSha256,
-          bundleName: pkg.attestationFilename,
-          bundleSha256: pkg.attestationSha256,
-        })),
-      ],
-    },
+    baseAssetSetSha256: phase === "ATTACHING" ? null : baseAssetSetSha256(),
+    attestationSet:
+      phase === "ATTACHING"
+        ? null
+        : {
+            repository: "cacheplane/dawnai",
+            workflow: ".github/workflows/release.yml",
+            sourceRef: `refs/tags/v${VERSION}`,
+            commitSha: COMMIT_SHA,
+            workflowRunId: 200,
+            runAttempt: 1,
+            subjects: [
+              {
+                subjectName: "manifest.json",
+                subjectSha256: MANIFEST_SHA256,
+                bundleName: MANIFEST_ATTESTATION_NAME,
+                bundleSha256: MANIFEST_ATTESTATION_SHA256,
+              },
+              ...PACKAGE_IDENTITIES.map((pkg) => ({
+                subjectName: pkg.filename,
+                subjectSha256: pkg.tarballSha256,
+                bundleName: pkg.attestationFilename,
+                bundleSha256: pkg.attestationSha256,
+              })),
+            ],
+          },
     npmEvidenceSha256: [
       "NPM_COMPLETE",
       "SMOKES_COMPLETE",

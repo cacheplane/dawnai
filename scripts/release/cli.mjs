@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 
 const COMMANDS = Object.freeze({
   abandon: Object.freeze(["version", "commit-sha", "reason", "artifact-context"]),
+  observe: Object.freeze(["event", "report", "github-output"]),
   tag: Object.freeze(["candidate"]),
   prepare: Object.freeze([
     "candidate",
@@ -48,6 +49,9 @@ export async function runReleaseCli(argv, dependencies = {}) {
   const runtime = normalizeDependencies(dependencies)
   if (parsed.command === "abandon") {
     return runAbandon(parsed.options, runtime)
+  }
+  if (parsed.command === "observe") {
+    return runObserve(parsed.options, runtime)
   }
   if (parsed.command === "tag") {
     return runTag(parsed.options, runtime)
@@ -154,6 +158,255 @@ async function runAbandon(options, runtime) {
     authorization,
     github,
   })
+}
+
+async function runObserve(options, runtime) {
+  const paths = Object.fromEntries(
+    Object.entries(options).map(([key, value]) => [key, resolveCliPath(value, runtime.cwd)]),
+  )
+  await assertObservePathsDistinct(runtime.fileSystem, paths)
+  const event = await readJsonFile(
+    runtime.fileSystem,
+    paths.event,
+    MAX_JSON_BYTES,
+    "production event",
+  )
+  const [observeModule, controllerModule, plannerModule] = await Promise.all([
+    runtime.importModule(new URL("./observe.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./controller.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./planner.mjs", import.meta.url).href),
+  ])
+  const classifyEvent = moduleFunction(
+    observeModule,
+    "classifyProductionEvent",
+    "production event classifier",
+  )
+  const resolveCandidate = moduleFunction(
+    observeModule,
+    "resolveProductionCandidate",
+    "production candidate resolver",
+  )
+  const observeCandidate = moduleFunction(
+    observeModule,
+    "observeProductionCandidate",
+    "production observer",
+  )
+  const createInventoryReader = moduleFunction(
+    observeModule,
+    "createProductionInventoryReader",
+    "production inventory reader factory",
+  )
+  const runController = moduleFunction(
+    controllerModule,
+    "runReleaseController",
+    "one-transition controller",
+  )
+  const planRelease = moduleFunction(plannerModule, "planRelease", "release planner")
+  classifyEvent(event)
+
+  const [git, github, npm, attestations, marker] = await Promise.all([
+    requireProductionGit(runtime),
+    requireProductionGitHub(runtime),
+    requireNpm(runtime),
+    requireAttestations(runtime),
+    readControllerMarker(runtime),
+  ])
+  const inventory = runtime.inventory ?? createInventoryReader({ root: runtime.cwd, git })
+  requiredMethod(inventory, "read", "production inventory reader")
+
+  let selection
+  let resolutionFailure = null
+  let observationDiagnostics = []
+  try {
+    selection = await resolveCandidate({
+      event,
+      inventory,
+      git,
+      github,
+      npm,
+      attestations,
+      marker,
+    })
+  } catch (error) {
+    resolutionFailure = safeObservationFailure(error, "CANDIDATE_DISCOVERY_AMBIGUOUS")
+    observationDiagnostics = [
+      observationDiagnostic("controller", "candidate-discovery", resolutionFailure.code),
+    ]
+    selection = {
+      candidate: null,
+      state: "NO_CANDIDATE",
+      disposition: "blocked",
+      tag: null,
+      conflicts: ["candidate-discovery-ambiguous"],
+    }
+  }
+
+  let immutableInventory = null
+  if (selection.candidate !== null) {
+    try {
+      immutableInventory = await inventory.read({ ref: selection.candidate.commitSha })
+    } catch (error) {
+      resolutionFailure = safeObservationFailure(error, "IMMUTABLE_INVENTORY_AMBIGUOUS")
+      observationDiagnostics = [
+        observationDiagnostic("git", "immutable-inventory", resolutionFailure.code),
+      ]
+    }
+  }
+  const npmAuditFactory = await requireNpmAuditFactory(runtime)
+  const observer = {
+    async observe() {
+      if (resolutionFailure !== null || selection.candidate === null) {
+        return {
+          status: resolutionFailure === null ? "no-candidate" : "ambiguous",
+          code: resolutionFailure?.code ?? null,
+        }
+      }
+      try {
+        const result = await observeCandidate({
+          candidate: selection.candidate,
+          inventory: immutableInventory,
+          marker,
+          git,
+          github,
+          npm,
+          npmAuditFactory,
+          attestations,
+        })
+        observationDiagnostics = normalizeObservationDiagnostics(result.diagnostics)
+        return result.observation
+      } catch (error) {
+        const failure = safeObservationFailure(error, "PRODUCTION_OBSERVATION_AMBIGUOUS")
+        observationDiagnostics = [
+          observationDiagnostic("controller", "production-observation", failure.code),
+        ]
+        return { status: "ambiguous", code: failure.code }
+      }
+    },
+  }
+  const planner = {
+    plan(input) {
+      if (
+        resolutionFailure !== null ||
+        observationDiagnostics.length > 0 ||
+        input.observation?.status === "ambiguous"
+      ) {
+        return blockedObservePlan({
+          state: selection.state,
+          conflicts: [...selection.conflicts, "production-observation-ambiguous"],
+        })
+      }
+      if (selection.candidate === null) {
+        return terminalObservePlan({
+          state: "NO_CANDIDATE",
+          disposition: "noop",
+          reason: "no release candidate was discovered",
+        })
+      }
+      if (selection.disposition === "blocked") {
+        return blockedObservePlan({ state: selection.state, conflicts: selection.conflicts })
+      }
+      if (["audit-only", "noop"].includes(selection.disposition)) {
+        return terminalObservePlan({
+          state: selection.state,
+          disposition: selection.disposition,
+          reason: "candidate arbitration does not permit an automatic transition",
+        })
+      }
+      return planRelease(input)
+    },
+  }
+  let emittedReport = null
+  const reporter = {
+    async write(report) {
+      emittedReport = canonicalize(
+        snapshotCliData(
+          { ...report, diagnostics: observationDiagnostics },
+          "production observation report",
+        ),
+      )
+      await assertObservePathsDistinct(runtime.fileSystem, paths)
+      await writeCanonicalFile(
+        runtime.fileSystem,
+        paths.report,
+        canonicalJsonBytes(emittedReport),
+        "production observation report",
+      )
+    },
+  }
+  const controllerReport = await runController({
+    candidate: selection.candidate,
+    dryRun: true,
+    observer,
+    planner,
+    effects: {},
+    reporter,
+  })
+  if (emittedReport === null) {
+    throw new Error("Release CLI production observation report was not emitted")
+  }
+  await assertObservePathsDistinct(runtime.fileSystem, paths)
+  await appendGitHubOutputs(runtime.fileSystem, paths["github-output"], {
+    candidate_version: selection.candidate?.version ?? "",
+    candidate_sha: selection.candidate?.commitSha ?? "",
+    state: controllerReport.before.plan.state,
+    disposition: controllerReport.before.plan.disposition,
+    next_transition: controllerReport.before.plan.nextTransition ?? "",
+  })
+  return emittedReport
+}
+
+async function assertObservePathsDistinct(fileSystem, paths) {
+  if (typeof fileSystem.realpath !== "function" || typeof fileSystem.lstat !== "function") {
+    throw new TypeError("Release CLI observe filesystem boundary is invalid")
+  }
+  const canonicalNames = new Set()
+  const inodes = new Set()
+  for (const filePath of [paths.event, paths.report, paths["github-output"]]) {
+    const parent = await fileSystem.realpath(path.dirname(filePath))
+    const canonicalTarget = path.join(parent, path.basename(filePath))
+    const canonicalName = canonicalTarget.normalize("NFC").toLowerCase()
+    if (canonicalNames.has(canonicalName)) {
+      throw new TypeError("Release CLI observe paths must be pairwise distinct")
+    }
+    canonicalNames.add(canonicalName)
+    let metadata = null
+    try {
+      metadata = await fileSystem.lstat(canonicalTarget)
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    if (metadata === null) continue
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new TypeError("Release CLI observe paths must be bounded regular-file targets")
+    }
+    const inode = `${String(metadata.dev)}:${String(metadata.ino)}`
+    if (inodes.has(inode)) {
+      throw new TypeError("Release CLI observe paths must be pairwise distinct")
+    }
+    inodes.add(inode)
+  }
+}
+
+function blockedObservePlan({ state, conflicts }) {
+  return {
+    state,
+    disposition: "blocked",
+    nextTransition: null,
+    reasons: ["production observation is ambiguous and cannot authorize a transition"],
+    conflicts: [...new Set(conflicts)].sort(compareText),
+    proposedMutations: [],
+  }
+}
+
+function terminalObservePlan({ state, disposition, reason }) {
+  return {
+    state,
+    disposition,
+    nextTransition: null,
+    reasons: [reason],
+    conflicts: [],
+    proposedMutations: [],
+  }
 }
 
 async function runEscrow(options, runtime) {
@@ -465,9 +718,7 @@ async function capturePublicationState({
   )
   const candidateRuns = []
   for (const run of withJobs) {
-    const publishStarted = run.jobs.some(
-      (job) => job.name === "publish-npm" && job.startedAt !== null,
-    )
+    const publishStarted = run.jobs.some(publisherJobExecuted)
     if (publishStarted) {
       throw new Error("Release CLI publication history shows that publish-npm already started")
     }
@@ -541,7 +792,7 @@ function normalizeCandidateRun(value, candidate) {
   ) {
     throw new Error("Release CLI candidate Actions run identity is invalid")
   }
-  return { runId, runAttempt, headSha, headBranch }
+  return { runId, runAttempt, headSha, headBranch, workflowPath, event }
 }
 
 function normalizeCandidateJobs(value, currentAttempt) {
@@ -575,10 +826,24 @@ function normalizeCandidateJobs(value, currentAttempt) {
     ) {
       throw new Error("Release CLI candidate job history is malformed")
     }
+    const terminal = job.status === "completed"
+    if (
+      terminal !== (job.conclusion !== null) ||
+      terminal !== (job.completedAt !== null) ||
+      (job.completedAt !== null && job.startedAt === null)
+    ) {
+      throw new Error("Release CLI candidate job terminal evidence is incoherent")
+    }
     return job
   })
   jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
   return jobs
+}
+
+function publisherJobExecuted(job) {
+  if (job.name !== "publish-npm") return false
+  if (job.status === "completed" && job.conclusion === "skipped") return false
+  return job.startedAt !== null
 }
 
 async function runReconcileNpm(options, runtime) {
@@ -1081,6 +1346,15 @@ function normalizeDependencies(value) {
   const environmentSnapshot = snapshotEnvironment(environment)
   const npm = optionalDataDependency(value, "npm", "npm reader")
   const attestations = optionalDataDependency(value, "attestations", "attestation verifier")
+  const git = optionalDataDependency(value, "git", "Git reader")
+  const inventory = optionalDataDependency(value, "inventory", "production inventory reader")
+  const githubReader = optionalDataDependency(value, "githubReader", "GitHub reader")
+  const npmAuditFactory = optionalDataDependency(
+    value,
+    "npmAuditFactory",
+    "npm audit verifier factory",
+  )
+  const controllerMarker = optionalDataDependency(value, "controllerMarker", "controller marker")
   const now = optionalDataDependency(value, "now", "clock") ?? Date.now
   const wait = optionalDataDependency(value, "wait", "waiter")
   if (typeof now !== "function") throw new TypeError("Release CLI clock is invalid")
@@ -1096,6 +1370,11 @@ function normalizeDependencies(value) {
     environment: environmentSnapshot,
     npm,
     attestations,
+    git,
+    inventory,
+    githubReader,
+    npmAuditFactory,
+    controllerMarker,
     now,
     wait,
   })
@@ -1269,6 +1548,91 @@ async function requireGitHub(runtime) {
   )
 }
 
+async function requireProductionGit(runtime) {
+  if (runtime.git !== undefined) return runtime.git
+  const module = await runtime.importModule(new URL("./adapters/git.mjs", import.meta.url).href)
+  return moduleFunction(module, "createGitReader", "Git reader factory")({ root: runtime.cwd })
+}
+
+async function requireProductionGitHub(runtime) {
+  if (runtime.githubReader !== undefined && runtime.github !== undefined) {
+    throw new TypeError("Release CLI observe GitHub reader boundary is ambiguous")
+  }
+  if (runtime.githubReader !== undefined) return runtime.githubReader
+  if (runtime.github !== undefined) {
+    if (
+      runtime.github === null ||
+      typeof runtime.github !== "object" ||
+      Array.isArray(runtime.github) ||
+      runtime.github.reader === null ||
+      typeof runtime.github.reader !== "object" ||
+      Array.isArray(runtime.github.reader)
+    ) {
+      throw new TypeError("Release CLI observe requires a valid GitHub reader")
+    }
+    return runtime.github.reader
+  }
+  const token = runtime.githubToken
+  if (
+    typeof token !== "string" ||
+    token.length === 0 ||
+    token.length > 4_096 ||
+    /[\r\n]/u.test(token)
+  ) {
+    throw new TypeError("Release CLI observe requires GITHUB_TOKEN")
+  }
+  const module = await runtime.importModule(new URL("./adapters/github.mjs", import.meta.url).href)
+  return moduleFunction(
+    module,
+    "createGitHubReader",
+    "GitHub reader factory",
+  )({
+    owner: "cacheplane",
+    repo: "dawnai",
+    token,
+  })
+}
+
+async function readControllerMarker(runtime) {
+  if (runtime.controllerMarker !== undefined) return runtime.controllerMarker
+  return readJsonFile(
+    runtime.fileSystem,
+    path.join(runtime.cwd, "scripts/release/controller-schema.json"),
+    MAX_JSON_BYTES,
+    "controller marker",
+  )
+}
+
+async function requireNpmAuditFactory(runtime) {
+  if (runtime.npmAuditFactory !== undefined) {
+    requiredMethod(runtime.npmAuditFactory, "create", "npm audit verifier factory")
+    return runtime.npmAuditFactory
+  }
+  const [auditModule, runnerModule] = await Promise.all([
+    runtime.importModule(new URL("./npm-audit.mjs", import.meta.url).href),
+    runtime.importModule(new URL("./process-runner.mjs", import.meta.url).href),
+  ])
+  const createVerifier = moduleFunction(
+    auditModule,
+    "createNpmAuditVerifier",
+    "npm audit verifier factory",
+  )
+  const createRunner = moduleFunction(
+    runnerModule,
+    "createReleasePreparationRunner",
+    "bounded process runner factory",
+  )
+  return Object.freeze({
+    create() {
+      return createVerifier({
+        runNpm: createRunner(),
+        environment: process.env,
+        signal: new AbortController().signal,
+      })
+    },
+  })
+}
+
 async function requireNpm(runtime) {
   if (runtime.npm !== undefined) {
     requiredMethod(runtime.npm, "observePackageVersion", "npm reader")
@@ -1285,10 +1649,10 @@ async function requireAttestations(runtime) {
   }
   const token = runtime.githubToken
   if (typeof token !== "string" || token.length === 0 || /[\r\n]/u.test(token)) {
-    throw new TypeError("Release CLI escrow requires GITHUB_TOKEN")
+    throw new TypeError("Release CLI attestation verification requires GITHUB_TOKEN")
   }
   if (runtime.environment.GITHUB_REPOSITORY !== "cacheplane/dawnai") {
-    throw new TypeError("Release CLI escrow requires the exact GitHub repository")
+    throw new TypeError("Release CLI attestation verification requires the exact GitHub repository")
   }
   const module = await runtime.importModule(new URL("./artifact-store.mjs", import.meta.url).href)
   return moduleFunction(
@@ -1385,6 +1749,72 @@ async function readRegularFile(fileSystem, filePath, maximumBytes, label) {
     throw new Error(`Release CLI ${label} changed while it was read`)
   }
   return Buffer.from(bytes)
+}
+
+async function appendGitHubOutputs(fileSystem, filePath, values) {
+  if (typeof fileSystem.open !== "function") {
+    throw new TypeError("Release CLI filesystem method open is invalid")
+  }
+  const fields = ["candidate_version", "candidate_sha", "state", "disposition", "next_transition"]
+  if (
+    values === null ||
+    typeof values !== "object" ||
+    Array.isArray(values) ||
+    Object.keys(values).length !== fields.length ||
+    fields.some(
+      (field) =>
+        !Object.hasOwn(values, field) ||
+        typeof values[field] !== "string" ||
+        /[\r\n\0]/u.test(values[field]) ||
+        Buffer.byteLength(values[field], "utf8") > 1_024,
+    )
+  ) {
+    throw new TypeError("Release CLI GitHub outputs are invalid")
+  }
+  const bytes = Buffer.from(`${fields.map((field) => `${field}=${values[field]}`).join("\n")}\n`)
+  let before = null
+  try {
+    before = await fileSystem.lstat(filePath)
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
+  if (
+    before !== null &&
+    (!before.isFile() ||
+      before.isSymbolicLink() ||
+      before.nlink !== 1 ||
+      !Number.isSafeInteger(before.size) ||
+      before.size < 0 ||
+      before.size + bytes.length > MAX_JSON_BYTES)
+  ) {
+    throw new TypeError("Release CLI GitHub output must be one bounded regular file")
+  }
+  const handle = await fileSystem.open(filePath, before === null ? "ax" : "a", 0o600)
+  try {
+    const opened = await handle.stat()
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      (before !== null && (opened.dev !== before.dev || opened.ino !== before.ino)) ||
+      opened.size + bytes.length > MAX_JSON_BYTES
+    ) {
+      throw new Error("Release CLI GitHub output changed before append")
+    }
+    await handle.writeFile(bytes)
+    await handle.sync()
+    const after = await handle.stat()
+    if (
+      !after.isFile() ||
+      after.nlink !== 1 ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size + bytes.length
+    ) {
+      throw new Error("Release CLI GitHub output append was not durable")
+    }
+  } finally {
+    await handle.close()
+  }
 }
 
 async function writeCanonicalFile(fileSystem, filePath, bytes, label) {
@@ -1607,4 +2037,70 @@ function safeCode(error) {
   return typeof code === "string" && /^[A-Z0-9_]{1,128}$/u.test(code)
     ? code
     : "INVALID_RELEASE_COMMAND"
+}
+
+function safeObservationFailure(error, fallback) {
+  const code = error?.code
+  return Object.freeze({
+    code: typeof code === "string" && /^[A-Z][A-Z0-9_-]{0,127}$/u.test(code) ? code : fallback,
+  })
+}
+
+function normalizeObservationDiagnostics(value) {
+  const diagnostics = snapshotCliData(value, "production observation diagnostics")
+  if (!Array.isArray(diagnostics) || diagnostics.length > 256) {
+    throw new TypeError("Release CLI production observation diagnostics exceed their bound")
+  }
+  const normalized = diagnostics.map((entry) => {
+    if (
+      !hasExactDataFields(entry, ["source", "operation", "status", "httpStatus", "code"]) ||
+      typeof entry.source !== "string" ||
+      !/^[a-z][a-z0-9-]{0,63}$/u.test(entry.source) ||
+      typeof entry.operation !== "string" ||
+      !/^[a-z][a-z0-9-]{0,127}$/u.test(entry.operation) ||
+      !["AMBIGUOUS", "ERROR"].includes(entry.status) ||
+      !(
+        entry.httpStatus === null ||
+        (Number.isInteger(entry.httpStatus) && entry.httpStatus >= 100 && entry.httpStatus <= 599)
+      ) ||
+      typeof entry.code !== "string" ||
+      !/^[A-Z][A-Z0-9_-]{0,127}$/u.test(entry.code)
+    ) {
+      throw new TypeError("Release CLI production observation diagnostic is malformed")
+    }
+    return observationDiagnostic(entry.source, entry.operation, entry.code, {
+      status: entry.status,
+      httpStatus: entry.httpStatus,
+    })
+  })
+  normalized.sort((left, right) =>
+    compareText(
+      `${left.source}\0${left.operation}\0${left.code}`,
+      `${right.source}\0${right.operation}\0${right.code}`,
+    ),
+  )
+  return normalized
+}
+
+function observationDiagnostic(
+  source,
+  operation,
+  code,
+  { status = "AMBIGUOUS", httpStatus = null } = {},
+) {
+  return {
+    source,
+    operation,
+    status,
+    httpStatus,
+    code,
+    classification: transientObservationCode(code) ? "transient-error" : "conflict",
+  }
+}
+
+function transientObservationCode(code) {
+  return (
+    /(?:TIMEOUT|NETWORK|RATE_LIMIT|THROTTL|ABORTED|HTTP_408)/u.test(code) ||
+    /^HTTP_(?:429|5[0-9]{2})$/u.test(code)
+  )
 }

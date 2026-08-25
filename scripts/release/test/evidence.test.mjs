@@ -4,18 +4,18 @@ import test from "node:test"
 import { correlateReleaseEvidence } from "../evidence.mjs"
 import { AUDIT_SHA256, candidate, observationForMarker } from "./support/marker-observation.mjs"
 
-test("ESCROWING is a resumable exact subset and not a completed escrow", () => {
+test("ATTACHING is a resumable exact subset and not a completed escrow", () => {
   const evidence = correlateReleaseEvidence(
     candidate(),
     observationForMarker({
-      phase: "ESCROWING",
+      phase: "ATTACHING",
       npmComplete: false,
       smokesComplete: false,
       partialBase: true,
     }),
   )
 
-  assert.equal(evidence.assets.markerPhase, "ESCROWING")
+  assert.equal(evidence.assets.markerPhase, "ATTACHING")
   assert.equal(evidence.assets.escrowResumable, true)
   assert.equal(evidence.assets.escrowComplete, false)
   assert.equal(evidence.assets.draftExact, false)
@@ -47,13 +47,10 @@ test("audit-result bytes must match the marker canonical digest", () => {
   assert.equal(evidence.conflicts.includes("github-audit-result-bytes-mismatch"), true)
 })
 
-test("abandonment permits a matching partial base without classifying escrow complete", () => {
+test("abandonment retains the exact verified base without classifying escrow complete", () => {
   const evidence = correlateReleaseEvidence(
     candidate(),
-    observationForMarker({
-      phase: "ABANDONED_PREPUBLICATION",
-      partialBase: true,
-    }),
+    observationForMarker({ phase: "ABANDONED_PREPUBLICATION" }),
   )
 
   assert.equal(evidence.assets.markerPhase, "ABANDONED_PREPUBLICATION")

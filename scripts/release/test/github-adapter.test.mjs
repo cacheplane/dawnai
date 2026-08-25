@@ -533,6 +533,17 @@ test("GitHub download redirect hops share one deadline and one byte budget", asy
     ]).fetchImpl,
   })
   assert.equal((await oversized.downloadReleaseAsset({ assetId: 7 })).code, "OPERATION_TOO_LARGE")
+
+  const oversizedActions = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxResponseBytes: 4,
+    fetchImpl: recordingFetch([binaryResponse(new Uint8Array([1, 2]))]).fetchImpl,
+  })
+  assert.equal(
+    (await oversizedActions.downloadActionsArtifact({ artifactId: 8, maximumBytes: 1 })).code,
+    "OPERATION_TOO_LARGE",
+  )
 })
 
 test("GitHub canonicalization rejects unsafe remote keys without prototype mutation or secrets", async () => {

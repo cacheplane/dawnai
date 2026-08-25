@@ -57,12 +57,7 @@ const ARTIFACT_FIELDS = Object.freeze([
 ])
 const RELEASE_FIELDS = Object.freeze(["status", "releaseId", "bodySha256", "marker", "assets"])
 const ASSET_FIELDS = Object.freeze(["id", "name", "sha256"])
-const PREDECESSORS = Object.freeze([
-  "CANDIDATE_TAGGED",
-  "ARTIFACTS_PREPARED",
-  "ARTIFACTS_ATTESTED",
-  "CANDIDATE_ESCROWED",
-])
+const PREDECESSORS = Object.freeze(["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED", "CANDIDATE_ESCROWED"])
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const BASE_ASSET_NAME_PATTERN =
@@ -95,6 +90,7 @@ export async function evaluateAbandonment(input) {
     actionsHistory: source.actionsHistory,
     observations: source.observations,
     approval,
+    artifactContext,
   })
   validateTerminalContext(artifactContext, sha256(canonicalAbandonmentBytes(tombstone)))
   return tombstone
@@ -128,10 +124,14 @@ export function canonicalAbandonmentReleaseBody(input) {
   }
   const tombstoneBytes = canonicalAbandonmentBytes(source.tombstone)
   const record = parseCanonicalAbandonmentBytes(tombstoneBytes)
+  const predecessorMarker = record.predecessor.marker
+  if (canonicalText(source.previousMarker ?? null) !== canonicalText(predecessorMarker)) {
+    throw new TypeError("Abandonment Release body predecessor evidence is not exact")
+  }
   const body = canonicalReleaseBody({
     marker: source.marker,
     manifest: null,
-    ...(source.previousMarker !== undefined ? { previousMarker: source.previousMarker } : {}),
+    ...(predecessorMarker === null ? {} : { previousMarker: predecessorMarker }),
   })
   const releaseMarker = parseReleaseMarker(body)
   if (
@@ -186,7 +186,12 @@ export function parseAbandonmentReleaseBody(body) {
     "Embedded abandonment record",
   )
   const record = parseCanonicalAbandonmentBytes(bytes)
-  const expected = canonicalAbandonmentReleaseBody({ marker, tombstone: record })
+  const previousMarker = record.predecessor.marker
+  const expected = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone: record,
+    ...(previousMarker === null ? {} : { previousMarker }),
+  })
   if (body !== expected) throw new TypeError("Abandonment Release body is not canonical")
   return record
 }
@@ -234,7 +239,13 @@ export async function recordAbandonment(input) {
   const terminalEvidenceComplete = initiallyTerminal && initialTombstonePresent
   const mutationRequired = !terminalEvidenceComplete
   const finalAuthorization = mutationRequired
-    ? await authorizeFreshMutation(boundary.authorization, candidate, reason)
+    ? await authorizeFreshMutation(
+        boundary.authorization,
+        candidate,
+        reason,
+        context,
+        recoveredTombstone?.predecessor ?? null,
+      )
     : null
   const tombstone = recoveredTombstone ?? finalAuthorization
   if (tombstone === null) throw new Error("Abandonment has no canonical durable evidence")
@@ -254,10 +265,9 @@ export async function recordAbandonment(input) {
   const terminalBody = canonicalAbandonmentReleaseBody({
     marker: terminalMarker,
     tombstone,
-    ...(context.release.marker !== null &&
-    context.release.marker.phase !== "ABANDONED_PREPUBLICATION"
-      ? { previousMarker: context.release.marker }
-      : {}),
+    ...(tombstone.predecessor.marker === null
+      ? {}
+      : { previousMarker: tombstone.predecessor.marker }),
   })
   const title = `Dawn v${candidate.version} (abandoned before publication)`
 
@@ -276,7 +286,7 @@ export async function recordAbandonment(input) {
   }
 
   if (mutationRequired) {
-    await reobserveReleaseBoundary(boundary.github.reader, candidate)
+    await reobserveReleaseBoundary(boundary.github.reader, candidate, context.release)
     if (release === null) {
       const receipt = validateCreateReceipt(
         await boundary.github.writer.createDraftRelease({
@@ -339,8 +349,12 @@ export async function recordAbandonment(input) {
   }
 
   if (abandonmentAssets.length === 0 && createReturnedExisting) {
-    await authorizeFreshMutation(boundary.authorization, candidate, reason)
-    await reobserveReleaseBoundary(boundary.github.reader, candidate)
+    await authorizeFreshMutation(boundary.authorization, candidate, reason, context)
+    await reobserveReleaseBoundary(boundary.github.reader, candidate, {
+      status: "draft",
+      releaseId: release.id,
+      bodySha256: releaseBodySha256(release.body),
+    })
   }
   if (abandonmentAssets.length === 0) {
     await boundary.github.writer.uploadAssetIfAbsentAndEqual({
@@ -498,9 +512,7 @@ function validateArtifactContext(value, candidate) {
     const permittedPhases =
       context.predecessor === "CANDIDATE_ESCROWED"
         ? ["ESCROWED", "ABANDONED_PREPUBLICATION"]
-        : context.predecessor === "ARTIFACTS_ATTESTED"
-          ? ["ESCROWING", "ABANDONED_PREPUBLICATION"]
-          : ["ABANDONED_PREPUBLICATION"]
+        : ["ABANDONED_PREPUBLICATION"]
     if (!permittedPhases.includes(marker.phase)) {
       throw new TypeError("Draft abandonment marker does not match its predecessor")
     }
@@ -661,13 +673,13 @@ async function reconcileReleaseList({ releases, context, candidate, reader }) {
   return readManagedRelease(reader, context.release.releaseId)
 }
 
-async function reobserveReleaseBoundary(reader, candidate) {
+async function reobserveReleaseBoundary(reader, candidate, expectedRelease) {
   const releases = await readGitHubValue(reader.listReleases({}), "releases")
   if (!Array.isArray(releases) || releases.length > MAX_RELEASES) {
     throw new Error("GitHub Release list is malformed or unbounded")
   }
   const ids = new Set()
-  let candidateMatches = 0
+  const candidateMatches = []
   for (const release of releases) {
     if (
       !isRecord(release) ||
@@ -678,14 +690,33 @@ async function reobserveReleaseBoundary(reader, candidate) {
       throw new Error("GitHub Release identity is malformed or duplicate")
     }
     ids.add(release.id)
-    if (release.tag_name === `v${candidate.version}`) candidateMatches += 1
+    if (release.tag_name === `v${candidate.version}`) candidateMatches.push(release)
     if (release.tag_name.startsWith("v") && isReleaseVersion(release.tag_name.slice(1))) {
       if (compareSemver(release.tag_name.slice(1), candidate.version) > 0) {
         throw new Error("A newer GitHub Release interleaved before abandonment")
       }
     }
   }
-  if (candidateMatches > 1) throw new Error("Duplicate candidate Releases are ambiguous")
+  if (candidateMatches.length > 1) {
+    throw new Error("Duplicate candidate Releases are ambiguous")
+  }
+  if (expectedRelease.status === "absent") {
+    if (candidateMatches.length !== 0) {
+      throw new Error("Abandonment Release absence observation is stale before mutation")
+    }
+    return
+  }
+  if (
+    expectedRelease.status !== "draft" ||
+    candidateMatches.length !== 1 ||
+    candidateMatches[0].id !== expectedRelease.releaseId
+  ) {
+    throw new Error("Abandonment Release identity changed before mutation")
+  }
+  const exact = await readManagedRelease(reader, expectedRelease.releaseId)
+  if (releaseBodySha256(exact.body) !== expectedRelease.bodySha256) {
+    throw new Error("Abandonment Release body changed before mutation")
+  }
 }
 
 function validateCreateReceipt(value, expectedBody) {
@@ -872,13 +903,29 @@ function validateApprovalInput(value) {
   return value
 }
 
-function buildAbandonmentRecord({ candidate, reason, actionsHistory, observations, approval }) {
+function buildAbandonmentRecord({
+  candidate,
+  reason,
+  actionsHistory,
+  observations,
+  approval,
+  artifactContext,
+  predecessorEvidence = null,
+}) {
   return parseAbandonmentRecord(
     {
       schemaVersion: 1,
       version: candidate.version,
       commitSha: candidate.commitSha,
       tag: `v${candidate.version}`,
+      predecessor: predecessorEvidence ?? {
+        state: artifactContext.predecessor,
+        releaseStatus: artifactContext.release.status,
+        releaseId: artifactContext.release.releaseId,
+        bodySha256: artifactContext.release.bodySha256,
+        marker: artifactContext.release.marker,
+        artifact: artifactContext.artifact,
+      },
       reason,
       actor: approval.actor,
       actorId: approval.actorId,
@@ -904,7 +951,13 @@ function buildAbandonmentRecord({ candidate, reason, actionsHistory, observation
   )
 }
 
-async function authorizeFreshMutation(authorization, candidate, reason) {
+async function authorizeFreshMutation(
+  authorization,
+  candidate,
+  reason,
+  artifactContext,
+  predecessorEvidence = null,
+) {
   const evidence = snapshotJson(
     await authorization.readFreshAbandonmentEvidence({ candidate: snapshotJson(candidate) }),
   )
@@ -920,6 +973,8 @@ async function authorizeFreshMutation(authorization, candidate, reason) {
     actionsHistory: evidence.actionsHistory,
     observations: evidence.observations,
     approval,
+    artifactContext,
+    predecessorEvidence,
   })
   assertFreshAuthorization(record, Date.now())
   return record
@@ -1027,6 +1082,8 @@ async function readManagedRelease(reader, releaseId) {
 function assertDraftRelease(release, candidate) {
   if (
     release.tag_name !== `v${candidate.version}` ||
+    release.target_commitish !== "main" ||
+    release.prerelease !== false ||
     typeof release.name !== "string" ||
     typeof release.body !== "string" ||
     release.draft !== true ||

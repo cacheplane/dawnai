@@ -141,11 +141,13 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
-    downloadReleaseAsset({ assetId }) {
+    downloadReleaseAsset({ assetId, maximumBytes } = {}) {
       const id = normalizeId(assetId)
+      const limit = normalizeReadLimit(maximumBytes, context.maxResponseBytes)
       return readBinary(context, {
         url: `${base}/releases/assets/${id}`,
         operation: "release-asset-download",
+        ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
     listActionsArtifacts({ name } = {}) {
@@ -224,11 +226,13 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
-    downloadActionsArtifact({ artifactId }) {
+    downloadActionsArtifact({ artifactId, maximumBytes } = {}) {
       const id = normalizeId(artifactId)
+      const limit = normalizeReadLimit(maximumBytes, context.maxResponseBytes)
       return readBinary(context, {
         url: `${base}/actions/artifacts/${id}/zip`,
         operation: "actions-artifact-download",
+        ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
     getAttestations({ subjectDigest }) {
@@ -408,8 +412,8 @@ async function readJson(context, { url, operation, requestBudget = {} }) {
   }
 }
 
-async function readBinary(context, { url, operation }) {
-  const budget = createOperationBudget(context)
+async function readBinary(context, { url, operation, maximumBytes }) {
+  const budget = createOperationBudget(context, maximumBytes)
   const firstRequest = remainingRequestBudget(budget)
   if (firstRequest === null) {
     return failure("AMBIGUOUS", operation, null, "TIMEOUT")
@@ -453,12 +457,20 @@ async function readBinary(context, { url, operation }) {
     : classification
 }
 
-function createOperationBudget(context) {
+function createOperationBudget(context, maximumBytes = context.maxResponseBytes) {
   return {
     deadline: context.now() + context.timeoutMs,
-    remainingBytes: context.maxResponseBytes,
+    remainingBytes: maximumBytes,
     now: context.now,
   }
+}
+
+function normalizeReadLimit(value, maximum) {
+  if (value === undefined) return null
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new TypeError("GitHub download byte limit is invalid")
+  }
+  return value
 }
 
 function remainingRequestBudget(budget) {

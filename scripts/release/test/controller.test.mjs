@@ -616,6 +616,50 @@ test("release CLI rejects unknown, duplicate, missing, and unpaired command argu
   }
 })
 
+test("abandon, observe, and wait-audit CLI routes coexist", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-cli-routes-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const missing = (name) => join(directory, `${name}.json`)
+  const routes = [
+    [
+      "abandon",
+      "--version",
+      CANDIDATE.version,
+      "--commit-sha",
+      CANDIDATE.commitSha,
+      "--reason",
+      "route probe",
+      "--artifact-context",
+      missing("context"),
+    ],
+    [
+      "observe",
+      "--event",
+      missing("event"),
+      "--report",
+      missing("report"),
+      "--github-output",
+      missing("github-output"),
+    ],
+    [
+      "wait-audit",
+      "--candidate",
+      missing("candidate"),
+      "--dispatch-result",
+      missing("dispatch"),
+      "--output",
+      missing("audit"),
+    ],
+  ]
+
+  for (const argv of routes) {
+    await assert.rejects(
+      runReleaseCli(argv, { cwd: directory, github: { reader: {}, writer: {} } }),
+      (error) => error?.code === "ENOENT" && !/unsupported/u.test(error.message),
+    )
+  }
+})
+
 test("abandon CLI derives fresh protected evidence inside each requested mutation authorization", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandon-cli-"))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -1174,6 +1218,15 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
     writeFile(paths.bundle, bundle),
   ])
   const githubCalls = []
+  let publishJob = {
+    id: 803,
+    runAttempt: 2,
+    name: "publish-npm",
+    status: "completed",
+    conclusion: "skipped",
+    startedAt: "2026-08-25T09:02:01Z",
+    completedAt: "2026-08-25T09:02:02Z",
+  }
   const github = {
     reader: {
       async listWorkflowRuns(input) {
@@ -1193,6 +1246,15 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
         githubCalls.push(["jobs", input])
         return presentEnvelope("actions-run-jobs", [
           {
+            id: 800,
+            runAttempt: 1,
+            name: "publish-npm",
+            status: "completed",
+            conclusion: "skipped",
+            startedAt: "2026-08-25T09:00:00Z",
+            completedAt: "2026-08-25T09:00:01Z",
+          },
+          {
             id: 801,
             runAttempt: 1,
             name: "tag",
@@ -1210,15 +1272,7 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
             startedAt: "2026-08-25T09:02:00Z",
             completedAt: null,
           },
-          {
-            id: 803,
-            runAttempt: 2,
-            name: "publish-npm",
-            status: "queued",
-            conclusion: null,
-            startedAt: null,
-            completedAt: null,
-          },
+          { ...publishJob },
         ])
       },
     },
@@ -1301,7 +1355,18 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
     true,
   )
   assert.equal(received.publicationState.packages.length, 21)
-  assert.equal(received.publicationState.candidateRuns[0].jobs[2].startedAt, null)
+  assert.deepEqual(
+    { ...received.publicationState.candidateRuns[0].jobs[3] },
+    {
+      id: 803,
+      runAttempt: 2,
+      name: "publish-npm",
+      status: "completed",
+      conclusion: "skipped",
+      startedAt: "2026-08-25T09:02:01Z",
+      completedAt: "2026-08-25T09:02:02Z",
+    },
+  )
   assert.deepEqual(
     parseAttestationSet(received.attestationSet, {
       candidate: CANDIDATE,
@@ -1321,6 +1386,43 @@ test("escrow derives exact multi-subject bundles and captures fresh publication 
   )
   assert.equal(received.github, github)
   assert.equal(received.attestations, attestations)
+
+  publishJob = { ...publishJob, conclusion: "success" }
+  received = null
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "escrow",
+        "--candidate",
+        paths.candidate,
+        "--record",
+        paths.record,
+        "--artifact-dir",
+        artifactDirectory,
+        "--attestation-bundle",
+        paths.bundle,
+      ],
+      {
+        cwd: directory,
+        github,
+        npm,
+        attestations,
+        now: () => Date.parse("2026-08-25T09:03:00Z"),
+        environment: Object.freeze({
+          GITHUB_TOKEN: "token",
+          GITHUB_REPOSITORY: "cacheplane/dawnai",
+          GITHUB_REF: `refs/tags/v${CANDIDATE.version}`,
+          GITHUB_SHA: CANDIDATE.commitSha,
+          GITHUB_RUN_ID: "701",
+          GITHUB_RUN_ATTEMPT: "2",
+          GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${CANDIDATE.version}`,
+        }),
+        importModule,
+      },
+    ),
+    /publish-npm already started/iu,
+  )
+  assert.equal(received, null)
 })
 
 function observer(values) {

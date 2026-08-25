@@ -41,6 +41,8 @@ test("draft creation proves an annotated tag and re-reads the exact created draf
     release: {
       id: 7,
       tag_name: TAG,
+      target_commitish: "main",
+      prerelease: false,
       name: `Dawn v${VERSION}`,
       body: "candidate body",
       draft: true,
@@ -106,6 +108,8 @@ test("writer rejects lightweight tags and stale body CAS without mutation", asyn
       release: {
         id: 7,
         tag_name: TAG,
+        target_commitish: "main",
+        prerelease: false,
         name: "old",
         body: "old body",
         draft: true,
@@ -129,6 +133,76 @@ test("writer rejects lightweight tags and stale body CAS without mutation", asyn
     /stale|body|compare/iu,
   )
   assert.equal(mutations, 0)
+})
+
+test("writer rejects off-target or prerelease drafts at every mutation boundary", async () => {
+  const bytes = Buffer.from("exact manifest")
+  const digest = sha256(bytes)
+  for (const release of [
+    { ...draftRelease("body"), target_commitish: "release-controller-temp" },
+    { ...draftRelease("body"), prerelease: true },
+  ]) {
+    let mutations = 0
+    const writer = createGitHubWriter({
+      owner: OWNER,
+      repo: REPO,
+      reader: exactReader({ release }),
+      fetchImpl: async () => {
+        mutations += 1
+        return jsonResponse({}, 200)
+      },
+    })
+    await assert.rejects(
+      writer.updateDraftReleaseIfCurrent({
+        releaseId: 7,
+        tag: TAG,
+        targetSha: SHA,
+        expectedBodySha256: releaseBodySha256("body"),
+        title: "new",
+        body: "new body",
+      }),
+      /identity|metadata|target|prerelease/iu,
+    )
+    await assert.rejects(
+      writer.uploadAssetIfAbsentAndEqual({
+        releaseId: 7,
+        tag: TAG,
+        targetSha: SHA,
+        name: "manifest.json",
+        bytes,
+        sha256: digest,
+      }),
+      /identity|metadata|target|prerelease/iu,
+    )
+    assert.equal(mutations, 0)
+  }
+})
+
+test("draft creation rejects a raced prerelease before returning an existing receipt", async () => {
+  let releaseLists = 0
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      releases() {
+        releaseLists += 1
+        return releaseLists === 1 ? [] : [{ id: 7, tag_name: TAG, draft: true }]
+      },
+      release: { ...draftRelease("candidate body"), prerelease: true },
+    }),
+    fetchImpl: async () => jsonResponse({}, 422),
+  })
+
+  await assert.rejects(
+    writer.createDraftRelease({
+      tag: TAG,
+      targetSha: SHA,
+      title: `Dawn v${VERSION}`,
+      body: "candidate body",
+    }),
+    /identity|metadata|prerelease/iu,
+  )
+  assert.equal(releaseLists, 2)
 })
 
 test("writer revalidates an annotated tag before returning an existing-resource no-op", async () => {
@@ -403,6 +477,8 @@ test("publication changes only draft state and requires immutable unchanged re-r
       return {
         id: 7,
         tag_name: TAG,
+        target_commitish: "main",
+        prerelease: false,
         name: `Dawn v${VERSION}`,
         body: fixture.body,
         draft: releaseReads === 1,
@@ -584,7 +660,12 @@ function exactReader({
         },
       }),
     listReleases: async () =>
-      present("releases", releases ?? [{ id: 7, tag_name: TAG, draft: true }]),
+      present(
+        "releases",
+        typeof releases === "function"
+          ? releases()
+          : (releases ?? [{ id: 7, tag_name: TAG, draft: true }]),
+      ),
     getRelease: async () => present("release", getReleaseValue()),
     listReleaseAssets: async () =>
       present(
@@ -617,6 +698,8 @@ function draftRelease(body) {
   return {
     id: 7,
     tag_name: TAG,
+    target_commitish: "main",
+    prerelease: false,
     name: `Dawn v${VERSION}`,
     body,
     draft: true,
@@ -632,9 +715,9 @@ function verifiedPublicationFixture() {
       bytes: Buffer.from(`package-${index}`),
     })),
   ].map((subject) => ({ ...subject, digest: sha256(subject.bytes) }))
-  const bundles = subjects.map((subject, index) => ({
+  const bundles = subjects.map((subject) => ({
     name: `${subject.name}.intoto.jsonl`,
-    bytes: Buffer.from(`bundle-${index}`),
+    bytes: Buffer.from("one-exact-multi-subject-bundle"),
   }))
   const attestationSubjects = subjects.map((subject, index) => ({
     subjectName: subject.name,

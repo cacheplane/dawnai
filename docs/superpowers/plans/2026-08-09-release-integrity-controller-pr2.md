@@ -585,14 +585,27 @@ stable attempt/ID ordering; missing attempt or job coverage, duplicate
 run/attempt/job identities, a non-null `publish-npm.startedAt` in any attempt, a
 candidate publication receipt, or any ambiguous registry observation blocks
 before Release mutation. A resumed escrow takes a new snapshot rather than
-trusting the previous run's absence proof.
-It creates or resumes a draft with phase `ESCROWING`, then uploads exactly 45 base
-assets: release record, manifest, 21 tarballs, and 22 bundles. Inject runner loss
-after draft creation and after asset 1, a middle asset, and asset 44. A matching
-subset is resumable before npm; repeated complete escrow is a no-op. Duplicate,
-unexpected, ambiguous, different-byte, wrong-marker, wrong-record, or wrong-tag
-state blocks. Missing escrow after the publish job starts is a hard conflict and
-may not be repaired.
+trusting the previous run's absence proof. It creates or resumes a draft with
+phase `ATTACHING`; that marker binds the prepared manifest and release record but
+deliberately leaves `baseAssetSetSha256` and `attestationSet` null. It first
+uploads the release record, manifest, and 21 tarballs. The first
+cryptographically valid exact multi-subject bundle durably attached to the
+Release becomes the anchor. A concurrent replay that produced different valid
+bundle bytes downloads, verifies, and adopts that existing anchor rather than
+merging bundle sets or trusting the losing caller. The writer copies the anchored
+bytes to all 22 deterministic bundle names and only then CASes directly to
+`ESCROWED`, recording the signed winning workflow run/attempt and exact 45-asset
+base digest.
+
+Inject runner loss after draft creation, every prepared-asset write, anchor
+selection, every bundle copy, and the final marker CAS. A matching `ATTACHING`
+subset is resumable while its exact bytes remain available; repeated complete
+escrow is a no-op. Fence every write with an unchanged annotated tag, draft
+identity/body revision, asset inventory, and fresh publication-absence snapshot,
+so an abandonment or competing writer cannot poison the namespace. Duplicate,
+unexpected, ambiguous, different-byte, wrong-marker, wrong-record, wrong-tag, or
+unverifiable bundle state blocks. Missing escrow after the publish job starts is
+a hard conflict and may not be repaired.
 
 Partition later assets without weakening base exactness: audit attempts are named
 `audit-attempt-<runId>-<attempt>.json`, canonical success is
@@ -600,10 +613,13 @@ Partition later assets without weakening base exactness: audit attempts are name
 audit/abandonment coexistence, duplicate evidence, or a canonical result unequal
 to its successful attempt receipt block. `escrowComplete` evaluates the exact 45
 base assets separately from the phase-appropriate evidence union. An audit may
-add receipts only after the exact 45-member base set is complete. An abandoned
-draft may preserve zero, a matching subset, or all 45 base assets, but that
-terminal exception is never classified as complete escrow and can never be
-published.
+add receipts only after the exact 45-member base set is complete. A tagged-only
+or prepared/no-Release abandonment tombstone may retain zero base assets and must
+bind that predecessor explicitly. Once an `ATTACHING` draft exists, abandonment
+must first resume it to a cryptographically verified exact 45-member `ESCROWED`
+base; retention loss that makes this impossible blocks rather than synthesizing
+or discarding evidence. A terminal abandonment is never classified as complete
+escrow and can never be published.
 
 - [ ] **Step 4: Implement marker-driven reconciliation and immutable publication guard**
 
@@ -630,7 +646,7 @@ successful audit bytes already attached to a draft whose marker is
 published metadata.
 
 Update the observation schema/evidence/conflict/state/planner layers so an
-`ESCROWING` matching subset is incomplete/resumable rather than
+`ATTACHING` matching subset is incomplete/resumable rather than
 `escrow-draft-incomplete`, terminal evidence does not pollute base exactness, and
 metadata state is derived from the canonical marker rather than the current
 hard-coded `metadataReconciled: false` placeholder.
@@ -807,11 +823,13 @@ Cover every legal predecessor and its one exact marker shape:
   recognizes it before trying to load `release-record.json`;
 - `ARTIFACTS_PREPARED`: manifest and release-record digests are non-null, while
   base-set and attestation fields remain null;
-- `ARTIFACTS_ATTESTED`: all four artifact fields are non-null even when no draft
-  or base asset has yet been created;
-- `CANDIDATE_ESCROWED` or an interrupted matching `ESCROWING` draft: all four
-  artifact fields are non-null, and the zero/subset/all retained base assets are
-  preserved without repair.
+- a successful attestation action with no durable Release anchor remains
+  `ARTIFACTS_PREPARED`; it is safe to replay and cannot create a digest-only
+  `ARTIFACTS_ATTESTED` predecessor;
+- `CANDIDATE_ESCROWED`: all four artifact fields are non-null and the exact 45
+  cryptographically verified base assets are preserved. An interrupted matching
+  `ATTACHING` draft must resume to that state before abandonment; zero/subset
+  terminal rewrites are rejected.
 
 Reject every other nullability combination or any artifact context weaker than
 the durable evidence already observed. Unknown, duplicate, different-byte, or
@@ -1406,9 +1424,12 @@ invoke `record-artifact`, and upload the small release-record handoff separately
 Every later job addresses the payload by that recorded ID; no step expects a name
 output from the action or lists artifacts by a guessed name.
 
-`escrow` writes the canonical `ESCROWING` marker before uploading assets and uses
-a fresh exact `publicationState` snapshot to resume only matching missing members
-of the 45-asset base set. `correlate-audit` runs while the Release is draft,
+`escrow` writes the canonical `ATTACHING` marker before uploading the 23 prepared
+assets, adopts the first cryptographically valid durable bundle anchor, replicates
+it to all 22 deterministic bundle names, and only then CASes to `ESCROWED` with
+the winning signed run/attempt and exact 45-asset base digest. It uses fresh exact
+`publicationState` snapshots and Release/tag/body/asset fences at every mutation
+boundary. `correlate-audit` runs while the Release is draft,
 attaches the attempt-scoped receipt and canonical success, and leaves the marker
 at `AUDIT_VERIFIED`. Only the final `publish-release` job may then PATCH
 `draft: false`; it supplies no title/body/assets and must re-read the same Release

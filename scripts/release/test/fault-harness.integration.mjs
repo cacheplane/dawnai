@@ -1400,6 +1400,7 @@ function plannerObservation(candidate, packages) {
       tag: null,
       commitSha: null,
       immutable: null,
+      bodySha256: null,
       marker: null,
       assets: [],
     },
@@ -1424,7 +1425,7 @@ function plannerObservation(candidate, packages) {
       runAttempt: null,
       conclusion: null,
     },
-    abandonment: { requested: false, recorded: false },
+    abandonment: { requested: false, recorded: false, predecessor: null },
   }
 }
 

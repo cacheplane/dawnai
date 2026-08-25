@@ -608,6 +608,8 @@ function auditRemote() {
     release: {
       id: 7,
       tag_name: `v${VERSION}`,
+      target_commitish: "main",
+      prerelease: false,
       name: `Dawn v${VERSION}`,
       body: canonicalReleaseBody({ marker: fixture.marker, manifest: null }),
       draft: true,
@@ -711,7 +713,7 @@ function baseFixture() {
   const subjects = [manifest, ...tarballs]
   const bundles = subjects.map((subject) => ({
     name: `${subject.name}.intoto.jsonl`,
-    bytes: Buffer.from(`bundle:${subject.name}`),
+    bytes: Buffer.from("one-exact-multi-subject-bundle"),
   }))
   const record = { name: "release-record.json", bytes: Buffer.from("record") }
   const assets = [record, ...subjects, ...bundles]

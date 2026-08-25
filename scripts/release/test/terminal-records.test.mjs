@@ -37,6 +37,12 @@ test("parseAbandonmentRecord rejects incomplete or noncanonical protected eviden
     (value) => (value.approval.workflowRunId += 1),
     (value) => (value.observations[1].runAttempt = 0),
     (value) => (value.observations[1].observedAt = value.observations[0].observedAt),
+    (value) => (value.observations[1].observedAt = "2026-08-24T12:01:01Z"),
+    (value) => {
+      value.observations[0].observedAt = "2026-08-24T12:00:01Z"
+      value.observations[1].observedAt = "2026-08-24T12:01:01Z"
+    },
+    (value) => (value.approval.approvedAt = "2026-08-24T11:53:00Z"),
     (value) => value.observations[1].packages.pop(),
     (value) => (value.observations[1].packages[0].name = value.observations[1].packages[1].name),
     (value) => (value.observations[1].packages[0].status = "PRESENT"),
@@ -83,6 +89,19 @@ function abandonmentRecord() {
     version: VERSION,
     commitSha: SHA,
     tag: `v${VERSION}`,
+    predecessor: {
+      state: "CANDIDATE_TAGGED",
+      releaseStatus: "absent",
+      releaseId: null,
+      bodySha256: null,
+      marker: null,
+      artifact: {
+        manifestSha256: null,
+        releaseRecordSha256: null,
+        baseAssetSetSha256: null,
+        attestationSet: null,
+      },
+    },
     reason: "Candidate preparation is deterministically defective",
     actor: "release-operator",
     actorId: 200,

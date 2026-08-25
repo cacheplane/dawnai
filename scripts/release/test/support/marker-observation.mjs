@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto"
 
+import { canonicalReleaseBody } from "../../metadata.mjs"
+
 export const VERSION = "0.8.22"
 export const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 export const MANIFEST_SHA256 = "a".repeat(64)
@@ -20,7 +22,7 @@ export function candidate() {
 export function observationForMarker({
   phase,
   releaseStatus = "draft",
-  npmComplete = !["ESCROWING", "ESCROWED", "ABANDONED_PREPUBLICATION"].includes(phase),
+  npmComplete = !["ATTACHING", "ESCROWED", "ABANDONED_PREPUBLICATION"].includes(phase),
   smokesComplete = [
     "SMOKES_COMPLETE",
     "AUDIT_DISPATCHED",
@@ -31,6 +33,9 @@ export function observationForMarker({
 } = {}) {
   const packages = packageIdentities()
   const marker = releaseMarker(phase, packages)
+  const bodySha256 = createHash("sha256")
+    .update(canonicalReleaseBody({ marker, manifest: null }))
+    .digest("hex")
   const baseAssets = immutableAssets(packages)
   const releaseBase = partialBase ? baseAssets.slice(0, 10) : baseAssets
   return {
@@ -40,6 +45,8 @@ export function observationForMarker({
       workflow: "CI",
       check: "validate",
       commitSha: COMMIT_SHA,
+      workflowRunId: 30,
+      runAttempt: 1,
     },
     otherCandidates: [],
     tag: { status: "present", commitSha: COMMIT_SHA },
@@ -78,13 +85,14 @@ export function observationForMarker({
         },
       ],
     },
-    escrow: partialBase
-      ? { status: "absent", manifestSha256: null, assets: [] }
-      : {
-          status: "present",
-          manifestSha256: MANIFEST_SHA256,
-          assets: baseAssets.map((asset) => ({ ...asset, status: "matching" })),
-        },
+    escrow:
+      partialBase || phase === "ABANDONED_PREPUBLICATION"
+        ? { status: "absent", manifestSha256: null, assets: [] }
+        : {
+            status: "present",
+            manifestSha256: MANIFEST_SHA256,
+            assets: baseAssets.map((asset) => ({ ...asset, status: "matching" })),
+          },
     registry: {
       publishJobStarted: npmComplete,
       mutationStarted: npmComplete,
@@ -120,6 +128,7 @@ export function observationForMarker({
       tag: `v${VERSION}`,
       commitSha: COMMIT_SHA,
       immutable: releaseStatus === "published",
+      bodySha256,
       marker,
       assets: [
         ...releaseBase.map((asset) => ({ ...asset, status: "matching" })),
@@ -142,6 +151,7 @@ export function observationForMarker({
     abandonment: {
       requested: phase === "ABANDONED_PREPUBLICATION",
       recorded: phase === "ABANDONED_PREPUBLICATION",
+      predecessor: phase === "ABANDONED_PREPUBLICATION" ? "CANDIDATE_ESCROWED" : null,
     },
   }
 }
@@ -156,7 +166,7 @@ function packageIdentities() {
       filename,
       tarballSha256: (index + 1).toString(16).padStart(64, "0"),
       attestationFilename: `${filename}.intoto.jsonl`,
-      attestationSha256: (index + 64).toString(16).padStart(64, "0"),
+      attestationSha256: MANIFEST_BUNDLE_SHA256,
       integrity: "sha512-cGFja2FnZQ==",
     }
   })
@@ -201,16 +211,19 @@ function releaseMarker(phase, packages) {
     tag: `v${VERSION}`,
     manifestSha256: MANIFEST_SHA256,
     releaseRecordSha256: RELEASE_RECORD_SHA256,
-    baseAssetSetSha256: baseDigest(packages),
-    attestationSet: {
-      repository: "cacheplane/dawnai",
-      workflow: ".github/workflows/release.yml",
-      sourceRef: `refs/tags/v${VERSION}`,
-      commitSha: COMMIT_SHA,
-      workflowRunId: 300,
-      runAttempt: 1,
-      subjects,
-    },
+    baseAssetSetSha256: phase === "ATTACHING" ? null : baseDigest(packages),
+    attestationSet:
+      phase === "ATTACHING"
+        ? null
+        : {
+            repository: "cacheplane/dawnai",
+            workflow: ".github/workflows/release.yml",
+            sourceRef: `refs/tags/v${VERSION}`,
+            commitSha: COMMIT_SHA,
+            workflowRunId: 300,
+            runAttempt: 1,
+            subjects,
+          },
     npmEvidenceSha256: [
       "NPM_COMPLETE",
       "SMOKES_COMPLETE",

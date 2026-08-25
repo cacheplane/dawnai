@@ -22,11 +22,26 @@ const ABANDONMENT_FIELDS = Object.freeze([
   "approval",
   "commitSha",
   "observations",
+  "predecessor",
   "reason",
   "recordedAt",
   "schemaVersion",
   "tag",
   "version",
+])
+const PREDECESSOR_FIELDS = Object.freeze([
+  "artifact",
+  "bodySha256",
+  "marker",
+  "releaseId",
+  "releaseStatus",
+  "state",
+])
+const PREDECESSOR_ARTIFACT_FIELDS = Object.freeze([
+  "attestationSet",
+  "baseAssetSetSha256",
+  "manifestSha256",
+  "releaseRecordSha256",
 ])
 const APPROVAL_FIELDS = Object.freeze([
   "environment",
@@ -55,6 +70,8 @@ const MAX_CHECKS = 256
 const MAX_NAME_BYTES = 256
 const MAX_DETAIL_BYTES = 8_192
 const MIN_REGISTRY_OBSERVATION_GAP_MS = 60_000
+const MAX_SECOND_OBSERVATION_TO_RECORD_MS = 2 * 60_000
+const MAX_AUTHORIZATION_EVIDENCE_SPAN_MS = 10 * 60_000
 
 export function parseAuditResult(value) {
   const record = snapshotRecord(value, "audit result")
@@ -160,6 +177,7 @@ export function parseAbandonmentRecord(value, options) {
   ) {
     throw new TypeError("Invalid abandonment approval evidence")
   }
+  validateAbandonmentPredecessor(record.predecessor)
   const history = record.actionsHistory
   if (
     !hasExactFields(history, ACTIONS_HISTORY_FIELDS) ||
@@ -206,21 +224,81 @@ export function parseAbandonmentRecord(value, options) {
   }
 
   const [first, second] = record.observations
+  const approvalTime = Date.parse(approval.observedAt)
+  const historyTime = Date.parse(history.observedAt)
+  const firstTime = Date.parse(first.observedAt)
+  const secondTime = Date.parse(second.observedAt)
+  const recordedTime = Date.parse(record.recordedAt)
   if (
     [history, first, second].some(
       (evidence) =>
         evidence.workflowRunId !== approval.workflowRunId ||
         evidence.runAttempt !== approval.runAttempt,
     ) ||
-    Date.parse(second.observedAt) - Date.parse(first.observedAt) <
-      MIN_REGISTRY_OBSERVATION_GAP_MS ||
-    Date.parse(approval.observedAt) > Date.parse(first.observedAt) ||
-    Date.parse(second.observedAt) > Date.parse(history.observedAt) ||
-    Date.parse(history.observedAt) > Date.parse(record.recordedAt)
+    firstTime >= secondTime ||
+    approvalTime > firstTime ||
+    secondTime > historyTime ||
+    historyTime > recordedTime ||
+    secondTime - firstTime < MIN_REGISTRY_OBSERVATION_GAP_MS ||
+    recordedTime - secondTime > MAX_SECOND_OBSERVATION_TO_RECORD_MS ||
+    recordedTime - approvalTime > MAX_AUTHORIZATION_EVIDENCE_SPAN_MS
   ) {
     throw new TypeError("Invalid abandonment evidence ordering")
   }
   return deepFreeze(record)
+}
+
+function validateAbandonmentPredecessor(value) {
+  if (
+    !hasExactFields(value, PREDECESSOR_FIELDS) ||
+    !["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED", "CANDIDATE_ESCROWED"].includes(value.state) ||
+    !["absent", "draft"].includes(value.releaseStatus) ||
+    !hasExactFields(value.artifact, PREDECESSOR_ARTIFACT_FIELDS)
+  ) {
+    throw new TypeError("Invalid abandonment predecessor evidence")
+  }
+  const artifact = value.artifact
+  const tagged = [
+    artifact.manifestSha256,
+    artifact.releaseRecordSha256,
+    artifact.baseAssetSetSha256,
+    artifact.attestationSet,
+  ].every((item) => item === null)
+  const prepared =
+    SHA256_PATTERN.test(artifact.manifestSha256) &&
+    SHA256_PATTERN.test(artifact.releaseRecordSha256) &&
+    artifact.baseAssetSetSha256 === null &&
+    artifact.attestationSet === null
+  const escrowed =
+    SHA256_PATTERN.test(artifact.manifestSha256) &&
+    SHA256_PATTERN.test(artifact.releaseRecordSha256) &&
+    SHA256_PATTERN.test(artifact.baseAssetSetSha256) &&
+    artifact.attestationSet !== null &&
+    !Array.isArray(artifact.attestationSet) &&
+    typeof artifact.attestationSet === "object"
+  if (
+    (value.state === "CANDIDATE_TAGGED" && !tagged) ||
+    (value.state === "ARTIFACTS_PREPARED" && !prepared) ||
+    (value.state === "CANDIDATE_ESCROWED" && !escrowed)
+  ) {
+    throw new TypeError("Invalid abandonment predecessor artifact evidence")
+  }
+  if (
+    (value.releaseStatus === "absent" &&
+      (value.releaseId !== null ||
+        value.bodySha256 !== null ||
+        value.marker !== null ||
+        value.state === "CANDIDATE_ESCROWED")) ||
+    (value.releaseStatus === "draft" &&
+      (!isPositiveInteger(value.releaseId) ||
+        !SHA256_PATTERN.test(value.bodySha256) ||
+        value.marker === null ||
+        Array.isArray(value.marker) ||
+        typeof value.marker !== "object" ||
+        value.state !== "CANDIDATE_ESCROWED"))
+  ) {
+    throw new TypeError("Invalid abandonment predecessor Release evidence")
+  }
 }
 
 function snapshotRecord(value, label) {

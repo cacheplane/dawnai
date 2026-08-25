@@ -214,7 +214,7 @@ test("resumes marker-first abandonment after a real process restart without call
 })
 
 test("resumes asset-first abandonment after a real process restart without caller tombstone bytes", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 4 })
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   const originalAuthorization = freshAuthorization(input)
   const durableInput = structuredClone(input)
   durableInput.actionsHistory = structuredClone(originalAuthorization.evidence.actionsHistory)
@@ -278,6 +278,31 @@ test("reobserves newer Releases after fresh authorization and immediately before
   assert.deepEqual(remote.mutations, [])
 })
 
+test("blocks an ATTACHING Release interleaved after final authorization", async () => {
+  const input = validInput()
+  const remote = fakeGitHub()
+  const fresh = freshAuthorization(input)
+  const authorization = {
+    async readFreshAbandonmentEvidence(request) {
+      const evidence = await fresh.authorization.readFreshAbandonmentEvidence(request)
+      remote.releases.push({ id: 77, tag_name: `v${VERSION}` })
+      return evidence
+    },
+  }
+
+  await assert.rejects(
+    recordAbandonment({
+      candidate: input.candidate,
+      reason: input.reason,
+      artifactContext: input.artifactContext,
+      authorization,
+      github: remote.github,
+    }),
+    /absence observation|interleaved|Release/iu,
+  )
+  assert.deepEqual(remote.mutations, [])
+})
+
 test("a create-existing race is not reported as creation and is reauthorized before upload", async () => {
   const input = validInput()
   const remote = fakeGitHub({ createStatus: "existing" })
@@ -296,13 +321,8 @@ test("a create-existing race is not reported as creation and is reauthorized bef
   assert.deepEqual(remote.mutations, ["upload"])
 })
 
-test("accepts only the four legal predecessor artifact shapes", async () => {
-  for (const predecessor of [
-    "CANDIDATE_TAGGED",
-    "ARTIFACTS_PREPARED",
-    "ARTIFACTS_ATTESTED",
-    "CANDIDATE_ESCROWED",
-  ]) {
+test("accepts only the three legal predecessor artifact shapes", async () => {
+  for (const predecessor of ["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED", "CANDIDATE_ESCROWED"]) {
     const input = validInput({ predecessor })
     const result = await evaluateAbandonment(input)
     assert.equal(result.version, VERSION)
@@ -342,8 +362,8 @@ test("records tagged-only abandonment without requiring a release record", async
   assert.deepEqual(remote.mutations, ["create", "upload"])
 })
 
-test("records prepared and attested no-draft predecessors without inventing escrow assets", async () => {
-  for (const predecessor of ["ARTIFACTS_PREPARED", "ARTIFACTS_ATTESTED"]) {
+test("records a prepared no-draft predecessor without inventing escrow assets", async () => {
+  for (const predecessor of ["ARTIFACTS_PREPARED"]) {
     const input = validInput({ predecessor })
     const remote = fakeGitHub({ context: input.artifactContext })
 
@@ -385,35 +405,13 @@ test("records fully escrowed abandonment without weakening or replacing any base
   assert.equal(remote.assets.at(-1).name, "abandonment.json")
 })
 
-test("preserves a matching interrupted escrow subset and advances its marker once", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 7 })
-  const remote = fakeGitHub({ context: input.artifactContext })
-  const retained = remote.assets.map(({ name, bytes }) => ({ name, bytes: Buffer.from(bytes) }))
-  const fresh = freshAuthorization(input)
-
-  const result = await recordAbandonment({
-    candidate: input.candidate,
-    reason: input.reason,
-    artifactContext: input.artifactContext,
-    authorization: fresh.authorization,
-    github: remote.github,
-  })
-
-  assert.equal(result.status, "recorded")
-  assert.equal(parseReleaseMarker(remote.release.body).revision, 2)
-  assert.deepEqual(
-    remote.assets.slice(0, retained.length).map(({ name, bytes }) => ({ name, bytes })),
-    retained,
-  )
-  assert.equal(remote.assets.at(-1).name, "abandonment.json")
-  assert.equal(fresh.calls(), 1)
-  assert.deepEqual(remote.mutations, ["update", "upload"])
-  const persisted = JSON.parse(remote.assets.at(-1).bytes)
-  assert.deepEqual(persisted.observations, fresh.evidence.observations)
+test("rejects abandonment from an incomplete durable escrow", async () => {
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED", escrowCount: 7 })
+  await assert.rejects(evaluateAbandonment(input), /all 45|escrow|asset/iu)
 })
 
 test("an exact existing tombstone is idempotent and differing evidence cannot reactivate it", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 3 })
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   const first = fakeGitHub({ context: input.artifactContext })
   await recordAbandonment({
     candidate: input.candidate,
@@ -448,7 +446,7 @@ test("an exact existing tombstone is idempotent and differing evidence cannot re
 })
 
 test("an exact terminal abandonment is a no-op without requesting new authorization", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 3 })
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   const first = fakeGitHub({ context: input.artifactContext })
   await recordAbandonment({
     candidate: input.candidate,
@@ -477,7 +475,7 @@ test("an exact terminal abandonment is a no-op without requesting new authorizat
 })
 
 test("resumes both safe runner-loss boundaries without replacing retained evidence", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 4 })
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   const tombstone = await evaluateAbandonment(input)
   const tombstoneBytes = canonicalAbandonmentBytes(tombstone)
 
@@ -502,6 +500,9 @@ test("resumes both safe runner-loss boundaries without replacing retained eviden
   assert.equal(uploadedResult.status, "recorded")
   assert.deepEqual(afterUpload.mutations, ["update"])
 
+  const taggedInput = validInput()
+  const taggedTombstone = await evaluateAbandonment(taggedInput)
+  const taggedTombstoneBytes = canonicalAbandonmentBytes(taggedTombstone)
   const afterMarker = fakeGitHub()
   const terminalMarker = {
     schemaVersion: 1,
@@ -518,15 +519,17 @@ test("resumes both safe runner-loss boundaries without replacing retained eviden
     npmEvidenceSha256: null,
     smokeAggregateSha256: null,
     audit: null,
-    abandonmentSha256: sha256(tombstoneBytes),
+    abandonmentSha256: sha256(taggedTombstoneBytes),
   }
   const terminalBody = canonicalAbandonmentReleaseBody({
     marker: terminalMarker,
-    tombstone,
+    tombstone: taggedTombstone,
   })
   afterMarker.release = {
     id: 10,
     tag_name: `v${VERSION}`,
+    target_commitish: "main",
+    prerelease: false,
     name: `Dawn v${VERSION} (abandoned before publication)`,
     body: terminalBody,
     draft: true,
@@ -543,9 +546,9 @@ test("resumes both safe runner-loss boundaries without replacing retained eviden
   }
   const markedResult = await recordAbandonment({
     candidate: CANDIDATE,
-    reason: input.reason,
+    reason: taggedInput.reason,
     artifactContext: terminalContext,
-    authorization: freshAuthorization(input).authorization,
+    authorization: freshAuthorization(taggedInput).authorization,
     github: afterMarker.github,
   })
   assert.equal(markedResult.status, "recorded")
@@ -578,6 +581,8 @@ test("conflicting terminal metadata is rejected before a missing tombstone can b
   remote.release = {
     id: 10,
     tag_name: `v${VERSION}`,
+    target_commitish: "main",
+    prerelease: false,
     name: "conflicting title",
     body,
     draft: true,
@@ -613,12 +618,12 @@ test("unknown, duplicate, audit, or different-byte retained assets block termina
     ["different base bytes", { id: 82, name: "manifest.json", sha256: "8".repeat(64) }],
   ]
   for (const [name, asset] of cases) {
-    const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 1 })
+    const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
     input.artifactContext.release.assets.push(asset)
     await assert.rejects(evaluateAbandonment(input), undefined, name)
   }
 
-  const duplicate = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 1 })
+  const duplicate = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   duplicate.artifactContext.release.assets.push({
     ...duplicate.artifactContext.release.assets[0],
     id: 83,
@@ -627,10 +632,12 @@ test("unknown, duplicate, audit, or different-byte retained assets block termina
 })
 
 test("stale tag, release, asset, or newer-release observations stop before mutation", async () => {
-  const input = validInput({ predecessor: "ARTIFACTS_ATTESTED", escrowCount: 2 })
+  const input = validInput({ predecessor: "CANDIDATE_ESCROWED" })
   const cases = [
     ["tag", (remote) => (remote.tagCommitSha = "b".repeat(40))],
     ["release body", (remote) => (remote.release.body += "stale")],
+    ["release target", (remote) => (remote.release.target_commitish = "release-temp")],
+    ["prerelease", (remote) => (remote.release.prerelease = true)],
     ["asset bytes", (remote) => (remote.assets[0].bytes = Buffer.from("changed"))],
     ["newer release", (remote) => remote.releases.push({ id: 99, tag_name: "v0.8.23" })],
   ]
@@ -751,7 +758,7 @@ function freshAuthorization(input, { ageMinutes = 0 } = {}) {
 
 function artifactContext(predecessor, requestedEscrowCount) {
   const prepared = predecessor !== "CANDIDATE_TAGGED"
-  const attested = ["ARTIFACTS_ATTESTED", "CANDIDATE_ESCROWED"].includes(predecessor)
+  const attested = predecessor === "CANDIDATE_ESCROWED"
   const attestationSet = attested ? makeAttestationSet() : null
   const artifact = {
     manifestSha256: prepared ? sha256(bytesForName("manifest.json")) : null,
@@ -761,7 +768,7 @@ function artifactContext(predecessor, requestedEscrowCount) {
   }
   const escrowCount =
     requestedEscrowCount ?? (predecessor === "CANDIDATE_ESCROWED" ? baseAssets(artifact).length : 0)
-  const hasRelease = attested && (predecessor === "CANDIDATE_ESCROWED" || escrowCount > 0)
+  const hasRelease = predecessor === "CANDIDATE_ESCROWED"
   let release = {
     status: "absent",
     releaseId: null,
@@ -770,10 +777,7 @@ function artifactContext(predecessor, requestedEscrowCount) {
     assets: [],
   }
   if (hasRelease) {
-    const marker = releaseMarker(
-      predecessor === "CANDIDATE_ESCROWED" ? "ESCROWED" : "ESCROWING",
-      artifact,
-    )
+    const marker = releaseMarker("ESCROWED", artifact)
     const body = canonicalReleaseBody({ marker, manifest: null })
     release = {
       status: "draft",
@@ -799,6 +803,7 @@ function makeAttestationSet() {
     "manifest.json",
     ...Array.from({ length: 21 }, (_, index) => `package-${String(index).padStart(2, "0")}.tgz`),
   ]
+  const bundleSha256 = sha256(bytesForName("multi-subject.intoto.jsonl"))
   return {
     repository: "cacheplane/dawnai",
     workflow: ".github/workflows/release.yml",
@@ -810,7 +815,7 @@ function makeAttestationSet() {
       subjectName,
       subjectSha256: sha256(bytesForName(subjectName)),
       bundleName: `${subjectName}.intoto.jsonl`,
-      bundleSha256: sha256(bytesForName(`${subjectName}.intoto.jsonl`)),
+      bundleSha256,
     })),
   }
 }
@@ -889,6 +894,8 @@ function fakeGitHub({
     state.release = {
       id: context.release.releaseId,
       tag_name: `v${VERSION}`,
+      target_commitish: "main",
+      prerelease: false,
       name: `Dawn v${VERSION}`,
       body,
       draft: true,
@@ -939,6 +946,8 @@ function fakeGitHub({
       state.release = {
         id: 10,
         tag_name: tag,
+        target_commitish: "main",
+        prerelease: false,
         name: title,
         body,
         draft: true,
@@ -986,6 +995,9 @@ function contextFromRemote(context, remote) {
 }
 
 function bytesForName(name) {
+  if (name.endsWith(".intoto.jsonl")) {
+    return Buffer.from("exact fixture bytes for multi-subject.intoto.jsonl\n", "utf8")
+  }
   return Buffer.from(`exact fixture bytes for ${name}\n`, "utf8")
 }
 

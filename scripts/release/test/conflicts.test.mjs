@@ -4,11 +4,11 @@ import test from "node:test"
 import { findReleaseConflicts } from "../state.mjs"
 import { candidate, observationForMarker } from "./support/marker-observation.mjs"
 
-test("an exact ESCROWING subset remains safely resumable", () => {
+test("an exact ATTACHING subset remains safely resumable", () => {
   const conflicts = findReleaseConflicts(
     candidate(),
     observationForMarker({
-      phase: "ESCROWING",
+      phase: "ATTACHING",
       npmComplete: false,
       smokesComplete: false,
       partialBase: true,

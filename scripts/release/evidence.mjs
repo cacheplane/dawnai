@@ -1,4 +1,5 @@
 import {
+  abandonmentBaseAssetsFromMarker,
   findObservationSchemaConflicts,
   observationStructureIsValid,
 } from "./observation-schema.mjs"
@@ -42,6 +43,7 @@ function invalidEvidence(conflicts) {
       prepared: false,
       attested: false,
       manifestSha256: null,
+      preparedAssets: Object.freeze([]),
       immutableAssets: Object.freeze([]),
     }),
     assets: Object.freeze({
@@ -192,28 +194,66 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
         file.integrity === pkg.integrity
       )
     })
+  const immutableAssets = inventoryPackages.every(packageArtifactDigestsComplete)
+    ? [
+        artifacts.releaseRecordAsset,
+        artifacts.manifestAsset,
+        artifacts.manifestAttestationAsset,
+        ...inventoryPackages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+        ...inventoryPackages.map((pkg) => ({
+          name: pkg.attestationFilename,
+          sha256: pkg.attestationSha256,
+        })),
+      ]
+    : []
+  const preparedAssets = valid
+    ? [
+        artifacts.releaseRecordAsset,
+        artifacts.manifestAsset,
+        ...inventoryPackages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+      ]
+    : []
   return Object.freeze({
     prepared: valid,
     attested: valid && artifacts.status === "attested" && attestationsComplete,
     manifestSha256: artifacts.manifestSha256 ?? null,
-    immutableAssets: Object.freeze([
-      artifacts.releaseRecordAsset,
-      artifacts.manifestAsset,
-      artifacts.manifestAttestationAsset,
-      ...inventoryPackages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
-      ...inventoryPackages.map((pkg) => ({
-        name: pkg.attestationFilename,
-        sha256: pkg.attestationSha256,
-      })),
-    ]),
+    preparedAssets: Object.freeze(preparedAssets),
+    immutableAssets: Object.freeze(immutableAssets),
   })
+}
+
+function packageArtifactDigestsComplete(pkg) {
+  return (
+    isSha256(pkg?.tarballSha256) &&
+    isSha256(pkg.attestationSha256) &&
+    typeof pkg.integrity === "string" &&
+    pkg.integrity.startsWith("sha512-")
+  )
 }
 
 function analyzeAssets(candidate, observation, artifact, conflicts) {
   const escrow = observation.escrow ?? {}
   const release = observation.release ?? {}
-  const expected = artifact.immutableAssets
-  if (expected.length === 0) conflicts.add("escrow-required-assets-empty")
+  const abandonmentBaseAssets = abandonmentBaseAssetsFromMarker(release.marker)
+  const expected =
+    abandonmentBaseAssets.length === 45
+      ? abandonmentBaseAssets
+      : release.marker?.phase === "ATTACHING"
+        ? artifact.attested
+          ? artifact.immutableAssets
+          : artifact.preparedAssets
+        : artifact.immutableAssets
+  if (
+    expected.length === 0 &&
+    (observation.artifacts?.status === "attested" ||
+      escrow.status !== "absent" ||
+      (release.status !== "absent" &&
+        !(release.status === "draft" && release.marker?.phase === "ABANDONED_PREPUBLICATION")) ||
+      observation.registry?.publishJobStarted ||
+      observation.registry?.mutationStarted)
+  ) {
+    conflicts.add("escrow-required-assets-empty")
+  }
   if (escrow.status === "ambiguous") conflicts.add("candidate-escrow-ambiguous")
   if (escrow.status === "present") {
     if (!isSha256(escrow.manifestSha256)) conflicts.add("escrow-manifest-digest-missing")
@@ -248,13 +288,14 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
   const evidenceAssets = releaseAssets.filter(({ name }) => !expectedNames.has(name))
   const escrowResumable =
     release.status === "draft" &&
-    marker?.phase === "ESCROWING" &&
+    marker?.phase === "ATTACHING" &&
+    artifact.attested &&
     matchingAssetSubset(baseAssets, expected, "github", conflicts)
   if (release.status === "draft" && marker?.phase === "ABANDONED_PREPUBLICATION") {
     matchingAssetSubset(baseAssets, expected, "github", conflicts)
   }
   const releaseExact =
-    releaseExists && !["ESCROWING", "ABANDONED_PREPUBLICATION"].includes(marker?.phase)
+    releaseExists && !["ATTACHING", "ABANDONED_PREPUBLICATION"].includes(marker?.phase)
       ? exactAssetSet(baseAssets, expected, "github", conflicts)
       : false
   const terminalEvidence = analyzeTerminalAssets(evidenceAssets, marker, conflicts)
@@ -586,10 +627,12 @@ function analyzeSmokes(candidate, observation, manifestSha256, conflicts) {
     if (result.version !== candidate.version) conflicts.add("required-smoke-version-mismatch")
     if (result.commitSha !== candidate.commitSha) conflicts.add("required-smoke-commit-mismatch")
     if (result.manifestSha256 !== manifestSha256) conflicts.add("required-smoke-manifest-mismatch")
-    if (!isPositiveInteger(result.workflowRunId)) {
+    if (result.status !== "pending" && !isPositiveInteger(result.workflowRunId)) {
       conflicts.add("required-smoke-workflow-run-id-invalid")
     }
-    if (!isPositiveInteger(result.runAttempt)) conflicts.add("required-smoke-run-attempt-invalid")
+    if (result.status !== "pending" && !isPositiveInteger(result.runAttempt)) {
+      conflicts.add("required-smoke-run-attempt-invalid")
+    }
     if (result.status === "missing" || result.status === "failed") {
       conflicts.add(`required-smoke-${result.status}`)
     } else if (result.status === "ambiguous") {
