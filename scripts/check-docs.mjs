@@ -3446,9 +3446,10 @@ const rbacOnlyUpgradeContracts = [
     source: appChartNotesSource,
   },
 ]
+const installedInfrastructureChartVersionGuard = `test -n "$INFRA_CHART_VERSION" || { printf '%s\\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }`
 for (const { file, source } of rbacOnlyUpgradeContracts) {
   const captureIndex = source.indexOf('INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra')
-  const guardIndex = source.indexOf('test -n "$INFRA_CHART_VERSION"', captureIndex)
+  const guardIndex = source.indexOf(installedInfrastructureChartVersionGuard, captureIndex)
   const upgrades = [
     ...source.matchAll(/^\s*helm upgrade dawn-sandbox-infra\b(?:[^\n]*\\\n)*[^\n]*/gm),
   ]
@@ -3459,8 +3460,17 @@ for (const { file, source } of rbacOnlyUpgradeContracts) {
   if (captureIndex === -1 || !source.includes(`awk '$1 == "VERSION:" { print $2 }')"`)) {
     failures.push(`${file} must capture the installed infrastructure chart VERSION table row`)
   }
-  if (guardIndex <= captureIndex) {
-    failures.push(`${file} must reject an empty installed infrastructure chart version`)
+  if (guardIndex === -1) {
+    failures.push(
+      `${file} must fail closed when the installed infrastructure chart version is empty`,
+    )
+  } else if (guardIndex <= captureIndex) {
+    failures.push(
+      `${file} must guard the installed infrastructure chart version after capturing it`,
+    )
+  }
+  if (/^\s*test -n "\$INFRA_CHART_VERSION"\s*$/m.test(source)) {
+    failures.push(`${file} must not use a non-terminating bare infrastructure chart version guard`)
   }
   if (rbacUpgrades.length !== 1) {
     failures.push(`${file} must contain exactly one RBAC-only infrastructure upgrade`)

@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { spawnSync } from "node:child_process"
+import { access, mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 
 import { describe, expect, test } from "vitest"
 import { parse } from "yaml"
@@ -54,6 +56,7 @@ const storageDocumentation = ["chart", "sandboxGuide", "contributors"] as const
 const compatibilityDisclaimer =
   "Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers."
 const publishedInfrastructureChart = "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra"
+const installedChartVersionGuard = `test -n "$INFRA_CHART_VERSION" || { printf '%s\\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }`
 const canonicalAppSubjectValues = `orchestrator:
   subjects:
     - kind: ServiceAccount
@@ -75,6 +78,15 @@ async function loadDocumentation(): Promise<Documentation> {
     ]),
   )
   return Object.fromEntries(entries) as Documentation
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function markdownText(source: string): string {
@@ -565,7 +577,7 @@ Managed Kubernetes services require separate validation.`,
       const captureIndex = source.indexOf(
         'INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra',
       )
-      const guardIndex = source.indexOf('test -n "$INFRA_CHART_VERSION"', captureIndex)
+      const guardIndex = source.indexOf(installedChartVersionGuard, captureIndex)
       const versionReuseIndex = source.indexOf('--version "$INFRA_CHART_VERSION"', captureIndex)
       const upgrades = infrastructureHelmCommands(source).filter(
         ({ command, verb }) =>
@@ -579,9 +591,13 @@ Managed Kubernetes services require separate validation.`,
       expect(source, `${name} must parse Helm's portable VERSION table row`).toContain(
         `awk '$1 == "VERSION:" { print $2 }')"`,
       )
-      expect(guardIndex, `${name} must reject an empty installed chart version`).toBeGreaterThan(
-        captureIndex,
+      expect(source, `${name} must not publish a non-terminating bare guard`).not.toMatch(
+        /^\s*test -n "\$INFRA_CHART_VERSION"\s*$/m,
       )
+      expect(
+        guardIndex,
+        `${name} must fail closed when the installed chart version is empty`,
+      ).toBeGreaterThan(captureIndex)
       expect(upgrades, `${name} must publish one RBAC-only infrastructure upgrade`).toHaveLength(1)
       expect(
         upgrades[0]?.command,
@@ -591,6 +607,53 @@ Managed Kubernetes services require separate validation.`,
         versionReuseIndex,
         `${name} must guard the installed version before the RBAC-only upgrade`,
       ).toBeGreaterThan(guardIndex)
+    }
+  })
+
+  test("fails closed before later commands when the installed chart version is empty", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of rbacOnlyUpgradeDocumentation) {
+      const source = documentation[name]
+      const guards = source
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line === installedChartVersionGuard)
+      expect(guards, `${name} must contain one executable fail-closed guard`).toEqual([
+        installedChartVersionGuard,
+      ])
+
+      const directory = await mkdtemp(join(tmpdir(), "dawn-chart-version-guard-"))
+      const marker = join(directory, "marker")
+      const script = `${guards[0]}\nprintf '%s\\n' reached > marker`
+      try {
+        const rejected = spawnSync("/bin/sh", ["-c", script], {
+          cwd: directory,
+          encoding: "utf8",
+          env: { INFRA_CHART_VERSION: "" },
+        })
+        expect(rejected.error, `${name} empty-version shell must start`).toBeUndefined()
+        expect(rejected.signal, `${name} empty-version shell must not be signalled`).toBeNull()
+        expect(rejected.status, `${name} empty version must exit nonzero`).toBe(1)
+        expect(rejected.stderr).toContain(
+          "unable to determine installed infrastructure chart version",
+        )
+        expect(await pathExists(marker), `${name} empty version must stop before the marker`).toBe(
+          false,
+        )
+
+        const accepted = spawnSync("/bin/sh", ["-c", script], {
+          cwd: directory,
+          encoding: "utf8",
+          env: { INFRA_CHART_VERSION: "0.1.4" },
+        })
+        expect(accepted.error, `${name} nonempty-version shell must start`).toBeUndefined()
+        expect(accepted.signal, `${name} nonempty-version shell must not be signalled`).toBeNull()
+        expect(accepted.status, `${name} nonempty version must continue`).toBe(0)
+        expect(await readFile(marker, "utf8")).toBe("reached\n")
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
     }
   })
 

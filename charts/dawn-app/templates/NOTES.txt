@@ -56,7 +56,7 @@ First capture the installed infrastructure chart version and export the
 release's effective values:
 
   INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace {{ .Release.Namespace }} | awk '$1 == "VERSION:" { print $2 }')"
-  test -n "$INFRA_CHART_VERSION"
+  test -n "$INFRA_CHART_VERSION" || { printf '%s\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }
   helm get values dawn-sandbox-infra --all --output yaml \
     --namespace {{ .Release.Namespace }} \
     > dawn-sandbox-infra-rbac-values.yaml

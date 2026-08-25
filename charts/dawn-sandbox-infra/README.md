@@ -64,7 +64,7 @@ its effective values:
 
 ```sh
 INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace dawn-app | awk '$1 == "VERSION:" { print $2 }')"
-test -n "$INFRA_CHART_VERSION"
+test -n "$INFRA_CHART_VERSION" || { printf '%s\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }
 helm get values dawn-sandbox-infra --all --output yaml \
   --namespace dawn-app \
   > dawn-sandbox-infra-rbac-values.yaml
