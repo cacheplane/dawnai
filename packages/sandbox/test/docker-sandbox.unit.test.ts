@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest"
 import type { Docker } from "../src/docker/docker-cli.ts"
+import { dockerFilesystem } from "../src/docker/docker-filesystem.ts"
 import { dockerSandbox } from "../src/docker/docker-sandbox.ts"
 
 function recordingDocker(): { docker: Docker; runs: string[][] } {
@@ -16,6 +17,12 @@ function recordingDocker(): { docker: Docker; runs: string[][] } {
 }
 
 const signal = () => new AbortController().signal
+
+function filesystemStartedOutput(command: readonly string[], output = ""): string {
+  const marker = /__DAWN_FILESYSTEM_STARTED_[0-9a-f-]+__/u.exec(command.join(" "))?.[0]
+  if (marker === undefined) throw new Error("filesystem command did not include its started marker")
+  return `${marker}\n${output}`
+}
 
 describe("dockerSandbox (unit, no daemon)", () => {
   test("acquire runs a container named for the thread + names a volume; deny → --network none", async () => {
@@ -541,6 +548,177 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     })
     return { promise, resolve }
   }
+
+  test("recycles after a controlled filesystem operation cannot fork", async () => {
+    const runs: string[][] = []
+    const execCommands: string[][] = []
+    let containerExists = false
+    let volumeExists = false
+    let execCalls = 0
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, command) => {
+        execCalls += 1
+        execCommands.push([...command])
+        return execCalls === 1
+          ? {
+              stdout: filesystemStartedOutput(command),
+              stderr: "sh: 1: Cannot fork",
+              exitCode: 1,
+            }
+          : { stdout: filesystemStartedOutput(command, "sentinel"), stderr: "", exitCode: 0 }
+      },
+    }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const h = await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" }, security: { pidsLimit: 32 } },
+      signal: signal(),
+    })
+
+    await expect(
+      h.filesystem.readFile("/workspace/sentinel.txt", {
+        workspaceRoot: h.workspaceRoot,
+        signal: signal(),
+      }),
+    ).resolves.toBe("sentinel")
+
+    expect(execCommands).toHaveLength(2)
+    expect(execCommands[1]).toEqual(execCommands[0])
+    expect(runs.filter((run) => run[0] === "rm")).toEqual([["rm", "-f", "dawn-sbx-abc"]])
+    expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(2)
+    expect(runs.some((run) => run[0] === "volume" && run[1] === "rm")).toBe(false)
+  })
+
+  test("does not trust a started filesystem command's stdout as a recovery signal", async () => {
+    let recoveries = 0
+    const docker: Docker = {
+      run: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      exec: async (_container, command) => ({
+        stdout: filesystemStartedOutput(
+          command,
+          "OCI runtime exec failed\nResource temporarily unavailable\nsh: 1: Cannot fork",
+        ),
+        stderr: "cat: input/output error",
+        exitCode: 1,
+      }),
+    }
+    const filesystem = dockerFilesystem(docker, "keeper", {
+      pidExhaustionRecovery: {
+        captureToken: () => "generation-1",
+        recoverAndRetry: async (_token, retry) => {
+          recoveries += 1
+          return retry()
+        },
+      },
+    })
+
+    await expect(
+      filesystem.readFile("/workspace/spoof", {
+        workspaceRoot: "/workspace",
+        signal: signal(),
+      }),
+    ).rejects.toThrow("readFile failed: cat: input/output error")
+    expect(recoveries).toBe(0)
+  })
+
+  test("does not trust a fork-shaped line embedded in a missing path diagnostic", async () => {
+    let recoveries = 0
+    const path = "/workspace/missing\nsh: 1: Cannot fork\nentry"
+    const docker: Docker = {
+      run: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      exec: async (_container, command) => ({
+        stdout: filesystemStartedOutput(command),
+        stderr: `cat: ${path}: No such file or directory`,
+        exitCode: 1,
+      }),
+    }
+    const filesystem = dockerFilesystem(docker, "keeper", {
+      pidExhaustionRecovery: {
+        captureToken: () => "generation-1",
+        recoverAndRetry: async (_token, retry) => {
+          recoveries += 1
+          return retry()
+        },
+      },
+    })
+
+    await expect(
+      filesystem.readFile(path, {
+        workspaceRoot: "/workspace",
+        signal: signal(),
+      }),
+    ).rejects.toThrow("No such file or directory")
+    expect(recoveries).toBe(0)
+  })
+
+  test.each([
+    "sh: 1: Cannot fork",
+    "sh: can't fork: Resource temporarily unavailable",
+    "sh: cannot fork: Resource temporarily unavailable",
+  ])("replays identical write content once after a started shell reports %s", async (stderr) => {
+    const inputs: Array<string | undefined> = []
+    let execCalls = 0
+    let recoveries = 0
+    const docker: Docker = {
+      run: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      exec: async (_container, command, opts) => {
+        execCalls += 1
+        inputs.push(opts?.stdin)
+        return execCalls === 1
+          ? {
+              stdout: filesystemStartedOutput(command),
+              stderr,
+              exitCode: 1,
+            }
+          : { stdout: filesystemStartedOutput(command), stderr: "", exitCode: 0 }
+      },
+    }
+    const filesystem = dockerFilesystem(docker, "keeper", {
+      pidExhaustionRecovery: {
+        captureToken: () => "generation-1",
+        recoverAndRetry: async (_token, retry) => {
+          recoveries += 1
+          return retry()
+        },
+      },
+    })
+
+    await expect(
+      filesystem.writeFile("/workspace/note.txt", "same content", {
+        workspaceRoot: "/workspace",
+        signal: signal(),
+      }),
+    ).resolves.toEqual({ bytesWritten: 12 })
+    expect(inputs).toEqual(["same content", "same content"])
+    expect(recoveries).toBe(1)
+  })
 
   test("removes and recreates the keeper with its volume before retrying the command", async () => {
     const acquireSignal = signal()

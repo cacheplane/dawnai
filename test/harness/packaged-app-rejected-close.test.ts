@@ -83,6 +83,42 @@ async function waitForTopology(path: string): Promise<{
   throw new Error(`Hanging process fixture did not become ready at ${path}`)
 }
 
+async function waitForFirstStdoutLine(child: ChildProcess): Promise<string> {
+  const stdout = child.stdout
+  if (stdout === null) throw new Error("Hanging process fixture has no stdout pipe")
+
+  return await new Promise<string>((resolvePromise, rejectPromise) => {
+    let output = ""
+    const timeout = setTimeout(() => {
+      cleanup()
+      rejectPromise(new Error("Hanging process fixture did not emit stdout"))
+    }, 2_000)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      stdout.off("data", onData)
+      stdout.off("error", onError)
+    }
+    const onData = (chunk: string | Buffer) => {
+      output += chunk.toString()
+      if (Buffer.byteLength(output, "utf8") > 1_024) {
+        cleanup()
+        rejectPromise(new Error("Hanging process fixture stdout exceeded its bound"))
+        return
+      }
+      const newline = output.indexOf("\n")
+      if (newline === -1) return
+      cleanup()
+      resolvePromise(output.slice(0, newline))
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      rejectPromise(error)
+    }
+    stdout.on("data", onData)
+    stdout.once("error", onError)
+  })
+}
+
 function stopProcessGroup(pid: number): void {
   try {
     process.kill(-pid, "SIGKILL")
@@ -103,6 +139,7 @@ it.skipIf(process.platform === "win32")(
     const abortReason = new Error("cancel rejected-close fixture")
     const childError = new Error("injected child error during interruption")
     let spawnedChild: ChildProcess | undefined
+    let stdoutReady: Promise<string> | undefined
     let topology: Awaited<ReturnType<typeof waitForTopology>> | undefined
     let commandResult: ReturnType<typeof runPackagedCommand> | undefined
     let maximumTimerGapMs = 0
@@ -115,6 +152,8 @@ it.skipIf(process.platform === "win32")(
 
     childProcessHooks.onSpawn = (child) => {
       spawnedChild = child
+      stdoutReady = waitForFirstStdoutLine(child)
+      void stdoutReady.catch(() => undefined)
     }
     try {
       commandResult = runPackagedCommand({
@@ -126,6 +165,8 @@ it.skipIf(process.platform === "win32")(
       })
       topology = await waitForTopology(readyPath)
       expect(spawnedChild?.pid).toBe(topology.leaderPid)
+      if (stdoutReady === undefined) throw new Error("Spawn hook did not observe fixture stdout")
+      expect(await stdoutReady).toBe(JSON.stringify(topology))
 
       controller.abort(abortReason)
       await Promise.resolve()
@@ -159,6 +200,7 @@ it.skipIf(process.platform === "win32")(
       childProcessHooks.onSpawn = undefined
       controller.abort(abortReason)
       await commandResult?.catch(() => undefined)
+      await stdoutReady?.catch(() => undefined)
       if (topology !== undefined) {
         stopProcessGroup(topology.leaderPid)
         await expectProcessStopped(topology.leaderPid)
@@ -180,11 +222,14 @@ it.runIf(process.platform !== "win32")(
     const abortReason = new Error("cancel simulated Windows fixture")
     const childError = new Error("injected Windows child error during interruption")
     let spawnedChild: ChildProcess | undefined
+    let stdoutReady: Promise<string> | undefined
     let topology: Awaited<ReturnType<typeof waitForTopology>> | undefined
     let commandResult: ReturnType<typeof runPackagedCommand> | undefined
 
     childProcessHooks.onSpawn = (child) => {
       spawnedChild = child
+      stdoutReady = waitForFirstStdoutLine(child)
+      void stdoutReady.catch(() => undefined)
     }
     childProcessHooks.onTaskkill = (pid, callback) => {
       process.kill(-pid, "SIGKILL")
@@ -203,6 +248,8 @@ it.runIf(process.platform !== "win32")(
       })
       topology = await waitForTopology(readyPath)
       expect(spawnedChild?.pid).toBe(topology.leaderPid)
+      if (stdoutReady === undefined) throw new Error("Spawn hook did not observe fixture stdout")
+      expect(await stdoutReady).toBe(JSON.stringify(topology))
 
       controller.abort(abortReason)
       await Promise.resolve()
@@ -233,6 +280,7 @@ it.runIf(process.platform !== "win32")(
       childProcessHooks.onTaskkill = undefined
       controller.abort(abortReason)
       await commandResult?.catch(() => undefined)
+      await stdoutReady?.catch(() => undefined)
       if (platformDescriptor !== undefined) {
         Object.defineProperty(process, "platform", platformDescriptor)
       }

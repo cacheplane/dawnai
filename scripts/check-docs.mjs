@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { createRequire } from "node:module"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { tsImport } from "tsx/esm/api"
@@ -27,9 +28,6 @@ import {
 } from "./lib/docs-api-inventory.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
-const { default: GithubSlugger } = await import(
-  pathToFileURL(resolve(repoRoot, "apps/web/node_modules/github-slugger/index.js")).href
-)
 
 function maskText(value) {
   return value.replace(/[^\r\n]/g, " ")
@@ -453,23 +451,115 @@ function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxC
   }
 }
 
-function markdownHeadings(source) {
-  const masked = maskMarkdownCodeAndComments(source)
-  const slugger = new GithubSlugger()
-  return [...masked.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*$/gm)].flatMap((match) => {
-    if (match.index === undefined || !match[1]) return []
-    const lineEnd = source.indexOf("\n", match.index)
-    const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
-    const text = normalizeCodeSpans(
-      originalLine
-        .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
-        .replace(/[ \t]+#+[ \t]*$/, "")
-        .trim(),
-    )
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .trim()
-    return [{ id: slugger.slug(text), index: match.index, level: match[1].length, text }]
+function hastText(node) {
+  if (node.type === "text") return typeof node.value === "string" ? node.value : ""
+  return (node.children ?? []).map(hastText).join("")
+}
+
+function effectiveLiteralMdxId(attributes = []) {
+  for (let index = attributes.length - 1; index >= 0; index--) {
+    const attribute = attributes[index]
+    if (attribute.type === "mdxJsxExpressionAttribute") return null
+    if (attribute.type !== "mdxJsxAttribute" || attribute.name !== "id") continue
+    return typeof attribute.value === "string" && attribute.value !== "" ? attribute.value : null
+  }
+  return null
+}
+
+function collectMarkdownAnalysisNodes() {
+  return (tree, file) => {
+    const headings = []
+    const explicitIds = []
+    function visit(node) {
+      if (node.type === "element" && /^h[1-6]$/.test(node.tagName ?? "")) {
+        const id = node.properties?.id
+        const index = node.position?.start?.offset
+        if (typeof id === "string" && typeof index === "number") {
+          headings.push({
+            id,
+            index,
+            level: Number(node.tagName.slice(1)),
+            text: hastText(node),
+          })
+        }
+      }
+      if (
+        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
+        node.name === "span"
+      ) {
+        const id = effectiveLiteralMdxId(node.attributes)
+        if (id) explicitIds.push(id)
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(tree)
+    file.data.maintainedMarkdownAnalysis = { headings, explicitIds }
+  }
+}
+
+async function resolveMdxPlugins(specs, requireFromWeb) {
+  return await Promise.all(
+    specs.map(async ([name, options]) => {
+      const module = await import(pathToFileURL(requireFromWeb.resolve(name)).href)
+      return [module.default, options]
+    }),
+  )
+}
+
+const requireFromWeb = createRequire(resolve(repoRoot, "apps/web/package.json"))
+const { createProcessor } = await import(pathToFileURL(requireFromWeb.resolve("@mdx-js/mdx")).href)
+const { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } = await tsImport(
+  pathToFileURL(resolve(repoRoot, "apps/web/lib/mdx-plugins.ts")).href,
+  import.meta.url,
+)
+const markdownRemarkPlugins = await resolveMdxPlugins(MDX_REMARK_PLUGINS, requireFromWeb)
+const markdownRehypePlugins = await resolveMdxPlugins(
+  MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
+  requireFromWeb,
+)
+function createMarkdownAnalysisProcessor(format) {
+  return createProcessor({
+    format,
+    remarkPlugins: markdownRemarkPlugins,
+    // Syntax highlighting cannot affect heading identity and is intentionally
+    // omitted from this otherwise shipped MDX/rehype-slug pipeline.
+    rehypePlugins: [...markdownRehypePlugins, collectMarkdownAnalysisNodes],
   })
+}
+
+const markdownAnalysisProcessors = {
+  md: createMarkdownAnalysisProcessor("md"),
+  mdx: createMarkdownAnalysisProcessor("mdx"),
+}
+
+function markdownAnalysis(file, source) {
+  const format = file.toLowerCase().endsWith(".mdx")
+    ? "mdx"
+    : file.toLowerCase().endsWith(".md")
+      ? "md"
+      : null
+  if (!format) throw new Error(`Unsupported documentation format: ${file}`)
+
+  const processed = markdownAnalysisProcessors[format].processSync({ path: file, value: source })
+  const analysis = processed.data.maintainedMarkdownAnalysis
+  if (!analysis || !Array.isArray(analysis.headings) || !Array.isArray(analysis.explicitIds)) {
+    throw new Error(`${file}: documentation analysis did not produce heading identities`)
+  }
+  return analysis
+}
+
+function markdownHeadings(file, source) {
+  return markdownAnalysis(file, source).headings
+}
+
+function maintainedHeadingIds(file, source, onDuplicateId = () => {}) {
+  const { headings, explicitIds } = markdownAnalysis(file, source)
+  const ids = new Set(headings.map(({ id }) => id))
+  for (const id of explicitIds) {
+    if (ids.has(id)) onDuplicateId(id)
+    ids.add(id)
+  }
+  return ids
 }
 
 function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
@@ -516,8 +606,8 @@ function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
   return false
 }
 
-function markdownSectionRange(source, predicate) {
-  const headings = markdownHeadings(source)
+function markdownSectionRange(file, source, predicate) {
+  const headings = markdownHeadings(file, source)
   const headingIndex = headings.findIndex(predicate)
   const heading = headings[headingIndex]
   if (!heading) return null
@@ -533,7 +623,7 @@ function movedLinkGuardViolations(file, source, contracts) {
     if (!contract) return []
     const fragment = contract.legacyHref.split("#")[1]
     const compatibilityRange = fragment
-      ? markdownSectionRange(source, (heading) => heading.id === fragment)
+      ? markdownSectionRange(file, source, (heading) => heading.id === fragment)
       : null
     if (
       file === contract.legacyFile &&
@@ -547,9 +637,9 @@ function movedLinkGuardViolations(file, source, contracts) {
   })
 }
 
-function canonicalOwnerGuardViolations(source, contracts) {
+function canonicalOwnerGuardViolations(file, source, contracts) {
   return contracts.flatMap(({ heading, required }) => {
-    const range = markdownSectionRange(source, (candidate) => candidate.text === heading)
+    const range = markdownSectionRange(file, source, (candidate) => candidate.text === heading)
     const destinations = range
       ? linkDestinationOccurrences(source.slice(range.start, range.end)).flatMap(
           ({ destination }) => {
@@ -1179,10 +1269,37 @@ if (process.argv[2] === "--analyze-doc-link-guards") {
         fixture.movedContracts ?? [],
       ),
       canonicalViolations: canonicalOwnerGuardViolations(
+        fixture.file ?? "fixture.mdx",
         fixture.source ?? "",
         fixture.canonicalContracts ?? [],
       ),
     })}\n`,
+  )
+  process.exit(0)
+}
+
+async function readStdin() {
+  let input = ""
+  process.stdin.setEncoding("utf8")
+  for await (const chunk of process.stdin) input += chunk
+  return input
+}
+
+async function writeStdout(output) {
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(output, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
+}
+
+if (process.argv[2] === "--analyze-maintained-heading-ids") {
+  const fixture = JSON.parse(await readStdin())
+  await writeStdout(
+    `${JSON.stringify([
+      ...maintainedHeadingIds(fixture.file ?? "fixture.mdx", fixture.source ?? ""),
+    ])}\n`,
   )
   process.exit(0)
 }
@@ -1194,11 +1311,11 @@ if (process.argv[2] === "--analyze-compatibility-stub") {
 }
 
 if (process.argv[2] === "--analyze-doc-titles") {
-  const fixture = JSON.parse(process.argv[3] ?? readFileSync(0, "utf8"))
+  const fixture = JSON.parse(process.argv[3] ?? (await readStdin()))
   const analysis = Array.isArray(fixture)
     ? analyzeDocTitlesBatch(fixture)
     : analyzeDocTitles(fixture)
-  process.stdout.write(`${JSON.stringify(analysis)}\n`)
+  await writeStdout(`${JSON.stringify(analysis)}\n`)
   process.exit(0)
 }
 
@@ -1215,7 +1332,7 @@ if (process.argv[2] === "--analyze-api-reference-manifests") {
 }
 
 if (process.argv[2] === "--analyze-api-inventory") {
-  const fixtures = JSON.parse(readFileSync(0, "utf8"))
+  const fixtures = JSON.parse(await readStdin())
   if (!Array.isArray(fixtures)) {
     throw new Error("--analyze-api-inventory expects one JSON fixture batch on stdin")
   }
@@ -3532,7 +3649,7 @@ const canonicalOwnerContracts = [
 
 for (const { file, heading, required } of canonicalOwnerContracts) {
   failures.push(
-    ...canonicalOwnerGuardViolations(readFileSync(resolve(repoRoot, file), "utf8"), [
+    ...canonicalOwnerGuardViolations(file, readFileSync(resolve(repoRoot, file), "utf8"), [
       { heading, required },
     ]).map((violation) => `${file} ${violation}`),
   )
@@ -3546,31 +3663,10 @@ const maintainedDocsPages = new Map(
       ? `/docs/${relativePath.slice(0, -"/index.mdx".length)}`
       : `/docs/${relativePath.slice(0, -".mdx".length)}`
     const source = readFileSync(file, "utf8")
-    const masked = maskMarkdownCodeAndComments(source)
-    const slugger = new GithubSlugger()
-    const ids = new Set(
-      [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
-        if (match.index === undefined) return []
-        const lineEnd = source.indexOf("\n", match.index)
-        const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
-        const text = normalizeCodeSpans(
-          originalLine
-            .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
-            .replace(/[ \t]+#+[ \t]*$/, "")
-            .trim(),
-        )
-          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-          .replace(/<[^>]+>/g, "")
-          .trim()
-        return [slugger.slug(text)]
-      }),
+    const relativeFile = relativeToRoot(file)
+    const ids = maintainedHeadingIds(relativeFile, source, (id) =>
+      failures.push(`${relativeFile} has duplicate id ${id}`),
     )
-    for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
-      const id = match[1]
-      if (!id) continue
-      if (ids.has(id)) failures.push(`${relativeToRoot(file)} has duplicate id ${id}`)
-      ids.add(id)
-    }
     return [route, ids]
   }),
 )
@@ -3950,8 +4046,10 @@ if (apiReferenceRegistry) {
     }
   }
 
-  const apiHubSource = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+  const apiHubFile = "apps/web/content/docs/api.mdx"
+  const apiHubSource = readFileSync(resolve(repoRoot, apiHubFile), "utf8")
   const catalogRange = markdownSectionRange(
+    apiHubFile,
     apiHubSource,
     ({ text }) => text === "Package and surface index",
   )
@@ -4070,7 +4168,7 @@ if (apiReferenceRegistry) {
   )
   if (
     !/Application shortcuts:/i.test(maskMarkdownCodeAndComments(shortcutSource)) ||
-    markdownHeadings(shortcutSource).length !== 0 ||
+    markdownHeadings("apps/web/content/docs/api.mdx", shortcutSource).length !== 0 ||
     JSON.stringify(shortcutDestinations) !== JSON.stringify(applicationShortcutDestinations)
   ) {
     failures.push(
@@ -4544,7 +4642,7 @@ const frozenApiHeadingIds = [
   "where-to-read-more",
   "related",
 ]
-const apiHeadingIds = markdownHeadings(apiMdx).map(({ id }) => id)
+const apiHeadingIds = markdownHeadings("apps/web/content/docs/api.mdx", apiMdx).map(({ id }) => id)
 if (JSON.stringify(apiHeadingIds) !== JSON.stringify(frozenApiHeadingIds)) {
   failures.push(
     `apps/web/content/docs/api.mdx must retain exactly ${frozenApiHeadingIds.length} frozen heading ids in order with no additions`,

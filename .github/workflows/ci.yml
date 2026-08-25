@@ -142,6 +142,41 @@ jobs:
         # guard without running broader Windows HMR coverage.
         run: pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"
 
+      - name: Dependency security regressions
+        run: pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts
+
+  dependency-security-browser:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Dependency security browser regressions
+        run: |
+          pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit
+          pnpm exec playwright test --config test/security-dependencies/playwright.config.ts
+
   sandbox-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -343,6 +378,40 @@ jobs:
             }
             console.log("workerd lane ran: " + passed + " passed, 0 skipped.")
           ' "${{ runner.temp }}/workerd-lane-report.json"
+
+  copilotkit-examples-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm --filter @dawn-example/chat-web exec playwright install --with-deps chromium
+
+      - name: Build example workspace dependencies
+        run: pnpm --filter @dawn-ai/ag-ui build
+
+      - name: Verify chat transport
+        run: pnpm --filter @dawn-example/chat-web test:e2e
+
+      - name: Verify research transport
+        run: pnpm --filter @dawn-example/research-web test:e2e
 
   vercel-native:
     if: >-

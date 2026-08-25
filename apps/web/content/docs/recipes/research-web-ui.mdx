@@ -32,8 +32,8 @@ The plan and researcher cards are informational. They never resolve or cancel
 an interrupt; interrupt outcomes and answers use the standard AG-UI fields
 documented on the protocol page.
 
-Durable-memory review is not part of this slice — the Dawn endpoints are in
-place, but the example mounts no panel and ships no proxy route. See
+Durable-memory review is part of the Workbench: a bounded panel reaches Dawn
+through the same allowlisted, same-origin proxy used for thread hydration. See
 [Approve memory candidates](#approve-memory-candidates) below.
 
 ## Run it
@@ -71,14 +71,9 @@ hook binds without per-component wiring:
 
 <CodeGroup>
 
-```ts title="examples/research/web/app/api/copilotkit/route.ts"
+```ts title="examples/research/web/app/api/copilotkit/[...path]/route.ts"
 import { HttpAgent } from "@ag-ui/client"
-import {
-  CopilotRuntime,
-  copilotRuntimeNextJSAppRouterEndpoint,
-  ExperimentalEmptyAdapter,
-} from "@copilotkit/runtime"
-import type { NextRequest } from "next/server"
+import { CopilotRuntime, createCopilotRuntimeHandler } from "@copilotkit/runtime/v2"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -86,18 +81,15 @@ export const dynamic = "force-dynamic"
 const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
 const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
 
-const copilotRuntime = new CopilotRuntime({
-  agents: { default: new HttpAgent({ url: agUiUrl }) },
+const handler = createCopilotRuntimeHandler({
+  runtime: new CopilotRuntime({
+    agents: { default: new HttpAgent({ url: agUiUrl }) },
+  }),
+  basePath: "/api/copilotkit",
 })
 
-export const POST = async (req: NextRequest): Promise<Response> => {
-  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
-    runtime: copilotRuntime,
-    serviceAdapter: new ExperimentalEmptyAdapter(),
-    endpoint: "/api/copilotkit",
-  })
-  return handleRequest(req)
-}
+export const GET = handler
+export const POST = handler
 ```
 
 ```tsx title="examples/research/web/app/page.tsx"
@@ -105,6 +97,7 @@ export const POST = async (req: NextRequest): Promise<Response> => {
 // file, over `app/lib/thread-source.ts`.
 <CopilotKit
   runtimeUrl="/api/copilotkit"
+  useSingleEndpoint={false}
   defaultThrottleMs={100}
   renderActivityMessages={workbenchActivityRenderers}
 >
@@ -117,12 +110,19 @@ export const POST = async (req: NextRequest): Promise<Response> => {
       onSelectThread={handleSelect}
       onCreateThread={handleCreate}
       onUserMessage={handleUserMessage}
+      threadSource={source}
     />
   </CopilotChatConfigurationProvider>
 </CopilotKit>
 ```
 
 </CodeGroup>
+
+The required catch-all route exposes CopilotKit's V2 REST and SSE paths under
+`/api/copilotkit/*`. Setting `useSingleEndpoint={false}` makes the browser begin
+with `GET /api/copilotkit/info` instead of sending the legacy method envelope to
+the base URL. The web runtime holds no model credential; only the Dawn server has
+`OPENAI_API_KEY`.
 
 <Callout type="warn" title="Register the agent as default">
   CopilotKit hooks that omit an `agentId` resolve the id `default`. Register the
@@ -198,7 +198,11 @@ pnpm add @dawn-ai/ag-ui
 ```tsx
 import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
-<CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
+<CopilotKit
+  runtimeUrl="/api/copilotkit"
+  useSingleEndpoint={false}
+  renderActivityMessages={dawnActivityRenderers}
+>
 ```
 
 Then import the stylesheet once, in your root layout:
@@ -266,7 +270,8 @@ its `task` argument summary is worth keeping.
 
 Choose **Research a topic** on the empty transcript to see the root plan and
 researcher progress update before the cited answer. This live flow still uses
-the Dawn server's model key; it is not a browser-automation fixture.
+the Dawn server's model key. The automated browser check proves only V2 transport
+selection; it does not replace this live-model flow.
 
 ## Approve memory candidates
 

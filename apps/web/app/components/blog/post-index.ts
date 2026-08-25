@@ -44,6 +44,7 @@ export interface Post {
 }
 
 const DATE_PREFIX = /^\d{4}-\d{2}-\d{2}-/
+const BLOG_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 function slugFromFilename(filename: string): string {
   return filename.replace(/\.mdx?$/, "").replace(DATE_PREFIX, "")
@@ -59,7 +60,7 @@ interface Frontmatter {
   author?: AuthorId
   ogImage?: string
   draft?: boolean
-  slug?: string
+  slug?: unknown
 }
 
 function parsePost(filename: string, raw: string): Post {
@@ -88,13 +89,18 @@ function parsePost(filename: string, raw: string): Post {
     throw new Error(`Release post ${filename} is missing required "version" frontmatter`)
   }
 
+  const slug = Object.hasOwn(fm, "slug") ? fm.slug : slugFromFilename(filename)
+  if (typeof slug !== "string" || !BLOG_SLUG_PATTERN.test(slug)) {
+    throw new Error(`Post ${filename} has an invalid slug`)
+  }
+
   // gray-matter parses YAML date scalars as JS Date objects; normalise to YYYY-MM-DD string.
   const dateStr =
     fm.date instanceof Date ? fm.date.toISOString().slice(0, 10) : String(fm.date).slice(0, 10)
 
   const stats = readingTime(content)
   return {
-    slug: fm.slug ?? slugFromFilename(filename),
+    slug,
     title: fm.title,
     description: fm.description,
     date: dateStr,

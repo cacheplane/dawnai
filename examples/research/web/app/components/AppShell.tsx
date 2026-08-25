@@ -41,7 +41,7 @@ import { Transcript } from "./Transcript"
  */
 
 /**
- * The default `api/copilotkit/route.ts` and `api/dawn/[...path]/route.ts` fall
+ * The default `api/copilotkit/[...path]/route.ts` and `api/dawn/[...path]/route.ts` fall
  * back to when `DAWN_SERVER_URL` is unset. Those two are the SHAREABLE copies
  * — one source, read from the env at request time on the server. This one is
  * not: it ships inside the client bundle, can only ever be a literal, and
@@ -65,7 +65,7 @@ const SERVER_PROBE_PATH = "/api/dawn/memory/candidates"
  *
  * `useCopilotKit().runtimeConnectionStatus` looks like the right predicate
  * and is not, which is what shipped here first and was caught live: the
- * CopilotKit runtime route (`api/copilotkit/route.ts`) runs in the SAME Next
+ * CopilotKit runtime route (`api/copilotkit/[...path]/route.ts`) runs in the SAME Next
  * process as this page, its `/info` handler enumerates the registered
  * `HttpAgent`s without ever contacting Dawn (`HttpAgent` implements no
  * `getCapabilities`), and any failure to reach Dawn along that path is
@@ -376,7 +376,7 @@ export function AppShell({
   // like it would apply and does not. `copilotkit.connectAgent()` asks the
   // runtime to replay a thread's historic events, but the only two callers of
   // it live inside `<CopilotChat>`, which this app does not mount, and
-  // `useAgent`'s own thread effect does exactly one thing in 1.66.4:
+  // `useAgent`'s own thread effect does exactly one thing in 1.68.3:
   // `agent.threadId = resolvedThreadId`. Verified live: switching away from a
   // three-message thread and back leaves it empty and fires no network request
   // at all. The server holds that history and this client has to ask for it

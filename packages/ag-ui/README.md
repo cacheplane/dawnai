@@ -26,9 +26,14 @@ Built-in orchestration is presented once. A `writeTodos` or `task` call whose ac
 `@dawn-ai/ag-ui/react` renders those activity snapshots. The drop-in is one prop:
 
 ```tsx
+import { CopilotKit } from "@copilotkit/react-core/v2"
 import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
-<CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
+<CopilotKit
+  runtimeUrl="/api/copilotkit"
+  useSingleEndpoint={false}
+  renderActivityMessages={dawnActivityRenderers}
+>
 ```
 
 The subpath exports three layers, from drop-in to build-your-own:

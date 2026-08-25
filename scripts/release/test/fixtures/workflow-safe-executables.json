@@ -230,6 +230,62 @@
       },
       {
         "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 6,
+        "step": "Dependency security regressions",
+        "kind": "run",
+        "value": "pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 4,
+        "step": "Install Chromium",
+        "kind": "run",
+        "value": "pnpm exec playwright install --with-deps chromium"
+      },
+      {
+        "classification": "safe",
+        "job": "dependency-security-browser",
+        "stepIndex": 5,
+        "step": "Dependency security browser regressions",
+        "kind": "run",
+        "value": "pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit\npnpm exec playwright test --config test/security-dependencies/playwright.config.ts\n"
+      },
+      {
+        "classification": "safe",
         "job": "sandbox-docker",
         "stepIndex": 0,
         "step": "Checkout",
@@ -443,6 +499,70 @@
         "step": "Assert the workerd lane did not skip",
         "kind": "run",
         "value": "node -e '\n  const fs = require(\"node:fs\")\n  const path = process.argv[1]\n  if (!fs.existsSync(path)) {\n    throw new Error(\"no vitest report at \" + path + \" — the lane produced no run at all.\")\n  }\n  const report = JSON.parse(fs.readFileSync(path, \"utf8\"))\n  const passed = report.numPassedTests ?? 0\n  const skipped = report.numPendingTests ?? 0\n  if (passed === 0 || skipped > 0) {\n    throw new Error(\n      \"the workerd lane reported \" + passed + \" passed and \" + skipped + \" skipped. \" +\n        \"This job is the only place DAWN_TEST_WORKERD=1 is set, so a skip here means the \" +\n        \"merge gate ran nothing while still exiting 0. Check that the flag name in \" +\n        \"packages/cli/test/workerd-lane.test.ts still matches the one this job exports.\",\n    )\n  }\n  console.log(\"workerd lane ran: \" + passed + \" passed, 0 skipped.\")\n' \"${{ runner.temp }}/workerd-lane-report.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 4,
+        "step": "Install Chromium",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-example/chat-web exec playwright install --with-deps chromium"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 5,
+        "step": "Build example workspace dependencies",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/ag-ui build"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 6,
+        "step": "Verify chat transport",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-example/chat-web test:e2e"
+      },
+      {
+        "classification": "safe",
+        "job": "copilotkit-examples-e2e",
+        "stepIndex": 7,
+        "step": "Verify research transport",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-example/research-web test:e2e"
       },
       {
         "classification": "safe",
@@ -1067,6 +1187,64 @@
         "step": "Install dawn-app (placeholder image) and verify it serves",
         "kind": "run",
         "value": "helm install dawn-app charts/dawn-app \\\n  --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl rollout status deploy/dawn-app --timeout=120s\nkubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
+      }
+    ],
+    "dependency-security-receipt.yml": [
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 0,
+        "step": "Validate receipt correlation inputs",
+        "kind": "run",
+        "value": "set -euo pipefail\nsha_pattern='^[0-9a-f]{40}$'\nfor value in \"$EXPECTED_MAIN_SHA\" \"$EXPECTED_REVIEWED_BASE_SHA\" \"$EXPECTED_REVIEWED_HEAD_SHA\" \"$EXPECTED_MERGE_SHA\"; do\n  if [[ ! \"$value\" =~ $sha_pattern ]]; then\n    echo \"invalid receipt correlation SHA\" >&2\n    exit 2\n  fi\ndone\nif [[ ! \"$EXPECTED_PR_NUMBER\" =~ ^[1-9][0-9]{0,14}$ ]]; then\n  echo \"invalid pull request number\" >&2\n  exit 2\nfi\nif [[ ! \"$RECEIPT_SHA256\" =~ ^[0-9a-f]{64}$ ]]; then\n  echo \"invalid receipt SHA-256\" >&2\n  exit 2\nfi\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 1,
+        "step": "Checkout exact observation",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 3,
+        "step": "Require unchanged default branch head",
+        "kind": "run",
+        "value": "set -euo pipefail\nif [[ \"$GITHUB_SHA\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"workflow dispatch SHA does not match expectedMainSha\" >&2\n  exit 2\nfi\nlive_main_sha=\"$(gh api repos/cacheplane/dawnai/git/ref/heads/main --jq '.object.sha')\"\nif [[ \"$live_main_sha\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"default branch moved after the reviewed observation\" >&2\n  exit 2\nfi\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 4,
+        "step": "Prepare sealed receipt directory",
+        "kind": "run",
+        "value": "install -d -m 0700 -- \"$RECEIPT_OUTPUT_ROOT\""
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 5,
+        "step": "Seal canonical receipt",
+        "kind": "run",
+        "value": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 6,
+        "step": "Upload sealed receipt",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       }
     ],
     "claude-review.yml": [

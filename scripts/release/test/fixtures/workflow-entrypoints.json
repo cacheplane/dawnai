@@ -237,6 +237,141 @@
         },
         {
           "classification": "safe",
+          "id": "copilotkit-examples-e2e",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 20
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0",
+                  "cache": "pnpm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install Chromium",
+                "run": "pnpm --filter @dawn-example/chat-web exec playwright install --with-deps chromium"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build example workspace dependencies",
+                "run": "pnpm --filter @dawn-ai/ag-ui build"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Verify chat transport",
+                "run": "pnpm --filter @dawn-example/chat-web test:e2e"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Verify research transport",
+                "run": "pnpm --filter @dawn-example/research-web test:e2e"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "dependency-security-browser",
+          "descriptor": {
+            "permissions": {
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 15
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install Chromium",
+                "run": "pnpm exec playwright install --with-deps chromium"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Dependency security browser regressions",
+                "run": "pnpm exec tsc -p test/security-dependencies/tsconfig.json --noEmit\npnpm exec playwright test --config test/security-dependencies/playwright.config.ts\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "edge-workerd",
           "descriptor": {
             "runs-on": "ubuntu-latest",
@@ -997,6 +1132,13 @@
                 "name": "Native Windows subprocess shutdown tests",
                 "run": "pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern \"Windows process tree|injected Windows tree kill\""
               }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Dependency security regressions",
+                "run": "pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts test/security-dependencies/dependency-resolution.test.ts test/security-dependencies/hono-serve-static-windows.test.ts"
+              }
             }
           ]
         },
@@ -1287,6 +1429,157 @@
                   "path": "${{ runner.temp }}/vercel-native/upload/",
                   "if-no-files-found": "error",
                   "retention-days": 3
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "dependency-security-receipt.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "name": "Dependency Security Receipt",
+        "on": {
+          "workflow_dispatch": {
+            "inputs": {
+              "expectedMainSha": {
+                "description": "Exact default-branch observation SHA",
+                "required": true,
+                "type": "string"
+              },
+              "expectedMergeSha": {
+                "description": "Exact pull request merge SHA",
+                "required": true,
+                "type": "string"
+              },
+              "expectedPrNumber": {
+                "description": "Merged pull request number",
+                "required": true,
+                "type": "string"
+              },
+              "expectedReviewedBaseSha": {
+                "description": "Exact reviewed pull request base SHA",
+                "required": true,
+                "type": "string"
+              },
+              "expectedReviewedHeadSha": {
+                "description": "Exact reviewed pull request head SHA",
+                "required": true,
+                "type": "string"
+              },
+              "receiptGzipBase64": {
+                "description": "Canonical redacted reconciliation receipt encoded as gzip plus base64",
+                "required": true,
+                "type": "string"
+              },
+              "receiptSha256": {
+                "description": "SHA-256 of the canonical reconciliation receipt",
+                "required": true,
+                "type": "string"
+              }
+            }
+          }
+        },
+        "run-name": "Dependency security receipt ${{ inputs.receiptSha256 }}"
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "upload",
+          "descriptor": {
+            "permissions": {
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 10
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "EXPECTED_MAIN_SHA": "${{ inputs.expectedMainSha }}",
+                  "EXPECTED_MERGE_SHA": "${{ inputs.expectedMergeSha }}",
+                  "EXPECTED_PR_NUMBER": "${{ inputs.expectedPrNumber }}",
+                  "EXPECTED_REVIEWED_BASE_SHA": "${{ inputs.expectedReviewedBaseSha }}",
+                  "EXPECTED_REVIEWED_HEAD_SHA": "${{ inputs.expectedReviewedHeadSha }}",
+                  "RECEIPT_SHA256": "${{ inputs.receiptSha256 }}"
+                },
+                "name": "Validate receipt correlation inputs",
+                "run": "set -euo pipefail\nsha_pattern='^[0-9a-f]{40}$'\nfor value in \"$EXPECTED_MAIN_SHA\" \"$EXPECTED_REVIEWED_BASE_SHA\" \"$EXPECTED_REVIEWED_HEAD_SHA\" \"$EXPECTED_MERGE_SHA\"; do\n  if [[ ! \"$value\" =~ $sha_pattern ]]; then\n    echo \"invalid receipt correlation SHA\" >&2\n    exit 2\n  fi\ndone\nif [[ ! \"$EXPECTED_PR_NUMBER\" =~ ^[1-9][0-9]{0,14}$ ]]; then\n  echo \"invalid pull request number\" >&2\n  exit 2\nfi\nif [[ ! \"$RECEIPT_SHA256\" =~ ^[0-9a-f]{64}$ ]]; then\n  echo \"invalid receipt SHA-256\" >&2\n  exit 2\nfi\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact observation",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "persist-credentials": false,
+                  "ref": "${{ inputs.expectedMainSha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "EXPECTED_MAIN_SHA": "${{ inputs.expectedMainSha }}",
+                  "GH_TOKEN": "${{ github.token }}"
+                },
+                "name": "Require unchanged default branch head",
+                "run": "set -euo pipefail\nif [[ \"$GITHUB_SHA\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"workflow dispatch SHA does not match expectedMainSha\" >&2\n  exit 2\nfi\nlive_main_sha=\"$(gh api repos/cacheplane/dawnai/git/ref/heads/main --jq '.object.sha')\"\nif [[ \"$live_main_sha\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"default branch moved after the reviewed observation\" >&2\n  exit 2\nfi\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "RECEIPT_OUTPUT_ROOT": "${{ runner.temp }}/dependency-security-receipt-root"
+                },
+                "name": "Prepare sealed receipt directory",
+                "run": "install -d -m 0700 -- \"$RECEIPT_OUTPUT_ROOT\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "EXPECTED_MAIN_SHA": "${{ inputs.expectedMainSha }}",
+                  "EXPECTED_MERGE_SHA": "${{ inputs.expectedMergeSha }}",
+                  "EXPECTED_PR_NUMBER": "${{ inputs.expectedPrNumber }}",
+                  "EXPECTED_REVIEWED_BASE_SHA": "${{ inputs.expectedReviewedBaseSha }}",
+                  "EXPECTED_REVIEWED_HEAD_SHA": "${{ inputs.expectedReviewedHeadSha }}",
+                  "RECEIPT_GZIP_BASE64": "${{ inputs.receiptGzipBase64 }}",
+                  "RECEIPT_OUTPUT_DIRECTORY": "${{ runner.temp }}/dependency-security-receipt-root/sealed",
+                  "RECEIPT_OUTPUT_ROOT": "${{ runner.temp }}/dependency-security-receipt-root",
+                  "RECEIPT_SHA256": "${{ inputs.receiptSha256 }}"
+                },
+                "name": "Seal canonical receipt",
+                "run": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Upload sealed receipt",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "dependency-security-receipt-${{ inputs.expectedMainSha }}-${{ inputs.receiptSha256 }}",
+                  "path": "${{ runner.temp }}/dependency-security-receipt-root/sealed/dependency-security-reconciliation.json\n${{ runner.temp }}/dependency-security-receipt-root/sealed/uploader-manifest.json\n",
+                  "retention-days": 90
                 }
               }
             }

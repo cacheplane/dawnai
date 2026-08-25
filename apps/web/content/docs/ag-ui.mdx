@@ -47,9 +47,14 @@ renderer array to CopilotKit:
 
 ```tsx
 import "@dawn-ai/ag-ui/react/styles.css"
+import { CopilotKit } from "@copilotkit/react-core/v2"
 import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 
-<CopilotKit runtimeUrl="/api/copilotkit" renderActivityMessages={dawnActivityRenderers}>
+<CopilotKit
+  runtimeUrl="/api/copilotkit"
+  useSingleEndpoint={false}
+  renderActivityMessages={dawnActivityRenderers}
+>
 ```
 
 The stylesheet import gives the cards Dawn's default appearance in light and
