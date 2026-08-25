@@ -97,6 +97,15 @@ describe("regex scorer safety policy", () => {
     )
   })
 
+  it("retains the validated pattern after caller-owned expression mutation", async () => {
+    const expression = /^safe$/iu
+    const scorer = regex(expression)
+
+    RegExp.prototype.compile.call(expression, "^(a+)+$", "u")
+
+    expect(normalizeScore(await scorer.score(run({ finalMessage: "SAFE" }), noCase)).score).toBe(1)
+  })
+
   it.each([
     { createExpression: () => /items/gu, name: "global" },
     { createExpression: () => /items/uy, name: "sticky" },
@@ -145,6 +154,18 @@ describe("private regex safety adapter", () => {
 
     expect(testOversizedInput).toThrow(RangeError)
     expect(testOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
+  })
+
+  it("retains the validated source and flags after caller-owned expression mutation", () => {
+    const expression = /^safe$/iu
+    const test = createSafeRegexTester(expression)
+
+    RegExp.prototype.compile.call(expression, "^(a+)+$", "u")
+    expression.lastIndex = 2
+
+    expect(test("SAFE")).toBe(true)
+    expect(test("SAFE")).toBe(true)
+    expect(expression.lastIndex).toBe(2)
   })
 
   it.each([

@@ -352,6 +352,18 @@ describe("private regex safety adapter", () => {
     expect(testOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
   })
 
+  it("retains the validated source and flags after caller-owned expression mutation", () => {
+    const expression = /^safe$/iu
+    const test = createSafeRegexTester(expression)
+
+    RegExp.prototype.compile.call(expression, "^(a+)+$", "u")
+    expression.lastIndex = 2
+
+    expect(test("SAFE")).toBe(true)
+    expect(test("SAFE")).toBe(true)
+    expect(expression.lastIndex).toBe(2)
+  })
+
   it.each([
     { expression: /items/gu, name: "global" },
     { expression: /items/uy, name: "sticky" },

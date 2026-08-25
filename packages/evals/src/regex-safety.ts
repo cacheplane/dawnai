@@ -7,7 +7,11 @@ const OVERSIZED_REGEX_INPUT_MESSAGE = "Regular expression input exceeds 65536 UT
 export function createSafeRegexTester(expression: RegExp): (input: string) => boolean {
   // safe-regex2 is a structural screen complemented by the input bound, not a
   // proof of the expression's runtime complexity.
-  if (!safeRegex(expression)) {
+  const source = expression.source
+  const flags = expression.flags
+  const validatedExpression = new RegExp(source, flags)
+
+  if (!safeRegex(validatedExpression)) {
     throw new TypeError(UNSAFE_REGEX_MESSAGE)
   }
 
@@ -15,6 +19,6 @@ export function createSafeRegexTester(expression: RegExp): (input: string) => bo
     if (input.length > MAX_REGEX_INPUT_CODE_UNITS) {
       throw new RangeError(OVERSIZED_REGEX_INPUT_MESSAGE)
     }
-    return new RegExp(expression.source, expression.flags).test(input)
+    return new RegExp(source, flags).test(input)
   }
 }
