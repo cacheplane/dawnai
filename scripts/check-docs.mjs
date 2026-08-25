@@ -472,6 +472,18 @@ function markdownHeadings(source) {
   })
 }
 
+function maintainedHeadingIds(source, onDuplicateId = () => {}) {
+  const masked = maskMarkdownCodeAndComments(source)
+  const ids = new Set(markdownHeadings(source).map(({ id }) => id))
+  for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
+    const id = match[1]
+    if (!id) continue
+    if (ids.has(id)) onDuplicateId(id)
+    ids.add(id)
+  }
+  return ids
+}
+
 function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
   const masked = maskFencedCode(source)
     .replace(/<!--[\s\S]*?-->/g, (comment) => maskText(comment))
@@ -1184,6 +1196,12 @@ if (process.argv[2] === "--analyze-doc-link-guards") {
       ),
     })}\n`,
   )
+  process.exit(0)
+}
+
+if (process.argv[2] === "--analyze-maintained-heading-ids") {
+  const fixture = JSON.parse(process.argv[3] ?? "{}")
+  process.stdout.write(`${JSON.stringify([...maintainedHeadingIds(fixture.source ?? "")])}\n`)
   process.exit(0)
 }
 
@@ -3546,31 +3564,9 @@ const maintainedDocsPages = new Map(
       ? `/docs/${relativePath.slice(0, -"/index.mdx".length)}`
       : `/docs/${relativePath.slice(0, -".mdx".length)}`
     const source = readFileSync(file, "utf8")
-    const masked = maskMarkdownCodeAndComments(source)
-    const slugger = new GithubSlugger()
-    const ids = new Set(
-      [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
-        if (match.index === undefined) return []
-        const lineEnd = source.indexOf("\n", match.index)
-        const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
-        const text = normalizeCodeSpans(
-          originalLine
-            .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
-            .replace(/[ \t]+#+[ \t]*$/, "")
-            .trim(),
-        )
-          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-          .replace(/<[^>]+>/g, "")
-          .trim()
-        return [slugger.slug(text)]
-      }),
+    const ids = maintainedHeadingIds(source, (id) =>
+      failures.push(`${relativeToRoot(file)} has duplicate id ${id}`),
     )
-    for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
-      const id = match[1]
-      if (!id) continue
-      if (ids.has(id)) failures.push(`${relativeToRoot(file)} has duplicate id ${id}`)
-      ids.add(id)
-    }
     return [route, ids]
   }),
 )

@@ -232,6 +232,19 @@ function analyzeDocLinkGuards(fixture: Record<string, unknown>): DocLinkGuardAna
   return JSON.parse(result.stdout) as DocLinkGuardAnalysis
 }
 
+function analyzeMaintainedHeadingIds(source: string): readonly string[] {
+  const result = spawnSync(
+    process.execPath,
+    [CHECK_DOCS_PATH, "--analyze-maintained-heading-ids", JSON.stringify({ source })],
+    { encoding: "utf8" },
+  )
+
+  expect(result.status).toBe(0)
+  expect(result.stderr).toBe("")
+  expect(result.stdout).toMatch(/^\[/)
+  return JSON.parse(result.stdout) as readonly string[]
+}
+
 function filesUnder(
   root: string,
   matches: (fileName: string) => boolean,
@@ -827,6 +840,25 @@ ${pageSource}`,
       analysis.contentImportTarget === "../../../content/docs/real.mdx" &&
         analysis.docsPageImportTarget === "../../components/docs/DocsPage",
     ).toBe(false)
+  })
+})
+
+describe("maintained documentation heading identity analysis", () => {
+  it.each([
+    ["inline code", "## Use `@dawn-ai/cli/fetch`\n", ["use-dawn-aiclifetch"]],
+    [
+      "an ordinary Markdown link",
+      "## Read the [deployment guide](/docs/deployment)\n",
+      ["read-the-deployment-guide"],
+    ],
+    [
+      "nested tag-like text",
+      "## Nested <scr<script>ipt> identity\n",
+      ["nested-scrscriptipt-identity"],
+    ],
+    ["repeated headings", "## Repeat\n## Repeat\n", ["repeat", "repeat-1"]],
+  ])("uses GitHub-style IDs for %s", (_label, source, expectedIds) => {
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(expectedIds)
   })
 })
 
