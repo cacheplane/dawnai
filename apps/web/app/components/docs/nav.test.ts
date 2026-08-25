@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { type CompileOptions, compile } from "@mdx-js/mdx"
 import { describe, expect, it } from "vitest"
+import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
 import {
   ALL_DOCS_PAGES,
@@ -164,6 +166,51 @@ interface DocLinkGuardAnalysis {
   readonly canonicalViolations: readonly string[]
 }
 
+interface HastNode {
+  readonly type: string
+  readonly tagName?: string
+  readonly properties?: Record<string, unknown>
+  readonly children?: readonly HastNode[]
+}
+
+type PluginList = NonNullable<CompileOptions["rehypePlugins"]>
+
+async function resolvePlugins(specs: readonly (readonly [string, unknown])[]): Promise<PluginList> {
+  return await Promise.all(
+    specs.map(async ([name, options]) => {
+      const module = (await import(name)) as { default: unknown }
+      return [module.default, options] as unknown as PluginList[number]
+    }),
+  )
+}
+
+const renderedHeadingRemarkPlugins = resolvePlugins(MDX_REMARK_PLUGINS)
+const renderedHeadingRehypePlugins = resolvePlugins(
+  MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
+)
+
+async function renderedHeadingIds(source: string): Promise<readonly string[]> {
+  const ids: string[] = []
+  const collect = () => (tree: HastNode) => {
+    const visit = (node: HastNode): void => {
+      if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
+        const id = node.properties?.id
+        if (typeof id === "string") ids.push(id)
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(tree)
+  }
+
+  await compile(source, {
+    remarkPlugins: await renderedHeadingRemarkPlugins,
+    // Syntax highlighting cannot affect heading identity and is intentionally
+    // omitted from this otherwise shipped MDX/rehype-slug pipeline.
+    rehypePlugins: [...(await renderedHeadingRehypePlugins), collect],
+  })
+  return ids
+}
+
 let docTitleAnalysisProcessCount = 0
 
 function analyzeCompatibilityStub(
@@ -235,12 +282,25 @@ function analyzeDocLinkGuards(fixture: Record<string, unknown>): DocLinkGuardAna
 function analyzeMaintainedHeadingIds(source: string): readonly string[] {
   const result = spawnSync(
     process.execPath,
-    [CHECK_DOCS_PATH, "--analyze-maintained-heading-ids", JSON.stringify({ source })],
-    { encoding: "utf8" },
+    [CHECK_DOCS_PATH, "--analyze-maintained-heading-ids"],
+    {
+      encoding: "utf8",
+      input: JSON.stringify({ source }),
+    },
   )
+  const stderr = result.stderr ?? ""
 
-  expect(result.status).toBe(0)
-  expect(result.stderr).toBe("")
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `Maintained heading analysis failed with status ${String(result.status)}`,
+        `signal: ${result.signal ?? "none"}`,
+        `error: ${result.error?.message ?? "none"}`,
+        `stderr: ${stderr.slice(0, 2_000) || "none"}`,
+      ].join("\n"),
+    )
+  }
+  expect(stderr).toBe("")
   expect(result.stdout).toMatch(/^\[/)
   return JSON.parse(result.stdout) as readonly string[]
 }
@@ -844,6 +904,18 @@ ${pageSource}`,
 })
 
 describe("maintained documentation heading identity analysis", () => {
+  it("accepts analyzer input larger than an argv payload", () => {
+    const source = `## Large fixture\n${" ".repeat(1_100_000)}`
+
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(["large-fixture"])
+  })
+
+  it("surfaces analyzer subprocess diagnostics", () => {
+    expect(() => analyzeMaintainedHeadingIds("## Invalid <scr<script>ipt> fixture\n")).toThrow(
+      /Maintained heading analysis failed with status 1\nsignal: none\nerror: none\nstderr: /,
+    )
+  })
+
   it.each([
     ["inline code", "## Use `@dawn-ai/cli/fetch`\n", ["use-dawn-aiclifetch"]],
     [
@@ -851,14 +923,31 @@ describe("maintained documentation heading identity analysis", () => {
       "## Read the [deployment guide](/docs/deployment)\n",
       ["read-the-deployment-guide"],
     ],
+    ["inline JSX", "## Hello <span>world</span>\n", ["hello-world"]],
     [
-      "nested tag-like text",
-      "## Nested <scr<script>ipt> identity\n",
-      ["nested-scrscriptipt-identity"],
+      "a link with a nested label",
+      "## [Outer [inner] end](/docs/deployment)\n",
+      ["outer-inner-end"],
     ],
     ["repeated headings", "## Repeat\n## Repeat\n", ["repeat", "repeat-1"]],
-  ])("uses GitHub-style IDs for %s", (_label, source, expectedIds) => {
-    expect(analyzeMaintainedHeadingIds(source)).toEqual(expectedIds)
+    [
+      "masked pseudo-headings",
+      "## Visible\n```md\n## Fenced\n```\n{/* ## Commented */}\n",
+      ["visible"],
+    ],
+  ])("matches rendered heading IDs for %s", async (_label, source, expectedIds) => {
+    const runtimeIds = await renderedHeadingIds(source)
+
+    expect(runtimeIds).toEqual(expectedIds)
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
+  })
+
+  it("preserves nested tag-like text inside rendered inline code", async () => {
+    const source = "## Nested `<scr<script>ipt>` identity\n"
+    const runtimeIds = await renderedHeadingIds(source)
+
+    expect(runtimeIds).toEqual(["nested-scrscriptipt-identity"])
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
   })
 })
 
