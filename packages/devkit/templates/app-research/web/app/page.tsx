@@ -11,18 +11,20 @@ import {
   type WorkbenchThread,
 } from "./lib/thread-source"
 
-// Notes (verified against installed @copilotkit/react-core@1.66.4 types — see
+// Notes (verified against installed @copilotkit/react-core@1.68.3 types — see
 // examples/chat/web/app/page.tsx for the original investigation):
 // - Use the `CopilotKit` wrapper (not bare `CopilotKitProvider`) per CopilotKit's own v2
 //   guidance: it adds the error boundary, toasts, and threads provider around the context.
 //   Its props are a superset of CopilotKitProviderProps (so `runtimeUrl` applies).
+// - The compatibility wrapper still defaults `useSingleEndpoint` to true. V2 transport
+//   requires false so `/info` reaches the catch-all `api/copilotkit/[...path]/route.ts`.
 // - `CopilotSidebar` ships from `@copilotkit/react-core/v2`, not `@copilotkit/react-ui`
 //   (react-ui's root export is the v1 CopilotSidebar, incompatible with the v2 context;
 //   react-ui exposes no `/v2` JS export, only `/v2/styles.css`). This app no longer uses
 //   it — the workbench renders its own transcript and composer — but the import path is
 //   recorded because the mistake is easy to repeat.
 // - Components/hooks that omit agentId resolve CopilotKit's default id ("default").
-//   The runtime route (api/copilotkit/route.ts) registers the Dawn /research route
+//   The catch-all route (api/copilotkit/[...path]/route.ts) registers the Dawn /research route
 //   under "default", so every hook binds without per-component agentId wiring.
 // - `defaultThrottleMs` coalesces the useAgent re-renders that the transcript and panels
 //   get from OnMessagesChanged/OnStateChanged. It defaults to UNTHROTTLED,
@@ -85,6 +87,7 @@ export default function Home() {
   return (
     <CopilotKit
       runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
       defaultThrottleMs={100}
       // Off deliberately. `enableInspector` defaults to CopilotKit's own
       // `isLocalhost()` check -- NOT to NODE_ENV -- so leaving it unset mounts a

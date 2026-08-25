@@ -54,7 +54,7 @@ npm run build --workspace web
 | Plan card | `app/components/PlanCard.tsx` | the packaged plan card, restyled |
 | Subagent card | `app/components/SubagentCard.tsx` | the packaged subagent card, restyled |
 | Renderer registry | `app/components/activity-renderers.tsx` | hands both cards to CopilotKit |
-| CopilotKit runtime | `app/api/copilotkit/route.ts` | registers an `HttpAgent` on Dawn's AG-UI endpoint |
+| CopilotKit runtime | `app/api/copilotkit/[...path]/route.ts` | registers an `HttpAgent` on Dawn's AG-UI endpoint |
 | Server proxy | `app/api/dawn/[...path]/route.ts` | forwards allowlisted reads to Dawn |
 | Proxy allowlist | `app/lib/proxy-allowlist.ts` | the pure policy the proxy enforces |
 | Thread history | `app/lib/thread-source.ts`, `app/lib/hydrate.ts` | the rail's list, and restoring a saved thread |
