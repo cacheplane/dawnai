@@ -12,6 +12,9 @@ import {
 } from "../candidate.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import { abandonmentReleaseMarker, canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
+import { canonicalReleaseRecordBytes } from "../release-record.mjs"
+import { canonicalAuditResultBytes } from "../terminal-records.mjs"
+import { observationForMarker } from "./support/marker-observation.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
 const ACTIVE_MARKER = Object.freeze({
@@ -365,6 +368,116 @@ test("scheduled discovery never excludes an audit-looking Release without durabl
   })
 
   assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+})
+
+test("scheduled discovery admits an exact AUDIT_VERIFIED draft for production observation", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const release = auditVerifiedDraftRelease(21, "0.8.21", SHA_21)
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+})
+
+test("scheduled discovery rejects successful audit evidence on any inexact draft", async () => {
+  const cases = [
+    {
+      name: "foreign title",
+      mutate(release) {
+        release.name = "Foreign release"
+      },
+    },
+    {
+      name: "foreign target",
+      mutate(release) {
+        release.target_commitish = "release-candidate"
+      },
+    },
+    {
+      name: "immutable draft",
+      mutate(release) {
+        release.immutable = true
+      },
+    },
+    {
+      name: "prerelease draft",
+      mutate(release) {
+        release.prerelease = true
+      },
+    },
+    {
+      name: "noncanonical body",
+      mutate(release) {
+        release.body = `${release.body}\n`
+      },
+    },
+    {
+      name: "different phase",
+      mutate(release) {
+        const marker = parseReleaseMarker(release.body)
+        const retryable = {
+          ...marker,
+          phase: "AUDIT_RETRYABLE",
+          audit: {
+            ...marker.audit,
+            canonicalSha256: null,
+            conclusion: "failure",
+          },
+        }
+        release.body = canonicalReleaseBody({ marker: retryable, manifest: null })
+      },
+    },
+    {
+      name: "different audit attempt",
+      mutate(release) {
+        const marker = parseReleaseMarker(release.body)
+        const mismatched = {
+          ...marker,
+          audit: {
+            ...marker.audit,
+            runAttempt: marker.audit.runAttempt + 1,
+            attemptAssetName: `audit-attempt-${marker.audit.workflowRunId}-${marker.audit.runAttempt + 1}.json`,
+          },
+        }
+        release.body = canonicalReleaseBody({ marker: mismatched, manifest: null })
+      },
+    },
+    {
+      name: "noncanonical audit receipt",
+      mutate(release) {
+        const auditAsset = release.assets.find((asset) => asset.name === "audit-result.json")
+        release.assetBytes.set(auditAsset.id, Buffer.from(JSON.stringify(release.auditResult)))
+      },
+    },
+  ]
+
+  for (const fixture of cases) {
+    const repository = repositoryFixture([
+      commit(BASE_SHA, "0.8.20"),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ])
+    const release = auditVerifiedDraftRelease(21, "0.8.21", SHA_21)
+    fixture.mutate(release)
+
+    await assert.rejects(
+      discoverScheduledCandidate({
+        inventory: repository.inventory,
+        git: repository.git,
+        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        marker: ACTIVE_MARKER,
+      }),
+      /audit|canonical|candidate draft|managed Release/iu,
+      fixture.name,
+    )
+  }
 })
 
 test("only a published Release with a strict consistent successful audit is terminal", async () => {
@@ -1247,6 +1360,76 @@ function managedRelease(
   }
 }
 
+function auditVerifiedDraftRelease(id, version, commitSha) {
+  const release = managedRelease(id, version, commitSha, { auditComplete: true })
+  release.record.actionsArtifact.id = String(release.record.actionsArtifact.id)
+  release.record.actionsArtifact.prepareRunId = String(release.record.actionsArtifact.prepareRunId)
+  const template = observationForMarker({ phase: "AUDIT_VERIFIED" }).release.marker
+  const auditBytes = canonicalAuditResultBytes(release.auditResult)
+  const auditSha256 = sha256(auditBytes)
+  const releaseRecordSha256 = sha256(canonicalReleaseRecordBytes(release.record))
+  const subjects = [
+    {
+      subjectName: "manifest.json",
+      subjectSha256: release.record.manifestSha256,
+      bundleName: "manifest.json.intoto.jsonl",
+      bundleSha256: "c".repeat(64),
+    },
+    ...Array.from({ length: 21 }, (_unused, index) => {
+      const ordinal = String(index + 1).padStart(2, "0")
+      const subjectName = `dawn-ai-package-${ordinal}-${version}.tgz`
+      return {
+        subjectName,
+        subjectSha256: (index + 1).toString(16).padStart(64, "0"),
+        bundleName: `${subjectName}.intoto.jsonl`,
+        bundleSha256: "c".repeat(64),
+      }
+    }),
+  ]
+  const baseAssets = [
+    { name: "release-record.json", sha256: releaseRecordSha256 },
+    { name: "manifest.json", sha256: release.record.manifestSha256 },
+    ...subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  const marker = {
+    ...template,
+    revision: 7,
+    version,
+    commitSha,
+    tag: `v${version}`,
+    manifestSha256: release.record.manifestSha256,
+    releaseRecordSha256,
+    baseAssetSetSha256: sha256(Buffer.from(`${JSON.stringify(baseAssets)}\n`)),
+    attestationSet: {
+      ...template.attestationSet,
+      sourceRef: `refs/tags/v${version}`,
+      commitSha,
+      subjects,
+    },
+    audit: {
+      ...template.audit,
+      workflowRunId: release.auditResult.workflowRunId,
+      runUrl: `https://api.github.com/repos/cacheplane/dawnai/actions/runs/${release.auditResult.workflowRunId}`,
+      htmlUrl: `https://github.com/cacheplane/dawnai/actions/runs/${release.auditResult.workflowRunId}`,
+      runAttempt: release.auditResult.runAttempt,
+      attemptAssetName: `audit-attempt-${release.auditResult.workflowRunId}-${release.auditResult.runAttempt}.json`,
+      attemptSha256: auditSha256,
+      canonicalSha256: auditSha256,
+    },
+  }
+  const auditAsset = release.assets.find((asset) => asset.name === "audit-result.json")
+  release.body = canonicalReleaseBody({ marker, manifest: null })
+  release.assetBytes = new Map([[auditAsset.id, auditBytes]])
+  return release
+}
+
 function interruptedAbandonmentRelease(id, version, commitSha) {
   const release = managedRelease(id, version, commitSha, {
     abandoned: true,
@@ -1481,7 +1664,9 @@ function githubFixture({ tags = [], releases = [] } = {}) {
     const recordAsset = release.assets.find((asset) => asset.name === "release-record.json")
     if (recordAsset !== undefined) assetBytes.set(recordAsset.id, release.record)
     const auditAsset = release.assets.find((asset) => asset.name === "audit-result.json")
-    if (auditAsset !== undefined) assetBytes.set(auditAsset.id, release.auditResult)
+    if (auditAsset !== undefined && !assetBytes.has(auditAsset.id)) {
+      assetBytes.set(auditAsset.id, release.auditResult)
+    }
     const abandonmentAsset = release.assets.find((asset) => asset.name === "abandonment.json")
     if (abandonmentAsset !== undefined) {
       assetBytes.set(abandonmentAsset.id, release.abandonmentBytes ?? release.abandonment)

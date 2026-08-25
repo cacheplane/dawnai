@@ -3,11 +3,16 @@ import { createHash } from "node:crypto"
 import { canonicalAbandonmentBytes, parseAbandonmentReleaseBody } from "./abandonment.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
-import { parseReleaseMarker } from "./metadata.mjs"
+import { canonicalReleaseBody, parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
+import { releaseRecordSha256 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
-import { parseAbandonmentRecord, parseAuditResult } from "./terminal-records.mjs"
+import {
+  canonicalAuditResultBytes,
+  parseAbandonmentRecord,
+  parseAuditResult,
+} from "./terminal-records.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
 const EXPECTED_PACKAGE_COUNT = 21
@@ -453,19 +458,32 @@ async function releaseStateFromAssets({ release, releaseRecord, assets, tagIdent
     throw new Error(`Managed GitHub Release ${tagIdentity.tag} has duplicate terminal evidence`)
   }
   if (auditAssets.length === 1) {
-    const record = parseAuditResult(
-      await downloadJsonAsset(github, auditAssets[0], `audit result for ${tagIdentity.tag}`, {
+    const downloaded = await downloadJsonAsset(
+      github,
+      auditAssets[0],
+      `audit result for ${tagIdentity.tag}`,
+      {
         maximumBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
-      }),
+        includeBytes: true,
+      },
     )
+    const record = parseAuditResult(downloaded.value)
     validateTerminalIdentity(record, tagIdentity, {
       label: "audit result",
       requireTag: false,
       manifestSha256: releaseRecord.manifestSha256,
     })
     if (record.conclusion === "success") {
-      if (release.draft !== false) {
-        throw new Error(`Managed audit result for ${tagIdentity.tag} requires a published Release`)
+      if (release.draft === true) {
+        assertExactAuditVerifiedDraft({
+          release,
+          releaseRecord,
+          auditResult: record,
+          auditBytes: downloaded.bytes,
+          tagIdentity,
+        })
+      } else if (release.draft !== false) {
+        throw new Error(`Managed audit result for ${tagIdentity.tag} has an invalid Release state`)
       }
       // Candidate discovery cannot prove the durable smoke descriptor, exact
       // terminal namespace, or cryptographic Release authority. Keep the
@@ -476,6 +494,54 @@ async function releaseStateFromAssets({ release, releaseRecord, assets, tagIdent
     }
   }
   return ReleaseState.CANDIDATE_TAGGED
+}
+
+function assertExactAuditVerifiedDraft({
+  release,
+  releaseRecord,
+  auditResult,
+  auditBytes,
+  tagIdentity,
+}) {
+  if (
+    release.tag_name !== tagIdentity.tag ||
+    release.name !== `Dawn v${tagIdentity.version}` ||
+    release.target_commitish !== "main" ||
+    release.draft !== true ||
+    release.immutable !== false ||
+    release.prerelease !== false ||
+    typeof release.body !== "string"
+  ) {
+    throw new Error(`Managed audit result for ${tagIdentity.tag} requires an exact candidate draft`)
+  }
+  const marker = parseReleaseMarker(release.body)
+  if (release.body !== canonicalReleaseBody({ marker, manifest: null })) {
+    throw new Error(`Managed audit result for ${tagIdentity.tag} requires a canonical Release body`)
+  }
+  const canonicalAuditBytes = canonicalAuditResultBytes(auditResult)
+  const auditSha256 = sha256(canonicalAuditBytes)
+  if (!auditBytes.equals(canonicalAuditBytes)) {
+    throw new Error(`Managed audit result for ${tagIdentity.tag} is not canonical`)
+  }
+  if (
+    marker.phase !== "AUDIT_VERIFIED" ||
+    marker.version !== tagIdentity.version ||
+    marker.commitSha !== tagIdentity.commitSha ||
+    marker.tag !== tagIdentity.tag ||
+    marker.manifestSha256 !== releaseRecord.manifestSha256 ||
+    marker.releaseRecordSha256 !== releaseRecordSha256(releaseRecord) ||
+    marker.audit?.workflowRunId !== auditResult.workflowRunId ||
+    marker.audit?.runAttempt !== auditResult.runAttempt ||
+    marker.audit?.attemptAssetName !==
+      `audit-attempt-${auditResult.workflowRunId}-${auditResult.runAttempt}.json` ||
+    marker.audit?.attemptSha256 !== auditSha256 ||
+    marker.audit?.canonicalSha256 !== auditSha256 ||
+    marker.audit?.conclusion !== "success"
+  ) {
+    throw new Error(
+      `Managed audit result for ${tagIdentity.tag} does not match its AUDIT_VERIFIED draft`,
+    )
+  }
 }
 
 async function inspectAbandonmentRelease({
