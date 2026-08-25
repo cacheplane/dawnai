@@ -1,4 +1,4 @@
-import { expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   expectFinalMessage,
   expectInterrupt,
@@ -12,6 +12,7 @@ import {
   expectToolCalled,
   expectToolSequence,
 } from "../src/matchers.js"
+import { createSafeRegexTester } from "../src/regex-safety.js"
 import type { AgentRunResult } from "../src/run-result.js"
 
 const base: AgentRunResult = {
@@ -267,4 +268,48 @@ it("expectNoToolErrors treats a HITL interrupt as NOT a tool error", () => {
     toolResults: [],
   }
   expectNoToolErrors(run)
+})
+
+describe("private regex safety adapter", () => {
+  it("rejects structurally unsafe expressions with the exact error", () => {
+    const createTester = () => createSafeRegexTester(/^(a+)+$/u)
+
+    expect(createTester).toThrow(TypeError)
+    expect(createTester).toThrow("Regular expression is unsafe for synchronous matching")
+  })
+
+  it.each([
+    { expected: true, input: "12 ITEMS", name: "matching input" },
+    { expected: false, input: "none", name: "non-matching input" },
+  ])("preserves ordinary flags for $name", ({ expected, input }) => {
+    const test = createSafeRegexTester(/\d+ items/iu)
+
+    expect(test(input)).toBe(expected)
+  })
+
+  it("accepts 65,536 UTF-16 code units", () => {
+    const test = createSafeRegexTester(/^a+$/u)
+
+    expect(test("a".repeat(65_536))).toBe(true)
+  })
+
+  it("rejects 65,537 UTF-16 code units with the exact error", () => {
+    const test = createSafeRegexTester(/^a+$/u)
+    const testOversizedInput = () => test("a".repeat(65_537))
+
+    expect(testOversizedInput).toThrow(RangeError)
+    expect(testOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
+  })
+
+  it.each([
+    { expression: /items/gu, name: "global" },
+    { expression: /items/uy, name: "sticky" },
+  ])("keeps $name expressions deterministic without changing caller state", ({ expression }) => {
+    expression.lastIndex = 2
+    const test = createSafeRegexTester(expression)
+
+    expect(test("items")).toBe(true)
+    expect(test("items")).toBe(true)
+    expect(expression.lastIndex).toBe(2)
+  })
 })

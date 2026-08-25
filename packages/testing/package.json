@@ -37,7 +37,8 @@
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.37.4",
-    "@dawn-ai/memory": "workspace:*"
+    "@dawn-ai/memory": "workspace:*",
+    "safe-regex2": "^5.1.1"
   },
   "peerDependencies": {
     "@dawn-ai/cli": "workspace:*",

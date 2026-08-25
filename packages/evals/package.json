@@ -35,6 +35,9 @@
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "safe-regex2": "^5.1.1"
+  },
   "peerDependencies": {
     "@dawn-ai/testing": "workspace:*"
   },
