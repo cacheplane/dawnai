@@ -1030,6 +1030,9 @@ const api = "https://api.github.com/repos/cacheplane/dawnai"
 const artifactUrl = \`\${api}/actions/artifacts/\${fixture.record.actionsArtifact.id}\`
 const attemptUrl = \`\${api}/actions/runs/\${fixture.record.actionsArtifact.prepareRunId}/attempts/\${fixture.record.actionsArtifact.prepareRunAttempt}\`
 const downloadUrl = \`\${artifactUrl}/zip\`
+const tagObjectSha = "b".repeat(40)
+const tagRefUrl = \`\${api}/git/ref/\${encodeURIComponent(\`tags/\${fixture.record.tag}\`)}\`
+const tagObjectUrl = \`\${api}/git/tags/\${tagObjectSha}\`
 
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input)
@@ -1075,11 +1078,23 @@ globalThis.fetch = async (input, init = {}) => {
         id: fixture.release.id,
         name: \`Dawn \${fixture.record.tag}\`,
         tag_name: fixture.record.tag,
-        target_commitish: fixture.record.commitSha,
+        target_commitish: "main",
         draft: true,
         prerelease: false,
       },
     ])
+  }
+  if (url === tagRefUrl) {
+    return json({
+      ref: \`refs/tags/\${fixture.record.tag}\`,
+      object: { type: "tag", sha: tagObjectSha },
+    })
+  }
+  if (url === tagObjectUrl) {
+    return json({
+      tag: fixture.record.tag,
+      object: { type: "commit", sha: fixture.record.commitSha },
+    })
   }
   if (url === \`\${api}/releases/\${fixture.release.id}/assets?per_page=100\`) {
     return json(fixture.release.assets.map(({ id, name, size }) => ({ id, name, size })))

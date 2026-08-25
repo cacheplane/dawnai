@@ -22,6 +22,11 @@ const METADATA_FIELDS = Object.freeze([
   "headSha",
 ])
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+const SHA_PATTERN = /^[0-9a-f]{40}$/u
+const LATER_SMOKE_RECEIPT_PATTERN =
+  /^smoke-result-[a-z][a-z0-9-]{0,63}-[1-9][0-9]*-[1-9][0-9]*\.json$/u
+const LATER_AUDIT_ATTEMPT_PATTERN = /^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u
+const MAX_LATER_RECEIPT_ASSETS = 1_024
 const ZIP_LOCAL_SIGNATURE = 0x04034b50
 const ZIP_CENTRAL_SIGNATURE = 0x02014b50
 const ZIP_END_SIGNATURE = 0x06054b50
@@ -643,13 +648,15 @@ export function createArtifactStoreGitHubRuntime({
         }
         const [release] = matching
         if (
-          release.target_commitish !== record.commitSha ||
+          release.target_commitish !== "main" ||
           release.draft !== true ||
           release.prerelease !== false ||
           !Number.isSafeInteger(release.id)
         ) {
           return { status: "ERROR", httpStatus: 200, code: "RELEASE_IDENTITY_CONFLICT" }
         }
+        const tagProof = await verifyEscrowAnnotatedTag(metadataReader, { tag, record })
+        if (tagProof.status !== "PRESENT") return tagProof
         const assetsResult = await metadataReader.listReleaseAssets({ releaseId: release.id })
         if (assetsResult.status !== "PRESENT" || !Array.isArray(assetsResult.value)) {
           return assetsResult.status === "PRESENT"
@@ -679,7 +686,7 @@ export function createArtifactStoreGitHubRuntime({
         const names = ["manifest.json", ...manifest.packages.map((entry) => entry.filename)]
         const bundleNames = names.map((name) => `${name}.intoto.jsonl`)
         const expectedAssetNames = ["release-record.json", ...names, ...bundleNames]
-        if (!sameSortedSet([...byName.keys()], expectedAssetNames)) {
+        if (!containsExactEscrowAssetSet(byName, expectedAssetNames)) {
           return { status: "ERROR", httpStatus: 200, code: "ESCROW_ASSET_SET_CONFLICT" }
         }
         const files = [{ name: "manifest.json", bytes: manifestBytes }]
@@ -717,6 +724,65 @@ export function createArtifactStoreGitHubRuntime({
         return { status: "PRESENT", draft: true, files, releaseRecordBytes, bundles }
       },
     },
+  }
+}
+
+async function verifyEscrowAnnotatedTag(reader, { tag, record }) {
+  const ref = await reader.getRef({ ref: `tags/${tag}` })
+  if (ref?.status !== "PRESENT") return ref
+  const value = ref.value
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    value.ref !== `refs/tags/${tag}` ||
+    value.object === null ||
+    typeof value.object !== "object" ||
+    value.object.type !== "tag" ||
+    typeof value.object.sha !== "string" ||
+    !SHA_PATTERN.test(value.object.sha)
+  ) {
+    return { status: "ERROR", httpStatus: 200, code: "TAG_IDENTITY_CONFLICT" }
+  }
+  const annotated = await reader.getGitTag({ tagSha: value.object.sha })
+  if (annotated?.status !== "PRESENT") return annotated
+  if (
+    annotated.value === null ||
+    typeof annotated.value !== "object" ||
+    annotated.value.tag !== tag ||
+    annotated.value.object === null ||
+    typeof annotated.value.object !== "object" ||
+    annotated.value.object.type !== "commit" ||
+    annotated.value.object.sha !== record.commitSha
+  ) {
+    return { status: "ERROR", httpStatus: 200, code: "TAG_IDENTITY_CONFLICT" }
+  }
+  return { status: "PRESENT" }
+}
+
+function containsExactEscrowAssetSet(byName, expectedAssetNames) {
+  if (byName.size > expectedAssetNames.length + MAX_LATER_RECEIPT_ASSETS) return false
+  const expected = new Set(expectedAssetNames)
+  if ([...expected].some((name) => !byName.has(name))) return false
+  for (const [name, asset] of byName) {
+    if (expected.has(name)) continue
+    if (!isAllowedLaterReceipt(name, asset.size)) return false
+  }
+  return true
+}
+
+function isAllowedLaterReceipt(name, size) {
+  if (
+    name !== "audit-result.json" &&
+    !LATER_AUDIT_ATTEMPT_PATTERN.test(name) &&
+    !LATER_SMOKE_RECEIPT_PATTERN.test(name)
+  ) {
+    return false
+  }
+  try {
+    assertPayloadByteLength(size, RELEASE_PAYLOAD_LIMITS.auditReceiptBytes, name)
+    return true
+  } catch {
+    return false
   }
 }
 

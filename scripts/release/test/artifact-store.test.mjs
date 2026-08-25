@@ -330,6 +330,160 @@ test("retention fallback refuses a published Release during npm publication", as
   await assert.rejects(loadVerifiedReleaseArtifact(fixture.inputs), /draft.*Release|escrow/iu)
 })
 
+test("production escrow accepts GitHub's main target only after exact annotated-tag peel and partitions later receipts", async () => {
+  const fixture = artifactFixture()
+  const manifestBytes = canonicalManifestBytes(fixture.manifest)
+  const contents = new Map([
+    ["release-record.json", canonicalReleaseRecordBytes(fixture.record)],
+    ["manifest.json", manifestBytes],
+  ])
+  for (const pkg of fixture.manifest.packages) {
+    contents.set(pkg.filename, Buffer.from(`packed:${pkg.name}`))
+  }
+  for (const name of ["manifest.json", ...fixture.manifest.packages.map((pkg) => pkg.filename)]) {
+    contents.set(`${name}.intoto.jsonl`, Buffer.from("one-multi-subject-bundle"))
+  }
+  const laterReceipts = [
+    "smoke-result-metadata-901-2.json",
+    "audit-attempt-902-1.json",
+    "audit-result.json",
+  ]
+  for (const name of laterReceipts) contents.set(name, Buffer.from(`later:${name}`))
+  const assets = [...contents].map(([name, bytes], index) => ({
+    id: index + 1,
+    name,
+    size: bytes.length,
+  }))
+  const byId = new Map(assets.map((asset) => [asset.id, contents.get(asset.name)]))
+  const calls = []
+  const runtime = createArtifactStoreGitHubRuntime({
+    metadataReader: {
+      async listReleases() {
+        return {
+          status: "PRESENT",
+          value: [
+            {
+              id: 44,
+              tag_name: fixture.record.tag,
+              target_commitish: "main",
+              draft: true,
+              prerelease: false,
+            },
+          ],
+        }
+      },
+      async getRef({ ref }) {
+        calls.push(["ref", ref])
+        return {
+          status: "PRESENT",
+          value: { ref: `refs/${ref}`, object: { type: "tag", sha: "b".repeat(40) } },
+        }
+      },
+      async getGitTag({ tagSha }) {
+        calls.push(["tag", tagSha])
+        return {
+          status: "PRESENT",
+          value: {
+            tag: fixture.record.tag,
+            object: { type: "commit", sha: fixture.record.commitSha },
+          },
+        }
+      },
+      async listReleaseAssets({ releaseId }) {
+        assert.equal(releaseId, 44)
+        return { status: "PRESENT", value: assets }
+      },
+    },
+    binaryReader: {
+      async downloadReleaseAsset({ assetId }) {
+        const bytes = byId.get(assetId)
+        assert.ok(bytes)
+        return { status: "PRESENT", contentBase64: bytes.toString("base64") }
+      },
+    },
+  })
+
+  const escrow = await runtime.releaseReader.loadEscrow({
+    tag: fixture.record.tag,
+    record: fixture.record,
+  })
+
+  assert.equal(escrow.status, "PRESENT")
+  assert.equal(escrow.files.length, 22)
+  assert.equal(escrow.bundles.length, 22)
+  assert.deepEqual(calls, [
+    ["ref", `tags/${fixture.record.tag}`],
+    ["tag", "b".repeat(40)],
+  ])
+})
+
+test("production escrow rejects noncanonical targets, lightweight tags, and wrong annotated peels", async () => {
+  const fixture = artifactFixture()
+  for (const variation of [
+    {
+      target: fixture.record.commitSha,
+      refType: "tag",
+      peeledSha: fixture.record.commitSha,
+      code: "RELEASE_IDENTITY_CONFLICT",
+    },
+    {
+      target: "main",
+      refType: "commit",
+      peeledSha: fixture.record.commitSha,
+      code: "TAG_IDENTITY_CONFLICT",
+    },
+    {
+      target: "main",
+      refType: "tag",
+      peeledSha: "c".repeat(40),
+      code: "TAG_IDENTITY_CONFLICT",
+    },
+  ]) {
+    const runtime = createArtifactStoreGitHubRuntime({
+      metadataReader: {
+        async listReleases() {
+          return {
+            status: "PRESENT",
+            value: [
+              {
+                id: 44,
+                tag_name: fixture.record.tag,
+                target_commitish: variation.target,
+                draft: true,
+                prerelease: false,
+              },
+            ],
+          }
+        },
+        async getRef({ ref }) {
+          return {
+            status: "PRESENT",
+            value: {
+              ref: `refs/${ref}`,
+              object: { type: variation.refType, sha: "b".repeat(40) },
+            },
+          }
+        },
+        async getGitTag() {
+          return {
+            status: "PRESENT",
+            value: {
+              tag: fixture.record.tag,
+              object: { type: "commit", sha: variation.peeledSha },
+            },
+          }
+        },
+      },
+      binaryReader: {},
+    })
+
+    assert.deepEqual(
+      await runtime.releaseReader.loadEscrow({ tag: fixture.record.tag, record: fixture.record }),
+      { status: "ERROR", httpStatus: 200, code: variation.code },
+    )
+  }
+})
+
 test("production escrow downloads share one bounded byte budget", async () => {
   const fixture = artifactFixture()
   const runtime = createArtifactStoreGitHubRuntime({
@@ -342,13 +496,14 @@ test("production escrow downloads share one bounded byte budget", async () => {
             {
               id: 1,
               tag_name: fixture.record.tag,
-              target_commitish: SHA,
+              target_commitish: "main",
               draft: true,
               prerelease: false,
             },
           ],
         }
       },
+      ...annotatedTagMetadata(fixture),
       async listReleaseAssets() {
         return {
           status: "PRESENT",
@@ -390,13 +545,14 @@ test("escrow rejects an oversized asset from metadata before downloading it", as
             {
               id: 1,
               tag_name: fixture.record.tag,
-              target_commitish: SHA,
+              target_commitish: "main",
               draft: true,
               prerelease: false,
             },
           ],
         }
       },
+      ...annotatedTagMetadata(fixture),
       async listReleaseAssets() {
         return {
           status: "PRESENT",
@@ -734,6 +890,29 @@ function artifactFixture(overrides = {}) {
           }
         },
       },
+    },
+  }
+}
+
+function annotatedTagMetadata(fixture) {
+  const tagSha = "b".repeat(40)
+  return {
+    async getRef({ ref }) {
+      assert.equal(ref, `tags/${fixture.record.tag}`)
+      return {
+        status: "PRESENT",
+        value: { ref: `refs/${ref}`, object: { type: "tag", sha: tagSha } },
+      }
+    },
+    async getGitTag({ tagSha: requestedSha }) {
+      assert.equal(requestedSha, tagSha)
+      return {
+        status: "PRESENT",
+        value: {
+          tag: fixture.record.tag,
+          object: { type: "commit", sha: fixture.record.commitSha },
+        },
+      }
     },
   }
 }
