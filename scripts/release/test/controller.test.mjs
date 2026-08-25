@@ -1,0 +1,987 @@
+import assert from "node:assert/strict"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import test from "node:test"
+
+import { runReleaseCli } from "../cli.mjs"
+import { runReleaseController } from "../controller.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import { parseReleaseRecord } from "../release-record.mjs"
+import {
+  candidate as markerCandidate,
+  observationForMarker,
+} from "./support/marker-observation.mjs"
+
+const CANDIDATE = Object.freeze({
+  version: "0.8.22",
+  commitSha: "0123456789abcdef0123456789abcdef01234567",
+  ciWorkflow: "CI",
+  ciCheck: "validate",
+  publisherWorkflow: ".github/workflows/release.yml",
+})
+
+const PLAN_CASES = [
+  ["NO_CANDIDATE", "noop", null],
+  ["SUPERSEDED_NOOP", "audit-only", null],
+  ["CANDIDATE_VALIDATED", "would-transition", "create-candidate-tag"],
+  ["CANDIDATE_TAGGED", "would-transition", "prepare-artifacts"],
+  ["ARTIFACTS_PREPARED", "would-transition", "attest-artifacts"],
+  ["ARTIFACTS_ATTESTED", "would-transition", "escrow-candidate"],
+  ["CANDIDATE_ESCROWED", "would-transition", "publish-npm-packages"],
+  ["NPM_PARTIAL", "would-transition", "resume-npm-publish"],
+  ["NPM_COMPLETE", "would-transition", "reconcile-npm-evidence"],
+  ["RELEASE_DRAFT_COMPLETE", "would-transition", "run-release-smokes"],
+  ["SMOKES_COMPLETE", "would-transition", "dispatch-release-audit"],
+  ["AUDIT_DISPATCHED", "would-transition", "complete-release-audit"],
+  ["AUDIT_RETRYABLE", "would-transition", "dispatch-release-audit"],
+  ["AUDIT_VERIFIED", "would-transition", "publish-github-release"],
+  ["AUDIT_COMPLETE", "noop", null],
+  ["ABANDONED_PREPUBLICATION", "noop", null],
+]
+
+for (const [state, disposition, transition] of PLAN_CASES) {
+  test(`controller executes at most one planned transition for ${state}`, async () => {
+    const observations = [
+      { sequence: 1, state },
+      { sequence: 2, state: `${state}_AFTER` },
+    ]
+    const calls = []
+    const reports = []
+    const effects = Object.create(null)
+    if (transition !== null) {
+      effects[transition] = async (input) => {
+        calls.push([transition, input.observation.sequence])
+        return { receipt: transition }
+      }
+    }
+
+    const result = await runReleaseController({
+      candidate: state === "NO_CANDIDATE" ? null : CANDIDATE,
+      dryRun: false,
+      observer: observer(observations),
+      planner: plannerFor({ state, disposition, transition }),
+      effects,
+      reporter: reporter(reports),
+    })
+
+    assert.deepEqual(
+      calls,
+      transition === null ? [] : [[transition, 1]],
+      "a controller run may execute only the selected transition once",
+    )
+    assert.equal(result.before.plan.state, state)
+    assert.equal(result.transition.name, transition)
+    assert.equal(result.transition.status, transition === null ? "not-required" : "completed")
+    assert.equal(result.after === null, transition === null)
+    assert.equal(reports.length, 1)
+    assert.deepEqual(reports[0], result)
+    assertRecursivelyFrozen(result)
+  })
+}
+
+test("controller dry-run reports the plan without resolving or executing write effects", async () => {
+  let selectedReads = 0
+  const effects = Object.create(null)
+  Object.defineProperty(effects, "prepare-artifacts", {
+    enumerable: true,
+    get() {
+      selectedReads += 1
+      assert.fail("dry-run must not resolve a write effect")
+    },
+  })
+  const reports = []
+  const result = await runReleaseController({
+    candidate: CANDIDATE,
+    dryRun: true,
+    observer: observer([{ sequence: 1 }]),
+    planner: plannerFor({
+      state: "CANDIDATE_TAGGED",
+      disposition: "would-transition",
+      transition: "prepare-artifacts",
+    }),
+    effects,
+    reporter: reporter(reports),
+  })
+  assert.equal(selectedReads, 0)
+  assert.equal(result.transition.status, "dry-run")
+  assert.equal(result.after, null)
+  assert.equal(reports.length, 1)
+})
+
+test("blocked plans emit one report and never inspect any mutation effect", async () => {
+  const effects = new Proxy(
+    {},
+    {
+      get() {
+        assert.fail("blocked plans must not inspect write effects")
+      },
+      getOwnPropertyDescriptor() {
+        assert.fail("blocked plans must not inspect write effects")
+      },
+    },
+  )
+  const reports = []
+  const result = await runReleaseController({
+    candidate: CANDIDATE,
+    dryRun: false,
+    observer: observer([{ sequence: 1 }]),
+    planner: plannerFor({ state: "CANDIDATE_TAGGED", disposition: "blocked", transition: null }),
+    effects,
+    reporter: reporter(reports),
+  })
+  assert.equal(result.transition.status, "blocked")
+  assert.equal(reports.length, 1)
+})
+
+test("controller resolves only the selected named effect and never cascades into another transition", async () => {
+  const calls = []
+  const effects = Object.create(null)
+  effects["prepare-artifacts"] = async () => {
+    calls.push("prepare-artifacts")
+    return { suggestedNextTransition: "publish-github-release" }
+  }
+  Object.defineProperty(effects, "publish-github-release", {
+    enumerable: true,
+    get() {
+      assert.fail("one run must never cascade from preparation to publication")
+    },
+  })
+  const result = await runReleaseController({
+    candidate: CANDIDATE,
+    dryRun: false,
+    observer: observer([{ sequence: 1 }, { sequence: 2 }]),
+    planner: plannerFor({
+      state: "CANDIDATE_TAGGED",
+      disposition: "would-transition",
+      transition: "prepare-artifacts",
+    }),
+    effects,
+    reporter: reporter([]),
+  })
+  assert.deepEqual(calls, ["prepare-artifacts"])
+  assert.equal(result.transition.status, "completed")
+})
+
+test("controller passes deeply frozen candidate, observation, and plan snapshots to effects", async () => {
+  const mutableCandidate = structuredClone(CANDIDATE)
+  const mutableObservation = { nested: { value: "before" } }
+  const result = await runReleaseController({
+    candidate: mutableCandidate,
+    dryRun: false,
+    observer: observer([mutableObservation, { nested: { value: "after" } }]),
+    planner: plannerFor({
+      state: "CANDIDATE_TAGGED",
+      disposition: "would-transition",
+      transition: "prepare-artifacts",
+    }),
+    effects: {
+      async "prepare-artifacts"(input) {
+        assertRecursivelyFrozen(input.candidate)
+        assertRecursivelyFrozen(input.observation)
+        assertRecursivelyFrozen(input.plan)
+        assert.throws(() => {
+          input.observation.nested.value = "mutated"
+        }, TypeError)
+        return { accepted: true }
+      },
+    },
+    reporter: reporter([]),
+  })
+  mutableCandidate.version = "9.9.9"
+  mutableObservation.nested.value = "outside mutation"
+  assert.equal(result.candidate.version, CANDIDATE.version)
+  assert.equal(result.before.observation.nested.value, "before")
+})
+
+test("missing or accessor-based selected effects fail closed after emitting a report", async () => {
+  for (const effects of [
+    Object.freeze({}),
+    Object.defineProperty({}, "prepare-artifacts", {
+      enumerable: true,
+      get() {
+        assert.fail("selected effect accessors must not execute")
+      },
+    }),
+  ]) {
+    const reports = []
+    await assert.rejects(
+      runReleaseController({
+        candidate: CANDIDATE,
+        dryRun: false,
+        observer: observer([{ sequence: 1 }]),
+        planner: plannerFor({
+          state: "CANDIDATE_TAGGED",
+          disposition: "would-transition",
+          transition: "prepare-artifacts",
+        }),
+        effects,
+        reporter: reporter(reports),
+      }),
+      (error) => {
+        assert.equal(error.code, "RELEASE_EFFECT_UNAVAILABLE")
+        assert.equal(error.report.transition.status, "configuration-error")
+        return true
+      },
+    )
+    assert.equal(reports.length, 1)
+  }
+})
+
+test("retryable transition failures re-observe, emit a secret-free report, and remain failures", async () => {
+  const reports = []
+  let observations = 0
+  await assert.rejects(
+    runReleaseController({
+      candidate: CANDIDATE,
+      dryRun: false,
+      observer: {
+        async observe() {
+          observations += 1
+          return { sequence: observations }
+        },
+      },
+      planner: plannerFor({
+        state: "AUDIT_DISPATCHED",
+        disposition: "would-transition",
+        transition: "complete-release-audit",
+      }),
+      effects: {
+        async "complete-release-audit"() {
+          throw Object.assign(new Error("token=do-not-report"), {
+            code: "AUDIT_PENDING",
+            retryable: true,
+          })
+        },
+      },
+      reporter: reporter(reports),
+    }),
+    (error) => {
+      assert.equal(error.code, "AUDIT_PENDING")
+      assert.equal(error.report.transition.status, "retryable-error")
+      assert.equal(JSON.stringify(error.report).includes("do-not-report"), false)
+      return true
+    },
+  )
+  assert.equal(observations, 2)
+  assert.equal(reports.length, 1)
+})
+
+test("fatal transition failures also re-observe and emit exactly one classified report", async () => {
+  const reports = []
+  await assert.rejects(
+    runReleaseController({
+      candidate: CANDIDATE,
+      dryRun: false,
+      observer: observer([{ sequence: 1 }, { sequence: 2 }]),
+      planner: plannerFor({
+        state: "AUDIT_VERIFIED",
+        disposition: "would-transition",
+        transition: "publish-github-release",
+      }),
+      effects: {
+        async "publish-github-release"() {
+          throw Object.assign(new Error("immutable publication conflict"), {
+            code: "RELEASE_CONFLICT",
+          })
+        },
+      },
+      reporter: reporter(reports),
+    }),
+    (error) => {
+      assert.equal(error.report.transition.status, "fatal-error")
+      return true
+    },
+  )
+  assert.equal(reports.length, 1)
+})
+
+test("a fatal re-observation error dominates an otherwise retryable transition error", async () => {
+  const reports = []
+  let reads = 0
+  await assert.rejects(
+    runReleaseController({
+      candidate: CANDIDATE,
+      observer: {
+        async observe() {
+          reads += 1
+          if (reads === 1) return { sequence: reads }
+          throw Object.assign(new Error("authorization failed"), { code: "GITHUB_AUTH_FAILED" })
+        },
+      },
+      planner: plannerFor({
+        state: "AUDIT_DISPATCHED",
+        disposition: "would-transition",
+        transition: "complete-release-audit",
+      }),
+      effects: {
+        async "complete-release-audit"() {
+          throw Object.assign(new Error("pending"), { code: "AUDIT_PENDING", retryable: true })
+        },
+      },
+      reporter: reporter(reports),
+    }),
+    (error) => {
+      assert.equal(error.code, "GITHUB_AUTH_FAILED")
+      assert.equal(error.report.transition.status, "fatal-error")
+      assert.equal(error.report.transition.error.reobservationCode, "GITHUB_AUTH_FAILED")
+      return true
+    },
+  )
+  assert.equal(reports.length, 1)
+})
+
+test("the default planner integrates a smoke-complete observation with only audit dispatch", async () => {
+  const calls = []
+  const before = observationForMarker({ phase: "SMOKES_COMPLETE" })
+  const after = observationForMarker({ phase: "AUDIT_DISPATCHED" })
+  const result = await runReleaseController({
+    candidate: markerCandidate(),
+    dryRun: false,
+    observer: observer([before, after]),
+    effects: {
+      async "dispatch-release-audit"() {
+        calls.push("dispatch-release-audit")
+        return { workflowRunId: 500 }
+      },
+    },
+    reporter: reporter([]),
+  })
+  assert.deepEqual(calls, ["dispatch-release-audit"])
+  assert.equal(result.before.plan.nextTransition, "dispatch-release-audit")
+  assert.equal(result.after.plan.state, "AUDIT_DISPATCHED")
+})
+
+test("record-artifact routes exact action outputs into one canonical release record", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-cli-test-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const paths = {
+    candidate: join(directory, "candidate.json"),
+    manifest: join(directory, "manifest.json"),
+    upload: join(directory, "upload.json"),
+    output: join(directory, "release-record.json"),
+  }
+  const manifest = sealedManifest()
+  await writeFile(paths.candidate, `${JSON.stringify(CANDIDATE)}\n`)
+  await writeFile(paths.manifest, canonicalManifestBytes(manifest))
+  await writeFile(
+    paths.upload,
+    `${JSON.stringify({
+      artifactId: "9001",
+      artifactUrl: "https://github.com/cacheplane/dawnai/actions/runs/7001/artifacts/9001",
+      artifactDigest: "a".repeat(64),
+    })}\n`,
+  )
+  const imports = []
+  const result = await runReleaseCli(
+    [
+      "record-artifact",
+      "--candidate",
+      paths.candidate,
+      "--manifest",
+      paths.manifest,
+      "--artifact-upload-result",
+      paths.upload,
+      "--output",
+      paths.output,
+    ],
+    {
+      cwd: directory,
+      importModule: async (specifier) => {
+        imports.push(specifier)
+        return import(specifier)
+      },
+    },
+  )
+  const record = parseReleaseRecord(await readFile(paths.output))
+  assert.deepEqual(result, record)
+  assert.deepEqual(record.actionsArtifact, {
+    id: "9001",
+    name: `release-v${CANDIDATE.version}-${CANDIDATE.commitSha.slice(0, 12)}`,
+    serviceDigest: `sha256:${"a".repeat(64)}`,
+    prepareRunId: "7001",
+    prepareRunAttempt: 2,
+  })
+  assert.deepEqual(
+    imports.map((specifier) => new URL(specifier).pathname.split("/").at(-1)),
+    ["manifest.mjs", "release-record.mjs"],
+  )
+})
+
+test("tag route creates and pushes only the exact candidate annotated tag", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-tag-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidatePath = join(directory, "candidate.json")
+  await writeFile(candidatePath, JSON.stringify(CANDIDATE))
+  const calls = []
+  const imports = []
+  const result = await runReleaseCli(["tag", "--candidate", candidatePath], {
+    cwd: directory,
+    importModule: async (specifier) => {
+      imports.push(specifier)
+      return {
+        createCandidateTagWriter({ root }) {
+          assert.equal(root, directory)
+          return {
+            async createAnnotatedTag(input) {
+              calls.push(["create", input])
+              return { status: "created", tag: input.tag, sha: input.sha }
+            },
+            async pushTag(input) {
+              calls.push(["push", input])
+              return { status: "pushed", tag: input.tag, sha: CANDIDATE.commitSha }
+            },
+          }
+        },
+      }
+    },
+  })
+  assert.deepEqual(calls, [
+    [
+      "create",
+      {
+        tag: `v${CANDIDATE.version}`,
+        sha: CANDIDATE.commitSha,
+        message: `Dawn release v${CANDIDATE.version}`,
+      },
+    ],
+    ["push", { tag: `v${CANDIDATE.version}` }],
+  ])
+  assert.equal(result.tag, `v${CANDIDATE.version}`)
+  assert.deepEqual(
+    imports.map((specifier) => new URL(specifier).pathname.split("/").at(-1)),
+    ["git-write.mjs"],
+  )
+})
+
+test("prepare route supplies every authority receipt and exact tag ref without defaults", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-prepare-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const outputDir = join(tmpdir(), `dawn-release-prepare-output-${process.pid}`)
+  const inputFiles = {
+    candidate: CANDIDATE,
+    inventory: { status: "valid", packages: [] },
+    ci: {
+      status: "success",
+      retryable: false,
+      commitSha: CANDIDATE.commitSha,
+      workflow: "CI",
+      check: "validate",
+      runId: 101,
+      runAttempt: 1,
+    },
+    run: { id: 102, attempt: 2 },
+    authority: { state: "CANDIDATE_TAGGED", releaseRecord: null, npm: [] },
+  }
+  const paths = Object.fromEntries(
+    await Promise.all(
+      Object.entries(inputFiles).map(async ([name, value]) => {
+        const target = join(directory, `${name}.json`)
+        await writeFile(target, JSON.stringify(value))
+        return [name, target]
+      }),
+    ),
+  )
+  let received
+  const result = await runReleaseCli(
+    [
+      "prepare",
+      "--candidate",
+      paths.candidate,
+      "--inventory",
+      paths.inventory,
+      "--root",
+      directory,
+      "--output-dir",
+      outputDir,
+      "--ci-receipt",
+      paths.ci,
+      "--prepare-run",
+      paths.run,
+      "--preparation-authority",
+      paths.authority,
+      "--source-ref",
+      `refs/tags/v${CANDIDATE.version}`,
+    ],
+    {
+      cwd: directory,
+      importModule: async () => ({
+        async prepareReleaseArtifacts(input) {
+          received = input
+          return { artifactName: "exact-artifact", manifestSha256: "a".repeat(64) }
+        },
+      }),
+    },
+  )
+  assert.deepEqual(result, {
+    artifactName: "exact-artifact",
+    manifestSha256: "a".repeat(64),
+  })
+  assert.deepEqual(received.candidate, inputFiles.candidate)
+  assert.deepEqual(received.inventory, inputFiles.inventory)
+  assert.deepEqual(received.ci, inputFiles.ci)
+  assert.deepEqual(received.prepareRun, inputFiles.run)
+  assert.deepEqual(received.preparationAuthority, inputFiles.authority)
+  assert.equal(received.root, directory)
+  assert.equal(received.outputDir, outputDir)
+  assert.equal(received.sourceRef, `refs/tags/v${CANDIDATE.version}`)
+  assert.equal(received.fileSystem, undefined)
+
+  await assert.rejects(
+    runReleaseCli([
+      "prepare",
+      "--candidate",
+      paths.candidate,
+      "--inventory",
+      paths.inventory,
+      "--root",
+      directory,
+      "--output-dir",
+      outputDir,
+      "--ci-receipt",
+      paths.ci,
+      "--prepare-run",
+      paths.run,
+      "--preparation-authority",
+      paths.authority,
+    ]),
+    /usage|argument|source-ref/iu,
+  )
+})
+
+test("record-artifact rejects missing, discoverable-name, and mismatched URL outputs", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-cli-negative-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidatePath = join(directory, "candidate.json")
+  const manifestPath = join(directory, "manifest.json")
+  await writeFile(candidatePath, JSON.stringify(CANDIDATE))
+  await writeFile(manifestPath, canonicalManifestBytes(sealedManifest()))
+
+  for (const [name, upload] of [
+    ["missing-digest", { artifactId: "9001", artifactUrl: artifactUrl(9001) }],
+    [
+      "name-discovery",
+      {
+        artifactId: "9001",
+        artifactUrl: artifactUrl(9001),
+        artifactDigest: "a".repeat(64),
+        name: "release-evidence",
+      },
+    ],
+    [
+      "wrong-url-id",
+      {
+        artifactId: "9001",
+        artifactUrl: artifactUrl(9002),
+        artifactDigest: "a".repeat(64),
+      },
+    ],
+  ]) {
+    const uploadPath = join(directory, `${name}.json`)
+    const outputPath = join(directory, `${name}-record.json`)
+    await writeFile(uploadPath, JSON.stringify(upload))
+    await assert.rejects(
+      runReleaseCli([
+        "record-artifact",
+        "--candidate",
+        candidatePath,
+        "--manifest",
+        manifestPath,
+        "--artifact-upload-result",
+        uploadPath,
+        "--output",
+        outputPath,
+      ]),
+      /artifact|output|url|schema|field/iu,
+    )
+    await assert.rejects(readFile(outputPath), { code: "ENOENT" })
+  }
+})
+
+test("release CLI rejects unknown, duplicate, missing, and unpaired command arguments", async () => {
+  for (const argv of [
+    [],
+    ["unknown"],
+    ["record-artifact", "--candidate"],
+    ["record-artifact", "--candidate", "a", "--candidate", "b"],
+    ["record-artifact", "--candidate", "a", "--unknown", "b"],
+  ]) {
+    await assert.rejects(runReleaseCli(argv), /usage|command|argument|flag/iu)
+  }
+})
+
+test("audit CLI routes keep dispatch, marker recording, correlation, and publication distinct", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-audit-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const paths = {
+    candidate: join(directory, "candidate.json"),
+    dispatch: join(directory, "dispatch.json"),
+    audit: join(directory, "audit.json"),
+    record: join(directory, "record.json"),
+    output: join(directory, "dispatch-output.json"),
+  }
+  const dispatchReceipt = {
+    workflow: ".github/workflows/published-artifact-verify.yml",
+    workflowRunId: 501,
+    runUrl: "https://api.github.com/repos/cacheplane/dawnai/actions/runs/501",
+    htmlUrl: "https://github.com/cacheplane/dawnai/actions/runs/501",
+  }
+  const audit = {
+    schemaVersion: 1,
+    version: CANDIDATE.version,
+    commitSha: CANDIDATE.commitSha,
+    manifestSha256: "a".repeat(64),
+    workflowRunId: 501,
+    runAttempt: 1,
+    startedAt: "2026-08-24T01:00:00Z",
+    finishedAt: "2026-08-24T01:01:00Z",
+    checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
+  }
+  await Promise.all([
+    writeFile(paths.candidate, JSON.stringify(CANDIDATE)),
+    writeFile(paths.dispatch, JSON.stringify(dispatchReceipt)),
+    writeFile(paths.audit, JSON.stringify(audit)),
+    writeFile(paths.record, JSON.stringify({ release: "record" })),
+  ])
+  const calls = []
+  const github = { reader: { capability: "contents-read" }, writer: { capability: "scoped" } }
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    if (name === "terminal-records.mjs") {
+      return { parseAuditResult: (value) => value }
+    }
+    if (name === "metadata.mjs") {
+      return {
+        async publishConsolidatedRelease(input) {
+          calls.push(["publish", input])
+          return { phase: "AUDIT_COMPLETE" }
+        },
+      }
+    }
+    assert.equal(name, "audit.mjs")
+    return {
+      async dispatchIndependentAudit(input) {
+        calls.push(["dispatch", input])
+        return dispatchReceipt
+      },
+      async recordAuditDispatch(input) {
+        calls.push(["record-dispatch", input])
+        return { phase: "AUDIT_DISPATCHED" }
+      },
+      async recordAuditAttempt(input) {
+        calls.push(["record-attempt", input])
+        return { phase: "AUDIT_DISPATCHED" }
+      },
+      async verifyAuditSuccess(input) {
+        calls.push(["verify-success", input])
+        return { phase: "AUDIT_VERIFIED" }
+      },
+    }
+  }
+
+  await runReleaseCli(
+    [
+      "dispatch-audit",
+      "--version",
+      CANDIDATE.version,
+      "--commit-sha",
+      CANDIDATE.commitSha,
+      "--manifest-sha256",
+      "a".repeat(64),
+      "--output",
+      paths.output,
+    ],
+    { cwd: directory, github, importModule },
+  )
+  assert.deepEqual(JSON.parse(await readFile(paths.output, "utf8")), dispatchReceipt)
+  await runReleaseCli(
+    ["record-audit-dispatch", "--candidate", paths.candidate, "--dispatch-result", paths.dispatch],
+    { cwd: directory, github, importModule },
+  )
+  await runReleaseCli(
+    [
+      "correlate-audit",
+      "--candidate",
+      paths.candidate,
+      "--dispatch-result",
+      paths.dispatch,
+      "--audit-result",
+      paths.audit,
+    ],
+    { cwd: directory, github, importModule },
+  )
+  await runReleaseCli(
+    [
+      "publish-release",
+      "--candidate",
+      paths.candidate,
+      "--record",
+      paths.record,
+      "--audit-result",
+      paths.audit,
+    ],
+    { cwd: directory, github, importModule },
+  )
+
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["dispatch", "record-dispatch", "record-attempt", "verify-success", "publish"],
+  )
+  assert.equal(calls[0][1].github, github.writer)
+  assert.equal(calls[1][1].github, github)
+  assert.equal(calls[2][1].github, github)
+  assert.equal(calls[3][1].github, github)
+  assert.equal(calls[4][1].github, github)
+  assert.equal(
+    calls.some(([name], index) => name === "publish" && index < calls.length - 1),
+    false,
+  )
+})
+
+test("npm and smoke reconciliation CLI routes remain separate manifest-bound transitions", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-reconcile-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const smokeDirectory = join(directory, "smokes")
+  await mkdir(smokeDirectory)
+  const files = {
+    candidate: CANDIDATE,
+    record: { version: CANDIDATE.version, commitSha: CANDIDATE.commitSha },
+    manifest: sealedManifest(),
+    npm: { status: "NPM_COMPLETE", complete: true },
+  }
+  const paths = Object.fromEntries(
+    await Promise.all(
+      Object.entries(files).map(async ([name, value]) => {
+        const target = join(directory, `${name}.json`)
+        await writeFile(
+          target,
+          name === "manifest" ? canonicalManifestBytes(value) : JSON.stringify(value),
+        )
+        return [name, target]
+      }),
+    ),
+  )
+  await writeFile(join(smokeDirectory, "z-lane.json"), JSON.stringify({ lane: "z" }))
+  await writeFile(join(smokeDirectory, "a-lane.json"), JSON.stringify({ lane: "a" }))
+  const calls = []
+  const github = { reader: {}, writer: {} }
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    if (name === "manifest.mjs") {
+      return { parseSealedReleaseManifest: (bytes) => JSON.parse(bytes.toString("utf8")) }
+    }
+    assert.equal(name, "metadata.mjs")
+    return {
+      async reconcileNpmEvidence(input) {
+        calls.push(["npm", input])
+        return { phase: "NPM_COMPLETE" }
+      },
+      async reconcileSmokeEvidence(input) {
+        calls.push(["smokes", input])
+        return { phase: "SMOKES_COMPLETE" }
+      },
+    }
+  }
+  await runReleaseCli(
+    [
+      "reconcile-npm",
+      "--candidate",
+      paths.candidate,
+      "--record",
+      paths.record,
+      "--manifest",
+      paths.manifest,
+      "--npm-evidence",
+      paths.npm,
+    ],
+    { cwd: directory, github, importModule },
+  )
+  await runReleaseCli(
+    [
+      "reconcile-smokes",
+      "--candidate",
+      paths.candidate,
+      "--record",
+      paths.record,
+      "--manifest",
+      paths.manifest,
+      "--npm-evidence",
+      paths.npm,
+      "--smoke-results",
+      smokeDirectory,
+    ],
+    { cwd: directory, github, importModule },
+  )
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["npm", "smokes"],
+  )
+  assert.equal(calls[0][1].github, github)
+  assert.equal(calls[1][1].github, github)
+  assert.deepEqual(
+    calls[1][1].smokeResults.map(({ lane }) => lane),
+    ["a", "z"],
+  )
+  assert.equal(calls[0][1].manifest.version, CANDIDATE.version)
+  assert.equal(calls[1][1].manifest.version, CANDIDATE.version)
+})
+
+test("GitHub-mutating routes lazily construct the production boundary from the exact token", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-production-github-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidatePath = join(directory, "candidate.json")
+  const recordPath = join(directory, "record.json")
+  const auditPath = join(directory, "audit.json")
+  await Promise.all([
+    writeFile(candidatePath, JSON.stringify(CANDIDATE)),
+    writeFile(recordPath, JSON.stringify({ record: true })),
+    writeFile(auditPath, JSON.stringify({ audit: true })),
+  ])
+  const calls = []
+  const reader = Object.freeze({ kind: "reader" })
+  const writer = Object.freeze({ kind: "writer" })
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    calls.push(["import", name])
+    if (name === "github.mjs") {
+      return {
+        createGitHubReader(input) {
+          calls.push(["reader", input])
+          return reader
+        },
+      }
+    }
+    if (name === "github-write.mjs") {
+      return {
+        createGitHubWriter(input) {
+          calls.push(["writer", input])
+          return writer
+        },
+        composeGitHubEffects(input) {
+          calls.push(["compose", input])
+          return Object.freeze(input)
+        },
+      }
+    }
+    assert.equal(name, "metadata.mjs")
+    return {
+      async publishConsolidatedRelease(input) {
+        calls.push(["publish", input])
+        return { phase: "AUDIT_COMPLETE" }
+      },
+    }
+  }
+  await runReleaseCli(
+    [
+      "publish-release",
+      "--candidate",
+      candidatePath,
+      "--record",
+      recordPath,
+      "--audit-result",
+      auditPath,
+    ],
+    {
+      cwd: directory,
+      environment: Object.freeze({ GITHUB_TOKEN: "exact-test-token" }),
+      importModule,
+    },
+  )
+  const readerCall = calls.find(([name]) => name === "reader")[1]
+  const writerCall = calls.find(([name]) => name === "writer")[1]
+  assert.deepEqual(readerCall, {
+    owner: "cacheplane",
+    repo: "dawnai",
+    token: "exact-test-token",
+  })
+  assert.deepEqual(writerCall, {
+    owner: "cacheplane",
+    repo: "dawnai",
+    token: "exact-test-token",
+    reader,
+  })
+  assert.deepEqual(
+    calls.filter(([name]) => name === "import").map(([, name]) => name),
+    ["github.mjs", "github-write.mjs", "metadata.mjs"],
+  )
+  assert.equal(calls.at(-1)[0], "publish")
+  assert.deepEqual(calls.at(-1)[1].github, { reader, writer })
+})
+
+function observer(values) {
+  let index = 0
+  return Object.freeze({
+    async observe() {
+      assert.ok(index < values.length, "observer called more than the bounded contract")
+      const value = values[index]
+      index += 1
+      return structuredClone(value)
+    },
+  })
+}
+
+function plannerFor({ state, disposition, transition }) {
+  return Object.freeze({
+    plan({ observation }) {
+      return {
+        state: observation.state ?? state,
+        disposition,
+        nextTransition: transition,
+        reasons: ["fixture"],
+        conflicts: disposition === "blocked" ? ["fixture-conflict"] : [],
+        proposedMutations:
+          transition === null
+            ? []
+            : [{ type: transition, version: CANDIDATE.version, commitSha: CANDIDATE.commitSha }],
+      }
+    },
+  })
+}
+
+function reporter(reports) {
+  return Object.freeze({
+    async write(report) {
+      reports.push(report)
+    },
+  })
+}
+
+function sealedManifest() {
+  return {
+    schemaVersion: 1,
+    version: CANDIDATE.version,
+    commitSha: CANDIDATE.commitSha,
+    ci: { workflow: "CI", runId: 6001, runAttempt: 1 },
+    artifact: {
+      name: `release-v${CANDIDATE.version}-${CANDIDATE.commitSha.slice(0, 12)}`,
+      prepareRunId: 7001,
+      prepareRunAttempt: 2,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name, index) => {
+      const filename = `${name.replace(/^@/u, "").replace("/", "-")}-${CANDIDATE.version}.tgz`
+      const sha512 = (index + 1).toString(16).padStart(128, "0")
+      return {
+        name,
+        version: CANDIDATE.version,
+        filename,
+        size: index + 1,
+        sha256: (index + 1).toString(16).padStart(64, "0"),
+        sha512,
+        npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+        access: "public",
+      }
+    }),
+  }
+}
+
+function artifactUrl(artifactId) {
+  return `https://github.com/cacheplane/dawnai/actions/runs/7001/artifacts/${artifactId}`
+}
+
+function assertRecursivelyFrozen(value) {
+  if (value === null || typeof value !== "object") return
+  assert.equal(Object.isFrozen(value), true)
+  for (const child of Object.values(value)) assertRecursivelyFrozen(child)
+}
