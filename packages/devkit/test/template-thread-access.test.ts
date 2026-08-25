@@ -7,18 +7,27 @@ const templates = ["app-basic", "app-research"] as const
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 
+/**
+ * Where each template's app tree starts. `app-research` is an npm workspace,
+ * so its `src/` — and the authorization files in it — live under `server/`.
+ */
+const appRoot = (name: string): string => (name === "app-research" ? `${name}/server` : name)
+
 /** Every place the same two authorization files are shipped from. */
 const copies = [
   fileURLToPath(new URL("../templates/app-basic/src/", import.meta.url)),
-  fileURLToPath(new URL("../templates/app-research/src/", import.meta.url)),
+  fileURLToPath(new URL("../templates/app-research/server/src/", import.meta.url)),
   `${resolve(repoRoot, "examples/research/server/src")}/`,
 ] as const
 
 const read = (name: string, file: string): string =>
-  readFileSync(fileURLToPath(new URL(`../templates/${name}/${file}`, import.meta.url)), "utf8")
+  readFileSync(
+    fileURLToPath(new URL(`../templates/${appRoot(name)}/${file}`, import.meta.url)),
+    "utf8",
+  )
 
 const exists = (name: string, file: string): boolean =>
-  existsSync(fileURLToPath(new URL(`../templates/${name}/${file}`, import.meta.url)))
+  existsSync(fileURLToPath(new URL(`../templates/${appRoot(name)}/${file}`, import.meta.url)))
 
 /** Line-oriented and deliberately crude: enough to tell code from commentary. */
 const stripComments = (source: string): string =>

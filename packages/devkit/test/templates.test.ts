@@ -219,7 +219,8 @@ describe("template registry", () => {
 
 describe("research template parity with examples/research/server", () => {
   it("keeps the complete research behavior tree in byte-for-byte parity", async () => {
-    expect(await compareParityTrees(exampleRoot, await resolveTemplateDir("research"))).toEqual({
+    const templateServerRoot = join(await resolveTemplateDir("research"), "server")
+    expect(await compareParityTrees(exampleRoot, templateServerRoot)).toEqual({
       contentDriftedPaths: [],
       missingTemplatePaths: [],
       normalizedPathCollisions: [],

@@ -1,11 +1,7 @@
 node_modules/
-dist/
-.dawn/
+.DS_Store
+*.tsbuildinfo
 .vercel/
 .env
 .env.*
 !.env.example
-
-# Runtime workspace outputs (the agent writes these at run time).
-workspace/reports/
-workspace/tool-outputs/
