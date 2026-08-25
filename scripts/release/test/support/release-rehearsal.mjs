@@ -180,7 +180,7 @@ export async function driveRehearsalController({
     }
     if (report.before.plan.disposition !== "would-transition") {
       throw new Error(
-        `Release rehearsal controller stopped before audit completion in ${report.before.plan.state}`,
+        `Release rehearsal controller stopped before audit completion in ${report.before.plan.state} (${report.before.plan.disposition}; conflicts: ${report.before.plan.conflicts.join(",") || "none"}; reasons: ${report.before.plan.reasons.join(",") || "none"})`,
       )
     }
   }
