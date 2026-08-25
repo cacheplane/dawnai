@@ -12,7 +12,12 @@ import { promisify } from "node:util"
 
 import { createNpmReader } from "../adapters/npm.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
-import { canonicalBaseAssetSet, escrowCandidate, parseReleaseMarker } from "../metadata.mjs"
+import {
+  canonicalBaseAssetSet,
+  escrowCandidate,
+  parseReleaseMarker,
+  parseSmokeReleaseAssetName,
+} from "../metadata.mjs"
 import { createReleaseRecord } from "../release-record.mjs"
 import { createFaultHarness, executeReleaseRehearsal } from "./support/fault-harness.mjs"
 import { startFaultProxy } from "./support/fault-proxy.mjs"
@@ -117,6 +122,7 @@ test("fixed-group fault inventory covers every durable external transition in or
     "publish:21",
     "registry-convergence",
     "reconcile-npm",
+    "smoke-result:metadata",
     "smoke-result:published-harness",
     "smoke-result:runtime-targets",
     "smoke-result:scaffold",
@@ -391,7 +397,13 @@ test("real reconciliation, audit retry, publication, and immutable replay surviv
   assert.deepEqual(snapshot.dispatchedRunIds, [501, 502, 503, 504, 505, 506])
   assert.equal(snapshot.release.draft, false)
   assert.equal(snapshot.release.immutable, true)
-  assert.equal(snapshot.assets.length, 48)
+  const baseNames = new Set(base.assets.map(({ name }) => name))
+  assert.equal(snapshot.assets.filter(({ name }) => baseNames.has(name)).length, 45)
+  assert.equal(
+    snapshot.assets.filter(({ name }) => parseSmokeReleaseAssetName(name) !== null).length,
+    5,
+  )
+  assert.equal(snapshot.assets.length, 53)
   assert.deepEqual(
     snapshot.assets
       .map(({ name }) => name)

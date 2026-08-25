@@ -11,13 +11,13 @@ import { canonicalBaseAssetSet } from "../metadata.mjs"
 import { canonicalNpmEvidenceBytes } from "../npm-evidence.mjs"
 import { planRelease } from "../planner.mjs"
 import { canonicalReleaseRecordBytes, createReleaseRecord } from "../release-record.mjs"
-import { canonicalSmokeResultBytes } from "../smoke-result.mjs"
+import { canonicalSmokeResultBytes, REQUIRED_RELEASE_SMOKE_LANES } from "../smoke-result.mjs"
 import {
   MANIFEST_SHA256,
   candidate as markerCandidate,
   observationForMarker,
 } from "./support/marker-observation.mjs"
-import { createOrderedFaultGate } from "./support/release-rehearsal.mjs"
+import { createOrderedFaultGate, driveRehearsalController } from "./support/release-rehearsal.mjs"
 import {
   applyRehearsalAttestationReceipt,
   applyRehearsalSmokeReceipts,
@@ -115,7 +115,7 @@ test("malformed workflow attestation bytes cannot advance prepared evidence", as
 test("canonical correlated smoke receipts let the real planner select reconciliation", () => {
   const candidate = markerCandidate()
   const observation = smokeObservation()
-  const receipts = SMOKE_LANES.map((lane) =>
+  const receipts = REQUIRED_RELEASE_SMOKE_LANES.map((lane) =>
     canonicalSmokeResultBytes(smokeReceipt({ lane, candidate })),
   )
 
@@ -132,7 +132,7 @@ test("workflow smoke evidence cannot replace an incomplete production observatio
   const candidate = markerCandidate()
   const observation = smokeObservation()
   observation.smokes.pop()
-  const receipts = SMOKE_LANES.map((lane) =>
+  const receipts = REQUIRED_RELEASE_SMOKE_LANES.map((lane) =>
     canonicalSmokeResultBytes(smokeReceipt({ lane, candidate })),
   )
 
@@ -145,12 +145,12 @@ test("workflow smoke evidence cannot replace an incomplete production observatio
 test("missing or mismatched workflow smoke receipts cannot advance", () => {
   const candidate = markerCandidate()
   const observation = smokeObservation()
-  const exact = SMOKE_LANES.map((lane) =>
+  const exact = REQUIRED_RELEASE_SMOKE_LANES.map((lane) =>
     canonicalSmokeResultBytes(smokeReceipt({ lane, candidate })),
   )
   const mismatched = [...exact]
   mismatched[0] = canonicalSmokeResultBytes({
-    ...smokeReceipt({ lane: SMOKE_LANES[0], candidate }),
+    ...smokeReceipt({ lane: REQUIRED_RELEASE_SMOKE_LANES[0], candidate }),
     commitSha: "f".repeat(40),
   })
 
@@ -322,6 +322,44 @@ test("a missing controller-selected rehearsal route fails closed", async () => {
     }),
     (error) => error?.code === "RELEASE_EFFECT_UNAVAILABLE",
   )
+})
+
+test("the rehearsal resumes a controller-selected accepted transition and terminates from observation", async () => {
+  const candidate = markerCandidate()
+  const gate = createOrderedFaultGate(["after-release-publication"])
+  let observation = observationForMarker({ phase: "AUDIT_VERIFIED" })
+  const reports = []
+
+  const result = await driveRehearsalController({
+    candidate,
+    observer: {
+      async observe() {
+        return observation
+      },
+    },
+    effects: {
+      async "publish-github-release"() {
+        return gate.around("release-publication", async () => {
+          observation = observationForMarker({
+            phase: "AUDIT_VERIFIED",
+            releaseStatus: "published",
+          })
+          return { immutable: true }
+        })
+      },
+    },
+    reporter: {
+      async write(report) {
+        reports.push(report)
+      },
+    },
+    maximumAttempts: 3,
+  })
+
+  assert.equal(result.state, "AUDIT_COMPLETE")
+  assert.deepEqual(result.recoveredFaults, ["after-release-publication"])
+  assert.equal(result.terminalReport.before.plan.disposition, "noop")
+  assert.equal(reports.length, 2)
 })
 
 test("bounded rehearsal adapters classify the untouched candidate through the real observe CLI", async (t) => {
@@ -594,12 +632,10 @@ test("real registry observations drive partial, complete, and reconciled npm pla
   assert.equal(reconciledPlan.nextTransition, "run-release-smokes")
 })
 
-const SMOKE_LANES = Object.freeze(["published-harness", "runtime-targets", "scaffold", "storage"])
-
 function smokeObservation() {
   const observation = observationForMarker({ phase: "NPM_COMPLETE" })
-  observation.requiredSmokeLanes = [...SMOKE_LANES]
-  observation.smokes = SMOKE_LANES.map((name) => ({
+  observation.requiredSmokeLanes = [...REQUIRED_RELEASE_SMOKE_LANES]
+  observation.smokes = REQUIRED_RELEASE_SMOKE_LANES.map((name) => ({
     name,
     status: "pending",
     version: observation.release.marker.version,

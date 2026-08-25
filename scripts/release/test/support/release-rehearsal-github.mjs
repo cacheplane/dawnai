@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto"
 
-import { parseReleaseMarker, releaseBodySha256 } from "../../metadata.mjs"
+import {
+  parseReleaseMarker,
+  parseSmokeReleaseAssetName,
+  releaseBodySha256,
+} from "../../metadata.mjs"
 import { canonicalReleaseRecordBytes } from "../../release-record.mjs"
+import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "../../smoke-result.mjs"
+import { canonicalAuditResultBytes } from "../../terminal-records.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
@@ -61,6 +67,9 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
     assets: new Map(),
     nextAssetId: 1,
     prepared: null,
+    smoke: null,
+    auditRuns: new Map(),
+    baseAssetNames: [...baseAssetNames],
     publisherStarted: false,
   }
 
@@ -72,6 +81,15 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
         const workflowRunId = state.nextRunId
         state.nextRunId += 1
         state.dispatchedRunIds.push(workflowRunId)
+        state.auditRuns.set(
+          workflowRunId,
+          auditActionsRun({
+            candidate: identity,
+            workflowRunId,
+            manifestSha256: input.inputs.manifestSha256,
+            conclusion: state.retryAudit ? "success" : "failure",
+          }),
+        )
         return Object.freeze({
           workflowRunId,
           runUrl: `https://api.github.com/repos/${REPOSITORY}/actions/runs/${workflowRunId}`,
@@ -134,7 +152,9 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       })
     },
     async listReleases() {
-      return present("releases", state.release === null ? [] : [cloneRelease(state.release)])
+      const read = async () =>
+        present("releases", state.release === null ? [] : [cloneRelease(state.release)])
+      return state.release?.draft === false ? gate.around("immutable-reread", read) : read()
     },
     async getReleaseByTag({ tag }) {
       if (state.release === null || state.release.tag_name !== tag) return absent("release")
@@ -177,22 +197,40 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       return present("actions-artifacts", [structuredClone(state.prepared.payloadMetadata)])
     },
     async listActionsRunArtifacts({ runId }) {
-      if (state.prepared === null || Number(runId) !== 300) {
-        return present("actions-run-artifacts", [])
+      if (state.prepared !== null && Number(runId) === 300) {
+        return present("actions-run-artifacts", [
+          structuredClone(state.prepared.payloadMetadata),
+          structuredClone(state.prepared.handoffMetadata),
+        ])
       }
-      return present("actions-run-artifacts", [
-        structuredClone(state.prepared.payloadMetadata),
-        structuredClone(state.prepared.handoffMetadata),
-      ])
+      if (state.smoke !== null && Number(runId) === state.smoke.workflowRunId) {
+        return present(
+          "actions-run-artifacts",
+          state.smoke.artifacts.map(({ metadata }) => structuredClone(metadata)),
+        )
+      }
+      const audit = state.auditRuns.get(Number(runId))
+      if (audit !== undefined) {
+        return present("actions-run-artifacts", [structuredClone(audit.metadata)])
+      }
+      return present("actions-run-artifacts", [])
     },
     async downloadActionsArtifact({ artifactId }) {
-      if (state.prepared === null) return absent("actions-artifact-download")
-      const bytes = state.prepared.archives.get(String(artifactId))
+      const bytes = actionsArchive(state, artifactId)
       if (bytes === undefined) return absent("actions-artifact-download")
       return binary("actions-artifact-download", bytes)
     },
-    async getActionsRun() {
-      return absent("actions-run")
+    async getActionsArtifact({ artifactId }) {
+      const metadata = actionsArtifactMetadata(state, artifactId)
+      return metadata === undefined
+        ? absent("actions-artifact")
+        : present("actions-artifact", structuredClone(metadata))
+    },
+    async getActionsRun({ runId }) {
+      const audit = state.auditRuns.get(Number(runId))
+      return audit === undefined
+        ? absent("actions-run")
+        : present("actions-run", structuredClone(audit.run))
     },
     async getActionsRunAttempt({ runId, attempt }) {
       if (Number(runId) === 100 && attempt === 1) {
@@ -200,6 +238,13 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       }
       if (state.prepared !== null && Number(runId) === 300 && attempt === 1) {
         return present("actions-run-attempt", prepareRun(identity))
+      }
+      if (
+        state.smoke !== null &&
+        Number(runId) === state.smoke.workflowRunId &&
+        attempt === state.smoke.runAttempt
+      ) {
+        return present("actions-run-attempt", smokeRun(identity, state.smoke))
       }
       return absent("actions-run-attempt")
     },
@@ -321,7 +366,7 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       if (record === undefined) throw new Error("Release rehearsal record asset is missing")
       const files = []
       const bundles = []
-      for (const name of baseAssetNames) {
+      for (const name of state.baseAssetNames) {
         if (name === "release-record.json") continue
         const asset = state.assets.get(name)
         if (asset === undefined) throw new Error("Release rehearsal escrow asset is missing")
@@ -394,6 +439,40 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       }
       state.publisherStarted = true
     },
+    recordBaseAssetNames(names) {
+      if (
+        !Array.isArray(names) ||
+        names.length !== 45 ||
+        names.some((name) => typeof name !== "string" || name.length === 0) ||
+        new Set(names).size !== names.length
+      ) {
+        throw new TypeError("Release rehearsal base asset inventory is invalid")
+      }
+      if (
+        state.baseAssetNames.length > 0 &&
+        JSON.stringify(state.baseAssetNames) !== JSON.stringify(names)
+      ) {
+        throw new Error("Release rehearsal base asset inventory conflicts")
+      }
+      state.baseAssetNames = [...names]
+      baseOrdinal.clear()
+      for (const [index, name] of names.entries()) baseOrdinal.set(name, index + 1)
+    },
+    recordSmokeArtifacts({ receipts, workflowRunId, runAttempt }) {
+      const smoke = smokeActionsArtifacts({
+        candidate: identity,
+        receipts,
+        workflowRunId,
+        runAttempt,
+      })
+      if (state.smoke !== null) {
+        if (JSON.stringify(smoke.summary) !== JSON.stringify(state.smoke.summary)) {
+          throw new Error("Release rehearsal smoke Actions artifacts conflict")
+        }
+        return
+      }
+      state.smoke = smoke
+    },
     snapshot() {
       return deepFreeze({
         dispatchedRunIds: [...state.dispatchedRunIds],
@@ -424,6 +503,8 @@ function markerTransition(previous, next) {
 function assetTransition({ name, content, baseOrdinal }) {
   const ordinal = baseOrdinal.get(name)
   if ([1, 23, 45].includes(ordinal)) return `escrow-asset:${ordinal}`
+  const smoke = parseSmokeReleaseAssetName(name)
+  if (smoke !== null) return `smoke-result:${smoke.lane}`
   if (name === "audit-result.json") return "canonical-audit-success"
   if (/^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(name)) {
     let conclusion
@@ -512,6 +593,64 @@ function prepareRun(candidate) {
   }
 }
 
+function smokeRun(candidate, smoke) {
+  return {
+    id: smoke.workflowRunId,
+    run_attempt: smoke.runAttempt,
+    path: candidate.publisherWorkflow,
+    head_sha: candidate.commitSha,
+    head_branch: `v${candidate.version}`,
+  }
+}
+
+function auditActionsRun({ candidate, workflowRunId, manifestSha256, conclusion }) {
+  const result = {
+    schemaVersion: 1,
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    manifestSha256,
+    workflowRunId,
+    runAttempt: 1,
+    startedAt: "2026-08-25T01:00:00.000Z",
+    finishedAt: "2026-08-25T01:01:00.000Z",
+    checks: [
+      {
+        name: "published-artifacts",
+        conclusion,
+        detail: conclusion === "success" ? "verified" : "injected retryable failure",
+      },
+    ],
+    conclusion,
+  }
+  const bytes = canonicalAuditResultBytes(result)
+  const archive = storedZip([{ name: "audit-result.json", bytes }])
+  const artifactId = 2_000 + workflowRunId
+  return {
+    run: {
+      id: workflowRunId,
+      run_attempt: 1,
+      status: "completed",
+      conclusion,
+      event: "workflow_dispatch",
+      path: AUDIT_WORKFLOW,
+      head_sha: candidate.commitSha,
+      head_branch: `v${candidate.version}`,
+    },
+    metadata: {
+      id: artifactId,
+      name: `audit-result-${workflowRunId}-1`,
+      digest: `sha256:${digest(archive)}`,
+      expired: false,
+      workflow_run: {
+        id: workflowRunId,
+        head_sha: candidate.commitSha,
+        head_branch: `v${candidate.version}`,
+      },
+    },
+    archive,
+  }
+}
+
 function publisherJob({ started }) {
   return {
     id: 201,
@@ -565,6 +704,75 @@ function storedZip(files) {
   end.writeUInt32LE(centralSize, 12)
   end.writeUInt32LE(offset, 16)
   return Buffer.concat([...locals, ...centrals, end])
+}
+
+function smokeActionsArtifacts({ candidate, receipts, workflowRunId, runAttempt }) {
+  if (
+    !Array.isArray(receipts) ||
+    receipts.length !== REQUIRED_RELEASE_SMOKE_LANES.length ||
+    !Number.isSafeInteger(workflowRunId) ||
+    workflowRunId < 1 ||
+    !Number.isSafeInteger(runAttempt) ||
+    runAttempt < 1
+  ) {
+    throw new TypeError("Release rehearsal smoke Actions inputs are invalid")
+  }
+  const artifacts = receipts.map((bytes, index) => {
+    const lane = REQUIRED_RELEASE_SMOKE_LANES[index]
+    const receipt = parseSmokeResult(bytes)
+    if (
+      receipt.lane !== lane ||
+      receipt.version !== candidate.version ||
+      receipt.commitSha !== candidate.commitSha ||
+      receipt.workflowRunId !== workflowRunId ||
+      receipt.runAttempt !== runAttempt ||
+      receipt.conclusion !== "success"
+    ) {
+      throw new Error(`Release rehearsal smoke receipt ${lane} is not exact`)
+    }
+    const archive = storedZip([{ name: `${lane}.json`, bytes: Buffer.from(bytes) }])
+    const id = 1_000 + index
+    return {
+      metadata: {
+        id,
+        name: `smoke-result-${lane}-${workflowRunId}-${runAttempt}`,
+        digest: `sha256:${digest(archive)}`,
+        expired: false,
+        workflow_run: {
+          id: workflowRunId,
+          head_sha: candidate.commitSha,
+          head_branch: `v${candidate.version}`,
+        },
+      },
+      archive,
+    }
+  })
+  return {
+    workflowRunId,
+    runAttempt,
+    artifacts,
+    summary: artifacts.map(({ metadata }) => metadata),
+  }
+}
+
+function actionsArtifactMetadata(state, artifactId) {
+  const id = Number(artifactId)
+  const prepared =
+    state.prepared === null ? [] : [state.prepared.payloadMetadata, state.prepared.handoffMetadata]
+  const smoke = state.smoke === null ? [] : state.smoke.artifacts.map(({ metadata }) => metadata)
+  const audit = [...state.auditRuns.values()].map(({ metadata }) => metadata)
+  return [...prepared, ...smoke, ...audit].find((metadata) => metadata.id === id)
+}
+
+function actionsArchive(state, artifactId) {
+  const prepared = state.prepared?.archives.get(String(artifactId))
+  if (prepared !== undefined) return prepared
+  const smoke = state.smoke?.artifacts.find(
+    ({ metadata }) => metadata.id === Number(artifactId),
+  )?.archive
+  if (smoke !== undefined) return smoke
+  return [...state.auditRuns.values()].find(({ metadata }) => metadata.id === Number(artifactId))
+    ?.archive
 }
 
 function digest(bytes) {

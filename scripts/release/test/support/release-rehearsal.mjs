@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { createCandidateTagWriter } from "../../adapters/git-write.mjs"
+import { createGitReader } from "../../adapters/git.mjs"
 import { createNpmReader } from "../../adapters/npm.mjs"
 import { loadVerifiedReleaseArtifact } from "../../artifact-store.mjs"
 import {
@@ -14,6 +14,7 @@ import {
   recordAuditDispatch,
   verifyAuditSuccess,
 } from "../../audit.mjs"
+import { runReleaseCli } from "../../cli.mjs"
 import { readReleaseInventory } from "../../inventory.mjs"
 import {
   canonicalManifestBytes,
@@ -22,19 +23,29 @@ import {
 } from "../../manifest.mjs"
 import {
   canonicalBaseAssetSet,
-  escrowCandidate,
   parseReleaseMarker,
+  parseSmokeReleaseAssetName,
   publishConsolidatedRelease,
   reconcileNpmEvidence,
   reconcileSmokeEvidence,
 } from "../../metadata.mjs"
-import { prepareReleaseArtifacts } from "../../prepare.mjs"
+import { canonicalNpmEvidenceBytes } from "../../npm-evidence.mjs"
 import { createReleasePreparationRunner } from "../../process-runner.mjs"
 import { publishManifestSerially } from "../../publisher.mjs"
-import { createReleaseRecord } from "../../release-record.mjs"
-import { createRehearsalGitHub } from "./release-rehearsal-github.mjs"
+import {
+  canonicalSmokeResultBytes,
+  REQUIRED_RELEASE_SMOKE_LANES,
+  writeCanonicalSmokeResult,
+} from "../../smoke-result.mjs"
+import {
+  createRehearsalCliObserver,
+  runRehearsalControllerStep,
+} from "./release-rehearsal-controller.mjs"
+import {
+  createRehearsalArtifactUploadResult,
+  createRehearsalGitHub,
+} from "./release-rehearsal-github.mjs"
 
-const SMOKE_LANES = Object.freeze(["published-harness", "runtime-targets", "scaffold", "storage"])
 const execFileAsync = promisify(execFile)
 const THREE_PACKAGE_FIXTURE = fileURLToPath(new URL("../fixtures/fault-workspace", import.meta.url))
 
@@ -51,7 +62,7 @@ const FIXED_GROUP_TRANSITIONS = Object.freeze([
   "publish:21",
   "registry-convergence",
   "reconcile-npm",
-  ...SMOKE_LANES.map((lane) => `smoke-result:${lane}`),
+  ...REQUIRED_RELEASE_SMOKE_LANES.map((lane) => `smoke-result:${lane}`),
   "reconcile-smokes",
   "audit-dispatch",
   "audit-dispatch-receipt",
@@ -132,6 +143,48 @@ export function createOrderedFaultGate(points) {
     },
   })
   return gate
+}
+
+export async function driveRehearsalController({
+  candidate,
+  observer,
+  effects,
+  reporter,
+  maximumAttempts,
+}) {
+  if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 10_000) {
+    throw new TypeError("Release rehearsal controller attempt bound is invalid")
+  }
+  const recoveredFaults = []
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    let report
+    try {
+      report = await runRehearsalControllerStep({ candidate, observer, effects, reporter })
+    } catch (error) {
+      const crash = rehearsalCrashCause(error)
+      if (crash === null) throw error
+      recoveredFaults.push(crash.point)
+      continue
+    }
+    if (
+      report.before.plan.state === "AUDIT_COMPLETE" &&
+      report.before.plan.disposition === "noop" &&
+      report.transition.name === null &&
+      report.transition.status === "not-required"
+    ) {
+      return Object.freeze({
+        state: "AUDIT_COMPLETE",
+        recoveredFaults: Object.freeze([...recoveredFaults]),
+        terminalReport: report,
+      })
+    }
+    if (report.before.plan.disposition !== "would-transition") {
+      throw new Error(
+        `Release rehearsal controller stopped before audit completion in ${report.before.plan.state}`,
+      )
+    }
+  }
+  throw new Error("Release rehearsal controller exceeded its bounded transition attempts")
 }
 
 export function createRehearsalDurableState() {
@@ -221,22 +274,26 @@ export async function resumeFixedGroupEvidence({
   }
 
   if (marker.phase === "NPM_COMPLETE") {
-    for (const lane of SMOKE_LANES) {
+    for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
       if (state.smokeResults.has(lane)) continue
-      await gate.around(`smoke-result:${lane}`, async () => {
-        state.smokeResults.set(
-          lane,
+      state.smokeResults.set(
+        lane,
+        canonicalSmokeResultBytes(
           smokeResult({ lane, candidate, manifestSha256: record.manifestSha256 }),
-        )
-      })
+        ),
+      )
     }
+    remote.recordSmokeArtifacts({
+      receipts: REQUIRED_RELEASE_SMOKE_LANES.map((lane) => state.smokeResults.get(lane)),
+      workflowRunId: 400,
+      runAttempt: 1,
+    })
     await reconcileSmokeEvidence({
       candidate,
       record,
       manifest,
       npmEvidence,
-      smokeResults: SMOKE_LANES.map((lane) => state.smokeResults.get(lane)),
-      requiredLanes: SMOKE_LANES,
+      smokeResults: REQUIRED_RELEASE_SMOKE_LANES.map((lane) => state.smokeResults.get(lane)),
       workflowRunId: 400,
       runAttempt: 1,
       github: remote.releaseGitHub,
@@ -413,8 +470,10 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
   const gate = createOrderedFaultGate(faultPoints)
   const runtime = await realpath(await mkdtemp(join(tmpdir(), "dawn-fixed-group-rehearsal-")))
   const artifactDir = join(runtime, "artifact")
+  const controllerDir = join(runtime, "controller")
   let registryHarness = null
   try {
+    await mkdir(controllerDir)
     const candidateRepository = await createCandidateRepositoryFixture({
       sourceRoot: canonicalRoot,
       runtime,
@@ -437,218 +496,731 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       ciCheck: "validate",
       publisherWorkflow: ".github/workflows/release.yml",
     })
-    const tagWriter = createCandidateTagWriter({
-      root: candidateRepository.workingDirectory,
-      run: (command, args, commandOptions) =>
-        isolatedGitCommand(command, args, commandOptions, candidateRepository.environment),
-    })
     const preparationRun = createExactCandidateCommandRunner({
       root: candidateRepository.workingDirectory,
       run: createReleasePreparationRunner(),
     })
-
+    const paths = await writeCanonicalRehearsalInputs({
+      directory: controllerDir,
+      artifactDir,
+      candidate,
+      inventory,
+    })
+    const git = createGitReader({ root: candidateRepository.workingDirectory })
+    const productionInventory = createRehearsalProductionInventory({
+      candidate,
+      inventory,
+      parentSha: await git.firstParent(candidate.commitSha),
+    })
+    let npmReader = absentRehearsalNpmReader()
+    const npm = deferredNpmReader(() => npmReader)
+    const remote = createRehearsalGitHub({
+      candidate,
+      gate,
+      async tagResolver() {
+        return (await exactCandidateTagExists(
+          candidateRepository.workingDirectory,
+          candidate,
+          candidateRepository.environment,
+        ))
+          ? candidate.commitSha
+          : null
+      },
+    })
     let prepared = null
     let attestation = null
     let record = null
-    let remote = null
-    let npmReader = null
-    let publicationState = null
+    let base = null
     let npmEvidence = null
+    let registryConverged = false
+    let smokeReceipts = null
     let fallback = null
-    const durable = createRehearsalDurableState()
     const acceptedPackages = new Set()
-    let final = null
-    const maximumAttempts = faultPoints.length + 20
-    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-      try {
-        if (
-          !(await exactCandidateTagExists(
-            candidateRepository.workingDirectory,
-            candidate,
-            candidateRepository.environment,
-          ))
-        ) {
-          await gate.around("tag", async () => {
-            await tagWriter.createAnnotatedTag({
-              tag: `v${candidate.version}`,
-              sha: candidate.commitSha,
-              message: `release rehearsal v${candidate.version}`,
-            })
-            await tagWriter.pushTag({ tag: `v${candidate.version}` })
-          })
-        }
+    let initialDispatch = null
+    let retryDispatch = null
+    let dispatchSequence = 0
+    let auditSequence = 0
+    const controllerReports = []
 
-        prepared ??= await loadPreparedArtifactIfPresent({ artifactDir, candidate })
-        if (prepared === null) {
-          await gate.around("prepare", async () => {
-            await preparationRun(
-              "pnpm",
-              ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
-              { cwd: candidateRepository.workingDirectory },
-            )
-            await prepareReleaseArtifacts({
-              candidate,
-              inventory,
-              root: candidateRepository.workingDirectory,
-              outputDir: artifactDir,
-              ci: {
-                status: "success",
-                retryable: false,
-                commitSha: candidate.commitSha,
-                workflow: "CI",
-                check: "validate",
-                runId: 100,
-                runAttempt: 1,
-              },
-              prepareRun: { id: 200, attempt: 1 },
-              preparationAuthority: {
-                state: "CANDIDATE_TAGGED",
-                releaseRecord: "absent",
-                npm: "absent",
-              },
-              sourceRef: `refs/tags/v${candidate.version}`,
-              run: preparationRun,
-            })
-            prepared = await loadPreparedArtifact({ artifactDir, candidate })
-          })
-        }
+    async function ensureRegistry() {
+      if (registryHarness !== null) return
+      registryHarness = await createFaultHarness({
+        fixtureDirectory: THREE_PACKAGE_FIXTURE,
+        publishRoots: [artifactDir],
+      })
+      npmReader = createProductionRehearsalNpmReader(registryHarness)
+    }
 
-        record ??= createRehearsalReleaseRecord({ candidate, prepared })
-        if (attestation === null) {
-          await gate.around("attest", async () => {
-            attestation = createRehearsalAttestation({ candidate, prepared })
-          })
-        }
-        const base = canonicalBaseAssetSet({
-          record,
-          artifact: prepared.artifact,
-          attestationSet: attestation.set,
-          bundles: attestation.bundles,
+    async function observeAndPublishManifest() {
+      await ensureRegistry()
+      remote.recordPublisherStarted()
+      return publishManifestSerially({
+        candidate,
+        manifest: prepared.manifest,
+        observeRegistry: ({ name, version: exactVersion }) =>
+          exactVersion === undefined
+            ? npmReader.observePackageMetadata({ name })
+            : npmReader.observePackageVersion({ name, version: exactVersion }),
+        downloadRegistryTarball: (request) => npmReader.downloadRegistryTarball(request),
+        verifyPackage: ({ entry }) => verifiedNpmAudit({ candidate, entry }),
+        publishTarball: async ({ entry }) => {
+          const ordinal = prepared.manifest.packageOrder.indexOf(entry.name) + 1
+          const publish = async () => {
+            if (acceptedPackages.has(entry.name)) {
+              throw new Error(`Fixed-group rehearsal attempted to republish ${entry.name}`)
+            }
+            await registryHarness.publishPreparedTarball({
+              tarballPath: join(artifactDir, entry.filename),
+            })
+            acceptedPackages.add(entry.name)
+          }
+          if ([1, 11, 21].includes(ordinal)) await gate.around(`publish:${ordinal}`, publish)
+          else await publish()
+        },
+        async poll() {},
+        log() {},
+      })
+    }
+
+    async function ensureNpmEvidence() {
+      npmEvidence = await observeAndPublishManifest()
+      if (!registryConverged) {
+        await gate.around("registry-convergence", async () => {
+          await verifyRegistryBytes({ manifest: prepared.manifest, npmReader })
+          registryConverged = true
         })
-        remote ??= createRehearsalGitHub({
+      }
+      await writeCanonicalOrEqual(
+        paths.npmEvidence,
+        canonicalNpmEvidenceBytes(npmEvidence, {
           candidate,
-          gate,
-          baseAssetNames: base.assets.map(({ name }) => name),
-        })
-        if (registryHarness === null) {
-          registryHarness = await createFaultHarness({
-            fixtureDirectory: THREE_PACKAGE_FIXTURE,
-            publishRoots: [artifactDir],
-          })
-          npmReader = createRehearsalNpmReader(registryHarness)
-          publicationState = await captureAbsentPublicationState({
-            candidate,
-            manifest: prepared.manifest,
-            npmReader,
-          })
-        }
+          manifest: prepared.manifest,
+          manifestSha256: record.manifestSha256,
+        }),
+      )
+      return npmEvidence
+    }
 
-        const release = remote.snapshot().release
-        if (release === null || parseReleaseMarker(release.body).phase === "ESCROWING") {
-          await escrowCandidate({
+    async function dispatchAudit(retry) {
+      let durable = retry ? retryDispatch : initialDispatch
+      if (durable === null) {
+        dispatchSequence += 1
+        const temporary = join(controllerDir, `dispatch-response-${dispatchSequence}.json`)
+        const receipt = await runReleaseCli(
+          [
+            "dispatch-audit",
+            "--version",
+            candidate.version,
+            "--commit-sha",
+            candidate.commitSha,
+            "--manifest-sha256",
+            record.manifestSha256,
+            "--output",
+            temporary,
+          ],
+          {
+            cwd: controllerDir,
+            github: { reader: remote.releaseGitHub.reader, writer: remote.actionsWriter },
+          },
+        )
+        const durablePath = retry ? paths.retryDispatch : paths.initialDispatch
+        const transition = retry ? "retry-audit-dispatch-receipt" : "audit-dispatch-receipt"
+        await gate.around(transition, async () => {
+          await writeCanonicalOrEqual(
+            durablePath,
+            Buffer.from(`${JSON.stringify(receipt)}\n`, "utf8"),
+          )
+          durable = Object.freeze({ receipt, path: durablePath })
+          if (retry) retryDispatch = durable
+          else initialDispatch = durable
+        })
+      }
+      await runReleaseCli(
+        [
+          "record-audit-dispatch",
+          "--candidate",
+          paths.candidate,
+          "--dispatch-result",
+          durable.path,
+        ],
+        { cwd: controllerDir, github: remote.releaseGitHub },
+      )
+      return durable.receipt
+    }
+
+    const effects = Object.freeze({
+      async "create-candidate-tag"() {
+        return gate.around("tag", () =>
+          runReleaseCli(["tag", "--candidate", paths.candidate], {
+            cwd: candidateRepository.workingDirectory,
+          }),
+        )
+      },
+      async "prepare-artifacts"() {
+        return gate.around("prepare", async () => {
+          await preparationRun(
+            "pnpm",
+            ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
+            { cwd: candidateRepository.workingDirectory },
+          )
+          await runReleaseCli(
+            [
+              "prepare",
+              "--candidate",
+              paths.candidate,
+              "--inventory",
+              paths.inventory,
+              "--root",
+              candidateRepository.workingDirectory,
+              "--output-dir",
+              artifactDir,
+              "--ci-receipt",
+              paths.ci,
+              "--prepare-run",
+              paths.prepareRun,
+              "--preparation-authority",
+              paths.preparationAuthority,
+              "--source-ref",
+              `refs/tags/v${candidate.version}`,
+            ],
+            { cwd: candidateRepository.workingDirectory },
+          )
+          await assertCleanRehearsalCheckout(
+            candidateRepository.workingDirectory,
+            candidateRepository.environment,
+            "candidate",
+          )
+          prepared = await loadPreparedArtifact({ artifactDir, candidate })
+          const upload = createRehearsalArtifactUploadResult({
             candidate,
+            artifact: prepared.artifact,
+          })
+          await writeCanonicalOrEqual(
+            paths.artifactUpload,
+            Buffer.from(`${JSON.stringify(upload)}\n`, "utf8"),
+          )
+          record = await runReleaseCli(
+            [
+              "record-artifact",
+              "--candidate",
+              paths.candidate,
+              "--manifest",
+              join(artifactDir, "manifest.json"),
+              "--artifact-upload-result",
+              paths.artifactUpload,
+              "--output",
+              paths.record,
+            ],
+            { cwd: controllerDir },
+          )
+          remote.recordPreparedArtifact({ record, artifact: prepared.artifact })
+          return { packageCount: prepared.manifest.packages.length }
+        })
+      },
+      async "attest-artifacts"() {
+        return gate.around("attest", async () => {
+          await runReleaseCli(
+            [
+              "attestation-input",
+              "--record",
+              paths.record,
+              "--artifact-dir",
+              artifactDir,
+              "--output",
+              paths.attestationInput,
+            ],
+            { cwd: controllerDir },
+          )
+          attestation = createRehearsalAttestation({ candidate, prepared })
+          await writeCanonicalOrEqual(paths.attestationBundle, attestation.bundleBytes)
+          base = canonicalBaseAssetSet({
             record,
             artifact: prepared.artifact,
             attestationSet: attestation.set,
             bundles: attestation.bundles,
-            publicationState,
-            attestations: verifiedAttestations,
-            github: remote.releaseGitHub,
           })
-        }
-        if (fallback === null) {
-          fallback = await verifyExpiredActionsEscrowFallback({ record, remote })
-        }
-
-        const marker = parseReleaseMarker(remote.snapshot().release.body)
-        if (marker.phase === "ESCROWED" && npmEvidence === null) {
-          const observedEvidence = await publishManifestSerially({
-            candidate,
-            manifest: prepared.manifest,
-            observeRegistry: ({ name, version: exactVersion }) =>
-              exactVersion === undefined
-                ? npmReader.observePackageMetadata({ name })
-                : npmReader.observePackageVersion({ name, version: exactVersion }),
-            downloadRegistryTarball: (request) => npmReader.downloadRegistryTarball(request),
-            verifyPackage: ({ entry }) => verifiedNpmAudit({ candidate, entry }),
-            publishTarball: async ({ entry }) => {
-              const ordinal = prepared.manifest.packageOrder.indexOf(entry.name) + 1
-              const publish = async () => {
-                if (acceptedPackages.has(entry.name)) {
-                  throw new Error(`Fixed-group rehearsal attempted to republish ${entry.name}`)
-                }
-                await registryHarness.publishPreparedTarball({
-                  tarballPath: join(artifactDir, entry.filename),
-                })
-                acceptedPackages.add(entry.name)
-              }
-              if ([1, 11, 21].includes(ordinal)) {
-                await gate.around(`publish:${ordinal}`, publish)
-              } else {
-                await publish()
-              }
-            },
-            async poll() {},
-            log() {},
-          })
-          await gate.around("registry-convergence", async () => {
-            await verifyRegistryBytes({ manifest: prepared.manifest, npmReader })
-          })
-          npmEvidence = observedEvidence
-        }
-
-        final = await resumeFixedGroupEvidence({
-          candidate,
-          record,
-          manifest: prepared.manifest,
-          npmEvidence,
-          gate,
-          remote,
-          durable,
+          remote.recordBaseAssetNames(base.assets.map(({ name }) => name))
+          return { subjectCount: attestation.set.subjects.length }
         })
-        if (final.status === "AUDIT_COMPLETE" && gate.snapshot().remaining.length === 0) break
-      } catch (error) {
-        if (!(error instanceof RehearsalCrashError)) throw error
-      }
-    }
-    if (final?.status !== "AUDIT_COMPLETE" || gate.snapshot().remaining.length !== 0) {
+      },
+      async "escrow-candidate"() {
+        await ensureRegistry()
+        const result = await runReleaseCli(
+          [
+            "escrow",
+            "--candidate",
+            paths.candidate,
+            "--record",
+            paths.record,
+            "--artifact-dir",
+            artifactDir,
+            "--attestation-bundle",
+            paths.attestationBundle,
+          ],
+          {
+            cwd: controllerDir,
+            github: remote.releaseGitHub,
+            npm,
+            attestations: verifiedAttestations,
+            environment: releaseRehearsalEnvironment(candidate),
+            now: () => Date.parse("2026-08-25T00:05:00.000Z"),
+          },
+        )
+        fallback ??= await verifyExpiredActionsEscrowFallback({ record, remote })
+        return result
+      },
+      async "publish-npm-packages"() {
+        return ensureNpmEvidence()
+      },
+      async "resume-npm-publish"() {
+        return ensureNpmEvidence()
+      },
+      async "reconcile-npm-evidence"() {
+        await ensureNpmEvidence()
+        return runReleaseCli(
+          [
+            "reconcile-npm",
+            "--candidate",
+            paths.candidate,
+            "--record",
+            paths.record,
+            "--manifest",
+            join(artifactDir, "manifest.json"),
+            "--npm-evidence",
+            paths.npmEvidence,
+          ],
+          { cwd: controllerDir, github: remote.releaseGitHub },
+        )
+      },
+      async "run-release-smokes"() {
+        if (smokeReceipts === null) {
+          await mkdir(paths.smokeResults)
+          smokeReceipts = []
+          for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
+            const value = smokeResult({
+              lane,
+              candidate,
+              manifestSha256: record.manifestSha256,
+            })
+            const target = join(paths.smokeResults, `${lane}.json`)
+            await writeCanonicalSmokeResult(target, value)
+            smokeReceipts.push(await readFile(target))
+          }
+          smokeReceipts = Object.freeze(smokeReceipts)
+          remote.recordSmokeArtifacts({
+            receipts: smokeReceipts,
+            workflowRunId: 400,
+            runAttempt: 1,
+          })
+        }
+        return { lanes: [...REQUIRED_RELEASE_SMOKE_LANES] }
+      },
+      async "reconcile-smoke-evidence"() {
+        return runReleaseCli(
+          [
+            "reconcile-smokes",
+            "--candidate",
+            paths.candidate,
+            "--record",
+            paths.record,
+            "--manifest",
+            join(artifactDir, "manifest.json"),
+            "--npm-evidence",
+            paths.npmEvidence,
+            "--smoke-results",
+            paths.smokeResults,
+          ],
+          {
+            cwd: controllerDir,
+            github: remote.releaseGitHub,
+            environment: { GITHUB_RUN_ID: "400", GITHUB_RUN_ATTEMPT: "1" },
+          },
+        )
+      },
+      async "dispatch-release-audit"({ observation }) {
+        return dispatchAudit(observation.release.marker.phase === "AUDIT_RETRYABLE")
+      },
+      async "complete-release-audit"({ observation }) {
+        const workflowRunId = observation.release.marker.audit.workflowRunId
+        const dispatch = [initialDispatch, retryDispatch].find(
+          (entry) => entry?.receipt.workflowRunId === workflowRunId,
+        )
+        if (dispatch === undefined) {
+          throw new Error("Release rehearsal lost the direct audit dispatch receipt")
+        }
+        auditSequence += 1
+        const auditPath = join(controllerDir, `audit-result-${workflowRunId}-${auditSequence}.json`)
+        const result = await runReleaseCli(
+          [
+            "wait-audit",
+            "--candidate",
+            paths.candidate,
+            "--dispatch-result",
+            dispatch.path,
+            "--output",
+            auditPath,
+          ],
+          {
+            cwd: controllerDir,
+            github: { reader: remote.releaseGitHub.reader, writer: remote.actionsWriter },
+            wait: async () => {},
+            now: monotonicRehearsalClock(),
+          },
+        )
+        await runReleaseCli(
+          [
+            "correlate-audit",
+            "--candidate",
+            paths.candidate,
+            "--dispatch-result",
+            dispatch.path,
+            "--audit-result",
+            auditPath,
+          ],
+          { cwd: controllerDir, github: remote.releaseGitHub },
+        )
+        return { workflowRunId, conclusion: result.conclusion }
+      },
+      async "publish-github-release"() {
+        const auditPath = await downloadCanonicalAuditResult({
+          directory: controllerDir,
+          remote,
+          sequence: auditSequence + 1,
+        })
+        return runReleaseCli(
+          [
+            "publish-release",
+            "--candidate",
+            paths.candidate,
+            "--record",
+            paths.record,
+            "--audit-result",
+            auditPath,
+          ],
+          { cwd: controllerDir, github: remote.releaseGitHub },
+        )
+      },
+    })
+    const observer = createRehearsalCliObserver({
+      candidate,
+      directory: controllerDir,
+      dependencies: {
+        cwd: candidateRepository.workingDirectory,
+        git,
+        inventory: productionInventory,
+        githubReader: remote.releaseGitHub.reader,
+        npm,
+        npmAuditFactory: rehearsalNpmAuditFactory(candidate),
+        attestations: verifiedAttestations,
+      },
+      receipts: {
+        async readAttestation() {
+          return attestation === null
+            ? null
+            : { record, artifact: prepared.artifact, bundleBytes: attestation.bundleBytes }
+        },
+        async readSmokes() {
+          return smokeReceipts
+        },
+      },
+    })
+    const reporter = Object.freeze({
+      async write(report) {
+        controllerReports.push(report)
+      },
+    })
+    const final = await driveRehearsalController({
+      candidate,
+      observer,
+      effects,
+      reporter,
+      maximumAttempts: faultPoints.length + 64,
+    })
+    if (gate.snapshot().remaining.length !== 0) {
       throw new Error("Fixed-group release rehearsal did not consume every requested fault")
     }
-    const replay = await resumeFixedGroupEvidence({
-      candidate,
-      record,
-      manifest: prepared.manifest,
-      npmEvidence,
-      gate,
-      remote,
-      durable,
-    })
-    if (replay.mutations !== 0) throw new Error("Fixed-group release replay was not a no-op")
+    const beforeReplay = JSON.stringify(remote.snapshot())
+    const replay = await runRehearsalControllerStep({ candidate, observer, effects, reporter })
+    if (
+      replay.before.plan.state !== "AUDIT_COMPLETE" ||
+      replay.before.plan.disposition !== "noop" ||
+      replay.transition.status !== "not-required" ||
+      JSON.stringify(remote.snapshot()) !== beforeReplay
+    ) {
+      throw new Error("Fixed-group release replay was not a production-controller no-op")
+    }
     const observed = remote.snapshot()
-    if (acceptedPackages.size !== 21 || observed.assets.length !== 48) {
+    if (
+      observed.release === null ||
+      observed.release.draft !== false ||
+      observed.release.immutable !== true ||
+      fallback?.source !== "escrow"
+    ) {
+      throw new Error("Fixed-group release rehearsal did not reach immutable publication")
+    }
+    const baseNames = new Set(base.assets.map(({ name }) => name))
+    const baseAssetCount = observed.assets.filter(({ name }) => baseNames.has(name)).length
+    const smokeAssetCount = observed.assets.filter(
+      ({ name }) => parseSmokeReleaseAssetName(name) !== null,
+    ).length
+    const auditAssetCount = observed.assets.length - baseAssetCount - smokeAssetCount
+    if (
+      acceptedPackages.size !== 21 ||
+      baseAssetCount !== 45 ||
+      smokeAssetCount !== REQUIRED_RELEASE_SMOKE_LANES.length ||
+      auditAssetCount !== 3 ||
+      observed.assets.length !== 53
+    ) {
       throw new Error("Fixed-group release rehearsal terminal inventory is incomplete")
+    }
+    const controllerRoutes = controllerReports
+      .map(({ transition }) => transition.name)
+      .filter((name, index, names) => name !== null && names.indexOf(name) === index)
+    const requiredControllerRoutes = [
+      "create-candidate-tag",
+      "prepare-artifacts",
+      "attest-artifacts",
+      "escrow-candidate",
+      "publish-npm-packages",
+      "reconcile-npm-evidence",
+      "run-release-smokes",
+      "reconcile-smoke-evidence",
+      "dispatch-release-audit",
+      "complete-release-audit",
+      "publish-github-release",
+    ]
+    if (
+      faultPoints.some((point) =>
+        ["after-publish:1", "before-publish:11", "after-publish:11", "before-publish:21"].includes(
+          point,
+        ),
+      )
+    ) {
+      requiredControllerRoutes.push("resume-npm-publish")
+    }
+    if (requiredControllerRoutes.some((route) => !controllerRoutes.includes(route))) {
+      throw new Error("Fixed-group release rehearsal bypassed a production controller route")
     }
     return Object.freeze({
       schemaVersion: 1,
-      status: final.status,
+      status: final.state,
       inventory: "fixed-group",
       version: candidate.version,
       commitSha: candidate.commitSha,
       packageCount: acceptedPackages.size,
       registryVerified: true,
-      baseAssetCount: 45,
-      auditAssetCount: observed.assets.length - 45,
+      baseAssetCount,
+      smokeAssetCount,
+      auditAssetCount,
+      totalAssetCount: observed.assets.length,
       dispatchedAuditRuns: observed.dispatchedRunIds.length,
       orphanedAuditRuns: observed.dispatchedRunIds.length - 2,
       actionsArtifactRecovery: fallback.source,
-      immutable: final.immutable,
+      immutable: observed.release.immutable,
       replay: "noop",
+      controllerRoutes: Object.freeze(controllerRoutes),
+      controllerReportCount: controllerReports.length,
       injectedFaults: gate.snapshot().injected,
     })
   } finally {
     await registryHarness?.close()
     await rm(runtime, { recursive: true, force: true })
   }
+}
+
+async function writeCanonicalRehearsalInputs({ directory, artifactDir, candidate, inventory }) {
+  const paths = Object.freeze({
+    candidate: join(directory, "candidate.json"),
+    inventory: join(directory, "inventory.json"),
+    ci: join(directory, "ci-receipt.json"),
+    prepareRun: join(directory, "prepare-run.json"),
+    preparationAuthority: join(directory, "preparation-authority.json"),
+    artifactUpload: join(directory, "artifact-upload.json"),
+    record: join(directory, "release-record.json"),
+    attestationInput: join(directory, "attestation-input.txt"),
+    attestationBundle: join(directory, "attestation.intoto.jsonl"),
+    npmEvidence: join(directory, "npm-evidence.json"),
+    smokeResults: join(directory, "smoke-results"),
+    initialDispatch: join(directory, "audit-dispatch-initial.json"),
+    retryDispatch: join(directory, "audit-dispatch-retry.json"),
+    artifactDir,
+  })
+  await Promise.all([
+    writeCanonicalOrEqual(paths.candidate, Buffer.from(`${JSON.stringify(candidate)}\n`, "utf8")),
+    writeCanonicalOrEqual(paths.inventory, Buffer.from(`${JSON.stringify(inventory)}\n`, "utf8")),
+    writeCanonicalOrEqual(
+      paths.ci,
+      Buffer.from(
+        `${JSON.stringify({
+          status: "success",
+          retryable: false,
+          commitSha: candidate.commitSha,
+          workflow: "CI",
+          check: "validate",
+          runId: 100,
+          runAttempt: 1,
+        })}\n`,
+        "utf8",
+      ),
+    ),
+    writeCanonicalOrEqual(
+      paths.prepareRun,
+      Buffer.from(`${JSON.stringify({ id: 300, attempt: 1 })}\n`, "utf8"),
+    ),
+    writeCanonicalOrEqual(
+      paths.preparationAuthority,
+      Buffer.from(
+        `${JSON.stringify({
+          state: "CANDIDATE_TAGGED",
+          releaseRecord: "absent",
+          npm: "absent",
+        })}\n`,
+        "utf8",
+      ),
+    ),
+  ])
+  return paths
+}
+
+function createRehearsalProductionInventory({ candidate, inventory, parentSha }) {
+  const packageNames = inventory.workspacePackages
+    .filter((pkg) => pkg.private !== true)
+    .map((pkg) => pkg.name)
+    .sort(compareText)
+  if (packageNames.length !== 21 || new Set(packageNames).size !== 21) {
+    throw new Error("Release rehearsal production inventory is not the exact fixed group")
+  }
+  const previousVersion = previousPatchVersion(candidate.version)
+  return Object.freeze({
+    async read({ ref }) {
+      if (typeof ref !== "string" || ref.length === 0) {
+        throw new TypeError("Release rehearsal production inventory ref is invalid")
+      }
+      const version = ref === candidate.commitSha ? candidate.version : previousVersion
+      if (ref === parentSha && version !== previousVersion) {
+        throw new Error("Release rehearsal first-parent inventory is invalid")
+      }
+      return Object.freeze({
+        status: "valid",
+        packages: Object.freeze(packageNames.map((name) => Object.freeze({ name, version }))),
+      })
+    },
+  })
+}
+
+function previousPatchVersion(version) {
+  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.exec(version)
+  if (match === null || Number(match[3]) < 1) {
+    throw new Error("Release rehearsal version requires a preceding patch version")
+  }
+  return `${match[1]}.${match[2]}.${Number(match[3]) - 1}`
+}
+
+function deferredNpmReader(readCurrent) {
+  if (typeof readCurrent !== "function") {
+    throw new TypeError("Release rehearsal deferred npm reader is invalid")
+  }
+  return Object.freeze({
+    observePackageMetadata(input) {
+      return readCurrent().observePackageMetadata(input)
+    },
+    observePackageVersion(input) {
+      return readCurrent().observePackageVersion(input)
+    },
+    downloadRegistryTarball(input) {
+      return readCurrent().downloadRegistryTarball(input)
+    },
+  })
+}
+
+function absentRehearsalNpmReader() {
+  return Object.freeze({
+    async observePackageMetadata() {
+      return { status: "ABSENT", operation: "package-metadata", httpStatus: 404, code: "E404" }
+    },
+    async observePackageVersion() {
+      return { status: "ABSENT", operation: "package-version", httpStatus: 404, code: "E404" }
+    },
+    async downloadRegistryTarball() {
+      throw new Error("Release rehearsal absent npm package has no tarball")
+    },
+  })
+}
+
+function rehearsalNpmAuditFactory(candidate) {
+  return Object.freeze({
+    async create() {
+      return Object.freeze({
+        async verifyPackage({ entry }) {
+          return verifiedNpmAudit({ candidate, entry })
+        },
+        async dispose() {},
+      })
+    },
+  })
+}
+
+function releaseRehearsalEnvironment(candidate) {
+  return Object.freeze({
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/${candidate.publisherWorkflow}@refs/tags/v${candidate.version}`,
+    GITHUB_REF: `refs/tags/v${candidate.version}`,
+    GITHUB_SHA: candidate.commitSha,
+    GITHUB_RUN_ID: "300",
+    GITHUB_RUN_ATTEMPT: "1",
+  })
+}
+
+function monotonicRehearsalClock() {
+  let value = Date.parse("2026-08-25T01:02:00.000Z")
+  return () => {
+    value += 1
+    return value
+  }
+}
+
+async function downloadCanonicalAuditResult({ directory, remote, sequence }) {
+  const release = remote.snapshot().release
+  if (release === null) throw new Error("Release rehearsal audit Release is missing")
+  const listed = await remote.releaseGitHub.reader.listReleaseAssets({ releaseId: release.id })
+  const assets = listed?.value
+  const matches = Array.isArray(assets)
+    ? assets.filter(({ name }) => name === "audit-result.json")
+    : []
+  if (matches.length !== 1) throw new Error("Release rehearsal canonical audit asset is missing")
+  const download = await remote.releaseGitHub.reader.downloadReleaseAsset({
+    assetId: matches[0].id,
+    maximumBytes: matches[0].size,
+  })
+  if (
+    download?.status !== "PRESENT" ||
+    typeof download.contentBase64 !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(matches[0].digest)
+  ) {
+    throw new Error("Release rehearsal canonical audit download is invalid")
+  }
+  const bytes = Buffer.from(download.contentBase64, "base64")
+  if (
+    bytes.toString("base64") !== download.contentBase64 ||
+    `sha256:${hash("sha256", bytes)}` !== matches[0].digest
+  ) {
+    throw new Error("Release rehearsal canonical audit bytes conflict")
+  }
+  const target = join(directory, `canonical-audit-result-${sequence}.json`)
+  await writeCanonicalOrEqual(target, bytes)
+  return target
+}
+
+async function writeCanonicalOrEqual(path, bytes) {
+  const content = Buffer.from(bytes)
+  try {
+    const existing = await readFile(path)
+    if (!existing.equals(content)) throw new Error(`Release rehearsal file conflicts: ${path}`)
+    return
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
+  await writeFile(path, content, { flag: "wx", mode: 0o600 })
 }
 
 export function parseReleaseRehearsalArguments(argv) {
@@ -821,15 +1393,6 @@ async function exactCandidateTagExists(root, candidate, environment) {
   }
 }
 
-async function isolatedGitCommand(command, args, options, environment) {
-  if (command !== "git") throw new TypeError("Fixed-group rehearsal Git command is invalid")
-  const result = await execFileAsync(command, args, {
-    ...options,
-    env: environment,
-  })
-  return result.stdout
-}
-
 async function gitCommand(cwd, args, env) {
   try {
     const result = await execFileAsync("git", args, {
@@ -850,16 +1413,6 @@ async function gitCommand(cwd, args, env) {
     })
     throw wrapped
   }
-}
-
-async function loadPreparedArtifactIfPresent({ artifactDir, candidate }) {
-  try {
-    await readFile(join(artifactDir, "manifest.json"))
-  } catch (error) {
-    if (error?.code === "ENOENT") return null
-    throw error
-  }
-  return loadPreparedArtifact({ artifactDir, candidate })
 }
 
 async function loadPreparedArtifact({ artifactDir, candidate }) {
@@ -890,29 +1443,59 @@ async function loadPreparedArtifact({ artifactDir, candidate }) {
   })
 }
 
-function createRehearsalReleaseRecord({ candidate, prepared }) {
-  const serviceBytes = Buffer.concat(
-    prepared.artifact.files.flatMap(({ name, bytes }) => [
-      Buffer.from(`${name}\0`, "utf8"),
-      Buffer.from(bytes),
-    ]),
-  )
-  return createReleaseRecord({
-    candidate,
-    manifestSha256: prepared.manifestSha256,
-    artifact: { name: prepared.artifactName },
-    artifactUpload: {
-      id: "900",
-      digest: `sha256:${hash("sha256", serviceBytes)}`,
-    },
-    prepareRun: { id: 200, attempt: 1 },
-  })
-}
-
 function createRehearsalAttestation({ candidate, prepared }) {
+  const repository = "https://github.com/cacheplane/dawnai"
+  const ref = `refs/tags/v${candidate.version}`
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: prepared.artifact.files.map(({ name, bytes }) => ({
+      name,
+      digest: { sha256: hash("sha256", bytes) },
+    })),
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      buildDefinition: {
+        buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+        externalParameters: {
+          workflow: {
+            ref,
+            repository,
+            path: candidate.publisherWorkflow,
+          },
+        },
+        internalParameters: { github: { event_name: "workflow_dispatch" } },
+        resolvedDependencies: [
+          { uri: `git+${repository}@${ref}`, digest: { gitCommit: candidate.commitSha } },
+        ],
+      },
+      runDetails: {
+        builder: { id: "https://github.com/actions/runner/github-hosted" },
+        metadata: {
+          invocationId: "https://github.com/cacheplane/dawnai/actions/runs/300/attempts/1",
+        },
+      },
+    },
+  }
+  const bundleBytes = Buffer.from(
+    `${JSON.stringify({
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      verificationMaterial: {
+        certificate: { rawBytes: "release-rehearsal" },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
+      dsseEnvelope: {
+        payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [{ sig: "verified-by-release-rehearsal", keyid: "" }],
+      },
+    })}\n`,
+    "utf8",
+  )
+  const bundleSha256 = hash("sha256", bundleBytes)
   const bundles = prepared.artifact.files.map(({ name }) => ({
     name: `${name}.intoto.jsonl`,
-    bytes: Buffer.from(`fixed-group-rehearsal-bundle:${name}`, "utf8"),
+    bytes: bundleBytes,
   }))
   const set = Object.freeze({
     repository: "cacheplane/dawnai",
@@ -927,26 +1510,46 @@ function createRehearsalAttestation({ candidate, prepared }) {
           subjectName: file.name,
           subjectSha256: hash("sha256", file.bytes),
           bundleName: bundles[index].name,
-          bundleSha256: hash("sha256", bundles[index].bytes),
+          bundleSha256,
         }),
       ),
     ),
   })
-  return Object.freeze({ set, bundles: Object.freeze(bundles) })
+  return Object.freeze({ set, bundles: Object.freeze(bundles), bundleBytes })
 }
 
 const verifiedAttestations = Object.freeze({
-  async verify({ subjects, bundles }) {
-    if (!Array.isArray(subjects) || !Array.isArray(bundles) || subjects.length !== bundles.length) {
+  async verify({ source, subjects, files, bundles }) {
+    if (
+      source !== "escrow" ||
+      !Array.isArray(subjects) ||
+      !Array.isArray(files) ||
+      !Array.isArray(bundles) ||
+      subjects.length !== 22 ||
+      files.length !== subjects.length ||
+      bundles.length !== subjects.length
+    ) {
       throw new Error("Fixed-group rehearsal attestation set is incomplete")
+    }
+    const anchor = Buffer.from(bundles[0].bytes)
+    for (const [index, subject] of subjects.entries()) {
+      const file = files[index]
+      const bundle = bundles[index]
+      if (
+        file.name !== subject.name ||
+        hash("sha256", file.bytes) !== subject.sha256 ||
+        !Buffer.from(bundle.bytes).equals(anchor)
+      ) {
+        throw new Error("Fixed-group rehearsal attestation evidence conflicts")
+      }
     }
     return { status: "VERIFIED", subjects }
   },
 })
 
-function createRehearsalNpmReader(harness) {
+function createProductionRehearsalNpmReader(harness) {
   const registry = new URL(harness.registry.url)
-  return createNpmReader({
+  const local = createNpmReader({
     registryUrl: registry.href,
     trustedRegistryOrigins: [registry.origin],
     async fetchImpl(url, options) {
@@ -971,33 +1574,43 @@ function createRehearsalNpmReader(harness) {
       return response
     },
   })
+  return Object.freeze({
+    observePackageMetadata(input) {
+      return local.observePackageMetadata(input)
+    },
+    async observePackageVersion(input) {
+      const observed = await local.observePackageVersion(input)
+      if (observed.status !== "PRESENT") return observed
+      return {
+        ...observed,
+        package: {
+          ...observed.package,
+          tarballUrl: officialRegistryTarballUrl(input.name, input.version),
+        },
+      }
+    },
+    async downloadRegistryTarball({ tarballUrl, signal }) {
+      const official = new URL(tarballUrl)
+      if (official.origin !== "https://registry.npmjs.org") {
+        throw new Error("Fixed-group rehearsal npm tarball did not use the production origin")
+      }
+      const localUrl = new URL(`${official.pathname}${official.search}`, registry)
+      const downloaded = await local.downloadRegistryTarball({
+        tarballUrl: localUrl.href,
+        ...(signal === undefined ? {} : { signal }),
+      })
+      if (downloaded.status !== "PRESENT") return downloaded
+      return {
+        ...downloaded,
+        tarball: { ...downloaded.tarball, url: official.href },
+      }
+    },
+  })
 }
 
-async function captureAbsentPublicationState({ candidate, manifest, npmReader }) {
-  const packages = []
-  for (const { name } of manifest.packages) {
-    const observed = await npmReader.observePackageVersion({ name, version: candidate.version })
-    if (observed.status !== "ABSENT" || observed.httpStatus !== 404 || observed.code !== "E404") {
-      throw new Error(`Fixed-group rehearsal registry absence is ambiguous for ${name}`)
-    }
-    packages.push({
-      name,
-      version: candidate.version,
-      status: "ABSENT",
-      httpStatus: 404,
-      observedAt: "2026-08-25T00:00:00Z",
-    })
-  }
-  return Object.freeze({
-    schemaVersion: 1,
-    version: candidate.version,
-    commitSha: candidate.commitSha,
-    tag: `v${candidate.version}`,
-    observedAt: "2026-08-25T00:00:00Z",
-    candidateRuns: Object.freeze([]),
-    registryMutationReceipts: Object.freeze([]),
-    packages: Object.freeze(packages),
-  })
+function officialRegistryTarballUrl(name, version) {
+  const packageName = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name
+  return new URL(`${name}/-/${packageName}-${version}.tgz`, "https://registry.npmjs.org/").href
 }
 
 function verifiedNpmAudit({ candidate }) {
@@ -1048,12 +1661,27 @@ function hash(algorithm, bytes) {
   return createHash(algorithm).update(bytes).digest("hex")
 }
 
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 function requiredPath() {
   const value = Reflect.get(process.env, "PATH")
   if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
     throw new TypeError("Fixed-group rehearsal requires a safe PATH")
   }
   return value
+}
+
+function rehearsalCrashCause(error) {
+  const seen = new Set()
+  let current = error
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    if (current instanceof RehearsalCrashError) return current
+    seen.add(current)
+    current = current.cause
+  }
+  return null
 }
 
 function currentMarker(remote) {

@@ -4,9 +4,11 @@ import { isAbsolute, join } from "node:path"
 import { runReleaseCli } from "../../cli.mjs"
 import { runReleaseController } from "../../controller.mjs"
 import { verifyReleaseAttestationAnchor } from "../../metadata.mjs"
-import { correlateSmokeResults, parseSmokeResult } from "../../smoke-result.mjs"
-
-const SMOKE_LANES = Object.freeze(["published-harness", "runtime-targets", "scaffold", "storage"])
+import {
+  correlateSmokeResults,
+  parseSmokeResult,
+  REQUIRED_RELEASE_SMOKE_LANES,
+} from "../../smoke-result.mjs"
 
 export function createRehearsalCliObserver({
   candidate,
@@ -212,17 +214,19 @@ export function applyRehearsalSmokeReceipts({ observation, candidate, receipts }
   if (observed.release?.marker?.phase !== "NPM_COMPLETE") return deepFreeze(observed)
   if (
     !Array.isArray(receipts) ||
-    receipts.length !== SMOKE_LANES.length ||
+    receipts.length !== REQUIRED_RELEASE_SMOKE_LANES.length ||
     !Array.isArray(observed.requiredSmokeLanes) ||
-    observed.requiredSmokeLanes.length !== SMOKE_LANES.length ||
-    observed.requiredSmokeLanes.some((lane, index) => lane !== SMOKE_LANES[index]) ||
+    observed.requiredSmokeLanes.length !== REQUIRED_RELEASE_SMOKE_LANES.length ||
+    observed.requiredSmokeLanes.some(
+      (lane, index) => lane !== REQUIRED_RELEASE_SMOKE_LANES[index],
+    ) ||
     observed.release.status !== "draft" ||
     observed.release.immutable !== false ||
     !Array.isArray(observed.smokes) ||
-    observed.smokes.length !== SMOKE_LANES.length ||
+    observed.smokes.length !== REQUIRED_RELEASE_SMOKE_LANES.length ||
     observed.smokes.some(
       (smoke, index) =>
-        smoke?.name !== SMOKE_LANES[index] ||
+        smoke?.name !== REQUIRED_RELEASE_SMOKE_LANES[index] ||
         smoke.status !== "pending" ||
         smoke.version !== candidate.version ||
         smoke.commitSha !== candidate.commitSha ||
@@ -238,7 +242,6 @@ export function applyRehearsalSmokeReceipts({ observation, candidate, receipts }
   const parsed = receipts.map((receipt) => parseSmokeResult(receipt))
   const first = parsed[0]
   const correlated = correlateSmokeResults(parsed, {
-    requiredLanes: SMOKE_LANES,
     version: candidate.version,
     commitSha: candidate.commitSha,
     manifestSha256: observed.release.marker.manifestSha256,
