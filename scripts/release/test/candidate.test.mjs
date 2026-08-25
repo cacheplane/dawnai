@@ -94,6 +94,65 @@ test("a legacy version commit without the active marker is audit-only", async ()
   assert.deepEqual(result.conflicts, [])
 })
 
+test("candidate discovery rejects an active version commit that is not provably on main", async () => {
+  for (const ancestry of [false, null]) {
+    const repository = repositoryFixture(
+      [
+        commit(BASE_SHA, "0.8.20", { marker: true }),
+        commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+      ],
+      { ancestry },
+    )
+
+    await assert.rejects(
+      discoverManagedCandidate({
+        ref: SHA_21,
+        inventory: repository.inventory,
+        git: repository.git,
+        marker: ACTIVE_MARKER,
+      }),
+      /reachable from main/u,
+    )
+  }
+
+  const repository = repositoryFixture(
+    [
+      commit(BASE_SHA, "0.8.20", { marker: true }),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ],
+    { ancestryError: new Error("ancestry unavailable") },
+  )
+  await assert.rejects(
+    discoverManagedCandidate({
+      ref: SHA_21,
+      inventory: repository.inventory,
+      git: repository.git,
+      marker: ACTIVE_MARKER,
+    }),
+    /ancestry unavailable/u,
+  )
+})
+
+test("scheduled standalone recovery rejects an off-main candidate tag", async () => {
+  const repository = repositoryFixture(
+    [
+      commit(BASE_SHA, "0.8.20", { marker: true }),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ],
+    { ancestry: false },
+  )
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      inventory: repository.inventory,
+      git: repository.git,
+      github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)] }),
+      marker: ACTIVE_MARKER,
+    }),
+    /reachable from main/u,
+  )
+})
+
 test("scheduled discovery enumerates managed Releases and standalone tags before choosing the oldest incomplete tag", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20", { marker: true }),
@@ -154,6 +213,26 @@ test("a standalone active candidate tag is recovered as CANDIDATE_TAGGED", async
   })
 
   assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+})
+
+test("a markerless legacy v* Release is audit-only and does not block active discovery", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA }),
+    commit(CUTOVER_SHA, "0.8.21", { parent: SHA_21, marker: true }),
+    commit(SHA_22, "0.8.22", { parent: CUTOVER_SHA, marker: true }),
+  ])
+  const legacy = managedRelease(21, "0.8.21", SHA_21, { published: true })
+  legacy.assets = []
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [legacy] }),
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"))
 })
 
 test("a draft Release record identifies a tagged candidate without overstating escrow progress", async () => {
@@ -241,6 +320,107 @@ test("scheduled discovery rejects terminal audit evidence for another manifest",
   )
 })
 
+test("only a published Release with a strict consistent successful audit is terminal", async () => {
+  const cases = [
+    {
+      name: "draft Release",
+      mutate(release) {
+        release.draft = true
+      },
+    },
+    {
+      name: "skeletal result",
+      mutate(release) {
+        delete release.auditResult.workflowRunId
+      },
+    },
+    {
+      name: "reversed timestamps",
+      mutate(release) {
+        release.auditResult.finishedAt = "2026-08-24T11:59:59Z"
+      },
+    },
+    {
+      name: "hidden failed check",
+      mutate(release) {
+        release.auditResult.checks[0].conclusion = "failure"
+      },
+    },
+  ]
+
+  for (const fixture of cases) {
+    const repository = repositoryFixture([
+      commit(BASE_SHA, "0.8.20"),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ])
+    const release = managedRelease(21, "0.8.21", SHA_21, {
+      auditComplete: true,
+      published: true,
+    })
+    fixture.mutate(release)
+
+    await assert.rejects(
+      discoverScheduledCandidate({
+        inventory: repository.inventory,
+        git: repository.git,
+        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        marker: ACTIVE_MARKER,
+      }),
+      /audit result|published Release/iu,
+      fixture.name,
+    )
+  }
+})
+
+test("only a draft Release with a complete protected abandonment tombstone is terminal", async () => {
+  const cases = [
+    {
+      name: "published Release",
+      mutate(release) {
+        release.draft = false
+      },
+    },
+    {
+      name: "skeletal tombstone",
+      mutate(release) {
+        delete release.abandonment.actor
+      },
+    },
+    {
+      name: "publish history started",
+      mutate(release) {
+        release.abandonment.actionsHistory.publishJobStarted = true
+      },
+    },
+    {
+      name: "incomplete package observation",
+      mutate(release) {
+        release.abandonment.observations[1].packages.pop()
+      },
+    },
+  ]
+
+  for (const fixture of cases) {
+    const repository = repositoryFixture([
+      commit(BASE_SHA, "0.8.20"),
+      commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+    ])
+    const release = managedRelease(21, "0.8.21", SHA_21, { abandoned: true })
+    fixture.mutate(release)
+
+    await assert.rejects(
+      discoverScheduledCandidate({
+        inventory: repository.inventory,
+        git: repository.git,
+        github: githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [release] }),
+        marker: ACTIVE_MARKER,
+      }),
+      /abandonment|draft Release/iu,
+      fixture.name,
+    )
+  }
+})
+
 test("scheduled discovery chooses the newest unsuperseded untagged first-parent candidate", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20"),
@@ -311,6 +491,7 @@ test("an older incomplete tag wins over a newer commit and is redispatched at it
     marker: ACTIVE_MARKER,
   })
   const invocation = decideInvocation({
+    candidateVersion: "0.8.21",
     candidateSha: selected.candidate.commitSha,
     githubSha: SHA_22,
     tagState: { status: "present", tag: selected.tag, commitSha: SHA_21 },
@@ -476,6 +657,7 @@ test("GITHUB_SHA equal to the candidate continues after creating or validating i
     { status: "present", tag: "v0.8.22", commitSha: SHA_22 },
   ]) {
     const result = decideInvocation({
+      candidateVersion: "0.8.22",
       candidateSha: SHA_22,
       githubSha: SHA_22,
       tagState,
@@ -490,6 +672,7 @@ test("GITHUB_SHA equal to the candidate continues after creating or validating i
 
 test("a coordinator at another SHA tags then dispatches the immutable ref and exits", () => {
   const result = decideInvocation({
+    candidateVersion: "0.8.22",
     candidateSha: SHA_22,
     githubSha: SHA_23,
     tagState: { status: "absent", tag: "v0.8.22", commitSha: null },
@@ -506,6 +689,7 @@ test("a coordinator at another SHA tags then dispatches the immutable ref and ex
 
 test("an existing candidate tag at another commit is a conflict", () => {
   const result = decideInvocation({
+    candidateVersion: "0.8.22",
     candidateSha: SHA_22,
     githubSha: SHA_23,
     tagState: { status: "present", tag: "v0.8.22", commitSha: OTHER_SHA },
@@ -517,7 +701,20 @@ test("an existing candidate tag at another commit is a conflict", () => {
   assert.deepEqual(result.conflicts, ["candidate-tag-commit-mismatch"])
 })
 
-function repositoryFixture(commits) {
+test("invocation decisions bind the candidate tag to the exact candidate version", () => {
+  assert.throws(
+    () =>
+      decideInvocation({
+        candidateVersion: "0.8.22",
+        candidateSha: SHA_22,
+        githubSha: SHA_22,
+        tagState: { status: "present", tag: "v0.8.23", commitSha: SHA_22 },
+      }),
+    /candidate version/u,
+  )
+})
+
+function repositoryFixture(commits, { ancestry = true, ancestryError = null } = {}) {
   const bySha = new Map(commits.map((entry) => [entry.sha, entry]))
   const history = commits.map((entry) => entry.sha).reverse()
   const head = commits.at(-1)?.sha
@@ -544,6 +741,11 @@ function repositoryFixture(commits) {
         const parent = bySha.get(ref)?.parent
         if (parent === null || parent === undefined) throw new Error("fixture commit has no parent")
         return parent
+      },
+      async isAncestor({ ancestor, descendant }) {
+        calls.push(["isAncestor", ancestor, descendant])
+        if (ancestryError !== null) throw ancestryError
+        return ancestry
       },
       async listTree({ ref }) {
         calls.push(["listTree", ref])
@@ -626,20 +828,67 @@ function managedRelease(
             version,
             commitSha,
             manifestSha256: "b".repeat(64),
+            workflowRunId: 300,
+            runAttempt: 1,
+            startedAt: "2026-08-24T12:00:00Z",
+            finishedAt: "2026-08-24T12:05:00Z",
+            checks: [
+              {
+                name: "public-release",
+                conclusion: "success",
+                detail: "Public release identity and package evidence verified",
+              },
+            ],
             conclusion: "success",
           },
         }
       : {}),
     ...(abandoned
       ? {
-          abandonment: {
-            schemaVersion: 1,
-            version,
-            commitSha,
-            tag: `v${version}`,
-          },
+          abandonment: abandonmentRecord(version, commitSha),
         }
       : {}),
+  }
+}
+
+function abandonmentRecord(version, commitSha) {
+  const observation = (workflowRunId, observedAt) => ({
+    workflowRunId,
+    runAttempt: 1,
+    observedAt,
+    packages: PACKAGE_NAMES.map((name) => ({
+      name,
+      version,
+      status: "ABSENT",
+      httpStatus: 404,
+      code: "E404",
+    })),
+  })
+  return {
+    schemaVersion: 1,
+    version,
+    commitSha,
+    tag: `v${version}`,
+    reason: "Candidate preparation is deterministically defective",
+    actor: "release-operator",
+    recordedAt: "2026-08-24T12:04:00Z",
+    approval: {
+      environment: "release-abandonment",
+      deploymentId: 200,
+      reviewer: "release-reviewer",
+      approvedAt: "2026-08-24T11:59:00Z",
+    },
+    actionsHistory: {
+      workflowRunId: 300,
+      runAttempt: 1,
+      observedAt: "2026-08-24T12:00:00Z",
+      publishJobStarted: false,
+      registryMutationStarted: false,
+    },
+    observations: [
+      observation(301, "2026-08-24T12:01:00Z"),
+      observation(302, "2026-08-24T12:03:00Z"),
+    ],
   }
 }
 

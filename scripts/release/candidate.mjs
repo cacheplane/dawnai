@@ -1,6 +1,7 @@
 import { planCandidateArbitration } from "./planner.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
+import { parseAbandonmentRecord, parseAuditResult } from "./terminal-records.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
 const EXPECTED_PACKAGE_COUNT = 21
@@ -21,11 +22,22 @@ const ACTIVE_MARKER = Object.freeze({
 const ACTIVE_MARKER_FIELDS = Object.freeze(Object.keys(ACTIVE_MARKER).sort())
 
 export async function discoverManagedCandidate({ ref, inventory, git, marker }) {
+  return (
+    await discoverManagedCandidateDetails({
+      ref,
+      inventory,
+      git,
+      marker,
+    })
+  ).selection
+}
+
+async function discoverManagedCandidateDetails({ ref, inventory, git, marker }) {
   normalizeActiveMarker(marker)
   assertRef(ref)
   assertMethods(
     git,
-    ["listFirstParentHistory", "firstParent", "listTree", "showFile"],
+    ["listFirstParentHistory", "firstParent", "isAncestor", "listTree", "showFile"],
     "Git reader",
   )
   assertMethods(inventory, ["read"], "inventory reader")
@@ -35,6 +47,8 @@ export async function discoverManagedCandidate({ ref, inventory, git, marker }) 
     throw new TypeError("Candidate ref did not resolve to one exact commit")
   }
   const commitSha = history[0]
+  const onMain = await git.isAncestor({ ancestor: commitSha, descendant: "refs/heads/main" })
+  if (onMain !== true) throw new Error(`Candidate SHA ${commitSha} is not reachable from main`)
   const parentSha = await git.firstParent(commitSha)
   if (!isSha(parentSha)) throw new TypeError("Candidate first parent is not an exact commit")
 
@@ -47,36 +61,44 @@ export async function discoverManagedCandidate({ ref, inventory, git, marker }) 
   if (!arraysEqual(current.names, parent.names)) {
     throw new TypeError("Release inventory package set changed across the candidate commit")
   }
-  if (current.version === parent.version) return noCandidate()
+  if (current.version === parent.version) {
+    return candidateDetails(noCandidate(), current.names)
+  }
   if (compareSemver(current.version, parent.version) <= 0) {
     throw new TypeError("Release inventory version delta must increase uniformly")
   }
 
   const candidate = candidateIdentity(current.version, commitSha)
   if (!(await commitHasActiveMarker({ commitSha, git, marker }))) {
-    return candidateSelection({
-      candidate,
-      state: ReleaseState.SUPERSEDED_NOOP,
-      disposition: "audit-only",
-      tag: null,
-      conflicts: [],
-    })
+    return candidateDetails(
+      candidateSelection({
+        candidate,
+        state: ReleaseState.SUPERSEDED_NOOP,
+        disposition: "audit-only",
+        tag: null,
+        conflicts: [],
+      }),
+      current.names,
+    )
   }
 
-  return candidateSelection({
-    candidate,
-    state: ReleaseState.CANDIDATE_VALIDATED,
-    disposition: "selected",
-    tag: null,
-    conflicts: [],
-  })
+  return candidateDetails(
+    candidateSelection({
+      candidate,
+      state: ReleaseState.CANDIDATE_VALIDATED,
+      disposition: "selected",
+      tag: null,
+      conflicts: [],
+    }),
+    current.names,
+  )
 }
 
 export async function discoverScheduledCandidate({ inventory, git, github, marker }) {
   normalizeActiveMarker(marker)
   assertMethods(
     git,
-    ["resolveTag", "listFirstParentHistory", "firstParent", "listTree", "showFile"],
+    ["resolveTag", "listFirstParentHistory", "firstParent", "isAncestor", "listTree", "showFile"],
     "Git reader",
   )
   assertMethods(inventory, ["read"], "inventory reader")
@@ -216,10 +238,16 @@ export function arbitrateCandidate({ candidate, managedReleases, registryLatest 
   return planCandidateArbitration({ candidate, managedReleases, registryLatest })
 }
 
-export function decideInvocation({ candidateSha, githubSha, tagState }) {
+export function decideInvocation({ candidateVersion, candidateSha, githubSha, tagState }) {
+  if (!isReleaseVersion(candidateVersion)) {
+    throw new TypeError("Invocation candidate version must be exact SemVer without build metadata")
+  }
   validateSha(candidateSha, "Candidate SHA")
   validateSha(githubSha, "GITHUB_SHA")
   const tag = normalizeTagState(tagState)
+  if (tag.tag !== `v${candidateVersion}`) {
+    throw new TypeError("Invocation candidate tag does not match the candidate version")
+  }
   if (tag.status === "ambiguous") {
     return invocationDecision({
       disposition: "blocked",
@@ -272,12 +300,14 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
     if (tagIdentity === undefined) {
       throw new Error(`Managed GitHub Release ${tag} has no matching tag ref`)
     }
-    const discovery = await discoverManagedCandidate({
+    const candidate = await discoverManagedCandidateDetails({
       ref: tagIdentity.commitSha,
       inventory,
       git,
       marker,
     })
+    const discovery = candidate.selection
+    if (discovery.state === ReleaseState.SUPERSEDED_NOOP) continue
     if (
       discovery.state !== ReleaseState.CANDIDATE_VALIDATED ||
       discovery.candidate.version !== tagIdentity.version ||
@@ -295,9 +325,12 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
     const record = await downloadJsonAsset(github, records[0], `release record for ${tag}`)
     validateReleaseRecordIdentity(record, tagIdentity)
     const state = await releaseStateFromAssets({
+      release,
       releaseRecord: record,
       assets,
       tagIdentity,
+      expectedPackageNames: candidate.packageNames,
+      abandonmentEnvironment: marker.abandonmentEnvironment,
       github,
     })
     releases.push(
@@ -313,7 +346,15 @@ async function inspectManagedReleases({ records, tagsByName, inventory, git, git
   return releases
 }
 
-async function releaseStateFromAssets({ releaseRecord, assets, tagIdentity, github }) {
+async function releaseStateFromAssets({
+  release,
+  releaseRecord,
+  assets,
+  tagIdentity,
+  expectedPackageNames,
+  abandonmentEnvironment,
+  github,
+}) {
   const auditAssets = assets.filter((asset) => asset?.name === "audit-result.json")
   const abandonmentAssets = assets.filter((asset) => asset?.name === "abandonment.json")
   if (auditAssets.length > 1 || abandonmentAssets.length > 1) {
@@ -323,30 +364,41 @@ async function releaseStateFromAssets({ releaseRecord, assets, tagIdentity, gith
     throw new Error(`Managed GitHub Release ${tagIdentity.tag} has conflicting terminal evidence`)
   }
   if (abandonmentAssets.length === 1) {
-    const record = await downloadJsonAsset(
-      github,
-      abandonmentAssets[0],
-      `abandonment record for ${tagIdentity.tag}`,
+    const record = parseAbandonmentRecord(
+      await downloadJsonAsset(
+        github,
+        abandonmentAssets[0],
+        `abandonment record for ${tagIdentity.tag}`,
+      ),
+      {
+        candidate: { version: tagIdentity.version, commitSha: tagIdentity.commitSha },
+        environment: abandonmentEnvironment,
+        packageNames: expectedPackageNames,
+      },
     )
-    validateTerminalIdentity(record, tagIdentity, {
-      label: "abandonment record",
-      requireTag: true,
-      manifestSha256: null,
-    })
+    if (record.tag !== tagIdentity.tag) {
+      throw new Error(`Managed abandonment record identity does not match ${tagIdentity.tag}`)
+    }
+    if (release.draft !== true) {
+      throw new Error(`Managed abandonment record for ${tagIdentity.tag} requires a draft Release`)
+    }
     return ReleaseState.ABANDONED_PREPUBLICATION
   }
   if (auditAssets.length === 1) {
-    const record = await downloadJsonAsset(
-      github,
-      auditAssets[0],
-      `audit result for ${tagIdentity.tag}`,
+    const record = parseAuditResult(
+      await downloadJsonAsset(github, auditAssets[0], `audit result for ${tagIdentity.tag}`),
     )
     validateTerminalIdentity(record, tagIdentity, {
       label: "audit result",
       requireTag: false,
       manifestSha256: releaseRecord.manifestSha256,
     })
-    if (record.conclusion === "success") return ReleaseState.AUDIT_COMPLETE
+    if (record.conclusion === "success") {
+      if (release.draft !== false) {
+        throw new Error(`Managed audit result for ${tagIdentity.tag} requires a published Release`)
+      }
+      return ReleaseState.AUDIT_COMPLETE
+    }
   }
   return ReleaseState.CANDIDATE_TAGGED
 }
@@ -617,6 +669,10 @@ function candidateSelection(value) {
     tag: value.tag,
     conflicts: value.conflicts,
   })
+}
+
+function candidateDetails(selection, packageNames) {
+  return deepFreeze({ selection, packageNames: [...packageNames] })
 }
 
 function invocationDecision(value) {
