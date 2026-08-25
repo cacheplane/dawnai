@@ -1312,6 +1312,7 @@ test("consolidated publication accepts only attached canonical audit bytes and p
   )
   manifestAsset.bytes = manifestBytes
 
+  const finalDownloadStart = remote.releaseDownloadRequests.length
   const result = await publishConsolidatedRelease({
     candidate: CANDIDATE,
     record: fixture.record,
@@ -1329,6 +1330,13 @@ test("consolidated publication accepts only attached canonical audit bytes and p
   assert.equal(remote.release.draft, false)
   assert.equal(remote.release.immutable, true)
   assert.equal(remote.publishCount, 1)
+  assert.ok(
+    remote.releaseDownloadRequests.slice(finalDownloadStart).every(({ assetId, maximumBytes }) => {
+      const asset = [...remote.assets.values()].find(({ id }) => id === assetId)
+      return maximumBytes === asset?.bytes.byteLength
+    }),
+    "every publication Release download must carry its preflighted declared-size cap",
+  )
 })
 
 function releaseFixture({

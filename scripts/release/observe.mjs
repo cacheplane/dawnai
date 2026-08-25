@@ -14,6 +14,7 @@ import {
 import {
   canonicalReleaseBody,
   MAX_AUDIT_ATTEMPTS,
+  MAX_PUBLICATION_ASSETS,
   MAX_SMOKE_ASSETS,
   MAX_SMOKE_ATTEMPTS,
   parseReleaseMarker,
@@ -535,15 +536,10 @@ export async function observeProductionCandidate({
     },
     release,
     requiredSmokeLanes: [...REQUIRED_SMOKE_LANES],
-    smokes: REQUIRED_SMOKE_LANES.map((name) => ({
-      name,
-      status: "pending",
-      version: identity.version,
-      commitSha: identity.commitSha,
-      manifestSha256: artifacts.manifestSha256,
-      workflowRunId: null,
-      runAttempt: null,
-    })),
+    smokes:
+      releaseState.smokes.length === REQUIRED_SMOKE_LANES.length
+        ? releaseState.smokes
+        : pendingProductionSmokeObservations(identity, artifacts.manifestSha256),
     audit: releaseState.audit,
     abandonment: releaseState.abandonment,
   }
@@ -1712,6 +1708,16 @@ async function mapProductionRelease({
       attestations,
       diagnostics,
     })
+    const smokeEvidence = await observeDurableSmokeReceipts({
+      marker: releaseMarker,
+      candidate,
+      github,
+      rawAssets: assetsResult.value,
+      diagnostics,
+    })
+    if (smokeEvidence === null) {
+      throw observationError("SMOKE_RECEIPT_EVIDENCE_INVALID")
+    }
     const preparedInventory = inventoryFromManifest(inventory, manifest)
     const observedInventory = inventoryFromAttestationSet({
       inventory: preparedInventory,
@@ -1728,15 +1734,18 @@ async function mapProductionRelease({
     const expectedByName = new Map(expectedBase.map((asset) => [asset.name, asset]))
     const releaseAssets = remoteAssets.map((asset) => {
       const expected = expectedByName.get(asset.name)
+      const smoke = smokeEvidence.assets.get(String(asset.id))
       return {
         name: asset.name,
         status:
-          asset.sha256 === null
-            ? "ambiguous"
-            : expected !== undefined && asset.sha256 === expected.sha256
-              ? "matching"
-              : "different",
-        sha256: asset.sha256,
+          smoke !== undefined
+            ? smoke.status
+            : asset.sha256 === null
+              ? "ambiguous"
+              : expected !== undefined && asset.sha256 === expected.sha256
+                ? "matching"
+                : "different",
+        sha256: smoke?.sha256 ?? asset.sha256,
       }
     })
     const actualBase = releaseAssets.filter((asset) => expectedByName.has(asset.name))
@@ -1786,6 +1795,7 @@ async function mapProductionRelease({
         : { status: "absent", manifestSha256: null, assets: [] },
       audit: terminal.audit,
       abandonment: terminal.abandonment,
+      smokes: smokeEvidence.smokes,
     })
   } catch (error) {
     addDiagnostic(
@@ -2288,7 +2298,7 @@ function normalizeReleaseIdentity(value, candidate) {
 }
 
 function normalizeReleaseAssetInventory(value) {
-  if (!Array.isArray(value) || value.length > 174) {
+  if (!Array.isArray(value) || value.length > MAX_PUBLICATION_ASSETS) {
     throw observationError("RELEASE_ASSET_INVENTORY_INVALID")
   }
   const ids = new Set()
@@ -2317,9 +2327,14 @@ function assertReleaseAssetBudgets(assets) {
   let tarballs = 0
   let bundles = 0
   let audit = 0
+  let auditAssets = 0
   let base = 0
+  let smoke = 0
+  let smokeAssets = 0
+  const smokeAttempts = new Set()
   for (const asset of assets) {
     let maximum
+    const smokeIdentity = parseSmokeReleaseAssetName(asset.name)
     if (asset.name === "release-record.json") {
       maximum = RELEASE_PAYLOAD_LIMITS.releaseRecordBytes
       base += asset.size
@@ -2334,9 +2349,15 @@ function assertReleaseAssetBudgets(assets) {
       maximum = RELEASE_PAYLOAD_LIMITS.attestationBundleBytes
       bundles += asset.size
       base += asset.size
+    } else if (smokeIdentity !== null) {
+      maximum = RELEASE_PAYLOAD_LIMITS.smokeReceiptBytes
+      smoke += asset.size
+      smokeAssets += 1
+      smokeAttempts.add(`${smokeIdentity.workflowRunId}:${smokeIdentity.runAttempt}`)
     } else if (isAuditAssetName(asset.name) || asset.name === "abandonment.json") {
       maximum = RELEASE_PAYLOAD_LIMITS.auditReceiptBytes
       audit += asset.size
+      auditAssets += 1
     } else {
       throw observationError("RELEASE_ASSET_NAMESPACE_INVALID")
     }
@@ -2348,7 +2369,11 @@ function assertReleaseAssetBudgets(assets) {
     tarballs > RELEASE_PAYLOAD_LIMITS.preparedTarballsBytes ||
     bundles > RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes ||
     base > RELEASE_PAYLOAD_LIMITS.escrowBytes ||
-    audit > RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes
+    audit > RELEASE_PAYLOAD_LIMITS.auditEvidenceBytes ||
+    auditAssets > MAX_AUDIT_ATTEMPTS + 1 ||
+    smoke > RELEASE_PAYLOAD_LIMITS.smokeReceiptsBytes ||
+    smokeAssets > MAX_SMOKE_ASSETS ||
+    smokeAttempts.size > MAX_SMOKE_ATTEMPTS
   ) {
     throw observationError("RELEASE_ASSET_SIZE_LIMIT_EXCEEDED")
   }
@@ -2364,7 +2389,11 @@ function uniqueRemoteAsset(assets, name) {
 
 async function downloadReleaseBytes({ github, asset, diagnostics }) {
   const result = await observeAdapter(
-    () => github.downloadReleaseAsset({ assetId: asset.id, maximumBytes: asset.size }),
+    () =>
+      github.downloadReleaseAsset({
+        assetId: asset.id,
+        maximumBytes: asset.size,
+      }),
     {
       source: "github",
       operation: "release-asset-download",
@@ -2654,7 +2683,9 @@ async function observeReleaseTerminal({
   diagnostics,
 }) {
   const baseNames = new Set(markerBaseAssets(marker).map((asset) => asset.name))
-  const terminalAssets = remoteAssets.filter((asset) => !baseNames.has(asset.name))
+  const terminalAssets = remoteAssets.filter(
+    (asset) => !baseNames.has(asset.name) && parseSmokeReleaseAssetName(asset.name) === null,
+  )
   if (marker.phase === "ABANDONED_PREPUBLICATION") {
     throw observationError("ABANDONMENT_RECORD_UNREAD")
   }
@@ -2955,8 +2986,9 @@ function productionReleaseState({
   escrow,
   audit = emptyAudit(),
   abandonment = { requested: false, recorded: false, predecessor: null },
+  smokes = [],
 }) {
-  return { release, artifactState, escrow, audit, abandonment }
+  return { release, artifactState, escrow, audit, abandonment, smokes }
 }
 
 async function mapProductionRegistryPackage({
@@ -3195,6 +3227,18 @@ function emptyAudit() {
     runAttempt: null,
     conclusion: null,
   }
+}
+
+function pendingProductionSmokeObservations(candidate, manifestSha256) {
+  return REQUIRED_SMOKE_LANES.map((name) => ({
+    name,
+    status: "pending",
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    manifestSha256,
+    workflowRunId: null,
+    runAttempt: null,
+  }))
 }
 
 function productionArtifactName(candidate) {

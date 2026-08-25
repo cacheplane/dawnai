@@ -919,7 +919,10 @@ async function downloadReleaseAsset(
   if (remainingField !== undefined && asset.size > budget[remainingField]) {
     throw new Error(`Release escrow ${label} cumulative byte budget exceeded`)
   }
-  const result = await reader.downloadReleaseAsset({ assetId: asset.id })
+  const result = await reader.downloadReleaseAsset({
+    assetId: asset.id,
+    maximumBytes: asset.size,
+  })
   if (result.status !== "PRESENT") {
     throw new Error(`Release escrow asset ${asset.name} could not be downloaded`)
   }

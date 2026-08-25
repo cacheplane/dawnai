@@ -32,7 +32,7 @@ import {
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
-import { dockerUuidToken } from "./docker-identity.mjs"
+import { dockerUuidToken, removeAndVerifyDockerResource } from "./docker-identity.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -169,32 +169,19 @@ export async function cleanupDockerSandboxResources(identity, { runCommand } = {
   if (typeof runCommand !== "function") {
     throw new TypeError("Published Docker cleanup requires a strict runner")
   }
-  await runCommand("docker", ["rm", "-f", identity.containerName], {
-    acceptedExitCodes: [0, 1],
-  })
-  await runCommand("docker", ["volume", "rm", "--force", identity.volumeName], {
-    acceptedExitCodes: [0, 1],
-  })
-  const containers = await runCommand("docker", [
-    "container",
-    "ls",
-    "--all",
-    "--filter",
-    `name=^/${identity.containerName}$`,
-    "--format",
-    "{{.Names}}",
-  ])
-  const volumes = await runCommand("docker", [
-    "volume",
-    "ls",
-    "--filter",
-    `name=^${identity.volumeName}$`,
-    "--format",
-    "{{.Name}}",
-  ])
-  if (containers.stdout.trim() !== "" || volumes.stdout.trim() !== "") {
-    throw new Error("Published Docker probe resources remain after cleanup")
+  const errors = []
+  for (const resource of [
+    { kind: "container", name: identity.containerName },
+    { kind: "volume", name: identity.volumeName },
+  ]) {
+    try {
+      await removeAndVerifyDockerResource({ ...resource, runCommand })
+    } catch (error) {
+      errors.push(error)
+    }
   }
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) throw new AggregateError(errors, "Published Docker probe cleanup failed")
 }
 
 function assertDockerProbeIdentity(identity) {

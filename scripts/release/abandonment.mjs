@@ -823,7 +823,9 @@ async function assertRemoteAsset(reader, asset, expectedSha256, maximumBytes) {
 }
 
 async function downloadAsset(reader, asset, maximumBytes) {
-  const result = snapshotJson(await reader.downloadReleaseAsset({ assetId: asset.id }))
+  const result = snapshotJson(
+    await reader.downloadReleaseAsset({ assetId: asset.id, maximumBytes }),
+  )
   if (
     !hasExactFields(result, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
     result.status !== "PRESENT" ||

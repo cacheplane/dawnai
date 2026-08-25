@@ -1266,7 +1266,7 @@ function interruptedAbandonmentRelease(id, version, commitSha) {
     baseAssetSetSha256: null,
     attestationSet: null,
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: null,
   }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  cleanupStorageContainer,
   runStorageSmoke,
   startDisposableDatabase,
   storageDockerIdentities,
@@ -30,6 +31,43 @@ test("storage Docker identities use one validated UUID without cross-lane collis
     "not-a-uuid",
   ]) {
     assert.throws(() => storageDockerIdentities(() => invalid), /UUID/u)
+  }
+})
+
+test("storage cleanup accepts only exact missing errors and verifies absence by inspect", async () => {
+  const name = "dawn-storage-postgres-123e4567e89b42d3a456426614174000"
+  const calls = []
+  await cleanupStorageContainer(name, {
+    async runCommand(_command, args, options = {}) {
+      calls.push(args)
+      const error = missingContainerError(name, args[0] === "inspect")
+      if (options.acceptedExitCodes?.includes(1)) return { stdout: "", stderr: error.stderr }
+      throw error
+    },
+  })
+  assert.deepEqual(calls, [
+    ["rm", "-f", name],
+    ["inspect", name],
+  ])
+})
+
+test("storage cleanup propagates non-missing removal and inspect failures", async () => {
+  const name = "dawn-storage-postgres-123e4567e89b42d3a456426614174000"
+  for (const failingOperation of ["rm", "inspect"]) {
+    await assert.rejects(
+      cleanupStorageContainer(name, {
+        async runCommand(_command, args, options = {}) {
+          if (args[0] === failingOperation) {
+            if (options.acceptedExitCodes?.includes(1)) {
+              return { stdout: "", stderr: "permission denied" }
+            }
+            throw dockerCommandError("permission denied")
+          }
+          return { stdout: "", stderr: "" }
+        },
+      }),
+      /permission denied/u,
+    )
   }
 })
 
@@ -158,6 +196,9 @@ test("self-cleans a container when readiness fails before lane cleanup registrat
         async runCommand(_command, args) {
           calls.push(args)
           if (args[0] === "exec") throw new Error("not ready")
+          if (args[0] === "inspect") {
+            throw missingContainerError("dawn-startup-failure", true)
+          }
           return { stdout: "", stderr: "" }
         },
         async sleep() {},
@@ -167,9 +208,10 @@ test("self-cleans a container when readiness fails before lane cleanup registrat
   )
   assert.deepEqual(
     calls.map((args) => args[0]),
-    ["run", "exec", "rm"],
+    ["run", "exec", "rm", "inspect"],
   )
-  assert.deepEqual(calls.at(-1), ["rm", "-f", "dawn-startup-failure"])
+  assert.deepEqual(calls.at(-2), ["rm", "-f", "dawn-startup-failure"])
+  assert.deepEqual(calls.at(-1), ["inspect", "dawn-startup-failure"])
 })
 
 test("pre-registers both exact container cleanups before the first Docker start", async () => {
@@ -218,6 +260,9 @@ test("database startup attempts cleanup even when docker run loses its response"
         async runCommand(_command, args) {
           calls.push(args)
           if (args[0] === "run") throw new Error("response lost")
+          if (args[0] === "inspect") {
+            throw missingContainerError("dawn-run-response-lost", true)
+          }
           return { stdout: "", stderr: "" }
         },
       },
@@ -226,7 +271,7 @@ test("database startup attempts cleanup even when docker run loses its response"
   )
   assert.deepEqual(
     calls.map((args) => args[0]),
-    ["run", "rm"],
+    ["run", "rm", "inspect"],
   )
 })
 
@@ -251,4 +296,16 @@ function releaseEnv(runId, attempt) {
     ImageOS: "ubuntu24",
     ImageVersion: "test",
   }
+}
+
+function dockerCommandError(stderr) {
+  return Object.assign(new Error(stderr), { exitCode: 1, stderr })
+}
+
+function missingContainerError(name, inspect) {
+  return dockerCommandError(
+    inspect
+      ? `Error: No such object: ${name}`
+      : `Error response from daemon: No such container: ${name}`,
+  )
 }

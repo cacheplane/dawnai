@@ -971,7 +971,7 @@ function failedCi(sha, reason) {
 
 async function downloadJsonAsset(github, asset, label, { maximumBytes, includeBytes = false }) {
   if (!isPositiveId(asset?.id)) throw new TypeError(`${label} asset identity is invalid`)
-  const result = await github.downloadReleaseAsset({ assetId: asset.id })
+  const result = await github.downloadReleaseAsset({ assetId: asset.id, maximumBytes })
   if (!isExactAssetDownload(result)) {
     throw new Error(`${label} could not be read exactly`)
   }
@@ -998,7 +998,7 @@ async function downloadJsonAsset(github, asset, label, { maximumBytes, includeBy
 }
 
 async function downloadAssetBytes(github, asset, maximumBytes) {
-  const result = await github.downloadReleaseAsset({ assetId: asset.id })
+  const result = await github.downloadReleaseAsset({ assetId: asset.id, maximumBytes })
   if (!isExactAssetDownload(result)) {
     throw new Error(`Managed abandonment asset ${asset.name} could not be read exactly`)
   }

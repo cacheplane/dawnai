@@ -20,6 +20,12 @@ import {
 } from "../observe.mjs"
 import { planRelease } from "../planner.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
+import {
+  aggregateSmokeResults,
+  canonicalAggregateSmokeResultBytes,
+  canonicalSmokeResultBytes,
+  REQUIRED_RELEASE_SMOKE_LANES,
+} from "../smoke-result.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
 
 const VERSION = "0.8.22"
@@ -1720,6 +1726,212 @@ test("production observation rejects a marker whose npm evidence digest does not
   assert.ok(diagnostics.some((entry) => entry.code === "NPM_EVIDENCE_DIGEST_MISMATCH"))
 })
 
+test("production observation resumes a markerless partial smoke receipt set from NPM_COMPLETE", async () => {
+  const fixture = npmCompletedReleaseFixture({ smokeReceiptCount: 2 })
+  const npmFixture = publishedNpmFixture(fixture.manifest)
+
+  const { observation, diagnostics } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: gitReader(),
+    github: releaseFixtureReader(fixture),
+    npm: npmFixture.npm,
+    npmAuditFactory: npmFixture.npmAuditFactory,
+    attestations: attestationVerifier([]),
+  })
+
+  assert.deepEqual(diagnostics, [])
+  assert.deepEqual(
+    observation.smokes.map(({ name, status, workflowRunId, runAttempt }) => ({
+      name,
+      status,
+      workflowRunId,
+      runAttempt,
+    })),
+    REQUIRED_RELEASE_SMOKE_LANES.map((name) => ({
+      name,
+      status: "pending",
+      workflowRunId: null,
+      runAttempt: null,
+    })),
+  )
+  const partialNames = new Set(fixture.markerlessSmokeAssets.map((asset) => asset.name))
+  assert.ok(
+    observation.release.assets
+      .filter((asset) => partialNames.has(asset.name))
+      .every((asset) => asset.status === "matching"),
+  )
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "RELEASE_DRAFT_COMPLETE")
+  assert.equal(plan.nextTransition, "run-release-smokes")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("production observation verifies the exact durable five-lane receipt set for SMOKES_COMPLETE", async () => {
+  const fixture = smokeCompletedReleaseFixture()
+  const npmFixture = publishedNpmFixture(fixture.manifest)
+
+  const { observation, diagnostics } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: gitReader(),
+    github: releaseFixtureReader(fixture),
+    npm: npmFixture.npm,
+    npmAuditFactory: npmFixture.npmAuditFactory,
+    attestations: attestationVerifier([]),
+  })
+
+  assert.deepEqual(diagnostics, [])
+  assert.deepEqual(
+    observation.smokes,
+    REQUIRED_RELEASE_SMOKE_LANES.map((name) => ({
+      name,
+      status: "passed",
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256: fixture.marker.manifestSha256,
+      workflowRunId: fixture.marker.smoke.workflowRunId,
+      runAttempt: fixture.marker.smoke.runAttempt,
+    })),
+  )
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "SMOKES_COMPLETE")
+  assert.equal(plan.nextTransition, "dispatch-release-audit")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("production observation fails closed on marker-selected smoke receipt byte, digest, or identity drift", async () => {
+  const cases = [
+    [
+      "bytes",
+      (fixture) => {
+        const asset = fixture.assets.find((entry) => entry.id === 3_000)
+        const bytes = Buffer.from(fixture.bytesById.get(asset.id))
+        bytes[0] ^= 1
+        fixture.bytesById.set(asset.id, bytes)
+      },
+      "SMOKE_RECEIPT_UNREADABLE",
+    ],
+    [
+      "digest",
+      (fixture) => {
+        const asset = fixture.assets.find((entry) => entry.id === 3_000)
+        asset.digest = `sha256:${"f".repeat(64)}`
+      },
+      "SMOKE_RECEIPT_SET_MISMATCH",
+    ],
+    [
+      "identity",
+      (fixture) => {
+        const asset = fixture.assets.find((entry) => entry.id === 3_000)
+        const bytes = canonicalSmokeResultBytes({
+          schemaVersion: 1,
+          lane: "metadata",
+          version: VERSION,
+          commitSha: COMMIT_SHA,
+          manifestSha256: fixture.marker.manifestSha256,
+          workflowRunId: 401,
+          runAttempt: 1,
+          startedAt: "2026-08-25T08:00:00.000Z",
+          finishedAt: "2026-08-25T08:01:00.000Z",
+          checks: [{ name: "published-artifacts", conclusion: "success", detail: "exact" }],
+          conclusion: "success",
+        })
+        const receiptSha256 = digest(bytes)
+        const smoke = {
+          ...fixture.marker.smoke,
+          artifacts: fixture.marker.smoke.artifacts.map((entry, index) =>
+            index === 0 ? { ...entry, receiptSha256 } : entry,
+          ),
+          receiptAssets: fixture.marker.smoke.receiptAssets.map((entry, index) =>
+            index === 0 ? { ...entry, receiptSha256 } : entry,
+          ),
+        }
+        fixture.marker = { ...fixture.marker, smoke }
+        fixture.release.body = canonicalReleaseBody({ marker: fixture.marker, manifest: null })
+        asset.digest = `sha256:${receiptSha256}`
+        asset.size = bytes.byteLength
+        fixture.bytesById.set(asset.id, bytes)
+      },
+      "SMOKE_RECEIPT_IDENTITY_MISMATCH",
+    ],
+  ]
+  for (const [label, mutate, expectedCode] of cases) {
+    const fixture = smokeCompletedReleaseFixture()
+    mutate(fixture)
+    const npmFixture = publishedNpmFixture(fixture.manifest)
+    const { observation, diagnostics } = await observeProductionCandidate({
+      candidate: candidate(),
+      inventory: inventory(),
+      marker: MARKER,
+      git: gitReader(),
+      github: releaseFixtureReader(fixture),
+      npm: npmFixture.npm,
+      npmAuditFactory: npmFixture.npmAuditFactory,
+      attestations: attestationVerifier([]),
+    })
+    assert.equal(observation.release.status, "ambiguous", label)
+    assert.ok(
+      diagnostics.some(({ code }) => code === expectedCode),
+      label,
+    )
+    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    assert.equal(plan.nextTransition, null, label)
+    assert.ok(plan.conflicts.length > 0, label)
+  }
+})
+
+test("production observation rejects a marker-bound smoke namespace with an extra or missing receipt", async () => {
+  for (const variant of ["extra", "missing"]) {
+    const fixture = smokeCompletedReleaseFixture()
+    if (variant === "missing") {
+      fixture.assets = fixture.assets.filter((asset) => asset.id !== 3_000)
+    } else {
+      const bytes = canonicalSmokeResultBytes({
+        schemaVersion: 1,
+        lane: "metadata",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        manifestSha256: fixture.marker.manifestSha256,
+        workflowRunId: 401,
+        runAttempt: 1,
+        startedAt: "2026-08-25T09:00:00.000Z",
+        finishedAt: "2026-08-25T09:01:00.000Z",
+        checks: [{ name: "published-artifacts", conclusion: "success", detail: "exact" }],
+        conclusion: "success",
+      })
+      fixture.assets.push({
+        id: 3_999,
+        name: "smoke-result-metadata-401-1.json",
+        digest: `sha256:${digest(bytes)}`,
+        size: bytes.byteLength,
+      })
+      fixture.bytesById.set(3_999, bytes)
+    }
+    const npmFixture = publishedNpmFixture(fixture.manifest)
+    const { observation, diagnostics } = await observeProductionCandidate({
+      candidate: candidate(),
+      inventory: inventory(),
+      marker: MARKER,
+      git: gitReader(),
+      github: releaseFixtureReader(fixture),
+      npm: npmFixture.npm,
+      npmAuditFactory: npmFixture.npmAuditFactory,
+      attestations: attestationVerifier([]),
+    })
+    assert.equal(observation.release.status, "ambiguous", variant)
+    assert.ok(
+      diagnostics.some(({ code }) => code === "SMOKE_RECEIPT_SET_MISMATCH"),
+      variant,
+    )
+    const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+    assert.equal(plan.nextTransition, null, variant)
+    assert.ok(plan.conflicts.length > 0, variant)
+  }
+})
+
 test("production observation binds terminal audit assets to the exact run, attempt, jobs, and immutable Release", async () => {
   const audited = auditedReleaseFixture()
   const npmFixture = publishedNpmFixture(audited.manifest)
@@ -2032,8 +2244,8 @@ test("production observation maps allowlisted non-success audit conclusions to a
   })
   const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
   assert.equal(plan.state, "AUDIT_RETRYABLE")
-  assert.equal(plan.nextTransition, null)
-  assert.ok(plan.conflicts.includes("release-smoke-marker-before-smokes-complete"))
+  assert.equal(plan.nextTransition, "dispatch-release-audit")
+  assert.deepEqual(plan.conflicts, [])
 })
 
 test("production observation blocks a published Release whose terminal marker is incomplete or mutable", async () => {
@@ -3045,7 +3257,7 @@ function attestedReleaseFixture({ ci } = {}) {
       subjects,
     },
     npmEvidenceSha256: null,
-    smokeAggregateSha256: null,
+    smoke: null,
     audit: null,
     abandonmentSha256: null,
   }
@@ -3112,8 +3324,143 @@ function attachingReleaseFixture(retainedNames = ["release-record.json", "manife
   }
 }
 
-function auditedReleaseFixture() {
+function npmCompletedReleaseFixture({ smokeReceiptCount = 0 } = {}) {
   const escrow = attestedReleaseFixture()
+  const npmEvidence = completeNpmEvidenceFixture(escrow.manifest)
+  const npmEvidenceSha256 = digest(
+    canonicalNpmEvidenceBytes(npmEvidence, {
+      candidate: candidate(),
+      manifest: escrow.manifest,
+      manifestSha256: escrow.marker.manifestSha256,
+    }),
+  )
+  const smoke = durableSmokeFixture(escrow.marker.manifestSha256)
+  const markerlessSmokeAssets = smoke.assets.slice(0, smokeReceiptCount)
+  const marker = {
+    ...escrow.marker,
+    revision: 3,
+    phase: "NPM_COMPLETE",
+    npmEvidenceSha256,
+  }
+  const bytesById = new Map(escrow.bytesById)
+  for (const asset of markerlessSmokeAssets) {
+    bytesById.set(asset.id, smoke.bytesById.get(asset.id))
+  }
+  return {
+    ...escrow,
+    marker,
+    markerlessSmokeAssets,
+    assets: [...escrow.assets, ...markerlessSmokeAssets],
+    bytesById,
+    release: {
+      ...escrow.release,
+      body: canonicalReleaseBody({ marker, manifest: null }),
+    },
+  }
+}
+
+function smokeCompletedReleaseFixture() {
+  const escrow = attestedReleaseFixture()
+  const npmEvidence = completeNpmEvidenceFixture(escrow.manifest)
+  const npmEvidenceSha256 = digest(
+    canonicalNpmEvidenceBytes(npmEvidence, {
+      candidate: candidate(),
+      manifest: escrow.manifest,
+      manifestSha256: escrow.marker.manifestSha256,
+    }),
+  )
+  const smoke = durableSmokeFixture(escrow.marker.manifestSha256)
+  const marker = {
+    ...escrow.marker,
+    revision: 4,
+    phase: "SMOKES_COMPLETE",
+    npmEvidenceSha256,
+    smoke: smoke.descriptor,
+  }
+  const bytesById = new Map(escrow.bytesById)
+  for (const asset of smoke.assets) bytesById.set(asset.id, smoke.bytesById.get(asset.id))
+  return {
+    ...escrow,
+    marker,
+    assets: [...escrow.assets, ...smoke.assets],
+    bytesById,
+    release: {
+      ...escrow.release,
+      body: canonicalReleaseBody({ marker, manifest: null }),
+    },
+  }
+}
+
+function durableSmokeFixture(manifestSha256) {
+  const workflowRunId = 400
+  const runAttempt = 1
+  const receiptBytes = REQUIRED_RELEASE_SMOKE_LANES.map((lane) =>
+    canonicalSmokeResultBytes({
+      schemaVersion: 1,
+      lane,
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+      manifestSha256,
+      workflowRunId,
+      runAttempt,
+      startedAt: "2026-08-25T08:00:00.000Z",
+      finishedAt: "2026-08-25T08:01:00.000Z",
+      checks: [{ name: "published-artifacts", conclusion: "success", detail: "exact" }],
+      conclusion: "success",
+    }),
+  )
+  const receipts = REQUIRED_RELEASE_SMOKE_LANES.map((lane, index) => ({
+    lane,
+    workflowRunId,
+    runAttempt,
+    releaseAssetId: 3_000 + index,
+    releaseAssetName: `smoke-result-${lane}-${workflowRunId}-${runAttempt}.json`,
+    receiptSha256: digest(receiptBytes[index]),
+  }))
+  const descriptor = {
+    workflow: ".github/workflows/release.yml",
+    workflowRunId,
+    runAttempt,
+    requiredLanes: [...REQUIRED_RELEASE_SMOKE_LANES],
+    artifacts: receipts.map((receipt, index) => ({
+      lane: receipt.lane,
+      actionsArtifactId: String(4_000 + index),
+      actionsArtifactName: `smoke-result-${receipt.lane}-${workflowRunId}-${runAttempt}`,
+      actionsArtifactUrl: `https://github.com/cacheplane/dawnai/actions/runs/${workflowRunId}/artifacts/${4_000 + index}`,
+      actionsArtifactServiceDigest: `sha256:${"8".repeat(64)}`,
+      releaseAssetId: receipt.releaseAssetId,
+      releaseAssetName: receipt.releaseAssetName,
+      receiptSha256: receipt.receiptSha256,
+    })),
+    receiptAssets: receipts,
+    aggregateSha256: digest(
+      canonicalAggregateSmokeResultBytes(
+        aggregateSmokeResults(receiptBytes, {
+          version: VERSION,
+          commitSha: COMMIT_SHA,
+          manifestSha256,
+          workflowRunId,
+          runAttempt,
+        }),
+      ),
+    ),
+  }
+  const bytesById = new Map()
+  const assets = receipts.map((receipt, index) => {
+    const bytes = receiptBytes[index]
+    bytesById.set(receipt.releaseAssetId, bytes)
+    return {
+      id: receipt.releaseAssetId,
+      name: receipt.releaseAssetName,
+      digest: `sha256:${receipt.receiptSha256}`,
+      size: bytes.byteLength,
+    }
+  })
+  return { descriptor, assets, bytesById }
+}
+
+function auditedReleaseFixture() {
+  const escrow = smokeCompletedReleaseFixture()
   const npmEvidence = completeNpmEvidenceFixture(escrow.manifest)
   const npmEvidenceSha256 = digest(
     canonicalNpmEvidenceBytes(npmEvidence, {
@@ -3141,7 +3488,6 @@ function auditedReleaseFixture() {
     revision: 7,
     phase: "AUDIT_VERIFIED",
     npmEvidenceSha256,
-    smokeAggregateSha256: "4".repeat(64),
     audit: {
       workflow: ".github/workflows/published-artifact-verify.yml",
       workflowRunId: auditResult.workflowRunId,

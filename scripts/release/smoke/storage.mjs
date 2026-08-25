@@ -16,7 +16,7 @@ import {
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
-import { dockerUuidToken } from "./docker-identity.mjs"
+import { dockerUuidToken, removeAndVerifyDockerResource } from "./docker-identity.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -35,7 +35,7 @@ export async function runStorageSmoke(options, overrides = {}) {
     runPgvectorProbe: (root, databaseUrl) => defaultPgvectorProbe(root, databaseUrl, runCommand),
     runPostgresProbe: (root, databaseUrl) => defaultPostgresProbe(root, databaseUrl, runCommand),
     startDatabase: (database) => startDisposableDatabase(database, { runCommand }),
-    stopContainer: (name) => defaultStopContainer(name, runCommand),
+    stopContainer: (name) => cleanupStorageContainer(name, { runCommand }),
     ...overrides,
     probeContainment: strictRunner.probe,
     runCommand,
@@ -161,7 +161,7 @@ export async function startDisposableDatabase(
     throw new Error(`Database container did not become ready: ${lastError?.message ?? "unknown"}`)
   } catch (error) {
     try {
-      await runCommand("docker", ["rm", "-f", containerName], { acceptedExitCodes: [0, 1] })
+      await removeAndVerifyDockerResource({ kind: "container", name: containerName, runCommand })
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -176,23 +176,11 @@ function defaultSleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 }
 
-async function defaultStopContainer(name, runCommand) {
+export async function cleanupStorageContainer(name, { runCommand } = {}) {
   if (!/^dawn-storage-(?:pgvector|postgres)-[0-9a-f]{32}$/u.test(name)) {
     throw new TypeError("Storage Docker container identity is invalid")
   }
-  await runCommand("docker", ["rm", "-f", name], { acceptedExitCodes: [0, 1] })
-  const remaining = await runCommand("docker", [
-    "container",
-    "ls",
-    "--all",
-    "--filter",
-    `name=^/${name}$`,
-    "--format",
-    "{{.Names}}",
-  ])
-  if (remaining.stdout.trim() !== "") {
-    throw new Error(`Storage Docker container ${name} remains after cleanup`)
-  }
+  await removeAndVerifyDockerResource({ kind: "container", name, runCommand })
 }
 
 function assertDatabaseDockerIdentity(containerName, image) {

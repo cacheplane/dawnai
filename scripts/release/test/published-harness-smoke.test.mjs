@@ -4,6 +4,7 @@ import test from "node:test"
 
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import {
+  cleanupDockerSandboxResources,
   publishedDockerProbeIdentity,
   runPublishedHarnessSmoke,
   validateNpmAuditSignatures,
@@ -42,6 +43,85 @@ test("published Docker probe identities use one validated collision-resistant UU
   }
 })
 
+test("published Docker cleanup accepts only exact missing errors and verifies absence by inspect", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const calls = []
+  await cleanupDockerSandboxResources(identity, {
+    async runCommand(_command, args, options = {}) {
+      calls.push(args)
+      const kind = args[0] === "volume" ? "volume" : "container"
+      const name = kind === "volume" ? identity.volumeName : identity.containerName
+      const error = missingDockerResourceError(kind, name, args.includes("inspect"))
+      if (options.acceptedExitCodes?.includes(1)) return { stdout: "", stderr: error.stderr }
+      throw error
+    },
+  })
+  assert.deepEqual(calls, [
+    ["rm", "-f", identity.containerName],
+    ["inspect", identity.containerName],
+    ["volume", "rm", "--force", identity.volumeName],
+    ["volume", "inspect", identity.volumeName],
+  ])
+})
+
+test("published Docker cleanup propagates a non-missing removal failure", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args, options = {}) {
+        const kind = args[0] === "volume" ? "volume" : "container"
+        const name = kind === "volume" ? identity.volumeName : identity.containerName
+        if (kind === "container" && args[0] === "rm") {
+          if (options.acceptedExitCodes?.includes(1)) {
+            return { stdout: "", stderr: "permission denied" }
+          }
+          throw dockerCommandError("permission denied")
+        }
+        if (args.includes("inspect")) throw missingDockerResourceError(kind, name, true)
+        return { stdout: "", stderr: "" }
+      },
+    }),
+    /permission denied/u,
+  )
+})
+
+test("published Docker cleanup attempts both owned resources and aggregates both failures", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const calls = []
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args) {
+        calls.push(args)
+        throw dockerCommandError(`permission denied for ${args.at(-1)}`)
+      },
+    }),
+    (error) =>
+      error instanceof AggregateError &&
+      error.errors.length === 2 &&
+      error.errors.every((entry) => /permission denied/u.test(entry.message)),
+  )
+  assert.deepEqual(calls, [
+    ["rm", "-f", identity.containerName],
+    ["volume", "rm", "--force", identity.volumeName],
+  ])
+})
+
+test("published Docker cleanup fails when exact inspect still finds a resource", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args) {
+        if (args[0] === "inspect") return { stdout: "[]", stderr: "" }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          throw missingDockerResourceError("volume", identity.volumeName, true)
+        }
+        return { stdout: "", stderr: "" }
+      },
+    }),
+    /remain/u,
+  )
+})
+
 test("installs the exact public fixed group, verifies npm signatures, and runs clean harness lanes", async () => {
   const commands = []
   const lanes = []
@@ -67,6 +147,10 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
         acceptedExitCodes: runOptions.acceptedExitCodes,
       })
       if (args[0] === "audit") return { stdout: auditOutput(manifest), stderr: "" }
+      if (command === "docker" && args.includes("inspect")) {
+        const kind = args[0] === "volume" ? "volume" : "container"
+        throw missingDockerResourceError(kind, args.at(-1), true)
+      }
       return { stdout: "", stderr: "" }
     }),
     async runHarnessAssertion(_root, lane, version) {
@@ -297,6 +381,10 @@ test("writes a receipt and outer-cleans Docker identities when the installed pro
       },
       strictRunner: fakeStrictRunner(async (command, args) => {
         if (command === "docker") events.push(`cleanup-command:${args.join(" ")}`)
+        if (command === "docker" && args.includes("inspect")) {
+          const kind = args[0] === "volume" ? "volume" : "container"
+          throw missingDockerResourceError(kind, args.at(-1), true)
+        }
         return {
           stdout: args[0] === "audit" ? auditOutput(manifest) : "",
           stderr: "",
@@ -323,9 +411,9 @@ test("writes a receipt and outer-cleans Docker identities when the installed pro
     /^probe:dawn-sbx-published-uuid-[0-9a-f]{32}:dawn-sbx-vol-published-uuid-/u,
   )
   assert.match(events[1], /^cleanup-command:rm -f dawn-sbx-published-uuid-/u)
-  assert.match(events[2], /^cleanup-command:volume rm --force dawn-sbx-vol-published-uuid-/u)
-  assert.match(events[3], /^cleanup-command:container ls --all --filter name=\^\/dawn-sbx-/u)
-  assert.match(events[4], /^cleanup-command:volume ls --filter name=\^dawn-sbx-vol-/u)
+  assert.match(events[2], /^cleanup-command:inspect dawn-sbx-published-uuid-/u)
+  assert.match(events[3], /^cleanup-command:volume rm --force dawn-sbx-vol-published-uuid-/u)
+  assert.match(events[4], /^cleanup-command:volume inspect dawn-sbx-vol-published-uuid-/u)
   assert.deepEqual(events.slice(5), ["cleanup", "receipt"])
   assert.equal(receipt.conclusion, "failure")
 })
@@ -482,4 +570,23 @@ function releaseEnv(runId, attempt) {
     ImageOS: "ubuntu24",
     ImageVersion: "test",
   }
+}
+
+function dockerCommandError(stderr) {
+  return Object.assign(new Error(stderr), { exitCode: 1, stderr })
+}
+
+function missingDockerResourceError(kind, name, inspect) {
+  if (kind === "volume") {
+    return dockerCommandError(
+      inspect
+        ? `Error: No such volume: ${name}`
+        : `Error response from daemon: get ${name}: no such volume`,
+    )
+  }
+  return dockerCommandError(
+    inspect
+      ? `Error: No such object: ${name}`
+      : `Error response from daemon: No such container: ${name}`,
+  )
 }

@@ -160,7 +160,7 @@ export const MAX_AUDIT_ATTEMPTS = 128
 export const MAX_SMOKE_ATTEMPTS = 128
 const BASE_ASSET_COUNT = 45
 export const MAX_SMOKE_ASSETS = MAX_SMOKE_ATTEMPTS * REQUIRED_RELEASE_SMOKE_LANES.length
-const MAX_PUBLICATION_ASSETS = BASE_ASSET_COUNT + MAX_SMOKE_ASSETS + MAX_AUDIT_ATTEMPTS + 1
+export const MAX_PUBLICATION_ASSETS = BASE_ASSET_COUNT + MAX_SMOKE_ASSETS + MAX_AUDIT_ATTEMPTS + 1
 const SMOKE_WORKFLOW = ".github/workflows/release.yml"
 const ACTIONS_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const DECIMAL_ID_PATTERN = /^[1-9][0-9]*$/u
@@ -2258,7 +2258,12 @@ async function observePublicationAssets(reader, releaseId, marker, auditBytes) {
   const auditAssets = []
   const totals = { base: 0, prepared: 0, bundles: 0, smoke: 0, audit: 0 }
   for (const descriptor of descriptors) {
-    const download = snapshotJson(await reader.downloadReleaseAsset({ assetId: descriptor.id }))
+    const download = snapshotJson(
+      await reader.downloadReleaseAsset({
+        assetId: descriptor.id,
+        maximumBytes: descriptor.size,
+      }),
+    )
     if (
       !hasExactFields(download, ["status", "operation", "httpStatus", "code", "contentBase64"]) ||
       download.status !== "PRESENT" ||
