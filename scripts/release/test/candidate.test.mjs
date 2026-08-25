@@ -494,6 +494,7 @@ test("an older incomplete tag wins over a newer commit and is redispatched at it
     candidateVersion: "0.8.21",
     candidateSha: selected.candidate.commitSha,
     githubSha: SHA_22,
+    githubRef: "refs/heads/main",
     tagState: { status: "present", tag: selected.tag, commitSha: SHA_21 },
   })
 
@@ -651,7 +652,25 @@ test("a successful check with any other CI identity cannot gate tagging", async 
   }
 })
 
-test("GITHUB_SHA equal to the candidate continues after creating or validating its tag", () => {
+test("only the exact candidate tag ref and SHA continue after tag validation", () => {
+  const result = decideInvocation({
+    candidateVersion: "0.8.22",
+    candidateSha: SHA_22,
+    githubSha: SHA_22,
+    githubRef: "refs/tags/v0.8.22",
+    tagState: { status: "present", tag: "v0.8.22", commitSha: SHA_22 },
+  })
+
+  assert.deepEqual(result, {
+    disposition: "continue",
+    tagAction: "validate",
+    dispatchRef: null,
+    exitBeforePreparation: false,
+    conflicts: [],
+  })
+})
+
+test("a branch coordinator at the candidate SHA still tags, dispatches, and exits", () => {
   for (const tagState of [
     { status: "absent", tag: "v0.8.22", commitSha: null },
     { status: "present", tag: "v0.8.22", commitSha: SHA_22 },
@@ -660,13 +679,17 @@ test("GITHUB_SHA equal to the candidate continues after creating or validating i
       candidateVersion: "0.8.22",
       candidateSha: SHA_22,
       githubSha: SHA_22,
+      githubRef: "refs/heads/main",
       tagState,
     })
 
-    assert.equal(result.disposition, "continue")
-    assert.equal(result.tagAction, tagState.status === "absent" ? "create" : "validate")
-    assert.equal(result.dispatchRef, null)
-    assert.equal(result.exitBeforePreparation, false)
+    assert.deepEqual(result, {
+      disposition: "dispatch-and-exit",
+      tagAction: tagState.status === "absent" ? "create" : "validate",
+      dispatchRef: "v0.8.22",
+      exitBeforePreparation: true,
+      conflicts: [],
+    })
   }
 })
 
@@ -675,6 +698,7 @@ test("a coordinator at another SHA tags then dispatches the immutable ref and ex
     candidateVersion: "0.8.22",
     candidateSha: SHA_22,
     githubSha: SHA_23,
+    githubRef: "refs/heads/main",
     tagState: { status: "absent", tag: "v0.8.22", commitSha: null },
   })
 
@@ -692,6 +716,7 @@ test("an existing candidate tag at another commit is a conflict", () => {
     candidateVersion: "0.8.22",
     candidateSha: SHA_22,
     githubSha: SHA_23,
+    githubRef: "refs/heads/main",
     tagState: { status: "present", tag: "v0.8.22", commitSha: OTHER_SHA },
   })
 
@@ -708,10 +733,33 @@ test("invocation decisions bind the candidate tag to the exact candidate version
         candidateVersion: "0.8.22",
         candidateSha: SHA_22,
         githubSha: SHA_22,
+        githubRef: "refs/tags/v0.8.22",
         tagState: { status: "present", tag: "v0.8.23", commitSha: SHA_22 },
       }),
     /candidate version/u,
   )
+})
+
+test("an exact candidate tag invocation with a mismatched SHA or missing tag blocks", () => {
+  const wrongSha = decideInvocation({
+    candidateVersion: "0.8.22",
+    candidateSha: SHA_22,
+    githubSha: SHA_23,
+    githubRef: "refs/tags/v0.8.22",
+    tagState: { status: "present", tag: "v0.8.22", commitSha: SHA_22 },
+  })
+  assert.equal(wrongSha.disposition, "blocked")
+  assert.deepEqual(wrongSha.conflicts, ["candidate-invocation-ref-sha-mismatch"])
+
+  const missingTag = decideInvocation({
+    candidateVersion: "0.8.22",
+    candidateSha: SHA_22,
+    githubSha: SHA_22,
+    githubRef: "refs/tags/v0.8.22",
+    tagState: { status: "absent", tag: "v0.8.22", commitSha: null },
+  })
+  assert.equal(missingTag.disposition, "blocked")
+  assert.deepEqual(missingTag.conflicts, ["candidate-tag-missing-at-invocation-ref"])
 })
 
 function repositoryFixture(commits, { ancestry = true, ancestryError = null } = {}) {

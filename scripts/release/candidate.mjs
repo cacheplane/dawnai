@@ -238,12 +238,19 @@ export function arbitrateCandidate({ candidate, managedReleases, registryLatest 
   return planCandidateArbitration({ candidate, managedReleases, registryLatest })
 }
 
-export function decideInvocation({ candidateVersion, candidateSha, githubSha, tagState }) {
+export function decideInvocation({
+  candidateVersion,
+  candidateSha,
+  githubSha,
+  githubRef,
+  tagState,
+}) {
   if (!isReleaseVersion(candidateVersion)) {
     throw new TypeError("Invocation candidate version must be exact SemVer without build metadata")
   }
   validateSha(candidateSha, "Candidate SHA")
   validateSha(githubSha, "GITHUB_SHA")
+  const invocationRef = normalizeGithubRef(githubRef)
   const tag = normalizeTagState(tagState)
   if (tag.tag !== `v${candidateVersion}`) {
     throw new TypeError("Invocation candidate tag does not match the candidate version")
@@ -267,7 +274,26 @@ export function decideInvocation({ candidateVersion, candidateSha, githubSha, ta
     })
   }
   const tagAction = tag.status === "absent" ? "create" : "validate"
-  if (githubSha === candidateSha) {
+  const candidateRef = `refs/tags/${tag.tag}`
+  if (invocationRef === candidateRef) {
+    if (tag.status === "absent") {
+      return invocationDecision({
+        disposition: "blocked",
+        tagAction: null,
+        dispatchRef: null,
+        exitBeforePreparation: true,
+        conflicts: ["candidate-tag-missing-at-invocation-ref"],
+      })
+    }
+    if (githubSha !== candidateSha) {
+      return invocationDecision({
+        disposition: "blocked",
+        tagAction: null,
+        dispatchRef: null,
+        exitBeforePreparation: true,
+        conflicts: ["candidate-invocation-ref-sha-mismatch"],
+      })
+    }
     return invocationDecision({
       disposition: "continue",
       tagAction,
@@ -283,6 +309,22 @@ export function decideInvocation({ candidateVersion, candidateSha, githubSha, ta
     exitBeforePreparation: true,
     conflicts: [],
   })
+}
+
+function normalizeGithubRef(value) {
+  if (
+    typeof value !== "string" ||
+    !/^refs\/(?:heads|tags)\/[\x21-\x7e]+$/u.test(value) ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    value.endsWith(".") ||
+    value.endsWith("/") ||
+    value.includes("//") ||
+    value.includes("\\")
+  ) {
+    throw new TypeError("GITHUB_REF must be one safe full branch or tag ref")
+  }
+  return value
 }
 
 async function inspectManagedReleases({ records, tagsByName, inventory, git, github, marker }) {
