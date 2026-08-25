@@ -456,6 +456,16 @@ function hastText(node) {
   return (node.children ?? []).map(hastText).join("")
 }
 
+function effectiveLiteralMdxId(attributes = []) {
+  for (let index = attributes.length - 1; index >= 0; index--) {
+    const attribute = attributes[index]
+    if (attribute.type === "mdxJsxExpressionAttribute") return null
+    if (attribute.type !== "mdxJsxAttribute" || attribute.name !== "id") continue
+    return typeof attribute.value === "string" && attribute.value !== "" ? attribute.value : null
+  }
+  return null
+}
+
 function collectMarkdownAnalysisNodes() {
   return (tree, file) => {
     const headings = []
@@ -477,10 +487,8 @@ function collectMarkdownAnalysisNodes() {
         (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
         node.name === "span"
       ) {
-        const id = node.attributes?.find(
-          (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === "id",
-        )?.value
-        if (typeof id === "string" && id !== "") explicitIds.push(id)
+        const id = effectiveLiteralMdxId(node.attributes)
+        if (id) explicitIds.push(id)
       }
       for (const child of node.children ?? []) visit(child)
     }

@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { type CompileOptions, compile } from "@mdx-js/mdx"
+import { type CompileOptions, compile, evaluate } from "@mdx-js/mdx"
+import { createElement } from "react"
+import { Fragment, jsx, jsxs } from "react/jsx-runtime"
+import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
@@ -169,13 +172,7 @@ interface DocLinkGuardAnalysis {
 interface HastNode {
   readonly type: string
   readonly tagName?: string
-  readonly name?: string
   readonly properties?: Record<string, unknown>
-  readonly attributes?: readonly {
-    readonly type: string
-    readonly name?: string
-    readonly value?: unknown
-  }[]
   readonly children?: readonly HastNode[]
 }
 
@@ -200,22 +197,12 @@ async function renderedHeadingIds(
   source: string,
   format: DocumentationFormat = "mdx",
 ): Promise<readonly string[]> {
-  const headingIds: string[] = []
-  const explicitIds: string[] = []
+  const ids: string[] = []
   const collect = () => (tree: HastNode) => {
     const visit = (node: HastNode): void => {
       if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
         const id = node.properties?.id
-        if (typeof id === "string") headingIds.push(id)
-      }
-      if (
-        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
-        node.name === "span"
-      ) {
-        const id = node.attributes?.find(
-          (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === "id",
-        )?.value
-        if (typeof id === "string" && id !== "") explicitIds.push(id)
+        if (typeof id === "string") ids.push(id)
       }
       for (const child of node.children ?? []) visit(child)
     }
@@ -229,7 +216,18 @@ async function renderedHeadingIds(
     // omitted from this otherwise shipped MDX/rehype-slug pipeline.
     rehypePlugins: [...(await renderedHeadingRehypePlugins), collect],
   })
-  return [...headingIds, ...explicitIds]
+  return ids
+}
+
+async function renderedMdxMarkup(source: string): Promise<string> {
+  const module = await evaluate(source, {
+    Fragment,
+    jsx,
+    jsxs,
+    remarkPlugins: await renderedHeadingRemarkPlugins,
+    rehypePlugins: await renderedHeadingRehypePlugins,
+  })
+  return renderToStaticMarkup(createElement(module.default))
 }
 
 let docTitleAnalysisProcessCount = 0
@@ -1000,9 +998,42 @@ describe("maintained documentation heading identity analysis", () => {
   it("collects a literal span ID after comment-like JSX attribute text", async () => {
     const source = '## Heading <span title="<!--">world</span>\n\n<span id="legacy"></span>\n'
     const runtimeIds = await renderedHeadingIds(source)
+    const markup = await renderedMdxMarkup(source)
 
-    expect(runtimeIds).toEqual(["heading-world", "legacy"])
-    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
+    expect(runtimeIds).toEqual(["heading-world"])
+    expect(markup).toContain('id="heading-world"')
+    expect(markup).toContain('<span id="legacy"></span>')
+    expect(analyzeMaintainedHeadingIds(source)).toEqual([...runtimeIds, "legacy"])
+  })
+
+  it.each([
+    [
+      "the last direct literal id",
+      '<span id="first" id="second"></span>\n',
+      '<span id="second"></span>',
+      ["second"],
+    ],
+    [
+      "no id before a later spread",
+      '<span id="legacy" {...{ id: "actual" }}></span>\n',
+      '<span id="actual"></span>',
+      [],
+    ],
+    [
+      "a final literal id after a spread",
+      '<span {...{ id: "spread" }} id="literal"></span>\n',
+      '<span id="literal"></span>',
+      ["literal"],
+    ],
+    [
+      "no id before a later dynamic id",
+      '<span id="legacy" id={"actual"}></span>\n',
+      '<span id="actual"></span>',
+      [],
+    ],
+  ])("collects %s", async (_label, source, expectedMarkup, expectedIds) => {
+    expect(await renderedMdxMarkup(source)).toBe(expectedMarkup)
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(expectedIds)
   })
 })
 
