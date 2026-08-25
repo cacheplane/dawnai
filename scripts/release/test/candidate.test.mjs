@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
 
-import { canonicalAbandonmentBytes } from "../abandonment.mjs"
+import { canonicalAbandonmentBytes, canonicalAbandonmentReleaseBody } from "../abandonment.mjs"
 import {
   arbitrateCandidate,
   decideInvocation,
@@ -511,6 +511,14 @@ test("terminal abandonment requires exact canonical bytes, marker digest, metada
     [
       "noncanonical tombstone",
       (release) => (release.abandonmentBytes = Buffer.from(JSON.stringify(release.abandonment))),
+    ],
+    [
+      "missing durable body record",
+      (release) =>
+        (release.body = canonicalReleaseBody({
+          marker: parseReleaseMarker(release.body),
+          manifest: null,
+        })),
     ],
     ["wrong title", (release) => (release.name = "conflicting title")],
     ["unknown asset", (release) => release.assets.push({ id: 999, name: "notes.txt" })],
@@ -1050,7 +1058,10 @@ function managedRelease(
       ? {}
       : {
           name: `Dawn v${version} (abandoned before publication)`,
-          body: canonicalReleaseBody({ marker: abandonmentMarker, manifest: null }),
+          body: canonicalAbandonmentReleaseBody({
+            marker: abandonmentMarker,
+            tombstone: abandonment,
+          }),
         }),
     assets,
     record: releaseRecord(version, commitSha),
@@ -1153,7 +1164,11 @@ function terminalAttestedAbandonmentRelease(id, version, commitSha) {
     previousMarker,
   })
   release.name = `Dawn v${version} (abandoned before publication)`
-  release.body = canonicalReleaseBody({ marker, manifest: null, previousMarker })
+  release.body = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone: release.abandonment,
+    previousMarker,
+  })
   return release
 }
 

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
 
-import { canonicalAbandonmentBytes } from "./abandonment.mjs"
+import { canonicalAbandonmentBytes, parseAbandonmentReleaseBody } from "./abandonment.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
-import { canonicalReleaseBody, parseReleaseMarker } from "./metadata.mjs"
+import { parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
@@ -495,10 +495,12 @@ async function inspectAbandonmentRelease({
       `Managed abandonment evidence for ${tagIdentity.tag} has an illegal predecessor`,
     )
   }
+  const bodyTombstone = terminal ? parseAbandonmentReleaseBody(release.body) : null
+  const bodyTombstoneBytes =
+    bodyTombstone === null ? null : canonicalAbandonmentBytes(bodyTombstone)
   if (terminal) {
-    const expectedBody = canonicalReleaseBody({ marker, manifest: null })
     const expectedTitle = `Dawn v${tagIdentity.version} (abandoned before publication)`
-    if (release.body !== expectedBody || release.name !== expectedTitle) {
+    if (release.name !== expectedTitle) {
       throw new Error(`Managed abandonment Release metadata for ${tagIdentity.tag} is not exact`)
     }
   }
@@ -529,9 +531,21 @@ async function inspectAbandonmentRelease({
     }
   }
 
-  await verifyAbandonmentAssetBytes({ baseAssets, tombstoneBytes, github })
+  if (
+    bodyTombstoneBytes !== null &&
+    tombstoneBytes !== null &&
+    !bodyTombstoneBytes.equals(tombstoneBytes)
+  ) {
+    throw new Error(`Managed abandonment body and asset evidence conflict for ${tagIdentity.tag}`)
+  }
 
-  if (terminal && tombstoneBytes !== null) {
+  await verifyAbandonmentAssetBytes({
+    baseAssets,
+    tombstoneBytes: tombstoneBytes ?? bodyTombstoneBytes,
+    github,
+  })
+
+  if (terminal && bodyTombstoneBytes !== null && tombstoneBytes !== null) {
     if (marker.abandonmentSha256 !== sha256(tombstoneBytes)) {
       throw new Error(`Managed abandonment marker digest conflicts with ${tagIdentity.tag}`)
     }
