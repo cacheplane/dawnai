@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import {
   canonicalBaseAssetSet,
@@ -13,6 +14,7 @@ import {
   reconcileNpmEvidence,
   reconcileSmokeEvidence,
   releaseBodySha256,
+  validatePublicationAuditAssets,
 } from "../metadata.mjs"
 import { createReleaseRecord, releaseRecordSha256 } from "../release-record.mjs"
 
@@ -168,6 +170,66 @@ test("canonical base escrow is exactly 45 digest-bound assets and excludes attes
   )
 })
 
+test("escrow invokes the bounded verifier for all 22 bundles before any Release mutation", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  let verificationInput
+  const attestations = Object.freeze({
+    async verify(input) {
+      verificationInput = input
+      return { status: "INVALID", subjects: [] }
+    },
+  })
+
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: fixture.attestationSet,
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations,
+      github: remote.github,
+    }),
+    /attestation|verif/iu,
+  )
+
+  assert.equal(verificationInput.source, "escrow")
+  assert.deepEqual(verificationInput.record, fixture.record)
+  assert.equal(verificationInput.subjects.length, 22)
+  assert.equal(verificationInput.files.length, 22)
+  assert.equal(verificationInput.bundles.length, 22)
+  assert.deepEqual(
+    verificationInput.files.map(({ name }) => name),
+    verificationInput.subjects.map(({ name }) => name),
+  )
+  assert.deepEqual(
+    verificationInput.bundles.map(({ name }) => name),
+    fixture.attestationSet.subjects.map(({ bundleName }) => bundleName),
+  )
+  assert.equal(remote.release, null)
+  assert.equal(remote.uploadCount, 0)
+  assert.equal(remote.updateCount, 0)
+
+  const alternateRepository = inMemoryGitHub()
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: { ...fixture.attestationSet, repository: "fork/dawnai" },
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations: verifiedAttestations(fixture),
+      github: alternateRepository.github,
+    }),
+    /attestation|repository|identity/iu,
+  )
+  assert.equal(alternateRepository.release, null)
+  assert.equal(alternateRepository.uploadCount + alternateRepository.updateCount, 0)
+})
+
 test("publication state proves all job attempts and exact package absence before escrow", () => {
   const fixture = releaseFixture()
   const state = publicationState(fixture)
@@ -211,6 +273,65 @@ test("publication state proves all job attempts and exact package absence before
   )
 })
 
+test("publication audit history has independent count and aggregate byte bounds", () => {
+  const fixture = releaseFixture()
+  const auditResult = {
+    schemaVersion: 1,
+    version: VERSION,
+    commitSha: COMMIT_SHA,
+    manifestSha256: fixture.record.manifestSha256,
+    workflowRunId: 300,
+    runAttempt: 1,
+    startedAt: "2026-08-24T01:00:00Z",
+    finishedAt: "2026-08-24T01:01:00Z",
+    checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
+  }
+  const auditBytes = Buffer.from(`${JSON.stringify(canonicalize(auditResult), null, 2)}\n`)
+  const auditDigest = sha256(auditBytes)
+  const marker = {
+    ...escrowMarker(fixture),
+    revision: 7,
+    phase: "AUDIT_VERIFIED",
+    npmEvidenceSha256: "4".repeat(64),
+    smokeAggregateSha256: "5".repeat(64),
+    audit: {
+      workflow: ".github/workflows/published-artifact-verify.yml",
+      workflowRunId: 300,
+      runUrl: "https://api.github.com/repos/cacheplane/dawnai/actions/runs/300",
+      htmlUrl: "https://github.com/cacheplane/dawnai/actions/runs/300",
+      runAttempt: 1,
+      attemptAssetName: "audit-attempt-300-1.json",
+      attemptSha256: auditDigest,
+      canonicalSha256: auditDigest,
+      conclusion: "success",
+    },
+  }
+
+  assert.throws(
+    () =>
+      validatePublicationAuditAssets(
+        Array.from({ length: 130 }, (_unused, index) => ({
+          name: `audit-attempt-${index + 1}-1.json`,
+          bytes: Buffer.from("{}"),
+        })),
+        { marker },
+      ),
+    /count|bound/iu,
+  )
+  assert.throws(
+    () =>
+      validatePublicationAuditAssets(
+        Array.from({ length: 17 }, (_unused, index) => ({
+          name: `audit-attempt-${index + 1}-1.json`,
+          bytes: Buffer.alloc(RELEASE_PAYLOAD_LIMITS.auditReceiptBytes),
+        })),
+        { marker },
+      ),
+    /cumulative|byte|limit/iu,
+  )
+})
+
 test("escrow creates one resumable 45-asset draft and advances its marker only after exact re-read", async () => {
   const fixture = releaseFixture()
   const remote = inMemoryGitHub()
@@ -221,6 +342,7 @@ test("escrow creates one resumable 45-asset draft and advances its marker only a
     attestationSet: fixture.attestationSet,
     bundles: fixture.bundles,
     publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
     github: remote.github,
   }
 
@@ -253,6 +375,27 @@ test("escrow creates one resumable 45-asset draft and advances its marker only a
   assert.equal(remote.uploadCount, 45)
 })
 
+test("escrow revalidates the annotated candidate tag before a no-op", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const input = {
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  }
+  await escrowCandidate(input)
+  const mutationCount = remote.uploadCount + remote.updateCount
+  remote.tagTargetSha = "f".repeat(40)
+
+  await assert.rejects(escrowCandidate(input), /annotated|tag|target|commit/iu)
+  assert.equal(remote.uploadCount + remote.updateCount, mutationCount)
+})
+
 test("npm and smoke reconciliation are separate one-transition body compare-and-swaps", async () => {
   const fixture = releaseFixture()
   const remote = inMemoryGitHub()
@@ -263,6 +406,7 @@ test("npm and smoke reconciliation are separate one-transition body compare-and-
     attestationSet: fixture.attestationSet,
     bundles: fixture.bundles,
     publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
     github: remote.github,
   })
   const npmEvidence = {
@@ -317,6 +461,7 @@ test("consolidated publication accepts only attached canonical audit bytes and p
     attestationSet: fixture.attestationSet,
     bundles: fixture.bundles,
     publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
     github: remote.github,
   })
   const npmEvidence = {
@@ -384,6 +529,38 @@ test("consolidated publication accepts only attached canonical audit bytes and p
   remote.addAsset("audit-attempt-300-1.json", auditBytes)
   remote.addAsset("audit-result.json", auditBytes)
   const bodyBefore = remote.release.body
+
+  const historicalSuccess = {
+    ...auditResult,
+    workflowRunId: 299,
+    checks: [{ name: "published-artifacts", conclusion: "success", detail: "unexpected" }],
+  }
+  remote.addAsset(
+    "audit-attempt-299-1.json",
+    Buffer.from(`${JSON.stringify(canonicalize(historicalSuccess), null, 2)}\n`),
+  )
+  await assert.rejects(
+    publishConsolidatedRelease({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      auditResult,
+      github: remote.github,
+    }),
+    /audit|historical|failure|receipt/iu,
+  )
+  assert.equal(remote.publishCount, 0)
+  remote.assets.delete("audit-attempt-299-1.json")
+
+  const historicalFailure = {
+    ...auditResult,
+    workflowRunId: 299,
+    checks: [{ name: "published-artifacts", conclusion: "failure", detail: "failed" }],
+    conclusion: "failure",
+  }
+  remote.addAsset(
+    "audit-attempt-299-1.json",
+    Buffer.from(`${JSON.stringify(canonicalize(historicalFailure), null, 2)}\n`),
+  )
 
   const manifestAsset = remote.assets.get("manifest.json")
   const manifestBytes = manifestAsset.bytes
@@ -565,6 +742,18 @@ function packageFilename(name) {
   return `${name.replace(/^@/u, "").replace("/", "-")}-${VERSION}.tgz`
 }
 
+function verifiedAttestations(fixture) {
+  return Object.freeze({
+    async verify({ source, record, subjects, files, bundles }) {
+      assert.equal(source, "escrow")
+      assert.deepEqual(record, fixture.record)
+      assert.equal(files.length, 22)
+      assert.equal(bundles.length, 22)
+      return { status: "VERIFIED", subjects }
+    },
+  })
+}
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
 }
@@ -578,8 +767,25 @@ function inMemoryGitHub() {
     updateCount: 0,
     publishCount: 0,
     failAfterUploads: null,
+    tagObjectType: "tag",
+    tagObjectSha: "a".repeat(40),
+    tagTargetSha: COMMIT_SHA,
+    tagReadCount: 0,
   }
   const reader = Object.freeze({
+    async getRef() {
+      remote.tagReadCount += 1
+      return present("ref", {
+        object: { type: remote.tagObjectType, sha: remote.tagObjectSha },
+      })
+    },
+    async getGitTag() {
+      remote.tagReadCount += 1
+      return present("git-tag", {
+        tag: `v${VERSION}`,
+        object: { type: "commit", sha: remote.tagTargetSha },
+      })
+    },
     async listReleases() {
       return present(
         "releases",

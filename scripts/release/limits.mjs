@@ -7,6 +7,8 @@ export const RELEASE_PAYLOAD_LIMITS = Object.freeze({
   actionsArchiveBytes: 40 * MEBIBYTE,
   actionsExpandedBytes,
   archiveFilenameBytes: 512,
+  auditEvidenceBytes: 16 * MEBIBYTE,
+  auditReceiptBytes: MEBIBYTE,
   attestationBundleBytes: 2 * MEBIBYTE,
   attestationBundlesBytes: 31 * MEBIBYTE,
   escrowBytes: 64 * MEBIBYTE,

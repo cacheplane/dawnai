@@ -1,4 +1,5 @@
 import { snapshotJson } from "./adapter-normalize.mjs"
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const AUDIT_RESULT_FIELDS = Object.freeze([
@@ -86,6 +87,17 @@ export function parseAuditResult(value) {
     throw new TypeError("Audit result conclusion conflicts with its checks")
   }
   return deepFreeze(record)
+}
+
+export function canonicalAuditResultBytes(value) {
+  const result = parseAuditResult(value)
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(result), null, 2)}\n`, "utf8")
+  assertPayloadByteLength(
+    bytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
+    "Canonical audit result",
+  )
+  return bytes
 }
 
 export function parseAbandonmentRecord(value, options) {
@@ -249,6 +261,16 @@ function deepFreeze(value) {
     Object.freeze(value)
   }
   return value
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort(compareText)
+      .map((key) => [key, canonicalize(value[key])]),
+  )
 }
 
 function arraysEqual(left, right) {

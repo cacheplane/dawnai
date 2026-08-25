@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { Worker } from "node:worker_threads"
 
 import { createGitHubReader } from "../adapters/github.mjs"
 
@@ -175,6 +176,51 @@ test("GitHub all-attempt jobs fail closed on gaps, duplicates, or malformed atte
     const result = await github.listActionsRunJobs({ runId: 55 })
     assert.equal(result.status, "ERROR")
     assert.match(result.code, /ATTEMPT|DUPLICATE|MALFORMED/u)
+  }
+})
+
+test("GitHub all-attempt coverage rejects a max-safe sparse attempt in bounded time", async () => {
+  const moduleUrl = new URL("../adapters/github.mjs", import.meta.url).href
+  const source = `
+    const { parentPort } = require("node:worker_threads")
+    ;(async () => {
+      const { createGitHubReader } = await import(${JSON.stringify(moduleUrl)})
+      const github = createGitHubReader({
+        owner: "dawn-ai",
+        repo: "dawn",
+        fetchImpl: async () => new Response(JSON.stringify({
+          jobs: [{
+            id: 1,
+            run_attempt: Number.MAX_SAFE_INTEGER,
+            name: "prepare",
+            status: "completed",
+            conclusion: "success",
+            started_at: null,
+            completed_at: null,
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } }),
+      })
+      parentPort.postMessage(await github.listActionsRunJobs({ runId: 55 }))
+    })().catch((error) => parentPort.postMessage({ workerError: error.message }))
+  `
+  const worker = new Worker(source, { eval: true })
+  let timer
+  try {
+    const result = await Promise.race([
+      new Promise((resolve, reject) => {
+        worker.once("message", resolve)
+        worker.once("error", reject)
+      }),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("attempt coverage exceeded time bound")), 1_000)
+      }),
+    ])
+    assert.equal(result.workerError, undefined)
+    assert.equal(result.status, "ERROR")
+    assert.equal(result.code, "ATTEMPT_COVERAGE_INCOMPLETE")
+  } finally {
+    clearTimeout(timer)
+    await worker.terminate()
   }
 })
 

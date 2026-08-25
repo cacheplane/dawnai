@@ -3,7 +3,9 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { composeGitHubEffects, createGitHubWriter } from "../adapters/github-write.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { releaseBodySha256 } from "../metadata.mjs"
+import { canonicalAuditResultBytes } from "../terminal-records.mjs"
 
 const OWNER = "cacheplane"
 const REPO = "dawnai"
@@ -129,6 +131,33 @@ test("writer rejects lightweight tags and stale body CAS without mutation", asyn
   assert.equal(mutations, 0)
 })
 
+test("writer revalidates an annotated tag before returning an existing-resource no-op", async () => {
+  let tagReads = 0
+  const reader = exactReader({
+    tagTargetSha() {
+      tagReads += 1
+      return tagReads === 1 ? SHA : "f".repeat(40)
+    },
+  })
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader,
+    fetchImpl: assert.fail,
+  })
+
+  await assert.rejects(
+    writer.createDraftRelease({
+      tag: TAG,
+      targetSha: SHA,
+      title: `Dawn v${VERSION}`,
+      body: "candidate body",
+    }),
+    /annotated|tag|target|commit/iu,
+  )
+  assert.equal(tagReads, 2)
+})
+
 test("asset uploads accept only absent bytes or downloaded byte equality", async () => {
   const bytes = Buffer.from("exact asset")
   const digest = sha256(bytes)
@@ -179,6 +208,67 @@ test("asset uploads accept only absent bytes or downloaded byte equality", async
       sha256: digest,
     }),
     /different|digest|bytes/iu,
+  )
+})
+
+test("asset uploads admit valid tarballs above the JSON request limit", async () => {
+  const bytes = Buffer.alloc(5 * 1024 * 1024, 0x61)
+  const digest = sha256(bytes)
+  const assets = []
+  const downloads = new Map()
+  let uploads = 0
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({ release: draftRelease("body"), assets, downloads }),
+    fetchImpl: async (_url, init) => {
+      uploads += 1
+      assert.equal(init.body.byteLength, bytes.byteLength)
+      assets.push({ id: 90, name: "package-01.tgz" })
+      downloads.set(90, bytes)
+      return jsonResponse({ id: 90 }, 201)
+    },
+  })
+
+  assert.deepEqual(
+    await writer.uploadAssetIfAbsentAndEqual({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      name: "package-01.tgz",
+      bytes,
+      sha256: digest,
+    }),
+    { assetId: 90, status: "uploaded", sha256: digest },
+  )
+  assert.equal(uploads, 1)
+})
+
+test("asset uploads reject unknown namespaces and bytes above the exact asset-class limit", async () => {
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({ release: draftRelease("body") }),
+    fetchImpl: assert.fail,
+  })
+  const input = {
+    releaseId: 7,
+    tag: TAG,
+    targetSha: SHA,
+    name: "oversized.tgz",
+    bytes: Buffer.alloc(RELEASE_PAYLOAD_LIMITS.tarballBytes + 1),
+    sha256: "0".repeat(64),
+  }
+
+  await assert.rejects(writer.uploadAssetIfAbsentAndEqual(input), /byte|limit|tarball/iu)
+  await assert.rejects(
+    writer.uploadAssetIfAbsentAndEqual({
+      ...input,
+      name: "controller-debug.intoto.jsonl",
+      bytes: Buffer.alloc(0),
+      sha256: sha256(Buffer.alloc(0)),
+    }),
+    /namespace|allowed|asset/iu,
   )
 })
 
@@ -377,17 +467,68 @@ test("publication rejects a marker whose immutable base digest does not match it
   assert.equal(mutations, 0)
 })
 
+test("publication rejects a malformed historical audit attempt before mutation", async () => {
+  const fixture = verifiedPublicationFixture()
+  const invalid = {
+    name: "audit-attempt-100-1.json",
+    bytes: Buffer.from("not an audit receipt"),
+  }
+  const assets = [...fixture.assets, { ...invalid, digest: sha256(invalid.bytes) }]
+  let releaseReads = 0
+  let mutations = 0
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release() {
+        releaseReads += 1
+        return {
+          ...draftRelease(fixture.body),
+          draft: releaseReads === 1,
+          immutable: releaseReads > 1,
+        }
+      },
+      assets: assets.map((asset, index) => ({ id: index + 1, name: asset.name })),
+      downloads: new Map(assets.map((asset, index) => [index + 1, asset.bytes])),
+    }),
+    fetchImpl: async () => {
+      mutations += 1
+      return jsonResponse({ id: 7, draft: false }, 200)
+    },
+  })
+
+  await assert.rejects(
+    writer.publishReleaseIfCurrent({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      expectedBodySha256: releaseBodySha256(fixture.body),
+      assets: assets.map(({ name, digest }) => ({ name, sha256: digest })),
+    }),
+    /audit|canonical|receipt/iu,
+  )
+  assert.equal(mutations, 0)
+})
+
 function exactReader({
   releases,
   release = draftRelease("candidate body"),
   assets = [],
   downloads = new Map(),
   tagType = "tag",
+  tagTargetSha = SHA,
 } = {}) {
   const getReleaseValue = () => (typeof release === "function" ? release() : release)
   return Object.freeze({
     getRef: async () => present("ref", { object: { type: tagType, sha: TAG_SHA } }),
-    getGitTag: async () => present("git-tag", { tag: TAG, object: { type: "commit", sha: SHA } }),
+    getGitTag: async () =>
+      present("git-tag", {
+        tag: TAG,
+        object: {
+          type: "commit",
+          sha: typeof tagTargetSha === "function" ? tagTargetSha() : tagTargetSha,
+        },
+      }),
     listReleases: async () =>
       present("releases", releases ?? [{ id: 7, tag_name: TAG, draft: true }]),
     getRelease: async () => present("release", getReleaseValue()),
@@ -444,7 +585,18 @@ function verifiedPublicationFixture() {
     ...asset,
     digest: sha256(asset.bytes),
   }))
-  const auditBytes = Buffer.from("canonical audit result")
+  const auditBytes = canonicalAuditResultBytes({
+    schemaVersion: 1,
+    version: VERSION,
+    commitSha: SHA,
+    manifestSha256: subjects[0].digest,
+    workflowRunId: 101,
+    runAttempt: 1,
+    startedAt: "2026-08-24T01:00:00Z",
+    finishedAt: "2026-08-24T01:01:00Z",
+    checks: [{ name: "published-artifacts", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
+  })
   const auditDigest = sha256(auditBytes)
   const marker = {
     schemaVersion: 1,

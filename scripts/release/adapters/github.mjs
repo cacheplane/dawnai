@@ -782,6 +782,7 @@ function normalizeAllAttemptJobs(result) {
   const identities = new Set()
   const attempts = new Set()
   const jobs = []
+  let maximumAttempt = 0
   for (const record of result.value) {
     if (
       !Number.isSafeInteger(record.id) ||
@@ -804,6 +805,7 @@ function normalizeAllAttemptJobs(result) {
     }
     identities.add(identity)
     attempts.add(record.run_attempt)
+    maximumAttempt = Math.max(maximumAttempt, record.run_attempt)
     jobs.push({
       id: record.id,
       runAttempt: record.run_attempt,
@@ -814,11 +816,8 @@ function normalizeAllAttemptJobs(result) {
       completedAt: record.completed_at,
     })
   }
-  const maximumAttempt = Math.max(...attempts)
-  for (let attempt = 1; attempt <= maximumAttempt; attempt += 1) {
-    if (!attempts.has(attempt)) {
-      return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
-    }
+  if (attempts.size !== maximumAttempt) {
+    return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
   }
   jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
   return { ...publicResult(result), value: jobs }

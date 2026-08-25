@@ -1,7 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 
 import { normalizeAdapterEnvelope, snapshotJson } from "../adapter-normalize.mjs"
-import { parseReleaseMarker, releaseBodySha256 } from "../metadata.mjs"
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
+import {
+  parseReleaseMarker,
+  releaseBodySha256,
+  validatePublicationAuditAssets,
+} from "../metadata.mjs"
 
 const API_ORIGIN = "https://api.github.com"
 const UPLOAD_ORIGIN = "https://uploads.github.com"
@@ -30,7 +35,7 @@ const READER_METHODS = Object.freeze([
 const MAX_TIMEOUT_MS = 300_000
 const DEFAULT_TIMEOUT_MS = 15_000
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-const MAX_REQUEST_BYTES = 4 * 1024 * 1024
+const MAX_JSON_REQUEST_BYTES = 4 * 1024 * 1024
 
 export function composeGitHubEffects({ reader, writer }) {
   if (
@@ -124,6 +129,7 @@ export function createGitHubWriter({
       if (existing !== null) {
         const release = await readRelease(context, existing.id)
         assertDraftIdentity(release, args, { title: args.title, body: args.body })
+        await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({
           releaseId: release.id,
           status: "existing",
@@ -185,6 +191,7 @@ export function createGitHubWriter({
         throw new Error("Release body compare-and-swap is stale")
       }
       if (current.body === args.body && current.name === args.title) {
+        await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({
           releaseId,
           status: "unchanged",
@@ -222,6 +229,7 @@ export function createGitHubWriter({
       let existing = findOneAsset(assets, args.name)
       if (existing !== null) {
         await assertAssetEquality(context, existing, args.sha256)
+        await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({ assetId: existing.id, status: "existing", sha256: args.sha256 })
       }
       const response = await requestJson(context, {
@@ -230,6 +238,7 @@ export function createGitHubWriter({
         apiVersion: RELEASE_API_VERSION,
         bodyBytes: args.bytes,
         contentType: "application/octet-stream",
+        maxRequestBytes: args.maximumBytes,
       })
       if (![201, 422].includes(response.httpStatus)) {
         throw new Error("GitHub Release asset upload did not return HTTP 201")
@@ -264,10 +273,11 @@ export function createGitHubWriter({
       }
       const marker = parseReleaseMarker(current.body)
       validatePublicationMarker(marker, args, expectedAssets)
-      await assertExactRemoteAssets(context, releaseId, expectedAssets)
+      await assertExactPublicationAssets(context, releaseId, expectedAssets, marker)
       if (current.draft === false) {
         if (current.immutable !== true)
           throw new Error("Published managed Release is not immutable")
+        await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({ releaseId, status: "existing", immutable: true })
       }
       if (current.draft !== true || current.immutable !== false) {
@@ -291,7 +301,7 @@ export function createGitHubWriter({
       ) {
         throw new Error("Published Release immutable re-read changed metadata")
       }
-      await assertExactRemoteAssets(context, releaseId, expectedAssets)
+      await assertExactPublicationAssets(context, releaseId, expectedAssets, marker)
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
       return Object.freeze({ releaseId, status: "published", immutable: true })
     },
@@ -463,6 +473,7 @@ async function assertAssetEquality(context, asset, expectedSha256) {
   ) {
     throw new Error("GitHub Release asset has different bytes or digest")
   }
+  return bytes
 }
 
 async function assertExactRemoteAssets(context, releaseId, expectedAssets) {
@@ -477,8 +488,21 @@ async function assertExactRemoteAssets(context, releaseId, expectedAssets) {
     throw new Error("GitHub Release asset namespace is not exact")
   }
   const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset.sha256]))
-  for (const asset of actual)
-    await assertAssetEquality(context, asset, expectedByName.get(asset.name))
+  const result = []
+  for (const asset of actual) {
+    const bytes = await assertAssetEquality(context, asset, expectedByName.get(asset.name))
+    result.push(Object.freeze({ name: asset.name, bytes }))
+  }
+  return Object.freeze(result)
+}
+
+async function assertExactPublicationAssets(context, releaseId, expectedAssets, marker) {
+  const actual = await assertExactRemoteAssets(context, releaseId, expectedAssets)
+  const baseNames = new Set(markerBaseAssets(marker).map(({ name }) => name))
+  validatePublicationAuditAssets(
+    actual.filter(({ name }) => !baseNames.has(name)),
+    { marker },
+  )
 }
 
 function validatePublicationMarker(marker, args, assets) {
@@ -568,14 +592,21 @@ function normalizeExpectedAssets(value) {
 
 async function requestJson(
   context,
-  { url, method, apiVersion, body, bodyBytes, contentType = "application/json" },
+  {
+    url,
+    method,
+    apiVersion,
+    body,
+    bodyBytes,
+    contentType = "application/json",
+    maxRequestBytes = MAX_JSON_REQUEST_BYTES,
+  },
 ) {
   const bytes =
     bodyBytes === undefined
       ? Buffer.from(JSON.stringify(canonicalize(body)), "utf8")
       : Buffer.from(bodyBytes)
-  if (bytes.length > MAX_REQUEST_BYTES)
-    throw new TypeError("GitHub write request exceeds byte limit")
+  if (bytes.length > maxRequestBytes) throw new TypeError("GitHub write request exceeds byte limit")
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), context.timeoutMs)
   try {
@@ -716,16 +747,37 @@ function snapshotAssetInput(value) {
   const fields = ["releaseId", "tag", "targetSha", "name", "bytes", "sha256"]
   if (!sameOwnDataFields(value, fields))
     throw new TypeError("Release asset input schema is invalid")
+  const name = dataField(value, "name")
+  validateAssetName(name)
+  const maximumBytes = assetUploadLimit(name)
   const json = snapshotJson({
     releaseId: dataField(value, "releaseId"),
     tag: dataField(value, "tag"),
     targetSha: dataField(value, "targetSha"),
-    name: dataField(value, "name"),
+    name,
     sha256: dataField(value, "sha256"),
   })
   const bytes = dataField(value, "bytes")
   if (!(bytes instanceof Uint8Array)) throw new TypeError("Release asset bytes are invalid")
-  return { ...json, bytes: Buffer.from(bytes) }
+  assertPayloadByteLength(bytes.byteLength, maximumBytes, `${name} upload`)
+  return { ...json, bytes: Buffer.from(bytes), maximumBytes }
+}
+
+function assetUploadLimit(name) {
+  if (name === "release-record.json") return RELEASE_PAYLOAD_LIMITS.releaseRecordBytes
+  if (name === "manifest.json") return RELEASE_PAYLOAD_LIMITS.manifestBytes
+  if (name.endsWith(".tgz")) return RELEASE_PAYLOAD_LIMITS.tarballBytes
+  if (name === "manifest.json.intoto.jsonl" || name.endsWith(".tgz.intoto.jsonl")) {
+    return RELEASE_PAYLOAD_LIMITS.attestationBundleBytes
+  }
+  if (
+    name === "audit-result.json" ||
+    name === "abandonment.json" ||
+    /^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(name)
+  ) {
+    return RELEASE_PAYLOAD_LIMITS.auditReceiptBytes
+  }
+  throw new TypeError("GitHub Release asset namespace is not allowed")
 }
 
 function sameOwnDataFields(value, fields) {
