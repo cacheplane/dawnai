@@ -55,6 +55,31 @@ The web tree's `ConnectScreen.tsx` currently renders "Start it from `examples/re
 
 ---
 
+## CORRECTIONS FROM THE SPIKE ROUND (2026-08-25) — these override the tasks below
+
+Five spikes ran before implementation. They discharged every "SPIKE REQUIRED" marker in this plan and **corrected four of its instructions**. Where this section and a task disagree, this section wins. The full decision sheet (with literal command output) is in the session scratchpad as `sp3a-decision-sheet.md`; it is deliberately not committed because it quotes a phrase the docs gate bans.
+
+**C1 — Task 1 Step 2's root scripts are broken. Every single-workspace delegator needs a trailing ` --`.**
+Verified on node 24.19.0 / npm 11.17.0: `npm run dev --workspace server` invoked as `npm run dev -- --port 4123` passes the child only `["4123"]` — npm eats the flag NAME — and `dawn dev` then hard-errors `too many arguments for 'dev'`. With a trailing ` --` the child receives `["--port","4123"]`. The harness boots generated apps exactly that way, so without this the activation lane dies 200 lines later as an unrelated-looking health-check timeout. Use the map in the decision sheet verbatim: trailing ` --` on every `--workspace` delegator, `--if-present` on every `--workspaces` fan-out, and no trailing `--` on the fan-outs.
+
+**C2 — Task 3 Step 1 understates the parity work.** `RESEARCH_PARITY_ROOTS`/`RESEARCH_PARITY_IGNORED_PATHS` are module-level constants read *inside* `inventoryParityTree`, and `compareParityTrees` takes only `(exampleRoot, templateRoot)`. A "second describe block using the same comparator" would silently compare the web trees against the SERVER's roots — finding nothing and passing. Both functions must be parameterized with `parityRoots` (+ `ignoredPaths`) and all four callsites updated (three are the existing fixture tests).
+
+**C3 — Task 5 Step 3 is a no-op; delete it.** `writePnpmWorkspaceBuildPolicy` early-returns because the template already carries all three markers. `test/generated/harness.ts` scaffolds `--template basic` in both modes, so the research restructure cannot reach it.
+
+**C4 — Task 1 Step 1's single root gitignore is unsafe. Ship three.** Root (hand-written, must keep exactly one `.vercel/` line — `template-gitignore.test.ts` asserts it — and must add `.env`/`.env.*`/`!.env.example`, which the server's own file lacks) plus byte mirrors of the example's `server/.gitignore` and `web/.gitignore`. Hoisting breaks directory-anchored `workspace/*` entries and lets web's unanchored `AGENTS.md` hide the parity-guarded `server/AGENTS.md`. **Every one ships as `gitignore.template` at its own level** — `npm pack` silently drops a literal `.gitignore` at any depth.
+
+**C5 — `web/tsconfig.json` goes INSIDE parity, unchanged.** It is self-contained (no `extends`, no `references`). Do NOT "tidy" it onto `@dawn-ai/config-typescript/nextjs`: that preset flips `jsx` and `allowJs` and adds two strict flags — a behavior change that also breaks parity.
+
+**C6 — The web tree is 49 tracked files, not ~30** (14 of them tests).
+
+**C7 — Two banned-phrase hits must be fixed on the EXAMPLE side before any mirroring**, in `examples/research/web/app/components/ui.ts:6` and `app/lib/hydrate.test.ts:484`. They are invisible today only because `examples` is outside the docs gate's roots; they become a hard failure the moment the file lands under `packages/`. Parity is byte-for-byte, so they cannot be fixed template-side.
+
+**Discharged spikes (do not re-run):** `next dev -p 3010 --port 4123` binds 4123 (last flag wins). `npm run dev:server`/`dev:web` work inside `examples/research`. `--workspaces --if-present` exits 0 when a member lacks the script. `--workspaces` never fail-fasts — it reports the LAST failing workspace's code. `npm install` at the root hoists to one `node_modules` with members symlinked. `--workspace <dir>` resolves by directory, not package name.
+
+**Highest-value traps** (full ranked list in the sheet): the trailing ` --` reads as a typo and will be "cleaned up" — add a devkit test asserting the literal strings end with `" --"`; the activation lane's `.env` must move to `server/.env` FIRST and ALONE, because a root `.env` makes `npm start` fail as an unrelated request-count assertion; `applyInternalModePackageOverrides` OVERWRITES `pnpm-workspace.yaml` with `packages:\n  - .`, so internal mode cannot install until it emits the two members; and two assertions go green-but-meaningless after the move (`packaged-app.test.ts`'s template-manifest byte check, and the activation lane's negative `src/app/(public)/hello/…` check).
+
+---
+
 ### Task 0: Baseline
 
 - [ ] **Step 1: Confirm branch and green start**
