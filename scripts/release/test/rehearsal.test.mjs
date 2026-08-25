@@ -546,9 +546,10 @@ function fixedGroupArtifactFixture() {
     artifactUpload: { id: "12", digest: `sha256:${"b".repeat(64)}` },
     prepareRun: { id: 11, attempt: 1 },
   })
+  const multiSubjectBundle = testMultiSubjectBundle({ candidate, files })
   const bundles = files.map(({ name }) => ({
     name: `${name}.intoto.jsonl`,
-    bytes: Buffer.from(`bundle:${name}`),
+    bytes: multiSubjectBundle,
   }))
   const attestationSet = {
     repository: "cacheplane/dawnai",
@@ -580,7 +581,27 @@ function absentPublicationState(fixture) {
     commitSha: fixture.candidate.commitSha,
     tag: `v${fixture.candidate.version}`,
     observedAt: "2026-08-25T00:00:00Z",
-    candidateRuns: [],
+    candidateRuns: [
+      {
+        runId: fixture.attestationSet.workflowRunId,
+        runAttempt: fixture.attestationSet.runAttempt,
+        headSha: fixture.candidate.commitSha,
+        headBranch: `v${fixture.candidate.version}`,
+        workflowPath: fixture.candidate.publisherWorkflow,
+        event: "workflow_dispatch",
+        jobs: [
+          {
+            id: 1,
+            runAttempt: 1,
+            name: "publish-npm",
+            status: "completed",
+            conclusion: "skipped",
+            startedAt: "2026-08-25T00:00:00Z",
+            completedAt: "2026-08-25T00:00:01Z",
+          },
+        ],
+      },
+    ],
     registryMutationReceipts: [],
     packages: fixture.artifact.manifest.packages.map(({ name }) => ({
       name,
@@ -651,4 +672,50 @@ async function runGit(cwd, args) {
 
 function hash(algorithm, bytes) {
   return createHash(algorithm).update(bytes).digest("hex")
+}
+
+function testMultiSubjectBundle({ candidate, files }) {
+  const repository = "https://github.com/cacheplane/dawnai"
+  const ref = `refs/tags/v${candidate.version}`
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: files.map(({ name, bytes }) => ({
+      name,
+      digest: { sha256: hash("sha256", bytes) },
+    })),
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      buildDefinition: {
+        buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+        externalParameters: {
+          workflow: { ref, repository, path: candidate.publisherWorkflow },
+        },
+        internalParameters: { github: { event_name: "workflow_dispatch" } },
+        resolvedDependencies: [
+          { uri: `git+${repository}@${ref}`, digest: { gitCommit: candidate.commitSha } },
+        ],
+      },
+      runDetails: {
+        builder: { id: "https://github.com/actions/runner/github-hosted" },
+        metadata: {
+          invocationId: "https://github.com/cacheplane/dawnai/actions/runs/13/attempts/1",
+        },
+      },
+    },
+  }
+  return Buffer.from(
+    `${JSON.stringify({
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      verificationMaterial: {
+        certificate: { rawBytes: "fixture" },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
+      dsseEnvelope: {
+        payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [{ sig: "verified-by-github", keyid: "" }],
+      },
+    })}\n`,
+  )
 }
