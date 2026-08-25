@@ -15,17 +15,32 @@ const documentationPaths = {
   chartValues: resolve(repoRoot, "charts/dawn-sandbox-infra/values.yaml"),
   chartNotes: resolve(repoRoot, "charts/dawn-sandbox-infra/templates/NOTES.txt"),
   dawnAppNotes: resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
-  package: resolve(repoRoot, "packages/sandbox/README.md"),
-  website: resolve(repoRoot, "apps/web/content/docs/sandbox.mdx"),
-  bundled: resolve(repoRoot, "packages/cli/docs/sandbox.md"),
+  sandboxGuide: resolve(repoRoot, "apps/web/content/docs/sandbox/kubernetes.mdx"),
+  deploymentGuide: resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
   contributors: resolve(repoRoot, "CONTRIBUTORS.md"),
 } as const
 
 type DocumentationName = keyof typeof documentationPaths
 type Documentation = Readonly<Record<DocumentationName, string>>
 
-const policyDocumentation = ["chart", "package", "website", "bundled"] as const
+const policyDocumentation = ["chart", "sandboxGuide"] as const
 const commandDocumentation = [...policyDocumentation, "contributors"] as const
+const baselineDocumentation = ["chart", "chartValues", "chartNotes", "sandboxGuide"] as const
+const infrastructureHelmDocumentation = [
+  "chart",
+  "chartNotes",
+  "dawnAppNotes",
+  "sandboxGuide",
+  "deploymentGuide",
+] as const
+const crossNamespaceDocumentation = [
+  "chartNotes",
+  "dawnAppNotes",
+  "sandboxGuide",
+  "deploymentGuide",
+] as const
+const preflightDocumentation = ["chart", "sandboxGuide"] as const
+const storageDocumentation = ["chart", "sandboxGuide", "contributors"] as const
 const compatibilityDisclaimer =
   "Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers."
 const publishedInfrastructureChart = "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra"
@@ -423,27 +438,27 @@ Managed Kubernetes services require separate validation.`,
   })
 
   test("distinguishes storage selection preflight from runtime provisioning", async () => {
-    const { contributors } = await loadDocumentation()
-    const source = proseText(contributors)
+    const documentation = await loadDocumentation()
 
-    expect(source).toMatch(/preflights?[^.]*storage selection/i)
-    expect(source).not.toMatch(/preflights?[^.]*dynamic(?:ally)? (?:RWO|ReadWriteOnce)/i)
-    expect(source).toMatch(
-      /dynamic(?:ally)? (?:RWO|ReadWriteOnce) provisioning is a runtime prerequisite verified by the lifecycle, not proven by preflight/i,
-    )
+    for (const name of storageDocumentation) {
+      const source = proseText(documentation[name])
+      expect(source, `${name} must describe storage selection preflight`).toMatch(
+        /preflights?[^.]*storage selection/i,
+      )
+      expect(
+        source,
+        `${name} must not claim preflight proves dynamic RWO provisioning`,
+      ).not.toMatch(/preflights?[^.]*dynamic(?:ally)? (?:RWO|ReadWriteOnce)/i)
+      expect(source, `${name} must reserve provisioning proof for lifecycle`).toMatch(
+        /dynamic(?:ally)? (?:RWO|ReadWriteOnce) provisioning is a runtime prerequisite verified by the lifecycle, not proven by preflight/i,
+      )
+    }
   })
 
   test("keeps Baseline guidance limited to actual Restricted admission violations", async () => {
     const documentation = await loadDocumentation()
 
-    for (const name of [
-      "chart",
-      "chartValues",
-      "chartNotes",
-      "package",
-      "website",
-      "bundled",
-    ] as const) {
+    for (const name of baselineDocumentation) {
       const source = proseText(documentation[name])
       expect(source, `${name} must limit Baseline to actual Restricted violations`).toMatch(
         /Baseline is (?:needed|required) only for [^.]*actually violate Restricted admission/i,
@@ -461,14 +476,7 @@ Managed Kubernetes services require separate validation.`,
   test("publishes complete infrastructure Helm commands with a management release namespace", async () => {
     const documentation = await loadDocumentation()
 
-    for (const name of [
-      "chart",
-      "chartNotes",
-      "dawnAppNotes",
-      "package",
-      "website",
-      "bundled",
-    ] as const) {
+    for (const name of infrastructureHelmDocumentation) {
       const commands = infrastructureHelmCommands(documentation[name])
       expect(
         commands.length,
@@ -485,7 +493,7 @@ Managed Kubernetes services require separate validation.`,
           `${name} command must target the management release namespace: ${command}`,
         ).toBe(true)
 
-        if (verb === "install") {
+        if (verb === "install" || commandTokens.includes("--install")) {
           expect(
             commandTokens.includes("--create-namespace"),
             `${name} install must create the management namespace: ${command}`,
@@ -501,6 +509,10 @@ Managed Kubernetes services require separate validation.`,
             `${name} local chart command must use the checkout-relative path`,
           ).toBe(true)
         }
+
+        expect(command, `${name} must not pin a stale chart release version`).not.toMatch(
+          /(?:^|\s)--version\s+v?\d+\.\d+\.\d+(?=\s|$)/,
+        )
       }
     }
 
@@ -514,17 +526,84 @@ Managed Kubernetes services require separate validation.`,
   })
 
   test("requires credential-safe cross-namespace ServiceAccount wiring in chart NOTES", async () => {
-    const { chartNotes } = await loadDocumentation()
+    const documentation = await loadDocumentation()
+    const { chartNotes } = documentation
     expect(chartNotes).not.toContain("Bind an in-cluster Dawn app to this ServiceAccount")
     expect(chartNotes).not.toMatch(/serviceAccountName:\s+\{\{.*orchestratorSAName/)
     expect(chartNotes).toContain(
       "Create or use the Dawn app ServiceAccount in a separate management namespace.",
     )
     expect(chartNotes).toContain(
-      `--set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"<app-service-account>","namespace":"<management-namespace>"}'`,
-    )
-    expect(chartNotes).toContain(
       "Configure the app Pod to use that management-namespace ServiceAccount.",
     )
+
+    for (const [name, source] of Object.entries(documentation)) {
+      expect(source, `${name} must not recommend indexed subject replacement`).not.toMatch(
+        /--set-json\s+['"]?orchestrator\.subjects\[\d+\]/,
+      )
+    }
+
+    for (const name of crossNamespaceDocumentation) {
+      const source = proseText(documentation[name])
+      expect(source, `${name} must use the complete intended subject list`).toMatch(
+        /orchestrator\.subjects[^.]*complete intended subject list/i,
+      )
+      expect(source, `${name} must preserve existing RoleBinding subjects`).toMatch(
+        /preserve every existing (?:entry|item|subject)/i,
+      )
+      expect(source, `${name} must explain Helm array replacement`).toMatch(/Helm replaces arrays/i)
+      expect(source, `${name} must reject guessed numeric subject indexes`).toMatch(
+        /(?:do not|never)[^.]*guessed numeric subject index/i,
+      )
+      expect(source, `${name} must bind the app ServiceAccount across namespaces`).toMatch(
+        /cross-namespace (?:ServiceAccount )?subject/i,
+      )
+    }
+  })
+
+  test("keeps Helm releases and credentials out of the sandbox namespace", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of infrastructureHelmDocumentation) {
+      const source = proseText(documentation[name])
+      expect(source, `${name} must identify the management namespace`).toMatch(
+        /dawn-app management namespace/i,
+      )
+      expect(source, `${name} must identify the sandbox resource namespace`).toMatch(
+        /sandbox resources[^.]*dawn-sandboxes|dawn-sandboxes[^.]*sandbox resources/i,
+      )
+    }
+  })
+
+  test("documents complete provider authorization preflight and cautious CNI detection", async () => {
+    const documentation = await loadDocumentation()
+
+    for (const name of preflightDocumentation) {
+      const source = proseText(documentation[name])
+      expect(source, `${name} must describe the complete runtime permission set`).toMatch(
+        /every Kubernetes API operation the provider can perform|complete runtime permission set/i,
+      )
+      expect(source, `${name} must cover Pod permissions`).toMatch(/create\/get\/delete Pods/i)
+      expect(source, `${name} must cover PVC permissions`).toMatch(/create\/get\/delete PVCs/i)
+      expect(source, `${name} must cover pod exec permissions`).toMatch(/create\/get pods\/exec/i)
+      expect(source, `${name} must cover NetworkPolicy permissions`).toMatch(
+        /create\/get\/list\/update\/delete NetworkPolicies/i,
+      )
+      expect(source, `${name} must distinguish authorization denial`).toMatch(
+        /missing permissions|authorization denials?/i,
+      )
+      expect(source, `${name} must distinguish authorization-review failure`).toMatch(
+        /authorization-review failures?/i,
+      )
+      expect(source, `${name} must distinguish API transport failure`).toMatch(
+        /(?:API )?transport failures?/i,
+      )
+      expect(source, `${name} must treat unknown CNI enforcement as a warning`).toMatch(
+        /unconfirmed policy-capable CNI produces a warning/i,
+      )
+      expect(source, `${name} must not present the CNI warning as proof`).toMatch(
+        /warning rather than (?:a )?(?:successful )?enforcement (?:claim|proof)/i,
+      )
+    }
   })
 })

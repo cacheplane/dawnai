@@ -2499,8 +2499,8 @@ const accuracyContracts = [
       "cannot override",
       "PID limits",
       "node/runtime",
-      "Pod-create authorization only",
-      "NetworkPolicy enforcement is unknown",
+      "every Kubernetes API operation the provider can perform",
+      "unconfirmed policy-capable CNI produces a warning",
       "every unreferenced Dawn PVC",
       "still-live thread",
       "reaper.ttlHours",
@@ -2657,6 +2657,11 @@ const accuracyContracts = [
       "!.dawn/build/**",
       "COPY . .",
       "image layer",
+      "dawn-app management namespace",
+      "complete intended subject list",
+      "preserve every existing",
+      "Helm replaces arrays",
+      "helm upgrade --install dawn-sandbox-infra ./charts/dawn-sandbox-infra",
     ],
     forbidden: [
       "backend that does not exist yet",
@@ -2666,6 +2671,9 @@ const accuracyContracts = [
       "image built the alternate way",
       "containerize the `langsmith` target",
       "generated Dockerfile copies only the files needed at runtime",
+      "--namespace dawn-sandboxes",
+      "same namespace",
+      "orchestrator.subjects[0]",
     ],
   },
   {
@@ -3270,14 +3278,16 @@ if (canonicalKubernetesSandboxUrlCount !== 1) {
 // expected command counts exact so a new unpinned example cannot hide beside
 // an older pinned one.
 const helmInstallExampleContracts = [
-  { file: "apps/web/content/docs/deployment/kubernetes.mdx", expectedCount: 3 },
+  { file: "apps/web/content/docs/deployment/kubernetes.mdx", expectedCount: 2 },
   {
     file: "charts/dawn-app/README.md",
     expectedCount: 2,
     requiredInEveryCommand: [
-      "--namespace dawn-sandboxes",
+      "--namespace dawn-app",
       "--set image.repository=ghcr.io/you/your-app",
       "--set image.tag=2026-08-10",
+      "--set serviceAccount.create=true",
+      "--set serviceAccount.name=dawn-app",
     ],
   },
 ]
@@ -3349,20 +3359,35 @@ const kubernetesDeploymentSource = readFileSync(
   resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
   "utf8",
 )
+const initialInfrastructureInstall = kubernetesDeploymentSource.indexOf(
+  "helm upgrade --install dawn-sandbox-infra",
+)
+const initialSandboxAppInstall = kubernetesDeploymentSource.indexOf(
+  "helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
+)
+if (initialInfrastructureInstall === -1 || initialSandboxAppInstall === -1) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must show both initial sandbox infrastructure and app installs",
+  )
+} else if (initialInfrastructureInstall > initialSandboxAppInstall) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must install sandbox infrastructure with the planned RoleBinding subject before installing the app",
+  )
+}
+const effectiveValuesExport = kubernetesDeploymentSource.indexOf(
+  "helm get values dawn-sandbox-infra --all",
+)
 const crossNamespaceRoleBinding = kubernetesDeploymentSource.indexOf(
   "helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra",
+  effectiveValuesExport,
 )
-const crossNamespaceAppInstall = kubernetesDeploymentSource.indexOf(
-  "helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
-  kubernetesDeploymentSource.indexOf("For a separate application namespace"),
-)
-if (crossNamespaceRoleBinding === -1 || crossNamespaceAppInstall === -1) {
+if (effectiveValuesExport === -1 || crossNamespaceRoleBinding === -1) {
   failures.push(
-    "apps/web/content/docs/deployment/kubernetes.mdx must show both cross-namespace RoleBinding update and app install",
+    "apps/web/content/docs/deployment/kubernetes.mdx must show the effective-values cross-namespace RoleBinding update",
   )
-} else if (crossNamespaceRoleBinding > crossNamespaceAppInstall) {
+} else if (effectiveValuesExport > crossNamespaceRoleBinding) {
   failures.push(
-    "apps/web/content/docs/deployment/kubernetes.mdx must update the cross-namespace RoleBinding before installing the app ServiceAccount",
+    "apps/web/content/docs/deployment/kubernetes.mdx must export effective values before updating the cross-namespace RoleBinding",
   )
 }
 for (const required of ["future ServiceAccount", "Ready-but-sandbox-broken"]) {

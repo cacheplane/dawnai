@@ -38,6 +38,7 @@ The root uses Node APIs, Docker process execution, and the Kubernetes client. `/
 | `DockerSandboxOptions` | Configure the Docker image and optional injected Docker seam. |
 | `dockerSandbox` | Create the Docker provider. |
 | `KubeClient` | Describe the public Kubernetes client seam; helper request shapes remain implementation details. |
+| `KubePermission` | Describe one Kubernetes authorization check used by the public client seam. |
 | `KubernetesSandboxOptions` | Configure the Kubernetes image, namespace, storage class, timeout, and client seam. |
 | `kubernetesSandbox` | Create the Kubernetes provider. |
 
@@ -94,7 +95,7 @@ Kubernetes `network:allow` without an allowlist emits no NetworkPolicy.
 
 #### Network enforcement caveat
 
-No provider-created policy does not promise unrestricted egress: cluster defaults, infrastructure policies, and CNI behavior still apply. Preflight checks Kubernetes API reachability and Pod-creation RBAC; it does not prove NetworkPolicy enforcement.
+The absence of a provider-created policy does not promise unrestricted egress: cluster defaults, infrastructure policies, and CNI behavior still apply. Preflight checks Kubernetes API reachability and the complete runtime permission set, reporting authorization denials, review failures, and transport failures separately. Unknown CNI enforcement produces a warning; preflight does not prove NetworkPolicy enforcement.
 
 #### Behavior contract `sandbox.error.create`
 {/* api-behavior-authorities: [{"kind":"test-assertion","file":"packages/sandbox/test/sandbox-error-code.test.ts","testNames":["a failed container creation throws an error tagged DAWN_E2001"]}] */}

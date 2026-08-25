@@ -32,7 +32,6 @@ other credentials in `dawn-app`.
 
 ```sh
 helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-  --version 0.1.3 \
   --namespace dawn-app \
   --create-namespace
 ```
@@ -96,7 +95,7 @@ current kubeconfig context; the command refuses to switch contexts. It requires
 single annotated default or the exact `--storage-class`), Pod Security
 Admission, and a policy-enforcing CNI.
 
-Before changing the cluster, the command checks the server minor, unused
+Before changing the cluster, the command preflights the server minor, unused
 temporary namespace names, storage selection, and every administrative
 permission it will use. The permission preflight reports every denial and every
 failed authorization review, covering namespace lifecycle and StorageClass
@@ -105,6 +104,9 @@ requests, Roles, RoleBindings, ConfigMaps, ResourceQuotas, LimitRanges, PVCs,
 Services, Pods and `pods/exec`/`pods/log`, Deployments, CronJobs, Jobs,
 NetworkPolicies, Events, and SelfSubjectAccessReviews at their required
 management or sandbox scope.
+
+Dynamic RWO provisioning is a runtime prerequisite verified by the lifecycle,
+not proven by preflight.
 
 ## Values
 
@@ -146,7 +148,6 @@ downgrade:
 
 ```sh
 helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
-  --version 0.1.3 \
   --namespace dawn-app \
   --reuse-values \
   --set podSecurityStandard.enforce=baseline

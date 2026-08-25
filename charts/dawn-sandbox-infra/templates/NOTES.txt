@@ -1,11 +1,14 @@
 dawn-sandbox-infra installed.
 
 Helm release namespace:
-  {{ .Release.Namespace }} (management namespace; keep separate from the sandbox namespace)
+  {{ .Release.Namespace }} (dawn-app management namespace; keep separate from the sandbox namespace)
 
 Namespace:
   {{ include "dawn-sandbox-infra.namespace" . }}
 {{- if .Values.namespace.create }} (created by this chart){{- else }} (must already exist — namespace.create=false){{- end }}
+
+By default, sandbox resources live in dawn-sandboxes while this Helm release
+and its Secret live in the separate dawn-app management namespace.
 
 Point your Dawn app's `dawn.config.ts` at this namespace so the
 kubernetesSandbox provider agrees with the chart:
@@ -21,13 +24,23 @@ Configure the app Pod to use that management-namespace ServiceAccount.
 Then bind that cross-namespace subject into this sandbox namespace's
 orchestrator RoleBinding through `orchestrator.subjects`:
 
+First export this release's effective values:
+
+  helm get values {{ .Release.Name }} --all --output yaml \
+    --namespace {{ .Release.Namespace }} \
+    > dawn-sandbox-infra-rbac-values.yaml
+
+Edit dawn-sandbox-infra-rbac-values.yaml so `orchestrator.subjects` contains
+the complete intended subject list: preserve every existing item and append
+the application ServiceAccount as a cross-namespace subject. Helm replaces
+arrays, so never write a guessed numeric subject index.
+
   helm upgrade {{ .Release.Name }} oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
     --version {{ .Chart.Version }} \
     --namespace {{ .Release.Namespace }} \
-    --reuse-values \
-    --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"<app-service-account>","namespace":"<management-namespace>"}'
+    --values dawn-sandbox-infra-rbac-values.yaml
 
-The equivalent values shape is:
+The appended values entry is:
 
   orchestrator:
     subjects:
