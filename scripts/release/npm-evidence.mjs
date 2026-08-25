@@ -29,7 +29,7 @@ const PACKAGE_FIELDS = Object.freeze([
   "provenance",
 ])
 const LATEST_FIELDS = Object.freeze(["status", "version"])
-const SIGNATURE_FIELDS = Object.freeze(["status", "keyid"])
+const SIGNATURE_FIELDS = Object.freeze(["status", "verifier"])
 const PROVENANCE_FIELDS = Object.freeze([
   "predicateType",
   "workflow",
@@ -40,7 +40,6 @@ const PROVENANCE_FIELDS = Object.freeze([
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const SHA512_PATTERN = /^[0-9a-f]{128}$/u
-const KEY_ID_PATTERN = /^SHA256:[A-Za-z0-9+/_=-]{1,256}$/u
 const EXPECTED_REPOSITORY = "https://github.com/cacheplane/dawnai"
 const EXPECTED_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
@@ -158,8 +157,7 @@ function validatePackageEvidence(evidence, { candidate, expectedName, manifestEn
   assertExactFields(evidence.signature, SIGNATURE_FIELDS, `npm evidence signature ${expectedName}`)
   if (
     evidence.signature.status !== "valid" ||
-    typeof evidence.signature.keyid !== "string" ||
-    !KEY_ID_PATTERN.test(evidence.signature.keyid)
+    evidence.signature.verifier !== "npm-audit-signatures@11"
   ) {
     throw new TypeError(`npm evidence signature ${expectedName} is invalid`)
   }

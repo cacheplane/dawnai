@@ -12,6 +12,7 @@ import {
   parseSealedReleaseManifest,
   validateSealedReleaseManifest,
 } from "./manifest.mjs"
+import { createNpmAuditVerifier } from "./npm-audit.mjs"
 import {
   canonicalNpmEvidenceBytes,
   NPM_EVIDENCE_MAX_BYTES,
@@ -52,6 +53,7 @@ export const PUBLISHER_SPARSE_FILES = Object.freeze([
   "scripts/release/adapters/npm.mjs",
   "scripts/release/limits.mjs",
   "scripts/release/manifest.mjs",
+  "scripts/release/npm-audit.mjs",
   "scripts/release/npm-evidence.mjs",
   "scripts/release/process-runner.mjs",
   "scripts/release/publisher.mjs",
@@ -77,6 +79,7 @@ export async function publishManifestSerially({
   manifest,
   observeRegistry,
   downloadRegistryTarball,
+  verifyPackage,
   publishTarball,
   poll,
   log,
@@ -85,6 +88,7 @@ export async function publishManifestSerially({
   const sealedManifest = validateSealedReleaseManifest(manifest, { candidate: identity })
   assertFunction(observeRegistry, "observeRegistry")
   assertFunction(downloadRegistryTarball, "downloadRegistryTarball")
+  assertFunction(verifyPackage, "verifyPackage")
   assertFunction(publishTarball, "publishTarball")
   assertFunction(poll, "poll")
   assertFunction(log, "log")
@@ -121,6 +125,7 @@ export async function publishManifestSerially({
         candidate: identity,
         observeRegistry,
         downloadRegistryTarball,
+        verifyPackage,
         poll,
       })
       log({ event: "package-verified", name: entry.name })
@@ -142,6 +147,7 @@ export async function publishManifestSerially({
         candidate: identity,
         observeRegistry,
         downloadRegistryTarball,
+        verifyPackage,
         poll,
       })
       log({ event: "package-recovered", name: entry.name })
@@ -162,6 +168,7 @@ export async function publishManifestSerially({
         candidate: identity,
         observeRegistry,
         downloadRegistryTarball,
+        verifyPackage,
         poll,
       })
       log({ event: "package-recovered", name: entry.name })
@@ -176,6 +183,7 @@ export async function publishManifestSerially({
       candidate: identity,
       observeRegistry,
       downloadRegistryTarball,
+      verifyPackage,
       poll,
     })
   }
@@ -191,10 +199,14 @@ export async function publishManifestSerially({
       candidate: identity,
       downloadRegistryTarball,
     })
-    if (analyzed.status !== "present" || !analyzed.ready) {
+    if (analyzed.status !== "present" || !registryReady(analyzed, identity)) {
       throw new Error(`Final npm verification is incomplete for ${entry.name}`)
     }
-    packages.push(packageEvidence(entry, analyzed))
+    const audit = await observeNpmAudit(verifyPackage, entry, identity)
+    if (audit.status !== "verified") {
+      throw new Error(`Final npm verification is incomplete for ${entry.name}`)
+    }
+    packages.push(packageEvidence(entry, { ...analyzed, audit }))
   }
   const expectedManifestSha256 = manifestSha256(sealedManifest)
   return parseNpmEvidence(
@@ -251,7 +263,10 @@ export async function runPublisherCli(argv, options = {}) {
     PUBLISHER_OVERALL_TIMEOUT_MS,
     "publisher overall timeout",
   )
-  const deadline = createPublisherDeadline(overallTimeoutMs)
+  const deadline = createPublisherDeadline(overallTimeoutMs, {
+    scheduleTimeout: options.scheduleTimeout ?? setTimeout,
+    cancelTimeout: options.cancelTimeout ?? clearTimeout,
+  })
   const environment = options.environment ?? process.env
   if (environment === null || Array.isArray(environment) || typeof environment !== "object") {
     deadline.dispose()
@@ -263,12 +278,18 @@ export async function runPublisherCli(argv, options = {}) {
       commandTimeoutMs: PUBLISH_COMMAND_TIMEOUT_MS,
       overallTimeoutMs,
     })
+  const auditVerifierFactory = options.createNpmAuditVerifier ?? createNpmAuditVerifier
+  if (typeof auditVerifierFactory !== "function") {
+    deadline.dispose()
+    throw new TypeError("npm audit verifier factory must be a function")
+  }
   try {
     return await deadline.race(
       runPublisherCliWithinDeadline(argv, {
         fileSystem: options.fileSystem ?? defaultFileSystem,
         npmReader: options.npmReader ?? createNpmReader(),
         runNpm,
+        auditVerifierFactory,
         poll: options.poll ?? productionPoll,
         log: options.log ?? productionLog,
         environment,
@@ -287,7 +308,7 @@ export async function runPublisherCli(argv, options = {}) {
 
 async function runPublisherCliWithinDeadline(
   argv,
-  { fileSystem, npmReader, runNpm, poll, log, environment, deadline },
+  { fileSystem, npmReader, runNpm, auditVerifierFactory, poll, log, environment, deadline },
 ) {
   const input = parsePublisherArguments(argv)
   const paths = Object.fromEntries(
@@ -316,73 +337,77 @@ async function runPublisherCliWithinDeadline(
     fileSystem,
   })
   assertNpmReader(npmReader)
-
-  const observeRegistry = async ({ name, version }) => {
-    if (version === undefined) {
-      return deadline.race(npmReader.observePackageMetadata({ name, signal: deadline.signal }))
-    }
-    const result = await deadline.race(
-      npmReader.observePackageVersion({ name, version, signal: deadline.signal }),
-    )
-    if (result?.status !== "PRESENT") return result
-    const signature = await deadline.race(
-      npmReader.verifyRegistrySignatures({
-        name,
-        version,
-        integrity: result.package?.integrity,
-        signatures: result.package?.signatures,
-        signal: deadline.signal,
-      }),
-    )
-    if (signature?.status !== "PRESENT") return signature
-    return {
-      ...result,
-      package: { ...result.package, signature: signature.signature },
-    }
-  }
-  const publishTarball = async ({ entry }) => {
-    const tarballPath = artifact.tarballPaths.get(entry.name)
-    if (tarballPath === undefined) throw new Error("Recorded tarball path is unavailable")
-    await verifyLocalTarball({ entry, tarballPath, fileSystem })
-    await runNpm(
-      "npm",
-      [
-        "publish",
-        tarballPath,
-        "--tag",
-        "latest",
-        "--access",
-        "public",
-        "--provenance",
-        "--ignore-scripts",
-      ],
-      { cwd: paths.artifactDir, env: environment, signal: deadline.signal },
-    )
-    await verifyLocalTarball({ entry, tarballPath, fileSystem })
-  }
-  const result = await publishManifestSerially({
-    candidate,
-    manifest: artifact.manifest,
-    observeRegistry,
-    downloadRegistryTarball: (request) =>
-      deadline.race(npmReader.downloadRegistryTarball({ ...request, signal: deadline.signal })),
-    publishTarball,
-    poll: (request) => deadline.race(poll({ ...request, signal: deadline.signal })),
-    log,
-  })
-  await writeCanonicalReport({
-    fileSystem,
-    reportPath: paths.reportPath,
-    result,
-    candidate,
-    manifest: artifact.manifest,
-  })
-  await fileSystem.appendFile(
-    paths.githubOutputPath,
-    `complete=${String(result.complete)}\nstate=${result.status}\n`,
-    "utf8",
+  const auditVerifier = await deadline.race(
+    auditVerifierFactory({
+      runNpm,
+      fileSystem,
+      environment,
+      signal: deadline.signal,
+    }),
   )
-  return result
+  try {
+    for (const method of ["dispose", "publisherEnvironment", "verifyPackage"]) {
+      if (typeof auditVerifier?.[method] !== "function") {
+        throw new TypeError(`npm audit verifier must expose ${method}`)
+      }
+    }
+    const observeRegistry = ({ name, version }) =>
+      deadline.race(
+        version === undefined
+          ? npmReader.observePackageMetadata({ name, signal: deadline.signal })
+          : npmReader.observePackageVersion({ name, version, signal: deadline.signal }),
+      )
+    const publishTarball = async ({ entry }) => {
+      const tarballPath = artifact.tarballPaths.get(entry.name)
+      if (tarballPath === undefined) throw new Error("Recorded tarball path is unavailable")
+      await verifyLocalTarball({ entry, tarballPath, fileSystem })
+      await runNpm(
+        "npm",
+        [
+          "publish",
+          tarballPath,
+          "--tag",
+          "latest",
+          "--access",
+          "public",
+          "--provenance",
+          "--ignore-scripts",
+        ],
+        {
+          cwd: paths.artifactDir,
+          env: auditVerifier.publisherEnvironment({ candidate }),
+          signal: deadline.signal,
+        },
+      )
+      await verifyLocalTarball({ entry, tarballPath, fileSystem })
+    }
+    const result = await publishManifestSerially({
+      candidate,
+      manifest: artifact.manifest,
+      observeRegistry,
+      downloadRegistryTarball: (request) =>
+        deadline.race(npmReader.downloadRegistryTarball({ ...request, signal: deadline.signal })),
+      verifyPackage: (request) => deadline.race(auditVerifier.verifyPackage(request)),
+      publishTarball,
+      poll: (request) => deadline.race(poll({ ...request, signal: deadline.signal })),
+      log,
+    })
+    await writeCanonicalReport({
+      fileSystem,
+      reportPath: paths.reportPath,
+      result,
+      candidate,
+      manifest: artifact.manifest,
+    })
+    await fileSystem.appendFile(
+      paths.githubOutputPath,
+      `complete=${String(result.complete)}\nstate=${result.status}\n`,
+      "utf8",
+    )
+    return result
+  } finally {
+    if (typeof auditVerifier?.dispose === "function") await auditVerifier.dispose()
+  }
 }
 
 async function waitUntilVerified({
@@ -390,6 +415,7 @@ async function waitUntilVerified({
   candidate,
   observeRegistry,
   downloadRegistryTarball,
+  verifyPackage,
   poll,
 }) {
   for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt += 1) {
@@ -406,7 +432,10 @@ async function waitUntilVerified({
       candidate,
       downloadRegistryTarball,
     })
-    if (analyzed.status === "present" && analyzed.ready) return analyzed
+    if (analyzed.status === "present" && registryReady(analyzed, candidate)) {
+      const audit = await observeNpmAudit(verifyPackage, entry, candidate)
+      if (audit.status === "verified") return { ...analyzed, audit, ready: true }
+    }
     if (attempt < MAX_POLL_ATTEMPTS)
       await poll({ name: entry.name, attempt, delayMs: POLL_DELAY_MS })
   }
@@ -454,9 +483,9 @@ async function observeVersion(observeRegistry, entry) {
   return result
 }
 
-async function analyzeVersion({ entry, metadata, version, candidate, downloadRegistryTarball }) {
+async function analyzeVersion({ entry, metadata, version, downloadRegistryTarball }) {
   if (version.status === "ABSENT") {
-    return { status: "absent", entry, metadata, ready: false }
+    return { status: "absent", entry, metadata }
   }
   const packageRecord = version.package
   if (
@@ -466,7 +495,6 @@ async function analyzeVersion({ entry, metadata, version, candidate, downloadReg
     packageRecord.version !== entry.version ||
     typeof packageRecord.tarballUrl !== "string" ||
     packageRecord.integrity !== entry.npmIntegrity ||
-    !Array.isArray(packageRecord.signatures) ||
     packageRecord.distTags?.latest !== packageRecord.latest
   ) {
     throw new Error(`npm package identity or integrity conflicts for ${entry.name}`)
@@ -483,31 +511,38 @@ async function analyzeVersion({ entry, metadata, version, candidate, downloadReg
   if (packageRecord.shasum !== tarball.sha1) {
     throw new Error(`npm registry tarball shasum conflicts for ${entry.name}`)
   }
-  const provenance = packageRecord.provenance
-  if (
-    provenance?.status === "PRESENT" &&
-    (provenance.workflow !== candidate.publisherWorkflow ||
-      provenance.commitSha !== candidate.commitSha ||
-      provenance.repository !== EXPECTED_REPOSITORY ||
-      provenance.ref !== `refs/tags/v${candidate.version}` ||
-      !provenance.predicateTypes?.includes("https://slsa.dev/provenance/v1"))
-  ) {
-    throw new Error(`npm provenance conflicts for ${entry.name}`)
-  }
-  const ready =
-    metadata.metadata.latest === candidate.version &&
-    packageRecord.latest === candidate.version &&
-    packageRecord.signature?.status === "valid" &&
-    typeof packageRecord.signature.keyid === "string" &&
-    provenance?.status === "PRESENT"
   return {
     status: "present",
     entry,
     metadata,
     package: packageRecord,
     tarball,
-    ready,
   }
+}
+
+function registryReady(analyzed, candidate) {
+  return (
+    analyzed.metadata.metadata.latest === candidate.version &&
+    analyzed.package.latest === candidate.version
+  )
+}
+
+async function observeNpmAudit(verifyPackage, entry, candidate) {
+  const result = await verifyPackage({ entry, candidate })
+  if (result?.status === "pending" && Object.keys(result).length === 1) return result
+  if (
+    result?.status !== "verified" ||
+    result.signature?.status !== "valid" ||
+    result.signature?.verifier !== "npm-audit-signatures@11" ||
+    result.provenance?.predicateType !== "https://slsa.dev/provenance/v1" ||
+    result.provenance.workflow !== candidate.publisherWorkflow ||
+    result.provenance.commitSha !== candidate.commitSha ||
+    result.provenance.repository !== EXPECTED_REPOSITORY ||
+    result.provenance.ref !== `refs/tags/v${candidate.version}`
+  ) {
+    throw new Error(`Official npm audit evidence is invalid for ${entry.name}`)
+  }
+  return result
 }
 
 function verifyDownloadedTarball(value, entry) {
@@ -551,14 +586,14 @@ function packageEvidence(entry, analyzed) {
     latest: { status: "present", version: entry.version },
     signature: {
       status: "valid",
-      keyid: analyzed.package.signature.keyid,
+      verifier: analyzed.audit.signature.verifier,
     },
     provenance: {
-      predicateType: "https://slsa.dev/provenance/v1",
-      workflow: analyzed.package.provenance.workflow,
-      commitSha: analyzed.package.provenance.commitSha,
-      repository: analyzed.package.provenance.repository,
-      ref: analyzed.package.provenance.ref,
+      predicateType: analyzed.audit.provenance.predicateType,
+      workflow: analyzed.audit.provenance.workflow,
+      commitSha: analyzed.audit.provenance.commitSha,
+      repository: analyzed.audit.provenance.repository,
+      ref: analyzed.audit.provenance.ref,
     },
   })
 }
@@ -749,7 +784,6 @@ function assertNpmReader(value) {
     "observePackageMetadata",
     "observePackageVersion",
     "downloadRegistryTarball",
-    "verifyRegistrySignatures",
   ]) {
     if (typeof value?.[method] !== "function") {
       throw new TypeError(`npm reader must expose ${method}`)
@@ -761,13 +795,16 @@ function assertFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`${label} must be a function`)
 }
 
-function createPublisherDeadline(timeoutMs) {
+function createPublisherDeadline(timeoutMs, { scheduleTimeout, cancelTimeout }) {
+  if (typeof scheduleTimeout !== "function" || typeof cancelTimeout !== "function") {
+    throw new TypeError("publisher deadline scheduler is invalid")
+  }
   const controller = new AbortController()
   let rejectExpiration
   const expiration = new Promise((_resolve, reject) => {
     rejectExpiration = reject
   })
-  const timer = setTimeout(() => {
+  const timer = scheduleTimeout(() => {
     controller.abort()
     rejectExpiration(new Error("npm publisher overall deadline expired"))
   }, timeoutMs)
@@ -777,7 +814,7 @@ function createPublisherDeadline(timeoutMs) {
       return Promise.race([Promise.resolve(value), expiration])
     },
     dispose() {
-      clearTimeout(timer)
+      cancelTimeout(timer)
     },
   }
 }

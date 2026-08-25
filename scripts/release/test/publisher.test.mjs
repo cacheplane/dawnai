@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto"
+import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import {
   access,
   chmod,
@@ -115,6 +116,7 @@ test("polls delayed exact metadata, signature, provenance, and latest before adv
 
 test("raw npm signature records never satisfy publication verification", async () => {
   const fixture = publisherFixture({ initiallyPresent: "all", rawSignatureIndex: 0 })
+  fixture.inputs.verifyPackage = async () => ({ status: "pending" })
 
   await assert.rejects(
     publishManifestSerially(fixture.inputs),
@@ -122,6 +124,24 @@ test("raw npm signature records never satisfy publication verification", async (
   )
 
   assert.deepEqual(fixture.publishCalls, [])
+})
+
+test("only official npm audit evidence can satisfy signature and provenance readiness", async () => {
+  const fixture = publisherFixture({ initiallyPresent: "all" })
+  let verifications = 0
+  fixture.inputs.verifyPackage = async ({ entry, candidate }) => {
+    verifications += 1
+    assert.deepEqual(candidate, CANDIDATE)
+    return verifiedAuditEvidence(entry)
+  }
+
+  const result = await publishManifestSerially(fixture.inputs)
+
+  assert.ok(verifications >= CANONICAL_RELEASE_PACKAGE_ORDER.length * 2)
+  assert.deepEqual(result.packages[0].signature, {
+    status: "valid",
+    verifier: "npm-audit-signatures@11",
+  })
 })
 
 test("a newer latest is a pre-mutation superseded no-op but conflicts with partial state", async () => {
@@ -169,6 +189,9 @@ test("complete npm evidence is exact, canonical, ordered, and bound to every man
     CANONICAL_RELEASE_PACKAGE_ORDER,
   )
   assert.ok(Object.isFrozen(parsed))
+  assert.ok(
+    parsed.packages.every(({ signature }) => signature.verifier === "npm-audit-signatures@11"),
+  )
   assert.deepEqual(JSON.parse(canonicalNpmEvidenceBytes(result, context)), parsed)
 
   for (const mutate of [
@@ -182,7 +205,7 @@ test("complete npm evidence is exact, canonical, ordered, and bound to every man
       value.packages[0].status = "absent"
     },
     (value) => {
-      value.packages[0].signature.keyid = "noncanonical"
+      value.packages[0].signature.verifier = "custom-verifier"
     },
     (value) => {
       value.packages[0].provenance.ref = "refs/heads/main"
@@ -312,31 +335,55 @@ test("the production CLI accepts only its narrow arguments and publishes exact r
     ],
     {
       npmReader: fixture.npmReader,
-      async runNpm(command, args) {
-        npmCalls.push([command, ...args])
-        fixture.acceptPublish(args[1])
-        return { stdout: "", stderr: "" }
+      async runNpm(command, args, options) {
+        npmCalls.push({ command, args, options })
+        if (args[0] === "--version") {
+          return { stdout: "11.17.0\n", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "install") return { stdout: "", stderr: "", exitCode: 0 }
+        if (args[0] === "audit") {
+          const consumer = JSON.parse(
+            await readFile(path.join(options.cwd, "package.json"), "utf8"),
+          )
+          const name = Object.keys(consumer.dependencies)[0]
+          const entry = manifest.packages.find((item) => item.name === name)
+          return { stdout: npmAuditOutput(entry), stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "publish") {
+          fixture.acceptPublish(args[1])
+          return { stdout: "", stderr: "", exitCode: 0 }
+        }
+        throw new Error(`unexpected npm operation ${args[0]}`)
       },
       poll: fixture.inputs.poll,
       log() {},
+      environment: publisherProvenanceEnvironment(),
     },
   )
 
   const last = manifest.packages.at(-1)
   assert.equal(result.status, "NPM_COMPLETE")
-  assert.deepEqual(npmCalls, [
+  assert.equal(npmCalls.filter(({ args }) => args[0] === "--version").length, 1)
+  assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 21)
+  assert.equal(npmCalls.filter(({ args }) => args[0] === "audit").length, 42)
+  assert.deepEqual(
+    npmCalls
+      .filter(({ args }) => args[0] === "publish")
+      .map(({ command, args }) => [command, ...args]),
     [
-      "npm",
-      "publish",
-      path.join(artifactDir, last.filename),
-      "--tag",
-      "latest",
-      "--access",
-      "public",
-      "--provenance",
-      "--ignore-scripts",
+      [
+        "npm",
+        "publish",
+        path.join(artifactDir, last.filename),
+        "--tag",
+        "latest",
+        "--access",
+        "public",
+        "--provenance",
+        "--ignore-scripts",
+      ],
     ],
-  ])
+  )
   const report = JSON.parse(await readFile(reportPath, "utf8"))
   assert.deepEqual(Object.keys(report).sort(), [
     "commitSha",
@@ -415,6 +462,9 @@ test("the publisher detects artifact mutation after initial verification and dur
   await assert.rejects(
     runPublisherCli(beforePublish.argv, {
       npmReader: beforeRegistry.npmReader,
+      createNpmAuditVerifier: stubAuditVerifierFactory({
+        verifyPackage: beforeRegistry.inputs.verifyPackage,
+      }),
       async runNpm() {
         npmCalls += 1
       },
@@ -434,6 +484,9 @@ test("the publisher detects artifact mutation after initial verification and dur
   await assert.rejects(
     runPublisherCli(duringPublish.argv, {
       npmReader: duringRegistry.npmReader,
+      createNpmAuditVerifier: stubAuditVerifierFactory({
+        verifyPackage: duringRegistry.inputs.verifyPackage,
+      }),
       async runNpm(_command, args) {
         await writeFile(duringTarget, Buffer.from("mutated while npm accepted publication"))
         duringRegistry.acceptPublish(args[1])
@@ -450,16 +503,12 @@ test("the production publisher deadline cancels registry reads and poll delays",
   assert.equal(PUBLISHER_OVERALL_TIMEOUT_MS, 25 * 60_000)
   const metadataFixture = await publisherCliFilesystem(t, "dawn-publisher-deadline-metadata-")
   let metadataSignal
+  const metadataDeadline = controlledDeadline()
   const metadataReader = {
     async observePackageMetadata({ signal }) {
       metadataSignal = signal
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      return {
-        status: "AMBIGUOUS",
-        operation: "package-metadata",
-        httpStatus: null,
-        code: "TIMEOUT",
-      }
+      queueMicrotask(metadataDeadline.expire)
+      return new Promise(() => {})
     },
     async observePackageVersion() {
       throw new Error("version must not be observed")
@@ -467,49 +516,51 @@ test("the production publisher deadline cancels registry reads and poll delays",
     async downloadRegistryTarball() {
       throw new Error("tarball must not be downloaded")
     },
-    async verifyRegistrySignatures() {
-      throw new Error("signature must not be verified")
-    },
   }
-  const metadataStarted = Date.now()
   await assert.rejects(
     runPublisherCli(metadataFixture.argv, {
       npmReader: metadataReader,
+      createNpmAuditVerifier: stubAuditVerifierFactory({
+        async verifyPackage() {
+          throw new Error("package audit must not run")
+        },
+      }),
       async runNpm() {
         throw new Error("npm must not run")
       },
       async poll() {},
       log() {},
       overallTimeoutMs: 20,
+      ...metadataDeadline.options,
     }),
     /publisher overall deadline/iu,
   )
-  assert.ok(Date.now() - metadataStarted < 90)
   assert.ok(metadataSignal instanceof AbortSignal)
   assert.equal(metadataSignal.aborted, true)
 
   const pollFixture = await publisherCliFilesystem(t, "dawn-publisher-deadline-poll-")
   const delayed = publisherFixture({ initiallyPresent: "all" })
-  delayed.npmReader.verifyRegistrySignatures = async () => ({
-    status: "PRESENT",
-    operation: "registry-signature",
-    httpStatus: null,
-    code: null,
-    signature: { status: "missing", keyid: null },
-  })
+  const pollDeadline = controlledDeadline()
   let pollSignal
   await assert.rejects(
     runPublisherCli(pollFixture.argv, {
       npmReader: delayed.npmReader,
+      createNpmAuditVerifier: stubAuditVerifierFactory({
+        async verifyPackage() {
+          return { status: "pending" }
+        },
+      }),
       async runNpm() {
         throw new Error("npm must not run")
       },
       async poll({ signal }) {
         pollSignal = signal
-        await new Promise((resolve) => setTimeout(resolve, 100))
+        queueMicrotask(pollDeadline.expire)
+        return new Promise(() => {})
       },
       log() {},
       overallTimeoutMs: 20,
+      ...pollDeadline.options,
     }),
     /publisher overall deadline/iu,
   )
@@ -522,7 +573,7 @@ test("the production publisher deadline preserves OIDC and terminates the npm su
   timeout: 10_000,
 }, async (t) => {
   const cli = await publisherCliFilesystem(t, "dawn-publisher-deadline-process-")
-  const registry = publisherFixture({ initiallyPresent: "all-except-last" })
+  const registry = publisherFixture()
   const binDir = path.join(cli.temporary, "bin")
   const descendantPath = path.join(cli.temporary, "descendant.pid")
   const oidcPath = path.join(cli.temporary, "oidc.json")
@@ -533,9 +584,23 @@ test("the production publisher deadline preserves OIDC and terminates the npm su
     `#!/usr/bin/env node
 const { spawn } = require("node:child_process")
 const { writeFileSync } = require("node:fs")
+const args = process.argv.slice(2)
+if (args[0] === "--version") {
+  process.stdout.write("11.17.0\\n")
+  process.exit(0)
+}
+if (args[0] !== "publish") process.exit(97)
 writeFileSync(${JSON.stringify(oidcPath)}, JSON.stringify({
-  token: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
-  url: process.env.ACTIONS_ID_TOKEN_REQUEST_URL,
+  token: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN ?? null,
+  url: process.env.ACTIONS_ID_TOKEN_REQUEST_URL ?? null,
+  githubToken: process.env.GITHUB_TOKEN ?? null,
+  nodeAuthToken: process.env.NODE_AUTH_TOKEN ?? null,
+  unrelated: process.env.RELEASE_RUNNER_SECRET ?? null,
+  ref: process.env.GITHUB_REF ?? null,
+  repository: process.env.GITHUB_REPOSITORY ?? null,
+  sha: process.env.GITHUB_SHA ?? null,
+  workflowRef: process.env.GITHUB_WORKFLOW_REF ?? null,
+  runnerEnvironment: process.env.RUNNER_ENVIRONMENT ?? null,
 }))
 const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
 writeFileSync(${JSON.stringify(descendantPath)}, String(descendant.pid))
@@ -544,10 +609,15 @@ setInterval(() => {}, 1000)
   )
   await chmod(npmPath, 0o755)
   const environment = {
+    ...publisherProvenanceEnvironment(),
     PATH: `${binDir}:${path.dirname(process.execPath)}`,
     ACTIONS_ID_TOKEN_REQUEST_TOKEN: "exact-oidc-token",
     ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/exact",
+    GITHUB_TOKEN: "must-not-leak",
+    NODE_AUTH_TOKEN: "must-not-leak",
+    RELEASE_RUNNER_SECRET: "must-not-leak",
   }
+  let deadlineTimer
 
   await assert.rejects(
     runPublisherCli(cli.argv, {
@@ -555,13 +625,32 @@ setInterval(() => {}, 1000)
       poll: registry.inputs.poll,
       log() {},
       environment,
-      overallTimeoutMs: 500,
+      overallTimeoutMs: 5_000,
+      scheduleTimeout(callback) {
+        deadlineTimer = setInterval(() => {
+          if (!existsSync(descendantPath)) return
+          clearInterval(deadlineTimer)
+          queueMicrotask(callback)
+        }, 5)
+        return deadlineTimer
+      },
+      cancelTimeout(timer) {
+        clearInterval(timer)
+      },
     }),
     /publisher overall deadline/iu,
   )
   assert.deepEqual(JSON.parse(await readFile(oidcPath, "utf8")), {
     token: environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
     url: environment.ACTIONS_ID_TOKEN_REQUEST_URL,
+    githubToken: null,
+    nodeAuthToken: null,
+    unrelated: null,
+    ref: environment.GITHUB_REF,
+    repository: environment.GITHUB_REPOSITORY,
+    sha: environment.GITHUB_SHA,
+    workflowRef: environment.GITHUB_WORKFLOW_REF,
+    runnerEnvironment: environment.RUNNER_ENVIRONMENT,
   })
   const descendantPid = Number(await readFile(descendantPath, "utf8"))
   await waitForProcessExit(descendantPid)
@@ -609,8 +698,27 @@ test("the exact sparse production sequence resolves Actions and expired escrow i
       assert.equal(metadata.nlink, 1)
       payload.push([name, (await readFile(target)).toString("base64")])
     }
-    const commands = await readJsonLines(outcome.commandLog)
-    assert.equal(commands.filter(({ command }) => command === "npm").length, 0)
+    const commands = [
+      ...(await readJsonLines(outcome.commandLog)),
+      ...(await readJsonLines(outcome.npmCommandLog)),
+    ]
+    const npmCalls = commands.filter(({ command }) => command === "npm")
+    assert.equal(npmCalls.filter(({ args }) => args[0] === "--version").length, 1)
+    assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 21)
+    assert.equal(npmCalls.filter(({ args }) => args[0] === "audit").length, 42)
+    assert.equal(
+      npmCalls.some(({ args }) => args[0] === "publish"),
+      false,
+    )
+    assert.ok(
+      npmCalls.every(
+        ({ environment }) =>
+          environment.githubToken === false &&
+          environment.nodeAuthToken === false &&
+          environment.nodeOptions === false &&
+          environment.oidcToken === false,
+      ),
+    )
     const ghCalls = commands.filter(({ command }) => command === "gh")
     assert.equal(ghCalls.length, 22)
     assert.ok(
@@ -646,7 +754,10 @@ test("the exact sparse production sequence resolves Actions and expired escrow i
     assert.notEqual(outcome.resolve.status, 0, scenario)
     assert.equal(outcome.publish, null)
     await assert.rejects(access(outcome.materializedDir))
-    const commands = await readJsonLines(outcome.commandLog)
+    const commands = [
+      ...(await readJsonLines(outcome.commandLog)),
+      ...(await readJsonLines(outcome.npmCommandLog)),
+    ]
     assert.equal(
       commands.some(({ command }) => command === "npm"),
       false,
@@ -731,8 +842,6 @@ async function sparseProductionFixture(t) {
     canonicalReleaseRecordBytes(record),
   )
 
-  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  const keyid = "SHA256:sparse-production-key"
   const npmPackages = manifest.packages.map((entry) => {
     const tarballUrl = new URL(`${entry.name}/-/${entry.filename}`, "https://registry.npmjs.org/")
       .href
@@ -741,49 +850,13 @@ async function sparseProductionFixture(t) {
       `${encodeURIComponent(entry.name)}/${encodeURIComponent(entry.version)}`,
       "https://registry.npmjs.org/",
     ).href
-    const provenanceUrl = new URL(
-      `/-/npm/v1/attestations/${npmAttestationName(entry.name)}@${entry.version}`,
-      "https://registry.npmjs.org/",
-    ).href
     const integrity = entry.npmIntegrity
-    const signature = signBytes(
-      "sha256",
-      Buffer.from(`${entry.name}@${entry.version}:${integrity}`),
-      privateKey,
-    ).toString("base64")
-    const statement = {
-      predicateType: "https://slsa.dev/provenance/v1",
-      subject: [
-        {
-          name: npmSubjectName(entry.name, entry.version),
-          digest: { sha512: entry.sha512 },
-        },
-      ],
-      predicate: {
-        buildDefinition: {
-          externalParameters: {
-            workflow: {
-              path: CANDIDATE.publisherWorkflow,
-              repository: "https://github.com/cacheplane/dawnai",
-              ref: `refs/tags/v${VERSION}`,
-            },
-          },
-          resolvedDependencies: [
-            {
-              uri: `git+https://github.com/cacheplane/dawnai@refs/tags/v${VERSION}`,
-              digest: { gitCommit: COMMIT_SHA },
-            },
-          ],
-        },
-      },
-    }
     return {
       name: entry.name,
       version: entry.version,
       metadataUrl,
       versionUrl,
       tarballUrl,
-      provenanceUrl,
       tarballBase64: tarballBytes(entry.name).toString("base64"),
       versionDocument: {
         name: entry.name,
@@ -792,23 +865,9 @@ async function sparseProductionFixture(t) {
           tarball: tarballUrl,
           shasum: createHash("sha1").update(tarballBytes(entry.name)).digest("hex"),
           integrity,
-          signatures: [{ keyid, sig: signature }],
-          attestations: { url: provenanceUrl },
         },
       },
       metadataDocument: { name: entry.name, "dist-tags": { latest: VERSION } },
-      provenanceDocument: {
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-              },
-            },
-          },
-        ],
-      },
     }
   })
   const escrowAssets = []
@@ -839,22 +898,17 @@ async function sparseProductionFixture(t) {
       archiveBase64: archive.toString("base64"),
       release: { id: 77, assets: escrowAssets },
       npm: {
-        key: {
-          expires: null,
-          key: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-          keyid,
-          keytype: "ecdsa-sha2-nistp256",
-          scheme: "ecdsa-sha2-nistp256",
-        },
         packages: npmPackages,
       },
     })}\n`,
   )
   const fetchShimPath = path.join(harnessRoot, "fetch-shim.mjs")
+  const npmCommandLog = path.join(harnessRoot, "npm-commands.jsonl")
   await writeFile(fetchShimPath, sparseFetchShimSource())
+  await writeFile(npmCommandLog, "")
   for (const command of ["gh", "npm"]) {
     const target = path.join(binDir, command)
-    await writeFile(target, fakeSparseCommandSource(command))
+    await writeFile(target, fakeSparseCommandSource(command, { manifest, npmCommandLog }))
     await chmod(target, 0o755)
   }
   return {
@@ -864,6 +918,7 @@ async function sparseProductionFixture(t) {
     binDir,
     fixturePath,
     fetchShimPath,
+    npmCommandLog,
     manifest,
     record,
   }
@@ -878,7 +933,11 @@ async function runSparseProductionSequence(fixture, scenario) {
   const githubOutputPath = path.join(outputRoot, "github-output")
   const commandLog = path.join(fixture.harnessRoot, `${scenario}-commands.jsonl`)
   const fetchLog = path.join(fixture.harnessRoot, `${scenario}-fetches.jsonl`)
-  await Promise.all([writeFile(commandLog, ""), writeFile(fetchLog, "")])
+  await Promise.all([
+    writeFile(commandLog, ""),
+    writeFile(fetchLog, ""),
+    writeFile(fixture.npmCommandLog, ""),
+  ])
   const environment = {
     ...process.env,
     PATH: `${fixture.binDir}:${path.dirname(process.execPath)}:${process.env.PATH ?? ""}`,
@@ -940,6 +999,7 @@ async function runSparseProductionSequence(fixture, scenario) {
     reportPath,
     githubOutputPath,
     commandLog,
+    npmCommandLog: fixture.npmCommandLog,
     fetchLog,
   }
 }
@@ -1029,13 +1089,9 @@ globalThis.fetch = async (input, init = {}) => {
   )
   if (asset !== undefined) return binary(Buffer.from(asset.contentBase64, "base64"))
 
-  if (url === "https://registry.npmjs.org/-/npm/v1/keys") {
-    return json({ keys: [fixture.npm.key] })
-  }
   for (const pkg of fixture.npm.packages) {
     if (url === pkg.metadataUrl) return json(pkg.metadataDocument)
     if (url === pkg.versionUrl) return json(pkg.versionDocument)
-    if (url === pkg.provenanceUrl) return json(pkg.provenanceDocument)
     if (url === pkg.tarballUrl) return binary(Buffer.from(pkg.tarballBase64, "base64"))
   }
   throw new Error(\`Unexpected sparse fixture URL: \${url}\`)
@@ -1043,7 +1099,42 @@ globalThis.fetch = async (input, init = {}) => {
 `
 }
 
-function fakeSparseCommandSource(command) {
+function fakeSparseCommandSource(command, { manifest, npmCommandLog }) {
+  if (command === "npm") {
+    const audits = Object.fromEntries(
+      manifest.packages.map((entry) => [entry.name, JSON.parse(npmAuditOutput(entry))]),
+    )
+    return `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require("node:fs")
+const path = require("node:path")
+const args = process.argv.slice(2)
+appendFileSync(${JSON.stringify(npmCommandLog)}, JSON.stringify({
+  command: "npm",
+  args,
+  cwd: process.cwd(),
+  environment: {
+    githubToken: process.env.GITHUB_TOKEN !== undefined,
+    nodeAuthToken: process.env.NODE_AUTH_TOKEN !== undefined,
+    nodeOptions: process.env.NODE_OPTIONS !== undefined,
+    oidcToken: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN !== undefined,
+  },
+}) + "\\n")
+if (args[0] === "--version") {
+  process.stdout.write("11.17.0\\n")
+  process.exit(0)
+}
+if (args[0] === "install") process.exit(0)
+if (args[0] === "audit") {
+  const consumer = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"))
+  const name = Object.keys(consumer.dependencies)[0]
+  const audits = ${JSON.stringify(audits)}
+  if (audits[name] === undefined) process.exit(96)
+  process.stdout.write(JSON.stringify(audits[name]))
+  process.exit(0)
+}
+process.exit(97)
+`
+  }
   return `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs")
 appendFileSync(process.env.DAWN_COMMAND_LOG, JSON.stringify({
@@ -1195,6 +1286,7 @@ function publisherFixture(overrides = {}) {
   const publishCalls = []
   const observeCalls = []
   const pollCalls = []
+  const verifyCalls = []
   const events = []
   const metadataReads = new Map()
   const versionReads = new Map()
@@ -1299,6 +1391,11 @@ function publisherFixture(overrides = {}) {
     const state = present.get(name)
     if (state !== undefined && state.ready < 4) state.ready += 1
   }
+  const verifyPackage = async ({ entry }) => {
+    verifyCalls.push(entry.name)
+    const state = present.get(entry.name)
+    return state?.ready >= 3 ? verifiedAuditEvidence(entry) : { status: "pending" }
+  }
   const npmReader = {
     observePackageMetadata({ name }) {
       return observeRegistry({ name })
@@ -1307,18 +1404,6 @@ function publisherFixture(overrides = {}) {
       return observeRegistry({ name, version })
     },
     downloadRegistryTarball,
-    async verifyRegistrySignatures({ signatures }) {
-      return {
-        status: "PRESENT",
-        operation: "registry-signature",
-        httpStatus: signatures.length === 0 ? null : 200,
-        code: null,
-        signature:
-          signatures.length === 0
-            ? { status: "missing", keyid: null }
-            : { status: "valid", keyid: "SHA256:key" },
-      }
-    },
   }
   return {
     inputs: {
@@ -1326,6 +1411,7 @@ function publisherFixture(overrides = {}) {
       manifest,
       observeRegistry,
       downloadRegistryTarball,
+      verifyPackage,
       publishTarball,
       poll,
       log() {},
@@ -1334,6 +1420,7 @@ function publisherFixture(overrides = {}) {
     publishCalls,
     observeCalls,
     pollCalls,
+    verifyCalls,
     events,
     concurrentPublishes,
     disableFailure() {
@@ -1344,6 +1431,108 @@ function publisherFixture(overrides = {}) {
       if (entry === undefined) throw new Error("unknown fixture publish tarball")
       publishCalls.push(entry.name)
       present.set(entry.name, { ready: 4 })
+    },
+  }
+}
+
+function verifiedAuditEvidence() {
+  return {
+    status: "verified",
+    signature: { status: "valid", verifier: "npm-audit-signatures@11" },
+    provenance: {
+      predicateType: "https://slsa.dev/provenance/v1",
+      workflow: CANDIDATE.publisherWorkflow,
+      commitSha: COMMIT_SHA,
+      repository: "https://github.com/cacheplane/dawnai",
+      ref: `refs/tags/v${VERSION}`,
+    },
+  }
+}
+
+function npmAuditOutput(entry) {
+  assert.ok(entry)
+  const ref = `refs/tags/v${VERSION}`
+  const repository = "https://github.com/cacheplane/dawnai"
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: [
+      { name: npmSubjectName(entry.name, entry.version), digest: { sha512: entry.sha512 } },
+    ],
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      buildDefinition: {
+        buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+        externalParameters: {
+          workflow: { ref, repository, path: CANDIDATE.publisherWorkflow },
+        },
+        internalParameters: { github: { event_name: "push" } },
+        resolvedDependencies: [
+          { uri: `git+${repository}@${ref}`, digest: { gitCommit: COMMIT_SHA } },
+        ],
+      },
+      runDetails: {
+        builder: { id: "https://github.com/actions/runner/github-hosted" },
+        metadata: {
+          invocationId: "https://github.com/cacheplane/dawnai/actions/runs/100/attempts/1",
+        },
+      },
+    },
+  }
+  const wrapper = {
+    predicateType: "https://slsa.dev/provenance/v1",
+    bundle: {
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      verificationMaterial: { certificate: { rawBytes: "verified-by-npm" } },
+      dsseEnvelope: {
+        payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [{ sig: "verified-by-npm", keyid: "" }],
+      },
+    },
+    signedAccessSignatureUrl: "",
+  }
+  return JSON.stringify({
+    invalid: [],
+    missing: [],
+    verified: [
+      {
+        name: entry.name,
+        version: entry.version,
+        location: `node_modules/${entry.name}`,
+        registry: "https://registry.npmjs.org/",
+        attestations: {
+          url: `https://registry.npmjs.org/-/npm/v1/attestations/${npmAttestationName(entry.name)}@${entry.version}`,
+          provenance: { predicateType: "https://slsa.dev/provenance/v1" },
+        },
+        attestationBundles: [wrapper],
+      },
+    ],
+  })
+}
+
+function stubAuditVerifierFactory({ verifyPackage }) {
+  return async () => ({
+    async dispose() {},
+    publisherEnvironment() {
+      return {}
+    },
+    verifyPackage,
+  })
+}
+
+function controlledDeadline() {
+  let expire
+  return {
+    options: {
+      scheduleTimeout(callback) {
+        expire = callback
+        return 1
+      },
+      cancelTimeout() {},
+    },
+    expire() {
+      assert.equal(typeof expire, "function")
+      expire()
     },
   }
 }
@@ -1393,6 +1582,26 @@ function releaseRecord(manifest, serviceDigest = `sha256:${"a".repeat(64)}`) {
       prepareRunId: "200",
       prepareRunAttempt: 1,
     },
+  }
+}
+
+function publisherProvenanceEnvironment() {
+  return {
+    PATH: process.env.PATH ?? "",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "exact-oidc-token",
+    ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/exact",
+    GITHUB_ACTIONS: "true",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: `refs/tags/v${VERSION}`,
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_REPOSITORY_ID: "123456789",
+    GITHUB_REPOSITORY_OWNER_ID: "987654321",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_RUN_ID: "100",
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_SHA: COMMIT_SHA,
+    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${VERSION}`,
+    RUNNER_ENVIRONMENT: "github-hosted",
   }
 }
 

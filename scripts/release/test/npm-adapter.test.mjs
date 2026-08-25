@@ -1,21 +1,18 @@
 import assert from "node:assert/strict"
-import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { classifyRegistryResponse, createNpmReader } from "../adapters/npm.mjs"
 
 const NAME = "@dawn-ai/sdk"
 const VERSION = "0.8.21"
-const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
-const OTHER_COMMIT_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 const REGISTRY = "https://registry.npmjs.org"
 const INTEGRITY = `sha512-${"A".repeat(86)}==`
 
-test("createNpmReader exposes only the named read operation and uses encoded GET requests", async () => {
+test("createNpmReader exposes only bounded metadata and tarball reads without interpreting trust evidence", async () => {
   const { fetchImpl, calls } = recordingFetch([
     jsonResponse(versionDocument()),
     jsonResponse({ name: NAME, "dist-tags": { next: "0.9.0-beta.1", latest: VERSION } }),
-    jsonResponse(attestationDocument()),
   ])
   const npm = createNpmReader({ fetchImpl })
 
@@ -23,7 +20,6 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
     "observePackageMetadata",
     "observePackageVersion",
     "downloadRegistryTarball",
-    "verifyRegistrySignatures",
   ])
   const result = await npm.observePackageVersion({ name: NAME, version: VERSION })
 
@@ -47,12 +43,6 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
         redirect: "manual",
         accept: "application/vnd.npm.install-v1+json",
       },
-      {
-        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
-        method: "GET",
-        redirect: "manual",
-        accept: "application/json",
-      },
     ],
   )
   assert.deepEqual(result, {
@@ -66,21 +56,8 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
       tarballUrl: `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`,
       shasum: "a".repeat(40),
       integrity: INTEGRITY,
-      signatures: [
-        { keyid: "SHA256:key-a", sig: "signature-a" },
-        { keyid: "SHA256:key-b", sig: "signature-b" },
-      ],
       distTags: { latest: VERSION, next: "0.9.0-beta.1" },
       latest: VERSION,
-      provenance: {
-        status: "PRESENT",
-        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
-        predicateTypes: ["https://slsa.dev/provenance/v1"],
-        workflow: ".github/workflows/release.yml",
-        commitSha: COMMIT_SHA,
-        repository: "https://github.com/cacheplane/dawnai",
-        ref: "refs/heads/main",
-      },
     },
   })
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
@@ -176,257 +153,6 @@ test("registry tarball auth, redirect, oversized, malformed, and cross-origin re
     /registry tarball URL|same-origin|unsafe/iu,
   )
   assert.equal(fetches, 0)
-})
-
-test("cryptographically verifies npm registry signatures against the exact registry key", async () => {
-  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  const keyid = "SHA256:test-key"
-  const signature = signBytes(
-    "sha256",
-    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
-    privateKey,
-  ).toString("base64")
-  const { fetchImpl, calls } = recordingFetch([
-    jsonResponse({
-      keys: [
-        {
-          expires: null,
-          keyid,
-          keytype: "ecdsa-sha2-nistp256",
-          scheme: "ecdsa-sha2-nistp256",
-          key: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-        },
-      ],
-    }),
-  ])
-  const npm = createNpmReader({ fetchImpl })
-
-  const result = await npm.verifyRegistrySignatures({
-    name: NAME,
-    version: VERSION,
-    integrity: INTEGRITY,
-    signatures: [{ keyid, sig: signature }],
-  })
-
-  assert.equal(calls[0].url, `${REGISTRY}/-/npm/v1/keys`)
-  assert.deepEqual(result, {
-    status: "PRESENT",
-    operation: "registry-signature",
-    httpStatus: 200,
-    code: null,
-    signature: { status: "valid", keyid },
-  })
-  assert.deepEqual(
-    await npm.verifyRegistrySignatures({
-      name: NAME,
-      version: VERSION,
-      integrity: INTEGRITY,
-      signatures: [],
-    }),
-    {
-      status: "PRESENT",
-      operation: "registry-signature",
-      httpStatus: null,
-      code: null,
-      signature: { status: "missing", keyid: null },
-    },
-  )
-})
-
-test("invalid, unknown-key, and ambiguous registry signatures never become valid evidence", async () => {
-  const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  const key = publicKey.export({ format: "der", type: "spki" }).toString("base64")
-  const signatures = [{ keyid: "SHA256:unknown", sig: Buffer.from("invalid").toString("base64") }]
-  for (const response of [
-    jsonResponse({
-      keys: [
-        {
-          expires: null,
-          keyid: "SHA256:other",
-          keytype: "ecdsa-sha2-nistp256",
-          scheme: "ecdsa-sha2-nistp256",
-          key,
-        },
-      ],
-    }),
-    jsonResponse({ code: "EAUTH" }, 401),
-    jsonResponse({ keys: "malformed" }),
-  ]) {
-    const result = await createNpmReader({
-      fetchImpl: async () => response,
-    }).verifyRegistrySignatures({
-      name: NAME,
-      version: VERSION,
-      integrity: INTEGRITY,
-      signatures,
-    })
-    assert.notDeepEqual(result.signature, { status: "valid", keyid: "SHA256:unknown" })
-    assert.notEqual(result.status, "ABSENT")
-  }
-})
-
-test("registry signature evidence rejects duplicate, expired, unsupported, and malformed keys and signatures", async () => {
-  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  const keyid = "SHA256:strict-key"
-  const key = publicKey.export({ format: "der", type: "spki" }).toString("base64")
-  const signature = signBytes(
-    "sha256",
-    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
-    privateKey,
-  ).toString("base64")
-  const validKey = {
-    expires: null,
-    key,
-    keyid,
-    keytype: "ecdsa-sha2-nistp256",
-    scheme: "ecdsa-sha2-nistp256",
-  }
-  const rows = [
-    {
-      name: "duplicate key IDs",
-      body: { keys: [validKey, { ...validKey }] },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-    {
-      name: "expired matching key",
-      body: { keys: [{ ...validKey, expires: "2026-01-01T00:00:00.000Z" }] },
-      signatures: [{ keyid, sig: signature }],
-      now: () => Date.parse("2026-01-02T00:00:00.000Z"),
-      code: "REGISTRY_KEY_EXPIRED",
-    },
-    {
-      name: "unsupported key type",
-      body: { keys: [{ ...validKey, keytype: "rsa-sha2-512" }] },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-    {
-      name: "unsupported signature scheme",
-      body: { keys: [{ ...validKey, scheme: "ecdsa-sha2-nistp384" }] },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-    {
-      name: "noncanonical key base64",
-      body: { keys: [{ ...validKey, key: "AA" }] },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-    {
-      name: "invalid public key DER",
-      body: { keys: [{ ...validKey, key: Buffer.from("not-spki").toString("base64") }] },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-    {
-      name: "key ID mismatch",
-      body: { keys: [validKey] },
-      signatures: [{ keyid: "SHA256:another-key", sig: signature }],
-      code: "REGISTRY_KEY_NOT_FOUND",
-    },
-    {
-      name: "noncanonical signature base64",
-      body: { keys: [validKey] },
-      signatures: [{ keyid, sig: `${signature}=` }],
-      code: "MALFORMED_SIGNATURE",
-    },
-    {
-      name: "invalid signature DER",
-      body: { keys: [validKey] },
-      signatures: [{ keyid, sig: Buffer.from("not-der").toString("base64") }],
-      code: "MALFORMED_SIGNATURE",
-    },
-    {
-      name: "unexpected key response field",
-      body: { keys: [validKey], fetchedAt: "2026-01-01T00:00:00.000Z" },
-      signatures: [{ keyid, sig: signature }],
-      code: "MALFORMED_SCHEMA",
-    },
-  ]
-
-  for (const row of rows) {
-    const result = await createNpmReader({
-      fetchImpl: async () => jsonResponse(row.body),
-      ...(row.now === undefined ? {} : { now: row.now }),
-    }).verifyRegistrySignatures({
-      name: NAME,
-      version: VERSION,
-      integrity: INTEGRITY,
-      signatures: row.signatures,
-    })
-    assert.equal(result.status, "ERROR", row.name)
-    assert.equal(result.code, row.code, row.name)
-    assert.notDeepEqual(result.signature, { status: "valid", keyid }, row.name)
-  }
-
-  for (const signatures of [
-    [
-      { keyid, sig: signature },
-      { keyid, sig: signature },
-    ],
-    [{ keyid, sig: signature, unexpected: true }],
-    Array.from({ length: 257 }, (_, index) => ({
-      keyid: `SHA256:key-${index}`,
-      sig: signature,
-    })),
-  ]) {
-    await assert.rejects(
-      createNpmReader({
-        fetchImpl: async () => jsonResponse({ keys: [validKey] }),
-      }).verifyRegistrySignatures({
-        name: NAME,
-        version: VERSION,
-        integrity: INTEGRITY,
-        signatures,
-      }),
-      /signature inputs/iu,
-    )
-  }
-})
-
-test("cached registry keys are rechecked against their exact expiry", async () => {
-  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  const keyid = "SHA256:expiring-key"
-  const expires = "2026-08-25T12:01:00.000Z"
-  let observedNow = Date.parse("2026-08-25T12:00:00.000Z")
-  let fetches = 0
-  const signature = signBytes(
-    "sha256",
-    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
-    privateKey,
-  ).toString("base64")
-  const npm = createNpmReader({
-    now: () => observedNow,
-    fetchImpl: async () => {
-      fetches += 1
-      return jsonResponse({
-        keys: [
-          {
-            expires,
-            keyid,
-            keytype: "ecdsa-sha2-nistp256",
-            scheme: "ecdsa-sha2-nistp256",
-            key: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-          },
-        ],
-      })
-    },
-  })
-  const request = {
-    name: NAME,
-    version: VERSION,
-    integrity: INTEGRITY,
-    signatures: [{ keyid, sig: signature }],
-  }
-
-  assert.equal((await npm.verifyRegistrySignatures(request)).signature.status, "valid")
-  observedNow = Date.parse(expires)
-  const expired = await npm.verifyRegistrySignatures(request)
-
-  assert.equal(fetches, 1)
-  assert.equal(expired.status, "ERROR")
-  assert.equal(expired.code, "REGISTRY_KEY_EXPIRED")
 })
 
 test("observePackageMetadata reads only bounded public dist-tags independently", async () => {
@@ -722,7 +448,7 @@ test("npm requires an explicit exact trust grant for non-default registry origin
   )
 })
 
-test("npm refuses malformed or cross-origin tarball and provenance URLs", async () => {
+test("npm refuses malformed or cross-origin tarball URLs", async () => {
   for (const mutate of [
     (document) => {
       document.dist.tarball = "https://evil.example/sdk.tgz"
@@ -732,18 +458,6 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
     },
     (document) => {
       document.dist.tarball = "https://user:secret@registry.npmjs.org/sdk.tgz"
-    },
-    (document) => {
-      document.dist.attestations.url = "https://evil.example/provenance"
-    },
-    (document) => {
-      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/admin/users`
-    },
-    (document) => {
-      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21?admin=true`
-    },
-    (document) => {
-      document.dist.attestations.url = `https://user:secret@registry.npmjs.org/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`
     },
   ]) {
     const document = versionDocument()
@@ -760,16 +474,13 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
   }
 })
 
-test("npm binds custom-registry provenance to the exact origin endpoint", async () => {
+test("npm binds custom-registry metadata and tarballs to the exact trusted origin", async () => {
   const customRegistry = "https://registry.example.test/npm/"
   const document = versionDocument()
   document.dist.tarball = `https://registry.example.test/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
-  document.dist.attestations.url =
-    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21"
   const recording = recordingFetch([
     jsonResponse(document),
     jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    jsonResponse(attestationDocument()),
   ])
 
   const result = await createNpmReader({
@@ -779,34 +490,7 @@ test("npm binds custom-registry provenance to the exact origin endpoint", async 
   }).observePackageVersion({ name: NAME, version: VERSION })
 
   assert.equal(result.status, "PRESENT")
-  assert.equal(
-    recording.calls[2].url,
-    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21",
-  )
-})
-
-test("npm rejects provenance redirects without following them", async () => {
-  const recording = recordingFetch([
-    jsonResponse(versionDocument()),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    new Response(null, {
-      status: 302,
-      headers: { location: `${REGISTRY}/-/npm/v1/admin/users` },
-    }),
-  ])
-
-  const result = await createNpmReader({ fetchImpl: recording.fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
-
-  assert.deepEqual(result, {
-    status: "ERROR",
-    operation: "provenance",
-    httpStatus: 302,
-    code: "REDIRECT",
-  })
-  assert.equal(recording.calls.length, 3)
+  assert.equal(recording.calls.length, 2)
 })
 
 test("npm requires a canonical padded base64 encoding of exactly 64 integrity bytes", async () => {
@@ -901,75 +585,6 @@ test("npm rejects malformed injected status and does not trust response ok", asy
   )
 })
 
-test("npm reports absent provenance explicitly without inventing workflow identity", async () => {
-  const document = versionDocument()
-  delete document.dist.attestations
-  const { fetchImpl } = recordingFetch([
-    jsonResponse(document),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-  ])
-
-  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
-
-  assert.deepEqual(result.package.provenance, {
-    status: "ABSENT",
-    url: null,
-    predicateTypes: [],
-    workflow: null,
-    commitSha: null,
-    repository: null,
-    ref: null,
-  })
-})
-
-test("npm never synthesizes provenance identity across separate SLSA statements", async () => {
-  const evidence = attestationDocument([
-    provenanceStatement({ commitSha: null }),
-    provenanceStatement({ workflow: null }),
-  ])
-
-  const result = await observeWithEvidence(evidence)
-
-  assert.deepEqual(result, {
-    status: "ERROR",
-    operation: "provenance",
-    httpStatus: 200,
-    code: "MALFORMED_PROVENANCE_IDENTITY",
-  })
-})
-
-test("npm rejects conflicting complete provenance statements independent of input order", async () => {
-  const statements = [provenanceStatement(), provenanceStatement({ commitSha: OTHER_COMMIT_SHA })]
-
-  const forward = await observeWithEvidence(attestationDocument(statements))
-  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
-
-  assert.deepEqual(forward, {
-    status: "AMBIGUOUS",
-    operation: "provenance",
-    httpStatus: 200,
-    code: "PROVENANCE_IDENTITY_CONFLICT",
-  })
-  assert.deepEqual(reversed, forward)
-})
-
-test("npm agreeing provenance statements normalize independently of evidence order", async () => {
-  const statements = [provenanceStatement(), structuredClone(provenanceStatement())]
-
-  const forward = await observeWithEvidence(attestationDocument(statements))
-  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
-
-  assert.equal(forward.status, "PRESENT")
-  assert.deepEqual(reversed, forward)
-  assert.equal(forward.package.provenance.workflow, ".github/workflows/release.yml")
-  assert.equal(forward.package.provenance.commitSha, COMMIT_SHA)
-  assert.equal(forward.package.provenance.repository, "https://github.com/cacheplane/dawnai")
-  assert.equal(forward.package.provenance.ref, "refs/heads/main")
-})
-
 function versionDocument() {
   return {
     name: NAME,
@@ -987,71 +602,6 @@ function versionDocument() {
       },
     },
   }
-}
-
-function provenanceStatement({
-  workflow = ".github/workflows/release.yml",
-  commitSha = COMMIT_SHA,
-  repository = "https://github.com/cacheplane/dawnai",
-  ref = "refs/heads/main",
-} = {}) {
-  return {
-    predicateType: "https://slsa.dev/provenance/v1",
-    subject: [
-      {
-        name: `pkg:npm/%40dawn-ai/sdk@${VERSION}`,
-        digest: { sha512: "0".repeat(128) },
-      },
-    ],
-    predicate: {
-      buildDefinition: {
-        externalParameters: {
-          workflow:
-            workflow === null
-              ? undefined
-              : {
-                  path: workflow,
-                  repository,
-                  ref,
-                },
-        },
-        resolvedDependencies:
-          commitSha === null
-            ? []
-            : [
-                {
-                  uri: `git+${repository}@${ref}`,
-                  digest: { gitCommit: commitSha },
-                },
-              ],
-      },
-    },
-  }
-}
-
-function attestationDocument(statements = [provenanceStatement()]) {
-  return {
-    attestations: statements.map((statement) => ({
-      predicateType: statement.predicateType,
-      bundle: {
-        dsseEnvelope: {
-          payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-        },
-      },
-    })),
-  }
-}
-
-async function observeWithEvidence(evidence) {
-  const { fetchImpl } = recordingFetch([
-    jsonResponse(versionDocument()),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    jsonResponse(evidence),
-  ])
-  return createNpmReader({ fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
 }
 
 function recordingFetch(responses) {

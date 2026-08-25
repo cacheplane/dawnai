@@ -80,6 +80,37 @@ test("the production preparation runner bounds combined stdout and stderr", asyn
   )
 })
 
+test("the production preparation runner accepts only explicitly allowed nonzero exits", async () => {
+  const run = createReleasePreparationRunner({
+    commandTimeoutMs: 1_000,
+    overallTimeoutMs: 2_000,
+  })
+
+  const accepted = await run(
+    process.execPath,
+    ["-e", "process.stdout.write('structured audit'); process.exitCode = 1"],
+    { cwd: process.cwd(), acceptedExitCodes: [0, 1] },
+  )
+  assert.equal(accepted.exitCode, 1)
+  assert.equal(accepted.stdout, "structured audit")
+
+  await assert.rejects(
+    run(process.execPath, ["-e", "process.exitCode = 2"], {
+      cwd: process.cwd(),
+      acceptedExitCodes: [0, 1],
+    }),
+    /exited unsuccessfully/iu,
+  )
+  assert.throws(
+    () =>
+      run(process.execPath, ["-e", ""], {
+        cwd: process.cwd(),
+        acceptedExitCodes: [0, 0],
+      }),
+    /accepted exit codes/iu,
+  )
+})
+
 test("the production preparation runner terminates descendants on timeout", {
   skip: process.platform === "win32",
 }, async (t) => {

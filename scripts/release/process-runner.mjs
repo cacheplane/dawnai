@@ -128,7 +128,8 @@ function executeCommand({
       clearTimeout(timer)
       if (settled) return
       settled = true
-      if (code !== 0) {
+      const acceptedExitCodes = options.acceptedExitCodes ?? [0]
+      if (!Number.isInteger(code) || !acceptedExitCodes.includes(code)) {
         reject(
           new Error(
             `Release preparation command exited unsuccessfully (${code ?? signal ?? "unknown"})`,
@@ -137,6 +138,7 @@ function executeCommand({
         return
       }
       resolve({
+        exitCode: code,
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
       })
@@ -309,6 +311,18 @@ function validateInvocation(command, args, options) {
       typeof options.signal.removeEventListener !== "function")
   ) {
     throw new TypeError("Preparation command abort signal is invalid")
+  }
+  if (
+    options.acceptedExitCodes !== undefined &&
+    (!Array.isArray(options.acceptedExitCodes) ||
+      options.acceptedExitCodes.length < 1 ||
+      options.acceptedExitCodes.length > 16 ||
+      !options.acceptedExitCodes.every(
+        (code, index, values) =>
+          Number.isSafeInteger(code) && code >= 0 && code <= 255 && values.indexOf(code) === index,
+      ))
+  ) {
+    throw new TypeError("Preparation command accepted exit codes are invalid")
   }
 }
 
