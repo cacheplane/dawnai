@@ -6,7 +6,10 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import {
+  ARTIFACT_STORE_SPARSE_FILES,
   buildAttestationVerificationArguments,
+  createArtifactStoreGitHubRuntime,
+  createCliAttestationVerifier,
   extractActionsArtifactZip,
   loadVerifiedReleaseArtifact,
   materializeVerifiedReleaseArtifact,
@@ -139,6 +142,99 @@ test("trusted ZIP extraction binds the archive bytes to exact basename entries",
     () => extractActionsArtifactZip(storedZip([{ name: "../escape", bytes: Buffer.from("x") }])),
     /basename|path/u,
   )
+  assert.throws(
+    () =>
+      extractActionsArtifactZip(
+        storedZip([
+          { name: "one", bytes: Buffer.alloc(6) },
+          { name: "two", bytes: Buffer.alloc(6) },
+        ]),
+        { maxOutputBytes: 10 },
+      ),
+    /output limit|size/u,
+  )
+})
+
+test("the documented four-argument resolver defaults to its built-in ZIP extractor", async () => {
+  const fixture = artifactFixture({ useZipArchive: true })
+  delete fixture.inputs.extractArchive
+
+  const artifact = await loadVerifiedReleaseArtifact(fixture.inputs)
+
+  assert.equal(artifact.source, "actions")
+  assert.equal(artifact.files.length, 22)
+})
+
+test("the sparse executable dependency allowlist covers its exact local import closure", () => {
+  assert.deepEqual(ARTIFACT_STORE_SPARSE_FILES, [
+    "scripts/release/adapters/github.mjs",
+    "scripts/release/adapters/http.mjs",
+    "scripts/release/artifact-store.mjs",
+    "scripts/release/manifest.mjs",
+    "scripts/release/release-record.mjs",
+    "scripts/release/semver.mjs",
+    "scripts/release/topology.mjs",
+  ])
+})
+
+test("the sparse allowlist equals the executable's transitive local import graph", async () => {
+  const releaseRoot = path.resolve(import.meta.dirname, "..")
+  const discovered = new Set()
+  const visit = async (absolutePath) => {
+    const repositoryPath = path.relative(path.resolve(releaseRoot, "../.."), absolutePath)
+    if (discovered.has(repositoryPath)) return
+    discovered.add(repositoryPath)
+    const source = await readFile(absolutePath, "utf8")
+    for (const match of source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/gu)) {
+      await visit(path.resolve(path.dirname(absolutePath), match[1]))
+    }
+  }
+  await visit(path.join(releaseRoot, "artifact-store.mjs"))
+  assert.deepEqual([...discovered].sort(), ARTIFACT_STORE_SPARSE_FILES)
+})
+
+test("retention fallback refuses a published Release during npm publication", async () => {
+  const fixture = artifactFixture({ downloadStatus: "gone", escrowDraft: false })
+  await assert.rejects(loadVerifiedReleaseArtifact(fixture.inputs), /draft.*Release|escrow/iu)
+})
+
+test("production escrow downloads share one bounded byte budget", async () => {
+  const fixture = artifactFixture()
+  const runtime = createArtifactStoreGitHubRuntime({
+    maxEscrowBytes: 10,
+    metadataReader: {
+      async listReleases() {
+        return {
+          status: "PRESENT",
+          value: [
+            {
+              id: 1,
+              tag_name: fixture.record.tag,
+              target_commitish: SHA,
+              draft: true,
+              prerelease: false,
+            },
+          ],
+        }
+      },
+      async listReleaseAssets() {
+        return { status: "PRESENT", value: [{ id: 2, name: "release-record.json" }] }
+      },
+    },
+    binaryReader: {
+      async downloadReleaseAsset() {
+        return {
+          status: "PRESENT",
+          contentBase64: canonicalReleaseRecordBytes(fixture.record).toString("base64"),
+        }
+      },
+    },
+  })
+
+  await assert.rejects(
+    runtime.releaseReader.loadEscrow({ tag: fixture.record.tag, record: fixture.record }),
+    /escrow.*byte|download.*budget/iu,
+  )
 })
 
 test("materialization writes only after verification into a fresh destination", async (t) => {
@@ -234,6 +330,102 @@ test("attestation verification binds the signer, tag, commit, repository, predic
   )
 })
 
+test("the CLI attestation verifier bounds every gh child process", async () => {
+  const calls = []
+  const verifier = createCliAttestationVerifier({
+    repository: "cacheplane/dawnai",
+    token: "token",
+    async runGh(args, options) {
+      calls.push({ args, options })
+    },
+  })
+  const subject = { name: "manifest.json", sha256: "b".repeat(64) }
+  const result = await verifier.verify({
+    source: "actions",
+    record: artifactFixture().record,
+    subjects: [subject],
+    files: [{ name: subject.name, bytes: Buffer.from("manifest") }],
+    bundles: [],
+  })
+
+  assert.equal(result.status, "VERIFIED")
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.timeout, 60_000)
+  assert.equal(calls[0].options.killSignal, "SIGKILL")
+})
+
+test("artifact metadata and extracted files reject accessors without invoking them", async () => {
+  for (const target of ["metadata", "files"]) {
+    const fixture = artifactFixture()
+    let reads = 0
+    if (target === "metadata") {
+      Object.defineProperty(fixture.inputs.actionsReader, "getArtifactMetadata", {
+        value: async () => {
+          const value = { ...artifactFixture().inputs.actionsReader }
+          const metadata = {
+            id: fixture.record.actionsArtifact.id,
+            name: fixture.record.actionsArtifact.name,
+            expired: false,
+            prepareRunId: fixture.record.actionsArtifact.prepareRunId,
+            prepareRunAttempt: fixture.record.actionsArtifact.prepareRunAttempt,
+            headSha: SHA,
+          }
+          Object.defineProperty(metadata, "serviceDigest", {
+            enumerable: true,
+            get() {
+              reads += 1
+              return fixture.record.actionsArtifact.serviceDigest
+            },
+          })
+          return { status: "PRESENT", value, ...{ value: metadata } }
+        },
+      })
+    } else {
+      fixture.inputs.extractArchive = async () => {
+        const files = artifactFixture().inputs.extractArchive
+        const materialized = await files(Buffer.from("exact-actions-archive"))
+        Object.defineProperty(materialized[0], "name", {
+          enumerable: true,
+          get() {
+            reads += 1
+            return "manifest.json"
+          },
+        })
+        return materialized
+      }
+    }
+    await assert.rejects(
+      loadVerifiedReleaseArtifact(fixture.inputs),
+      /accessor|snapshot|malformed/u,
+    )
+    assert.equal(reads, 0)
+  }
+})
+
+test("artifact metadata rejects an own __proto__ key without prototype mutation", async () => {
+  const fixture = artifactFixture()
+  const metadata = {
+    id: fixture.record.actionsArtifact.id,
+    name: fixture.record.actionsArtifact.name,
+    serviceDigest: fixture.record.actionsArtifact.serviceDigest,
+    expired: false,
+    prepareRunId: fixture.record.actionsArtifact.prepareRunId,
+    prepareRunAttempt: fixture.record.actionsArtifact.prepareRunAttempt,
+    headSha: SHA,
+  }
+  Object.defineProperty(metadata, "__proto__", {
+    enumerable: true,
+    value: { polluted: true },
+  })
+  fixture.inputs.actionsReader.getArtifactMetadata = async () => ({
+    status: "PRESENT",
+    value: metadata,
+  })
+
+  await assert.rejects(loadVerifiedReleaseArtifact(fixture.inputs), /unknown field __proto__/u)
+  assert.equal(Object.prototype.polluted, undefined)
+})
+
 function artifactFixture(overrides = {}) {
   const manifest = releaseManifest()
   let manifestBytes = canonicalManifestBytes(manifest)
@@ -248,7 +440,9 @@ function artifactFixture(overrides = {}) {
           : Buffer.from(`packed:${entry.name}`),
     })),
   ]
-  const archiveBytes = Buffer.from("exact-actions-archive")
+  const archiveBytes = overrides.useZipArchive
+    ? storedZip(files)
+    : Buffer.from("exact-actions-archive")
   const serviceDigest = `sha256:${createHash("sha256").update(archiveBytes).digest("hex")}`
   const fixtureRecord = releaseRecord(manifest, serviceDigest)
   const record = overrides.record === null ? null : fixtureRecord
@@ -305,6 +499,7 @@ function artifactFixture(overrides = {}) {
           return (
             overrides.escrowResult ?? {
               status: "PRESENT",
+              draft: overrides.escrowDraft ?? true,
               files: escrowFiles,
               releaseRecordBytes: overrides.corruptEscrowRecord
                 ? Buffer.from("wrong record")

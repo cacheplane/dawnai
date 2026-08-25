@@ -38,6 +38,24 @@ test("createReleaseRecord binds the candidate to the exact artifact upload recei
   assert.equal(canonicalReleaseRecordBytes(record).at(-1), 10)
 })
 
+test("createReleaseRecord canonicalizes the upload action's bare SHA-256 digest", () => {
+  const record = createReleaseRecord({
+    candidate: CANDIDATE,
+    manifestSha256: MANIFEST_SHA,
+    artifactUpload: {
+      id: "12345678901234567890",
+      name: `release-v${VERSION}-${SHA.slice(0, 12)}`,
+      serviceDigest: "C".repeat(64),
+    },
+    prepareRun: { id: "987654321", attempt: 2 },
+  })
+
+  assert.equal(record.actionsArtifact.serviceDigest, SERVICE_DIGEST)
+  const persisted = releaseRecord()
+  persisted.actionsArtifact.serviceDigest = "c".repeat(64)
+  assert.throws(() => parseReleaseRecord(persisted), /service digest/u)
+})
+
 test("release records are exact-key, accessor-safe snapshots", () => {
   const extra = releaseRecord()
   extra.extra = true

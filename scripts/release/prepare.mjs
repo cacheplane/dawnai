@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
-
+import { runCommand as defaultRunCommand } from "../published-artifact-smoke.mjs"
 import { assertValidReleaseInventory } from "./inventory.mjs"
 import {
   CANONICAL_RELEASE_PACKAGE_ORDER,
@@ -10,6 +10,7 @@ import {
   RELEASE_MANIFEST_SCHEMA_VERSION,
   validateReleaseManifest,
 } from "./manifest.mjs"
+import { createProductionPreparationChecks } from "./prepare-checks.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 import { orderReleasePackages } from "./topology.mjs"
 
@@ -41,16 +42,20 @@ export async function prepareReleaseArtifacts({
   ci,
   prepareRun,
   preparationAuthority,
-  run,
+  sourceRef,
+  run = defaultRunCommand,
   inspectTarball,
   smokeTarballs,
+  createProductionChecks = createProductionPreparationChecks,
   fileSystem = defaultFileSystem,
 }) {
   const identity = validateCandidate(candidate)
+  // Provenance verification later requires this exact tag ref; preparation from main is invalid.
+  validateSourceRef(sourceRef, identity)
   const ciReceipt = validateCi(ci, identity)
   const runReceipt = validatePrepareRun(prepareRun)
   validatePreparationAuthority(preparationAuthority)
-  validateDependencies({ run, inspectTarball, smokeTarballs, fileSystem })
+  validateDependencies({ run, createProductionChecks, fileSystem })
   const rootPath = validateAbsolutePath(root, "repository root")
   const outputPath = validateAbsolutePath(outputDir, "artifact output directory")
   const realRoot = await fileSystem.realpath(rootPath)
@@ -61,6 +66,23 @@ export async function prepareReleaseArtifacts({
     throw new Error("Artifact output parent must not resolve through a symlink")
   }
   await assertExactCheckout({ root: realRoot, candidate: identity, run })
+
+  const productionChecks =
+    inspectTarball === undefined || smokeTarballs === undefined
+      ? createProductionChecks({
+          root: realRoot,
+          outputDir: outputPath,
+          candidate: identity,
+          inventory,
+          run,
+          fileSystem,
+        })
+      : null
+  const inspect = inspectTarball ?? productionChecks?.inspectTarball
+  const smoke = smokeTarballs ?? productionChecks?.smokeTarballs
+  if (typeof inspect !== "function" || typeof smoke !== "function") {
+    throw new TypeError("Production preparation checks must provide inspection and smoke functions")
+  }
 
   const validInventory = assertValidReleaseInventory(inventory)
   if (
@@ -115,7 +137,7 @@ export async function prepareReleaseArtifacts({
       npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
       access,
     })
-    const inspection = await inspectTarball({
+    const inspection = await inspect({
       packageJson,
       tarballPath,
       entry,
@@ -148,16 +170,16 @@ export async function prepareReleaseArtifacts({
     },
     { packages: releasePackages },
   )
-  const smoke = await smokeTarballs({
+  const smokeResult = await smoke({
     candidate: identity,
     outputDir: outputPath,
     manifest,
     tarballs: manifest.packages.map((entry) => path.join(outputPath, entry.filename)),
   })
   if (
-    smoke?.cleanInstall !== "passed" ||
-    smoke?.typeScript !== "passed" ||
-    smoke?.scaffold !== "passed"
+    smokeResult?.cleanInstall !== "passed" ||
+    smokeResult?.typeScript !== "passed" ||
+    smokeResult?.scaffold !== "passed"
   ) {
     throw new Error("Local tarball clean-install, TypeScript, and scaffold smokes must all pass")
   }
@@ -235,14 +257,19 @@ function validatePreparationAuthority(authority) {
 }
 
 async function assertExactCheckout({ root, candidate, run }) {
-  const [headSource, tagSource] = await Promise.all([
+  const [headSource, tagSource, statusSource] = await Promise.all([
     run("git", ["rev-parse", "HEAD"], { cwd: root }),
     run("git", ["rev-list", "-n", "1", `v${candidate.version}`], { cwd: root }),
+    run("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: root }),
   ])
   const head = normalizeCommandSha(headSource, "HEAD")
   const tag = normalizeCommandSha(tagSource, "candidate tag")
+  const status = normalizeCommandStdout(statusSource, "checkout status")
   if (head !== candidate.commitSha) throw new Error("HEAD does not match candidate SHA")
   if (tag !== candidate.commitSha) throw new Error("Candidate tag does not match candidate SHA")
+  if (status !== "") {
+    throw new Error("Preparation requires a clean checkout with no dirty or untracked files")
+  }
 }
 
 async function assertFreshOutput(outputDir, fileSystem) {
@@ -256,17 +283,30 @@ async function assertFreshOutput(outputDir, fileSystem) {
 }
 
 function normalizeCommandSha(value, label) {
-  if (typeof value !== "string") throw new TypeError(`${label} command output is invalid`)
-  const normalized = value.trim()
+  const normalized = normalizeCommandStdout(value, label).trim()
   if (!SHA_PATTERN.test(normalized)) throw new TypeError(`${label} did not resolve to an exact SHA`)
   return normalized
 }
 
-function validateDependencies({ run, inspectTarball, smokeTarballs, fileSystem }) {
+function normalizeCommandStdout(value, label) {
+  if (typeof value === "string") return value
+  if (value !== null && !Array.isArray(value) && typeof value === "object") {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "stdout")
+    if (
+      descriptor?.enumerable === true &&
+      "value" in descriptor &&
+      typeof descriptor.value === "string"
+    ) {
+      return descriptor.value
+    }
+  }
+  throw new TypeError(`${label} command output is invalid`)
+}
+
+function validateDependencies({ run, createProductionChecks, fileSystem }) {
   for (const [name, value] of [
     ["run", run],
-    ["inspectTarball", inspectTarball],
-    ["smokeTarballs", smokeTarballs],
+    ["createProductionChecks", createProductionChecks],
   ]) {
     if (typeof value !== "function") throw new TypeError(`${name} must be a function`)
   }
@@ -274,6 +314,12 @@ function validateDependencies({ run, inspectTarball, smokeTarballs, fileSystem }
     if (typeof fileSystem?.[method] !== "function") {
       throw new TypeError(`Filesystem adapter must expose ${method}`)
     }
+  }
+}
+
+function validateSourceRef(sourceRef, candidate) {
+  if (sourceRef !== `refs/tags/v${candidate.version}`) {
+    throw new Error(`Preparation source ref must be refs/tags/v${candidate.version}`)
   }
 }
 

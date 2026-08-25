@@ -26,8 +26,19 @@ const ZIP_CENTRAL_SIGNATURE = 0x02014b50
 const ZIP_END_SIGNATURE = 0x06054b50
 const MAX_ARCHIVE_ENTRIES = 64
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+const MAX_ESCROW_BYTES = 64 * 1024 * 1024
 const execFileAsync = promisify(execFile)
 const VERIFIED_MATERIALIZATIONS = new WeakMap()
+
+export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
+  "scripts/release/adapters/github.mjs",
+  "scripts/release/adapters/http.mjs",
+  "scripts/release/artifact-store.mjs",
+  "scripts/release/manifest.mjs",
+  "scripts/release/release-record.mjs",
+  "scripts/release/semver.mjs",
+  "scripts/release/topology.mjs",
+])
 
 if (
   process.argv[1] !== undefined &&
@@ -121,7 +132,7 @@ export async function loadVerifiedReleaseArtifact({
   actionsReader,
   releaseReader,
   attestations,
-  extractArchive,
+  extractArchive = extractActionsArtifactZip,
 }) {
   const releaseRecord = parseReleaseRecord(record)
   assertMethod(actionsReader, "getArtifactMetadata", "Actions reader")
@@ -166,8 +177,15 @@ export async function loadVerifiedReleaseArtifact({
   })
 }
 
-export function extractActionsArtifactZip(raw) {
+export function extractActionsArtifactZip(raw, { maxOutputBytes = MAX_ARCHIVE_BYTES } = {}) {
   if (!(raw instanceof Uint8Array)) throw new TypeError("Actions artifact ZIP must be bytes")
+  if (
+    !Number.isSafeInteger(maxOutputBytes) ||
+    maxOutputBytes < 1 ||
+    maxOutputBytes > MAX_ARCHIVE_BYTES
+  ) {
+    throw new TypeError("Actions artifact ZIP output limit is invalid")
+  }
   const archive = Buffer.from(raw)
   if (archive.length < 22 || archive.length > MAX_ARCHIVE_BYTES) {
     throw new Error("Actions artifact ZIP size is invalid")
@@ -236,7 +254,7 @@ export function extractActionsArtifactZip(raw) {
     assertZipRange(archive, dataOffset, compressedSize)
     const compressed = archive.subarray(dataOffset, dataOffset + compressedSize)
     totalUncompressedSize += uncompressedSize
-    if (uncompressedSize > MAX_ARCHIVE_BYTES || totalUncompressedSize > MAX_ARCHIVE_BYTES) {
+    if (uncompressedSize > maxOutputBytes || totalUncompressedSize > maxOutputBytes) {
       throw new Error("Actions artifact ZIP entry size exceeds the output limit")
     }
     const bytes =
@@ -301,6 +319,7 @@ async function loadVerifiedEscrow({ releaseRecord, releaseReader, attestations }
   })
   if (
     escrow?.status !== "PRESENT" ||
+    escrow.draft !== true ||
     !Array.isArray(escrow.files) ||
     !Array.isArray(escrow.bundles) ||
     !(escrow.releaseRecordBytes instanceof Uint8Array)
@@ -411,16 +430,15 @@ async function verifyMaterializedFiles({
 }
 
 function validateActionsMetadata(value, record) {
-  assertObject(value, "Actions artifact metadata")
-  assertExactFields(value, METADATA_FIELDS, "Actions artifact metadata")
+  const metadata = snapshotExactDataObject(value, METADATA_FIELDS, "Actions artifact metadata")
   if (
-    value.id !== record.actionsArtifact.id ||
-    value.name !== record.actionsArtifact.name ||
-    value.serviceDigest !== record.actionsArtifact.serviceDigest ||
-    typeof value.expired !== "boolean" ||
-    value.prepareRunId !== record.actionsArtifact.prepareRunId ||
-    value.prepareRunAttempt !== record.actionsArtifact.prepareRunAttempt ||
-    value.headSha !== record.commitSha
+    metadata.id !== record.actionsArtifact.id ||
+    metadata.name !== record.actionsArtifact.name ||
+    metadata.serviceDigest !== record.actionsArtifact.serviceDigest ||
+    typeof metadata.expired !== "boolean" ||
+    metadata.prepareRunId !== record.actionsArtifact.prepareRunId ||
+    metadata.prepareRunAttempt !== record.actionsArtifact.prepareRunAttempt ||
+    metadata.headSha !== record.commitSha
   ) {
     throw new Error(
       "Actions artifact metadata does not match exact recorded identity or service digest",
@@ -454,18 +472,20 @@ function validateAttestationResult(value, subjects) {
 function normalizeFiles(files) {
   if (!Array.isArray(files)) throw new TypeError("Verified artifact files must be an array")
   const result = files.map((file, index) => {
+    const snapshot = snapshotExactDataObject(
+      file,
+      ["name", "bytes"],
+      `Verified artifact file ${index}`,
+    )
     if (
-      file === null ||
-      Array.isArray(file) ||
-      typeof file !== "object" ||
-      typeof file.name !== "string" ||
-      path.posix.basename(file.name) !== file.name ||
-      path.win32.basename(file.name) !== file.name ||
-      !(file.bytes instanceof Uint8Array)
+      typeof snapshot.name !== "string" ||
+      path.posix.basename(snapshot.name) !== snapshot.name ||
+      path.win32.basename(snapshot.name) !== snapshot.name ||
+      !(snapshot.bytes instanceof Uint8Array)
     ) {
       throw new TypeError(`Verified artifact file ${index} is malformed`)
     }
-    return { name: file.name, bytes: Buffer.from(file.bytes) }
+    return { name: snapshot.name, bytes: Buffer.from(snapshot.bytes) }
   })
   const names = result.map((file) => file.name)
   if (new Set(names).size !== names.length)
@@ -513,7 +533,18 @@ async function assertAbsent(target, fileSystem) {
   throw new Error(`Artifact output must be fresh; destination already exists: ${target}`)
 }
 
-function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
+export function createArtifactStoreGitHubRuntime({
+  metadataReader,
+  binaryReader,
+  maxEscrowBytes = MAX_ESCROW_BYTES,
+}) {
+  if (
+    !Number.isSafeInteger(maxEscrowBytes) ||
+    maxEscrowBytes < 1 ||
+    maxEscrowBytes > MAX_ESCROW_BYTES
+  ) {
+    throw new TypeError("Release escrow byte budget is invalid")
+  }
   return {
     actionsReader: {
       async getArtifactMetadata({ artifactId, prepareRunId }) {
@@ -560,6 +591,7 @@ function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
     },
     releaseReader: {
       async loadEscrow({ tag, record }) {
+        const budget = { remaining: maxEscrowBytes }
         const releasesResult = await metadataReader.listReleases()
         if (releasesResult.status !== "PRESENT") return releasesResult
         const matching = releasesResult.value.filter((release) => release?.tag_name === tag)
@@ -569,7 +601,7 @@ function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
         const [release] = matching
         if (
           release.target_commitish !== record.commitSha ||
-          ![true, false].includes(release.draft) ||
+          release.draft !== true ||
           release.prerelease !== false ||
           !Number.isSafeInteger(release.id)
         ) {
@@ -583,9 +615,13 @@ function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
         }
         const byName = indexReleaseAssets(assetsResult.value)
         const releaseRecordAsset = requireReleaseAsset(byName, "release-record.json")
-        const releaseRecordBytes = await downloadReleaseAsset(binaryReader, releaseRecordAsset)
+        const releaseRecordBytes = await downloadReleaseAsset(
+          binaryReader,
+          releaseRecordAsset,
+          budget,
+        )
         const manifestAsset = requireReleaseAsset(byName, "manifest.json")
-        const manifestBytes = await downloadReleaseAsset(binaryReader, manifestAsset)
+        const manifestBytes = await downloadReleaseAsset(binaryReader, manifestAsset, budget)
         const manifest = parseSealedReleaseManifest(manifestBytes, {
           candidate: { version: record.version, commitSha: record.commitSha },
         })
@@ -594,7 +630,11 @@ function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
         for (const name of names.slice(1)) {
           files.push({
             name,
-            bytes: await downloadReleaseAsset(binaryReader, requireReleaseAsset(byName, name)),
+            bytes: await downloadReleaseAsset(
+              binaryReader,
+              requireReleaseAsset(byName, name),
+              budget,
+            ),
           })
         }
         const bundleNames = names.map((name) => `${name}.intoto.jsonl`)
@@ -606,16 +646,25 @@ function createArtifactStoreGitHubRuntime({ metadataReader, binaryReader }) {
         for (const name of bundleNames) {
           bundles.push({
             name,
-            bytes: await downloadReleaseAsset(binaryReader, requireReleaseAsset(byName, name)),
+            bytes: await downloadReleaseAsset(
+              binaryReader,
+              requireReleaseAsset(byName, name),
+              budget,
+            ),
           })
         }
-        return { status: "PRESENT", files, releaseRecordBytes, bundles }
+        return { status: "PRESENT", draft: true, files, releaseRecordBytes, bundles }
       },
     },
   }
 }
 
-function createCliAttestationVerifier({ repository, token, fileSystem, runGh }) {
+export function createCliAttestationVerifier({
+  repository,
+  token,
+  fileSystem = defaultFileSystem,
+  runGh = runGhCommand,
+}) {
   return {
     async verify({ source, record, subjects, files, bundles }) {
       if (!Array.isArray(files) || files.length !== subjects.length) {
@@ -643,7 +692,11 @@ function createCliAttestationVerifier({ repository, token, fileSystem, runGh }) 
             record,
             ...(bundlePath === undefined ? {} : { bundlePath }),
           })
-          await runGh(args, { env: { ...process.env, GH_TOKEN: token } })
+          await runGh(args, {
+            env: { ...process.env, GH_TOKEN: token },
+            timeout: 60_000,
+            killSignal: "SIGKILL",
+          })
         }
       } catch {
         return { status: "INVALID", subjects: [] }
@@ -723,12 +776,15 @@ function requireReleaseAsset(byName, name) {
   return asset
 }
 
-async function downloadReleaseAsset(reader, asset) {
+async function downloadReleaseAsset(reader, asset, budget) {
   const result = await reader.downloadReleaseAsset({ assetId: asset.id })
   if (result.status !== "PRESENT") {
     throw new Error(`Release escrow asset ${asset.name} could not be downloaded`)
   }
-  return decodeCanonicalBase64(result.contentBase64)
+  const bytes = decodeCanonicalBase64(result.contentBase64)
+  budget.remaining -= bytes.length
+  if (budget.remaining < 0) throw new Error("Release escrow download byte budget exceeded")
+  return bytes
 }
 
 function parseRepository(value) {
@@ -779,6 +835,24 @@ function assertExactFields(value, fields, label) {
     .filter((field) => !fields.includes(field))
     .sort()
   if (unknown.length > 0) throw new Error(`${label} contains unknown field ${unknown[0]}`)
+}
+
+function snapshotExactDataObject(value, fields, label) {
+  assertObject(value, label)
+  const ownKeys = Reflect.ownKeys(value)
+  if (ownKeys.some((key) => typeof key !== "string")) {
+    throw new TypeError(`${label} snapshot contains a symbol field`)
+  }
+  const snapshot = Object.create(null)
+  for (const key of ownKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      throw new TypeError(`${label} snapshot contains an accessor or non-enumerable field`)
+    }
+    snapshot[key] = descriptor.value
+  }
+  assertExactFields(snapshot, fields, label)
+  return snapshot
 }
 
 function resultCode(result) {

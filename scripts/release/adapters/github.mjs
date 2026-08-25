@@ -57,6 +57,9 @@ export function createGitHubReader({
   assertBoundedInteger(maxRecords, 1, MAX_GITHUB_RECORDS, "GitHub maximum records")
   if (typeof now !== "function") throw new TypeError("Invalid GitHub clock")
   const normalizedApiOrigin = normalizeApiOrigin(apiOrigin)
+  if (token !== undefined && normalizedApiOrigin !== API_ORIGIN) {
+    throw new TypeError("GitHub token requires the trusted GitHub API origin")
+  }
   const base = `${normalizedApiOrigin}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   const http = createHttpGet({
     fetchImpl,

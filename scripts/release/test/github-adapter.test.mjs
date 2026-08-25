@@ -90,6 +90,19 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
   )
 })
 
+test("GitHub tokens cannot be sent to a configurable API origin", () => {
+  assert.throws(
+    () =>
+      createGitHubReader({
+        owner: OWNER,
+        repo: REPO,
+        token: TOKEN,
+        apiOrigin: "https://attacker.invalid",
+      }),
+    /API origin|token|trusted/iu,
+  )
+})
+
 test("GitHub list methods follow same-origin pagination and return stable records", async () => {
   const nextTags = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
   const nextReleases = `${BASE}/releases?per_page=100&page=2`

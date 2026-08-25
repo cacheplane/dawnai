@@ -149,7 +149,8 @@ function normalizeDecimalId(value, label, { allowNumber = false } = {}) {
 
 function normalizeServiceDigest(value, { normalize = false } = {}) {
   if (typeof value !== "string") throw new TypeError("Artifact service digest is required")
-  const normalized = normalize ? value.toLowerCase() : value
+  const lowered = normalize ? value.toLowerCase() : value
+  const normalized = normalize && /^[0-9a-f]{64}$/u.test(lowered) ? `sha256:${lowered}` : lowered
   if (!SERVICE_DIGEST_PATTERN.test(normalized)) {
     throw new TypeError("Artifact service digest must be sha256:<64 lowercase hex>")
   }
