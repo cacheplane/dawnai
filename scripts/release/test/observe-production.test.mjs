@@ -1240,7 +1240,8 @@ test("production observation partitions and binds the exact draft Release base n
     async listReleases() {
       return present("releases", [escrow.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, escrow.release.id)
       return present("release", escrow.release)
     },
     async listReleaseAssets({ releaseId }) {
@@ -1343,7 +1344,8 @@ test("production observation rejects self-consistent escrow and terminal bundles
       async listReleases() {
         return present("releases", [retained.release])
       },
-      async getReleaseByTag() {
+      async getRelease({ releaseId }) {
+        assert.equal(releaseId, retained.release.id)
         return present("release", retained.release)
       },
       async listReleaseAssets() {
@@ -1386,7 +1388,8 @@ test("production observation rejects 128 oversized audit assets before downloadi
     async listReleases() {
       return present("releases", [audited.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, audited.release.id)
       return present("release", audited.release)
     },
     async listReleaseAssets() {
@@ -1448,7 +1451,8 @@ test("production observation uses durable escrow after exact Actions retention e
     async listReleases() {
       return present("releases", [escrow.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, escrow.release.id)
       return present("release", escrow.release)
     },
     async listReleaseAssets() {
@@ -1549,7 +1553,8 @@ test("production observation preserves the prepared-to-attested phase boundary w
       async listReleases() {
         return present("releases", [attaching.release])
       },
-      async getReleaseByTag() {
+      async getRelease({ releaseId }) {
+        assert.equal(releaseId, attaching.release.id)
         return present("release", attaching.release)
       },
       async listReleaseAssets() {
@@ -1596,7 +1601,8 @@ test("production observation accepts npm presence only through exact tarball and
     async listReleases() {
       return present("releases", [escrow.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, escrow.release.id)
       return present("release", escrow.release)
     },
     async listReleaseAssets() {
@@ -1939,7 +1945,8 @@ test("production observation binds terminal audit assets to the exact run, attem
     async listReleases() {
       return present("releases", [audited.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, audited.release.id)
       return present("release", audited.release)
     },
     async listReleaseAssets() {
@@ -2027,7 +2034,8 @@ test("production observation rejects a noncanonical Release body or title outsid
       async listReleases() {
         return present("releases", [release])
       },
-      async getReleaseByTag() {
+      async getRelease({ releaseId }) {
+        assert.equal(releaseId, release.id)
         return present("release", release)
       },
     })
@@ -2060,7 +2068,8 @@ test("production observation rejects terminal audit run and job snapshots that d
     async listReleases() {
       return present("releases", [audited.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, audited.release.id)
       return present("release", audited.release)
     },
     async listReleaseAssets() {
@@ -2255,7 +2264,8 @@ test("production observation blocks a published Release whose terminal marker is
     async listReleases() {
       return present("releases", [unsafeRelease])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, unsafeRelease.id)
       return present("release", unsafeRelease)
     },
     async listReleaseAssets() {
@@ -2292,7 +2302,8 @@ test("production observation recognizes a protected tagged-only abandonment from
     async listReleases() {
       return present("releases", [abandoned.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, abandoned.release.id)
       return present("release", abandoned.release)
     },
     async listReleaseAssets() {
@@ -2346,7 +2357,8 @@ test("production observation retains a prepared predecessor after exact Actions 
     async listReleases() {
       return present("releases", [abandoned.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, abandoned.release.id)
       return present("release", abandoned.release)
     },
     async listReleaseAssets() {
@@ -2401,7 +2413,8 @@ test("production observation requires complete verified escrow for attested aban
       async listReleases() {
         return present("releases", [abandoned.release])
       },
-      async getReleaseByTag() {
+      async getRelease({ releaseId }) {
+        assert.equal(releaseId, abandoned.release.id)
         return present("release", abandoned.release)
       },
       async listReleaseAssets() {
@@ -2774,6 +2787,9 @@ function githubReader(overrides = {}) {
     async getReleaseByTag() {
       throw new Error("an absent Release must be established by exact enumeration")
     },
+    async getRelease() {
+      throw new Error("an absent Release must be established by exact enumeration")
+    },
     async listReleaseAssets() {
       throw new Error("an absent Release has no assets")
     },
@@ -2844,7 +2860,8 @@ function releaseFixtureReader(fixture, overrides = {}) {
     async listReleases() {
       return present("releases", [fixture.release])
     },
-    async getReleaseByTag() {
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, fixture.release.id)
       return present("release", fixture.release)
     },
     async listReleaseAssets() {

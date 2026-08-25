@@ -79,6 +79,8 @@ for (const predecessor of ["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED", "CANDIDATE_
       assert.deepEqual(context.release, absentRelease())
     } else {
       const raw = rawReleaseFixture(observation)
+      assert.equal(harness.calls.github.includes("getReleaseByTag"), false)
+      assert.equal(harness.calls.github.includes("getRelease"), true)
       assert.deepEqual(context.artifact, {
         manifestSha256: observation.release.marker.manifestSha256,
         releaseRecordSha256: observation.release.marker.releaseRecordSha256,
@@ -128,7 +130,11 @@ test("fails closed with resume-escrow-first for ATTACHING and artifact-attested 
         /resume.*escrow.*first/iu.test(error.message),
       name,
     )
-    assert.deepEqual(harness.calls.github, [], `${name} must fail before fresh Release reads`)
+    assert.ok(
+      harness.calls.github.includes("listReleases"),
+      `${name} checks durable recovery first`,
+    )
+    assert.equal(harness.calls.github.includes("getReleaseByTag"), false)
   }
 })
 
@@ -154,7 +160,11 @@ test("denies npm-started, published, terminal, and conflicting production states
       /abandonment|state|conflict|terminal|publish|npm/iu,
       name,
     )
-    assert.deepEqual(harness.calls.github, [], `${name} must not create a context`)
+    assert.ok(
+      harness.calls.github.includes("listReleases"),
+      `${name} checks durable recovery first`,
+    )
+    assert.equal(harness.calls.github.includes("getReleaseByTag"), false)
   }
 })
 
@@ -480,9 +490,10 @@ function githubReader(raw, calls) {
       calls.github.push("listReleases")
       return present("releases", raw.releases)
     },
-    async getReleaseByTag({ tag }) {
-      calls.github.push("getReleaseByTag")
-      assert.equal(tag, `v${VERSION}`)
+    async getRelease({ releaseId }) {
+      calls.github.push("getRelease")
+      const listed = raw.releases.find(({ tag_name: tagName }) => tagName === `v${VERSION}`)
+      assert.equal(releaseId, listed?.id)
       return present("release", raw.release)
     },
     async listReleaseAssets({ releaseId }) {

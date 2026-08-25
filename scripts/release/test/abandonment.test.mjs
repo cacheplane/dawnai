@@ -8,6 +8,7 @@ import {
   evaluateAbandonment,
   recordAbandonment,
 } from "../abandonment.mjs"
+import { createAbandonmentArtifactContext } from "../abandonment-handoff.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import {
   abandonmentReleaseMarker,
@@ -192,7 +193,7 @@ test("resumes marker-first abandonment after a real process restart without call
   assert.equal(parseReleaseMarker(remote.release.body).phase, "ABANDONED_PREPUBLICATION")
   assert.deepEqual(remote.assets, [])
 
-  const restartedContext = contextFromRemote(input.artifactContext, remote)
+  const restartedContext = await createContextFromRemote(remote)
   const restarted = fakeGitHub({ context: restartedContext, source: remote })
   const secondAuthorization = freshAuthorization(input)
   secondAuthorization.evidence.actionsHistory.workflowRunId = 910
@@ -228,7 +229,7 @@ test("resumes asset-first abandonment after a real process restart without calle
     name: "abandonment.json",
     bytes: Buffer.from(durableBytes),
   })
-  const restartedContext = contextFromRemote(input.artifactContext, remote)
+  const restartedContext = await createContextFromRemote(remote)
   const restarted = fakeGitHub({ context: restartedContext, source: remote })
   const secondAuthorization = freshAuthorization(input)
   secondAuthorization.evidence.actionsHistory.workflowRunId = 920
@@ -420,7 +421,7 @@ test("an exact existing tombstone is idempotent and differing evidence cannot re
     authorization: freshAuthorization(input).authorization,
     github: first.github,
   })
-  const terminalContext = contextFromRemote(input.artifactContext, first)
+  const terminalContext = await createContextFromRemote(first)
   const resumed = fakeGitHub({ context: terminalContext, source: first })
 
   const result = await recordAbandonment({
@@ -455,7 +456,7 @@ test("an exact terminal abandonment is a no-op without requesting new authorizat
     authorization: freshAuthorization(input).authorization,
     github: first.github,
   })
-  const terminalContext = contextFromRemote(input.artifactContext, first)
+  const terminalContext = await createContextFromRemote(first)
   const resumed = fakeGitHub({ context: terminalContext, source: first })
 
   const result = await recordAbandonment({
@@ -916,18 +917,33 @@ function fakeGitHub({
     value,
   })
   const reader = {
-    getRef: async () => envelope("ref", { object: { type: "tag", sha: "c".repeat(40) } }),
+    getRef: async () =>
+      envelope("ref", {
+        ref: `refs/tags/v${VERSION}`,
+        object: { type: "tag", sha: "c".repeat(40) },
+      }),
     getGitTag: async () =>
       envelope("git-tag", {
         tag: `v${VERSION}`,
         object: { type: "commit", sha: state.tagCommitSha },
       }),
-    listReleases: async () => envelope("releases", state.releases),
+    listReleases: async () =>
+      envelope(
+        "releases",
+        state.releases.map((release) =>
+          release.id === state.release?.id ? { ...state.release, ...release } : release,
+        ),
+      ),
     getRelease: async ({ releaseId }) => envelope("release", { ...state.release, id: releaseId }),
     listReleaseAssets: async () =>
       envelope(
         "release-assets",
-        state.assets.map(({ id, name }) => ({ id, name })),
+        state.assets.map(({ id, name, bytes }) => ({
+          id,
+          name,
+          digest: `sha256:${sha256(bytes)}`,
+          size: bytes.byteLength,
+        })),
       ),
     downloadReleaseAsset: async ({ assetId }) => {
       const asset = state.assets.find((item) => item.id === assetId)
@@ -982,16 +998,43 @@ function fakeGitHub({
   return Object.assign(state, { github: { reader, writer } })
 }
 
-function contextFromRemote(context, remote) {
-  const result = structuredClone(context)
-  result.release = {
-    status: "draft",
-    releaseId: remote.release.id,
-    bodySha256: releaseBodySha256(remote.release.body),
-    marker: parseReleaseMarker(remote.release.body),
-    assets: remote.assets.map(({ id, name, bytes }) => ({ id, name, sha256: sha256(bytes) })),
-  }
-  return result
+async function createContextFromRemote(remote) {
+  return createAbandonmentArtifactContext(
+    {
+      candidate: CANDIDATE,
+      environment: {
+        GITHUB_REPOSITORY: "cacheplane/dawnai",
+        GITHUB_REF: `refs/tags/v${VERSION}`,
+        GITHUB_SHA: SHA,
+        GITHUB_RUN_ID: "910",
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${VERSION}`,
+      },
+    },
+    {
+      root: "/exact-tagged-checkout",
+      git: {},
+      github: remote.github.reader,
+      npm: {},
+      attestations: {},
+      marker: { abandonmentEnvironment: "release-abandonment" },
+      inventory: {
+        async read({ ref }) {
+          assert.equal(ref, SHA)
+          return { status: "valid" }
+        },
+      },
+      async resolveProductionCandidate() {
+        assert.fail("durable abandonment recovery must precede normal candidate arbitration")
+      },
+      async observeProductionCandidate() {
+        assert.fail("durable abandonment recovery must precede normal production observation")
+      },
+      planRelease() {
+        assert.fail("durable abandonment recovery must precede normal release planning")
+      },
+    },
+  )
 }
 
 function bytesForName(name) {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 
+import { parseAbandonmentArtifactContext } from "../abandonment.mjs"
 import { runReleaseCli } from "../cli.mjs"
 import { runReleaseController } from "../controller.mjs"
 import {
@@ -958,6 +959,80 @@ test("abandonment-context fails closed if its output parent is replaced", async 
   assert.equal(replaced, true)
   await assert.rejects(readFile(output), { code: "ENOENT" })
   await assert.rejects(readFile(join(displaced, "artifact-context.json")), { code: "ENOENT" })
+  assert.deepEqual(await nodeFileSystem.readdir(parent), [])
+  assert.deepEqual(await nodeFileSystem.readdir(displaced), [])
+})
+
+test("abandon CLI rejects noncanonical artifact-context bytes before recording", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-abandon-canonical-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const contextPath = join(directory, "artifact-context.json")
+  const artifactContext = {
+    predecessor: "CANDIDATE_TAGGED",
+    tag: {
+      status: "present",
+      annotated: true,
+      tag: `v${CANDIDATE.version}`,
+      commitSha: CANDIDATE.commitSha,
+    },
+    newerReleaseInterleaved: false,
+    artifact: {
+      manifestSha256: null,
+      releaseRecordSha256: null,
+      baseAssetSetSha256: null,
+      attestationSet: null,
+    },
+    release: { status: "absent", releaseId: null, bodySha256: null, marker: null, assets: [] },
+  }
+  await writeFile(contextPath, JSON.stringify(artifactContext))
+  let recorded = false
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    if (name === "abandonment-authority.mjs") {
+      return { captureFreshAbandonmentEvidence: async () => assert.fail("must not authorize") }
+    }
+    if (name === "manifest.mjs") return { CANONICAL_RELEASE_PACKAGE_ORDER }
+    assert.equal(name, "abandonment.mjs")
+    return {
+      parseAbandonmentArtifactContext,
+      async recordAbandonment() {
+        recorded = true
+      },
+    }
+  }
+
+  await assert.rejects(
+    runReleaseCli(
+      [
+        "abandon",
+        "--version",
+        CANDIDATE.version,
+        "--commit-sha",
+        CANDIDATE.commitSha,
+        "--reason",
+        "Candidate preparation is deterministically defective",
+        "--artifact-context",
+        contextPath,
+      ],
+      {
+        cwd: directory,
+        github: { reader: {}, writer: {} },
+        npm: { observePackageVersion: async () => assert.fail("must not observe npm") },
+        environment: {
+          GITHUB_REPOSITORY: "cacheplane/dawnai",
+          GITHUB_RUN_ID: "700",
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_ACTOR: "release-operator",
+          GITHUB_ACTOR_ID: "7001",
+          GITHUB_REF: `refs/tags/v${CANDIDATE.version}`,
+          GITHUB_SHA: CANDIDATE.commitSha,
+        },
+        importModule,
+      },
+    ),
+    /canonical/iu,
+  )
+  assert.equal(recorded, false)
 })
 
 test("abandon CLI derives fresh protected evidence inside each requested mutation authorization", async (t) => {
@@ -1004,6 +1079,10 @@ test("abandon CLI derives fresh protected evidence inside each requested mutatio
     }
     assert.equal(name, "abandonment.mjs")
     return {
+      parseAbandonmentArtifactContext(bytes, { candidate }) {
+        calls.push(["parse", { bytes: Buffer.from(bytes), candidate }])
+        return JSON.parse(bytes)
+      },
       async recordAbandonment(input) {
         calls.push(["record", input])
         const first = await input.authorization.readFreshAbandonmentEvidence({
@@ -1039,13 +1118,15 @@ test("abandon CLI derives fresh protected evidence inside each requested mutatio
   })
   assert.deepEqual(
     calls.map(([name]) => name),
-    ["record", "capture", "capture"],
+    ["parse", "record", "capture", "capture"],
   )
   assert.deepEqual(calls[0][1].candidate, CANDIDATE)
-  assert.equal(calls[0][1].reason, "Candidate preparation is deterministically defective")
-  assert.deepEqual(calls[0][1].artifactContext, artifactContext)
-  assert.equal(calls[0][1].github, github)
-  for (const [, input] of calls.slice(1)) {
+  assert.deepEqual(JSON.parse(calls[0][1].bytes), artifactContext)
+  assert.deepEqual(calls[1][1].candidate, CANDIDATE)
+  assert.equal(calls[1][1].reason, "Candidate preparation is deterministically defective")
+  assert.deepEqual(calls[1][1].artifactContext, artifactContext)
+  assert.equal(calls[1][1].github, github)
+  for (const [, input] of calls.slice(2)) {
     assert.deepEqual(input.candidate, CANDIDATE)
     assert.deepEqual(input.packageNames, [...CANONICAL_RELEASE_PACKAGE_ORDER].sort())
     assert.equal(input.github, reader)

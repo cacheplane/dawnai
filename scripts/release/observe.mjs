@@ -304,7 +304,7 @@ export async function observeProductionCandidate({
       "getRef",
       "getGitTag",
       "listReleases",
-      "getReleaseByTag",
+      "getRelease",
       "listReleaseAssets",
       "downloadReleaseAsset",
       "listActionsArtifacts",
@@ -1579,15 +1579,12 @@ async function mapProductionRelease({
   }
   try {
     const listed = normalizeReleaseIdentity(matches[0], candidate)
-    const exactResult = await observeAdapter(
-      () => github.getReleaseByTag({ tag: `v${candidate.version}` }),
-      {
-        source: "github",
-        operation: "release",
-        payloadKey: "value",
-        diagnostics,
-      },
-    )
+    const exactResult = await observeAdapter(() => github.getRelease({ releaseId: listed.id }), {
+      source: "github",
+      operation: "release",
+      payloadKey: "value",
+      diagnostics,
+    })
     if (exactResult.status !== "PRESENT") throw observationError("RELEASE_READ_AMBIGUOUS")
     const release = normalizeReleaseIdentity(exactResult.value, candidate)
     if (

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util"
 import {
   canonicalAbandonmentArtifactContextBytes,
   parseAbandonmentArtifactContext,
+  parseAbandonmentReleaseBody,
 } from "./abandonment.mjs"
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { parseReleaseMarker, releaseBodySha256 } from "./metadata.mjs"
@@ -105,6 +106,12 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
     inputs: { version: candidate.version, commitSha: candidate.commitSha },
   })
   classifyProductionEvent(event)
+  const immutableInventory = await inventory.read({ ref: candidate.commitSha })
+  const durableRecovery = await captureDurableAbandonmentContext({ candidate, github })
+  if (durableRecovery !== null) {
+    await verifyExactAnnotatedTag({ candidate, github })
+    return durableRecovery
+  }
   const selection = validateSelection(
     await resolveProductionCandidate({
       event,
@@ -118,7 +125,6 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
     }),
     candidate,
   )
-  const immutableInventory = await inventory.read({ ref: candidate.commitSha })
   const observed = snapshotJson(
     await observeProductionCandidate({
       candidate,
@@ -230,6 +236,114 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
       newerReleaseInterleaved: false,
       artifact,
       release,
+    },
+    { candidate },
+  )
+}
+
+async function captureDurableAbandonmentContext({ candidate, github }) {
+  const listReleases = requireMethod(github, "listReleases", "GitHub production reader")
+  const releases = await readPresent(listReleases({}), "releases")
+  if (!Array.isArray(releases) || releases.length > MAX_RELEASES) {
+    throw new Error("Abandonment recovery GitHub Release list is malformed or unbounded")
+  }
+  const ids = new Set()
+  const matches = []
+  for (const release of releases) {
+    if (
+      !isRecord(release) ||
+      !isPositiveInteger(release.id) ||
+      typeof release.tag_name !== "string" ||
+      ids.has(String(release.id))
+    ) {
+      throw new Error("Abandonment recovery GitHub Release identity is malformed or duplicate")
+    }
+    ids.add(String(release.id))
+    if (release.tag_name === `v${candidate.version}`) matches.push(release)
+    if (
+      release.tag_name.startsWith("v") &&
+      isReleaseVersion(release.tag_name.slice(1)) &&
+      compareSemver(release.tag_name.slice(1), candidate.version) > 0
+    ) {
+      throw new Error("A newer GitHub Release interleaved before abandonment recovery")
+    }
+  }
+  if (matches.length === 0) return null
+  if (matches.length !== 1) {
+    throw new Error("Abandonment recovery requires one exact candidate Release")
+  }
+
+  const listed = normalizeRecoveryDraftRelease(matches[0], candidate, { bodyRequired: false })
+  const getRelease = requireMethod(github, "getRelease", "GitHub production reader")
+  const exact = normalizeRecoveryDraftRelease(
+    await readPresent(getRelease({ releaseId: listed.id }), "release"),
+    candidate,
+    { bodyRequired: true },
+  )
+  if (
+    listed.id !== exact.id ||
+    listed.name !== exact.name ||
+    listed.targetCommitish !== exact.targetCommitish ||
+    listed.draft !== exact.draft ||
+    listed.immutable !== exact.immutable ||
+    (listed.body !== null && listed.body !== exact.body)
+  ) {
+    throw new Error("Abandonment recovery Release identity or body changed during capture")
+  }
+  const marker = parseReleaseMarker(exact.body)
+  const listReleaseAssets = requireMethod(github, "listReleaseAssets", "GitHub production reader")
+  const assets = normalizeAssets(
+    await readPresent(listReleaseAssets({ releaseId: exact.id }), "release-assets"),
+  )
+  const abandonmentAssets = assets.filter((asset) => asset.name === "abandonment.json")
+  if (abandonmentAssets.length > 1) {
+    throw new Error("Abandonment recovery Release contains duplicate terminal assets")
+  }
+
+  let predecessor
+  let artifact
+  if (marker.phase === "ABANDONED_PREPUBLICATION") {
+    const tombstone = parseAbandonmentReleaseBody(exact.body)
+    predecessor = tombstone.predecessor.state
+    artifact = snapshotJson(tombstone.predecessor.artifact)
+    if (
+      abandonmentAssets.length === 1 &&
+      abandonmentAssets[0].sha256 !== marker.abandonmentSha256
+    ) {
+      throw new Error("Abandonment recovery terminal asset conflicts with the Release marker")
+    }
+  } else if (marker.phase === "ESCROWED" && abandonmentAssets.length === 1) {
+    predecessor = "CANDIDATE_ESCROWED"
+    artifact = markerArtifact(marker)
+  } else {
+    return null
+  }
+
+  const expectedTitle =
+    marker.phase === "ABANDONED_PREPUBLICATION"
+      ? `Dawn v${candidate.version} (abandoned before publication)`
+      : `Dawn v${candidate.version}`
+  if (exact.name !== expectedTitle) {
+    throw new Error("Abandonment recovery Release title conflicts with its phase")
+  }
+  return parseAbandonmentArtifactContext(
+    {
+      predecessor,
+      tag: {
+        status: "present",
+        annotated: true,
+        tag: `v${candidate.version}`,
+        commitSha: candidate.commitSha,
+      },
+      newerReleaseInterleaved: false,
+      artifact,
+      release: {
+        status: "draft",
+        releaseId: exact.id,
+        bodySha256: releaseBodySha256(exact.body),
+        marker,
+        assets: assets.map(({ id, name, sha256 }) => ({ id, name, sha256 })),
+      },
     },
     { candidate },
   )
@@ -378,9 +492,9 @@ async function captureExactReleaseContext({
     throw new Error("Abandonment context requires one exact escrowed candidate Release")
   }
   const listed = normalizeDraftRelease(matches[0], candidate, { bodyRequired: false })
-  const getReleaseByTag = requireMethod(github, "getReleaseByTag", "GitHub production reader")
+  const getRelease = requireMethod(github, "getRelease", "GitHub production reader")
   const exact = normalizeDraftRelease(
-    await readPresent(getReleaseByTag({ tag: `v${candidate.version}` }), "release"),
+    await readPresent(getRelease({ releaseId: listed.id }), "release"),
     candidate,
     { bodyRequired: true },
   )
@@ -454,6 +568,46 @@ function normalizeDraftRelease(value, candidate, { bodyRequired }) {
     draft: release.draft,
     immutable: release.immutable,
     body: release.body ?? null,
+  }
+}
+
+function normalizeRecoveryDraftRelease(value, candidate, { bodyRequired }) {
+  const release = snapshotJson(value)
+  if (
+    !isRecord(release) ||
+    !isPositiveInteger(release.id) ||
+    ![
+      `Dawn v${candidate.version}`,
+      `Dawn v${candidate.version} (abandoned before publication)`,
+    ].includes(release.name) ||
+    release.tag_name !== `v${candidate.version}` ||
+    release.target_commitish !== "main" ||
+    release.draft !== true ||
+    release.immutable !== false ||
+    release.prerelease !== false ||
+    !(
+      typeof release.body === "string" ||
+      (!bodyRequired && (release.body === undefined || release.body === null))
+    )
+  ) {
+    throw new Error("Abandonment recovery requires the exact mutable candidate draft")
+  }
+  return {
+    id: release.id,
+    name: release.name,
+    targetCommitish: release.target_commitish,
+    draft: release.draft,
+    immutable: release.immutable,
+    body: release.body ?? null,
+  }
+}
+
+function markerArtifact(marker) {
+  return {
+    manifestSha256: marker.manifestSha256,
+    releaseRecordSha256: marker.releaseRecordSha256,
+    baseAssetSetSha256: marker.baseAssetSetSha256,
+    attestationSet: marker.attestationSet,
   }
 }
 

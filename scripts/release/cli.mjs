@@ -174,7 +174,7 @@ async function runAbandon(options, runtime) {
     version: options.version,
     commitSha: options["commit-sha"],
   })
-  const artifactContext = await readJsonFile(
+  const artifactContextBytes = await readRegularFile(
     runtime.fileSystem,
     resolveCliPath(options["artifact-context"], runtime.cwd),
     MAX_MANIFEST_BYTES,
@@ -192,7 +192,13 @@ async function runAbandon(options, runtime) {
     "captureFreshAbandonmentEvidence",
     "abandonment authority",
   )
+  const parseArtifactContext = moduleFunction(
+    abandonmentModule,
+    "parseAbandonmentArtifactContext",
+    "abandonment artifact context parser",
+  )
   const record = moduleFunction(abandonmentModule, "recordAbandonment", "abandonment recorder")
+  const artifactContext = parseArtifactContext(artifactContextBytes, { candidate })
   const packageOrder = moduleValue(
     manifestModule,
     "CANONICAL_RELEASE_PACKAGE_ORDER",
@@ -2301,10 +2307,32 @@ async function writeContainedCanonicalOutput(
     throw error
   }
 
+  const temporaryParentPath = path.dirname(parentPath)
+  let temporaryParentHandle
+  try {
+    temporaryParentHandle =
+      temporaryParentPath === parentPath
+        ? parentHandle
+        : await fileSystem.open(
+            temporaryParentPath,
+            fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+          )
+  } catch (error) {
+    await parentHandle.close()
+    if (["ELOOP", "ENOTDIR"].includes(error?.code)) {
+      throw new TypeError(`Release CLI ${label} temporary parent must be one regular directory`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+
   let parentIdentity
+  let temporaryParentIdentity
   let temporaryPath = null
   let temporaryCreated = false
   let linkedIdentity = null
+  let outputLinked = false
   let existingIdentity = null
   let expected = null
   let primaryError = null
@@ -2313,7 +2341,17 @@ async function writeContainedCanonicalOutput(
     if (!parentIdentity.isDirectory()) {
       throw new TypeError(`Release CLI ${label} output parent must be one regular directory`)
     }
+    temporaryParentIdentity = await temporaryParentHandle.stat({ bigint: true })
+    if (!temporaryParentIdentity.isDirectory()) {
+      throw new TypeError(`Release CLI ${label} temporary parent must be one regular directory`)
+    }
     await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+    await assertContainedParent(
+      fileSystem,
+      temporaryParentPath,
+      temporaryParentIdentity,
+      `${label} temporary`,
+    )
 
     const bytes = await produceBytes()
     if (!(bytes instanceof Uint8Array) || bytes.byteLength < 1 || bytes.byteLength > maximumBytes) {
@@ -2321,9 +2359,15 @@ async function writeContainedCanonicalOutput(
     }
     expected = Buffer.from(bytes)
     await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
+    await assertContainedParent(
+      fileSystem,
+      temporaryParentPath,
+      temporaryParentIdentity,
+      `${label} temporary`,
+    )
 
     temporaryPath = path.join(
-      parentPath,
+      temporaryParentPath,
       `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
     )
     const temporaryHandle = await fileSystem.open(
@@ -2347,9 +2391,16 @@ async function writeContainedCanonicalOutput(
       await temporaryHandle.close()
     }
 
+    await assertContainedParent(
+      fileSystem,
+      temporaryParentPath,
+      temporaryParentIdentity,
+      `${label} temporary`,
+    )
     await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
     try {
       await fileSystem.link(temporaryPath, filePath)
+      outputLinked = true
       await assertLinkedOutput(fileSystem, filePath, linkedIdentity, label, false)
     } catch (error) {
       if (error?.code !== "EEXIST") {
@@ -2369,16 +2420,24 @@ async function writeContainedCanonicalOutput(
     primaryError = error
   }
 
-  let cleanupError = null
+  const cleanupErrors = []
+  if (primaryError !== null && outputLinked && linkedIdentity !== null) {
+    try {
+      await assertLinkedOutput(fileSystem, filePath, linkedIdentity, label, false)
+      await fileSystem.unlink(filePath)
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+  }
   if (temporaryCreated) {
     try {
       await fileSystem.unlink(temporaryPath)
-      await parentHandle.sync()
+      await temporaryParentHandle.sync()
     } catch (error) {
-      cleanupError = error
+      cleanupErrors.push(error)
     }
   }
-  if (primaryError === null && cleanupError === null) {
+  if (primaryError === null && cleanupErrors.length === 0) {
     try {
       await assertContainedParent(fileSystem, parentPath, parentIdentity, label)
       if (linkedIdentity !== null) {
@@ -2397,7 +2456,17 @@ async function writeContainedCanonicalOutput(
   } catch (error) {
     closeError = error
   }
-  const errors = [primaryError, cleanupError, closeError].filter((error) => error !== null)
+  let temporaryParentCloseError = null
+  if (temporaryParentHandle !== parentHandle) {
+    try {
+      await temporaryParentHandle.close()
+    } catch (error) {
+      temporaryParentCloseError = error
+    }
+  }
+  const errors = [primaryError, ...cleanupErrors, closeError, temporaryParentCloseError].filter(
+    (error) => error !== null,
+  )
   if (errors.length > 1) {
     const firstMessage =
       typeof errors[0]?.message === "string" ? errors[0].message : `Release CLI ${label} failed`
