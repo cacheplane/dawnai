@@ -1,5 +1,6 @@
 import { snapshotPlannerInput } from "./observation-schema.mjs"
-import { analyzeReleaseSnapshot, ReleaseState } from "./state.mjs"
+import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import { analyzeReleaseSnapshot, isIncompleteTaggedReleaseState, ReleaseState } from "./state.mjs"
 
 const NEXT_TRANSITIONS = Object.freeze({
   [ReleaseState.CANDIDATE_VALIDATED]: "create-candidate-tag",
@@ -95,6 +96,73 @@ export function planRelease(input) {
   })
 }
 
+export function planCandidateArbitration({ candidate, managedReleases = [], registryLatest = [] }) {
+  const selected = normalizeCandidateSelection(candidate, "candidate")
+  if (!Array.isArray(managedReleases)) {
+    throw new TypeError("managedReleases must be an array")
+  }
+  if (!Array.isArray(registryLatest)) {
+    throw new TypeError("registryLatest must be an array")
+  }
+  const managed = managedReleases.map((release, index) =>
+    normalizeCandidateSelection(release, `managedReleases[${index}]`),
+  )
+  const conflicts = new Set()
+  let superseded = false
+
+  for (const release of managed) {
+    const comparison = compareSemver(release.candidate.version, selected.candidate.version)
+    if (comparison === 0) {
+      if (release.candidate.commitSha !== selected.candidate.commitSha) {
+        conflicts.add("candidate-version-sha-conflict")
+      }
+      continue
+    }
+    if (comparison < 0 && isIncompleteTaggedReleaseState(release.state)) {
+      conflicts.add("older-tagged-candidate-incomplete")
+    }
+    if (comparison > 0) {
+      if (selected.state === ReleaseState.CANDIDATE_VALIDATED) superseded = true
+    }
+  }
+
+  let newerLatest = false
+  for (const [index, latest] of registryLatest.entries()) {
+    if (
+      latest === null ||
+      Array.isArray(latest) ||
+      typeof latest !== "object" ||
+      !isReleaseVersion(latest.version)
+    ) {
+      conflicts.add(`registry-latest-invalid-${index}`)
+      continue
+    }
+    if (compareSemver(latest.version, selected.candidate.version) > 0) newerLatest = true
+  }
+  if (newerLatest) {
+    if (selected.state === ReleaseState.CANDIDATE_VALIDATED) superseded = true
+    else if (!terminalHistoricalState(selected.state)) conflicts.add("newer-registry-latest")
+  }
+
+  if (conflicts.size > 0) {
+    return candidateSelection({
+      ...selected,
+      disposition: "blocked",
+      conflicts: [...conflicts].sort(),
+    })
+  }
+  if (superseded) {
+    return candidateSelection({
+      ...selected,
+      state: ReleaseState.SUPERSEDED_NOOP,
+      disposition: "audit-only",
+      tag: null,
+      conflicts: [],
+    })
+  }
+  return candidateSelection(selected)
+}
+
 function result(value) {
   return {
     state: value.state,
@@ -104,4 +172,81 @@ function result(value) {
     conflicts: value.conflicts,
     proposedMutations: value.proposedMutations,
   }
+}
+
+function normalizeCandidateSelection(value, label) {
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    throw new TypeError(`${label} must be a candidate selection`)
+  }
+  const identity = value.candidate
+  if (
+    identity === null ||
+    Array.isArray(identity) ||
+    typeof identity !== "object" ||
+    !isReleaseVersion(identity.version) ||
+    typeof identity.commitSha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(identity.commitSha) ||
+    identity.ciWorkflow !== "CI" ||
+    identity.ciCheck !== "validate" ||
+    identity.publisherWorkflow !== ".github/workflows/release.yml" ||
+    !arraysEqual(Object.keys(identity).sort(), [
+      "ciCheck",
+      "ciWorkflow",
+      "commitSha",
+      "publisherWorkflow",
+      "version",
+    ])
+  ) {
+    throw new TypeError(`${label} candidate identity is invalid`)
+  }
+  if (!Object.values(ReleaseState).includes(value.state)) {
+    throw new TypeError(`${label} release state is invalid`)
+  }
+  if (value.tag !== null && value.tag !== `v${identity.version}`) {
+    throw new TypeError(`${label} candidate tag is invalid`)
+  }
+  if (
+    !Array.isArray(value.conflicts) ||
+    !value.conflicts.every((item) => typeof item === "string")
+  ) {
+    throw new TypeError(`${label} conflicts are invalid`)
+  }
+  return {
+    candidate: structuredClone(identity),
+    state: value.state,
+    disposition: value.disposition,
+    tag: value.tag,
+    conflicts: [...value.conflicts],
+  }
+}
+
+function candidateSelection(value) {
+  const result = {
+    candidate: value.candidate,
+    state: value.state,
+    disposition: value.disposition,
+    tag: value.tag,
+    conflicts: value.conflicts,
+  }
+  return deepFreeze(result)
+}
+
+function terminalHistoricalState(state) {
+  return state === ReleaseState.AUDIT_COMPLETE || state === ReleaseState.ABANDONED_PREPUBLICATION
+}
+
+function isReleaseVersion(value) {
+  return isExactSemver(value) && parseSemver(value).build.length === 0
+}
+
+function deepFreeze(value) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }

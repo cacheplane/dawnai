@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "publishingOwner": "release-controller",
+  "epoch": "fixed-group-v1",
+  "npmTrustedPublisherEnvironment": null,
+  "abandonmentEnvironment": "release-abandonment"
+}

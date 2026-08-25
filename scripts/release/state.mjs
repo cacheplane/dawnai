@@ -45,6 +45,25 @@ export const TERMINAL_RELEASE_STATES = Object.freeze([
   ReleaseState.ABANDONED_PREPUBLICATION,
 ])
 
+export const INCOMPLETE_TAGGED_RELEASE_STATES = Object.freeze([
+  ReleaseState.CANDIDATE_TAGGED,
+  ReleaseState.ARTIFACTS_PREPARED,
+  ReleaseState.ARTIFACTS_ATTESTED,
+  ReleaseState.CANDIDATE_ESCROWED,
+  ReleaseState.NPM_PARTIAL,
+  ReleaseState.NPM_COMPLETE,
+  ReleaseState.RELEASE_DRAFT_COMPLETE,
+  ReleaseState.SMOKES_COMPLETE,
+  ReleaseState.RELEASE_PUBLISHED,
+  ReleaseState.AUDIT_DISPATCHED,
+])
+
+const INCOMPLETE_TAGGED_RELEASE_STATE_SET = new Set(INCOMPLETE_TAGGED_RELEASE_STATES)
+
+export function isIncompleteTaggedReleaseState(state) {
+  return INCOMPLETE_TAGGED_RELEASE_STATE_SET.has(state)
+}
+
 export function analyzeObservedRelease(candidate, observation) {
   const snapshot = snapshotReleaseInput(candidate, observation)
   return analyzeReleaseSnapshot(snapshot.candidate, snapshot.observation)

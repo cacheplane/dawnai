@@ -97,6 +97,14 @@ export function createGitHubReader({
         compare: compareStringFieldThenCanonical("ref"),
       })
     },
+    listReleases() {
+      return readPaginated(context, {
+        initialUrl: `${base}/releases?per_page=100`,
+        operation: "releases",
+        extract: arrayBody,
+        compare: compareIdThenName,
+      })
+    },
     getReleaseByTag({ tag }) {
       assertTag(tag)
       return readObject(context, {

@@ -23,6 +23,7 @@ const ALLOWED_METHODS = [
   "listActionsArtifacts",
   "listEnvironments",
   "listReleaseAssets",
+  "listReleases",
   "listTagRefs",
   "listWorkflowRuns",
 ]
@@ -32,6 +33,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
     jsonResponse({ check_runs: [] }),
     jsonResponse({ ref: "refs/tags/v0.8.21", object: { sha: SHA } }),
     jsonResponse({ id: 7, tag_name: "v0.8.21" }),
+    jsonResponse([{ id: 8, tag_name: "v0.8.22", draft: true }]),
     jsonResponse({ id: 9, head_sha: SHA }),
     jsonResponse({ attestations: [] }),
     jsonResponse({ id: 12, path: ".github/workflows/release.yml" }),
@@ -45,6 +47,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
   await github.getCommitCheckRuns({ commitSha: SHA })
   await github.getRef({ ref: "tags/v0.8.21" })
   await github.getReleaseByTag({ tag: "v0.8.21" })
+  await github.listReleases()
   await github.getActionsRun({ runId: 9 })
   await github.getAttestations({ subjectDigest: `sha256:${"a".repeat(64)}` })
   await github.getWorkflow({ workflow: "release.yml" })
@@ -65,6 +68,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
       `${BASE}/commits/${SHA}/check-runs?per_page=100`,
       `${BASE}/git/ref/tags%2Fv0.8.21`,
       `${BASE}/releases/tags/v0.8.21`,
+      `${BASE}/releases?per_page=100`,
       `${BASE}/actions/runs/9`,
       `${BASE}/attestations/sha256%3A${"a".repeat(64)}?per_page=100`,
       `${BASE}/actions/workflows/release.yml`,
@@ -84,10 +88,13 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
 
 test("GitHub list methods follow same-origin pagination and return stable records", async () => {
   const nextTags = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const nextReleases = `${BASE}/releases?per_page=100&page=2`
   const nextArtifacts = `${BASE}/actions/artifacts?per_page=100&name=release-evidence&page=2`
   const { fetchImpl, calls } = recordingFetch([
     jsonResponse([{ ref: "refs/tags/v2" }], 200, linkHeader(nextTags)),
     jsonResponse([{ ref: "refs/tags/v1" }]),
+    jsonResponse([{ id: 20, tag_name: "v2" }], 200, linkHeader(nextReleases)),
+    jsonResponse([{ id: 10, tag_name: "v1" }]),
     jsonResponse({ artifacts: [{ id: 20, name: "z" }] }, 200, linkHeader(nextArtifacts)),
     jsonResponse({ artifacts: [{ id: 10, name: "a" }] }),
     jsonResponse([
@@ -102,6 +109,10 @@ test("GitHub list methods follow same-origin pagination and return stable record
   assert.deepEqual((await github.listTagRefs()).value, [
     { ref: "refs/tags/v1" },
     { ref: "refs/tags/v2" },
+  ])
+  assert.deepEqual((await github.listReleases()).value, [
+    { id: 10, tag_name: "v1" },
+    { id: 20, tag_name: "v2" },
   ])
   assert.deepEqual((await github.listActionsArtifacts({ name: "release-evidence" })).value, [
     { id: 10, name: "a" },
@@ -124,6 +135,8 @@ test("GitHub list methods follow same-origin pagination and return stable record
     [
       [`${BASE}/git/matching-refs/tags/?per_page=100`, "GET"],
       [nextTags, "GET"],
+      [`${BASE}/releases?per_page=100`, "GET"],
+      [nextReleases, "GET"],
       [`${BASE}/actions/artifacts?per_page=100&name=release-evidence`, "GET"],
       [nextArtifacts, "GET"],
       [`${BASE}/releases/7/assets?per_page=100`, "GET"],
