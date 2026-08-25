@@ -186,7 +186,15 @@ test("the rehearsal observer obtains every snapshot through the exact production
         transition: { name: "publish-npm-packages", status: "dry-run" },
         after: null,
         schemaVersion: 1,
-        diagnostics: [],
+        diagnostics: [
+          {
+            source: "github",
+            operation: "releases",
+            status: "AMBIGUOUS",
+            httpStatus: null,
+            code: "RELEASE_CONTENT_INVALID",
+          },
+        ],
       }
     },
   })
@@ -201,6 +209,15 @@ test("the rehearsal observer obtains every snapshot through the exact production
     ["--event", "--report", "--github-output"],
   )
   assert.equal(calls[0].dependencies.githubReader, dependencies.githubReader)
+  assert.deepEqual(observer.latestDiagnostics(), [
+    {
+      source: "github",
+      operation: "releases",
+      status: "AMBIGUOUS",
+      httpStatus: null,
+      code: "RELEASE_CONTENT_INVALID",
+    },
+  ])
 })
 
 test("durable post-reconcile production observations discard workflow receipt overlays", async (t) => {

@@ -179,8 +179,15 @@ export async function driveRehearsalController({
       })
     }
     if (report.before.plan.disposition !== "would-transition") {
+      const diagnostics =
+        typeof observer.latestDiagnostics === "function"
+          ? observer
+              .latestDiagnostics()
+              .map((entry) => entry?.code)
+              .filter((code) => typeof code === "string")
+          : []
       throw new Error(
-        `Release rehearsal controller stopped before audit completion in ${report.before.plan.state} (${report.before.plan.disposition}; conflicts: ${report.before.plan.conflicts.join(",") || "none"}; reasons: ${report.before.plan.reasons.join(",") || "none"})`,
+        `Release rehearsal controller stopped before audit completion in ${report.before.plan.state} (${report.before.plan.disposition}; conflicts: ${report.before.plan.conflicts.join(",") || "none"}; diagnostics: ${diagnostics.join(",") || "none"}; reasons: ${report.before.plan.reasons.join(",") || "none"})`,
       )
     }
   }

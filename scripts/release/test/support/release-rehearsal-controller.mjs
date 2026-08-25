@@ -30,7 +30,11 @@ export function createRehearsalCliObserver({
   }
   const receiptBoundary = normalizeReceiptBoundary(receipts)
   let sequence = 0
+  let latestDiagnostics = Object.freeze([])
   return Object.freeze({
+    latestDiagnostics() {
+      return latestDiagnostics
+    },
     async observe({ candidate: requestedCandidate }) {
       const requested = exactCandidate(requestedCandidate)
       if (requested.version !== identity.version || requested.commitSha !== identity.commitSha) {
@@ -62,6 +66,9 @@ export function createRehearsalCliObserver({
           paths.output,
         ],
         { ...dependencies, cwd: dependencies.cwd ?? directory },
+      )
+      latestDiagnostics = deepFreeze(
+        Array.isArray(report?.diagnostics) ? structuredClone(report.diagnostics) : [],
       )
       if (
         report === null ||
