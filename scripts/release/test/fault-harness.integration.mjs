@@ -1338,7 +1338,7 @@ function assertPlannerDisposition({ exact, latest, blocked, candidateVersion = N
     }
   }
   const plan = planRelease({ candidate, observation, mode: "shadow" })
-  assert.equal(plan.disposition, blocked ? "blocked" : "would-transition")
+  assert.equal(plan.disposition, blocked ? "blocked" : "would-transition", JSON.stringify(plan))
   assert.deepEqual(plan.proposedMutations.length, blocked ? 0 : 1)
 }
 
@@ -1399,7 +1399,8 @@ function plannerObservation(candidate, packages) {
       status: "absent",
       tag: null,
       commitSha: null,
-      metadataReconciled: false,
+      immutable: null,
+      marker: null,
       assets: [],
     },
     requiredSmokeLanes: ["install"],
