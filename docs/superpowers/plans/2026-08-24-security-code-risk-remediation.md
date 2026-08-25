@@ -98,9 +98,11 @@ Also require a `g` expression and a `y` expression to return the same result acr
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/testing test -- matchers.test.ts
+  pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts \
+    test/matchers.test.ts
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/evals test -- scorers.test.ts
+  pnpm --filter @dawn-ai/evals exec vitest --run --config vitest.config.ts \
+    test/scorers.test.ts
 ```
 
 Expected: fail because the private adapters do not exist.
@@ -275,7 +277,8 @@ In `post-cards.test.ts`, use `createElement` and `renderToStaticMarkup` so the c
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/web test -- post-index.test.ts post-cards.test.ts
+  pnpm --filter @dawn-ai/web exec vitest --run --config vitest.config.ts \
+    app/components/blog/post-index.test.ts app/components/blog/post-cards.test.ts
 ```
 
 Expected: invalid slugs are accepted and both card sinks interpolate raw values.
@@ -329,7 +332,8 @@ Change the helper to reject `search === replacement` and a source that does not 
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/cli test -- test-command.test.ts
+  pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts \
+    test/test-command.test.ts
 ```
 
 Expected: pass, and no `replace("__SERVER_URL__", "__SERVER_URL__")` remains.
@@ -352,8 +356,9 @@ The parent reads the child program and sentinel from `process.argv[1]` and `[2]`
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/cli test -- vercel-native-lane.test.ts \
-  -t "runs sanitized explicit-env children and kills them at a finite deadline"
+  pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts \
+    test/vercel-native-lane.test.ts \
+    -t "runs sanitized explicit-env children and kills them at a finite deadline"
 ```
 
 Expected: pass without Vercel credentials because this is the local child-runner unit path. Exact-head CodeQL must later prove alert `#50` absent; that is the GREEN evidence for the static finding.
@@ -384,7 +389,8 @@ In `nav.test.ts`, invoke `--analyze-maintained-heading-ids` with headings contai
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm --filter @dawn-ai/web test -- nav.test.ts
+  pnpm --filter @dawn-ai/web exec vitest --run --config vitest.config.ts \
+    app/components/docs/nav.test.ts
 ```
 
 Expected: the shared maintained-page analyzer diverges on the nested tag-like identity fixture while exercising the same helper used by production link validation.
@@ -426,7 +432,9 @@ git commit -m "fix(docs): unify heading identity parsing"
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm --filter @dawn-ai/testing test
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm --filter @dawn-ai/evals test
-PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm --filter @dawn-ai/cli test -- test-command.test.ts vercel-native-lane.test.ts
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts \
+    test/test-command.test.ts test/vercel-native-lane.test.ts
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm --filter @dawn-ai/web test
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm test:release-fault-harness
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" node scripts/check-docs.mjs
@@ -435,12 +443,11 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" node scripts/check-doc
 - [ ] **Step 2: Run scoped hygiene**
 
 ```bash
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" pnpm lint
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
-  pnpm exec biome check packages/evals packages/testing \
-    packages/cli/test/test-command.test.ts \
-    packages/cli/test/vercel-native-lane.test.ts \
-    apps/web/app/components/blog \
-    apps/web/app/components/docs/nav.test.ts
+  pnpm exec biome lint \
+    --config-path packages/config-biome/biome.json \
+    packages/evals/test/scorers.test.ts
 git diff --check origin/main...HEAD
 node scripts/check-changesets.mjs
 ```
