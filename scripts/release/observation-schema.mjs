@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+import { canonicalReleaseBody } from "./metadata.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const PLANNER_FIELDS = Object.freeze(["candidate", "observation", "mode"])
@@ -25,8 +27,9 @@ const RELEASE_STATES = new Set([
   "NPM_COMPLETE",
   "RELEASE_DRAFT_COMPLETE",
   "SMOKES_COMPLETE",
-  "RELEASE_PUBLISHED",
   "AUDIT_DISPATCHED",
+  "AUDIT_RETRYABLE",
+  "AUDIT_VERIFIED",
   "AUDIT_COMPLETE",
   "ABANDONED_PREPUBLICATION",
 ])
@@ -147,7 +150,8 @@ export function findObservationSchemaConflicts(observation) {
       "status",
       "tag",
       "commitSha",
-      "metadataReconciled",
+      "immutable",
+      "marker",
       "assets",
     ]) &&
     recordsHaveExactFields(observation.release?.assets, ["name", "status", "sha256"]) &&
@@ -228,6 +232,15 @@ function addStatusDependentConflicts(observation, conflicts) {
   if (observation.release.status === "absent" && observation.release.assets.length > 0) {
     conflicts.add("github-assets-without-release")
   }
+  if (observation.release.status === "draft" && observation.release.immutable !== false) {
+    conflicts.add("github-release-draft-immutable-invalid")
+  }
+  if (observation.release.status === "published") {
+    if (observation.release.immutable !== true) conflicts.add("github-release-not-immutable")
+    if (observation.release.marker?.phase !== "AUDIT_VERIFIED") {
+      conflicts.add("github-release-published-without-audit")
+    }
+  }
   if (["draft", "published"].includes(observation.release.status)) {
     const expectedAssets = [
       observation.artifacts.releaseRecordAsset,
@@ -248,8 +261,11 @@ function addStatusDependentConflicts(observation, conflicts) {
       if (seen.has(asset.name)) conflicts.add("github-asset-duplicate")
       seen.add(asset.name)
       const expected = expectedByName.get(asset.name)
-      if (expected === undefined) conflicts.add("github-managed-asset-unexpected")
-      else if (asset.sha256 !== expected.sha256) conflicts.add("github-asset-bytes-mismatch")
+      if (expected === undefined) {
+        if (!releaseEvidenceAssetIsAllowed(asset, observation.release.marker)) {
+          conflicts.add("github-managed-asset-unexpected")
+        }
+      } else if (asset.sha256 !== expected.sha256) conflicts.add("github-asset-bytes-mismatch")
       if (asset.status === "ambiguous") conflicts.add("github-asset-ambiguous")
     }
   }
@@ -353,8 +369,65 @@ function validateCanonicalObservationSets(observation) {
     hasExactUniqueSet(attestationSubjects, expectedAttestationSubjects) &&
     artifactIdentitiesMatch &&
     attestationIdentitiesMatch &&
-    modeledAssetsAreUnique
+    modeledAssetsAreUnique &&
+    markerMatchesObservation(observation)
   )
+}
+
+function markerMatchesObservation(observation) {
+  const marker = observation.release.marker
+  if (marker === null) return true
+  if (marker.phase === "ABANDONED_PREPUBLICATION") return true
+  const subjects = marker.attestationSet?.subjects
+  const expectedSubjects = [
+    {
+      subjectName: "manifest.json",
+      subjectSha256: observation.artifacts.manifestSha256,
+      bundleName: observation.artifacts.manifestAttestationAsset.name,
+      bundleSha256: observation.artifacts.manifestAttestationAsset.sha256,
+    },
+    ...observation.inventory.packages.map((pkg) => ({
+      subjectName: pkg.filename,
+      subjectSha256: pkg.tarballSha256,
+      bundleName: pkg.attestationFilename,
+      bundleSha256: pkg.attestationSha256,
+    })),
+  ]
+  if (
+    marker.manifestSha256 !== observation.artifacts.manifestSha256 ||
+    marker.releaseRecordSha256 !== observation.artifacts.releaseRecordAsset.sha256 ||
+    !Array.isArray(subjects) ||
+    subjects.length !== expectedSubjects.length ||
+    !subjects.every((subject, index) =>
+      ["subjectName", "subjectSha256", "bundleName", "bundleSha256"].every(
+        (field) => subject[field] === expectedSubjects[index][field],
+      ),
+    )
+  ) {
+    return false
+  }
+  const digestEntries = [
+    {
+      name: observation.artifacts.releaseRecordAsset.name,
+      sha256: observation.artifacts.releaseRecordAsset.sha256,
+    },
+    {
+      name: observation.artifacts.manifestAsset.name,
+      sha256: observation.artifacts.manifestAsset.sha256,
+    },
+    ...observation.inventory.packages.map((pkg) => ({
+      name: pkg.filename,
+      sha256: pkg.tarballSha256,
+    })),
+    ...expectedSubjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  const baseDigest = createHash("sha256")
+    .update(`${JSON.stringify(digestEntries)}\n`)
+    .digest("hex")
+  return marker.baseAssetSetSha256 === baseDigest
 }
 
 function hasExactUniqueSet(actual, expected) {
@@ -557,17 +630,50 @@ function validateProvenance(provenance) {
 
 function validateRelease(release) {
   if (!["absent", "draft", "published", "ambiguous"].includes(release?.status)) return false
-  if (typeof release.metadataReconciled !== "boolean" || !Array.isArray(release.assets))
-    return false
+  if (!Array.isArray(release.assets)) return false
   if (!release.assets.every(validateManagedAsset)) return false
   if (["draft", "published"].includes(release.status)) {
-    return isNonEmptyString(release.tag) && isSha(release.commitSha) && release.assets.length > 0
+    return (
+      isNonEmptyString(release.tag) &&
+      isSha(release.commitSha) &&
+      typeof release.immutable === "boolean" &&
+      validateObservedMarker(release.marker)
+    )
   }
   return (
     release.tag === null &&
     release.commitSha === null &&
-    release.metadataReconciled === false &&
+    release.immutable === null &&
+    release.marker === null &&
     release.assets.length === 0
+  )
+}
+
+function validateObservedMarker(marker) {
+  try {
+    canonicalReleaseBody({ marker, manifest: null })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function releaseEvidenceAssetIsAllowed(asset, marker) {
+  if (marker?.phase === "ABANDONED_PREPUBLICATION") {
+    return asset.name === "abandonment.json" && asset.sha256 === marker.abandonmentSha256
+  }
+  if (!["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(marker?.phase)) {
+    return false
+  }
+  if (/^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(asset.name)) {
+    return (
+      asset.name !== marker.audit?.attemptAssetName || asset.sha256 === marker.audit.attemptSha256
+    )
+  }
+  return (
+    marker.phase === "AUDIT_VERIFIED" &&
+    asset.name === "audit-result.json" &&
+    asset.sha256 === marker.audit?.canonicalSha256
   )
 }
 

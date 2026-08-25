@@ -14,20 +14,169 @@ const ALLOWED_METHODS = [
   "getActionsArtifact",
   "getActionsPermissions",
   "getActionsRun",
+  "getActionsRunAttempt",
   "getAttestations",
   "getBranchProtection",
   "getCommitCheckRuns",
+  "getGitTag",
   "getRef",
+  "getRelease",
   "getReleaseByTag",
   "getWorkflow",
   "getWorkflowPermissions",
   "listActionsArtifacts",
+  "listActionsRunArtifacts",
+  "listActionsRunJobs",
   "listEnvironments",
   "listReleaseAssets",
   "listReleases",
   "listTagRefs",
   "listWorkflowRuns",
 ]
+
+test("GitHub exact-run reads expose annotated tags, Releases, artifacts, and every job attempt", async () => {
+  const nextJobs = `${BASE}/actions/runs/55/jobs?filter=all&per_page=100&page=2`
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse({ id: 55, run_attempt: 2, head_sha: SHA }),
+    jsonResponse({ object: { type: "commit", sha: SHA }, sha: "a".repeat(40), tag: "v0.8.22" }),
+    jsonResponse({ id: 44, draft: true, tag_name: "v0.8.22" }),
+    jsonResponse({ artifacts: [{ id: 9, name: "result" }] }),
+    jsonResponse(
+      {
+        jobs: [
+          {
+            id: 30,
+            run_attempt: 2,
+            name: "prepare",
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-08-24T00:02:00Z",
+            completed_at: "2026-08-24T00:03:00Z",
+          },
+        ],
+      },
+      200,
+      linkHeader(nextJobs),
+    ),
+    jsonResponse({
+      jobs: [
+        {
+          id: 20,
+          run_attempt: 1,
+          name: "publish-npm",
+          status: "completed",
+          conclusion: "failure",
+          started_at: "2026-08-24T00:00:00Z",
+          completed_at: "2026-08-24T00:01:00Z",
+        },
+      ],
+    }),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl })
+
+  assert.equal((await github.getActionsRunAttempt({ runId: 55, attempt: 2 })).value.run_attempt, 2)
+  assert.equal((await github.getGitTag({ tagSha: "a".repeat(40) })).value.tag, "v0.8.22")
+  assert.equal((await github.getRelease({ releaseId: 44 })).value.id, 44)
+  assert.deepEqual((await github.listActionsRunArtifacts({ runId: 55 })).value, [
+    { id: 9, name: "result" },
+  ])
+  assert.deepEqual((await github.listActionsRunJobs({ runId: 55 })).value, [
+    {
+      id: 20,
+      runAttempt: 1,
+      name: "publish-npm",
+      status: "completed",
+      conclusion: "failure",
+      startedAt: "2026-08-24T00:00:00Z",
+      completedAt: "2026-08-24T00:01:00Z",
+    },
+    {
+      id: 30,
+      runAttempt: 2,
+      name: "prepare",
+      status: "completed",
+      conclusion: "success",
+      startedAt: "2026-08-24T00:02:00Z",
+      completedAt: "2026-08-24T00:03:00Z",
+    },
+  ])
+  assert.deepEqual(
+    calls.map(({ url }) => url),
+    [
+      `${BASE}/actions/runs/55/attempts/2`,
+      `${BASE}/git/tags/${"a".repeat(40)}`,
+      `${BASE}/releases/44`,
+      `${BASE}/actions/runs/55/artifacts?per_page=100`,
+      `${BASE}/actions/runs/55/jobs?filter=all&per_page=100`,
+      nextJobs,
+    ],
+  )
+})
+
+test("GitHub all-attempt jobs fail closed on gaps, duplicates, or malformed attempt identity", async () => {
+  const cases = [
+    [
+      {
+        id: 1,
+        run_attempt: 1,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        id: 3,
+        run_attempt: 3,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        started_at: null,
+        completed_at: null,
+      },
+    ],
+    [
+      {
+        id: 1,
+        run_attempt: 1,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        id: 1,
+        run_attempt: 1,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        started_at: null,
+        completed_at: null,
+      },
+    ],
+    [
+      {
+        id: 1,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        started_at: null,
+        completed_at: null,
+      },
+    ],
+  ]
+  for (const jobs of cases) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => jsonResponse({ jobs }),
+    })
+    const result = await github.listActionsRunJobs({ runId: 55 })
+    assert.equal(result.status, "ERROR")
+    assert.match(result.code, /ATTEMPT|DUPLICATE|MALFORMED/u)
+  }
+})
 
 test("createGitHubReader exposes only named read operations and exact GET endpoints", async () => {
   const { fetchImpl, calls } = recordingFetch([
@@ -579,6 +728,22 @@ test("GitHub pagination enforces total page and record limits", async () => {
     operation: "tag-refs",
     httpStatus: 200,
     code: "RECORD_LIMIT_EXCEEDED",
+  })
+})
+
+test("GitHub pagination rejects a repeated next-page URL as ambiguous", async () => {
+  const next = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const repeated = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () => jsonResponse([{ ref: "refs/tags/v1" }], 200, linkHeader(next)),
+  })
+
+  assert.deepEqual(await repeated.listTagRefs(), {
+    status: "ERROR",
+    operation: "tag-refs",
+    httpStatus: 200,
+    code: "PAGINATION_LOOP",
   })
 })
 

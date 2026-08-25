@@ -9,11 +9,12 @@ const NEXT_TRANSITIONS = Object.freeze({
   [ReleaseState.ARTIFACTS_ATTESTED]: "escrow-candidate",
   [ReleaseState.CANDIDATE_ESCROWED]: "publish-npm-packages",
   [ReleaseState.NPM_PARTIAL]: "resume-npm-publish",
-  [ReleaseState.NPM_COMPLETE]: "reconcile-release-draft",
+  [ReleaseState.NPM_COMPLETE]: "reconcile-npm-evidence",
   [ReleaseState.RELEASE_DRAFT_COMPLETE]: "run-release-smokes",
-  [ReleaseState.SMOKES_COMPLETE]: "publish-github-release",
-  [ReleaseState.RELEASE_PUBLISHED]: "dispatch-release-audit",
+  [ReleaseState.SMOKES_COMPLETE]: "dispatch-release-audit",
   [ReleaseState.AUDIT_DISPATCHED]: "complete-release-audit",
+  [ReleaseState.AUDIT_RETRYABLE]: "dispatch-release-audit",
+  [ReleaseState.AUDIT_VERIFIED]: "publish-github-release",
 })
 
 const ABANDONABLE_STATES = new Set([
@@ -75,7 +76,9 @@ export function planRelease(input) {
   const nextTransition =
     observation.abandonment.requested && ABANDONABLE_STATES.has(state)
       ? "record-prepublication-abandonment"
-      : NEXT_TRANSITIONS[state]
+      : state === ReleaseState.RELEASE_DRAFT_COMPLETE && smokeEvidenceReady(observation)
+        ? "reconcile-smoke-evidence"
+        : NEXT_TRANSITIONS[state]
   if (nextTransition === undefined) {
     throw new Error(`No transition is defined for release state ${state}`)
   }
@@ -93,6 +96,16 @@ export function planRelease(input) {
         ...(nextTransition === "dispatch-release-audit" ? { tag: observation.release.tag } : {}),
       },
     ],
+  })
+}
+
+function smokeEvidenceReady(observation) {
+  const lanes = observation.requiredSmokeLanes
+  const smokes = observation.smokes
+  if (!Array.isArray(lanes) || lanes.length === 0 || !Array.isArray(smokes)) return false
+  return lanes.every((lane) => {
+    const matches = smokes.filter((smoke) => smoke.name === lane)
+    return matches.length === 1 && matches[0].status === "passed"
   })
 }
 

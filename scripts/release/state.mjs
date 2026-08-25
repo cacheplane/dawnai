@@ -14,8 +14,9 @@ export const ReleaseState = Object.freeze({
   NPM_COMPLETE: "NPM_COMPLETE",
   RELEASE_DRAFT_COMPLETE: "RELEASE_DRAFT_COMPLETE",
   SMOKES_COMPLETE: "SMOKES_COMPLETE",
-  RELEASE_PUBLISHED: "RELEASE_PUBLISHED",
   AUDIT_DISPATCHED: "AUDIT_DISPATCHED",
+  AUDIT_RETRYABLE: "AUDIT_RETRYABLE",
+  AUDIT_VERIFIED: "AUDIT_VERIFIED",
   AUDIT_COMPLETE: "AUDIT_COMPLETE",
   ABANDONED_PREPUBLICATION: "ABANDONED_PREPUBLICATION",
 })
@@ -32,10 +33,11 @@ export const RELEASE_PROGRESS_RANK = Object.freeze({
   [ReleaseState.NPM_COMPLETE]: 8,
   [ReleaseState.RELEASE_DRAFT_COMPLETE]: 9,
   [ReleaseState.SMOKES_COMPLETE]: 10,
-  [ReleaseState.RELEASE_PUBLISHED]: 11,
-  [ReleaseState.AUDIT_DISPATCHED]: 12,
-  [ReleaseState.AUDIT_COMPLETE]: 13,
-  [ReleaseState.ABANDONED_PREPUBLICATION]: 14,
+  [ReleaseState.AUDIT_DISPATCHED]: 11,
+  [ReleaseState.AUDIT_RETRYABLE]: 12,
+  [ReleaseState.AUDIT_VERIFIED]: 13,
+  [ReleaseState.AUDIT_COMPLETE]: 14,
+  [ReleaseState.ABANDONED_PREPUBLICATION]: 15,
 })
 
 export const TERMINAL_RELEASE_STATES = Object.freeze([
@@ -54,8 +56,9 @@ export const INCOMPLETE_TAGGED_RELEASE_STATES = Object.freeze([
   ReleaseState.NPM_COMPLETE,
   ReleaseState.RELEASE_DRAFT_COMPLETE,
   ReleaseState.SMOKES_COMPLETE,
-  ReleaseState.RELEASE_PUBLISHED,
   ReleaseState.AUDIT_DISPATCHED,
+  ReleaseState.AUDIT_RETRYABLE,
+  ReleaseState.AUDIT_VERIFIED,
 ])
 
 const INCOMPLETE_TAGGED_RELEASE_STATE_SET = new Set(INCOMPLETE_TAGGED_RELEASE_STATES)
@@ -98,17 +101,26 @@ export function findReleaseConflicts(candidate, observation) {
 
 function classifySnapshot(observation, evidence) {
   if (!evidence.schemaValid) return ReleaseState.CANDIDATE_VALIDATED
-  if (observation.abandonment?.recorded) return ReleaseState.ABANDONED_PREPUBLICATION
-  if (evidence.audit.complete) return ReleaseState.AUDIT_COMPLETE
-  if (evidence.audit.dispatched) return ReleaseState.AUDIT_DISPATCHED
-  if (evidence.assets.publishedExact) return ReleaseState.RELEASE_PUBLISHED
-  if (evidence.assets.metadataComplete && evidence.smokes.complete) {
+  if (
+    observation.abandonment?.recorded ||
+    evidence.assets.markerPhase === "ABANDONED_PREPUBLICATION"
+  ) {
+    return ReleaseState.ABANDONED_PREPUBLICATION
+  }
+  if (evidence.assets.publishedExact) return ReleaseState.AUDIT_COMPLETE
+  if (evidence.assets.auditVerified) return ReleaseState.AUDIT_VERIFIED
+  if (evidence.assets.auditRetryable) return ReleaseState.AUDIT_RETRYABLE
+  if (evidence.assets.auditDispatched) return ReleaseState.AUDIT_DISPATCHED
+  if (evidence.assets.smokesReconciled && evidence.smokes.complete) {
     return ReleaseState.SMOKES_COMPLETE
   }
-  if (evidence.assets.metadataComplete) return ReleaseState.RELEASE_DRAFT_COMPLETE
+  if (evidence.assets.npmReconciled && evidence.npm.complete) {
+    return ReleaseState.RELEASE_DRAFT_COMPLETE
+  }
   if (evidence.npm.complete) return ReleaseState.NPM_COMPLETE
   if (evidence.npm.started) return ReleaseState.NPM_PARTIAL
   if (evidence.assets.draftExact) return ReleaseState.CANDIDATE_ESCROWED
+  if (evidence.assets.escrowResumable) return ReleaseState.ARTIFACTS_ATTESTED
   if (evidence.artifact.attested) return ReleaseState.ARTIFACTS_ATTESTED
   if (evidence.artifact.prepared) return ReleaseState.ARTIFACTS_PREPARED
   if (observation.tag?.status === "present") return ReleaseState.CANDIDATE_TAGGED

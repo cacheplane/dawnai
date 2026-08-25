@@ -95,6 +95,13 @@ export function createGitHubReader({
         operation: "ref",
       })
     },
+    getGitTag({ tagSha }) {
+      assertCommitSha(tagSha)
+      return readObject(context, {
+        url: `${base}/git/tags/${tagSha}`,
+        operation: "git-tag",
+      })
+    },
     listTagRefs() {
       return readPaginated(context, {
         initialUrl: `${base}/git/matching-refs/tags/?per_page=100`,
@@ -115,6 +122,13 @@ export function createGitHubReader({
       assertTag(tag)
       return readObject(context, {
         url: `${base}/releases/tags/${encodeURIComponent(tag)}`,
+        operation: "release",
+      })
+    },
+    getRelease({ releaseId }) {
+      const id = normalizeId(releaseId)
+      return readObject(context, {
+        url: `${base}/releases/${id}`,
         operation: "release",
       })
     },
@@ -149,11 +163,39 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
+    async listActionsRunArtifacts({ runId }) {
+      const id = normalizeId(runId)
+      const result = await readPaginated(context, {
+        initialUrl: `${base}/actions/runs/${id}/artifacts?per_page=100`,
+        operation: "actions-run-artifacts",
+        extract: objectArray("artifacts"),
+        compare: compareIdThenName,
+      })
+      return rejectDuplicateNumericIds(result, "DUPLICATE_ARTIFACT_ID")
+    },
+    async listActionsRunJobs({ runId }) {
+      const id = normalizeId(runId)
+      const result = await readPaginated(context, {
+        initialUrl: `${base}/actions/runs/${id}/jobs?filter=all&per_page=100`,
+        operation: "actions-run-jobs",
+        extract: objectArray("jobs"),
+        compare: compareRunAttemptThenId,
+      })
+      return normalizeAllAttemptJobs(result)
+    },
     getActionsRun({ runId }) {
       const id = normalizeId(runId)
       return readObject(context, {
         url: `${base}/actions/runs/${id}`,
         operation: "actions-run",
+      })
+    },
+    getActionsRunAttempt({ runId, attempt }) {
+      const id = normalizeId(runId)
+      const attemptNumber = normalizeId(attempt)
+      return readObject(context, {
+        url: `${base}/actions/runs/${id}/attempts/${attemptNumber}`,
+        operation: "actions-run-attempt",
       })
     },
     getActionsArtifact({ artifactId }) {
@@ -263,6 +305,7 @@ async function readPaginated(
   const records = []
   const budget = createOperationBudget(context)
   let url = initialUrl
+  const seenUrls = new Set([new URL(initialUrl).href])
   for (let page = 0; page < context.maxPages; page += 1) {
     if (budget.deadline <= budget.now()) {
       return failure("AMBIGUOUS", operation, null, "TIMEOUT")
@@ -326,6 +369,10 @@ async function readPaginated(
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
+    if (seenUrls.has(nextUrl)) {
+      return failure("ERROR", operation, result.httpStatus, "PAGINATION_LOOP")
+    }
+    seenUrls.add(nextUrl)
     url = nextUrl
   }
   return failure("ERROR", operation, null, "PAGE_LIMIT_EXCEEDED")
@@ -699,6 +746,91 @@ function compareIdThenName(left, right) {
   }
   const nameComparison = compareStrings(String(left.name ?? ""), String(right.name ?? ""))
   return nameComparison === 0 ? compareCanonicalJson(left, right) : nameComparison
+}
+
+function compareRunAttemptThenId(left, right) {
+  const leftAttempt = Number.isSafeInteger(left.run_attempt)
+    ? left.run_attempt
+    : Number.MAX_SAFE_INTEGER
+  const rightAttempt = Number.isSafeInteger(right.run_attempt)
+    ? right.run_attempt
+    : Number.MAX_SAFE_INTEGER
+  if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt
+  return compareIdThenName(left, right)
+}
+
+function rejectDuplicateNumericIds(result, code) {
+  if (result.status !== "PRESENT") return result
+  const ids = new Set()
+  for (const record of result.value) {
+    if (!Number.isSafeInteger(record.id) || record.id < 1) {
+      return failure("ERROR", result.operation, result.httpStatus, "MALFORMED_SCHEMA")
+    }
+    if (ids.has(record.id)) {
+      return failure("ERROR", result.operation, result.httpStatus, code)
+    }
+    ids.add(record.id)
+  }
+  return result
+}
+
+function normalizeAllAttemptJobs(result) {
+  if (result.status !== "PRESENT") return result
+  if (result.value.length === 0) {
+    return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
+  }
+  const identities = new Set()
+  const attempts = new Set()
+  const jobs = []
+  for (const record of result.value) {
+    if (
+      !Number.isSafeInteger(record.id) ||
+      record.id < 1 ||
+      !Number.isSafeInteger(record.run_attempt) ||
+      record.run_attempt < 1 ||
+      typeof record.name !== "string" ||
+      record.name.length === 0 ||
+      typeof record.status !== "string" ||
+      record.status.length === 0 ||
+      !(record.conclusion === null || typeof record.conclusion === "string") ||
+      !isNullableTimestamp(record.started_at) ||
+      !isNullableTimestamp(record.completed_at)
+    ) {
+      return failure("ERROR", result.operation, result.httpStatus, "MALFORMED_ATTEMPT_IDENTITY")
+    }
+    const identity = `${record.run_attempt}:${record.id}`
+    if (identities.has(identity)) {
+      return failure("ERROR", result.operation, result.httpStatus, "DUPLICATE_ATTEMPT_JOB")
+    }
+    identities.add(identity)
+    attempts.add(record.run_attempt)
+    jobs.push({
+      id: record.id,
+      runAttempt: record.run_attempt,
+      name: record.name,
+      status: record.status,
+      conclusion: record.conclusion,
+      startedAt: record.started_at,
+      completedAt: record.completed_at,
+    })
+  }
+  const maximumAttempt = Math.max(...attempts)
+  for (let attempt = 1; attempt <= maximumAttempt; attempt += 1) {
+    if (!attempts.has(attempt)) {
+      return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
+    }
+  }
+  jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
+  return { ...publicResult(result), value: jobs }
+}
+
+function isNullableTimestamp(value) {
+  return (
+    value === null ||
+    (typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value) &&
+      Number.isFinite(Date.parse(value)))
+  )
 }
 
 function compareAttestations(left, right) {

@@ -47,8 +47,14 @@ function invalidEvidence(conflicts) {
     assets: Object.freeze({
       releaseExists: false,
       escrowComplete: false,
+      escrowResumable: false,
       draftExact: false,
-      metadataComplete: false,
+      markerPhase: null,
+      npmReconciled: false,
+      smokesReconciled: false,
+      auditDispatched: false,
+      auditRetryable: false,
+      auditVerified: false,
       publishedExact: false,
     }),
     npm: Object.freeze({
@@ -225,34 +231,179 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
   if (release.status === "ambiguous") conflicts.add("github-release-ambiguous")
   const releaseExists = release.status === "draft" || release.status === "published"
   const releaseAssets = Array.isArray(release.assets) ? release.assets : []
+  const marker = release.marker
   if (!releaseExists && releaseAssets.length > 0) conflicts.add("github-assets-without-release")
   if (releaseExists) {
     if (release.tag !== `v${candidate.version}`) conflicts.add("github-release-tag-mismatch")
     if (release.commitSha !== candidate.commitSha) conflicts.add("github-release-commit-mismatch")
+    if (marker?.version !== candidate.version)
+      conflicts.add("github-release-marker-version-mismatch")
+    if (marker?.commitSha !== candidate.commitSha) {
+      conflicts.add("github-release-marker-commit-mismatch")
+    }
+    if (marker?.tag !== `v${candidate.version}`) conflicts.add("github-release-marker-tag-mismatch")
   }
-  const releaseExact = releaseExists
-    ? exactAssetSet(releaseAssets, expected, "github", conflicts)
-    : false
+  const expectedNames = new Set(expected.map(({ name }) => name))
+  const baseAssets = releaseAssets.filter(({ name }) => expectedNames.has(name))
+  const evidenceAssets = releaseAssets.filter(({ name }) => !expectedNames.has(name))
+  const escrowResumable =
+    release.status === "draft" &&
+    marker?.phase === "ESCROWING" &&
+    matchingAssetSubset(baseAssets, expected, "github", conflicts)
+  if (release.status === "draft" && marker?.phase === "ABANDONED_PREPUBLICATION") {
+    matchingAssetSubset(baseAssets, expected, "github", conflicts)
+  }
+  const releaseExact =
+    releaseExists && !["ESCROWING", "ABANDONED_PREPUBLICATION"].includes(marker?.phase)
+      ? exactAssetSet(baseAssets, expected, "github", conflicts)
+      : false
+  const terminalEvidence = analyzeTerminalAssets(evidenceAssets, marker, conflicts)
   for (const asset of releaseAssets) {
     if (asset.status === "different") conflicts.add("github-asset-bytes-mismatch")
     if (asset.status === "ambiguous") conflicts.add("github-asset-ambiguous")
     if (asset.status === "absent") conflicts.add("github-required-asset-absent")
   }
   const escrowComplete =
-    releaseExists && releaseExact && escrow.status === "present" && escrowExact && artifact.attested
-  const draftExact = release.status === "draft" && escrowComplete
+    releaseExists &&
+    releaseExact &&
+    escrow.status === "present" &&
+    escrowExact &&
+    artifact.attested &&
+    marker?.phase !== "ABANDONED_PREPUBLICATION"
+  const draftExact =
+    release.status === "draft" &&
+    escrowComplete &&
+    [
+      "ESCROWED",
+      "NPM_COMPLETE",
+      "SMOKES_COMPLETE",
+      "AUDIT_DISPATCHED",
+      "AUDIT_RETRYABLE",
+      "AUDIT_VERIFIED",
+    ].includes(marker?.phase)
+  const npmReconciled =
+    escrowComplete &&
+    [
+      "NPM_COMPLETE",
+      "SMOKES_COMPLETE",
+      "AUDIT_DISPATCHED",
+      "AUDIT_RETRYABLE",
+      "AUDIT_VERIFIED",
+    ].includes(marker?.phase)
+  const smokesReconciled =
+    escrowComplete &&
+    ["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+      marker?.phase,
+    )
+  const auditDispatched = draftExact && marker?.phase === "AUDIT_DISPATCHED"
+  const auditRetryable =
+    draftExact && marker?.phase === "AUDIT_RETRYABLE" && terminalEvidence.currentAttemptExact
+  const auditVerified =
+    draftExact &&
+    marker?.phase === "AUDIT_VERIFIED" &&
+    terminalEvidence.currentAttemptExact &&
+    terminalEvidence.canonicalExact
+  const publishedExact =
+    release.status === "published" &&
+    release.immutable === true &&
+    escrowComplete &&
+    marker?.phase === "AUDIT_VERIFIED" &&
+    terminalEvidence.currentAttemptExact &&
+    terminalEvidence.canonicalExact
   return Object.freeze({
     releaseExists,
     escrowComplete,
+    escrowResumable,
     draftExact,
-    metadataComplete: escrowComplete && release.metadataReconciled === true,
-    publishedExact:
-      release.status === "published" &&
-      release.metadataReconciled === true &&
-      releaseExact &&
-      escrowExact &&
-      artifact.attested,
+    markerPhase: marker?.phase ?? null,
+    npmReconciled,
+    smokesReconciled,
+    auditDispatched,
+    auditRetryable,
+    auditVerified,
+    publishedExact,
   })
+}
+
+function matchingAssetSubset(actual, expected, prefix, conflicts) {
+  if (!Array.isArray(actual) || !Array.isArray(expected)) {
+    conflicts.add("observation-schema-invalid")
+    return false
+  }
+  const expectedByName = new Map(expected.map((asset) => [asset.name, asset]))
+  const seen = new Set()
+  let matching = true
+  for (const asset of actual) {
+    const expectedAsset = expectedByName.get(asset.name)
+    if (seen.has(asset.name)) {
+      conflicts.add(prefix === "github" ? "github-asset-duplicate" : "escrow-asset-duplicate")
+      matching = false
+    } else if (expectedAsset === undefined) {
+      conflicts.add(
+        prefix === "github" ? "github-managed-asset-unexpected" : "escrow-asset-unexpected",
+      )
+      matching = false
+    } else if (asset.status !== "matching" || asset.sha256 !== expectedAsset.sha256) {
+      conflicts.add(
+        prefix === "github" ? "github-asset-bytes-mismatch" : "escrow-asset-bytes-mismatch",
+      )
+      matching = false
+    }
+    seen.add(asset.name)
+  }
+  return matching
+}
+
+function analyzeTerminalAssets(assets, marker, conflicts) {
+  const names = new Set()
+  let currentAttemptExact = false
+  let canonicalExact = false
+  let abandonmentExact = false
+  let hasAudit = false
+  let hasAbandonment = false
+  for (const asset of assets) {
+    if (names.has(asset.name)) conflicts.add("github-asset-duplicate")
+    names.add(asset.name)
+    if (/^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(asset.name)) {
+      hasAudit = true
+      if (asset.name === marker?.audit?.attemptAssetName) {
+        currentAttemptExact =
+          asset.status === "matching" && asset.sha256 === marker.audit.attemptSha256
+        if (!currentAttemptExact) conflicts.add("github-audit-attempt-bytes-mismatch")
+      }
+    } else if (asset.name === "audit-result.json") {
+      hasAudit = true
+      canonicalExact =
+        marker?.phase === "AUDIT_VERIFIED" &&
+        asset.status === "matching" &&
+        asset.sha256 === marker.audit?.canonicalSha256 &&
+        marker.audit?.canonicalSha256 === marker.audit?.attemptSha256
+      if (!canonicalExact) conflicts.add("github-audit-result-bytes-mismatch")
+    } else if (asset.name === "abandonment.json") {
+      hasAbandonment = true
+      abandonmentExact =
+        marker?.phase === "ABANDONED_PREPUBLICATION" &&
+        asset.status === "matching" &&
+        asset.sha256 === marker.abandonmentSha256
+      if (!abandonmentExact) {
+        conflicts.add("github-abandonment-bytes-mismatch")
+      }
+    } else {
+      conflicts.add("github-managed-asset-unexpected")
+    }
+  }
+  if (hasAudit && hasAbandonment) conflicts.add("github-terminal-evidence-coexists")
+  if (marker?.phase === "ABANDONED_PREPUBLICATION" && !abandonmentExact) {
+    conflicts.add("github-abandonment-missing")
+  }
+  if (marker?.phase === "AUDIT_RETRYABLE" && !currentAttemptExact) {
+    conflicts.add("github-audit-attempt-missing")
+  }
+  if (marker?.phase === "AUDIT_VERIFIED") {
+    if (!currentAttemptExact) conflicts.add("github-audit-attempt-missing")
+    if (!canonicalExact) conflicts.add("github-audit-result-missing")
+  }
+  return { currentAttemptExact, canonicalExact }
 }
 
 function exactAssetSet(actual, expected, prefix, conflicts) {
