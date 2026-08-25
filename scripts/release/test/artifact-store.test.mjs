@@ -673,6 +673,7 @@ test("attestation verification binds the signer, tag, commit, repository, predic
     "sha256",
     "--signer-workflow",
     "cacheplane/dawnai/.github/workflows/release.yml",
+    "--deny-self-hosted-runners",
     "--source-digest",
     SHA,
     "--source-ref",

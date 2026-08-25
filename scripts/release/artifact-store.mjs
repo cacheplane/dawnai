@@ -863,6 +863,7 @@ export function buildAttestationVerificationArguments({
     "sha256",
     "--signer-workflow",
     "cacheplane/dawnai/.github/workflows/release.yml",
+    "--deny-self-hosted-runners",
     "--source-digest",
     releaseRecord.commitSha,
     "--source-ref",
