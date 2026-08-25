@@ -11,12 +11,14 @@ const tempRoots = []
 function fixtureRoot(charts) {
   const root = mkdtempSync(join(tmpdir(), "dawn-chart-sync-"))
   tempRoots.push(root)
-  for (const [relativePath, appVersion] of Object.entries(charts)) {
+  for (const [relativePath, fixture] of Object.entries(charts)) {
+    const { appVersion, chartVersion = "0.1.0" } =
+      typeof fixture === "string" ? { appVersion: fixture } : fixture
     const path = resolve(root, relativePath)
     mkdirSync(resolve(path, ".."), { recursive: true })
     writeFileSync(
       path,
-      `apiVersion: v2\nname: example\nversion: 0.1.0\nappVersion: "${appVersion}"\n`,
+      `apiVersion: v2\nname: example\nversion: ${chartVersion}\nappVersion: "${appVersion}"\n`,
       "utf8",
     )
   }
@@ -34,34 +36,35 @@ describe("syncChartAppVersions", () => {
 
     const updated = syncChartAppVersions({ charts, cliVersion: "0.8.13", root })
 
-    assert.deepEqual(updated, [{ chart: "charts/a/Chart.yaml", from: "0.8.12", to: "0.8.13" }])
-    assert.match(
-      readFileSync(resolve(root, "charts/a/Chart.yaml"), "utf8"),
-      /^appVersion: "0\.8\.13"$/m,
-    )
+    assert.deepEqual(updated, [
+      {
+        appVersionFrom: "0.8.12",
+        appVersionTo: "0.8.13",
+        chart: "charts/a/Chart.yaml",
+        chartVersionFrom: "0.1.0",
+        chartVersionTo: "0.1.1",
+      },
+    ])
+    const source = readFileSync(resolve(root, "charts/a/Chart.yaml"), "utf8")
+    assert.match(source, /^appVersion: "0\.8\.13"$/m)
+    assert.match(source, /^version: 0\.1\.1$/m)
   })
 
-  it("leaves the chart's own version untouched", () => {
-    const charts = ["charts/a/Chart.yaml"]
-    const root = fixtureRoot({ "charts/a/Chart.yaml": "0.8.12" })
-
-    syncChartAppVersions({ charts, cliVersion: "0.8.13", root })
-
-    assert.match(readFileSync(resolve(root, "charts/a/Chart.yaml"), "utf8"), /^version: 0\.1\.0$/m)
-  })
-
-  it("is a no-op when every chart already matches", () => {
+  it("is a byte-for-byte no-op when every chart already matches", () => {
     const charts = ["charts/a/Chart.yaml"]
     const root = fixtureRoot({ "charts/a/Chart.yaml": "0.8.13" })
+    const path = resolve(root, "charts/a/Chart.yaml")
+    const before = readFileSync(path, "utf8")
 
     assert.deepEqual(syncChartAppVersions({ charts, cliVersion: "0.8.13", root }), [])
+    assert.equal(readFileSync(path, "utf8"), before)
   })
 
-  it("syncs every configured chart", () => {
+  it("increments every stale chart independently", () => {
     const charts = ["charts/a/Chart.yaml", "charts/b/Chart.yaml"]
     const root = fixtureRoot({
-      "charts/a/Chart.yaml": "0.8.12",
-      "charts/b/Chart.yaml": "0.8.11",
+      "charts/a/Chart.yaml": { appVersion: "0.8.12", chartVersion: "0.1.0" },
+      "charts/b/Chart.yaml": { appVersion: "0.8.11", chartVersion: "1.7.29" },
     })
 
     const updated = syncChartAppVersions({ charts, cliVersion: "0.8.13", root })
@@ -70,6 +73,8 @@ describe("syncChartAppVersions", () => {
       updated.map((entry) => entry.chart),
       charts,
     )
+    assert.match(readFileSync(resolve(root, charts[0]), "utf8"), /^version: 0\.1\.1$/m)
+    assert.match(readFileSync(resolve(root, charts[1]), "utf8"), /^version: 1\.7\.30$/m)
   })
 
   it("throws when a chart has no appVersion to sync", () => {
@@ -81,6 +86,46 @@ describe("syncChartAppVersions", () => {
     assert.throws(
       () => syncChartAppVersions({ charts: ["charts/a/Chart.yaml"], cliVersion: "0.8.13", root }),
       /no appVersion line to sync/,
+    )
+  })
+
+  it("rejects a malformed chart version without partially updating another chart", () => {
+    const charts = ["charts/a/Chart.yaml", "charts/b/Chart.yaml"]
+    const root = fixtureRoot({
+      "charts/a/Chart.yaml": { appVersion: "0.8.12", chartVersion: "0.1.0" },
+      "charts/b/Chart.yaml": { appVersion: "0.8.12", chartVersion: "not-semver" },
+    })
+    const firstPath = resolve(root, charts[0])
+    const before = readFileSync(firstPath, "utf8")
+
+    assert.throws(
+      () => syncChartAppVersions({ charts, cliVersion: "0.8.13", root }),
+      /charts\/b\/Chart\.yaml has invalid chart version: not-semver/,
+    )
+    assert.equal(readFileSync(firstPath, "utf8"), before)
+  })
+
+  it("increments the patch field of a valid prerelease chart version", () => {
+    const charts = ["charts/a/Chart.yaml"]
+    const root = fixtureRoot({
+      "charts/a/Chart.yaml": { appVersion: "0.8.12", chartVersion: "2.4.6-rc.1+build.9" },
+    })
+
+    syncChartAppVersions({ charts, cliVersion: "0.8.13", root })
+
+    assert.match(
+      readFileSync(resolve(root, charts[0]), "utf8"),
+      /^version: 2\.4\.7-rc\.1\+build\.9$/m,
+    )
+  })
+
+  it("rejects a non-SemVer CLI version", () => {
+    const charts = ["charts/a/Chart.yaml"]
+    const root = fixtureRoot({ "charts/a/Chart.yaml": "0.8.12" })
+
+    assert.throws(
+      () => syncChartAppVersions({ charts, cliVersion: "latest", root }),
+      /Invalid exact SemVer: latest/,
     )
   })
 
