@@ -61,7 +61,10 @@ echo "==> installing app deps from Verdaccio (host-side, for dawn build)"
 ( cd "$APP_DIR" && pnpm install --ignore-workspace --registry "$HOST_REGISTRY" )
 
 echo "==> dawn build (node target)"
-( cd "$APP_DIR" && ./node_modules/.bin/dawn build )
+# The variant argument is the single authority for both the generated app and
+# the final image. Do not depend on an ambient kube context (or a caller export)
+# when building the Docker smoke app.
+( cd "$APP_DIR" && DAWN_SMOKE_SANDBOX="$VARIANT" ./node_modules/.bin/dawn build )
 
 SERVER_MJS="$APP_DIR/.dawn/build/server.mjs"
 EMITTED_DOCKERFILE="$APP_DIR/Dockerfile"
