@@ -1,9 +1,9 @@
 # dawn-app
 
 Runs a **user-built Dawn app image** on Kubernetes as a Deployment + Service
-(+ optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget), wired
-to the in-cluster `kubernetesSandbox` provider via the ServiceAccount +
-namespace provisioned by the `dawn-sandbox-infra` chart.
+(+ optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget).
+The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.
+That ServiceAccount is bound as a cross-namespace subject to the `dawn-sandbox-infra` orchestrator Role in `dawn-sandboxes`.
 
 This chart does **not** build your image or bake `dawn.config.ts` — it wraps
 a **user-built image** and owns only the *Kubernetes deployment* concerns.
@@ -57,7 +57,7 @@ docker build -t ghcr.io/you/your-app:2026-08-10 .
 docker push ghcr.io/you/your-app:2026-08-10
 ```
 
-For an app that configures `kubernetesSandbox`, keep the application,
+For a local checkout of an app that configures `kubernetesSandbox`, keep the application,
 credentials, and both Helm releases in the dawn-app management namespace
 while sandbox resources live in `dawn-sandboxes`. Prepare
 `dawn-sandbox-infra-values.yaml` with the planned app ServiceAccount as an

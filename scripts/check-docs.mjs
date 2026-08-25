@@ -2642,6 +2642,19 @@ const accuracyContracts = [
     forbidden: ["orchestrator.subjects[0]", "same command shown above"],
   },
   {
+    file: "charts/dawn-sandbox-infra/README.md",
+    required: [
+      "complete planned subject list",
+      "helm get values dawn-sandbox-infra --all --output yaml",
+      "preserve every existing item",
+      "Helm replaces arrays",
+      "never write a guessed numeric subject index",
+      "--values dawn-sandbox-infra-values.yaml",
+      "--values dawn-sandbox-infra-rbac-values.yaml",
+    ],
+    forbidden: ["orchestrator.subjects[0]"],
+  },
+  {
     file: "charts/dawn-app/README.md",
     required: [
       "Scaling requirements",
@@ -2662,6 +2675,8 @@ const accuracyContracts = [
       "preserve every existing",
       "Helm replaces arrays",
       "helm upgrade --install dawn-sandbox-infra ./charts/dawn-sandbox-infra",
+      "The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.",
+      "That ServiceAccount is bound as a cross-namespace subject to the `dawn-sandbox-infra` orchestrator Role in `dawn-sandboxes`.",
     ],
     forbidden: [
       "backend that does not exist yet",
@@ -2674,6 +2689,7 @@ const accuracyContracts = [
       "--namespace dawn-sandboxes",
       "same namespace",
       "orchestrator.subjects[0]",
+      "via the ServiceAccount +\nnamespace provisioned by the `dawn-sandbox-infra` chart",
     ],
   },
   {
@@ -3359,19 +3375,55 @@ const kubernetesDeploymentSource = readFileSync(
   resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
   "utf8",
 )
+const canonicalAppSubjectValues = `orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: dawn-app`
+const initialSubjectValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+const existingSubjectValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-rbac-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+const initialSubjectValues = kubernetesDeploymentSource.indexOf(initialSubjectValuesFence)
 const initialInfrastructureInstall = kubernetesDeploymentSource.indexOf(
   "helm upgrade --install dawn-sandbox-infra",
 )
 const initialSandboxAppInstall = kubernetesDeploymentSource.indexOf(
   "helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
 )
+const initialInfrastructureCommand = [
+  ...kubernetesDeploymentSource.matchAll(
+    /^helm upgrade --install dawn-sandbox-infra\b[\s\S]*?(?=\n\n|```)/gm,
+  ),
+][0]?.[0]
+if (initialSubjectValues === -1) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must define the exact dawn-app ServiceAccount subject before installation",
+  )
+}
+if (!kubernetesDeploymentSource.includes(existingSubjectValuesFence)) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx existing-release values must bind ServiceAccount dawn-app from namespace dawn-app",
+  )
+}
+if (!initialInfrastructureCommand?.includes("--values dawn-sandbox-infra-values.yaml")) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx initial infrastructure install must apply dawn-sandbox-infra-values.yaml",
+  )
+}
 if (initialInfrastructureInstall === -1 || initialSandboxAppInstall === -1) {
   failures.push(
     "apps/web/content/docs/deployment/kubernetes.mdx must show both initial sandbox infrastructure and app installs",
   )
-} else if (initialInfrastructureInstall > initialSandboxAppInstall) {
+} else if (
+  initialSubjectValues === -1 ||
+  initialSubjectValues > initialInfrastructureInstall ||
+  initialInfrastructureInstall > initialSandboxAppInstall
+) {
   failures.push(
-    "apps/web/content/docs/deployment/kubernetes.mdx must install sandbox infrastructure with the planned RoleBinding subject before installing the app",
+    "apps/web/content/docs/deployment/kubernetes.mdx must define the planned RoleBinding subject, apply it during infrastructure installation, then install the app",
   )
 }
 const effectiveValuesExport = kubernetesDeploymentSource.indexOf(

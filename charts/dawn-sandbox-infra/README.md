@@ -30,10 +30,23 @@ management namespace. The chart still creates sandbox resources in
 `dawn-sandboxes`, while the Helm release Secret stays with the application and
 other credentials in `dawn-app`.
 
+For a fresh release, prepare `dawn-sandbox-infra-values.yaml` with the complete planned subject list.
+This canonical example authorizes the application-owned ServiceAccount as a
+cross-namespace subject:
+
+```yaml
+orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: dawn-app
+```
+
 ```sh
 helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
   --namespace dawn-app \
-  --create-namespace
+  --create-namespace \
+  --values dawn-sandbox-infra-values.yaml
 ```
 
 For testing from a local checkout only, use the checkout-relative chart path
@@ -42,7 +55,28 @@ but keep the same management release namespace:
 ```sh
 helm install dawn-sandbox-infra ./charts/dawn-sandbox-infra \
   --namespace dawn-app \
-  --create-namespace
+  --create-namespace \
+  --values dawn-sandbox-infra-values.yaml
+```
+
+For an existing release, first export its effective values:
+
+```sh
+helm get values dawn-sandbox-infra --all --output yaml \
+  --namespace dawn-app \
+  > dawn-sandbox-infra-rbac-values.yaml
+```
+
+Edit `dawn-sandbox-infra-rbac-values.yaml` so `orchestrator.subjects` contains
+the complete intended subject list: preserve every existing item and append
+the application ServiceAccount as a cross-namespace subject. Helm replaces arrays,
+so never write a guessed numeric subject index. Inspect the complete
+file, then apply it:
+
+```sh
+helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --namespace dawn-app \
+  --values dawn-sandbox-infra-rbac-values.yaml
 ```
 
 Then point `dawn.config.ts` at the same namespace:

@@ -14,6 +14,7 @@ const documentationPaths = {
   chart: resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
   chartValues: resolve(repoRoot, "charts/dawn-sandbox-infra/values.yaml"),
   chartNotes: resolve(repoRoot, "charts/dawn-sandbox-infra/templates/NOTES.txt"),
+  dawnAppReadme: resolve(repoRoot, "charts/dawn-app/README.md"),
   dawnAppNotes: resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
   sandboxGuide: resolve(repoRoot, "apps/web/content/docs/sandbox/kubernetes.mdx"),
   deploymentGuide: resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
@@ -29,12 +30,15 @@ const baselineDocumentation = ["chart", "chartValues", "chartNotes", "sandboxGui
 const infrastructureHelmDocumentation = [
   "chart",
   "chartNotes",
+  "dawnAppReadme",
   "dawnAppNotes",
   "sandboxGuide",
   "deploymentGuide",
 ] as const
 const crossNamespaceDocumentation = [
+  "chart",
   "chartNotes",
+  "dawnAppReadme",
   "dawnAppNotes",
   "sandboxGuide",
   "deploymentGuide",
@@ -44,6 +48,11 @@ const storageDocumentation = ["chart", "sandboxGuide", "contributors"] as const
 const compatibilityDisclaimer =
   "Dawn's Kind/Calico coverage does not certify managed Kubernetes services, other CNI implementations, or storage drivers."
 const publishedInfrastructureChart = "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra"
+const canonicalAppSubjectValues = `orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: dawn-app`
 const sentenceSegmenter = new Intl.Segmenter("en", { granularity: "sentence" })
 
 interface HelmCommandBlock {
@@ -498,6 +507,11 @@ Managed Kubernetes services require separate validation.`,
             commandTokens.includes("--create-namespace"),
             `${name} install must create the management namespace: ${command}`,
           ).toBe(true)
+          expect(
+            commandTokens.includes("--values") &&
+              commandTokens.includes("dawn-sandbox-infra-values.yaml"),
+            `${name} install must apply the planned subject values file: ${command}`,
+          ).toBe(true)
         }
 
         if (!commandTokens.includes(publishedInfrastructureChart)) {
@@ -523,6 +537,60 @@ Managed Kubernetes services require separate validation.`,
     )
     expect(chartNotesCommands[0]?.command).toContain("--version {{ .Chart.Version }}")
     expect(chartNotesCommands[0]?.command).toContain("--namespace {{ .Release.Namespace }}")
+  })
+
+  test("defines the canonical app subject before the initial infrastructure and app installs", async () => {
+    const { deploymentGuide } = await loadDocumentation()
+    const initialValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+    const existingValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-rbac-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+    const initialValuesIndex = deploymentGuide.indexOf(initialValuesFence)
+    const initialInfrastructureIndex = deploymentGuide.indexOf(
+      "helm upgrade --install dawn-sandbox-infra",
+    )
+    const initialAppIndex = deploymentGuide.indexOf(
+      "helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
+    )
+
+    expect(
+      initialValuesIndex,
+      "deployment must define the exact initial app subject",
+    ).toBeGreaterThanOrEqual(0)
+    expect(
+      deploymentGuide,
+      "existing-release values must use the canonical app namespace",
+    ).toContain(existingValuesFence)
+    expect(
+      initialInfrastructureIndex,
+      "deployment must install sandbox infrastructure",
+    ).toBeGreaterThan(initialValuesIndex)
+    expect(
+      initialAppIndex,
+      "deployment must install the app after sandbox infrastructure",
+    ).toBeGreaterThan(initialInfrastructureIndex)
+
+    const initialInfrastructureCommand = infrastructureHelmCommands(deploymentGuide).find(
+      ({ command }) => command.startsWith("helm upgrade --install dawn-sandbox-infra "),
+    )
+    expect(initialInfrastructureCommand?.command).toContain(
+      "--values dawn-sandbox-infra-values.yaml",
+    )
+  })
+
+  test("describes application-owned cross-namespace ServiceAccount wiring", async () => {
+    const { dawnAppReadme } = await loadDocumentation()
+    expect(dawnAppReadme).toContain(
+      "The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.",
+    )
+    expect(dawnAppReadme).toContain(
+      "That ServiceAccount is bound as a cross-namespace subject to the `dawn-sandbox-infra` orchestrator Role in `dawn-sandboxes`.",
+    )
+    expect(dawnAppReadme).not.toContain(
+      "via the ServiceAccount +\nnamespace provisioned by the `dawn-sandbox-infra` chart",
+    )
   })
 
   test("requires credential-safe cross-namespace ServiceAccount wiring in chart NOTES", async () => {
