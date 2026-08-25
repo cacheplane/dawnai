@@ -106,6 +106,61 @@ test("production candidate resolution uses the exact immutable ref or scheduled 
   ])
 })
 
+test("production exact dispatch accepts a verified current-version no-candidate no-op", async () => {
+  const reads = []
+  const resolved = await resolveProductionCandidate({
+    event: { inputs: { version: VERSION, commitSha: COMMIT_SHA } },
+    inventory: {
+      async read({ ref }) {
+        reads.push(ref)
+        return inventory()
+      },
+    },
+    git: {},
+    github: {},
+    marker: MARKER,
+    discovery: {
+      async discoverManagedCandidate() {
+        return noCandidateSelection()
+      },
+      async discoverScheduledCandidate() {
+        return noCandidateSelection()
+      },
+    },
+  })
+
+  assert.deepEqual(resolved, noCandidateSelection())
+  assert.deepEqual(reads, [COMMIT_SHA])
+})
+
+test("production exact no-candidate dispatch rejects inventory version drift", async () => {
+  await assert.rejects(
+    resolveProductionCandidate({
+      event: { inputs: { version: VERSION, commitSha: COMMIT_SHA } },
+      inventory: {
+        async read() {
+          return {
+            status: "valid",
+            packages: inventory().packages.map((pkg) => ({ ...pkg, version: "0.8.21" })),
+          }
+        },
+      },
+      git: {},
+      github: {},
+      marker: MARKER,
+      discovery: {
+        async discoverManagedCandidate() {
+          return noCandidateSelection()
+        },
+        async discoverScheduledCandidate() {
+          return noCandidateSelection()
+        },
+      },
+    }),
+    /dispatch inputs do not match/u,
+  )
+})
+
 test("production exact-ref resolution cannot leapfrog an older globally selected candidate", async () => {
   const newer = { ...candidate(), version: "0.8.23" }
   const older = { ...candidate(), commitSha: PARENT_SHA }
@@ -2703,6 +2758,16 @@ function selection() {
     candidate: candidate(),
     state: "CANDIDATE_VALIDATED",
     disposition: "selected",
+    tag: null,
+    conflicts: [],
+  }
+}
+
+function noCandidateSelection() {
+  return {
+    candidate: null,
+    state: "NO_CANDIDATE",
+    disposition: "noop",
     tag: null,
     conflicts: [],
   }

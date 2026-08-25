@@ -200,14 +200,47 @@ export async function resolveProductionCandidate({
     }
     normalized = global.candidate === null ? exact : global
   }
+  const verifiedCurrentVersionNoop =
+    invocation.expectedVersion !== null && normalized.candidate === null
+      ? matchesCurrentVersionNoCandidateInventory(
+          await inventory.read({ ref: invocation.ref }),
+          invocation.expectedVersion,
+        )
+      : false
   if (
     invocation.expectedVersion !== null &&
+    !verifiedCurrentVersionNoop &&
     (normalized.candidate?.version !== invocation.expectedVersion ||
       normalized.candidate?.commitSha !== invocation.ref)
   ) {
     throw new Error("Production dispatch inputs do not match the discovered candidate")
   }
   return deepFreeze(normalized)
+}
+
+function matchesCurrentVersionNoCandidateInventory(value, expectedVersion) {
+  const inventory = snapshotJson(value)
+  if (
+    !hasExactKeys(inventory, ["status", "packages"]) ||
+    inventory.status !== "valid" ||
+    !Array.isArray(inventory.packages) ||
+    inventory.packages.length !== ACTIVE_PACKAGE_NAMES.length
+  ) {
+    return false
+  }
+  const names = []
+  for (const pkg of inventory.packages) {
+    if (
+      !isRecord(pkg) ||
+      !hasExactKeys(pkg, ["name", "version"]) ||
+      typeof pkg.name !== "string" ||
+      pkg.version !== expectedVersion
+    ) {
+      return false
+    }
+    names.push(pkg.name)
+  }
+  return arraysEqual(names.slice().sort(compareText), ACTIVE_PACKAGE_NAMES)
 }
 
 function normalizeProductionCandidateSelection(value) {
