@@ -601,7 +601,7 @@ test("protected abandonment derives context at the exact tag and accepts no call
   )
 })
 
-test("the independent workflow audits only the exact tag and always uploads one run-attempt result", async () => {
+test("the independent workflow relays default-branch audits and verifies exact tags in isolated modes", async () => {
   const { source, workflow } = await readRequiredWorkflow("published-artifact-verify.yml")
   assert.deepEqual(Object.keys(workflow.on).sort(), ["schedule", "workflow_dispatch"])
   assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
@@ -617,22 +617,39 @@ test("the independent workflow audits only the exact tag and always uploads one 
   const coordinator = requiredJob(workflow, "coordinate")
   assert.equal(coordinator.permissions?.actions, "write")
   assert.notEqual(coordinator.permissions?.contents, "write")
-  const relay = onlyRunStepMatching(coordinator, /2026-03-10/u)
-  assert.match(relay.run, /refs\/tags\/v/u)
+  assert.match(coordinator.if, /github\.event\.repository\.default_branch/u)
+  const coordinatorCheckout = onlyStepUsing(coordinator, ACTIONS.checkout)
+  assert.equal(
+    coordinatorCheckout.with?.ref,
+    workflowExpression("github.event.repository.default_branch"),
+  )
+  assert.equal(coordinatorCheckout.with?.["persist-credentials"], false)
+  const relay = onlyRunStepMatching(
+    coordinator,
+    /node scripts\/release\/independent-audit-coordinator\.mjs\b/u,
+  )
+  assertCommandFlags(relay.run, "node scripts/release/independent-audit-coordinator.mjs", [
+    "--github-output",
+  ])
   assert.doesNotMatch(relay.run, /return_run_details|list.*runs|runs\/\?|poll|wait|sleep/iu)
 
-  const audit = requiredJob(workflow, "audit")
-  assert.deepEqual(normalizeNeeds(audit.needs), ["coordinate"])
-  assert.equal(hasWritePermission(audit.permissions), false)
-  assertExactIndependentTagGate(audit)
-  const execute = onlyRunStepMatching(audit, /node scripts\/release\/independent-audit\.mjs\b/u)
+  const draft = requiredJob(workflow, "verify-draft")
+  assert.equal(draft.name, "verify")
+  assert.deepEqual(normalizeNeeds(draft.needs), ["coordinate"])
+  assert.equal(hasWritePermission(draft.permissions), false)
+  assertExactIndependentTagGate(draft, "draft")
+  const checkout = onlyStepUsing(draft, ACTIONS.checkout)
+  assert.equal(checkout.with?.ref, workflowExpression("github.ref"))
+  assert.equal(checkout.with?.["fetch-depth"], 0)
+  assert.equal(checkout.with?.["persist-credentials"], false)
+  const execute = onlyRunStepMatching(draft, /node scripts\/release\/independent-audit\.mjs\b/u)
   assertCommandFlags(execute.run, "node scripts/release/independent-audit.mjs", [
     "--version",
     "--commit-sha",
     "--manifest-sha256",
     "--result",
   ])
-  const resultUploads = audit.steps.filter((step) => step.uses === ACTIONS.upload)
+  const resultUploads = draft.steps.filter((step) => step.uses === ACTIONS.upload)
   assert.equal(resultUploads.length, 1)
   assert.equal(resultUploads[0].id, "result")
   assert.equal(resultUploads[0].if, workflowExpression("always()"))
@@ -641,6 +658,27 @@ test("the independent workflow audits only the exact tag and always uploads one 
     `audit-result-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
   )
   assert.equal(resultUploads[0].with?.["if-no-files-found"], "error")
+
+  const published = requiredJob(workflow, "verify-published")
+  assert.deepEqual(normalizeNeeds(published.needs), ["coordinate"])
+  assert.equal(hasWritePermission(published.permissions), false)
+  assertExactIndependentTagGate(published, "published")
+  const publishedCheckout = onlyStepUsing(published, ACTIONS.checkout)
+  assert.equal(publishedCheckout.with?.ref, workflowExpression("github.ref"))
+  assert.equal(publishedCheckout.with?.["fetch-depth"], 0)
+  const publishedExecute = onlyRunStepMatching(
+    published,
+    /node scripts\/release\/post-publication-audit\.mjs\b/u,
+  )
+  assertCommandFlags(publishedExecute.run, "node scripts/release/post-publication-audit.mjs", [
+    "--version",
+    "--commit-sha",
+    "--manifest-sha256",
+    "--result",
+  ])
+  const publishedUploads = published.steps.filter((step) => step.uses === ACTIONS.upload)
+  assert.equal(publishedUploads.length, 1)
+  assert.equal(publishedUploads[0].if, workflowExpression("always()"))
   assert.doesNotMatch(
     source,
     /runOpenAI|runPgvector|packageSet|return_run_details|list.*workflow.*runs/iu,
@@ -1790,9 +1828,10 @@ function assertExactTagAndOperationGate(job, { operation }) {
   if (operation === "abandon") assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u)
 }
 
-function assertExactIndependentTagGate(job) {
+function assertExactIndependentTagGate(job, mode) {
   assert.equal(typeof job.if, "string")
-  assert.match(job.if, /needs\.coordinate\.outputs\.continue == 'true'/u)
+  assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u)
+  assert.match(job.if, new RegExp(`needs\\.coordinate\\.outputs\\.mode == '${mode}'`, "u"))
   assert.match(job.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
   assert.match(job.if, /github\.sha == inputs\.commitSha/u)
 }

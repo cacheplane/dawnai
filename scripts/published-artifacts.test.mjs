@@ -1372,7 +1372,7 @@ describe("validateExactPublishedPackageEvidence", () => {
 })
 
 describe("final published-artifact workflow", () => {
-  it("accepts only the three release identities and runs the independent exact-tag executor", () => {
+  it("accepts only the three release identities and isolates draft from published exact-tag audits", () => {
     const { source, workflow } = readParsedWorkflow("published-artifact-verify.yml")
     const inputs = workflow.on?.workflow_dispatch?.inputs
     assert.deepEqual(Object.keys(inputs ?? {}).sort(), ["commitSha", "manifestSha256", "version"])
@@ -1380,11 +1380,29 @@ describe("final published-artifact workflow", () => {
       assert.equal(input.required, true)
       assert.equal(input.type, "string")
     }
-    const audit = workflow.jobs?.audit
-    assert.ok(Array.isArray(audit?.steps))
-    assert.match(audit.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
-    assert.match(audit.if, /github\.sha == inputs\.commitSha/u)
-    const executor = audit.steps.filter(
+    const coordinator = workflow.jobs?.coordinate
+    assert.ok(Array.isArray(coordinator?.steps))
+    assert.match(coordinator.if, /github\.event\.repository\.default_branch/u)
+    assert.equal(
+      coordinator.steps.filter(
+        (step) =>
+          typeof step.run === "string" &&
+          step.run.includes("node scripts/release/independent-audit-coordinator.mjs"),
+      ).length,
+      1,
+    )
+
+    const draft = workflow.jobs?.["verify-draft"]
+    assert.ok(Array.isArray(draft?.steps))
+    assert.match(draft.if, /needs\.coordinate\.outputs\.mode == 'draft'/u)
+    assert.match(draft.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+    assert.match(draft.if, /github\.sha == inputs\.commitSha/u)
+    const checkout = draft.steps.find(
+      (step) => step.uses === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    )
+    assert.equal(checkout?.with?.ref, workflowExpression("github.ref"))
+    assert.equal(checkout?.with?.["fetch-depth"], 0)
+    const executor = draft.steps.filter(
       (step) =>
         typeof step.run === "string" &&
         step.run.includes("node scripts/release/independent-audit.mjs"),
@@ -1396,7 +1414,7 @@ describe("final published-artifact workflow", () => {
       "--manifest-sha256",
       "--result",
     ])
-    const uploads = audit.steps.filter(
+    const uploads = draft.steps.filter(
       (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     )
     assert.equal(uploads.length, 1)
@@ -1405,6 +1423,29 @@ describe("final published-artifact workflow", () => {
       uploads[0].with?.name,
       `audit-result-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
     )
+
+    const published = workflow.jobs?.["verify-published"]
+    assert.ok(Array.isArray(published?.steps))
+    assert.match(published.if, /needs\.coordinate\.outputs\.mode == 'published'/u)
+    assert.match(published.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+    assert.match(published.if, /github\.sha == inputs\.commitSha/u)
+    const publishedExecutor = published.steps.filter(
+      (step) =>
+        typeof step.run === "string" &&
+        step.run.includes("node scripts/release/post-publication-audit.mjs"),
+    )
+    assert.equal(publishedExecutor.length, 1)
+    assert.deepEqual(workflowCommandFlags(publishedExecutor[0].run, "post-publication-audit.mjs"), [
+      "--version",
+      "--commit-sha",
+      "--manifest-sha256",
+      "--result",
+    ])
+    const publishedUploads = published.steps.filter(
+      (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    )
+    assert.equal(publishedUploads.length, 1)
+    assert.equal(publishedUploads[0].if, workflowExpression("always()"))
     assert.doesNotMatch(
       source,
       /packageSet|runPgvector|runOpenAI|published:verify|published:smoke/u,
