@@ -138,7 +138,7 @@ fill in how you authenticate a caller.
   delete on the server with no undo. It shows at most three candidates at a time
   and counts the rest, so it cannot push the thread list off the rail. It cannot
   browse, search, or edit stored memories; that is `npm run memory:list` and the
-  rest of the `dawn memory` CLI, or `npx dawn inspect` for a browser UI.
+  rest of the `dawn memory` CLI, or `npx dawn inspect --cwd server` for a browser UI.
 - **A connection loss costs your draft.** When a probe finds the server down,
   the connect screen replaces the whole shell, which unmounts the composer.
 

@@ -47,7 +47,7 @@ them, so a React client passes `dawnActivityRenderers` to CopilotKit's
 [Research assistant web UI](https://dawnai.org/docs/recipes/research-web-ui)
 recipe walks through building one.
 
-Separately, `npx dawn inspect` opens the
+Separately, `npx dawn inspect --cwd server` opens the
 [Dawn Inspector](https://dawnai.org/docs/inspector) — a browser UI over this
 app's live memory store, already installed here as a devDependency.
 
