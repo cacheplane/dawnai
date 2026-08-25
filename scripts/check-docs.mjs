@@ -456,9 +456,10 @@ function hastText(node) {
   return (node.children ?? []).map(hastText).join("")
 }
 
-function collectMarkdownHeadingNodes() {
+function collectMarkdownAnalysisNodes() {
   return (tree, file) => {
     const headings = []
+    const explicitIds = []
     function visit(node) {
       if (node.type === "element" && /^h[1-6]$/.test(node.tagName ?? "")) {
         const id = node.properties?.id
@@ -472,10 +473,19 @@ function collectMarkdownHeadingNodes() {
           })
         }
       }
+      if (
+        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
+        node.name === "span"
+      ) {
+        const id = node.attributes?.find(
+          (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === "id",
+        )?.value
+        if (typeof id === "string" && id !== "") explicitIds.push(id)
+      }
       for (const child of node.children ?? []) visit(child)
     }
     visit(tree)
-    file.data.maintainedMarkdownHeadings = headings
+    file.data.maintainedMarkdownAnalysis = { headings, explicitIds }
   }
 }
 
@@ -499,26 +509,45 @@ const markdownRehypePlugins = await resolveMdxPlugins(
   MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
   requireFromWeb,
 )
-const markdownHeadingProcessor = createProcessor({
-  remarkPlugins: markdownRemarkPlugins,
-  // Syntax highlighting cannot affect heading identity and is intentionally
-  // omitted from this otherwise shipped MDX/rehype-slug pipeline.
-  rehypePlugins: [...markdownRehypePlugins, collectMarkdownHeadingNodes],
-})
-
-function markdownHeadings(source) {
-  const file = markdownHeadingProcessor.processSync(source)
-  const headings = file.data.maintainedMarkdownHeadings
-  if (!Array.isArray(headings)) throw new Error("MDX heading analysis did not produce headings")
-  return headings
+function createMarkdownAnalysisProcessor(format) {
+  return createProcessor({
+    format,
+    remarkPlugins: markdownRemarkPlugins,
+    // Syntax highlighting cannot affect heading identity and is intentionally
+    // omitted from this otherwise shipped MDX/rehype-slug pipeline.
+    rehypePlugins: [...markdownRehypePlugins, collectMarkdownAnalysisNodes],
+  })
 }
 
-function maintainedHeadingIds(source, onDuplicateId = () => {}) {
-  const masked = maskMarkdownCodeAndComments(source)
-  const ids = new Set(markdownHeadings(source).map(({ id }) => id))
-  for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
-    const id = match[1]
-    if (!id) continue
+const markdownAnalysisProcessors = {
+  md: createMarkdownAnalysisProcessor("md"),
+  mdx: createMarkdownAnalysisProcessor("mdx"),
+}
+
+function markdownAnalysis(file, source) {
+  const format = file.toLowerCase().endsWith(".mdx")
+    ? "mdx"
+    : file.toLowerCase().endsWith(".md")
+      ? "md"
+      : null
+  if (!format) throw new Error(`Unsupported documentation format: ${file}`)
+
+  const processed = markdownAnalysisProcessors[format].processSync({ path: file, value: source })
+  const analysis = processed.data.maintainedMarkdownAnalysis
+  if (!analysis || !Array.isArray(analysis.headings) || !Array.isArray(analysis.explicitIds)) {
+    throw new Error(`${file}: documentation analysis did not produce heading identities`)
+  }
+  return analysis
+}
+
+function markdownHeadings(file, source) {
+  return markdownAnalysis(file, source).headings
+}
+
+function maintainedHeadingIds(file, source, onDuplicateId = () => {}) {
+  const { headings, explicitIds } = markdownAnalysis(file, source)
+  const ids = new Set(headings.map(({ id }) => id))
+  for (const id of explicitIds) {
     if (ids.has(id)) onDuplicateId(id)
     ids.add(id)
   }
@@ -569,8 +598,8 @@ function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
   return false
 }
 
-function markdownSectionRange(source, predicate) {
-  const headings = markdownHeadings(source)
+function markdownSectionRange(file, source, predicate) {
+  const headings = markdownHeadings(file, source)
   const headingIndex = headings.findIndex(predicate)
   const heading = headings[headingIndex]
   if (!heading) return null
@@ -586,7 +615,7 @@ function movedLinkGuardViolations(file, source, contracts) {
     if (!contract) return []
     const fragment = contract.legacyHref.split("#")[1]
     const compatibilityRange = fragment
-      ? markdownSectionRange(source, (heading) => heading.id === fragment)
+      ? markdownSectionRange(file, source, (heading) => heading.id === fragment)
       : null
     if (
       file === contract.legacyFile &&
@@ -600,9 +629,9 @@ function movedLinkGuardViolations(file, source, contracts) {
   })
 }
 
-function canonicalOwnerGuardViolations(source, contracts) {
+function canonicalOwnerGuardViolations(file, source, contracts) {
   return contracts.flatMap(({ heading, required }) => {
-    const range = markdownSectionRange(source, (candidate) => candidate.text === heading)
+    const range = markdownSectionRange(file, source, (candidate) => candidate.text === heading)
     const destinations = range
       ? linkDestinationOccurrences(source.slice(range.start, range.end)).flatMap(
           ({ destination }) => {
@@ -1232,6 +1261,7 @@ if (process.argv[2] === "--analyze-doc-link-guards") {
         fixture.movedContracts ?? [],
       ),
       canonicalViolations: canonicalOwnerGuardViolations(
+        fixture.file ?? "fixture.mdx",
         fixture.source ?? "",
         fixture.canonicalContracts ?? [],
       ),
@@ -1247,9 +1277,22 @@ async function readStdin() {
   return input
 }
 
+async function writeStdout(output) {
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(output, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
+}
+
 if (process.argv[2] === "--analyze-maintained-heading-ids") {
   const fixture = JSON.parse(await readStdin())
-  process.stdout.write(`${JSON.stringify([...maintainedHeadingIds(fixture.source ?? "")])}\n`)
+  await writeStdout(
+    `${JSON.stringify([
+      ...maintainedHeadingIds(fixture.file ?? "fixture.mdx", fixture.source ?? ""),
+    ])}\n`,
+  )
   process.exit(0)
 }
 
@@ -1264,7 +1307,7 @@ if (process.argv[2] === "--analyze-doc-titles") {
   const analysis = Array.isArray(fixture)
     ? analyzeDocTitlesBatch(fixture)
     : analyzeDocTitles(fixture)
-  process.stdout.write(`${JSON.stringify(analysis)}\n`)
+  await writeStdout(`${JSON.stringify(analysis)}\n`)
   process.exit(0)
 }
 
@@ -3598,7 +3641,7 @@ const canonicalOwnerContracts = [
 
 for (const { file, heading, required } of canonicalOwnerContracts) {
   failures.push(
-    ...canonicalOwnerGuardViolations(readFileSync(resolve(repoRoot, file), "utf8"), [
+    ...canonicalOwnerGuardViolations(file, readFileSync(resolve(repoRoot, file), "utf8"), [
       { heading, required },
     ]).map((violation) => `${file} ${violation}`),
   )
@@ -3612,8 +3655,9 @@ const maintainedDocsPages = new Map(
       ? `/docs/${relativePath.slice(0, -"/index.mdx".length)}`
       : `/docs/${relativePath.slice(0, -".mdx".length)}`
     const source = readFileSync(file, "utf8")
-    const ids = maintainedHeadingIds(source, (id) =>
-      failures.push(`${relativeToRoot(file)} has duplicate id ${id}`),
+    const relativeFile = relativeToRoot(file)
+    const ids = maintainedHeadingIds(relativeFile, source, (id) =>
+      failures.push(`${relativeFile} has duplicate id ${id}`),
     )
     return [route, ids]
   }),
@@ -3994,8 +4038,10 @@ if (apiReferenceRegistry) {
     }
   }
 
-  const apiHubSource = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+  const apiHubFile = "apps/web/content/docs/api.mdx"
+  const apiHubSource = readFileSync(resolve(repoRoot, apiHubFile), "utf8")
   const catalogRange = markdownSectionRange(
+    apiHubFile,
     apiHubSource,
     ({ text }) => text === "Package and surface index",
   )
@@ -4114,7 +4160,7 @@ if (apiReferenceRegistry) {
   )
   if (
     !/Application shortcuts:/i.test(maskMarkdownCodeAndComments(shortcutSource)) ||
-    markdownHeadings(shortcutSource).length !== 0 ||
+    markdownHeadings("apps/web/content/docs/api.mdx", shortcutSource).length !== 0 ||
     JSON.stringify(shortcutDestinations) !== JSON.stringify(applicationShortcutDestinations)
   ) {
     failures.push(
@@ -4588,7 +4634,7 @@ const frozenApiHeadingIds = [
   "where-to-read-more",
   "related",
 ]
-const apiHeadingIds = markdownHeadings(apiMdx).map(({ id }) => id)
+const apiHeadingIds = markdownHeadings("apps/web/content/docs/api.mdx", apiMdx).map(({ id }) => id)
 if (JSON.stringify(apiHeadingIds) !== JSON.stringify(frozenApiHeadingIds)) {
   failures.push(
     `apps/web/content/docs/api.mdx must retain exactly ${frozenApiHeadingIds.length} frozen heading ids in order with no additions`,

@@ -169,11 +169,18 @@ interface DocLinkGuardAnalysis {
 interface HastNode {
   readonly type: string
   readonly tagName?: string
+  readonly name?: string
   readonly properties?: Record<string, unknown>
+  readonly attributes?: readonly {
+    readonly type: string
+    readonly name?: string
+    readonly value?: unknown
+  }[]
   readonly children?: readonly HastNode[]
 }
 
 type PluginList = NonNullable<CompileOptions["rehypePlugins"]>
+type DocumentationFormat = "md" | "mdx"
 
 async function resolvePlugins(specs: readonly (readonly [string, unknown])[]): Promise<PluginList> {
   return await Promise.all(
@@ -189,13 +196,26 @@ const renderedHeadingRehypePlugins = resolvePlugins(
   MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
 )
 
-async function renderedHeadingIds(source: string): Promise<readonly string[]> {
-  const ids: string[] = []
+async function renderedHeadingIds(
+  source: string,
+  format: DocumentationFormat = "mdx",
+): Promise<readonly string[]> {
+  const headingIds: string[] = []
+  const explicitIds: string[] = []
   const collect = () => (tree: HastNode) => {
     const visit = (node: HastNode): void => {
       if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
         const id = node.properties?.id
-        if (typeof id === "string") ids.push(id)
+        if (typeof id === "string") headingIds.push(id)
+      }
+      if (
+        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
+        node.name === "span"
+      ) {
+        const id = node.attributes?.find(
+          (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === "id",
+        )?.value
+        if (typeof id === "string" && id !== "") explicitIds.push(id)
       }
       for (const child of node.children ?? []) visit(child)
     }
@@ -203,12 +223,13 @@ async function renderedHeadingIds(source: string): Promise<readonly string[]> {
   }
 
   await compile(source, {
+    format,
     remarkPlugins: await renderedHeadingRemarkPlugins,
     // Syntax highlighting cannot affect heading identity and is intentionally
     // omitted from this otherwise shipped MDX/rehype-slug pipeline.
     rehypePlugins: [...(await renderedHeadingRehypePlugins), collect],
   })
-  return ids
+  return [...headingIds, ...explicitIds]
 }
 
 let docTitleAnalysisProcessCount = 0
@@ -279,13 +300,13 @@ function analyzeDocLinkGuards(fixture: Record<string, unknown>): DocLinkGuardAna
   return JSON.parse(result.stdout) as DocLinkGuardAnalysis
 }
 
-function analyzeMaintainedHeadingIds(source: string): readonly string[] {
+function analyzeMaintainedHeadingIds(source: string, file = "fixture.mdx"): readonly string[] {
   const result = spawnSync(
     process.execPath,
     [CHECK_DOCS_PATH, "--analyze-maintained-heading-ids"],
     {
       encoding: "utf8",
-      input: JSON.stringify({ source }),
+      input: JSON.stringify({ file, source }),
     },
   )
   const stderr = result.stderr ?? ""
@@ -644,6 +665,19 @@ export const metadata: Metadata = { title: "Real Title" }
     })
   })
 
+  it("flushes a stdin batch response larger than the stdout pipe buffer", () => {
+    const title = `Large title ${"x".repeat(50_000)}`
+    const [analysis] = analyzeDocTitlesBatch([
+      {
+        mdxSource: `# ${title}\n`,
+        wrapperSource: `export const metadata = { title: ${JSON.stringify(title)} }\n`,
+      },
+    ])
+
+    expect(analysis?.firstH1).toBe(title)
+    expect(analysis?.metadataTitle).toBe(title)
+  })
+
   it("ignores fenced pseudo-H1s before the first rendered H1", () => {
     const analysis = analyzeDocTitles(
       `\`\`\`md
@@ -954,6 +988,22 @@ describe("maintained documentation heading identity analysis", () => {
     expect(runtimeIds).toEqual(["nested-scrscriptipt-identity"])
     expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
   })
+
+  it("parses standard HTML comments in README Markdown mode", async () => {
+    const source = "<!-- ## Hidden -->\n# @dawn-ai/ag-ui\n"
+    const runtimeIds = await renderedHeadingIds(source, "md")
+
+    expect(runtimeIds).toEqual(["dawn-aiag-ui"])
+    expect(analyzeMaintainedHeadingIds(source, "packages/ag-ui/README.md")).toEqual(runtimeIds)
+  })
+
+  it("collects a literal span ID after comment-like JSX attribute text", async () => {
+    const source = '## Heading <span title="<!--">world</span>\n\n<span id="legacy"></span>\n'
+    const runtimeIds = await renderedHeadingIds(source)
+
+    expect(runtimeIds).toEqual(["heading-world", "legacy"])
+    expect(analyzeMaintainedHeadingIds(source)).toEqual(runtimeIds)
+  })
 })
 
 describe("compatibility stub analysis", () => {
@@ -1122,6 +1172,24 @@ ${"x".repeat(650)}
 })
 
 describe("canonical docs link guard analysis", () => {
+  it("uses standard Markdown grammar for README ownership guards", () => {
+    const requiredHref = "/docs/ag-ui"
+    const source = `<!-- README ownership note -->
+# @dawn-ai/ag-ui
+
+[AG-UI guide](${requiredHref})
+`
+
+    expect(
+      analyzeDocLinkGuards({
+        file: "packages/ag-ui/README.md",
+        source,
+        movedContracts: [],
+        canonicalContracts: [{ heading: "@dawn-ai/ag-ui", required: [requiredHref] }],
+      }),
+    ).toEqual({ movedViolations: [], canonicalViolations: [] })
+  })
+
   it("uses only active destinations and scopes focused ownership to its subject section", () => {
     const legacyHref = "/docs/memory#how-recall-ranks"
     const ignoredSource = [
