@@ -149,6 +149,29 @@ export function createRehearsalDurableState() {
   return handle
 }
 
+export function createExactCandidateCommandRunner({ root, run }) {
+  if (
+    typeof root !== "string" ||
+    !isAbsolute(root) ||
+    resolve(root) !== root ||
+    typeof run !== "function"
+  ) {
+    throw new TypeError("Exact candidate command runner dependencies are invalid")
+  }
+  return async function runExactCandidateCommand(command, args, options) {
+    if (
+      ["git", "pnpm", "tar"].includes(command) &&
+      (options === null ||
+        Array.isArray(options) ||
+        typeof options !== "object" ||
+        options.cwd !== root)
+    ) {
+      throw new Error("Release preparation command escaped the exact candidate checkout")
+    }
+    return run(command, args, options)
+  }
+}
+
 export async function resumeFixedGroupEvidence({
   candidate,
   record,
@@ -396,7 +419,10 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       sourceRoot: canonicalRoot,
       runtime,
     })
-    const inventory = await readReleaseInventory({ root: canonicalRoot, ref: "HEAD" })
+    const inventory = await readReleaseInventory({
+      root: candidateRepository.workingDirectory,
+      ref: candidateRepository.commitSha,
+    })
     const versions = new Set(
       inventory.workspacePackages
         .filter((pkg) => pkg.private !== true)
@@ -416,12 +442,10 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       run: (command, args, commandOptions) =>
         isolatedGitCommand(command, args, commandOptions, candidateRepository.environment),
     })
-    const baseRun = createReleasePreparationRunner()
-    const preparationRun = (command, args, commandOptions) =>
-      baseRun(command, args, {
-        ...commandOptions,
-        cwd: command === "git" ? candidateRepository.workingDirectory : commandOptions.cwd,
-      })
+    const preparationRun = createExactCandidateCommandRunner({
+      root: candidateRepository.workingDirectory,
+      run: createReleasePreparationRunner(),
+    })
 
     let prepared = null
     let attestation = null
@@ -457,10 +481,15 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
         prepared ??= await loadPreparedArtifactIfPresent({ artifactDir, candidate })
         if (prepared === null) {
           await gate.around("prepare", async () => {
+            await preparationRun(
+              "pnpm",
+              ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
+              { cwd: candidateRepository.workingDirectory },
+            )
             await prepareReleaseArtifacts({
               candidate,
               inventory,
-              root: canonicalRoot,
+              root: candidateRepository.workingDirectory,
               outputDir: artifactDir,
               ci: {
                 status: "success",
@@ -710,7 +739,7 @@ function validateFixedGroupOptions(value) {
   return value
 }
 
-async function createCandidateRepositoryFixture({ sourceRoot, runtime }) {
+export async function createCandidateRepositoryFixture({ sourceRoot, runtime }) {
   const home = join(runtime, "git-home")
   const config = join(runtime, "git-config")
   const remote = join(runtime, "candidate.git")
@@ -730,6 +759,7 @@ async function createCandidateRepositoryFixture({ sourceRoot, runtime }) {
   if (!/^[0-9a-f]{40}$/u.test(commitSha)) {
     throw new Error("Fixed-group rehearsal source HEAD is not an exact SHA")
   }
+  await assertCleanRehearsalCheckout(sourceRoot, environment, "source")
   await gitCommand(runtime, ["clone", "--bare", "--no-local", sourceRoot, remote], environment)
   await gitCommand(runtime, ["clone", remote, workingDirectory], environment)
   await gitCommand(
@@ -742,12 +772,38 @@ async function createCandidateRepositoryFixture({ sourceRoot, runtime }) {
     ["config", "--local", "user.email", "release-rehearsal@example.invalid"],
     environment,
   )
+  await gitCommand(workingDirectory, ["checkout", "--detach", commitSha], environment)
   await gitCommand(workingDirectory, ["branch", "--force", "main", commitSha], environment)
+  const sourceHeadAfterClone = (
+    await gitCommand(sourceRoot, ["rev-parse", "HEAD"], environment)
+  ).trim()
+  if (sourceHeadAfterClone !== commitSha) {
+    throw new Error("Fixed-group rehearsal source HEAD drifted while cloning the candidate")
+  }
+  await assertCleanRehearsalCheckout(sourceRoot, environment, "source")
+  const candidateHead = (
+    await gitCommand(workingDirectory, ["rev-parse", "HEAD"], environment)
+  ).trim()
+  if (candidateHead !== commitSha) {
+    throw new Error("Fixed-group rehearsal candidate checkout does not match the source commit")
+  }
+  await assertCleanRehearsalCheckout(workingDirectory, environment, "candidate")
   return Object.freeze({
     commitSha,
     workingDirectory: await realpath(workingDirectory),
     environment: Object.freeze({ ...environment }),
   })
+}
+
+async function assertCleanRehearsalCheckout(root, environment, label) {
+  const status = await gitCommand(
+    root,
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    environment,
+  )
+  if (status !== "") {
+    throw new Error(`Fixed-group rehearsal ${label} checkout must be clean with no source drift`)
+  }
 }
 
 async function exactCandidateTagExists(root, candidate, environment) {

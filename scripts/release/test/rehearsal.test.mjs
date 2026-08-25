@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { once } from "node:events"
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
@@ -7,6 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 
 import { createNpmReader } from "../adapters/npm.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
@@ -15,6 +17,8 @@ import { createReleaseRecord } from "../release-record.mjs"
 import { createFaultHarness, executeReleaseRehearsal } from "./support/fault-harness.mjs"
 import { startFaultProxy } from "./support/fault-proxy.mjs"
 import {
+  createCandidateRepositoryFixture,
+  createExactCandidateCommandRunner,
   createOrderedFaultGate,
   createRehearsalDurableState,
   FIXED_GROUP_REHEARSAL_FAULTS,
@@ -27,6 +31,7 @@ import {
 import { createRehearsalGitHub } from "./support/release-rehearsal-github.mjs"
 
 const THREE_PACKAGE_FIXTURE = fileURLToPath(new URL("./fixtures/fault-workspace", import.meta.url))
+const execFileAsync = promisify(execFile)
 
 test("full release rehearsal defaults to the canonical fixed group", async () => {
   assert.deepEqual(parseReleaseRehearsalArguments(["--all-faults"]), {
@@ -167,6 +172,65 @@ test("ordered crash gate distinguishes pre-mutation and accepted-mutation runner
     injected: ["before-tag", "after-tag"],
     remaining: [],
   })
+})
+
+test("canonical candidate checkout rejects a dirty or drifted source tree", async (t) => {
+  const fixture = await createSourceRepositoryFixture(t)
+  await writeFile(join(fixture.sourceRoot, "candidate.txt"), "uncommitted drift\n")
+
+  await assert.rejects(
+    createCandidateRepositoryFixture({
+      sourceRoot: fixture.sourceRoot,
+      runtime: fixture.runtime,
+    }),
+    /source.*clean|dirty|drift/iu,
+  )
+})
+
+test("preparation commands are confined to the exact clean candidate checkout", async (t) => {
+  const fixture = await createSourceRepositoryFixture(t)
+  const candidate = await createCandidateRepositoryFixture({
+    sourceRoot: fixture.sourceRoot,
+    runtime: fixture.runtime,
+  })
+  assert.notEqual(candidate.workingDirectory, fixture.sourceRoot)
+  assert.equal(
+    (await runGit(candidate.workingDirectory, ["rev-parse", "HEAD"])).trim(),
+    candidate.commitSha,
+  )
+  assert.equal(
+    (
+      await runGit(candidate.workingDirectory, [
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+      ])
+    ).trim(),
+    "",
+  )
+
+  const calls = []
+  const run = createExactCandidateCommandRunner({
+    root: candidate.workingDirectory,
+    async run(command, args, options) {
+      calls.push({ command, args, cwd: options.cwd })
+      return { exitCode: 0, stdout: "", stderr: "" }
+    },
+  })
+  await run("pnpm", ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"], {
+    cwd: candidate.workingDirectory,
+  })
+  await assert.rejects(
+    run("pnpm", ["build"], { cwd: fixture.sourceRoot }),
+    /exact candidate checkout/iu,
+  )
+  assert.deepEqual(calls, [
+    {
+      command: "pnpm",
+      args: ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
+      cwd: candidate.workingDirectory,
+    },
+  ])
 })
 
 test("lost audit dispatch responses create an orphan but resume only from a new direct receipt", async () => {
@@ -555,6 +619,34 @@ function completeNpmEvidence(fixture) {
       },
     })),
   }
+}
+
+async function createSourceRepositoryFixture(t) {
+  const sourceRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-rehearsal-source-")))
+  const runtime = await realpath(await mkdtemp(join(tmpdir(), "dawn-rehearsal-runtime-")))
+  t.after(async () => {
+    await Promise.all([
+      rm(sourceRoot, { recursive: true, force: true }),
+      rm(runtime, { recursive: true, force: true }),
+    ])
+  })
+  await runGit(sourceRoot, ["init", "--initial-branch=main"])
+  await runGit(sourceRoot, ["config", "user.name", "Release Rehearsal Test"])
+  await runGit(sourceRoot, ["config", "user.email", "release-rehearsal-test@example.invalid"])
+  await writeFile(join(sourceRoot, "candidate.txt"), "committed candidate\n")
+  await runGit(sourceRoot, ["add", "candidate.txt"])
+  await runGit(sourceRoot, ["commit", "-m", "candidate"])
+  return { sourceRoot, runtime }
+}
+
+async function runGit(cwd, args) {
+  const result = await execFileAsync("git", args, {
+    cwd,
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  })
+  return result.stdout
 }
 
 function hash(algorithm, bytes) {
