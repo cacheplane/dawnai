@@ -1,10 +1,19 @@
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto"
+
 import { snapshotJson } from "../adapter-normalize.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { isExactSemver } from "../semver.mjs"
 import { createHttpGet } from "./http.mjs"
 
 // Every observation is a JSON-safe envelope with status, operation, httpStatus, and code.
 // PRESENT package observations additionally include the exact registry identity and evidence.
-const OPERATIONS = new Set(["package-version", "package-metadata", "provenance"])
+const OPERATIONS = new Set([
+  "package-version",
+  "package-metadata",
+  "package-tarball",
+  "provenance",
+  "registry-signature",
+])
 const PACKAGE_NAME_PATTERN =
   /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -19,18 +28,21 @@ export function createNpmReader({
   timeoutMs,
   maxResponseBytes,
   trustedRegistryOrigins,
+  now = Date.now,
 } = {}) {
   assertInputByteLength(registryUrl, MAX_REGISTRY_URL_BYTES, "npm registry URL")
   const registry = normalizeRegistryUrl(registryUrl)
   const trustedOrigins = normalizeTrustedRegistryOrigins(trustedRegistryOrigins)
+  if (typeof now !== "function") throw new TypeError("npm reader clock must be a function")
   if (!trustedOrigins.has(registry.origin)) {
     throw npmInputError("npm registry origin is not trusted", "UNTRUSTED_REGISTRY_ORIGIN")
   }
   const http = createHttpGet({
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
+    maxResponseBytes: maxResponseBytes ?? RELEASE_PAYLOAD_LIMITS.tarballBytes,
   })
+  let registryKeys
 
   return {
     observePackageMetadata({ name, signal }) {
@@ -44,6 +56,252 @@ export function createNpmReader({
         throw new TypeError("Invalid exact SemVer")
       }
       return observePackageVersion({ registry, http, name, version, signal })
+    },
+    downloadRegistryTarball({ tarballUrl, signal }) {
+      return downloadRegistryTarball({ registry, http, tarballUrl, signal })
+    },
+    async verifyRegistrySignatures({ name, version, integrity, signatures, signal }) {
+      assertPackageName(name)
+      assertInputByteLength(version, MAX_VERSION_BYTES, "exact SemVer")
+      if (!isExactSemver(version)) throw new TypeError("Invalid exact SemVer")
+      const normalizedIntegrity = canonicalIntegritySha512(integrity)
+      const normalizedSignatures = normalizeSignatures(signatures)
+      if (normalizedIntegrity === null || normalizedSignatures === null) {
+        throw new TypeError("Invalid npm registry signature inputs")
+      }
+      if (normalizedSignatures.length === 0) {
+        return {
+          status: "PRESENT",
+          operation: "registry-signature",
+          httpStatus: null,
+          code: null,
+          signature: { status: "missing", keyid: null },
+        }
+      }
+      if (registryKeys === undefined) {
+        const result = await readRegistryKeys({ registry, http, signal })
+        if (result.status !== "PRESENT") return result
+        registryKeys = result.keys
+      }
+      return verifyRegistrySignatureSet({
+        name,
+        version,
+        integrity,
+        signatures: normalizedSignatures,
+        keys: registryKeys,
+        now,
+      })
+    },
+  }
+}
+
+async function readRegistryKeys({ registry, http, signal }) {
+  const result = await getJson({
+    http,
+    url: new URL("/-/npm/v1/keys", `${registry.origin}/`),
+    operation: "registry-signature",
+    accept: "application/json",
+    signal,
+  })
+  if (result.status !== "PRESENT") return withoutBody(result)
+  const keys = normalizeRegistryKeys(result.body)
+  return keys === null
+    ? failure("ERROR", "registry-signature", result.httpStatus, "MALFORMED_SCHEMA")
+    : {
+        status: "PRESENT",
+        operation: "registry-signature",
+        httpStatus: result.httpStatus,
+        code: null,
+        keys,
+      }
+}
+
+function verifyRegistrySignatureSet({ name, version, integrity, signatures, keys, now }) {
+  const keysById = new Map(keys.map((key) => [key.keyid, key]))
+  const matching = signatures.filter((signature) => keysById.has(signature.keyid))
+  if (matching.length !== 1) {
+    return failure(
+      "ERROR",
+      "registry-signature",
+      200,
+      matching.length === 0 ? "REGISTRY_KEY_NOT_FOUND" : "AMBIGUOUS_SIGNATURE_KEY",
+    )
+  }
+  const signature = matching[0]
+  const key = keysById.get(signature.keyid)
+  let observedNow
+  try {
+    observedNow = now()
+  } catch {
+    return failure("ERROR", "registry-signature", 200, "MALFORMED_SCHEMA")
+  }
+  if (!Number.isFinite(observedNow)) {
+    return failure("ERROR", "registry-signature", 200, "MALFORMED_SCHEMA")
+  }
+  if (key.expiresAt !== null && key.expiresAt <= observedNow) {
+    return failure("ERROR", "registry-signature", 200, "REGISTRY_KEY_EXPIRED")
+  }
+  const signatureBytes = canonicalBase64Bytes(signature.sig)
+  if (signatureBytes === null || !isCanonicalEcdsaDerSignature(signatureBytes)) {
+    return failure("ERROR", "registry-signature", 200, "MALFORMED_SIGNATURE")
+  }
+  let verified = false
+  try {
+    verified = verifySignature(
+      "sha256",
+      Buffer.from(`${name}@${version}:${integrity}`, "utf8"),
+      key.publicKey,
+      signatureBytes,
+    )
+  } catch {
+    return failure("ERROR", "registry-signature", 200, "MALFORMED_SIGNATURE")
+  }
+  if (!verified) {
+    return failure("ERROR", "registry-signature", 200, "INVALID_SIGNATURE")
+  }
+  return {
+    status: "PRESENT",
+    operation: "registry-signature",
+    httpStatus: 200,
+    code: null,
+    signature: { status: "valid", keyid: signature.keyid },
+  }
+}
+
+function normalizeRegistryKeys(value) {
+  let snapshot
+  try {
+    snapshot = snapshotJson(value)
+  } catch {
+    return null
+  }
+  if (
+    !isObject(snapshot) ||
+    !exactObjectFields(snapshot, ["keys"]) ||
+    !Array.isArray(snapshot.keys) ||
+    snapshot.keys.length > 256
+  ) {
+    return null
+  }
+  const keys = []
+  const ids = new Set()
+  for (const key of snapshot.keys) {
+    if (
+      !isObject(key) ||
+      !exactObjectFields(key, ["expires", "key", "keyid", "keytype", "scheme"]) ||
+      typeof key.keyid !== "string" ||
+      !/^SHA256:[A-Za-z0-9+/_=-]{1,256}$/u.test(key.keyid) ||
+      key.keytype !== "ecdsa-sha2-nistp256" ||
+      key.scheme !== "ecdsa-sha2-nistp256" ||
+      ids.has(key.keyid)
+    ) {
+      return null
+    }
+    let expiresAt = null
+    if (key.expires !== null) {
+      if (typeof key.expires !== "string") return null
+      expiresAt = Date.parse(key.expires)
+      if (!Number.isFinite(expiresAt) || new Date(expiresAt).toISOString() !== key.expires) {
+        return null
+      }
+    }
+    const bytes = canonicalBase64Bytes(key.key)
+    if (bytes === null || bytes.length < 1 || bytes.length > 4096) return null
+    let publicKey
+    try {
+      publicKey = createPublicKey({ key: bytes, format: "der", type: "spki" })
+      if (
+        publicKey.asymmetricKeyType !== "ec" ||
+        publicKey.asymmetricKeyDetails?.namedCurve !== "prime256v1" ||
+        !Buffer.from(publicKey.export({ format: "der", type: "spki" })).equals(bytes)
+      ) {
+        return null
+      }
+    } catch {
+      return null
+    }
+    ids.add(key.keyid)
+    keys.push({
+      keyid: key.keyid,
+      expiresAt,
+      publicKey,
+    })
+  }
+  return keys.sort((left, right) => compareStrings(left.keyid, right.keyid))
+}
+
+function canonicalBase64Bytes(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 16_384) return null
+  const bytes = Buffer.from(value, "base64")
+  return bytes.toString("base64") === value ? bytes : null
+}
+
+function isCanonicalEcdsaDerSignature(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 8 || bytes.length > 72) return false
+  if (bytes[0] !== 0x30 || bytes[1] !== bytes.length - 2 || bytes[1] >= 0x80) return false
+  let offset = 2
+  for (let index = 0; index < 2; index += 1) {
+    if (bytes[offset] !== 0x02) return false
+    const length = bytes[offset + 1]
+    offset += 2
+    if (length < 1 || length > 33 || offset + length > bytes.length) return false
+    const first = bytes[offset]
+    if ((first & 0x80) !== 0) return false
+    if (length > 1 && first === 0 && (bytes[offset + 1] & 0x80) === 0) return false
+    if (bytes.subarray(offset, offset + length).every((value) => value === 0)) return false
+    offset += length
+  }
+  return offset === bytes.length
+}
+
+async function downloadRegistryTarball({ registry, http, tarballUrl, signal }) {
+  assertInputByteLength(tarballUrl, MAX_REGISTRY_URL_BYTES, "npm registry tarball URL")
+  const url = sameOriginUrl(tarballUrl, registry)
+  if (url === null) {
+    throw npmInputError("npm registry tarball URL must be exact and same-origin", "UNSAFE_URL")
+  }
+  const response = await http.getBinary({
+    url,
+    headers: { Accept: "application/octet-stream" },
+    ...(signal === undefined ? {} : { signal }),
+  })
+  if (response.status !== "OK" && response.status !== "HTTP_ERROR") {
+    return failure(
+      transportFailureStatus(response),
+      "package-tarball",
+      response.httpStatus,
+      response.code,
+    )
+  }
+  const classification = classifyRegistryResponse({
+    operation: "package-tarball",
+    response: { status: response.httpStatus },
+  })
+  if (classification.status !== "PRESENT") return classification
+  if (
+    !Number.isSafeInteger(response.bodyBytes) ||
+    response.bodyBytes < 1 ||
+    response.bodyBytes > RELEASE_PAYLOAD_LIMITS.tarballBytes ||
+    typeof response.contentBase64 !== "string"
+  ) {
+    return failure("ERROR", "package-tarball", response.httpStatus, "MALFORMED_SCHEMA")
+  }
+  const bytes = Buffer.from(response.contentBase64, "base64")
+  if (bytes.length !== response.bodyBytes || bytes.toString("base64") !== response.contentBase64) {
+    return failure("ERROR", "package-tarball", response.httpStatus, "MALFORMED_SCHEMA")
+  }
+  return {
+    status: "PRESENT",
+    operation: "package-tarball",
+    httpStatus: response.httpStatus,
+    code: null,
+    tarball: {
+      url,
+      size: bytes.length,
+      sha1: createHash("sha1").update(bytes).digest("hex"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sha512: createHash("sha512").update(bytes).digest("hex"),
+      contentBase64: response.contentBase64,
     },
   }
 }
@@ -253,20 +511,36 @@ function normalizeSignatures(value) {
   if (value === undefined) {
     return []
   }
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length > 256) {
     return null
   }
   const signatures = []
+  const keyids = new Set()
   for (const item of value) {
-    if (!isObject(item) || typeof item.keyid !== "string" || typeof item.sig !== "string") {
+    if (
+      !isObject(item) ||
+      !exactObjectFields(item, ["keyid", "sig"]) ||
+      typeof item.keyid !== "string" ||
+      !/^SHA256:[A-Za-z0-9+/_=-]{1,256}$/u.test(item.keyid) ||
+      typeof item.sig !== "string" ||
+      keyids.has(item.keyid)
+    ) {
       return null
     }
+    keyids.add(item.keyid)
     signatures.push({ keyid: item.keyid, sig: item.sig })
   }
   return signatures.sort((left, right) =>
     left.keyid === right.keyid
       ? compareStrings(left.sig, right.sig)
       : compareStrings(left.keyid, right.keyid),
+  )
+}
+
+function exactObjectFields(value, fields) {
+  return (
+    Object.keys(value).length === fields.length &&
+    fields.every((field) => Object.hasOwn(value, field))
   )
 }
 

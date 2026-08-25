@@ -64,6 +64,10 @@ function executeCommand({
   runTaskkill,
 }) {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted === true) {
+      reject(new Error("Release preparation command was aborted before it started"))
+      return
+    }
     let child
     try {
       child = spawnImpl(command, args, {
@@ -92,6 +96,9 @@ function executeCommand({
     const timer = setTimeout(() => {
       void fail(new Error(`Release preparation command timed out after ${timeoutMs}ms`))
     }, timeoutMs)
+    const onAbort = () => {
+      void fail(new Error("Release preparation command was aborted"))
+    }
 
     const capture = (target) => (chunk) => {
       if (failure !== undefined) return
@@ -114,6 +121,7 @@ function executeCommand({
     child.once("close", (code, signal) => {
       closed = true
       resolveClosed()
+      options.signal?.removeEventListener("abort", onAbort)
       if (failure !== undefined) {
         return
       }
@@ -133,6 +141,8 @@ function executeCommand({
         stderr: Buffer.concat(stderr).toString("utf8"),
       })
     })
+    options.signal?.addEventListener("abort", onAbort, { once: true })
+    if (options.signal?.aborted === true) onAbort()
 
     async function fail(error) {
       if (failure !== undefined) return
@@ -153,6 +163,7 @@ function executeCommand({
           "Release preparation command failed and its process tree could not be confirmed stopped",
         )
       }
+      options.signal?.removeEventListener("abort", onAbort)
       if (settled) return
       settled = true
       child.stdout?.destroy()
@@ -288,6 +299,16 @@ function validateInvocation(command, args, options) {
     (options.env === null || Array.isArray(options.env) || typeof options.env !== "object")
   ) {
     throw new TypeError("Preparation command environment must be an object")
+  }
+  if (
+    options.signal !== undefined &&
+    (options.signal === null ||
+      typeof options.signal !== "object" ||
+      typeof options.signal.aborted !== "boolean" ||
+      typeof options.signal.addEventListener !== "function" ||
+      typeof options.signal.removeEventListener !== "function")
+  ) {
+    throw new TypeError("Preparation command abort signal is invalid")
   }
 }
 

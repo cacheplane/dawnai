@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto"
 import test from "node:test"
 
 import { classifyRegistryResponse, createNpmReader } from "../adapters/npm.mjs"
@@ -18,7 +19,12 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
   ])
   const npm = createNpmReader({ fetchImpl })
 
-  assert.deepEqual(Object.keys(npm), ["observePackageMetadata", "observePackageVersion"])
+  assert.deepEqual(Object.keys(npm), [
+    "observePackageMetadata",
+    "observePackageVersion",
+    "downloadRegistryTarball",
+    "verifyRegistrySignatures",
+  ])
   const result = await npm.observePackageVersion({ name: NAME, version: VERSION })
 
   assert.deepEqual(
@@ -78,6 +84,349 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
     },
   })
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
+})
+
+test("downloads an exact same-origin registry tarball with bounded canonical bytes and digests", async () => {
+  const bytes = Buffer.from("exact registry tarball bytes")
+  const tarballUrl = `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
+  const { fetchImpl, calls } = recordingFetch([
+    new Response(bytes, { headers: { "content-type": "application/octet-stream" } }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).downloadRegistryTarball({ tarballUrl })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      url,
+      method: init.method,
+      redirect: init.redirect,
+      accept: init.headers.Accept,
+    })),
+    [
+      {
+        url: tarballUrl,
+        method: "GET",
+        redirect: "manual",
+        accept: "application/octet-stream",
+      },
+    ],
+  )
+  assert.deepEqual(result, {
+    status: "PRESENT",
+    operation: "package-tarball",
+    httpStatus: 200,
+    code: null,
+    tarball: {
+      url: tarballUrl,
+      size: bytes.length,
+      sha1: createHash("sha1").update(bytes).digest("hex"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sha512: createHash("sha512").update(bytes).digest("hex"),
+      contentBase64: bytes.toString("base64"),
+    },
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
+})
+
+test("registry tarball auth, redirect, oversized, malformed, and cross-origin results are never absence", async () => {
+  const tarballUrl = `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
+  const responses = [
+    new Response("denied", {
+      status: 401,
+      headers: { "content-type": "application/octet-stream" },
+    }),
+    new Response(null, {
+      status: 302,
+      headers: {
+        "content-type": "application/octet-stream",
+        location: "https://cdn.example.test/package.tgz",
+      },
+    }),
+    new Response(Buffer.alloc(6), {
+      headers: { "content-length": "6", "content-type": "application/octet-stream" },
+    }),
+    responseLike({
+      status: 200,
+      ok: true,
+      body: "bytes",
+      headers: { "content-type": "text/plain" },
+    }),
+  ]
+  for (let index = 0; index < responses.length; index += 1) {
+    const npm = createNpmReader({
+      fetchImpl: async () => responses[index],
+      ...(index === 2 ? { maxResponseBytes: 5 } : {}),
+    })
+    const result = await npm.downloadRegistryTarball({ tarballUrl })
+    assert.notEqual(result.status, "ABSENT")
+    assert.equal(result.operation, "package-tarball")
+  }
+
+  let fetches = 0
+  const npm = createNpmReader({
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error("must not fetch")
+    },
+  })
+  await assert.rejects(
+    npm.downloadRegistryTarball({
+      tarballUrl: `https://registry.example.test/sdk-${VERSION}.tgz`,
+    }),
+    /registry tarball URL|same-origin|unsafe/iu,
+  )
+  assert.equal(fetches, 0)
+})
+
+test("cryptographically verifies npm registry signatures against the exact registry key", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
+  const keyid = "SHA256:test-key"
+  const signature = signBytes(
+    "sha256",
+    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
+    privateKey,
+  ).toString("base64")
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse({
+      keys: [
+        {
+          expires: null,
+          keyid,
+          keytype: "ecdsa-sha2-nistp256",
+          scheme: "ecdsa-sha2-nistp256",
+          key: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+        },
+      ],
+    }),
+  ])
+  const npm = createNpmReader({ fetchImpl })
+
+  const result = await npm.verifyRegistrySignatures({
+    name: NAME,
+    version: VERSION,
+    integrity: INTEGRITY,
+    signatures: [{ keyid, sig: signature }],
+  })
+
+  assert.equal(calls[0].url, `${REGISTRY}/-/npm/v1/keys`)
+  assert.deepEqual(result, {
+    status: "PRESENT",
+    operation: "registry-signature",
+    httpStatus: 200,
+    code: null,
+    signature: { status: "valid", keyid },
+  })
+  assert.deepEqual(
+    await npm.verifyRegistrySignatures({
+      name: NAME,
+      version: VERSION,
+      integrity: INTEGRITY,
+      signatures: [],
+    }),
+    {
+      status: "PRESENT",
+      operation: "registry-signature",
+      httpStatus: null,
+      code: null,
+      signature: { status: "missing", keyid: null },
+    },
+  )
+})
+
+test("invalid, unknown-key, and ambiguous registry signatures never become valid evidence", async () => {
+  const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
+  const key = publicKey.export({ format: "der", type: "spki" }).toString("base64")
+  const signatures = [{ keyid: "SHA256:unknown", sig: Buffer.from("invalid").toString("base64") }]
+  for (const response of [
+    jsonResponse({
+      keys: [
+        {
+          expires: null,
+          keyid: "SHA256:other",
+          keytype: "ecdsa-sha2-nistp256",
+          scheme: "ecdsa-sha2-nistp256",
+          key,
+        },
+      ],
+    }),
+    jsonResponse({ code: "EAUTH" }, 401),
+    jsonResponse({ keys: "malformed" }),
+  ]) {
+    const result = await createNpmReader({
+      fetchImpl: async () => response,
+    }).verifyRegistrySignatures({
+      name: NAME,
+      version: VERSION,
+      integrity: INTEGRITY,
+      signatures,
+    })
+    assert.notDeepEqual(result.signature, { status: "valid", keyid: "SHA256:unknown" })
+    assert.notEqual(result.status, "ABSENT")
+  }
+})
+
+test("registry signature evidence rejects duplicate, expired, unsupported, and malformed keys and signatures", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
+  const keyid = "SHA256:strict-key"
+  const key = publicKey.export({ format: "der", type: "spki" }).toString("base64")
+  const signature = signBytes(
+    "sha256",
+    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
+    privateKey,
+  ).toString("base64")
+  const validKey = {
+    expires: null,
+    key,
+    keyid,
+    keytype: "ecdsa-sha2-nistp256",
+    scheme: "ecdsa-sha2-nistp256",
+  }
+  const rows = [
+    {
+      name: "duplicate key IDs",
+      body: { keys: [validKey, { ...validKey }] },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+    {
+      name: "expired matching key",
+      body: { keys: [{ ...validKey, expires: "2026-01-01T00:00:00.000Z" }] },
+      signatures: [{ keyid, sig: signature }],
+      now: () => Date.parse("2026-01-02T00:00:00.000Z"),
+      code: "REGISTRY_KEY_EXPIRED",
+    },
+    {
+      name: "unsupported key type",
+      body: { keys: [{ ...validKey, keytype: "rsa-sha2-512" }] },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+    {
+      name: "unsupported signature scheme",
+      body: { keys: [{ ...validKey, scheme: "ecdsa-sha2-nistp384" }] },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+    {
+      name: "noncanonical key base64",
+      body: { keys: [{ ...validKey, key: "AA" }] },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+    {
+      name: "invalid public key DER",
+      body: { keys: [{ ...validKey, key: Buffer.from("not-spki").toString("base64") }] },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+    {
+      name: "key ID mismatch",
+      body: { keys: [validKey] },
+      signatures: [{ keyid: "SHA256:another-key", sig: signature }],
+      code: "REGISTRY_KEY_NOT_FOUND",
+    },
+    {
+      name: "noncanonical signature base64",
+      body: { keys: [validKey] },
+      signatures: [{ keyid, sig: `${signature}=` }],
+      code: "MALFORMED_SIGNATURE",
+    },
+    {
+      name: "invalid signature DER",
+      body: { keys: [validKey] },
+      signatures: [{ keyid, sig: Buffer.from("not-der").toString("base64") }],
+      code: "MALFORMED_SIGNATURE",
+    },
+    {
+      name: "unexpected key response field",
+      body: { keys: [validKey], fetchedAt: "2026-01-01T00:00:00.000Z" },
+      signatures: [{ keyid, sig: signature }],
+      code: "MALFORMED_SCHEMA",
+    },
+  ]
+
+  for (const row of rows) {
+    const result = await createNpmReader({
+      fetchImpl: async () => jsonResponse(row.body),
+      ...(row.now === undefined ? {} : { now: row.now }),
+    }).verifyRegistrySignatures({
+      name: NAME,
+      version: VERSION,
+      integrity: INTEGRITY,
+      signatures: row.signatures,
+    })
+    assert.equal(result.status, "ERROR", row.name)
+    assert.equal(result.code, row.code, row.name)
+    assert.notDeepEqual(result.signature, { status: "valid", keyid }, row.name)
+  }
+
+  for (const signatures of [
+    [
+      { keyid, sig: signature },
+      { keyid, sig: signature },
+    ],
+    [{ keyid, sig: signature, unexpected: true }],
+    Array.from({ length: 257 }, (_, index) => ({
+      keyid: `SHA256:key-${index}`,
+      sig: signature,
+    })),
+  ]) {
+    await assert.rejects(
+      createNpmReader({
+        fetchImpl: async () => jsonResponse({ keys: [validKey] }),
+      }).verifyRegistrySignatures({
+        name: NAME,
+        version: VERSION,
+        integrity: INTEGRITY,
+        signatures,
+      }),
+      /signature inputs/iu,
+    )
+  }
+})
+
+test("cached registry keys are rechecked against their exact expiry", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
+  const keyid = "SHA256:expiring-key"
+  const expires = "2026-08-25T12:01:00.000Z"
+  let observedNow = Date.parse("2026-08-25T12:00:00.000Z")
+  let fetches = 0
+  const signature = signBytes(
+    "sha256",
+    Buffer.from(`${NAME}@${VERSION}:${INTEGRITY}`),
+    privateKey,
+  ).toString("base64")
+  const npm = createNpmReader({
+    now: () => observedNow,
+    fetchImpl: async () => {
+      fetches += 1
+      return jsonResponse({
+        keys: [
+          {
+            expires,
+            keyid,
+            keytype: "ecdsa-sha2-nistp256",
+            scheme: "ecdsa-sha2-nistp256",
+            key: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+          },
+        ],
+      })
+    },
+  })
+  const request = {
+    name: NAME,
+    version: VERSION,
+    integrity: INTEGRITY,
+    signatures: [{ keyid, sig: signature }],
+  }
+
+  assert.equal((await npm.verifyRegistrySignatures(request)).signature.status, "valid")
+  observedNow = Date.parse(expires)
+  const expired = await npm.verifyRegistrySignatures(request)
+
+  assert.equal(fetches, 1)
+  assert.equal(expired.status, "ERROR")
+  assert.equal(expired.code, "REGISTRY_KEY_EXPIRED")
 })
 
 test("observePackageMetadata reads only bounded public dist-tags independently", async () => {
