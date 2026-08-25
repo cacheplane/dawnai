@@ -10,8 +10,8 @@ import {
   validateCompatibilityPolicy,
 } from "../../scripts/kubernetes-compat/policy.ts"
 
-const checkoutAction = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-const nodeSetupAction = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+const checkoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+const nodeSetupAction = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
 const pnpmSetupAction = "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
 const helmSetupAction = "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
 const kindAction = "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
@@ -137,6 +137,9 @@ function assertCanonicalKindStep(
   useCalicoConfig = true,
 ): void {
   const canonical = requirePolicyTarget("canonical")
+  expect(requireNamedStep(steps, "Prime kind tool cache").run).toBe(
+    `scripts/prime-kind-cache.sh ${policy.toolchain.kind} ${policy.toolchain.kubectl}`,
+  )
   const kind = requireNamedStep(steps, "Create kind cluster")
   expect(kind.uses).toBe(kindAction)
   expect(kind.with).toEqual({

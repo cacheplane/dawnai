@@ -1314,7 +1314,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1330,7 +1330,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1354,7 +1354,7 @@
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
-        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
@@ -1370,7 +1370,7 @@
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
@@ -1400,6 +1400,14 @@
         "classification": "safe",
         "job": "compat",
         "stepIndex": 6,
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 7,
         "step": "Create kind cluster",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
@@ -1407,7 +1415,7 @@
       {
         "classification": "safe",
         "job": "compat",
-        "stepIndex": 7,
+        "stepIndex": 8,
         "step": "Prepare verified Calico manifest",
         "kind": "run",
         "value": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
@@ -1415,7 +1423,7 @@
       {
         "classification": "safe",
         "job": "compat",
-        "stepIndex": 8,
+        "stepIndex": 9,
         "step": "Install verified Calico",
         "kind": "run",
         "value": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
@@ -1423,7 +1431,7 @@
       {
         "classification": "safe",
         "job": "compat",
-        "stepIndex": 9,
+        "stepIndex": 10,
         "step": "Run Kubernetes compatibility harness",
         "kind": "run",
         "value": "pnpm verify:k8s:compat -- --target \"$DAWN_K8S_TARGET\" --context \"$DAWN_TEST_K8S_CONTEXT\""
@@ -1431,7 +1439,7 @@
       {
         "classification": "safe",
         "job": "compat",
-        "stepIndex": 10,
+        "stepIndex": 11,
         "step": "Upload Kubernetes compatibility artifacts",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
