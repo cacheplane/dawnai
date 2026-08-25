@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto"
 import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -17,6 +18,8 @@ const COMMANDS = Object.freeze({
     "source-ref",
   ]),
   "record-artifact": Object.freeze(["candidate", "manifest", "artifact-upload-result", "output"]),
+  "attestation-input": Object.freeze(["record", "artifact-dir", "output"]),
+  escrow: Object.freeze(["candidate", "record", "artifact-dir", "attestation-bundle"]),
   "reconcile-npm": Object.freeze(["candidate", "record", "manifest", "npm-evidence"]),
   "reconcile-smokes": Object.freeze([
     "candidate",
@@ -50,6 +53,12 @@ export async function runReleaseCli(argv, dependencies = {}) {
   if (parsed.command === "record-artifact") {
     return runRecordArtifact(parsed.options, runtime)
   }
+  if (parsed.command === "attestation-input") {
+    return runAttestationInput(parsed.options, runtime)
+  }
+  if (parsed.command === "escrow") {
+    return runEscrow(parsed.options, runtime)
+  }
   if (parsed.command === "reconcile-npm") {
     return runReconcileNpm(parsed.options, runtime)
   }
@@ -69,6 +78,431 @@ export async function runReleaseCli(argv, dependencies = {}) {
     return runPublishRelease(parsed.options, runtime)
   }
   throw new TypeError("Release CLI command is unsupported")
+}
+
+async function runEscrow(options, runtime) {
+  const [candidate, verified, limitsModule] = await Promise.all([
+    readCandidate(runtime, options.candidate),
+    readVerifiedArtifact({
+      runtime,
+      recordPath: options.record,
+      artifactDirectory: options["artifact-dir"],
+    }),
+    runtime.importModule(new URL("./limits.mjs", import.meta.url).href),
+  ])
+  if (
+    verified.record.version !== candidate.version ||
+    verified.record.commitSha !== candidate.commitSha
+  ) {
+    throw new Error("Release CLI escrow artifact does not match the candidate")
+  }
+  const limits = moduleValue(limitsModule, "RELEASE_PAYLOAD_LIMITS", "payload limits")
+  if (
+    limits === null ||
+    typeof limits !== "object" ||
+    !Number.isSafeInteger(limits.attestationBundleBytes) ||
+    !Number.isSafeInteger(limits.attestationBundlesBytes)
+  ) {
+    throw new TypeError("Release CLI payload limits module is invalid")
+  }
+  const maximumBundleBytes = Math.min(
+    limits.attestationBundleBytes,
+    Math.floor(limits.attestationBundlesBytes / 22),
+  )
+  const bundleBytes = await readRegularFile(
+    runtime.fileSystem,
+    resolveCliPath(options["attestation-bundle"], runtime.cwd),
+    maximumBundleBytes,
+    "attestation bundle",
+  )
+  validateAttestationBundleBytes(bundleBytes)
+  const attestationSet = attestationSetFromEnvironment({
+    candidate,
+    manifest: verified.manifest,
+    manifestSha256: verified.record.manifestSha256,
+    bundleBytes,
+    environment: runtime.environment,
+  })
+  const bundles = attestationSet.subjects.map(({ bundleName }) => ({
+    name: bundleName,
+    bytes: Buffer.from(bundleBytes),
+  }))
+  const [github, npm, attestations, metadataModule] = await Promise.all([
+    requireGitHub(runtime),
+    requireNpm(runtime),
+    requireAttestations(runtime),
+    runtime.importModule(new URL("./metadata.mjs", import.meta.url).href),
+  ])
+  const escrow = moduleFunction(metadataModule, "escrowCandidate", "candidate escrow")
+  const publicationState = await capturePublicationState({
+    candidate,
+    manifest: verified.manifest,
+    github: github.reader,
+    npm,
+    now: runtime.now,
+    currentRunId: attestationSet.workflowRunId,
+    currentRunAttempt: attestationSet.runAttempt,
+  })
+  return escrow({
+    candidate,
+    record: verified.record,
+    artifact: verified.artifact,
+    attestationSet,
+    bundles,
+    publicationState,
+    attestations,
+    github,
+  })
+}
+
+async function runAttestationInput(options, runtime) {
+  const verified = await readVerifiedArtifact({
+    runtime,
+    recordPath: options.record,
+    artifactDirectory: options["artifact-dir"],
+  })
+  const lines = [
+    `${verified.record.manifestSha256}  manifest.json`,
+    ...verified.manifest.packages.map((pkg) => `${pkg.sha256}  ${pkg.filename}`),
+  ]
+  if (lines.length !== 22) {
+    throw new Error("Release CLI attestation input must contain exactly 22 subjects")
+  }
+  await writeCanonicalFile(
+    runtime.fileSystem,
+    resolveCliPath(options.output, runtime.cwd),
+    Buffer.from(`${lines.join("\n")}\n`, "utf8"),
+    "attestation input",
+  )
+  return Object.freeze({
+    schemaVersion: 1,
+    version: verified.record.version,
+    commitSha: verified.record.commitSha,
+    manifestSha256: verified.record.manifestSha256,
+    subjectCount: lines.length,
+  })
+}
+
+async function readVerifiedArtifact({ runtime, recordPath, artifactDirectory }) {
+  const requestedDirectory = resolveCliPath(artifactDirectory, runtime.cwd)
+  for (const method of ["readdir", "realpath"]) {
+    if (typeof runtime.fileSystem[method] !== "function") {
+      throw new TypeError(`Release CLI filesystem method ${method} is invalid`)
+    }
+  }
+  const directory = await runtime.fileSystem.realpath(requestedDirectory)
+  const directoryBefore = await runtime.fileSystem.lstat(directory)
+  if (!directoryBefore.isDirectory() || directoryBefore.isSymbolicLink()) {
+    throw new TypeError("Release CLI artifact directory must be a regular directory")
+  }
+  const [recordBytes, manifestBytes] = await Promise.all([
+    readRegularFile(
+      runtime.fileSystem,
+      resolveCliPath(recordPath, runtime.cwd),
+      MAX_JSON_BYTES,
+      "release record",
+    ),
+    readRegularFile(
+      runtime.fileSystem,
+      path.join(directory, "manifest.json"),
+      MAX_MANIFEST_BYTES,
+      "manifest",
+    ),
+  ])
+  const recordModule = await runtime.importModule(
+    new URL("./release-record.mjs", import.meta.url).href,
+  )
+  const manifestModule = await runtime.importModule(new URL("./manifest.mjs", import.meta.url).href)
+  const parseRecord = moduleFunction(recordModule, "parseReleaseRecord", "release-record parser")
+  const canonicalRecord = moduleFunction(
+    recordModule,
+    "canonicalReleaseRecordBytes",
+    "release-record encoder",
+  )
+  const parseManifest = moduleFunction(
+    manifestModule,
+    "parseSealedReleaseManifest",
+    "manifest parser",
+  )
+  const canonicalManifest = moduleFunction(
+    manifestModule,
+    "canonicalManifestBytes",
+    "manifest encoder",
+  )
+  const manifestDigest = moduleFunction(manifestModule, "manifestSha256", "manifest digest")
+  const record = parseRecord(recordBytes)
+  if (!Buffer.from(recordBytes).equals(Buffer.from(canonicalRecord(record)))) {
+    throw new Error("Release CLI release record bytes must be canonical")
+  }
+  const candidate = candidateDocument({ version: record.version, commitSha: record.commitSha })
+  const manifest = parseManifest(manifestBytes, { candidate })
+  if (
+    !Buffer.from(manifestBytes).equals(Buffer.from(canonicalManifest(manifest))) ||
+    manifestDigest(manifest) !== record.manifestSha256
+  ) {
+    throw new Error("Release CLI artifact manifest is noncanonical or conflicts with the record")
+  }
+  const expectedNames = [
+    "manifest.json",
+    ...manifest.packages.map(({ filename }) => filename),
+  ].sort(compareText)
+  const names = await runtime.fileSystem.readdir(directory)
+  if (
+    !Array.isArray(names) ||
+    names.some((name) => typeof name !== "string") ||
+    !arraysEqual(names.slice().sort(compareText), expectedNames)
+  ) {
+    throw new Error("Release CLI artifact directory does not match the sealed manifest")
+  }
+  const files = [{ name: "manifest.json", bytes: Buffer.from(manifestBytes) }]
+  for (const pkg of manifest.packages) {
+    const bytes = await readRegularFile(
+      runtime.fileSystem,
+      path.join(directory, pkg.filename),
+      pkg.size,
+      `artifact tarball ${pkg.name}`,
+    )
+    if (
+      bytes.byteLength !== pkg.size ||
+      digest(bytes, "sha256") !== pkg.sha256 ||
+      digest(bytes, "sha512") !== pkg.sha512
+    ) {
+      throw new Error(`Release CLI artifact tarball ${pkg.name} does not match the manifest`)
+    }
+    files.push({ name: pkg.filename, bytes })
+  }
+  const directoryAfter = await runtime.fileSystem.lstat(directory)
+  if (
+    !directoryAfter.isDirectory() ||
+    directoryAfter.isSymbolicLink() ||
+    directoryAfter.dev !== directoryBefore.dev ||
+    directoryAfter.ino !== directoryBefore.ino ||
+    directoryAfter.mtimeMs !== directoryBefore.mtimeMs
+  ) {
+    throw new Error("Release CLI artifact directory changed while it was verified")
+  }
+  return Object.freeze({ record, candidate, manifest, artifact: { manifest, files } })
+}
+
+function validateAttestationBundleBytes(bytes) {
+  let source
+  let value
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    if (!source.endsWith("\n") || source.endsWith("\n\n") || source.includes("\r")) {
+      throw new TypeError("Attestation bundle must have one LF terminator")
+    }
+    value = JSON.parse(source)
+  } catch (error) {
+    throw new TypeError("Release CLI attestation bundle is not one UTF-8 JSON object", {
+      cause: error,
+    })
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Release CLI attestation bundle is not one JSON object")
+  }
+}
+
+function attestationSetFromEnvironment({
+  candidate,
+  manifest,
+  manifestSha256,
+  bundleBytes,
+  environment,
+}) {
+  const expected = {
+    GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_REF: `refs/tags/v${candidate.version}`,
+    GITHUB_SHA: candidate.commitSha,
+    GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${candidate.version}`,
+  }
+  for (const [name, value] of Object.entries(expected)) {
+    if (environment[name] !== value) {
+      throw new Error(`Release CLI attestation identity ${name} does not match the candidate`)
+    }
+  }
+  const workflowRunId = positiveEnvironmentInteger(environment.GITHUB_RUN_ID, "workflow run ID")
+  const runAttempt = positiveEnvironmentInteger(
+    environment.GITHUB_RUN_ATTEMPT,
+    "workflow run attempt",
+  )
+  const bundleSha256 = digest(bundleBytes, "sha256")
+  const subjects = [
+    { name: "manifest.json", sha256: manifestSha256 },
+    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+  ]
+  if (subjects.length !== 22) {
+    throw new Error("Release CLI attestation set must contain exactly 22 subjects")
+  }
+  return Object.freeze({
+    repository: "cacheplane/dawnai",
+    workflow: ".github/workflows/release.yml",
+    sourceRef: `refs/tags/v${candidate.version}`,
+    commitSha: candidate.commitSha,
+    workflowRunId,
+    runAttempt,
+    subjects: Object.freeze(
+      subjects.map((subject) =>
+        Object.freeze({
+          subjectName: subject.name,
+          subjectSha256: subject.sha256,
+          bundleName: `${subject.name}.intoto.jsonl`,
+          bundleSha256,
+        }),
+      ),
+    ),
+  })
+}
+
+async function capturePublicationState({
+  candidate,
+  manifest,
+  github,
+  npm,
+  now,
+  currentRunId,
+  currentRunAttempt,
+}) {
+  const listWorkflowRuns = requiredMethod(github, "listWorkflowRuns", "GitHub reader")
+  const listActionsRunJobs = requiredMethod(github, "listActionsRunJobs", "GitHub reader")
+  const observePackageVersion = requiredMethod(npm, "observePackageVersion", "npm reader")
+  const runs = await readPresentValue(
+    listWorkflowRuns({ workflow: "release.yml", commitSha: candidate.commitSha }),
+    "workflow-runs",
+  )
+  if (!Array.isArray(runs) || runs.length < 1 || runs.length > 100) {
+    throw new Error("Release CLI candidate Actions history is empty or exceeds its bound")
+  }
+  const normalizedRuns = runs.map((run) => normalizeCandidateRun(run, candidate))
+  normalizedRuns.sort((left, right) => left.runId - right.runId)
+  if (new Set(normalizedRuns.map(({ runId }) => runId)).size !== normalizedRuns.length) {
+    throw new Error("Release CLI candidate Actions history contains duplicate run IDs")
+  }
+  const withJobs = await Promise.all(
+    normalizedRuns.map(async (run) => ({
+      ...run,
+      jobs: normalizeCandidateJobs(
+        await readPresentValue(listActionsRunJobs({ runId: run.runId }), "actions-run-jobs"),
+        run.runAttempt,
+      ),
+    })),
+  )
+  const candidateRuns = []
+  for (const run of withJobs) {
+    const publishStarted = run.jobs.some(
+      (job) => job.name === "publish-npm" && job.startedAt !== null,
+    )
+    if (publishStarted) {
+      throw new Error("Release CLI publication history shows that publish-npm already started")
+    }
+    if (run.headBranch !== `v${candidate.version}`) continue
+    candidateRuns.push(run)
+  }
+  if (
+    !candidateRuns.some(
+      (run) =>
+        run.runId === currentRunId &&
+        run.runAttempt === currentRunAttempt &&
+        run.headBranch === `v${candidate.version}`,
+    )
+  ) {
+    throw new Error("Release CLI publication history does not contain the current tagged run")
+  }
+  const packages = await Promise.all(
+    manifest.packages.map(async (pkg) => {
+      const result = snapshotCliData(
+        await observePackageVersion({ name: pkg.name, version: candidate.version }),
+        "npm package observation",
+      )
+      if (
+        !hasExactDataFields(result, ["status", "operation", "httpStatus", "code"]) ||
+        result.status !== "ABSENT" ||
+        result.operation !== "package-version" ||
+        result.httpStatus !== 404 ||
+        result.code !== "E404"
+      ) {
+        throw new Error(`Release CLI package ${pkg.name} is not proven absent by exact E404`)
+      }
+      return {
+        name: pkg.name,
+        version: candidate.version,
+        status: "ABSENT",
+        httpStatus: 404,
+        observedAt: timestamp(now),
+      }
+    }),
+  )
+  return Object.freeze({
+    schemaVersion: 1,
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    tag: `v${candidate.version}`,
+    observedAt: timestamp(now),
+    candidateRuns,
+    registryMutationReceipts: [],
+    packages,
+  })
+}
+
+function normalizeCandidateRun(value, candidate) {
+  const run = snapshotCliData(value, "candidate Actions run")
+  const runId = dataValue(run, "id", "candidate Actions run")
+  const runAttempt = dataValue(run, "run_attempt", "candidate Actions run")
+  const headSha = dataValue(run, "head_sha", "candidate Actions run")
+  const headBranch = dataValue(run, "head_branch", "candidate Actions run")
+  const workflowPath = dataValue(run, "path", "candidate Actions run")
+  const event = dataValue(run, "event", "candidate Actions run")
+  if (
+    !Number.isSafeInteger(runId) ||
+    runId < 1 ||
+    !Number.isSafeInteger(runAttempt) ||
+    runAttempt < 1 ||
+    headSha !== candidate.commitSha ||
+    typeof headBranch !== "string" ||
+    headBranch.length === 0 ||
+    workflowPath !== ".github/workflows/release.yml" ||
+    !["push", "workflow_dispatch", "schedule"].includes(event)
+  ) {
+    throw new Error("Release CLI candidate Actions run identity is invalid")
+  }
+  return { runId, runAttempt, headSha, headBranch }
+}
+
+function normalizeCandidateJobs(value, currentAttempt) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10_000) {
+    throw new Error("Release CLI candidate job history is empty or exceeds its bound")
+  }
+  const jobs = value.map((entry) => {
+    const job = snapshotCliData(entry, "candidate Actions job")
+    if (
+      !hasExactDataFields(job, [
+        "id",
+        "runAttempt",
+        "name",
+        "status",
+        "conclusion",
+        "startedAt",
+        "completedAt",
+      ]) ||
+      !Number.isSafeInteger(job.id) ||
+      job.id < 1 ||
+      !Number.isSafeInteger(job.runAttempt) ||
+      job.runAttempt < 1 ||
+      job.runAttempt > currentAttempt ||
+      typeof job.name !== "string" ||
+      job.name.length === 0 ||
+      typeof job.status !== "string" ||
+      job.status.length === 0 ||
+      !(job.conclusion === null || typeof job.conclusion === "string") ||
+      !isNullableTimestamp(job.startedAt) ||
+      !isNullableTimestamp(job.completedAt)
+    ) {
+      throw new Error("Release CLI candidate job history is malformed")
+    }
+    return job
+  })
+  jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
+  return jobs
 }
 
 async function runReconcileNpm(options, runtime) {
@@ -506,17 +940,52 @@ function normalizeDependencies(value) {
   if (environment === null || typeof environment !== "object" || Array.isArray(environment)) {
     throw new TypeError("Release CLI environment boundary is invalid")
   }
-  const tokenDescriptor = Object.getOwnPropertyDescriptor(environment, "GITHUB_TOKEN")
-  if (tokenDescriptor !== undefined && !("value" in tokenDescriptor)) {
-    throw new TypeError("Release CLI GitHub token must be a data property")
-  }
+  const environmentSnapshot = snapshotEnvironment(environment)
+  const npm = optionalDataDependency(value, "npm", "npm reader")
+  const attestations = optionalDataDependency(value, "attestations", "attestation verifier")
+  const now = optionalDataDependency(value, "now", "clock") ?? Date.now
+  if (typeof now !== "function") throw new TypeError("Release CLI clock is invalid")
   return Object.freeze({
     cwd,
     importModule,
     fileSystem,
     github: githubDescriptor?.value,
-    githubToken: tokenDescriptor?.value,
+    githubToken: environmentSnapshot.GITHUB_TOKEN,
+    environment: environmentSnapshot,
+    npm,
+    attestations,
+    now,
   })
+}
+
+function snapshotEnvironment(environment) {
+  const result = Object.create(null)
+  for (const name of [
+    "GITHUB_TOKEN",
+    "GITHUB_REPOSITORY",
+    "GITHUB_REF",
+    "GITHUB_SHA",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_WORKFLOW_REF",
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(environment, name)
+    if (descriptor === undefined) continue
+    if (!("value" in descriptor) || typeof descriptor.value !== "string") {
+      throw new TypeError(`Release CLI environment ${name} must be a string data property`)
+    }
+    result[name] = descriptor.value
+  }
+  return Object.freeze(result)
+}
+
+function optionalDataDependency(value, name, label) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name)
+  if (descriptor === undefined) return undefined
+  if (!("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError(`Release CLI ${label} dependency is invalid`)
+  }
+  return descriptor.value
 }
 
 async function readCandidate(runtime, value) {
@@ -618,6 +1087,39 @@ async function requireGitHub(runtime) {
   )
 }
 
+async function requireNpm(runtime) {
+  if (runtime.npm !== undefined) {
+    requiredMethod(runtime.npm, "observePackageVersion", "npm reader")
+    return runtime.npm
+  }
+  const module = await runtime.importModule(new URL("./adapters/npm.mjs", import.meta.url).href)
+  return moduleFunction(module, "createNpmReader", "npm reader factory")()
+}
+
+async function requireAttestations(runtime) {
+  if (runtime.attestations !== undefined) {
+    requiredMethod(runtime.attestations, "verify", "attestation verifier")
+    return runtime.attestations
+  }
+  const token = runtime.githubToken
+  if (typeof token !== "string" || token.length === 0 || /[\r\n]/u.test(token)) {
+    throw new TypeError("Release CLI escrow requires GITHUB_TOKEN")
+  }
+  if (runtime.environment.GITHUB_REPOSITORY !== "cacheplane/dawnai") {
+    throw new TypeError("Release CLI escrow requires the exact GitHub repository")
+  }
+  const module = await runtime.importModule(new URL("./artifact-store.mjs", import.meta.url).href)
+  return moduleFunction(
+    module,
+    "createCliAttestationVerifier",
+    "attestation verifier factory",
+  )({
+    repository: "cacheplane/dawnai",
+    token,
+    fileSystem: runtime.fileSystem,
+  })
+}
+
 function validateGitHubBoundary(github) {
   if (
     github === null ||
@@ -678,6 +1180,7 @@ async function readRegularFile(fileSystem, filePath, maximumBytes, label) {
   if (
     !before.isFile() ||
     before.isSymbolicLink() ||
+    before.nlink !== 1 ||
     !Number.isSafeInteger(before.size) ||
     before.size < 1 ||
     before.size > maximumBytes
@@ -692,6 +1195,8 @@ async function readRegularFile(fileSystem, filePath, maximumBytes, label) {
     after.size !== before.size ||
     after.dev !== before.dev ||
     after.ino !== before.ino ||
+    after.nlink !== 1 ||
+    after.mtimeMs !== before.mtimeMs ||
     !after.isFile() ||
     after.isSymbolicLink()
   ) {
@@ -738,6 +1243,140 @@ function moduleFunction(module, name, label) {
   return Object.getOwnPropertyDescriptor(module, name).value
 }
 
+function moduleValue(module, name, label) {
+  if (module === null || typeof module !== "object") {
+    throw new TypeError(`Release CLI ${label} module is invalid`)
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(module, name)
+  if (descriptor === undefined || !("value" in descriptor)) {
+    throw new TypeError(`Release CLI ${label} module is invalid`)
+  }
+  return descriptor.value
+}
+
+function requiredMethod(value, name, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Release CLI ${label} is invalid`)
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, name)
+  if (
+    descriptor === undefined ||
+    descriptor.enumerable !== true ||
+    !("value" in descriptor) ||
+    typeof descriptor.value !== "function"
+  ) {
+    throw new TypeError(`Release CLI ${label} method ${name} is invalid`)
+  }
+  return descriptor.value.bind(value)
+}
+
+async function readPresentValue(promise, operation) {
+  const envelope = snapshotCliData(await promise, `${operation} envelope`)
+  if (
+    !hasExactDataFields(envelope, ["status", "operation", "httpStatus", "code", "value"]) ||
+    envelope.status !== "PRESENT" ||
+    envelope.operation !== operation ||
+    !Number.isInteger(envelope.httpStatus) ||
+    envelope.httpStatus < 200 ||
+    envelope.httpStatus >= 300 ||
+    envelope.code !== null
+  ) {
+    throw new Error(`Release CLI ${operation} observation is not exact`)
+  }
+  return envelope.value
+}
+
+function snapshotCliData(value, label, ancestors = new Set()) {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value
+  }
+  if (typeof value !== "object" || ancestors.has(value)) {
+    throw new TypeError(`Release CLI ${label} is not acyclic JSON data`)
+  }
+  const next = new Set(ancestors).add(value)
+  if (Array.isArray(value)) {
+    const expected = new Set(["length", ...value.map((_entry, index) => String(index))])
+    if (Reflect.ownKeys(value).some((key) => typeof key !== "string" || !expected.has(key))) {
+      throw new TypeError(`Release CLI ${label} array is sparse or contains extra fields`)
+    }
+    return value.map((_entry, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        throw new TypeError(`Release CLI ${label} array contains an accessor`)
+      }
+      return snapshotCliData(descriptor.value, label, next)
+    })
+  }
+  if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError(`Release CLI ${label} contains a non-JSON object`)
+  }
+  const result = Object.create(null)
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(value, key) : null
+    if (
+      typeof key !== "string" ||
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError(`Release CLI ${label} contains an accessor or symbol field`)
+    }
+    result[key] = snapshotCliData(descriptor.value, label, next)
+  }
+  return result
+}
+
+function dataValue(value, field, label) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, field)
+  if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+    throw new TypeError(`Release CLI ${label} field ${field} is invalid`)
+  }
+  return descriptor.value
+}
+
+function hasExactDataFields(value, fields) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === fields.length &&
+    fields.every((field) => Object.hasOwn(value, field))
+  )
+}
+
+function positiveEnvironmentInteger(value, label) {
+  if (typeof value !== "string" || !DECIMAL_ID_PATTERN.test(value)) {
+    throw new TypeError(`Release CLI ${label} environment value is invalid`)
+  }
+  const result = Number(value)
+  if (!Number.isSafeInteger(result) || result < 1) {
+    throw new TypeError(`Release CLI ${label} environment value is invalid`)
+  }
+  return result
+}
+
+function timestamp(now) {
+  const value = now()
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("Release CLI clock returned an invalid timestamp")
+  }
+  return new Date(value).toISOString()
+}
+
+function isNullableTimestamp(value) {
+  return (
+    value === null ||
+    (typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value) &&
+      Number.isFinite(Date.parse(value)))
+  )
+}
+
 function canonicalJsonBytes(value) {
   return Buffer.from(`${JSON.stringify(canonicalize(value), null, 2)}\n`, "utf8")
 }
@@ -754,6 +1393,14 @@ function canonicalize(value) {
 
 function compareText(left, right) {
   return left < right ? -1 : left > right ? 1 : 0
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function digest(bytes, algorithm) {
+  return createHash(algorithm).update(bytes).digest("hex")
 }
 
 function usageError() {

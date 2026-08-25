@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,8 +7,13 @@ import test from "node:test"
 
 import { runReleaseCli } from "../cli.mjs"
 import { runReleaseController } from "../controller.mjs"
-import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
-import { parseReleaseRecord } from "../release-record.mjs"
+import {
+  CANONICAL_RELEASE_PACKAGE_ORDER,
+  canonicalManifestBytes,
+  manifestSha256,
+} from "../manifest.mjs"
+import { parseAttestationSet, parsePublicationState } from "../metadata.mjs"
+import { canonicalReleaseRecordBytes, parseReleaseRecord } from "../release-record.mjs"
 import {
   candidate as markerCandidate,
   observationForMarker,
@@ -909,6 +915,222 @@ test("GitHub-mutating routes lazily construct the production boundary from the e
   assert.deepEqual(calls.at(-1)[1].github, { reader, writer })
 })
 
+test("attestation-input writes one exact 22-subject checksum set from verified artifact bytes", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-attestation-input-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const artifactDirectory = join(directory, "artifact")
+  await mkdir(artifactDirectory)
+  const { manifest, record } = await materializeArtifactFixture(artifactDirectory)
+  const recordPath = join(directory, "record.json")
+  const outputPath = join(directory, "subjects.sha256")
+  await writeFile(recordPath, canonicalReleaseRecordBytes(record))
+
+  const result = await runReleaseCli([
+    "attestation-input",
+    "--record",
+    recordPath,
+    "--artifact-dir",
+    artifactDirectory,
+    "--output",
+    outputPath,
+  ])
+  const lines = (await readFile(outputPath, "utf8")).trimEnd().split("\n")
+  assert.equal(lines.length, 22)
+  assert.deepEqual(
+    lines.map((line) => line.slice(66)),
+    ["manifest.json", ...manifest.packages.map(({ filename }) => filename)],
+  )
+  assert.equal(lines[0], `${record.manifestSha256}  manifest.json`)
+  assert.deepEqual(result, {
+    schemaVersion: 1,
+    version: CANDIDATE.version,
+    commitSha: CANDIDATE.commitSha,
+    manifestSha256: record.manifestSha256,
+    subjectCount: 22,
+  })
+
+  await writeFile(join(artifactDirectory, manifest.packages[4].filename), "corrupt")
+  await assert.rejects(
+    runReleaseCli([
+      "attestation-input",
+      "--record",
+      recordPath,
+      "--artifact-dir",
+      artifactDirectory,
+      "--output",
+      join(directory, "corrupt.sha256"),
+    ]),
+    /artifact|tarball|digest|manifest|size/iu,
+  )
+})
+
+test("escrow derives exact multi-subject bundles and captures fresh publication absence", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-escrow-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const artifactDirectory = join(directory, "artifact")
+  await mkdir(artifactDirectory)
+  const { manifest, record } = await materializeArtifactFixture(artifactDirectory)
+  const paths = {
+    candidate: join(directory, "candidate.json"),
+    record: join(directory, "record.json"),
+    bundle: join(directory, "attestation.jsonl"),
+  }
+  const bundle = Buffer.from('{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}\n')
+  await Promise.all([
+    writeFile(paths.candidate, JSON.stringify(CANDIDATE)),
+    writeFile(paths.record, canonicalReleaseRecordBytes(record)),
+    writeFile(paths.bundle, bundle),
+  ])
+  const githubCalls = []
+  const github = {
+    reader: {
+      async listWorkflowRuns(input) {
+        githubCalls.push(["runs", input])
+        return presentEnvelope("workflow-runs", [
+          {
+            id: 701,
+            run_attempt: 2,
+            head_sha: CANDIDATE.commitSha,
+            head_branch: `v${CANDIDATE.version}`,
+            path: ".github/workflows/release.yml",
+            event: "workflow_dispatch",
+          },
+        ])
+      },
+      async listActionsRunJobs(input) {
+        githubCalls.push(["jobs", input])
+        return presentEnvelope("actions-run-jobs", [
+          {
+            id: 801,
+            runAttempt: 1,
+            name: "tag",
+            status: "completed",
+            conclusion: "success",
+            startedAt: "2026-08-25T09:00:00Z",
+            completedAt: "2026-08-25T09:01:00Z",
+          },
+          {
+            id: 802,
+            runAttempt: 2,
+            name: "escrow",
+            status: "in_progress",
+            conclusion: null,
+            startedAt: "2026-08-25T09:02:00Z",
+            completedAt: null,
+          },
+          {
+            id: 803,
+            runAttempt: 2,
+            name: "publish-npm",
+            status: "queued",
+            conclusion: null,
+            startedAt: null,
+            completedAt: null,
+          },
+        ])
+      },
+    },
+    writer: {},
+  }
+  const npmCalls = []
+  const npm = {
+    async observePackageVersion(input) {
+      npmCalls.push(input)
+      return { status: "ABSENT", operation: "package-version", httpStatus: 404, code: "E404" }
+    },
+  }
+  const attestations = {
+    async verify() {
+      assert.fail("the route delegates bundle verification to escrowCandidate")
+    },
+  }
+  let received
+  const importModule = async (specifier) => {
+    const name = new URL(specifier).pathname.split("/").at(-1)
+    if (name !== "metadata.mjs") return import(specifier)
+    return {
+      async escrowCandidate(input) {
+        received = input
+        return { phase: "ESCROWED", status: "escrowed" }
+      },
+    }
+  }
+  const result = await runReleaseCli(
+    [
+      "escrow",
+      "--candidate",
+      paths.candidate,
+      "--record",
+      paths.record,
+      "--artifact-dir",
+      artifactDirectory,
+      "--attestation-bundle",
+      paths.bundle,
+    ],
+    {
+      cwd: directory,
+      github,
+      npm,
+      attestations,
+      now: () => Date.parse("2026-08-25T09:03:00Z"),
+      environment: Object.freeze({
+        GITHUB_TOKEN: "token",
+        GITHUB_REPOSITORY: "cacheplane/dawnai",
+        GITHUB_REF: `refs/tags/v${CANDIDATE.version}`,
+        GITHUB_SHA: CANDIDATE.commitSha,
+        GITHUB_RUN_ID: "701",
+        GITHUB_RUN_ATTEMPT: "2",
+        GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/release.yml@refs/tags/v${CANDIDATE.version}`,
+      }),
+      importModule,
+    },
+  )
+  assert.deepEqual(result, { phase: "ESCROWED", status: "escrowed" })
+  assert.deepEqual(
+    npmCalls.map(({ name }) => name),
+    [...CANONICAL_RELEASE_PACKAGE_ORDER],
+  )
+  assert.deepEqual(githubCalls, [
+    ["runs", { workflow: "release.yml", commitSha: CANDIDATE.commitSha }],
+    ["jobs", { runId: 701 }],
+  ])
+  assert.equal(received.attestationSet.subjects.length, 22)
+  assert.deepEqual(
+    received.attestationSet.subjects.map(({ subjectName }) => subjectName),
+    ["manifest.json", ...manifest.packages.map(({ filename }) => filename)],
+  )
+  assert.equal(
+    new Set(received.attestationSet.subjects.map(({ bundleSha256 }) => bundleSha256)).size,
+    1,
+  )
+  assert.equal(received.bundles.length, 22)
+  assert.equal(
+    received.bundles.every(({ bytes }) => Buffer.from(bytes).equals(bundle)),
+    true,
+  )
+  assert.equal(received.publicationState.packages.length, 21)
+  assert.equal(received.publicationState.candidateRuns[0].jobs[2].startedAt, null)
+  assert.deepEqual(
+    parseAttestationSet(received.attestationSet, {
+      candidate: CANDIDATE,
+      manifest,
+      repository: "cacheplane/dawnai",
+    }),
+    received.attestationSet,
+  )
+  assert.equal(
+    JSON.stringify(
+      parsePublicationState(received.publicationState, {
+        candidate: CANDIDATE,
+        inventory: { packages: manifest.packages.map(({ name }) => ({ name })) },
+      }),
+    ),
+    JSON.stringify(received.publicationState),
+  )
+  assert.equal(received.github, github)
+  assert.equal(received.attestations, attestations)
+})
+
 function observer(values) {
   let index = 0
   return Object.freeze({
@@ -976,8 +1198,46 @@ function sealedManifest() {
   }
 }
 
+async function materializeArtifactFixture(directory) {
+  const manifest = sealedManifest()
+  for (const pkg of manifest.packages) {
+    const bytes = Buffer.from(`artifact:${pkg.name}`, "utf8")
+    pkg.size = bytes.length
+    pkg.sha256 = digest(bytes, "sha256")
+    pkg.sha512 = digest(bytes, "sha512")
+    pkg.npmIntegrity = `sha512-${Buffer.from(pkg.sha512, "hex").toString("base64")}`
+    await writeFile(join(directory, pkg.filename), bytes)
+  }
+  await writeFile(join(directory, "manifest.json"), canonicalManifestBytes(manifest))
+  return {
+    manifest,
+    record: {
+      schemaVersion: 1,
+      version: CANDIDATE.version,
+      commitSha: CANDIDATE.commitSha,
+      tag: `v${CANDIDATE.version}`,
+      manifestSha256: manifestSha256(manifest),
+      actionsArtifact: {
+        id: "9001",
+        name: `release-v${CANDIDATE.version}-${CANDIDATE.commitSha.slice(0, 12)}`,
+        serviceDigest: `sha256:${"a".repeat(64)}`,
+        prepareRunId: "7001",
+        prepareRunAttempt: 2,
+      },
+    },
+  }
+}
+
+function digest(bytes, algorithm) {
+  return createHash(algorithm).update(bytes).digest("hex")
+}
+
 function artifactUrl(artifactId) {
   return `https://github.com/cacheplane/dawnai/actions/runs/7001/artifacts/${artifactId}`
+}
+
+function presentEnvelope(operation, value) {
+  return { status: "PRESENT", operation, httpStatus: 200, code: null, value }
 }
 
 function assertRecursivelyFrozen(value) {
