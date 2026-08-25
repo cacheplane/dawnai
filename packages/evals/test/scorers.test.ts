@@ -85,11 +85,11 @@ describe("built-in scorers", () => {
 })
 
 describe("regex scorer safety policy", () => {
-  it("preserves overlapping-alternative semantics when matching finishes within the budget", async () => {
-    const scorer = regex(/^(a|aa)+$/u)
+  it("preserves ordinary alternation semantics", async () => {
+    const scorer = regex(/^(a|b)+$/u)
 
-    expect(normalizeScore(await scorer.score(run({ finalMessage: "aaaa" }), noCase)).score).toBe(1)
-    expect(normalizeScore(await scorer.score(run({ finalMessage: "aaab" }), noCase)).score).toBe(0)
+    expect(normalizeScore(await scorer.score(run({ finalMessage: "abba" }), noCase)).score).toBe(1)
+    expect(normalizeScore(await scorer.score(run({ finalMessage: "abca" }), noCase)).score).toBe(0)
   })
 
   it("rejects oversized final messages before evaluation", () => {

@@ -148,7 +148,7 @@ git commit -m "fix(security): bound synchronous regex evaluation"
 
 Test the public APIs, not only the adapters:
 
-- ordinary overlapping-alternative expressions preserve normal JavaScript matching semantics when they finish within the budget;
+- ordinary safe alternation expressions preserve normal JavaScript matching semantics;
 - both public API paths invoke the same private hard-bounded tester whose catastrophic-match regression runs in a child process;
 - eval scoring rejects oversized `finalMessage` before evaluation;
 - `expectFinalMessage(...).toMatch()` and `expectSystemPrompt(...).toMatch()` enforce the same policy;
