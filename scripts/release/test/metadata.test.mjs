@@ -1002,7 +1002,7 @@ function completeNpmEvidence(fixture) {
       latest: { status: "present", version: VERSION },
       signature: {
         status: "valid",
-        verifier: "npm-audit-signatures@11",
+        verifier: "npm-audit-signatures@11.17.0",
       },
       provenance: {
         predicateType: "https://slsa.dev/provenance/v1",

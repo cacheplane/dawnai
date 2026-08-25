@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto"
 import * as defaultFileSystem from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -7,6 +8,7 @@ import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const PUBLIC_REGISTRY_ORIGIN = "https://registry.npmjs.org"
 const PROVENANCE_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
+const PUBLISH_PREDICATE_TYPE = "https://github.com/npm/attestation/tree/main/specs/publish/v0.1"
 const PROVENANCE_BUILD_TYPE =
   "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"
 const GITHUB_HOSTED_BUILDER = "https://github.com/actions/runner/github-hosted"
@@ -28,9 +30,10 @@ const VERIFIED_FIELDS = Object.freeze([
   "attestations",
   "attestationBundles",
 ])
+const EXPECTED_NPM_VERSION = "11.17.0"
 
 export const NPM_AUDIT_OUTPUT_MAX_BYTES = 2 * 1024 * 1024
-export const NPM_AUDIT_VERIFIER = "npm-audit-signatures@11"
+export const NPM_AUDIT_VERIFIER = `npm-audit-signatures@${EXPECTED_NPM_VERSION}`
 
 export function parseNpmAuditSignatures(output, { entry, candidate } = {}) {
   const identity = validateAuditContext(entry, candidate)
@@ -74,6 +77,7 @@ export function parseNpmAuditSignatures(output, { entry, candidate } = {}) {
   const verified = sameName[0]
   assertExactFields(verified, VERIFIED_FIELDS, "npm audit signatures verified entry")
   if (
+    verified.name !== identity.entry.name ||
     verified.version !== identity.entry.version ||
     verified.location !== `node_modules/${identity.entry.name}`
   ) {
@@ -83,9 +87,9 @@ export function parseNpmAuditSignatures(output, { entry, candidate } = {}) {
   }
   assertPublicRegistry(verified.registry)
   validateAttestationDescriptor(verified.attestations, identity)
-  // npm 11 populates attestationBundles only after Pacote/Sigstore verifies them. Decode the
-  // already-verified signed payload only to bind its release identity; this is not a verifier.
-  const statement = verifiedProvenanceStatement(verified.attestationBundles)
+  // npm 11 populates attestationBundles only after its built-in signature and Sigstore checks.
+  // Decode the already-verified signed payload only to bind its release identity.
+  const statement = verifiedProvenanceStatement(verified.attestationBundles, identity)
   const provenance = validateProvenanceStatement(statement, identity)
   return deepFreeze({
     status: "verified",
@@ -109,7 +113,7 @@ export async function createNpmAuditVerifier({
   ) {
     throw new TypeError("npm audit verifier dependencies are invalid")
   }
-  for (const method of ["mkdir", "mkdtemp", "readFile", "realpath", "rm", "writeFile"]) {
+  for (const method of ["mkdir", "mkdtemp", "readFile", "readdir", "realpath", "rm", "writeFile"]) {
     if (typeof fileSystem?.[method] !== "function") {
       throw new TypeError(`npm audit verifier file system must expose ${method}`)
     }
@@ -167,8 +171,13 @@ export async function createNpmAuditVerifier({
             consumersRoot,
             `package-${String(consumers.size + 1).padStart(2, "0")}`,
           )
-          await fileSystem.mkdir(directory, { mode: 0o700 })
-          const packageJson = Buffer.from(
+          const packageDirectory = path.join(
+            directory,
+            "node_modules",
+            ...identity.entry.name.split("/"),
+          )
+          await fileSystem.mkdir(packageDirectory, { recursive: true, mode: 0o700 })
+          const rootPackageJson = Buffer.from(
             `${JSON.stringify({
               name: "dawn-release-audit-consumer",
               version: "0.0.0",
@@ -177,39 +186,43 @@ export async function createNpmAuditVerifier({
             })}\n`,
             "utf8",
           )
-          const packageJsonPath = path.join(directory, "package.json")
-          await fileSystem.writeFile(packageJsonPath, packageJson, { flag: "wx", mode: 0o600 })
-          consumer = { directory, packageJson, packageJsonPath, installed: false }
+          const targetPackageJson = Buffer.from(
+            `${JSON.stringify({
+              name: identity.entry.name,
+              version: identity.entry.version,
+            })}\n`,
+            "utf8",
+          )
+          const rootPackageJsonPath = path.join(directory, "package.json")
+          const targetPackageJsonPath = path.join(packageDirectory, "package.json")
+          await Promise.all([
+            fileSystem.writeFile(rootPackageJsonPath, rootPackageJson, {
+              flag: "wx",
+              mode: 0o600,
+            }),
+            fileSystem.writeFile(targetPackageJsonPath, targetPackageJson, {
+              flag: "wx",
+              mode: 0o600,
+            }),
+          ])
+          consumer = {
+            directory,
+            packageDirectory,
+            rootPackageJson,
+            rootPackageJsonPath,
+            targetPackageJson,
+            targetPackageJsonPath,
+            version: identity.entry.version,
+          }
           consumers.set(identity.entry.name, consumer)
         }
-        const currentPackageJson = await fileSystem.readFile(consumer.packageJsonPath)
-        if (!Buffer.from(currentPackageJson).equals(consumer.packageJson)) {
+        if (consumer.version !== identity.entry.version) {
           throw new Error(`npm audit consumer identity changed for ${identity.entry.name}`)
         }
-        if (!consumer.installed) {
-          await runNpm(
-            "npm",
-            [
-              "install",
-              "--ignore-scripts",
-              "--package-lock=true",
-              "--omit=dev",
-              "--no-audit",
-              "--no-fund",
-              "--registry",
-              `${PUBLIC_REGISTRY_ORIGIN}/`,
-            ],
-            {
-              cwd: consumer.directory,
-              env: auditEnvironment,
-              signal,
-            },
-          )
-          consumer.installed = true
-        }
+        await assertSyntheticAuditTree(fileSystem, consumer, identity.entry.name)
         const auditResult = await runNpm(
           "npm",
-          ["audit", "signatures", "--json", "--include-attestations"],
+          ["audit", "signatures", "--no-package-lock", "--json", "--include-attestations"],
           {
             cwd: consumer.directory,
             env: auditEnvironment,
@@ -217,6 +230,7 @@ export async function createNpmAuditVerifier({
             acceptedExitCodes: [0, 1],
           },
         )
+        await assertSyntheticAuditTree(fileSystem, consumer, identity.entry.name)
         return parseNpmAuditSignatures(auditResult?.stdout, identity)
       },
       async dispose() {
@@ -265,10 +279,11 @@ function validateAttestationDescriptor(value, identity) {
   }
 }
 
-function verifiedProvenanceStatement(bundles) {
-  if (!Array.isArray(bundles) || bundles.length < 1 || bundles.length > 8) {
-    throw new Error("npm audit attestation bundles are malformed")
+function verifiedProvenanceStatement(bundles, identity) {
+  if (!Array.isArray(bundles) || bundles.length !== 2) {
+    throw new Error("npm audit attestation bundle set is missing or ambiguous")
   }
+  const publish = []
   const provenance = []
   for (const wrapper of bundles) {
     assertExactFields(
@@ -285,8 +300,18 @@ function verifiedProvenanceStatement(bundles) {
     ) {
       throw new Error("npm audit attestation bundle is malformed")
     }
-    if (wrapper.predicateType !== PROVENANCE_PREDICATE_TYPE) continue
-    provenance.push(decodeVerifiedStatement(wrapper.bundle))
+    if (wrapper.predicateType === PUBLISH_PREDICATE_TYPE) {
+      publish.push(validateVerifiedPublishBundle(wrapper.bundle))
+      continue
+    }
+    if (wrapper.predicateType === PROVENANCE_PREDICATE_TYPE) {
+      provenance.push(decodeVerifiedStatement(wrapper.bundle, identity))
+      continue
+    }
+    throw new Error("npm audit attestation bundle predicate is not permitted")
+  }
+  if (publish.length !== 1) {
+    throw new Error("npm audit keyed publish attestation is missing, duplicate, or ambiguous")
   }
   if (provenance.length !== 1) {
     throw new Error("npm audit provenance bundle is missing, duplicate, or ambiguous")
@@ -294,17 +319,55 @@ function verifiedProvenanceStatement(bundles) {
   return provenance[0]
 }
 
-function decodeVerifiedStatement(bundle) {
+function validateVerifiedPublishBundle(bundle) {
+  validateSigstoreBundle(bundle, "npm audit publish Sigstore bundle")
+  if (bundle.mediaType !== "application/vnd.dev.sigstore.bundle+json;version=0.2") {
+    throw new Error("npm audit keyed publish attestation media type is invalid")
+  }
+  const signatures = bundle.dsseEnvelope.signatures
+  if (signatures.length !== 1) {
+    throw new Error("npm audit keyed publish attestation signature is ambiguous")
+  }
+  validateVerificationMaterial(bundle.verificationMaterial, "publicKey", "npm audit keyed publish")
   assertExactFields(
-    bundle,
-    ["mediaType", "verificationMaterial", "dsseEnvelope"],
-    "npm audit Sigstore bundle",
+    bundle.verificationMaterial.publicKey,
+    ["hint"],
+    "npm audit keyed publish public key",
   )
+  const signature = signatures[0]
+  assertExactFields(signature, ["sig", "keyid"], "npm audit keyed publish signature")
   if (
-    ![
-      "application/vnd.dev.sigstore.bundle.v0.3+json",
-      "application/vnd.dev.sigstore.bundle+json;version=0.2",
-    ].includes(bundle.mediaType) ||
+    typeof signature.sig !== "string" ||
+    signature.sig.length < 1 ||
+    typeof signature.keyid !== "string" ||
+    !/^SHA256:[A-Za-z0-9+/_=-]{1,256}$/u.test(signature.keyid) ||
+    bundle.verificationMaterial.publicKey.hint !== signature.keyid
+  ) {
+    throw new Error("npm audit keyed publish attestation signature is invalid")
+  }
+}
+
+function decodeVerifiedStatement(bundle, identity) {
+  validateSigstoreBundle(bundle, "npm audit provenance Sigstore bundle")
+  if (bundle.mediaType !== "application/vnd.dev.sigstore.bundle.v0.3+json") {
+    throw new Error("npm audit provenance Sigstore bundle media type is invalid")
+  }
+  validateVerifiedCertificateIdentity(bundle.verificationMaterial, identity)
+  const bytes = Buffer.from(bundle.dsseEnvelope.payload, "base64")
+  if (bytes.length < 1 || bytes.toString("base64") !== bundle.dsseEnvelope.payload) {
+    throw new Error("npm audit DSSE payload is malformed")
+  }
+  try {
+    return snapshotJson(JSON.parse(UTF8_DECODER.decode(bytes)))
+  } catch (error) {
+    throw new Error("npm audit DSSE statement is malformed", { cause: error })
+  }
+}
+
+function validateSigstoreBundle(bundle, label) {
+  assertExactFields(bundle, ["mediaType", "verificationMaterial", "dsseEnvelope"], label)
+  if (
+    typeof bundle.mediaType !== "string" ||
     bundle.verificationMaterial === null ||
     Array.isArray(bundle.verificationMaterial) ||
     typeof bundle.verificationMaterial !== "object"
@@ -324,14 +387,48 @@ function decodeVerifiedStatement(bundle) {
   ) {
     throw new Error("npm audit DSSE envelope is malformed")
   }
-  const bytes = Buffer.from(bundle.dsseEnvelope.payload, "base64")
-  if (bytes.length < 1 || bytes.toString("base64") !== bundle.dsseEnvelope.payload) {
-    throw new Error("npm audit DSSE payload is malformed")
+}
+
+function validateVerifiedCertificateIdentity(verificationMaterial, identity) {
+  validateVerificationMaterial(verificationMaterial, "certificate", "npm audit provenance")
+  const certificate = verificationMaterial.certificate
+  assertExactFields(certificate, ["rawBytes"], "npm audit provenance certificate")
+  if (typeof certificate.rawBytes !== "string" || certificate.rawBytes.length > 64 * 1024) {
+    throw new Error("npm audit provenance certificate is malformed")
   }
+  const bytes = Buffer.from(certificate.rawBytes, "base64")
+  if (bytes.length < 1 || bytes.toString("base64") !== certificate.rawBytes) {
+    throw new Error("npm audit provenance certificate is malformed")
+  }
+  let parsed
   try {
-    return snapshotJson(JSON.parse(UTF8_DECODER.decode(bytes)))
+    parsed = new X509Certificate(bytes)
   } catch (error) {
-    throw new Error("npm audit DSSE statement is malformed", { cause: error })
+    throw new Error("npm audit provenance certificate is malformed", { cause: error })
+  }
+  const expected = `URI:${EXPECTED_REPOSITORY}/${identity.candidate.publisherWorkflow}@refs/tags/v${identity.candidate.version}`
+  if (parsed.subjectAltName !== expected) {
+    throw new Error("npm audit provenance certificate identity does not match the release")
+  }
+}
+
+function validateVerificationMaterial(verificationMaterial, keyField, label) {
+  assertExactFields(
+    verificationMaterial,
+    [keyField, "tlogEntries", "timestampVerificationData"],
+    `${label} verification material`,
+  )
+  assertExactFields(
+    verificationMaterial.timestampVerificationData,
+    ["rfc3161Timestamps"],
+    `${label} timestamp verification data`,
+  )
+  if (
+    !Array.isArray(verificationMaterial.tlogEntries) ||
+    verificationMaterial.tlogEntries.length < 1 ||
+    !Array.isArray(verificationMaterial.timestampVerificationData.rfc3161Timestamps)
+  ) {
+    throw new Error(`${label} verification material is malformed`)
   }
 }
 
@@ -505,9 +602,42 @@ function npmEnvironment(source, { home, cache, preserveOidc, additionalEnvironme
     npm_config_fund: "false",
     npm_config_globalconfig: path.join(home, "global.npmrc"),
     npm_config_ignore_scripts: "true",
+    npm_config_package_lock: "false",
     npm_config_registry: `${PUBLIC_REGISTRY_ORIGIN}/`,
     npm_config_update_notifier: "false",
     npm_config_userconfig: path.join(home, ".npmrc"),
+  }
+}
+
+async function assertSyntheticAuditTree(fileSystem, consumer, packageName) {
+  const [rootPackageJson, targetPackageJson, rootEntries, packageEntries] = await Promise.all([
+    fileSystem.readFile(consumer.rootPackageJsonPath),
+    fileSystem.readFile(consumer.targetPackageJsonPath),
+    fileSystem.readdir(consumer.directory),
+    fileSystem.readdir(consumer.packageDirectory),
+  ])
+  if (
+    !Buffer.from(rootPackageJson).equals(consumer.rootPackageJson) ||
+    !Buffer.from(targetPackageJson).equals(consumer.targetPackageJson) ||
+    !arraysEqual(rootEntries.sort(), ["node_modules", "package.json"]) ||
+    !arraysEqual(packageEntries.sort(), ["package.json"])
+  ) {
+    throw new Error(`npm audit consumer identity changed for ${packageName}`)
+  }
+  const segments = packageName.split("/")
+  const nodeModulesEntries = (
+    await fileSystem.readdir(path.join(consumer.directory, "node_modules"))
+  ).sort()
+  if (!arraysEqual(nodeModulesEntries, [segments[0]])) {
+    throw new Error(`npm audit consumer identity changed for ${packageName}`)
+  }
+  if (segments.length === 2) {
+    const scopeEntries = (
+      await fileSystem.readdir(path.join(consumer.directory, "node_modules", segments[0]))
+    ).sort()
+    if (!arraysEqual(scopeEntries, [segments[1]])) {
+      throw new Error(`npm audit consumer identity changed for ${packageName}`)
+    }
   }
 }
 
@@ -519,12 +649,8 @@ async function writeEmptyNpmConfigs(fileSystem, home) {
 }
 
 function assertNpm11Version(output) {
-  if (typeof output !== "string" || !/^11\.[0-9]+\.[0-9]+\n?$/u.test(output)) {
-    throw new Error("The release publisher requires an exact stable npm 11 CLI")
-  }
-  const version = output.endsWith("\n") ? output.slice(0, -1) : output
-  if (!isExactSemver(version) || parseSemver(version).major !== 11) {
-    throw new Error("The release publisher requires an exact stable npm 11 CLI")
+  if (output !== EXPECTED_NPM_VERSION && output !== `${EXPECTED_NPM_VERSION}\n`) {
+    throw new Error(`The release publisher requires exact stable npm ${EXPECTED_NPM_VERSION}`)
   }
 }
 
@@ -604,4 +730,8 @@ function deepFreeze(value) {
     Object.freeze(value)
   }
   return value
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }

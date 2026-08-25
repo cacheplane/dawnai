@@ -533,7 +533,7 @@ async function observeNpmAudit(verifyPackage, entry, candidate) {
   if (
     result?.status !== "verified" ||
     result.signature?.status !== "valid" ||
-    result.signature?.verifier !== "npm-audit-signatures@11" ||
+    result.signature?.verifier !== "npm-audit-signatures@11.17.0" ||
     result.provenance?.predicateType !== "https://slsa.dev/provenance/v1" ||
     result.provenance.workflow !== candidate.publisherWorkflow ||
     result.provenance.commitSha !== candidate.commitSha ||

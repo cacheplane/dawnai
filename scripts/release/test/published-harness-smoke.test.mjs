@@ -8,6 +8,7 @@ import {
   validateNpmAuditSignatures,
 } from "../smoke/published-harness.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
+import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "a".repeat(40)
@@ -341,10 +342,31 @@ function auditOutput(release, packages = CANONICAL_RELEASE_PACKAGE_ORDER, drift 
         },
         attestationBundles: [
           {
+            predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+            bundle: {
+              mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
+              verificationMaterial: {
+                publicKey: { hint: "SHA256:test" },
+                tlogEntries: [{}],
+                timestampVerificationData: { rfc3161Timestamps: [] },
+              },
+              dsseEnvelope: {
+                payload: Buffer.from("{}", "utf8").toString("base64"),
+                payloadType: "application/vnd.in-toto+json",
+                signatures: [{ sig: "verified-by-npm", keyid: "SHA256:test" }],
+              },
+            },
+            signedAccessSignatureUrl: "",
+          },
+          {
             predicateType: "https://slsa.dev/provenance/v1",
             bundle: {
               mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-              verificationMaterial: { certificate: { rawBytes: "verified-by-npm" } },
+              verificationMaterial: {
+                certificate: { rawBytes: EXACT_NPM_PROVENANCE_CERTIFICATE },
+                tlogEntries: [{}],
+                timestampVerificationData: { rfc3161Timestamps: [] },
+              },
               dsseEnvelope: {
                 payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
                 payloadType: "application/vnd.in-toto+json",

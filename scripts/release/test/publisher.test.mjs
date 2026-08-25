@@ -33,8 +33,9 @@ import {
   runPublisherCli,
 } from "../publisher.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
+import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
 
-const VERSION = "0.8.21"
+const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 const CANDIDATE = Object.freeze({
   version: VERSION,
@@ -140,7 +141,7 @@ test("only official npm audit evidence can satisfy signature and provenance read
   assert.ok(verifications >= CANONICAL_RELEASE_PACKAGE_ORDER.length * 2)
   assert.deepEqual(result.packages[0].signature, {
     status: "valid",
-    verifier: "npm-audit-signatures@11",
+    verifier: "npm-audit-signatures@11.17.0",
   })
 })
 
@@ -190,7 +191,7 @@ test("complete npm evidence is exact, canonical, ordered, and bound to every man
   )
   assert.ok(Object.isFrozen(parsed))
   assert.ok(
-    parsed.packages.every(({ signature }) => signature.verifier === "npm-audit-signatures@11"),
+    parsed.packages.every(({ signature }) => signature.verifier === "npm-audit-signatures@11.17.0"),
   )
   assert.deepEqual(JSON.parse(canonicalNpmEvidenceBytes(result, context)), parsed)
 
@@ -340,7 +341,6 @@ test("the production CLI accepts only its narrow arguments and publishes exact r
         if (args[0] === "--version") {
           return { stdout: "11.17.0\n", stderr: "", exitCode: 0 }
         }
-        if (args[0] === "install") return { stdout: "", stderr: "", exitCode: 0 }
         if (args[0] === "audit") {
           const consumer = JSON.parse(
             await readFile(path.join(options.cwd, "package.json"), "utf8"),
@@ -364,7 +364,7 @@ test("the production CLI accepts only its narrow arguments and publishes exact r
   const last = manifest.packages.at(-1)
   assert.equal(result.status, "NPM_COMPLETE")
   assert.equal(npmCalls.filter(({ args }) => args[0] === "--version").length, 1)
-  assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 21)
+  assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 0)
   assert.equal(npmCalls.filter(({ args }) => args[0] === "audit").length, 42)
   assert.deepEqual(
     npmCalls
@@ -704,7 +704,7 @@ test("the exact sparse production sequence resolves Actions and expired escrow i
     ]
     const npmCalls = commands.filter(({ command }) => command === "npm")
     assert.equal(npmCalls.filter(({ args }) => args[0] === "--version").length, 1)
-    assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 21)
+    assert.equal(npmCalls.filter(({ args }) => args[0] === "install").length, 0)
     assert.equal(npmCalls.filter(({ args }) => args[0] === "audit").length, 42)
     assert.equal(
       npmCalls.some(({ args }) => args[0] === "publish"),
@@ -1123,7 +1123,6 @@ if (args[0] === "--version") {
   process.stdout.write("11.17.0\\n")
   process.exit(0)
 }
-if (args[0] === "install") process.exit(0)
 if (args[0] === "audit") {
   const consumer = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"))
   const name = Object.keys(consumer.dependencies)[0]
@@ -1438,7 +1437,7 @@ function publisherFixture(overrides = {}) {
 function verifiedAuditEvidence() {
   return {
     status: "verified",
-    signature: { status: "valid", verifier: "npm-audit-signatures@11" },
+    signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
     provenance: {
       predicateType: "https://slsa.dev/provenance/v1",
       workflow: CANDIDATE.publisherWorkflow,
@@ -1478,11 +1477,32 @@ function npmAuditOutput(entry) {
       },
     },
   }
-  const wrapper = {
+  const publishWrapper = {
+    predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+    bundle: {
+      mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
+      verificationMaterial: {
+        publicKey: { hint: "SHA256:test" },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
+      dsseEnvelope: {
+        payload: Buffer.from("{}", "utf8").toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [{ sig: "verified-by-npm", keyid: "SHA256:test" }],
+      },
+    },
+    signedAccessSignatureUrl: "",
+  }
+  const provenanceWrapper = {
     predicateType: "https://slsa.dev/provenance/v1",
     bundle: {
       mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-      verificationMaterial: { certificate: { rawBytes: "verified-by-npm" } },
+      verificationMaterial: {
+        certificate: { rawBytes: EXACT_NPM_PROVENANCE_CERTIFICATE },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
       dsseEnvelope: {
         payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
         payloadType: "application/vnd.in-toto+json",
@@ -1504,7 +1524,7 @@ function npmAuditOutput(entry) {
           url: `https://registry.npmjs.org/-/npm/v1/attestations/${npmAttestationName(entry.name)}@${entry.version}`,
           provenance: { predicateType: "https://slsa.dev/provenance/v1" },
         },
-        attestationBundles: [wrapper],
+        attestationBundles: [publishWrapper, provenanceWrapper],
       },
     ],
   })

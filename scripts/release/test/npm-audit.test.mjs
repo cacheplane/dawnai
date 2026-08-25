@@ -1,10 +1,6 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { createHash, generateKeyPairSync, sign } from "node:crypto"
-import { access, mkdtemp, rm } from "node:fs/promises"
-import { createServer } from "node:http"
-import { createRequire } from "node:module"
-import os from "node:os"
+import { createHash } from "node:crypto"
+import { access, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import test from "node:test"
 
@@ -13,6 +9,11 @@ import {
   NPM_AUDIT_VERIFIER,
   parseNpmAuditSignatures,
 } from "../npm-audit.mjs"
+import {
+  EXACT_NPM_PROVENANCE_CERTIFICATE,
+  MULTIPLE_NPM_PROVENANCE_CERTIFICATE,
+  WRONG_NPM_PROVENANCE_CERTIFICATE,
+} from "./fixtures/npm-audit-certificates.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -24,7 +25,7 @@ const CANDIDATE = Object.freeze({
 })
 
 test("parses the exact npm 11 audit shape and binds its verified SLSA statement", () => {
-  assert.equal(NPM_AUDIT_VERIFIER, "npm-audit-signatures@11")
+  assert.equal(NPM_AUDIT_VERIFIER, "npm-audit-signatures@11.17.0")
   const expected = {
     status: "verified",
     signature: { status: "valid", verifier: NPM_AUDIT_VERIFIER },
@@ -65,6 +66,15 @@ test("rejects unsigned, forged, or ambiguous provenance even when registry JSON 
     [{ subjectSha512: "f".repeat(128) }, /subject|integrity/iu],
     [{ predicateType: "https://example.test/unsigned" }, /provenance|predicate/iu],
     [{ duplicateProvenance: true }, /duplicate|ambiguous|provenance/iu],
+    [{ provenanceOnly: true }, /publish|signature|attestation/iu],
+    [{ publishKeyid: "" }, /publish|key|signature/iu],
+    [{ publishHint: "" }, /publish|key|signature/iu],
+    [{ duplicatePublish: true }, /duplicate|ambiguous|publish/iu],
+    [{ certificateRawBytes: WRONG_NPM_PROVENANCE_CERTIFICATE }, /certificate|identity|workflow/iu],
+    [
+      { certificateRawBytes: MULTIPLE_NPM_PROVENANCE_CERTIFICATE },
+      /certificate|identity|multiple/iu,
+    ],
   ]
 
   for (const [drift, expected] of rows) {
@@ -73,25 +83,6 @@ test("rejects unsigned, forged, or ambiguous provenance even when registry JSON 
     if (expected === null) assert.deepEqual(result(), { status: "pending" })
     else assert.throws(result, expected)
   }
-})
-
-test("official npm 11 uses publication time and validates every registry signature", async (t) => {
-  const fixture = await officialNpmSignatureFixture(t)
-  const historical = await fixture.verify("dawn-audit-historical")
-  assert.equal(historical._signatures.length, 1)
-  assert.ok(Date.parse(fixture.expiredAt) < Date.now())
-
-  const dual = await fixture.verify("dawn-audit-dual")
-  assert.equal(dual._signatures.length, 2)
-
-  await assert.rejects(
-    fixture.verify("dawn-audit-valid-plus-unknown"),
-    (error) => error?.code === "EMISSINGSIGNATUREKEY",
-  )
-  await assert.rejects(
-    fixture.verify("dawn-audit-forged"),
-    (error) => error?.code === "EINTEGRITYSIGNATURE",
-  )
 })
 
 test("fails closed on strict audit-output drift, conflicting versions, and output limits", () => {
@@ -125,7 +116,7 @@ test("fails closed on strict audit-output drift, conflicting versions, and outpu
   )
 })
 
-test("uses one isolated exact-package consumer with credential-free npm 11 audit calls", async () => {
+test("uses one synthetic exact-package tree with no install, unpack, or lockfile", async () => {
   const calls = []
   const sourceEnvironment = {
     PATH: process.env.PATH ?? "",
@@ -155,8 +146,33 @@ test("uses one isolated exact-package consumer with credential-free npm 11 audit
     async runNpm(command, args, options) {
       calls.push({ command, args, options })
       if (args[0] === "--version") return { stdout: "11.17.0\n", stderr: "", exitCode: 0 }
-      if (args[0] === "install") return { stdout: "", stderr: "", exitCode: 0 }
       if (args[0] === "audit") {
+        assert.deepEqual((await readdir(options.cwd)).sort(), ["node_modules", "package.json"])
+        assert.deepEqual(await readdir(path.join(options.cwd, "node_modules")), ["@dawn-ai"])
+        assert.deepEqual(await readdir(path.join(options.cwd, "node_modules", "@dawn-ai")), ["sdk"])
+        assert.deepEqual(
+          JSON.parse(await readFile(path.join(options.cwd, "package.json"), "utf8")),
+          {
+            name: "dawn-release-audit-consumer",
+            version: "0.0.0",
+            private: true,
+            dependencies: { [ENTRY.name]: ENTRY.version },
+          },
+        )
+        assert.deepEqual(
+          JSON.parse(
+            await readFile(
+              path.join(options.cwd, "node_modules", ...ENTRY.name.split("/"), "package.json"),
+              "utf8",
+            ),
+          ),
+          { name: ENTRY.name, version: ENTRY.version },
+        )
+        assert.deepEqual(
+          await readdir(path.join(options.cwd, "node_modules", ...ENTRY.name.split("/"))),
+          ["package.json"],
+        )
+        await assert.rejects(access(path.join(options.cwd, "package-lock.json")))
         return { stdout: auditOutput(), stderr: "", exitCode: 0 }
       }
       throw new Error(`unexpected npm operation ${args[0]}`)
@@ -177,27 +193,15 @@ test("uses one isolated exact-package consumer with credential-free npm 11 audit
       calls.map(({ command, args }) => [command, ...args]),
       [
         ["npm", "--version"],
-        [
-          "npm",
-          "install",
-          "--ignore-scripts",
-          "--package-lock=true",
-          "--omit=dev",
-          "--no-audit",
-          "--no-fund",
-          "--registry",
-          "https://registry.npmjs.org/",
-        ],
-        ["npm", "audit", "signatures", "--json", "--include-attestations"],
-        ["npm", "audit", "signatures", "--json", "--include-attestations"],
+        ["npm", "audit", "signatures", "--no-package-lock", "--json", "--include-attestations"],
+        ["npm", "audit", "signatures", "--no-package-lock", "--json", "--include-attestations"],
       ],
     )
-    const install = calls[1]
-    const audits = calls.slice(2)
-    assert.ok(install.options.cwd.startsWith(root))
-    assert.ok(audits.every(({ options }) => options.cwd === install.options.cwd))
+    const audits = calls.slice(1)
+    assert.ok(audits[0].options.cwd.startsWith(root))
+    assert.ok(audits.every(({ options }) => options.cwd === audits[0].options.cwd))
     assert.ok(audits.every(({ options }) => options.acceptedExitCodes.join(",") === "0,1"))
-    for (const { options } of [install, ...audits]) {
+    for (const { options } of audits) {
       assert.ok(options.signal instanceof AbortSignal)
       assert.ok(options.env.HOME.startsWith(root))
       assert.equal(options.env.npm_config_registry, "https://registry.npmjs.org/")
@@ -262,137 +266,46 @@ test("uses one isolated exact-package consumer with credential-free npm 11 audit
   await assert.rejects(access(root))
 })
 
-async function officialNpmSignatureFixture(t) {
-  const globalRoot = execFileSync("npm", ["root", "--global"], {
-    encoding: "utf8",
-  }).trim()
-  const require = createRequire(import.meta.url)
-  const npmPackage = require(path.join(globalRoot, "npm", "package.json"))
-  assert.match(npmPackage.version, /^11\.[0-9]+\.[0-9]+$/u)
-  const pacote = require(path.join(globalRoot, "npm", "node_modules", "pacote"))
-  const cache = await mkdtemp(path.join(os.tmpdir(), "dawn-official-npm-signature-test-"))
-  const version = "1.0.0"
-  const expiredAt = "2020-01-01T00:00:00.000Z"
-  const publishedAt = "2019-01-01T00:00:00.000Z"
-  const integrity = `sha512-${createHash("sha512").update("official npm fixture").digest("base64")}`
-  const historicalKey = signingKey("historical", expiredAt)
-  const firstKey = signingKey("first", null)
-  const secondKey = signingKey("second", null)
-  const unknownKey = signingKey("unknown", null)
-  const forgeryKey = signingKey("forgery", null)
-  const packages = new Map([
-    [
-      "dawn-audit-historical",
-      {
-        publishedAt,
-        signatures: [registrySignature("dawn-audit-historical", historicalKey)],
-      },
-    ],
-    [
-      "dawn-audit-dual",
-      {
-        publishedAt: "2026-01-01T00:00:00.000Z",
-        signatures: [
-          registrySignature("dawn-audit-dual", firstKey),
-          registrySignature("dawn-audit-dual", secondKey),
-        ],
-      },
-    ],
-    [
-      "dawn-audit-valid-plus-unknown",
-      {
-        publishedAt: "2026-01-01T00:00:00.000Z",
-        signatures: [
-          registrySignature("dawn-audit-valid-plus-unknown", firstKey),
-          registrySignature("dawn-audit-valid-plus-unknown", unknownKey),
-        ],
-      },
-    ],
-    [
-      "dawn-audit-forged",
-      {
-        publishedAt: "2026-01-01T00:00:00.000Z",
-        signatures: [registrySignature("dawn-audit-forged", forgeryKey, firstKey.keyid)],
-      },
-    ],
-  ])
-  let origin
-  const server = createServer((request, response) => {
-    const name = decodeURIComponent(new URL(request.url, origin).pathname.slice(1))
-    const entry = packages.get(name)
-    if (entry === undefined) {
-      response.writeHead(404, { "content-type": "application/json" })
-      response.end(JSON.stringify({ error: "not found" }))
-      return
-    }
-    const body = JSON.stringify({
-      name,
-      versions: {
-        [version]: {
-          name,
-          version,
-          dist: {
-            tarball: `${origin}/${name}-${version}.tgz`,
-            integrity,
-            signatures: entry.signatures,
-          },
-        },
-      },
-      "dist-tags": { latest: version },
-      time: { [version]: entry.publishedAt },
-    })
-    response.writeHead(200, {
-      "content-length": Buffer.byteLength(body),
-      "content-type": "application/json",
-    })
-    response.end(body)
-  })
-  await new Promise((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
-  })
-  origin = `http://127.0.0.1:${server.address().port}`
-  const registry = `${origin}/`
-  const registryKey = `//127.0.0.1:${server.address().port}/:_keys`
-  t.after(async () => {
-    await new Promise((resolve) => server.close(resolve))
-    await rm(cache, { recursive: true, force: true })
-  })
-  return {
-    expiredAt,
-    verify(name) {
-      return pacote.manifest(`${name}@${version}`, {
-        cache,
-        registry,
-        verifySignatures: true,
-        [registryKey]: [historicalKey, firstKey, secondKey].map(({ keyid, pemkey, expires }) => ({
-          keyid,
-          pemkey,
-          expires,
-        })),
-      })
+test("rejects an audit command that creates a lockfile in the synthetic tree", async () => {
+  const verifier = await createNpmAuditVerifier({
+    environment: { PATH: process.env.PATH ?? "" },
+    signal: new AbortController().signal,
+    async runNpm(_command, args, options) {
+      if (args[0] === "--version") return { stdout: "11.17.0\n", stderr: "", exitCode: 0 }
+      if (args[0] === "audit") {
+        await writeFile(path.join(options.cwd, "package-lock.json"), "{}\n")
+        return { stdout: auditOutput(), stderr: "", exitCode: 0 }
+      }
+      throw new Error(`unexpected npm operation ${args[0]}`)
     },
+  })
+  try {
+    await assert.rejects(
+      verifier.verifyPackage({ entry: ENTRY, candidate: CANDIDATE }),
+      /consumer identity/iu,
+    )
+  } finally {
+    await verifier.dispose()
   }
+})
 
-  function registrySignature(name, key, keyid = key.keyid) {
-    return {
-      keyid,
-      sig: sign("sha256", Buffer.from(`${name}@${version}:${integrity}`), key.privateKey).toString(
-        "base64",
-      ),
-    }
+test("pins the exact npm CLI contract consumed by the strict audit parser", async () => {
+  for (const version of ["11.16.0", "11.17.1", "12.0.0"]) {
+    await assert.rejects(async () => {
+      const verifier = await createNpmAuditVerifier({
+        environment: { PATH: process.env.PATH ?? "" },
+        signal: new AbortController().signal,
+        async runNpm(_command, args) {
+          if (args[0] === "--version") {
+            return { stdout: `${version}\n`, stderr: "", exitCode: 0 }
+          }
+          throw new Error("audit must not run")
+        },
+      })
+      await verifier.dispose()
+    }, /exact stable npm 11/iu)
   }
-}
-
-function signingKey(name, expires) {
-  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" })
-  return {
-    expires,
-    keyid: `SHA256:${name}`,
-    pemkey: publicKey.export({ type: "spki", format: "pem" }),
-    privateKey,
-  }
-}
+})
 
 function auditOutput(drift = {}) {
   const version = drift.version ?? VERSION
@@ -434,7 +347,13 @@ function auditOutput(drift = {}) {
     predicateType,
     bundle: {
       mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-      verificationMaterial: { certificate: { rawBytes: "npm-verified" } },
+      verificationMaterial: {
+        certificate: {
+          rawBytes: drift.certificateRawBytes ?? EXACT_NPM_PROVENANCE_CERTIFICATE,
+        },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
       dsseEnvelope: {
         payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
         payloadType: "application/vnd.in-toto+json",
@@ -453,27 +372,34 @@ function auditOutput(drift = {}) {
         url: attestationUrl(version),
         provenance: { predicateType: "https://slsa.dev/provenance/v1" },
       },
-      attestationBundles: drift.duplicateProvenance
-        ? [provenance, structuredClone(provenance)]
-        : [
-            {
-              predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
-              bundle: {
-                mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
-                verificationMaterial: { publicKey: { hint: "SHA256:test" } },
-                dsseEnvelope: {
-                  payload: Buffer.from("{}", "utf8").toString("base64"),
-                  payloadType: "application/vnd.in-toto+json",
-                  signatures: [{ sig: "npm-verified", keyid: "SHA256:test" }],
-                },
-              },
-              signedAccessSignatureUrl: "",
-            },
-            provenance,
-          ],
+      attestationBundles: auditBundles(provenance, drift),
     },
   ]
   return JSON.stringify({ invalid: drift.invalid ?? [], missing: drift.missing ?? [], verified })
+}
+
+function auditBundles(provenance, drift) {
+  const publish = {
+    predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+    bundle: {
+      mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
+      verificationMaterial: {
+        publicKey: { hint: drift.publishHint ?? "SHA256:test" },
+        tlogEntries: [{}],
+        timestampVerificationData: { rfc3161Timestamps: [] },
+      },
+      dsseEnvelope: {
+        payload: Buffer.from("{}", "utf8").toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [{ sig: "npm-verified", keyid: drift.publishKeyid ?? "SHA256:test" }],
+      },
+    },
+    signedAccessSignatureUrl: "",
+  }
+  if (drift.duplicateProvenance) return [publish, provenance, structuredClone(provenance)]
+  if (drift.provenanceOnly) return [provenance]
+  if (drift.duplicatePublish) return [publish, structuredClone(publish), provenance]
+  return [publish, provenance]
 }
 
 function packageEntry(name) {

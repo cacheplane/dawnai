@@ -157,7 +157,7 @@ function validatePackageEvidence(evidence, { candidate, expectedName, manifestEn
   assertExactFields(evidence.signature, SIGNATURE_FIELDS, `npm evidence signature ${expectedName}`)
   if (
     evidence.signature.status !== "valid" ||
-    evidence.signature.verifier !== "npm-audit-signatures@11"
+    evidence.signature.verifier !== "npm-audit-signatures@11.17.0"
   ) {
     throw new TypeError(`npm evidence signature ${expectedName} is invalid`)
   }
