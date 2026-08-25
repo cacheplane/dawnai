@@ -3,7 +3,8 @@
  *
  * Shared because `RunError`'s Dismiss, `PermissionInterrupt`'s decisions, and
  * `Composer`'s Stop are the same control at two scales, and they had drifted
- * into byte-identical copies that a reader could not tell were meant to match.
+ * into byte-for-byte identical copies that a reader could not tell were meant
+ * to match.
  *
  * The scope stops there, deliberately. The rail's thread rows and the empty
  * state's suggestion cards are not this button at another size — they are a

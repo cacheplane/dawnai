@@ -481,7 +481,7 @@ describe("hydrateThreadState", () => {
     )
     // Ids are the one thing that legitimately differs: the real capture
     // carries the provider's own `chatcmpl-…` id where the trimmed fixture
-    // says "m2". Everything else must be byte-identical.
+    // says "m2". Everything else must match byte-for-byte.
     const withoutIds = (messages: readonly unknown[]) =>
       messages.map((message) => {
         const { id: _id, ...rest } = message as Record<string, unknown>

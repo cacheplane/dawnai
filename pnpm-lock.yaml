@@ -322,9 +322,6 @@ importers:
         specifier: ^4.3.3
         version: 4.3.3
     devDependencies:
-      '@dawn-ai/config-typescript':
-        specifier: workspace:*
-        version: link:../../../packages/config-typescript
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2

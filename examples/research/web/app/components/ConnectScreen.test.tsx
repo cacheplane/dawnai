@@ -23,12 +23,18 @@ describe("ConnectScreen", () => {
   test("shows the env copy step before the command that starts the server", () => {
     const html = render()
     expect(html).toContain("cp server/.env.example server/.env")
-    expect(html).toContain("pnpm dev:server")
+    expect(html).toContain("npm run dev:server")
   })
 
-  test("does not suggest the combined pnpm dev, which EADDRINUSEs against the running web client", () => {
+  test("does not suggest the combined npm run dev, which EADDRINUSEs against the running web client", () => {
     const html = render()
-    expect(html).not.toMatch(/>pnpm dev<\/code>/)
+    expect(html).not.toMatch(/>npm run dev<\/code>/)
+  })
+
+  test("keeps the commands context-neutral, so the template's copy of this file stays byte-equal", () => {
+    const html = render()
+    expect(html).not.toContain("pnpm")
+    expect(html).not.toContain("examples/research")
   })
 
   test("reminds the reader the server needs a real API key", () => {

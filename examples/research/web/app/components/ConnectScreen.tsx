@@ -56,11 +56,9 @@ export function ConnectScreen({ serverUrl, onRetry }: ConnectScreenProps) {
           </code>
           , and nothing there answered.
         </p>
-        <p className="mt-6 text-sm leading-6 text-wb-muted">
-          Start it from <code className="text-[13px]">examples/research</code>:
-        </p>
+        <p className="mt-6 text-sm leading-6 text-wb-muted">Start it from the app root:</p>
         <pre className="mt-2 overflow-x-auto rounded-wb border border-wb-border bg-wb-surface px-3.5 py-3 text-left text-[13px] leading-5">
-          <code>{"cp server/.env.example server/.env\npnpm dev:server"}</code>
+          <code>{"cp server/.env.example server/.env\nnpm run dev:server"}</code>
         </pre>
         <p className="mt-6 text-sm leading-6 text-wb-muted">
           Set a real <code className="text-[13px]">OPENAI_API_KEY</code> in that{" "}
