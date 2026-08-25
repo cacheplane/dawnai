@@ -12,6 +12,7 @@ import {
   executeSmokeLane,
   parseSmokeLaneArgs,
   parseSmokeResult,
+  REQUIRED_RELEASE_SMOKE_LANES,
   writeCanonicalSmokeResult,
 } from "../smoke-result.mjs"
 
@@ -21,6 +22,7 @@ const identity = Object.freeze({
   manifestSha256: "b".repeat(64),
 })
 const trustedRun = Object.freeze({ workflowRunId: 123, runAttempt: 2 })
+const requiredLanes = ["metadata", "published-harness", "runtime-targets", "scaffold", "storage"]
 
 function result(lane, overrides = {}) {
   return {
@@ -41,6 +43,10 @@ function result(lane, overrides = {}) {
     conclusion: "success",
     ...overrides,
   }
+}
+
+function allResults(overrides = {}) {
+  return requiredLanes.map((lane) => result(lane, overrides[lane]))
 }
 
 test("parses, snapshots, and deeply freezes an exact smoke result", () => {
@@ -189,72 +195,85 @@ test("rejects a lane success that hides a failed check", () => {
   )
 })
 
-test("correlates required lanes in stable order", () => {
-  const correlated = correlateSmokeResults([result("storage"), result("metadata")], {
+test("owns one deeply frozen exact release-smoke inventory", () => {
+  assert.deepEqual(REQUIRED_RELEASE_SMOKE_LANES, requiredLanes)
+  assert.equal(Object.isFrozen(REQUIRED_RELEASE_SMOKE_LANES), true)
+  assert.throws(() => REQUIRED_RELEASE_SMOKE_LANES.push("caller-lane"), TypeError)
+})
+
+test("correlates the controller-owned inventory in stable order", () => {
+  const correlated = correlateSmokeResults(allResults().reverse(), {
     ...identity,
     ...trustedRun,
-    requiredLanes: ["metadata", "storage"],
   })
 
   assert.deepEqual(
     correlated.map(({ lane }) => lane),
-    ["metadata", "storage"],
+    requiredLanes,
   )
   assert.equal(Object.isFrozen(correlated), true)
 })
 
-test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", () => {
+test("correlation rejects caller inventory control, every omission, duplicates, and extras", () => {
   assert.throws(
     () =>
-      correlateSmokeResults([result("metadata"), result("metadata")], {
+      correlateSmokeResults(allResults(), {
         ...identity,
         ...trustedRun,
         requiredLanes: ["metadata"],
+      }),
+    /unexpected.*requiredLanes/i,
+  )
+  for (const omitted of requiredLanes) {
+    assert.throws(
+      () =>
+        correlateSmokeResults(
+          allResults().filter(({ lane }) => lane !== omitted),
+          { ...identity, ...trustedRun },
+        ),
+      new RegExp(`missing.*${omitted}`, "i"),
+    )
+  }
+  assert.throws(
+    () =>
+      correlateSmokeResults([...allResults(), result("metadata")], {
+        ...identity,
+        ...trustedRun,
       }),
     /duplicate.*metadata/i,
   )
   assert.throws(
     () =>
-      correlateSmokeResults([result("metadata")], {
+      correlateSmokeResults([...allResults(), result("other")], {
         ...identity,
         ...trustedRun,
-        requiredLanes: ["metadata", "storage"],
-      }),
-    /missing.*storage/i,
-  )
-  assert.throws(
-    () =>
-      correlateSmokeResults([result("metadata"), result("other")], {
-        ...identity,
-        ...trustedRun,
-        requiredLanes: ["metadata"],
       }),
     /unexpected.*other/i,
   )
+})
+
+test("correlation rejects mismatched identity, workflow run, or attempt", () => {
   assert.throws(
     () =>
-      correlateSmokeResults([result("metadata", { commitSha: "c".repeat(40) })], {
+      correlateSmokeResults(allResults({ metadata: { commitSha: "c".repeat(40) } }), {
         ...identity,
         ...trustedRun,
-        requiredLanes: ["metadata"],
       }),
     /identity.*metadata/i,
   )
   assert.throws(
     () =>
-      correlateSmokeResults([result("metadata", { workflowRunId: 124 })], {
+      correlateSmokeResults(allResults({ metadata: { workflowRunId: 124 } }), {
         ...identity,
         ...trustedRun,
-        requiredLanes: ["metadata"],
       }),
     /workflow run.*metadata/i,
   )
   assert.throws(
     () =>
-      correlateSmokeResults([result("metadata", { runAttempt: 3 })], {
+      correlateSmokeResults(allResults({ metadata: { runAttempt: 3 } }), {
         ...identity,
         ...trustedRun,
-        requiredLanes: ["metadata"],
       }),
     /run attempt.*metadata/i,
   )
@@ -262,8 +281,8 @@ test("correlation rejects duplicate, missing, unexpected, or mismatched lanes", 
 
 test("aggregates one trusted run identity and derives every check and conclusion", () => {
   const aggregate = aggregateSmokeResults(
-    [
-      result("storage", {
+    allResults({
+      storage: {
         checks: [
           {
             name: "postgres",
@@ -272,40 +291,37 @@ test("aggregates one trusted run identity and derives every check and conclusion
           },
         ],
         conclusion: "failure",
-      }),
-      result("metadata"),
-    ],
-    { ...identity, ...trustedRun, requiredLanes: ["metadata", "storage"] },
+      },
+    }),
+    { ...identity, ...trustedRun },
   )
 
+  assert.equal(aggregate.workflowRunId, 123)
+  assert.equal(aggregate.runAttempt, 2)
   assert.deepEqual(
     aggregate.lanes.map(({ lane, workflowRunId, runAttempt }) => ({
       lane,
       workflowRunId,
       runAttempt,
     })),
-    [
-      { lane: "metadata", workflowRunId: 123, runAttempt: 2 },
-      { lane: "storage", workflowRunId: 123, runAttempt: 2 },
-    ],
+    requiredLanes.map((lane) => ({ lane, workflowRunId: 123, runAttempt: 2 })),
   )
   assert.deepEqual(
     aggregate.checks.map(({ name, conclusion }) => ({ name, conclusion })),
     [
       { name: "metadata:exact-install", conclusion: "success" },
+      { name: "published-harness:exact-install", conclusion: "success" },
+      { name: "runtime-targets:exact-install", conclusion: "success" },
+      { name: "scaffold:exact-install", conclusion: "success" },
       { name: "storage:postgres", conclusion: "failure" },
     ],
   )
   assert.equal(aggregate.conclusion, "failure")
   assert.equal(Object.isFrozen(aggregate.lanes[0].checks[0]), true)
-  assert.deepEqual(aggregate.lanes[1].checks, [
+  assert.deepEqual(aggregate.lanes[4].checks, [
     { name: "postgres", conclusion: "failure", detail: "connection refused" },
   ])
-  const first = aggregateSmokeResults([result("metadata")], {
-    ...identity,
-    ...trustedRun,
-    requiredLanes: ["metadata"],
-  })
+  const first = aggregateSmokeResults(allResults(), { ...identity, ...trustedRun })
   const reordered = Object.fromEntries(Object.entries(first).reverse())
   const firstBytes = canonicalAggregateSmokeResultBytes(first)
   assert.deepEqual(firstBytes, canonicalAggregateSmokeResultBytes(reordered))

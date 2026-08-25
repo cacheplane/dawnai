@@ -7,6 +7,13 @@ import { snapshotJson } from "./adapter-normalize.mjs"
 import { isExactSemver } from "./semver.mjs"
 
 export const SMOKE_RESULT_SCHEMA_VERSION = 1
+export const REQUIRED_RELEASE_SMOKE_LANES = Object.freeze([
+  "metadata",
+  "published-harness",
+  "runtime-targets",
+  "scaffold",
+  "storage",
+])
 
 const RESULT_FIELDS = [
   "schemaVersion",
@@ -27,6 +34,8 @@ const AGGREGATE_FIELDS = [
   "version",
   "commitSha",
   "manifestSha256",
+  "workflowRunId",
+  "runAttempt",
   "lanes",
   "checks",
   "conclusion",
@@ -121,7 +130,7 @@ export function correlateSmokeResults(results, options) {
     if (byLane.has(result.lane)) {
       throw new Error(`Smoke results contain duplicate lane ${result.lane}`)
     }
-    if (!identity.requiredLanes.includes(result.lane)) {
+    if (!REQUIRED_RELEASE_SMOKE_LANES.includes(result.lane)) {
       throw new Error(`Smoke results contain unexpected lane ${result.lane}`)
     }
     if (
@@ -140,13 +149,13 @@ export function correlateSmokeResults(results, options) {
     byLane.set(result.lane, result)
   }
 
-  for (const lane of identity.requiredLanes) {
+  for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
     if (!byLane.has(lane)) {
       throw new Error(`Smoke results are missing required lane ${lane}`)
     }
   }
 
-  return deepFreeze(identity.requiredLanes.map((lane) => byLane.get(lane)))
+  return deepFreeze(REQUIRED_RELEASE_SMOKE_LANES.map((lane) => byLane.get(lane)))
 }
 
 export function aggregateSmokeResults(results, options) {
@@ -173,6 +182,8 @@ export function aggregateSmokeResults(results, options) {
     version: identity.version,
     commitSha: identity.commitSha,
     manifestSha256: identity.manifestSha256,
+    workflowRunId: identity.workflowRunId,
+    runAttempt: identity.runAttempt,
     lanes,
     checks,
     conclusion: derivedConclusion(checks),
@@ -431,12 +442,15 @@ function validateAggregateSmokeResult(value) {
   assertRecord(aggregate, "aggregate smoke result")
   assertExactFields(aggregate, AGGREGATE_FIELDS, "aggregate smoke result")
   assertSchemaAndIdentity(aggregate)
+  assertPositiveInteger(aggregate.workflowRunId, "workflowRunId")
+  assertPositiveInteger(aggregate.runAttempt, "runAttempt")
   if (
     !Array.isArray(aggregate.lanes) ||
-    aggregate.lanes.length === 0 ||
-    aggregate.lanes.length > MAX_LANES
+    aggregate.lanes.length !== REQUIRED_RELEASE_SMOKE_LANES.length
   ) {
-    throw new Error(`aggregate smoke result lanes must contain 1 to ${MAX_LANES} lanes`)
+    throw new Error(
+      `aggregate smoke result lanes must contain exactly ${REQUIRED_RELEASE_SMOKE_LANES.length} lanes`,
+    )
   }
   const seen = new Set()
   let previousLane
@@ -454,6 +468,13 @@ function validateAggregateSmokeResult(value) {
     previousLane = lane.lane
     assertPositiveInteger(lane.workflowRunId, `${label}.workflowRunId`)
     assertPositiveInteger(lane.runAttempt, `${label}.runAttempt`)
+    if (
+      lane.lane !== REQUIRED_RELEASE_SMOKE_LANES[index] ||
+      lane.workflowRunId !== aggregate.workflowRunId ||
+      lane.runAttempt !== aggregate.runAttempt
+    ) {
+      throw new Error(`${label} must match the required lane and root workflow run identity`)
+    }
     assertTimestamps(lane.startedAt, lane.finishedAt, label)
     validateChecks(lane.checks, `${label}.checks`)
     assertConclusion(lane.conclusion, `${label}.conclusion`)
@@ -485,29 +506,13 @@ function parseCorrelationOptions(options) {
   assertRecord(value, "smoke correlation options")
   assertExactFields(
     value,
-    ["version", "commitSha", "manifestSha256", "workflowRunId", "runAttempt", "requiredLanes"],
+    ["version", "commitSha", "manifestSha256", "workflowRunId", "runAttempt"],
     "smoke correlation options",
   )
   assertIdentity(value)
   assertPositiveInteger(value.workflowRunId, "workflowRunId")
   assertPositiveInteger(value.runAttempt, "runAttempt")
-  if (
-    !Array.isArray(value.requiredLanes) ||
-    value.requiredLanes.length === 0 ||
-    value.requiredLanes.length > MAX_LANES
-  ) {
-    throw new Error(`requiredLanes must contain 1 to ${MAX_LANES} lanes`)
-  }
-  const requiredLanes = []
-  const seen = new Set()
-  for (const [index, lane] of value.requiredLanes.entries()) {
-    assertLane(lane, `requiredLanes[${index}]`)
-    if (seen.has(lane)) throw new Error(`requiredLanes contains duplicate lane ${lane}`)
-    seen.add(lane)
-    requiredLanes.push(lane)
-  }
-  requiredLanes.sort(compareStrings)
-  return deepFreeze({ ...value, requiredLanes })
+  return deepFreeze(value)
 }
 
 function assertSchemaAndIdentity(value) {

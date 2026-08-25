@@ -5,6 +5,8 @@ import * as defaultFileSystem from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "./smoke-result.mjs"
+
 const COMMANDS = Object.freeze({
   abandon: Object.freeze(["version", "commit-sha", "reason", "artifact-context"]),
   observe: Object.freeze(["event", "report", "github-output"]),
@@ -868,6 +870,8 @@ async function runReconcileNpm(options, runtime) {
 
 async function runReconcileSmokes(options, runtime) {
   const github = await requireGitHub(runtime)
+  const workflowRunId = environmentPositiveInteger(runtime.environment, "GITHUB_RUN_ID")
+  const runAttempt = environmentPositiveInteger(runtime.environment, "GITHUB_RUN_ATTEMPT")
   const [{ candidate, record, manifest, npmEvidence }, smokeResults] = await Promise.all([
     readReconciliationInputs(options, runtime),
     readSmokeResults(runtime, options["smoke-results"]),
@@ -883,6 +887,8 @@ async function runReconcileSmokes(options, runtime) {
     manifest,
     npmEvidence,
     smokeResults,
+    workflowRunId,
+    runAttempt,
     github,
   })
 }
@@ -928,8 +934,8 @@ async function readSmokeResults(runtime, value) {
     throw new TypeError("Release CLI smoke results must be one regular directory")
   }
   const entries = await runtime.fileSystem.readdir(directory, { withFileTypes: true })
-  if (!Array.isArray(entries) || entries.length < 1 || entries.length > 256) {
-    throw new TypeError("Release CLI smoke result directory is empty or exceeds its bound")
+  if (!Array.isArray(entries) || entries.length !== REQUIRED_RELEASE_SMOKE_LANES.length) {
+    throw new TypeError("Release CLI smoke result directory must contain the exact required lanes")
   }
   const names = entries.map((entry) => {
     if (
@@ -953,22 +959,34 @@ async function readSmokeResults(runtime, value) {
   if (new Set(names).size !== names.length) {
     throw new TypeError("Release CLI smoke result directory contains duplicate entries")
   }
+  const expectedNames = REQUIRED_RELEASE_SMOKE_LANES.map((lane) => `${lane}.json`)
+  if (!arraysEqual(names, expectedNames)) {
+    throw new TypeError(
+      "Release CLI smoke result directory does not match the exact required lanes",
+    )
+  }
   const results = await Promise.all(
-    names.map((name) =>
-      readJsonFile(
+    names.map(async (name, index) => {
+      const bytes = await readRegularFile(
         runtime.fileSystem,
         path.join(directory, name),
         MAX_JSON_BYTES,
         `smoke result ${name}`,
-      ),
-    ),
+      )
+      const result = parseSmokeResult(bytes)
+      if (result.lane !== REQUIRED_RELEASE_SMOKE_LANES[index]) {
+        throw new Error(`Release CLI smoke result ${name} does not match its required lane`)
+      }
+      return Buffer.from(bytes)
+    }),
   )
   const after = await runtime.fileSystem.lstat(directory)
   if (
     !after.isDirectory() ||
     after.isSymbolicLink() ||
     after.dev !== before.dev ||
-    after.ino !== before.ino
+    after.ino !== before.ino ||
+    after.mtimeMs !== before.mtimeMs
   ) {
     throw new Error("Release CLI smoke result directory changed while it was read")
   }
@@ -1414,6 +1432,18 @@ function projectEnvironment(environment, names) {
     result[name] = descriptor.value
   }
   return Object.freeze(result)
+}
+
+function environmentPositiveInteger(environment, name) {
+  const value = environment[name]
+  if (typeof value !== "string" || !DECIMAL_ID_PATTERN.test(value)) {
+    throw new TypeError(`Release CLI ${name} must be a positive decimal integer`)
+  }
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new TypeError(`Release CLI ${name} must be a safe positive integer`)
+  }
+  return parsed
 }
 
 function optionalDataDependency(value, name, label) {

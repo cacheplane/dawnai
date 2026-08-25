@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -14,6 +14,11 @@ import {
 } from "../manifest.mjs"
 import { parseAttestationSet, parsePublicationState } from "../metadata.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "../release-record.mjs"
+import {
+  canonicalSmokeResultBytes,
+  parseSmokeResult,
+  REQUIRED_RELEASE_SMOKE_LANES,
+} from "../smoke-result.mjs"
 import {
   candidate as markerCandidate,
   observationForMarker,
@@ -862,7 +867,12 @@ test("audit CLI routes keep dispatch, marker recording, correlation, and publica
       "--output",
       paths.output,
     ],
-    { cwd: directory, github, importModule },
+    {
+      cwd: directory,
+      github,
+      importModule,
+      environment: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "2" },
+    },
   )
   assert.deepEqual(JSON.parse(await readFile(paths.output, "utf8")), dispatchReceipt)
   await runReleaseCli(
@@ -1004,8 +1014,15 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
       }),
     ),
   )
-  await writeFile(join(smokeDirectory, "z-lane.json"), JSON.stringify({ lane: "z" }))
-  await writeFile(join(smokeDirectory, "a-lane.json"), JSON.stringify({ lane: "a" }))
+  const smokeBytes = new Map(
+    REQUIRED_RELEASE_SMOKE_LANES.map((lane) => {
+      const bytes = canonicalSmokeResultBytes(smokeResult(lane, 701, 2))
+      return [lane, bytes]
+    }),
+  )
+  await Promise.all(
+    [...smokeBytes].map(([lane, bytes]) => writeFile(join(smokeDirectory, `${lane}.json`), bytes)),
+  )
   const calls = []
   const github = { reader: {}, writer: {} }
   const importModule = async (specifier) => {
@@ -1037,7 +1054,12 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
       "--npm-evidence",
       paths.npm,
     ],
-    { cwd: directory, github, importModule },
+    {
+      cwd: directory,
+      github,
+      importModule,
+      environment: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "2" },
+    },
   )
   await runReleaseCli(
     [
@@ -1053,7 +1075,12 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
       "--smoke-results",
       smokeDirectory,
     ],
-    { cwd: directory, github, importModule },
+    {
+      cwd: directory,
+      github,
+      importModule,
+      environment: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "2" },
+    },
   )
   assert.deepEqual(
     calls.map(([name]) => name),
@@ -1062,11 +1089,157 @@ test("npm and smoke reconciliation CLI routes remain separate manifest-bound tra
   assert.equal(calls[0][1].github, github)
   assert.equal(calls[1][1].github, github)
   assert.deepEqual(
-    calls[1][1].smokeResults.map(({ lane }) => lane),
-    ["a", "z"],
+    calls[1][1].smokeResults.map((bytes) => parseSmokeResult(bytes).lane),
+    REQUIRED_RELEASE_SMOKE_LANES,
   )
+  assert.equal(Object.isFrozen(calls[1][1].smokeResults), true)
+  assert.equal(calls[1][1].smokeResults.every(Buffer.isBuffer), true)
+  assert.equal(calls[1][1].workflowRunId, 701)
+  assert.equal(calls[1][1].runAttempt, 2)
+  for (const [index, lane] of REQUIRED_RELEASE_SMOKE_LANES.entries()) {
+    const received = calls[1][1].smokeResults[index]
+    assert.deepEqual(received, smokeBytes.get(lane))
+    assert.notEqual(received, smokeBytes.get(lane))
+  }
   assert.equal(calls[0][1].manifest.version, CANDIDATE.version)
   assert.equal(calls[1][1].manifest.version, CANDIDATE.version)
+})
+
+test("smoke reconciliation rejects unsafe or inexact receipt directories before metadata", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-release-smoke-input-cli-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const manifest = sealedManifest()
+  const inputs = {
+    candidate: CANDIDATE,
+    record: { version: CANDIDATE.version, commitSha: CANDIDATE.commitSha },
+    manifest,
+    npm: { status: "NPM_COMPLETE", complete: true },
+  }
+  const paths = Object.fromEntries(
+    await Promise.all(
+      Object.entries(inputs).map(async ([name, value]) => {
+        const target = join(directory, `${name}.json`)
+        await writeFile(
+          target,
+          name === "manifest" ? canonicalManifestBytes(value) : JSON.stringify(value),
+        )
+        return [name, target]
+      }),
+    ),
+  )
+  let metadataImports = 0
+  const dependencies = {
+    cwd: directory,
+    github: { reader: {}, writer: {} },
+    environment: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "2" },
+    async importModule(specifier) {
+      const name = new URL(specifier).pathname.split("/").at(-1)
+      if (name === "manifest.mjs") {
+        return { parseSealedReleaseManifest: (bytes) => JSON.parse(bytes.toString("utf8")) }
+      }
+      metadataImports += 1
+      return { reconcileSmokeEvidence: async () => assert.fail("must not reconcile") }
+    },
+  }
+  const argv = (smokeDirectory) => [
+    "reconcile-smokes",
+    "--candidate",
+    paths.candidate,
+    "--record",
+    paths.record,
+    "--manifest",
+    paths.manifest,
+    "--npm-evidence",
+    paths.npm,
+    "--smoke-results",
+    smokeDirectory,
+  ]
+  const populate = async (target) => {
+    await mkdir(target)
+    await Promise.all(
+      REQUIRED_RELEASE_SMOKE_LANES.map((lane) =>
+        writeFile(
+          join(target, `${lane}.json`),
+          canonicalSmokeResultBytes(smokeResult(lane, 701, 2)),
+        ),
+      ),
+    )
+  }
+
+  for (const omitted of REQUIRED_RELEASE_SMOKE_LANES) {
+    const target = join(directory, `missing-${omitted}`)
+    await populate(target)
+    await rm(join(target, `${omitted}.json`))
+    await assert.rejects(
+      runReleaseCli(argv(target), dependencies),
+      new RegExp(`exact|required|${omitted}`, "i"),
+    )
+  }
+
+  const cases = [
+    ["extra", async (target) => writeFile(join(target, "other.json"), Buffer.from("{}\n"))],
+    [
+      "misnamed",
+      async (target) => {
+        await rm(join(target, "metadata.json"))
+        await writeFile(
+          join(target, "metadata-result.json"),
+          canonicalSmokeResultBytes(smokeResult("metadata", 701, 2)),
+        )
+      },
+    ],
+    [
+      "noncanonical",
+      async (target) =>
+        writeFile(join(target, "metadata.json"), JSON.stringify(smokeResult("metadata", 701, 2))),
+    ],
+    [
+      "invalid-utf8",
+      async (target) => writeFile(join(target, "metadata.json"), Buffer.from([0xff])),
+    ],
+    [
+      "duplicate-key",
+      async (target) => {
+        const canonical = canonicalSmokeResultBytes(smokeResult("metadata", 701, 2)).toString(
+          "utf8",
+        )
+        await writeFile(
+          join(target, "metadata.json"),
+          canonical.replace(
+            '  "lane": "metadata",',
+            '  "lane": "metadata",\n  "lane": "metadata",',
+          ),
+        )
+      },
+    ],
+    [
+      "oversize",
+      async (target) =>
+        writeFile(join(target, "metadata.json"), Buffer.alloc(1024 * 1024 + 1, 0x20)),
+    ],
+  ]
+  for (const [name, mutate] of cases) {
+    const target = join(directory, name)
+    await populate(target)
+    await mutate(target)
+    await assert.rejects(
+      runReleaseCli(argv(target), dependencies),
+      /smoke|exact|canonical|utf|byte|invalid|bounded/i,
+    )
+  }
+
+  const symlinkDirectory = join(directory, "symlink")
+  await populate(symlinkDirectory)
+  const realReceipt = join(directory, "real-metadata.json")
+  await writeFile(realReceipt, canonicalSmokeResultBytes(smokeResult("metadata", 701, 2)))
+  await rm(join(symlinkDirectory, "metadata.json"))
+  await symlink(realReceipt, join(symlinkDirectory, "metadata.json"))
+  await assert.rejects(
+    runReleaseCli(argv(symlinkDirectory), dependencies),
+    /regular|invalid|symbolic/i,
+  )
+
+  assert.equal(metadataImports, 0)
 })
 
 test("GitHub-mutating routes lazily construct the production boundary from the exact token", async (t) => {
@@ -1489,6 +1662,22 @@ function sealedManifest() {
         access: "public",
       }
     }),
+  }
+}
+
+function smokeResult(lane, workflowRunId, runAttempt) {
+  return {
+    schemaVersion: 1,
+    lane,
+    version: CANDIDATE.version,
+    commitSha: CANDIDATE.commitSha,
+    manifestSha256: "a".repeat(64),
+    workflowRunId,
+    runAttempt,
+    startedAt: "2026-08-25T12:00:00.000Z",
+    finishedAt: "2026-08-25T12:00:01.000Z",
+    checks: [{ name: "lane", conclusion: "success", detail: "verified" }],
+    conclusion: "success",
   }
 }
 
