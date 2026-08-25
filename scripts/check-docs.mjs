@@ -451,30 +451,6 @@ function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxC
   }
 }
 
-function maskHtmlCommentsForMdx(source) {
-  const masked = maskFencedCode(source)
-  const characters = masked.split("")
-  let index = 0
-  while (index < masked.length) {
-    if (masked[index] === "`") {
-      let runEnd = index
-      while (masked[runEnd] === "`") runEnd++
-      const end = inlineCodeEnd(masked, index, runEnd - index)
-      index = end === -1 ? runEnd : end
-      continue
-    }
-    if (masked.startsWith("<!--", index)) {
-      const closing = masked.indexOf("-->", index + 4)
-      const end = closing === -1 ? characters.length : closing + 3
-      maskRange(characters, index, end)
-      index = end
-      continue
-    }
-    index++
-  }
-  return characters.join("")
-}
-
 function hastText(node) {
   if (node.type === "text") return typeof node.value === "string" ? node.value : ""
   return (node.children ?? []).map(hastText).join("")
@@ -531,7 +507,7 @@ const markdownHeadingProcessor = createProcessor({
 })
 
 function markdownHeadings(source) {
-  const file = markdownHeadingProcessor.processSync(maskHtmlCommentsForMdx(source))
+  const file = markdownHeadingProcessor.processSync(source)
   const headings = file.data.maintainedMarkdownHeadings
   if (!Array.isArray(headings)) throw new Error("MDX heading analysis did not produce headings")
   return headings

@@ -925,6 +925,11 @@ describe("maintained documentation heading identity analysis", () => {
     ],
     ["inline JSX", "## Hello <span>world</span>\n", ["hello-world"]],
     [
+      "comment-like text in a JSX attribute",
+      '## Heading <span title="<!--">world</span>\n',
+      ["heading-world"],
+    ],
+    [
       "a link with a nested label",
       "## [Outer [inner] end](/docs/deployment)\n",
       ["outer-inner-end"],
@@ -1122,7 +1127,7 @@ describe("canonical docs link guard analysis", () => {
     const ignoredSource = [
       `The former destination was ${legacyHref}.`,
       `\`${legacyHref}\``,
-      `<!-- [comment](${legacyHref}) -->`,
+      `{/* [comment](${legacyHref}) */}`,
       "```md",
       `[fenced](${legacyHref})`,
       "```",
