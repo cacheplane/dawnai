@@ -75,13 +75,48 @@ Before coding, capture the live preflight report. Treat these as external merge 
 - the protected abandonment environment exists and requires approval;
 - required exact-SHA CI is workflow `CI`, job/check `validate`.
 
+### Execution corrections discovered during the 0.8.22 cutover
+
+The implementation audit on 2026-08-24 found several obligations that the original
+task breakdown did not assign to an implementation step. These corrections are
+mandatory and take precedence over narrower wording later in this plan:
+
+- Use the installed Node 24 runtime (currently `v24.19.0`) for every command below;
+  the older absolute `v24.18.0` examples are illustrative, not a requirement to
+  reinstall or downgrade Node.
+- Task 8 must wire a real workflow-facing observer. The `observe` command may not
+  stop at PR 1's shadow-only pure functions: it must construct the bounded Git,
+  GitHub, npm, inventory, and candidate readers, observe the exact candidate, and
+  feed that observation to the planner. Adapter ambiguity must remain fail-closed.
+- Task 8 must migrate `preflight.mjs` from its frozen legacy-workflow model to the
+  active controller schema and final workflow contracts. Strict preflight must be
+  capable of passing with authenticated owner evidence; hard-coded
+  `UNPROVABLE` results and the legacy Changesets publish topology are not valid
+  merge gates for the ownership switch.
+- Task 10 must delete `release-shadow.yml` so there is no second controller
+  entrypoint, and must update
+  `workflow-entrypoints.json`, `workflow-safe-executables.json`, and
+  `release-script-hashes.json` for every workflow/script ownership change.
+- The version command must increment each Helm chart's own patch `version` exactly
+  once whenever its `appVersion` advances, while remaining a no-op when already
+  synchronized. Merely changing `appVersion` causes the Publish Chart workflow to
+  find the old OCI version and silently skip publication, as happened for 0.8.21.
+  The first 0.8.22 Version Packages PR therefore advances both charts' package
+  versions and app versions, and post-merge verification must prove the new OCI
+  chart versions rather than accepting a skipped job.
+- `release.yml` and `publish-chart.yml` remain manually disabled until the atomic
+  ownership switch, strict preflight, and configuration checks are green. Their
+  later enablement is an explicit cutover action, not an implementation shortcut.
+
 ## Task 1: Activate exact candidate discovery and tag identity
 
 **Files:**
 - Create: `scripts/release/controller-schema.json`
 - Create: `scripts/release/candidate.mjs`
+- Create: `scripts/release/terminal-records.mjs`
 - Create: `scripts/release/adapters/git-write.mjs`
 - Create: `scripts/release/test/candidate.test.mjs`
+- Create: `scripts/release/test/terminal-records.test.mjs`
 - Create: `scripts/release/test/git-write.test.mjs`
 - Modify: `scripts/release/state.mjs`
 - Modify: `scripts/release/planner.mjs`
@@ -131,11 +166,31 @@ so `null` is the expected starting value, but strict owner-side preflight must
 reconfirm it. Mixed package settings are a merge blocker, not a value the
 controller normalizes.
 
+Candidate recovery must parse terminal assets through reusable, exact-key
+`audit-result.json` and `abandonment.json` schemas in `terminal-records.mjs`.
+Audit completion additionally requires a published (not draft) consolidated
+Release and aggregate/check consistency. Abandonment requires a draft Release,
+protected-environment approval evidence, publish/registry-mutation absence,
+distinct run receipts, and two time-ordered exact-E404 observations covering the
+full 21-package inventory. Tasks 5 and 7 import these parsers for their canonical
+writers; they may not redefine looser shapes.
+
+Expose and test:
+
+```js
+export function parseAuditResult(value)
+export function parseAbandonmentRecord(value, { candidate, environment, packageNames })
+```
+
+Both parsers snapshot JSON input without invoking accessors, reject extra keys,
+validate bounded scalar values and time ordering, and return deeply frozen data.
+
 - [ ] **Step 2: Run red**
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" node --test \
   scripts/release/test/candidate.test.mjs \
+  scripts/release/test/terminal-records.test.mjs \
   scripts/release/test/git-write.test.mjs
 ```
 
@@ -182,11 +237,14 @@ Validate `tag === v${version}`, full SHA, ancestry on `main`, and exact existing
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" node --test \
   scripts/release/test/candidate.test.mjs \
+  scripts/release/test/terminal-records.test.mjs \
   scripts/release/test/git-write.test.mjs \
   scripts/release/test/planner.test.mjs
 git add scripts/release/controller-schema.json scripts/release/candidate.mjs \
+  scripts/release/terminal-records.mjs \
   scripts/release/adapters/git-write.mjs scripts/release/state.mjs scripts/release/planner.mjs \
-  scripts/release/test/candidate.test.mjs scripts/release/test/git-write.test.mjs
+  scripts/release/test/candidate.test.mjs scripts/release/test/terminal-records.test.mjs \
+  scripts/release/test/git-write.test.mjs
 git commit -m "feat(release): activate exact release candidates"
 ```
 
@@ -502,6 +560,8 @@ export async function recordAbandonment({ candidate, tombstone, github })
 ```
 
 No automatic caller may invoke it. The workflow command is manual-only and the job must name the protected abandonment environment configured during preflight.
+The canonical writer must round-trip its output through Task 1's
+`parseAbandonmentRecord`; it may not define or accept a second tombstone schema.
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -619,6 +679,9 @@ export function correlateAuditResult({ dispatch, result, candidate, manifestSha2
 export async function attachAuditResult({ release, result, github })
 ```
 
+Audit correlation and the canonical writer must use Task 1's `parseAuditResult`;
+they may not define or accept a second audit-result schema.
+
 - [ ] **Step 4: Run tests and commit**
 
 ```bash
@@ -635,6 +698,10 @@ git commit -m "feat(release): correlate independent release audits"
 - Create: `scripts/release/controller.mjs`
 - Create: `scripts/release/cli.mjs`
 - Create: `scripts/release/test/controller.test.mjs`
+- Modify: `scripts/release/observe.mjs`
+- Modify: `scripts/release/preflight.mjs`
+- Create or modify: `scripts/release/test/observe-production.test.mjs`
+- Modify: `scripts/release/test/preflight.test.mjs`
 - Modify: `scripts/release/test/support/fault-harness.mjs`
 - Modify: `scripts/release/test/fault-harness.integration.mjs`
 - Modify: `package.json`
@@ -676,11 +743,44 @@ only that command's module graph. npm publication is deliberately absent from
 this router: the workflow invokes the tested dependency-free `publisher.mjs`
 executable directly.
 
-- [ ] **Step 2: Expand failure after every transition**
+- [ ] **Step 2: Wire production observation and strict owner preflight**
+
+Write failing tests proving that `observe` constructs only the named, bounded
+read adapters; resolves the scheduled or exact-ref candidate; loads inventory at
+that immutable commit; observes Git/GitHub/npm state; and passes the complete
+observation through arbitration and the one-transition controller. A missing
+adapter, malformed envelope, auth failure, timeout, or identity mismatch is a
+blocked/ambiguous result, never absence.
+
+Replace the legacy static workflow snapshot in `preflight.mjs` with the parsed
+final contracts and `controller-schema.json`. Provide separate `capture` and
+`verify` subcommands. `capture` invokes only the named read-only `npm trust list
+<package> --json` and GitHub REST probes and writes canonical owner evidence;
+`verify` never shells out and accepts that explicit evidence file.
+
+The evidence schema binds `phase`, repository/default branch, exact HEAD SHA,
+capture and expiry timestamps (maximum 15-minute validity), npm/gh tool versions,
+SHA-256 digests of the candidate workflow files and controller schema, all 21
+package trust results, the abandonment environment/protection response, and the
+remote workflow states. Reject extra keys, duplicate/missing packages, future or
+expired timestamps, a changed HEAD/file digest, mixed publisher tuples, or tool
+output that was not captured by the named adapters. It contains no credentials.
+
+`--phase pre-enable` parses the final candidate workflows from the worktree and
+requires the remote legacy `release.yml` and `publish-chart.yml` to remain
+`disabled_manually`; it is the PR merge gate. `--phase post-enable` runs only
+after the replacement workflows are on `main` and requires those exact workflow
+paths to be `active`, the protected abandonment environment to match the schema,
+and all package publishers to have one identical repository, workflow, and
+optional environment tuple. Missing, mixed, stale, or redacted evidence remains
+`UNPROVABLE`/`FAIL`. Never query or mutate trust settings inside an
+npm-publishing job.
+
+- [ ] **Step 3: Expand failure after every transition**
 
 The three-package harness must inject before/after tag, prepare, attest, escrow, first/middle/last publish, registry convergence, metadata update, each smoke result, Release publication, audit dispatch, and audit result attachment. Include runner loss after npm accepts a publish and Actions artifact expiry with valid escrow fallback.
 
-- [ ] **Step 3: Add local rehearsal scripts**
+- [ ] **Step 4: Add local rehearsal scripts**
 
 ```json
 {
@@ -698,7 +798,7 @@ pnpm release:rehearse -- --fixture three-package --all-faults
 pnpm release:rehearse -- --inventory fixed-group --inject after-publish:11 --resume
 ```
 
-- [ ] **Step 4: Run fault recovery and commit**
+- [ ] **Step 5: Run fault recovery and commit**
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
@@ -708,8 +808,11 @@ PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
   corepack pnpm release:rehearse -- --fixture three-package --all-faults
 git add scripts/release/controller.mjs scripts/release/cli.mjs \
+  scripts/release/observe.mjs scripts/release/preflight.mjs \
   scripts/release/test/controller.test.mjs scripts/release/test/support/fault-harness.mjs \
-  scripts/release/test/fault-harness.integration.mjs package.json
+  scripts/release/test/fault-harness.integration.mjs \
+  scripts/release/test/observe-production.test.mjs scripts/release/test/preflight.test.mjs \
+  package.json
 git commit -m "test(release): exercise resumable release faults"
 ```
 
@@ -741,9 +844,16 @@ DAWN_TEST_PGSTORAGE=1 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" 
 
 Expected: all pass. The known subprocess disposal failure remains a separately reported baseline until its other session lands; it cannot be waived silently.
 
-- [ ] **Checkpoint 3: External preflight and human go/no-go**
+- [ ] **Checkpoint 3: Preflight capability rehearsal**
 
-Run PR 1's preflight in strict mode and save the report. Confirm npm trusted-publisher workflow/environment for all 21 packages, PAT behavior for version PRs, standard-token tag/Release permissions, protected abandonment environment, and global concurrency syntax in a non-publishing workflow test. Obtain explicit go/no-go before the next task.
+Before final workflows exist, test the new capture/verify boundary with bounded
+fixtures and, when authenticated owner access is available, perform a non-gating
+read-only capture to expose permission or npm-login blockers early. Prove the
+evidence schema, redaction, auth-error handling, 21-package set checks, and
+pre-enable/post-enable state rules. Do not call this a live merge gate: final
+workflow digests do not exist yet and the 15-minute evidence window cannot span
+Tasks 9 and 10. The first authoritative pre-enable strict run occurs after the
+atomic switch commit, and is recaptured immediately before merge in Task 11.
 
 ## Task 9: Write final workflow contracts before the atomic ownership switch
 
@@ -761,6 +871,9 @@ Parse the three target workflows and assert:
 - repository-global `queue: max` and no cancellation;
 - all actions use full commit SHAs;
 - detect/prepare/smoke have no OIDC/write permissions;
+- the `release.yml` detect job invokes the exact production entrypoint
+  `node scripts/release/cli.mjs observe --event ... --report ... --github-output
+  "$GITHUB_OUTPUT"`, consumes its outputs, and has no fallback shadow command;
 - tag has only required contents/actions write;
 - attest has only contents/actions read plus id-token/attestations write;
 - npm has only contents/actions/attestations read plus id-token write;
@@ -781,6 +894,10 @@ Parse the three target workflows and assert:
 - Release publication depends on every required smoke result;
 - abandonment is manual, protected, pre-publish-only, evidence-preserving, and terminal;
 - independent audit uses exact tag, three correlation inputs, direct returned run ID, and `if: always()` result upload;
+- no shadow workflow or legacy preflight can remain as a second controller entrypoint;
+- Version Packages advances each changed chart's chart patch version and
+  `appVersion` together, while an already-synchronized rerun is byte-for-byte a
+  no-op;
 - no legacy per-package tag/Release/backfill/upload path remains.
 
 - [ ] **Step 2: Run contracts and confirm they fail against the legacy workflows**
@@ -800,6 +917,7 @@ Do not commit the red-only state separately; continue directly to the atomic swi
 - Create: `.github/workflows/version-pr.yml`
 - Replace: `.github/workflows/release.yml`
 - Replace: `.github/workflows/published-artifact-verify.yml`
+- Delete: `.github/workflows/release-shadow.yml`
 - Delete: `scripts/release-publish.mjs`
 - Delete: `scripts/release-publish.test.mjs`
 - Delete: `scripts/backfill-release-tags.mjs`
@@ -808,6 +926,10 @@ Do not commit the red-only state separately; continue directly to the atomic swi
 - Delete: `scripts/upload-release-assets.test.mjs`
 - Modify: `package.json`
 - Modify: `scripts/sync-chart-appversion.mjs`
+- Modify: `scripts/sync-chart-appversion.test.mjs`
+- Modify: `scripts/release/test/fixtures/workflow-entrypoints.json`
+- Modify: `scripts/release/test/fixtures/workflow-safe-executables.json`
+- Modify: `scripts/release/test/fixtures/release-script-hashes.json`
 - Modify: `docs/thread-handoff.md`
 - Create: `docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md`
 - Modify: `AGENTS.md`
@@ -815,6 +937,12 @@ Do not commit the red-only state separately; continue directly to the atomic swi
 - [ ] **Step 1: Create the version-only workflow**
 
 Use `changesets/action` with `version: pnpm run version`, Version Packages title/commit, and `RELEASE_GITHUB_TOKEN` without a silent standard-token fallback. Grant only `contents: write` and `pull-requests: write`. Omit `publish`, npm registry setup, OIDC, attestations, tags, and Releases. Retain chart synchronization through the existing root `version` script and update its comments.
+
+Change chart synchronization with tests first: when a chart's `appVersion`
+advances to the new fixed-group version, increment that chart's own patch
+`version` exactly once in the same Version Packages commit. Reject malformed or
+non-SemVer chart versions. A rerun at the already-synchronized app version is a
+strict no-op and may not increment again.
 
 - [ ] **Step 2: Replace `release.yml` in place**
 
@@ -832,6 +960,13 @@ detect(read) -> tag(contents/actions write)
 ```
 
 The tag job dispatches the same workflow at `vX.Y.Z` and exits if `github.sha != candidateSha`; it never waits while holding the global release lock. The npm job sparse-checks out the exact dependency-free resolver/publisher module allowlist proven in Task 4 with persisted credentials disabled. It invokes `node scripts/release/artifact-store.mjs resolve` to retrieve and verify the exact recorded artifact ID or, only after a classified retention-expired response, the attested draft-Release escrow. It then invokes `node scripts/release/publisher.mjs` directly against that materialized directory. It does not include or invoke `cli.mjs` and has no dependency install, build, test, pack, package directories, lockfile, or `node_modules`.
+
+The detect job invokes `node scripts/release/cli.mjs observe` with the serialized
+event, report path, and `$GITHUB_OUTPUT` path, then gates every later job from its
+validated outputs. There is no shadow-script, inline reimplementation, or
+continue-on-error fallback. The workflow contract executes the router with
+injected fixtures and proves that this exact entrypoint reaches Task 8's concrete
+observer wiring.
 
 Set the npm job's GitHub `environment:` to the exact checked-in trusted-publisher
 environment when the strict preflight proves one; omit the key only when
@@ -851,7 +986,14 @@ When adding any new third-party action such as artifact download, resolve its cu
 
 - [ ] **Step 4: Remove legacy owners in the same working-tree state**
 
-Delete the six legacy script/test files and remove `release:publish`, `test:release-publish`, `test:backfill-release-tags`, and `test:upload-release-assets`. Remove the corresponding local-only `ci:validate` steps. Replace regex-era legacy workflow assertions in `scripts/published-artifacts.test.mjs` with the final parsed contracts.
+Delete the six legacy script/test files and `release-shadow.yml`; remove
+`release:publish`, `test:release-publish`, `test:backfill-release-tags`, and
+`test:upload-release-assets`. Remove the corresponding local-only `ci:validate`
+steps. Replace regex-era legacy workflow assertions in
+`scripts/published-artifacts.test.mjs` with the final parsed contracts. Regenerate
+and review the exact workflow-entrypoint/safe-executable fixtures, and update the
+release-script hash fixture for every deleted, changed, or newly reachable
+release executable in the same atomic commit.
 
 - [ ] **Step 5: Add the cutover/recovery runbook**
 
@@ -873,7 +1015,8 @@ Document:
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
   node --test scripts/release/test/workflow-contracts.test.mjs \
     scripts/release/test/audit.test.mjs \
-    scripts/release/test/abandonment.test.mjs
+    scripts/release/test/abandonment.test.mjs \
+    scripts/sync-chart-appversion.test.mjs
 PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
   node scripts/check-docs.mjs
 ```
@@ -885,14 +1028,29 @@ Expected: final topology/permission contracts pass and docs check passes.
 ```bash
 git add .github/workflows/version-pr.yml .github/workflows/release.yml \
   .github/workflows/published-artifact-verify.yml scripts/release package.json \
-  scripts/sync-chart-appversion.mjs scripts/published-artifacts.test.mjs \
+  scripts/sync-chart-appversion.mjs scripts/sync-chart-appversion.test.mjs \
+  scripts/published-artifacts.test.mjs \
   docs/thread-handoff.md docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md \
   AGENTS.md
+git add -u .github/workflows
 git add -u scripts
 git commit -m "ci(release): switch to the release integrity controller"
 ```
 
-Before committing, confirm `git status --short` shows all three workflow changes and all six legacy deletions together.
+Before committing, confirm `git status --short` shows all four workflow changes
+(new version workflow, two replacements, and the shadow deletion), all six legacy
+script/test deletions, and all three regenerated fixture inventories together.
+
+- [ ] **Step 8: Run the authoritative pre-enable strict gate**
+
+At the new atomic-switch commit, perform authenticated `preflight capture
+--phase pre-enable` and `preflight verify --phase pre-enable --strict`. Require
+the evidence HEAD and workflow/schema digests to equal that exact commit, all 21
+npm publisher tuples to match, permission/environment probes to pass, and the two
+remote legacy workflow paths to remain `disabled_manually`. Save only the
+credential-free canonical evidence and redacted report as temporary receipts.
+The 15-minute freshness window applies to verification time; recapture this gate
+immediately before merge after PR CI completes.
 
 ## Task 11: Complete local, PR, and post-merge verification
 
@@ -954,7 +1112,25 @@ Expected: npm publication appears only in the controller path invoked by `.githu
 
 - [ ] **Step 6: Merge only before the next Version Packages PR**
 
-After PR CI is green and preflight is reconfirmed, merge the ownership switch before merging a Version Packages PR. The switch commit itself must yield `NO_CANDIDATE` because package versions did not change.
+After PR CI is green, recapture authenticated owner evidence and re-run strict
+`--phase pre-enable` at the unchanged branch HEAD. Merge only while that evidence
+is within its 15-minute window and all digests still match. Do not enable either
+legacy file before the replacement commit is on `main`, and merge the ownership
+switch before merging a Version Packages PR.
+
+At the exact switch SHA, explicitly enable the replaced `release.yml` and the
+unchanged `publish-chart.yml`, re-read both workflow states as `active`, and
+confirm the new `version-pr.yml` is active. Immediately capture fresh owner
+evidence and run strict `--phase post-enable`; its HEAD and workflow/schema
+digests must match the merged switch SHA. Re-resolve `refs/heads/main` and abort
+if it is no longer that SHA. Dispatch `release.yml` with `ref: main` plus the
+final workflow's required current-version and `commitSha=<switchSha>` inputs,
+retain the run ID returned directly by dispatch, and require that run's
+`head_sha` to equal the switch SHA and its correlated report to be
+`NO_CANDIDATE`. A moving `main`, guessed run ID, or mismatched run SHA aborts the
+cutover. The push-triggered `version-pr.yml` run may create or
+update the Version Packages PR using `RELEASE_GITHUB_TOKEN` during these checks,
+but that PR must not merge before the post-enable strict and no-candidate receipts.
 
 - [ ] **Step 7: Execute and record the first live patch release**
 
@@ -968,9 +1144,15 @@ For the next Version Packages merge:
 6. Keep the consolidated Release draft through all exact-version smoke lanes.
 7. Publish the single Release only after all smoke receipts correlate.
 8. Confirm Published Artifact Verification ran at the tag, used the dispatch-returned run ID, and attached matching `audit-result.json`.
-9. Run the independent manual exact-tag smoke once more from a clean environment.
-10. Confirm the next scheduled reconciliation/audit is a successful no-op.
+9. Confirm Publish Chart did not skip: the new `dawn-app` and
+   `dawn-sandbox-infra` chart versions are visible in GHCR, their `appVersion` is
+   `0.8.22`, and the publish run is tied to the Version Packages merge SHA.
+10. Run the independent manual exact-tag smoke once more from a clean environment.
+11. Confirm the next scheduled reconciliation/audit is a successful no-op.
 
 - [ ] **Step 8: Record the live receipt**
 
-Append the actual candidate SHA, CI run, release run/attempt, manifest digest, Actions artifact ID/digest, Release URL, audit run, and smoke conclusions to the runbook. Never include tokens or OIDC material.
+Append the actual candidate SHA, CI run, release run/attempt, manifest digest,
+Actions artifact ID/digest, Release URL, audit run, smoke conclusions, chart
+versions, and Publish Chart run to the runbook. Never include tokens or OIDC
+material.

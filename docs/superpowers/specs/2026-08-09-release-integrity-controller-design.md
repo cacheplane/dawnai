@@ -226,8 +226,11 @@ A release is complete only when all of these assertions hold:
 
 `.github/workflows/version-pr.yml` runs Changesets' version behavior only. It
 opens or updates the Version Packages pull request and synchronizes the Helm chart
-application versions. It cannot publish to npm and receives no OIDC or attestation
-permission.
+application versions. When an application version advances, the same command
+increments each affected chart's own patch version exactly once so the existing
+OCI publisher creates a new immutable chart instead of skipping an already-used
+chart version. An already-synchronized rerun is a no-op. The workflow cannot
+publish to npm and receives no OIDC or attestation permission.
 
 Separating it from publication prevents Changesets' `hasChangesets` branch from
 deciding whether a release candidate exists. It also isolates the PAT requirement
@@ -272,6 +275,26 @@ The pure core accepts a desired candidate plus observed state and returns a plan
 Adapters observe Git, GitHub, Actions artifacts and attestations, npm metadata and
 tarballs, and smoke results. Commands execute one planned transition at a time and
 then observe again. They do not optimistically mark a transition complete.
+
+The workflow-facing observer constructs those bounded adapters and supplies the
+complete exact-candidate observation to the pure planner; PR 1's shadow collector
+is not a production entrypoint. Pre-enable strict preflight parses the final
+candidate workflow topology and controller schema while proving the old remote
+publisher/chart workflows remain disabled; post-enable strict preflight repeats
+the same checks at the merged switch SHA and requires the replacement workflow
+paths to be active. Both phases consume fresh, commit/digest-bound authenticated
+owner evidence from `npm trust list` plus GitHub permission/environment probes.
+They pass only for one uniform 21-package publisher tuple and the exact protected
+abandonment environment. Unknown, mixed, or stale evidence fails closed.
+
+Scheduled recovery recognizes `AUDIT_COMPLETE` and
+`ABANDONED_PREPUBLICATION` only through shared exact-key terminal-record parsers.
+A successful audit also requires the consolidated Release to be published and
+must not hide a failed individual check. An abandonment tombstone requires the
+Release to remain draft, protected-environment approval, proof that neither the
+publish job nor a registry mutation started, and two time-ordered exact-E404
+observations covering all 21 packages. The audit and abandonment writers reuse
+the same parsers; skeletal identity-only JSON never unblocks a newer candidate.
 
 The state machine is:
 
@@ -761,6 +784,9 @@ clean/no-candidate result where appropriate.
 - Integrate independent Published Artifact Verification.
 - Replace shadow-era workflow allowances with final topology, permission,
   recovery-ref, and audit-correlation contracts.
+- Remove the shadow workflow when the production controller becomes active, and
+  refresh the pinned workflow-entrypoint, safe-executable, and release-script hash
+  inventories in the same ownership-switch commit.
 - Remove the old publisher, per-package release creation, backfill, and upload
   paths that would otherwise create split-brain ownership.
 - Re-run trusted-publisher and permission preflight before merge.
