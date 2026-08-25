@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -171,31 +171,40 @@ test("the rehearsal observer obtains every snapshot through the exact production
   const productionObservation = observationForMarker({ phase: "ESCROWED" })
   const calls = []
   const dependencies = { githubReader: Object.freeze({}) }
+  const productionReport = {
+    schemaVersion: 1,
+    candidate,
+    before: {
+      observation: productionObservation,
+      plan: planRelease({ candidate, observation: productionObservation, mode: "controller" }),
+    },
+    transition: {
+      name: "publish-npm-packages",
+      status: "dry-run",
+      result: null,
+      error: null,
+    },
+    after: null,
+    recovery: null,
+    diagnostics: [
+      {
+        source: "github",
+        operation: "releases",
+        status: "AMBIGUOUS",
+        httpStatus: null,
+        code: "RELEASE_CONTENT_INVALID",
+      },
+    ],
+  }
   const observer = createRehearsalCliObserver({
     candidate,
     directory,
     dependencies,
     async runCli(argv, dependencies) {
       calls.push({ argv, dependencies })
-      return {
-        candidate,
-        before: {
-          observation: productionObservation,
-          plan: planRelease({ candidate, observation: productionObservation, mode: "controller" }),
-        },
-        transition: { name: "publish-npm-packages", status: "dry-run" },
-        after: null,
-        schemaVersion: 1,
-        diagnostics: [
-          {
-            source: "github",
-            operation: "releases",
-            status: "AMBIGUOUS",
-            httpStatus: null,
-            code: "RELEASE_CONTENT_INVALID",
-          },
-        ],
-      }
+      const reportPath = argv[argv.indexOf("--report") + 1]
+      await writeFile(reportPath, `${JSON.stringify(productionReport)}\n`)
+      return productionReport
     },
   })
 
@@ -209,6 +218,10 @@ test("the rehearsal observer obtains every snapshot through the exact production
     ["--event", "--report", "--github-output"],
   )
   assert.equal(calls[0].dependencies.githubReader, dependencies.githubReader)
+  assert.deepEqual(
+    JSON.parse(await readFile(observer.latestProductionReportPath(), "utf8")),
+    productionReport,
+  )
   assert.deepEqual(observer.latestDiagnostics(), [
     {
       source: "github",
@@ -597,6 +610,32 @@ test("the real escrow CLI produces durable evidence that the production observer
     bundleBytes: attestation.bundleBytes,
   })
 
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await runReleaseCli(
+      [
+        "attestation-output",
+        "--record",
+        paths.record,
+        "--artifact-dir",
+        paths.artifact,
+        "--bundle",
+        paths.bundle,
+        "--attestation-set",
+        paths.attestationSet,
+        "--attestation-bundles-dir",
+        paths.attestationBundles,
+      ],
+      {
+        cwd: directory,
+        attestations: {
+          async verify({ subjects }) {
+            return { status: "VERIFIED", subjects }
+          },
+        },
+      },
+    )
+  }
+
   await runReleaseCli(
     [
       "escrow",
@@ -606,8 +645,10 @@ test("the real escrow CLI produces durable evidence that the production observer
       paths.record,
       "--artifact-dir",
       paths.artifact,
-      "--attestation-bundle",
-      paths.bundle,
+      "--attestation-set",
+      paths.attestationSet,
+      "--attestation-bundles-dir",
+      paths.attestationBundles,
     ],
     {
       cwd: directory,
@@ -1031,12 +1072,15 @@ function attestationFixture(fixture) {
 
 async function writeEscrowInputs({ directory, fixture, bundleBytes }) {
   const artifact = join(directory, "artifact")
-  await mkdir(artifact)
+  const attestationBundles = join(directory, "attestation-bundles")
+  await Promise.all([mkdir(artifact), mkdir(attestationBundles)])
   const paths = {
     candidate: join(directory, "candidate.json"),
     record: join(directory, "release-record.json"),
     artifact,
     bundle: join(directory, "attestation.intoto.jsonl"),
+    attestationSet: join(directory, "attestation-set.json"),
+    attestationBundles,
   }
   await Promise.all([
     writeFile(paths.candidate, `${JSON.stringify(fixture.candidate)}\n`),
@@ -1079,6 +1123,29 @@ async function escrowedFixture({ directory, fixture }) {
   })
   await runReleaseCli(
     [
+      "attestation-output",
+      "--record",
+      paths.record,
+      "--artifact-dir",
+      paths.artifact,
+      "--bundle",
+      paths.bundle,
+      "--attestation-set",
+      paths.attestationSet,
+      "--attestation-bundles-dir",
+      paths.attestationBundles,
+    ],
+    {
+      cwd: directory,
+      attestations: {
+        async verify({ subjects }) {
+          return { status: "VERIFIED", subjects }
+        },
+      },
+    },
+  )
+  await runReleaseCli(
+    [
       "escrow",
       "--candidate",
       paths.candidate,
@@ -1086,8 +1153,10 @@ async function escrowedFixture({ directory, fixture }) {
       paths.record,
       "--artifact-dir",
       paths.artifact,
-      "--attestation-bundle",
-      paths.bundle,
+      "--attestation-set",
+      paths.attestationSet,
+      "--attestation-bundles-dir",
+      paths.attestationBundles,
     ],
     {
       cwd: directory,

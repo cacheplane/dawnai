@@ -1366,6 +1366,8 @@ function plannerObservation(candidate, packages) {
       workflow: candidate.ciWorkflow,
       check: candidate.ciCheck,
       commitSha: candidate.commitSha,
+      workflowRunId: 100,
+      runAttempt: 1,
     },
     otherCandidates: [],
     tag: { status: "absent", commitSha: null },

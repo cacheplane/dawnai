@@ -34,9 +34,16 @@ export function createRehearsalCliObserver({
   const receiptBoundary = normalizeReceiptBoundary(receipts)
   let sequence = 0
   let latestDiagnostics = Object.freeze([])
+  let latestReportPath = null
   return Object.freeze({
     latestDiagnostics() {
       return latestDiagnostics
+    },
+    latestProductionReportPath() {
+      if (latestReportPath === null) {
+        throw new Error("Rehearsal production observation report is unavailable")
+      }
+      return latestReportPath
     },
     async observe({ candidate: requestedCandidate }) {
       const requested = exactCandidate(requestedCandidate)
@@ -109,6 +116,7 @@ export function createRehearsalCliObserver({
           `Rehearsal production observe CLI returned a malformed snapshot (${state}: ${conflicts}; ${diagnostics}${resolutionDetail})`,
         )
       }
+      latestReportPath = paths.report
       let observation = deepFreeze(structuredClone(report.before.observation))
       if (
         receiptBoundary !== null &&

@@ -197,6 +197,10 @@ test("canonical candidate checkout rejects a dirty or drifted source tree", asyn
 
 test("preparation commands are confined to the exact clean candidate checkout", async (t) => {
   const fixture = await createSourceRepositoryFixture(t)
+  await runGit(fixture.sourceRoot, ["switch", "-c", "release-candidate"])
+  await writeFile(join(fixture.sourceRoot, "candidate.txt"), "release candidate\n")
+  await runGit(fixture.sourceRoot, ["add", "candidate.txt"])
+  await runGit(fixture.sourceRoot, ["commit", "-m", "release candidate"])
   const candidate = await createCandidateRepositoryFixture({
     sourceRoot: fixture.sourceRoot,
     runtime: fixture.runtime,
@@ -204,6 +208,10 @@ test("preparation commands are confined to the exact clean candidate checkout", 
   assert.notEqual(candidate.workingDirectory, fixture.sourceRoot)
   assert.equal(
     (await runGit(candidate.workingDirectory, ["rev-parse", "HEAD"])).trim(),
+    candidate.commitSha,
+  )
+  assert.equal(
+    (await runGit(candidate.workingDirectory, ["rev-parse", "refs/remotes/origin/main"])).trim(),
     candidate.commitSha,
   )
   assert.equal(

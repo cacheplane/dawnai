@@ -41,6 +41,7 @@ import {
   writeCanonicalSmokeResult,
 } from "../../smoke-result.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "../../terminal-records.mjs"
+import { runPreparationHandoffCli } from "../../workflow-handoff.mjs"
 import {
   createRehearsalCliObserver,
   runRehearsalControllerStep,
@@ -522,7 +523,6 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
       directory: controllerDir,
       artifactDir,
       candidate,
-      inventory,
     })
     const git = createGitReader({ root: candidateRepository.workingDirectory })
     const productionInventory = createRehearsalProductionInventory({
@@ -753,7 +753,7 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
     const effects = Object.freeze({
       async "create-candidate-tag"() {
         return gate.around("tag", () =>
-          runReleaseCli(["tag", "--candidate", paths.candidate], {
+          runReleaseCli(["tag", "--candidate", paths.controllerCandidate], {
             cwd: candidateRepository.workingDirectory,
           }),
         )
@@ -765,25 +765,28 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
             ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
             { cwd: candidateRepository.workingDirectory },
           )
+          await runPreparationHandoffCli(
+            [
+              "--report",
+              observer.latestProductionReportPath(),
+              "--root",
+              candidateRepository.workingDirectory,
+              "--output",
+              paths.preparationHandoff,
+            ],
+            { environment: releaseRehearsalEnvironment(candidate) },
+          )
           await runReleaseCli(
             [
               "prepare",
-              "--candidate",
-              paths.candidate,
-              "--inventory",
-              paths.inventory,
+              "--handoff",
+              paths.preparationHandoff,
               "--root",
               candidateRepository.workingDirectory,
               "--output-dir",
               artifactDir,
-              "--ci-receipt",
-              paths.ci,
-              "--prepare-run",
-              paths.prepareRun,
-              "--preparation-authority",
-              paths.preparationAuthority,
-              "--source-ref",
-              `refs/tags/v${candidate.version}`,
+              "--candidate-output",
+              paths.candidate,
             ],
             { cwd: candidateRepository.workingDirectory },
           )
@@ -833,8 +836,37 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
             ],
             { cwd: controllerDir },
           )
-          attestation = createRehearsalAttestation({ candidate, prepared })
-          await writeCanonicalOrEqual(paths.attestationBundle, attestation.bundleBytes)
+          const actionAttestation = createRehearsalAttestation({ candidate, prepared })
+          await writeCanonicalOrEqual(paths.attestationBundle, actionAttestation.bundleBytes)
+          await mkdir(paths.attestationBundles, { recursive: true })
+          const anchored = await runReleaseCli(
+            [
+              "attestation-output",
+              "--record",
+              paths.record,
+              "--artifact-dir",
+              artifactDir,
+              "--bundle",
+              paths.attestationBundle,
+              "--attestation-set",
+              paths.attestationSet,
+              "--attestation-bundles-dir",
+              paths.attestationBundles,
+            ],
+            { cwd: controllerDir, attestations: verifiedAttestations },
+          )
+          attestation = Object.freeze({
+            ...actionAttestation,
+            set: anchored.attestationSet,
+            bundles: Object.freeze(
+              await Promise.all(
+                anchored.attestationSet.subjects.map(async ({ bundleName }) => ({
+                  name: bundleName,
+                  bytes: await readFile(join(paths.attestationBundles, bundleName)),
+                })),
+              ),
+            ),
+          })
           base = canonicalBaseAssetSet({
             record,
             artifact: prepared.artifact,
@@ -856,8 +888,10 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
             paths.record,
             "--artifact-dir",
             artifactDir,
-            "--attestation-bundle",
-            paths.attestationBundle,
+            "--attestation-set",
+            paths.attestationSet,
+            "--attestation-bundles-dir",
+            paths.attestationBundles,
           ],
           {
             cwd: controllerDir,
@@ -1144,57 +1178,27 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
   }
 }
 
-async function writeCanonicalRehearsalInputs({ directory, artifactDir, candidate, inventory }) {
+async function writeCanonicalRehearsalInputs({ directory, artifactDir, candidate }) {
   const paths = Object.freeze({
+    controllerCandidate: join(directory, "controller-candidate.json"),
     candidate: join(directory, "candidate.json"),
-    inventory: join(directory, "inventory.json"),
-    ci: join(directory, "ci-receipt.json"),
-    prepareRun: join(directory, "prepare-run.json"),
-    preparationAuthority: join(directory, "preparation-authority.json"),
+    preparationHandoff: join(directory, "preparation-handoff.json"),
     artifactUpload: join(directory, "artifact-upload.json"),
     record: join(directory, "release-record.json"),
     attestationInput: join(directory, "attestation-input.txt"),
     attestationBundle: join(directory, "attestation.intoto.jsonl"),
+    attestationSet: join(directory, "attestation-set.json"),
+    attestationBundles: join(directory, "attestation-bundles"),
     npmEvidence: join(directory, "npm-evidence.json"),
     smokeResults: join(directory, "smoke-results"),
     initialDispatch: join(directory, "audit-dispatch-initial.json"),
     retryDispatch: join(directory, "audit-dispatch-retry.json"),
     artifactDir,
   })
-  await Promise.all([
-    writeCanonicalOrEqual(paths.candidate, Buffer.from(`${JSON.stringify(candidate)}\n`, "utf8")),
-    writeCanonicalOrEqual(paths.inventory, Buffer.from(`${JSON.stringify(inventory)}\n`, "utf8")),
-    writeCanonicalOrEqual(
-      paths.ci,
-      Buffer.from(
-        `${JSON.stringify({
-          status: "success",
-          retryable: false,
-          commitSha: candidate.commitSha,
-          workflow: "CI",
-          check: "validate",
-          runId: 100,
-          runAttempt: 1,
-        })}\n`,
-        "utf8",
-      ),
-    ),
-    writeCanonicalOrEqual(
-      paths.prepareRun,
-      Buffer.from(`${JSON.stringify({ id: 300, attempt: 1 })}\n`, "utf8"),
-    ),
-    writeCanonicalOrEqual(
-      paths.preparationAuthority,
-      Buffer.from(
-        `${JSON.stringify({
-          state: "CANDIDATE_TAGGED",
-          releaseRecord: "absent",
-          npm: "absent",
-        })}\n`,
-        "utf8",
-      ),
-    ),
-  ])
+  await writeCanonicalOrEqual(
+    paths.controllerCandidate,
+    Buffer.from(`${JSON.stringify(candidate)}\n`, "utf8"),
+  )
   return paths
 }
 
@@ -1482,6 +1486,7 @@ export async function createCandidateRepositoryFixture({ sourceRoot, runtime }) 
   }
   await assertCleanRehearsalCheckout(sourceRoot, environment, "source")
   await gitCommand(runtime, ["clone", "--bare", "--no-local", sourceRoot, remote], environment)
+  await gitCommand(remote, ["update-ref", "refs/heads/main", commitSha], environment)
   await gitCommand(runtime, ["clone", remote, workingDirectory], environment)
   await gitCommand(
     workingDirectory,
