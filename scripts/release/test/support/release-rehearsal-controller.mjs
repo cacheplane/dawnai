@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path"
 import { runReleaseCli } from "../../cli.mjs"
 import { runReleaseController } from "../../controller.mjs"
 import { verifyReleaseAttestationAnchor } from "../../metadata.mjs"
+import { resolveProductionCandidate } from "../../observe.mjs"
 import {
   correlateSmokeResults,
   parseSmokeResult,
@@ -16,6 +17,7 @@ export function createRehearsalCliObserver({
   dependencies,
   receipts,
   runCli = runReleaseCli,
+  resolveCandidate = resolveProductionCandidate,
 }) {
   const identity = exactCandidate(candidate)
   if (
@@ -24,7 +26,8 @@ export function createRehearsalCliObserver({
     dependencies === null ||
     typeof dependencies !== "object" ||
     Array.isArray(dependencies) ||
-    typeof runCli !== "function"
+    typeof runCli !== "function" ||
+    typeof resolveCandidate !== "function"
   ) {
     throw new TypeError("Rehearsal CLI observer dependencies are invalid")
   }
@@ -47,12 +50,9 @@ export function createRehearsalCliObserver({
         report: join(directory, `observe-report-${suffix}.json`),
         output: join(directory, `observe-output-${suffix}.txt`),
       }
+      const event = { ref: "refs/heads/main", after: identity.commitSha }
       await Promise.all([
-        writeFile(
-          paths.event,
-          `${JSON.stringify({ ref: "refs/heads/main", after: identity.commitSha })}\n`,
-          { flag: "wx", mode: 0o600 },
-        ),
+        writeFile(paths.event, `${JSON.stringify(event)}\n`, { flag: "wx", mode: 0o600 }),
         writeFile(paths.output, "", { flag: "wx", mode: 0o600 }),
       ])
       const report = await runCli(
@@ -87,8 +87,26 @@ export function createRehearsalCliObserver({
         const diagnostics = Array.isArray(report?.diagnostics)
           ? report.diagnostics.map((entry) => entry?.code).join(",")
           : "unknown"
+        let resolutionDetail = ""
+        if (diagnostics.includes("CANDIDATE_DISCOVERY_AMBIGUOUS")) {
+          try {
+            await resolveCandidate({
+              event,
+              inventory: dependencies.inventory,
+              git: dependencies.git,
+              github: dependencies.githubReader,
+              npm: dependencies.npm,
+              npmAuditFactory: dependencies.npmAuditFactory,
+              attestations: dependencies.attestations,
+              marker: dependencies.controllerMarker,
+            })
+            resolutionDetail = "; direct resolution unexpectedly succeeded"
+          } catch (error) {
+            resolutionDetail = `; direct resolution: ${nestedErrorMessages(error).join(" <- ")}`
+          }
+        }
         throw new Error(
-          `Rehearsal production observe CLI returned a malformed snapshot (${state}: ${conflicts}; ${diagnostics})`,
+          `Rehearsal production observe CLI returned a malformed snapshot (${state}: ${conflicts}; ${diagnostics}${resolutionDetail})`,
         )
       }
       let observation = deepFreeze(structuredClone(report.before.observation))
@@ -124,6 +142,25 @@ export function createRehearsalCliObserver({
       return observation
     },
   })
+}
+
+function nestedErrorMessages(error) {
+  const messages = []
+  const seen = new Set()
+  let current = error
+  while (
+    current !== null &&
+    typeof current === "object" &&
+    !seen.has(current) &&
+    messages.length < 16
+  ) {
+    seen.add(current)
+    if (typeof current.message === "string" && current.message.length > 0) {
+      messages.push(current.message)
+    }
+    current = current.cause
+  }
+  return messages
 }
 
 export async function runRehearsalControllerStep({ candidate, observer, effects, reporter }) {

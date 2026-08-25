@@ -1015,6 +1015,7 @@ export async function runCanonicalFixedGroupRehearsal(options, { root, createFau
         npm,
         npmAuditFactory: rehearsalNpmAuditFactory(candidate),
         attestations: verifiedAttestations,
+        controllerMarker,
       },
       receipts: {
         async readAttestation() {

@@ -220,6 +220,50 @@ test("the rehearsal observer obtains every snapshot through the exact production
   ])
 })
 
+test("candidate-discovery ambiguity retains the direct production resolution cause", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-rehearsal-discovery-diagnostic-test-"))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const candidate = markerCandidate()
+  const observer = createRehearsalCliObserver({
+    candidate,
+    directory,
+    dependencies: {
+      git: {},
+      inventory: {},
+      githubReader: {},
+      npm: {},
+      npmAuditFactory: {},
+      attestations: {},
+      controllerMarker: CONTROLLER_MARKER,
+    },
+    async resolveCandidate() {
+      throw new Error("managed release audit asset is invalid")
+    },
+    async runCli() {
+      return {
+        candidate: null,
+        before: {
+          observation: { status: "ambiguous", code: "CANDIDATE_DISCOVERY_AMBIGUOUS" },
+          plan: {
+            state: "NO_CANDIDATE",
+            disposition: "blocked",
+            nextTransition: null,
+            reasons: [],
+            conflicts: ["candidate-discovery-ambiguous"],
+            proposedMutations: [],
+          },
+        },
+        diagnostics: [{ code: "CANDIDATE_DISCOVERY_AMBIGUOUS" }],
+      }
+    },
+  })
+
+  await assert.rejects(
+    observer.observe({ candidate }),
+    /CANDIDATE_DISCOVERY_AMBIGUOUS.*managed release audit asset is invalid/iu,
+  )
+})
+
 test("durable post-reconcile production observations discard workflow receipt overlays", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "dawn-rehearsal-durable-observer-test-"))
   t.after(() => rm(directory, { recursive: true, force: true }))
