@@ -45,6 +45,57 @@ author: brian
 Release body.
 `
 
+function withFrontmatterSlug(slug: unknown): string {
+  return samplePost.replace(
+    "tags: [philosophy]",
+    `tags: [philosophy]\nslug: ${JSON.stringify(slug)}`,
+  )
+}
+
+function expectInvalidSlug(filename: string, raw: string): void {
+  withFixture({ [filename]: raw }, (dir) => {
+    let caught: unknown
+    try {
+      loadPostsFromDir(dir, { includeDrafts: false })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe(`Post ${filename} has an invalid slug`)
+  })
+}
+
+const invalidFrontmatterSlugs = [
+  ["protocol-like text", "https://evil.example/post"],
+  ["network-path text", "//evil.example/post"],
+  ["a single quote", "single'quote"],
+  ["a double quote", 'double"quote'],
+  ["a backslash", "path\\segment"],
+  ["a current-directory dot segment", "."],
+  ["a parent-directory dot segment", ".."],
+  ["a control character", "line\nbreak"],
+  ["uppercase text", "Uppercase"],
+  ["a leading hyphen", "-leading"],
+  ["a trailing hyphen", "trailing-"],
+  ["repeated hyphens", "repeated--hyphens"],
+] as const
+
+const invalidFilenameSlugs = [
+  ["protocol-like text", "https:evil.example.mdx"],
+  ["an encoded network path", "%2F%2Fevil.example.mdx"],
+  ["a single quote", "single'quote.mdx"],
+  ["a double quote", 'double"quote.mdx'],
+  ["a backslash", "path\\segment.mdx"],
+  ["a current-directory dot segment", "..mdx"],
+  ["a parent-directory dot segment", "...mdx"],
+  ["a control character", "line\nbreak.mdx"],
+  ["uppercase text", "Uppercase.mdx"],
+  ["a leading hyphen", "-leading.mdx"],
+  ["a trailing hyphen", "trailing-.mdx"],
+  ["repeated hyphens", "repeated--hyphens.mdx"],
+] as const
+
 describe("loadPostsFromDir", () => {
   it("parses frontmatter and returns sorted posts (newest first)", () => {
     withFixture(
@@ -67,6 +118,42 @@ describe("loadPostsFromDir", () => {
       expect(p?.slug).toBe("why-we-built-dawn")
     })
   })
+
+  it.each([
+    [
+      "frontmatter",
+      "2026-05-12-source-post.mdx",
+      withFrontmatterSlug("valid-explicit-123"),
+      "valid-explicit-123",
+    ],
+    ["filename", "2026-05-12-valid-derived-123.mdx", samplePost, "valid-derived-123"],
+  ])("round-trips a valid lowercase %s slug", (_source, filename, raw, expectedSlug) => {
+    withFixture({ [filename]: raw }, (dir) => {
+      const [post] = loadPostsFromDir(dir, { includeDrafts: false })
+      expect(post?.slug).toBe(expectedSlug)
+    })
+  })
+
+  it.each(invalidFrontmatterSlugs)(
+    "rejects frontmatter slugs containing %s without echoing the value",
+    (_description, slug) => {
+      expectInvalidSlug("2026-05-12-source-post.mdx", withFrontmatterSlug(slug))
+    },
+  )
+
+  it.each([
+    ["null", null],
+    ["a number", 123],
+  ])("rejects %s as a non-string frontmatter slug", (_description, slug) => {
+    expectInvalidSlug("2026-05-12-source-post.mdx", withFrontmatterSlug(slug))
+  })
+
+  it.each(invalidFilenameSlugs)(
+    "rejects filename-derived slugs containing %s",
+    (_description, filename) => {
+      expectInvalidSlug(filename, samplePost)
+    },
+  )
 
   it("preserves the on-disk filename as sourceFile", () => {
     withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {
