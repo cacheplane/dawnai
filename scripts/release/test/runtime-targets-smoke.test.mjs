@@ -15,7 +15,7 @@ test("installs exact public packages and runs Node plus edge-target bundle/impor
   let cleaned = false
   let receipt
   await runRuntimeTargetsSmoke(options, {
-    env: { GITHUB_RUN_ID: "701", GITHUB_RUN_ATTEMPT: "1" },
+    env: releaseEnv("701", "1"),
     now: clock(),
     async makeTempDir() {
       return "/tmp/runtime-targets"
@@ -24,10 +24,10 @@ test("installs exact public packages and runs Node plus edge-target bundle/impor
       cleaned = true
     },
     async writeProbeFiles() {},
-    async runCommand(command, args, runOptions) {
+    strictRunner: fakeStrictRunner(async (command, args, runOptions) => {
       commands.push({ command, args, cwd: runOptions.cwd })
       return { stdout: "", stderr: "" }
-    },
+    }),
     async writeFile(_path, bytes) {
       receipt = parseSmokeResult(bytes)
     },
@@ -62,6 +62,7 @@ test("installs exact public packages and runs Node plus edge-target bundle/impor
   assert.equal(cleaned, true)
   assert.equal(receipt.conclusion, "success")
   assert.equal(receipt.lane, "runtime-targets")
+  assert.equal(receipt.checks[0].name, "containment")
 })
 
 test("writes the failed edge receipt and cleans the consumer", async () => {
@@ -69,7 +70,7 @@ test("writes the failed edge receipt and cleans the consumer", async () => {
   let receipt
   await assert.rejects(
     runRuntimeTargetsSmoke(options, {
-      env: { GITHUB_RUN_ID: "702", GITHUB_RUN_ATTEMPT: "2" },
+      env: releaseEnv("702", "2"),
       now: clock(),
       async makeTempDir() {
         return "/tmp/runtime-targets-failure"
@@ -78,10 +79,10 @@ test("writes the failed edge receipt and cleans the consumer", async () => {
         events.push("cleanup")
       },
       async writeProbeFiles() {},
-      async runCommand(command, args) {
+      strictRunner: fakeStrictRunner(async (command, args) => {
         if (command === "npm" && args.includes("esbuild")) throw new Error("edge bundle failed")
         return { stdout: "", stderr: "" }
-      },
+      }),
       async writeFile(_path, bytes) {
         events.push("receipt")
         receipt = parseSmokeResult(bytes)
@@ -102,4 +103,22 @@ test("writes the failed edge receipt and cleans the consumer", async () => {
 function clock() {
   const values = [new Date("2026-08-25T12:00:00.000Z"), new Date("2026-08-25T12:00:01.000Z")]
   return () => values.shift() ?? new Date("2026-08-25T12:00:01.000Z")
+}
+
+function fakeStrictRunner(runCommand) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseEnv(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
+  }
 }

@@ -27,7 +27,7 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
   let cleaned = false
   let receipt
   await runPublishedHarnessSmoke(options, {
-    env: { GITHUB_RUN_ID: "801", GITHUB_RUN_ATTEMPT: "1" },
+    env: releaseEnv("801", "1"),
     now: clock(),
     async makeTempDir() {
       return "/tmp/published-harness"
@@ -38,7 +38,7 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
     async removeDir() {
       cleaned = true
     },
-    async runCommand(command, args, runOptions) {
+    strictRunner: fakeStrictRunner(async (command, args, runOptions) => {
       commands.push({
         command,
         args,
@@ -47,7 +47,7 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
       })
       if (args[0] === "audit") return { stdout: auditOutput(manifest), stderr: "" }
       return { stdout: "", stderr: "" }
-    },
+    }),
     async runHarnessAssertion(_root, lane, version) {
       lanes.push({ lane, version })
     },
@@ -95,6 +95,7 @@ test("installs the exact public fixed group, verifies npm signatures, and runs c
   assert.equal(cleaned, true)
   assert.equal(receipt.conclusion, "success")
   assert.equal(receipt.lane, "published-harness")
+  assert.equal(receipt.checks[0].name, "containment")
 })
 
 test("fails closed on malformed, missing, duplicate, or wrong-version npm audit evidence", () => {
@@ -257,7 +258,7 @@ test("writes a receipt and cleans when an installed-package harness assertion fa
   let receipt
   await assert.rejects(
     runPublishedHarnessSmoke(options, {
-      env: { GITHUB_RUN_ID: "802", GITHUB_RUN_ATTEMPT: "2" },
+      env: releaseEnv("802", "2"),
       now: clock(),
       async makeTempDir() {
         return "/tmp/published-harness-failure"
@@ -268,12 +269,12 @@ test("writes a receipt and cleans when an installed-package harness assertion fa
       async removeDir() {
         events.push("cleanup")
       },
-      async runCommand(_command, args) {
+      strictRunner: fakeStrictRunner(async (_command, args) => {
         return {
           stdout: args[0] === "audit" ? auditOutput(manifest) : "",
           stderr: "",
         }
-      },
+      }),
       async runHarnessAssertion(_root, lane) {
         if (lane === "runtime") throw new Error("runtime assertion failed")
       },
@@ -427,4 +428,22 @@ function npmSubjectName(name, version) {
 function clock() {
   const values = [new Date("2026-08-25T12:00:00.000Z"), new Date("2026-08-25T12:00:01.000Z")]
   return () => values.shift() ?? new Date("2026-08-25T12:00:01.000Z")
+}
+
+function fakeStrictRunner(runCommand) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseEnv(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
+  }
 }

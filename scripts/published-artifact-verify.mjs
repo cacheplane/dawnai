@@ -12,6 +12,7 @@ import {
   normalizeCliArgs,
   npmView,
   PUBLISHED_RELEASE_WORKFLOW,
+  publicNpmEnvironment,
   readBoundedRegularFile,
   readPublicPackages,
   removeDir,
@@ -26,6 +27,11 @@ import {
 import { createNpmReader } from "./release/adapters/npm.mjs"
 import { RELEASE_PAYLOAD_LIMITS } from "./release/limits.mjs"
 import { canonicalManifestBytes, parseSealedReleaseManifest } from "./release/manifest.mjs"
+import { createNpmAuditVerifier } from "./release/npm-audit.mjs"
+import {
+  createStrictSmokeProcessRunner,
+  strictContainmentReceiptDetail,
+} from "./release/smoke-process-runner.mjs"
 import {
   canonicalSmokeResultBytes,
   formatSmokeError,
@@ -102,13 +108,19 @@ export async function runPublishedArtifactVerify(options, overrides = {}) {
 }
 
 async function runReleaseModeVerify(options, overrides) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Release-mode metadata command execution requires a strictRunner")
+  }
+  const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
   const dependencies = {
+    createNpmAuditVerifier,
     createNpmReader,
     env: process.env,
     mkdir,
     now: () => new Date(),
     readManifest: (path) =>
       readBoundedRegularFile(path, RELEASE_PAYLOAD_LIMITS.manifestBytes, "Release manifest"),
+    verifyDownloadedPackageContents,
     verifyReleasePackage,
     writeResult: writeCanonicalSmokeResult,
     ...overrides,
@@ -125,59 +137,125 @@ async function runReleaseModeVerify(options, overrides) {
   const startedAt = timestampFromClock(dependencies.now)
   const failures = []
   const checks = []
+  const fatalErrors = []
   let packageNames = []
-  let primaryError
+  let manifest
 
   try {
-    const bytes = await dependencies.readManifest(options.manifest)
-    const actualDigest = createHash("sha256").update(bytes).digest("hex")
-    if (actualDigest !== options.manifestSha256) {
-      throw new Error("Release manifest SHA256 does not match --manifest-sha256")
-    }
-    const manifest = parseSealedReleaseManifest(bytes, {
-      candidate: { version: options.version, commitSha: options.commitSha },
-    })
-    if (!canonicalManifestBytes(manifest).equals(Buffer.from(bytes))) {
-      throw new Error("Release manifest bytes are not canonical")
-    }
-    packageNames = manifest.packages.map(({ name }) => name)
+    await strictRunner.probe()
     checks.push({
-      name: "manifest",
+      name: "containment",
       conclusion: "success",
-      detail: `${packageNames.length} exact packages bound to ${options.manifestSha256}`,
+      detail: strictContainmentReceiptDetail(dependencies.env),
     })
-    const npmReader = dependencies.npmReader ?? dependencies.createNpmReader()
-
-    for (const entry of manifest.packages) {
-      try {
-        await dependencies.verifyReleasePackage(entry, {
-          commitSha: options.commitSha,
-          npmReader,
-          workflow: PUBLISHED_RELEASE_WORKFLOW,
-        })
-        checks.push({
-          name: `package:${entry.name}`,
-          conclusion: "success",
-          detail: `${entry.name}@${entry.version} exact registry evidence verified`,
-        })
-      } catch (error) {
-        failures.push(error)
-        checks.push({
-          name: `package:${entry.name}`,
-          conclusion: "failure",
-          detail: formatSmokeError(error),
-        })
-        console.error(`META FAIL ${formatSmokeError(error)}`)
-      }
-    }
   } catch (error) {
-    primaryError = error
     failures.push(error)
+    fatalErrors.push(error)
     checks.push({
-      name: "manifest",
+      name: "containment",
       conclusion: "failure",
       detail: formatSmokeError(error),
     })
+  }
+
+  if (fatalErrors.length === 0) {
+    try {
+      const bytes = await dependencies.readManifest(options.manifest)
+      const actualDigest = createHash("sha256").update(bytes).digest("hex")
+      if (actualDigest !== options.manifestSha256) {
+        throw new Error("Release manifest SHA256 does not match --manifest-sha256")
+      }
+      manifest = parseSealedReleaseManifest(bytes, {
+        candidate: { version: options.version, commitSha: options.commitSha },
+      })
+      if (!canonicalManifestBytes(manifest).equals(Buffer.from(bytes))) {
+        throw new Error("Release manifest bytes are not canonical")
+      }
+      packageNames = manifest.packages.map(({ name }) => name)
+      checks.push({
+        name: "manifest",
+        conclusion: "success",
+        detail: `${packageNames.length} exact packages bound to ${options.manifestSha256}`,
+      })
+    } catch (error) {
+      failures.push(error)
+      fatalErrors.push(error)
+      checks.push({
+        name: "manifest",
+        conclusion: "failure",
+        detail: formatSmokeError(error),
+      })
+    }
+  }
+
+  if (manifest !== undefined && fatalErrors.length === 0) {
+    const candidate = Object.freeze({
+      version: options.version,
+      commitSha: options.commitSha,
+      publisherWorkflow: PUBLISHED_RELEASE_WORKFLOW,
+    })
+    const auditController = new AbortController()
+    let auditVerifier
+    let npmReader
+    try {
+      npmReader = dependencies.npmReader ?? (await dependencies.createNpmReader())
+      auditVerifier = await dependencies.createNpmAuditVerifier({
+        runNpm: strictRunner.runCommand,
+        environment: dependencies.env,
+        signal: auditController.signal,
+      })
+      assertNpmAuditVerifier(auditVerifier)
+    } catch (error) {
+      failures.push(error)
+      fatalErrors.push(error)
+      checks.push({
+        name: "official-npm-audit",
+        conclusion: "failure",
+        detail: formatSmokeError(error),
+      })
+    }
+
+    if (fatalErrors.length === 0) {
+      for (const entry of manifest.packages) {
+        try {
+          await dependencies.verifyReleasePackage(entry, {
+            auditVerifier,
+            candidate,
+            npmReader,
+            runCommand: strictRunner.runCommand,
+            verifyDownloadedPackageContents: dependencies.verifyDownloadedPackageContents,
+          })
+          checks.push({
+            name: `package:${entry.name}`,
+            conclusion: "success",
+            detail: `${entry.name}@${entry.version} exact registry evidence verified`,
+          })
+        } catch (error) {
+          failures.push(error)
+          checks.push({
+            name: `package:${entry.name}`,
+            conclusion: "failure",
+            detail: formatSmokeError(error),
+          })
+          console.error(`META FAIL ${formatSmokeError(error)}`)
+        }
+      }
+    }
+
+    auditController.abort()
+    if (typeof auditVerifier?.dispose === "function") {
+      try {
+        await auditVerifier.dispose()
+      } catch (error) {
+        failures.push(error)
+        fatalErrors.push(error)
+        checks.push({
+          name: "official-npm-audit-cleanup",
+          conclusion: "failure",
+          detail: formatSmokeError(error),
+        })
+      }
+    }
   }
 
   let receiptError
@@ -208,8 +286,8 @@ async function runReleaseModeVerify(options, overrides) {
     receiptError = error
   }
 
-  if (primaryError !== undefined || receiptError !== undefined) {
-    const errors = [primaryError, receiptError].filter((error) => error !== undefined)
+  if (fatalErrors.length > 0 || receiptError !== undefined) {
+    const errors = [...fatalErrors, ...(receiptError === undefined ? [] : [receiptError])]
     if (errors.length === 1) throw errors[0]
     throw new AggregateError(errors, "Published metadata verification and receipt write failed")
   }
@@ -481,7 +559,16 @@ async function verifyPackage(packageName, requestedVersion) {
   }
 }
 
-async function verifyReleasePackage(entry, { commitSha, npmReader, workflow }) {
+async function verifyReleasePackage(
+  entry,
+  {
+    auditVerifier,
+    candidate,
+    npmReader,
+    runCommand,
+    verifyDownloadedPackageContents: verifyContents,
+  },
+) {
   const observation = await npmReader.observePackageVersion({
     name: entry.name,
     version: entry.version,
@@ -499,32 +586,43 @@ async function verifyReleasePackage(entry, { commitSha, npmReader, workflow }) {
       `${entry.name}@${entry.version} tarball download failed: ${tarballResult.status}/${tarballResult.code ?? "NO_CODE"}`,
     )
   }
-  const signature = await npmReader.verifyRegistrySignatures({
-    name: entry.name,
-    version: entry.version,
-    integrity: observation.package.integrity,
-    signatures: observation.package.signatures,
-  })
+  const audit = await auditVerifier.verifyPackage({ entry, candidate })
   validateExactPublishedPackageEvidence({
     entry,
     observation,
     tarball: tarballResult.tarball,
-    signature,
-    commitSha,
-    workflow,
+    audit,
+    candidate,
   })
-  await verifyDownloadedPackageContents(entry, tarballResult.tarball.contentBase64)
+  await verifyContents(entry, tarballResult.tarball.contentBase64, runCommand)
 }
 
-async function verifyDownloadedPackageContents(entry, contentBase64) {
+function assertNpmAuditVerifier(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    typeof value.verifyPackage !== "function" ||
+    typeof value.dispose !== "function"
+  ) {
+    throw new TypeError("Official npm audit verifier is invalid")
+  }
+}
+
+async function verifyDownloadedPackageContents(entry, contentBase64, runCommand) {
+  if (typeof runCommand !== "function") {
+    throw new TypeError("Release package extraction requires strict command containment")
+  }
   const tempDir = await makeTempDir("dawn-published-release-verify-")
   try {
     const tarballPath = resolve(tempDir, entry.filename)
     await writeFile(tarballPath, Buffer.from(contentBase64, "base64"))
     const extractDir = resolve(tempDir, "extract")
     await mkdir(extractDir)
-    await run("tar", ["-xzf", tarballPath, "-C", extractDir], {
+    await runCommand("tar", ["-xzf", tarballPath, "-C", extractDir], {
+      cwd: tempDir,
+      env: publicNpmEnvironment({ home: tempDir }),
       timeoutMs: 30_000,
+      maxOutputBytes: 2 * 1024 * 1024,
     })
     const packageDir = resolve(extractDir, "package")
     const packageJson = JSON.parse(await readFile(resolve(packageDir, "package.json"), "utf8"))

@@ -7,6 +7,8 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import { NPM_AUDIT_VERIFIER } from "../release/npm-audit.mjs"
+
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 export const PUBLISHED_RELEASE_WORKFLOW = ".github/workflows/release.yml"
 export const PUBLISHED_RELEASE_REPOSITORY = "https://github.com/cacheplane/dawnai"
@@ -261,9 +263,8 @@ export function validateExactPublishedPackageEvidence({
   entry,
   observation,
   tarball,
-  signature,
-  commitSha,
-  workflow = PUBLISHED_RELEASE_WORKFLOW,
+  audit,
+  candidate,
 }) {
   if (
     observation?.status !== "PRESENT" ||
@@ -302,28 +303,58 @@ export function validateExactPublishedPackageEvidence({
     throw new Error(`${entry.name}@${entry.version} tarball sha1 does not match registry metadata`)
   }
   if (
-    signature?.status !== "PRESENT" ||
-    signature.operation !== "registry-signature" ||
-    signature.signature?.status !== "valid"
+    candidate === null ||
+    Array.isArray(candidate) ||
+    typeof candidate !== "object" ||
+    Object.keys(candidate).sort().join(",") !== "commitSha,publisherWorkflow,version" ||
+    candidate.version !== entry.version ||
+    candidate.publisherWorkflow !== PUBLISHED_RELEASE_WORKFLOW ||
+    typeof candidate.commitSha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(candidate.commitSha)
   ) {
-    throw new Error(`${entry.name}@${entry.version} registry signature is not valid`)
+    throw new Error(`${entry.name}@${entry.version} exact release candidate is invalid`)
   }
-  const provenance = published.provenance
-  if (provenance?.status !== "PRESENT") {
-    throw new Error(`${entry.name}@${entry.version} npm provenance is not present`)
+  if (
+    audit === null ||
+    Array.isArray(audit) ||
+    typeof audit !== "object" ||
+    Object.keys(audit).sort().join(",") !== "provenance,signature,status" ||
+    audit.status !== "verified" ||
+    audit.signature === null ||
+    typeof audit.signature !== "object" ||
+    Object.keys(audit.signature).sort().join(",") !== "status,verifier" ||
+    audit.signature.status !== "valid" ||
+    audit.signature.verifier !== NPM_AUDIT_VERIFIER
+  ) {
+    throw new Error(`${entry.name}@${entry.version} official npm audit signature is not valid`)
   }
-  if (provenance.workflow !== workflow) {
-    throw new Error(`${entry.name}@${entry.version} npm provenance workflow does not match`)
+  const provenance = audit.provenance
+  if (
+    provenance === null ||
+    Array.isArray(provenance) ||
+    typeof provenance !== "object" ||
+    Object.keys(provenance).sort().join(",") !==
+      "commitSha,predicateType,ref,repository,workflow" ||
+    provenance.predicateType !== "https://slsa.dev/provenance/v1"
+  ) {
+    throw new Error(`${entry.name}@${entry.version} official npm provenance is not valid`)
   }
-  if (provenance.commitSha !== commitSha) {
-    throw new Error(`${entry.name}@${entry.version} npm provenance commit does not match`)
+  if (provenance.workflow !== candidate.publisherWorkflow) {
+    throw new Error(
+      `${entry.name}@${entry.version} official npm provenance workflow does not match`,
+    )
+  }
+  if (provenance.commitSha !== candidate.commitSha) {
+    throw new Error(`${entry.name}@${entry.version} official npm provenance commit does not match`)
   }
   if (provenance.repository !== PUBLISHED_RELEASE_REPOSITORY) {
-    throw new Error(`${entry.name}@${entry.version} npm provenance repository does not match`)
+    throw new Error(
+      `${entry.name}@${entry.version} official npm provenance repository does not match`,
+    )
   }
   if (provenance.ref !== `refs/tags/v${entry.version}`) {
     throw new Error(
-      `${entry.name}@${entry.version} npm provenance ref does not match the release tag`,
+      `${entry.name}@${entry.version} official npm provenance ref does not match the release tag`,
     )
   }
 }

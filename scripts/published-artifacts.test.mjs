@@ -918,7 +918,9 @@ describe("published artifact verification CLI", () => {
         result: "/outputs/result.json",
       },
       {
-        env: { GITHUB_RUN_ID: "301", GITHUB_RUN_ATTEMPT: "4" },
+        env: releaseSmokeEnvironment("301", "4"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
         now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
         async readFile(path) {
           assert.equal(path, "/inputs/manifest.json")
@@ -941,7 +943,7 @@ describe("published artifact verification CLI", () => {
       CANONICAL_RELEASE_PACKAGE_ORDER,
     )
     assert.equal(
-      calls.every(({ context }) => context.commitSha === manifest.commitSha),
+      calls.every(({ context }) => context.candidate.commitSha === manifest.commitSha),
       true,
     )
     assert.equal(writes.length, 1)
@@ -951,7 +953,240 @@ describe("published artifact verification CLI", () => {
     assert.equal(receipt.workflowRunId, 301)
     assert.equal(receipt.runAttempt, 4)
     assert.equal(receipt.conclusion, "success")
-    assert.equal(receipt.checks.length, CANONICAL_RELEASE_PACKAGE_ORDER.length + 1)
+    assert.equal(receipt.checks.length, CANONICAL_RELEASE_PACKAGE_ORDER.length + 2)
+    assert.equal(receipt.checks[0].name, "containment")
+  })
+
+  it("records release-mode containment refusal before reading the manifest or spawning", async () => {
+    const manifest = publishedReleaseManifest()
+    const digest = createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex")
+    let read = false
+    let spawned = false
+    let receipt
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: manifest.version,
+          commitSha: manifest.commitSha,
+          manifest: "/inputs/manifest.json",
+          manifestSha256: digest,
+          result: "/outputs/result.json",
+        },
+        {
+          env: releaseSmokeEnvironment("304", "1"),
+          strictRunner: {
+            async probe() {
+              throw new Error("strict containment unavailable")
+            },
+            async runCommand() {
+              spawned = true
+              throw new Error("must not spawn")
+            },
+          },
+          now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+          async readFile() {
+            read = true
+            return canonicalManifestBytes(manifest)
+          },
+          async writeFile(_path, bytes) {
+            receipt = parseSmokeResult(bytes)
+          },
+          async mkdir() {},
+        },
+      ),
+      /strict containment unavailable/iu,
+    )
+    assert.equal(read, false)
+    assert.equal(spawned, false)
+    assert.deepEqual(
+      receipt.checks.map(({ name, conclusion }) => ({ name, conclusion })),
+      [{ name: "containment", conclusion: "failure" }],
+    )
+  })
+
+  it("keeps generic execution unreachable from release-mode metadata", async () => {
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: "0.8.22",
+          commitSha: "a".repeat(40),
+          manifest: "/inputs/manifest.json",
+          manifestSha256: "b".repeat(64),
+          result: "/outputs/result.json",
+        },
+        { async runCommand() {} },
+      ),
+      /strictRunner/iu,
+    )
+
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "published-artifact-verify.mjs"),
+      "utf8",
+    )
+    const start = source.indexOf("async function runReleaseModeVerify")
+    const end = source.indexOf("export function parsePublishedArtifactVerifyArgs", start)
+    assert.ok(start >= 0 && end > start)
+    const releaseModeSource = source.slice(start, end)
+    assert.match(releaseModeSource, /createStrictSmokeProcessRunner\(\)/u)
+    assert.doesNotMatch(releaseModeSource, /\bawait\s+run\s*\(/u)
+  })
+
+  it("uses one strict official npm audit verifier for all 21 release packages and disposes it", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    const verified = []
+    const extracted = []
+    let disposed = 0
+    const strictRunner = fakeStrictRunner()
+    const npmReader = {
+      async observePackageVersion({ name, version }) {
+        const entry = manifest.packages.find((candidate) => candidate.name === name)
+        assert.equal(version, entry.version)
+        return exactPublishedObservation(entry)
+      },
+      async downloadRegistryTarball({ tarballUrl }) {
+        const entry = manifest.packages.find(
+          (candidate) => exactPublishedObservation(candidate).package.tarballUrl === tarballUrl,
+        )
+        return {
+          status: "PRESENT",
+          operation: "package-tarball",
+          httpStatus: 200,
+          code: null,
+          tarball: exactPublishedTarball(entry),
+        }
+      },
+    }
+    Object.defineProperty(npmReader, "verifyRegistrySignatures", {
+      get() {
+        throw new Error("removed npmReader method was read")
+      },
+    })
+
+    const result = await runPublishedArtifactVerify(
+      {
+        releaseMode: true,
+        version: manifest.version,
+        commitSha: manifest.commitSha,
+        manifest: "/inputs/manifest.json",
+        manifestSha256: digest,
+        result: "/outputs/result.json",
+      },
+      {
+        env: releaseSmokeEnvironment("305", "1"),
+        strictRunner,
+        async createNpmReader() {
+          return npmReader
+        },
+        async createNpmAuditVerifier({ runNpm, environment, signal }) {
+          assert.equal(runNpm, strictRunner.runCommand)
+          assert.equal(environment.GITHUB_RUN_ID, "305")
+          assert.equal(signal instanceof AbortSignal, true)
+          return {
+            async verifyPackage({ entry, candidate }) {
+              verified.push({ entry, candidate })
+              return officialAudit(entry)
+            },
+            async dispose() {
+              disposed += 1
+            },
+          }
+        },
+        async readFile() {
+          return manifestBytes
+        },
+        async verifyDownloadedPackageContents(entry, contentBase64, runCommand) {
+          assert.equal(runCommand, strictRunner.runCommand)
+          assert.equal(contentBase64, exactPublishedTarball(entry).contentBase64)
+          extracted.push(entry.name)
+        },
+        async writeFile() {},
+        async mkdir() {},
+        now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+      },
+    )
+
+    assert.deepEqual(result.failures, [])
+    assert.deepEqual(
+      verified.map(({ entry }) => entry.name),
+      CANONICAL_RELEASE_PACKAGE_ORDER,
+    )
+    assert.equal(
+      verified.every(
+        ({ entry, candidate }) =>
+          candidate.version === entry.version &&
+          candidate.commitSha === manifest.commitSha &&
+          candidate.publisherWorkflow === ".github/workflows/release.yml",
+      ),
+      true,
+    )
+    assert.deepEqual(extracted, CANONICAL_RELEASE_PACKAGE_ORDER)
+    assert.equal(disposed, 1)
+  })
+
+  it("disposes official npm audit after package failure and records cleanup failure", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    const verified = []
+    let disposed = 0
+    let receipt
+
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: manifest.version,
+          commitSha: manifest.commitSha,
+          manifest: "/inputs/manifest.json",
+          manifestSha256: digest,
+          result: "/outputs/result.json",
+        },
+        {
+          env: releaseSmokeEnvironment("306", "1"),
+          strictRunner: fakeStrictRunner(),
+          createNpmReader() {
+            return exactReleaseNpmReader(manifest)
+          },
+          async createNpmAuditVerifier() {
+            return {
+              async verifyPackage({ entry }) {
+                verified.push(entry.name)
+                if (entry.name === "@dawn-ai/core") {
+                  throw new Error("official npm audit package failure")
+                }
+                return officialAudit(entry)
+              },
+              async dispose() {
+                disposed += 1
+                throw new Error("official npm audit cleanup failure")
+              },
+            }
+          },
+          async readFile() {
+            return manifestBytes
+          },
+          async verifyDownloadedPackageContents() {},
+          async writeFile(_path, bytes) {
+            receipt = parseSmokeResult(bytes)
+          },
+          async mkdir() {},
+          now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+        },
+      ),
+      /official npm audit cleanup failure/iu,
+    )
+
+    assert.deepEqual(verified, CANONICAL_RELEASE_PACKAGE_ORDER)
+    assert.equal(disposed, 1)
+    assert.equal(receipt.conclusion, "failure")
+    assert.deepEqual(
+      receipt.checks.filter(({ conclusion }) => conclusion === "failure").map(({ name }) => name),
+      ["package:@dawn-ai/core", "official-npm-audit-cleanup"],
+    )
   })
 
   it("writes a failed receipt and preserves package failures", async () => {
@@ -969,7 +1204,9 @@ describe("published artifact verification CLI", () => {
         result: "/outputs/result.json",
       },
       {
-        env: { GITHUB_RUN_ID: "302", GITHUB_RUN_ATTEMPT: "1" },
+        env: releaseSmokeEnvironment("302", "1"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
         now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
         async readFile() {
           return manifestBytes
@@ -1013,7 +1250,9 @@ describe("published artifact verification CLI", () => {
         result: "/outputs/result.json",
       },
       {
-        env: { GITHUB_RUN_ID: "303", GITHUB_RUN_ATTEMPT: "1" },
+        env: releaseSmokeEnvironment("303", "1"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
         now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
         async readFile() {
           return manifestBytes
@@ -1039,41 +1278,43 @@ describe("published artifact verification CLI", () => {
 })
 
 describe("validateExactPublishedPackageEvidence", () => {
-  it("accepts exact manifest digests, latest, registry signature, and provenance identity", () => {
+  it("accepts exact registry bytes and official npm audit identity while ignoring packument claims", () => {
     const entry = publishedReleaseManifest().packages[0]
+    const observation = exactPublishedObservation(entry)
+    observation.package.provenance = {
+      status: "PRESENT",
+      workflow: ".github/workflows/attacker.yml",
+      commitSha: "f".repeat(40),
+      repository: "https://github.com/attacker/fork",
+      ref: "refs/heads/main",
+    }
     assert.doesNotThrow(() =>
       validateExactPublishedPackageEvidence({
         entry,
-        commitSha: "a".repeat(40),
-        workflow: ".github/workflows/release.yml",
-        observation: exactPublishedObservation(entry),
-        tarball: exactPublishedTarball(entry),
-        signature: {
-          status: "PRESENT",
-          operation: "registry-signature",
-          httpStatus: 200,
-          code: null,
-          signature: { status: "valid", keyid: "SHA256:key" },
+        candidate: {
+          version: entry.version,
+          commitSha: "a".repeat(40),
+          publisherWorkflow: ".github/workflows/release.yml",
         },
+        observation,
+        tarball: exactPublishedTarball(entry),
+        audit: officialAudit(entry),
       }),
     )
   })
 
-  it("fails closed on digest, latest, signature, workflow, or commit drift", () => {
+  it("fails closed on digest, latest, official signature, workflow, or commit drift", () => {
     const entry = publishedReleaseManifest().packages[0]
     const baseline = {
       entry,
-      commitSha: "a".repeat(40),
-      workflow: ".github/workflows/release.yml",
+      candidate: {
+        version: entry.version,
+        commitSha: "a".repeat(40),
+        publisherWorkflow: ".github/workflows/release.yml",
+      },
       observation: exactPublishedObservation(entry),
       tarball: exactPublishedTarball(entry),
-      signature: {
-        status: "PRESENT",
-        operation: "registry-signature",
-        httpStatus: 200,
-        code: null,
-        signature: { status: "valid", keyid: "SHA256:key" },
-      },
+      audit: officialAudit(entry),
     }
     const cases = [
       [
@@ -1096,30 +1337,30 @@ describe("validateExactPublishedPackageEvidence", () => {
       [
         {
           ...baseline,
-          signature: {
-            ...baseline.signature,
-            signature: { status: "missing", keyid: null },
-          },
+          audit: { status: "pending" },
         },
-        /signature/,
+        /audit|signature/,
       ],
       [
         {
           ...baseline,
-          observation: {
-            ...baseline.observation,
-            package: {
-              ...baseline.observation.package,
-              provenance: {
-                ...baseline.observation.package.provenance,
-                workflow: ".github/workflows/other.yml",
-              },
-            },
+          audit: {
+            ...baseline.audit,
+            provenance: { ...baseline.audit.provenance, workflow: ".github/workflows/other.yml" },
           },
         },
         /workflow/,
       ],
-      [{ ...baseline, commitSha: "c".repeat(40) }, /commit/],
+      [
+        {
+          ...baseline,
+          audit: {
+            ...baseline.audit,
+            provenance: { ...baseline.audit.provenance, commitSha: "c".repeat(40) },
+          },
+        },
+        /commit/,
+      ],
     ]
     for (const [input, expected] of cases) {
       assert.throws(() => validateExactPublishedPackageEvidence(input), expected)
@@ -3074,6 +3315,71 @@ function exactPublishedTarball(entry) {
     sha256: entry.sha256,
     sha512: entry.sha512,
     contentBase64: Buffer.from(`published-${entry.name}`).toString("base64"),
+  }
+}
+
+function officialAudit(entry) {
+  return {
+    status: "verified",
+    signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+    provenance: {
+      predicateType: "https://slsa.dev/provenance/v1",
+      workflow: ".github/workflows/release.yml",
+      commitSha: "a".repeat(40),
+      repository: "https://github.com/cacheplane/dawnai",
+      ref: `refs/tags/v${entry.version}`,
+    },
+  }
+}
+
+function exactReleaseNpmReader(manifest) {
+  return {
+    async observePackageVersion({ name, version }) {
+      const entry = manifest.packages.find((candidate) => candidate.name === name)
+      assert.ok(entry, `unexpected release package ${name}`)
+      assert.equal(version, entry.version)
+      return exactPublishedObservation(entry)
+    },
+    async downloadRegistryTarball({ tarballUrl }) {
+      const entry = manifest.packages.find(
+        (candidate) => exactPublishedObservation(candidate).package.tarballUrl === tarballUrl,
+      )
+      assert.ok(entry, `unexpected release tarball ${tarballUrl}`)
+      return {
+        status: "PRESENT",
+        operation: "package-tarball",
+        httpStatus: 200,
+        code: null,
+        tarball: exactPublishedTarball(entry),
+      }
+    },
+  }
+}
+
+function fakeNpmAuditVerifierFactory() {
+  return async () => ({
+    async verifyPackage({ entry }) {
+      return officialAudit(entry)
+    },
+    async dispose() {},
+  })
+}
+
+function fakeStrictRunner(runCommand = async () => ({ stdout: "", stderr: "" })) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseSmokeEnvironment(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
   }
 }
 

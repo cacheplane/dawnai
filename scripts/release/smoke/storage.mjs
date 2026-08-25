@@ -4,38 +4,49 @@ import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-import {
-  makeTempDir,
-  publicNpmEnvironment,
-  removeDir,
-  run,
-} from "../../lib/published-artifacts.mjs"
+import { makeTempDir, publicNpmEnvironment, removeDir } from "../../lib/published-artifacts.mjs"
 import {
   parseDockerMappedHostPort,
   pgvectorDatabaseUrl,
   runRuntimeSmoke,
 } from "../../published-artifact-smoke.mjs"
+import {
+  createStrictSmokeProcessRunner,
+  strictContainmentReceiptDetail,
+} from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 const COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
 
 export async function runStorageSmoke(options, overrides = {}) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Storage smoke command execution requires a strictRunner")
+  }
+  const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
+  const runCommand = (command, args, runOptions) =>
+    strictRunner.runCommand(command, args, productionCommandOptions(runOptions))
   const dependencies = {
     makeTempDir,
     removeDir,
-    runCommand: defaultRunCommand,
-    runPgvectorProbe: defaultPgvectorProbe,
-    runPostgresProbe: defaultPostgresProbe,
-    startDatabase: startDisposableDatabase,
-    stopContainer: defaultStopContainer,
+    runPgvectorProbe: (root, databaseUrl) => defaultPgvectorProbe(root, databaseUrl, runCommand),
+    runPostgresProbe: (root, databaseUrl) => defaultPostgresProbe(root, databaseUrl, runCommand),
+    startDatabase: (database) => startDisposableDatabase(database, { runCommand }),
+    stopContainer: (name) => defaultStopContainer(name, runCommand),
     ...overrides,
+    probeContainment: strictRunner.probe,
+    runCommand,
   }
   const nonce = `${process.pid}-${Date.now()}`
 
   return executeSmokeLane(
     { lane: "storage", ...options },
     async ({ check, deferCleanup }) => {
+      await check(
+        "containment",
+        strictContainmentReceiptDetail(dependencies.env),
+        dependencies.probeContainment,
+      )
       const root = await check("temporary-project", "clean storage consumer created", () =>
         dependencies.makeTempDir("dawn-published-storage-"),
       )
@@ -104,10 +115,13 @@ export async function runStorageSmoke(options, overrides = {}) {
 
 export async function startDisposableDatabase(
   { containerName, image },
-  { attempts = 60, runCommand = defaultRunCommand, sleep = defaultSleep } = {},
+  { attempts = 60, runCommand, sleep = defaultSleep } = {},
 ) {
   if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 60) {
     throw new TypeError("Database readiness attempts must be between 1 and 60")
+  }
+  if (typeof runCommand !== "function") {
+    throw new TypeError("Database command execution requires a strict runner")
   }
   let started = false
   try {
@@ -153,18 +167,18 @@ function defaultSleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 }
 
-async function defaultStopContainer(name) {
-  await defaultRunCommand("docker", ["rm", "-f", name])
+async function defaultStopContainer(name, runCommand) {
+  await runCommand("docker", ["rm", "-f", name])
 }
 
-async function defaultPgvectorProbe(root, databaseUrl) {
-  await runRuntimeSmoke(root, { databaseUrl, openai: false }, { runCommand: defaultRunCommand })
+async function defaultPgvectorProbe(root, databaseUrl, runCommand) {
+  await runRuntimeSmoke(root, { databaseUrl, openai: false }, { runCommand })
 }
 
-async function defaultPostgresProbe(root, databaseUrl) {
+async function defaultPostgresProbe(root, databaseUrl, runCommand) {
   const sourcePath = path.join(root, "postgres-storage-smoke.mjs")
   await writeFile(sourcePath, postgresProbeSource(), "utf8")
-  await defaultRunCommand("node", [sourcePath], {
+  await runCommand("node", [sourcePath], {
     cwd: root,
     env: {
       DATABASE_URL: databaseUrl,
@@ -193,19 +207,16 @@ try {
 `
 }
 
-async function defaultRunCommand(command, args, options = {}) {
-  const stdout = await run(command, args, {
+function productionCommandOptions(options = {}) {
+  return {
     ...options,
     env: publicNpmEnvironment({
       home: options.cwd ?? process.cwd(),
       extra: options.env,
     }),
-    replaceEnv: true,
-    stdio: "pipe",
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_BYTES,
-  })
-  return { stdout, stderr: "" }
+  }
 }
 
 async function main() {

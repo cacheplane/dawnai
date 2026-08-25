@@ -11,7 +11,6 @@ import {
   publicNpmEnvironment,
   readBoundedRegularFile,
   removeDir,
-  run,
 } from "../../lib/published-artifacts.mjs"
 import { runTypeScriptToolingProbe } from "../../lib/typescript-tooling-probe.mjs"
 import {
@@ -28,6 +27,10 @@ import {
   parseSealedReleaseManifest,
 } from "../manifest.mjs"
 import { parseNpmAuditSignatures as parseVerifiedNpmAuditSignatures } from "../npm-audit.mjs"
+import {
+  createStrictSmokeProcessRunner,
+  strictContainmentReceiptDetail,
+} from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
@@ -35,13 +38,21 @@ const COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
 const AUDIT_OUTPUT_BYTES = 2 * 1024 * 1024
 
 export async function runPublishedHarnessSmoke(options, overrides = {}) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Published-harness smoke command execution requires a strictRunner")
+  }
+  const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
+  const runCommand = (command, args, runOptions) =>
+    strictRunner.runCommand(command, args, productionCommandOptions(runOptions))
   const dependencies = {
     makeTempDir,
     readManifest: defaultReadManifest,
     removeDir,
-    runCommand: defaultRunCommand,
-    runHarnessAssertion: defaultRunHarnessAssertion,
+    runHarnessAssertion: (root, lane, version) =>
+      defaultRunHarnessAssertion(root, lane, version, runCommand),
     ...overrides,
+    probeContainment: strictRunner.probe,
+    runCommand,
   }
   dependencies.runAgUiProbe ??= (root) =>
     runAgUiInstalledProbe(root, { runCommand: dependencies.runCommand })
@@ -55,6 +66,11 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
   return executeSmokeLane(
     { lane: "published-harness", ...options },
     async ({ check, deferCleanup }) => {
+      await check(
+        "containment",
+        strictContainmentReceiptDetail(dependencies.env),
+        dependencies.probeContainment,
+      )
       const manifest = await check(
         "manifest",
         "canonical sealed manifest matched the exact release candidate",
@@ -232,10 +248,10 @@ export function validateNpmAuditSignatures(output, options) {
   return Object.freeze(verified.sort())
 }
 
-async function defaultRunHarnessAssertion(root, lane, version) {
+async function defaultRunHarnessAssertion(root, lane, version, runCommand) {
   const probePath = path.join(root, "published-harness.mjs")
   await writeFile(probePath, publishedHarnessProbeSource(), "utf8")
-  await defaultRunCommand("node", [probePath, lane, version], { cwd: root })
+  await runCommand("node", [probePath, lane, version], { cwd: root })
 }
 
 export function publishedHarnessProbeSource() {
@@ -261,16 +277,13 @@ for (const [name, value] of Object.entries(surfaces[lane])) {
 `
 }
 
-async function defaultRunCommand(command, args, options = {}) {
-  const stdout = await run(command, args, {
+function productionCommandOptions(options = {}) {
+  return {
     ...options,
-    env: publicNpmEnvironment({ home: options.cwd, extra: options.env }),
-    replaceEnv: true,
-    stdio: "pipe",
+    env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: options.maxOutputBytes ?? COMMAND_OUTPUT_BYTES,
-  })
-  return { stdout, stderr: "" }
+  }
 }
 
 async function main() {

@@ -4,12 +4,11 @@ import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { makeTempDir, publicNpmEnvironment, removeDir } from "../../lib/published-artifacts.mjs"
 import {
-  makeTempDir,
-  publicNpmEnvironment,
-  removeDir,
-  run,
-} from "../../lib/published-artifacts.mjs"
+  createStrictSmokeProcessRunner,
+  strictContainmentReceiptDetail,
+} from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
 
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000
@@ -17,17 +16,28 @@ const COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
 const ESBUILD_VERSION = "0.28.1"
 
 export async function runRuntimeTargetsSmoke(options, overrides = {}) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Runtime-target smoke command execution requires a strictRunner")
+  }
+  const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
   const dependencies = {
     makeTempDir,
     removeDir,
-    runCommand: defaultRunCommand,
     writeProbeFiles,
     ...overrides,
+    runCommand: (command, args, runOptions) =>
+      strictRunner.runCommand(command, args, productionCommandOptions(runOptions)),
+    probeContainment: strictRunner.probe,
   }
 
   return executeSmokeLane(
     { lane: "runtime-targets", ...options },
     async ({ check, deferCleanup }) => {
+      await check(
+        "containment",
+        strictContainmentReceiptDetail(dependencies.env),
+        dependencies.probeContainment,
+      )
       const root = await check("temporary-project", "clean runtime-target consumer created", () =>
         dependencies.makeTempDir("dawn-published-runtime-targets-"),
       )
@@ -123,16 +133,13 @@ assert.deepEqual(edgeSurface(), ["function", "function"])
 `
 }
 
-async function defaultRunCommand(command, args, options = {}) {
-  const stdout = await run(command, args, {
+function productionCommandOptions(options = {}) {
+  return {
     ...options,
-    env: publicNpmEnvironment({ home: options.cwd, extra: options.env }),
-    replaceEnv: true,
-    stdio: "pipe",
+    env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_BYTES,
-  })
-  return { stdout, stderr: "" }
+  }
 }
 
 async function main() {

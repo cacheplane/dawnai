@@ -14,7 +14,7 @@ test("runs exact pgvector and Postgres packages against separate disposable data
   const events = []
   let receipt
   await runStorageSmoke(options, {
-    env: { GITHUB_RUN_ID: "601", GITHUB_RUN_ATTEMPT: "1" },
+    env: releaseEnv("601", "1"),
     now: clock(),
     async makeTempDir() {
       return "/tmp/storage-consumer"
@@ -22,10 +22,10 @@ test("runs exact pgvector and Postgres packages against separate disposable data
     async removeDir() {
       events.push("remove-project")
     },
-    async runCommand(command, args) {
+    strictRunner: fakeStrictRunner(async (command, args) => {
       events.push({ command, args })
       return { stdout: "", stderr: "" }
-    },
+    }),
     async startDatabase({ kind, containerName }) {
       events.push(`start:${kind}:${containerName}`)
       return `postgres://postgres:postgres@127.0.0.1/${kind}`
@@ -72,6 +72,7 @@ test("runs exact pgvector and Postgres packages against separate disposable data
   )
   assert.equal(receipt.conclusion, "success")
   assert.equal(receipt.lane, "storage")
+  assert.equal(receipt.checks[0].name, "containment")
 })
 
 test("records probe failure and removes each started container and project", async () => {
@@ -79,7 +80,7 @@ test("records probe failure and removes each started container and project", asy
   let receipt
   await assert.rejects(
     runStorageSmoke(options, {
-      env: { GITHUB_RUN_ID: "602", GITHUB_RUN_ATTEMPT: "2" },
+      env: releaseEnv("602", "2"),
       now: clock(),
       async makeTempDir() {
         return "/tmp/storage-failure"
@@ -87,9 +88,7 @@ test("records probe failure and removes each started container and project", asy
       async removeDir() {
         events.push("remove-project")
       },
-      async runCommand() {
-        return { stdout: "", stderr: "" }
-      },
+      strictRunner: fakeStrictRunner(async () => ({ stdout: "", stderr: "" })),
       async startDatabase({ kind }) {
         events.push(`start:${kind}`)
         return `postgres:///${kind}`
@@ -151,4 +150,22 @@ test("self-cleans a container when readiness fails before lane cleanup registrat
 function clock() {
   const values = [new Date("2026-08-25T12:00:00.000Z"), new Date("2026-08-25T12:00:01.000Z")]
   return () => values.shift() ?? new Date("2026-08-25T12:00:01.000Z")
+}
+
+function fakeStrictRunner(runCommand) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseEnv(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
+  }
 }
