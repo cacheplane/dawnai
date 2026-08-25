@@ -152,6 +152,7 @@ export async function loadVerifiedReleaseArtifact({
   const metadataResult = await actionsReader.getArtifactMetadata({
     artifactId: releaseRecord.actionsArtifact.id,
     prepareRunId: releaseRecord.actionsArtifact.prepareRunId,
+    prepareRunAttempt: releaseRecord.actionsArtifact.prepareRunAttempt,
   })
   if (metadataResult?.status !== "PRESENT") {
     throw new Error(
@@ -572,10 +573,13 @@ export function createArtifactStoreGitHubRuntime({
   }
   return {
     actionsReader: {
-      async getArtifactMetadata({ artifactId, prepareRunId }) {
+      async getArtifactMetadata({ artifactId, prepareRunId, prepareRunAttempt }) {
         const artifactResult = await metadataReader.getActionsArtifact({ artifactId })
         if (artifactResult.status !== "PRESENT") return artifactResult
-        const runResult = await metadataReader.getActionsRun({ runId: prepareRunId })
+        const runResult = await metadataReader.getActionsRunAttempt({
+          runId: prepareRunId,
+          attempt: prepareRunAttempt,
+        })
         if (runResult.status !== "PRESENT") return runResult
         const artifact = artifactResult.value
         const run = runResult.value
@@ -586,7 +590,10 @@ export function createArtifactStoreGitHubRuntime({
           typeof run !== "object" ||
           artifact.workflow_run === null ||
           typeof artifact.workflow_run !== "object" ||
-          String(artifact.workflow_run.id) !== String(run.id) ||
+          String(artifact.id) !== String(artifactId) ||
+          String(artifact.workflow_run.id) !== String(prepareRunId) ||
+          String(run.id) !== String(prepareRunId) ||
+          run.run_attempt !== prepareRunAttempt ||
           artifact.workflow_run.head_sha !== run.head_sha
         ) {
           return { status: "ERROR", httpStatus: 200, code: "MALFORMED_SCHEMA" }

@@ -75,6 +75,108 @@ test("uses valid attested escrow only after exact expired metadata and an explic
   ])
 })
 
+test("production recovery binds the recorded immutable run attempt even after a later rerun", async () => {
+  const fixture = artifactFixture()
+  const readerCalls = []
+  const runtime = createArtifactStoreGitHubRuntime({
+    metadataReader: {
+      async getActionsArtifact({ artifactId }) {
+        readerCalls.push(["artifact", artifactId])
+        return {
+          status: "PRESENT",
+          value: {
+            id: artifactId,
+            name: fixture.record.actionsArtifact.name,
+            digest: fixture.record.actionsArtifact.serviceDigest,
+            expired: true,
+            workflow_run: {
+              id: Number(fixture.record.actionsArtifact.prepareRunId),
+              head_sha: SHA,
+            },
+          },
+        }
+      },
+      async getActionsRun({ runId }) {
+        readerCalls.push(["latest-run", runId])
+        return {
+          status: "PRESENT",
+          value: { id: Number(runId), run_attempt: 9, head_sha: SHA },
+        }
+      },
+      async getActionsRunAttempt({ runId, attempt }) {
+        readerCalls.push(["run-attempt", runId, attempt])
+        return {
+          status: "PRESENT",
+          value: { id: Number(runId), run_attempt: attempt, head_sha: SHA },
+        }
+      },
+    },
+    binaryReader: {
+      async downloadActionsArtifact({ artifactId }) {
+        readerCalls.push(["download", artifactId])
+        return { status: "GONE", httpStatus: 410, code: "HTTP_410" }
+      },
+    },
+  })
+
+  const artifact = await loadVerifiedReleaseArtifact({
+    ...fixture.inputs,
+    actionsReader: runtime.actionsReader,
+  })
+
+  assert.equal(artifact.source, "escrow")
+  assert.deepEqual(readerCalls, [
+    ["artifact", fixture.record.actionsArtifact.id],
+    [
+      "run-attempt",
+      fixture.record.actionsArtifact.prepareRunId,
+      fixture.record.actionsArtifact.prepareRunAttempt,
+    ],
+    ["download", fixture.record.actionsArtifact.id],
+  ])
+})
+
+test("production recovery rejects mismatched immutable run-attempt evidence", async () => {
+  const fixture = artifactFixture()
+  for (const run of [
+    { id: 201, run_attempt: 1, head_sha: SHA },
+    { id: 200, run_attempt: 2, head_sha: SHA },
+    { id: 200, run_attempt: 1, head_sha: "b".repeat(40) },
+  ]) {
+    const runtime = createArtifactStoreGitHubRuntime({
+      metadataReader: {
+        async getActionsArtifact() {
+          return {
+            status: "PRESENT",
+            value: {
+              id: fixture.record.actionsArtifact.id,
+              name: fixture.record.actionsArtifact.name,
+              digest: fixture.record.actionsArtifact.serviceDigest,
+              expired: false,
+              workflow_run: { id: 200, head_sha: SHA },
+            },
+          }
+        },
+        async getActionsRunAttempt() {
+          return { status: "PRESENT", value: run }
+        },
+      },
+      binaryReader: {},
+    })
+
+    const result = await runtime.actionsReader.getArtifactMetadata({
+      artifactId: fixture.record.actionsArtifact.id,
+      prepareRunId: fixture.record.actionsArtifact.prepareRunId,
+      prepareRunAttempt: fixture.record.actionsArtifact.prepareRunAttempt,
+    })
+    assert.deepEqual(result, {
+      status: "ERROR",
+      httpStatus: 200,
+      code: "MALFORMED_SCHEMA",
+    })
+  }
+})
+
 test("never selects escrow for metadata auth, timeout, 404, malformed, or other failures", async () => {
   for (const result of [
     { status: "ERROR", httpStatus: 401, code: "AUTHORIZATION" },

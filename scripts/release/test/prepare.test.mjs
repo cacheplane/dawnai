@@ -106,6 +106,23 @@ test("preparation verifies HEAD and the candidate tag before building", async (t
   assert.ok(!fixture.operations.includes("pnpm build"))
 })
 
+test("preparation rejects a lightweight candidate tag before building", async (t) => {
+  const fixture = await preparationFixture(t, { tagType: "commit" })
+
+  await assert.rejects(prepareReleaseArtifacts(fixture.options), /annotated.*tag|tag.*type/iu)
+
+  assert.ok(!fixture.operations.includes("pnpm build"))
+})
+
+test("preparation revalidates the annotated candidate tag immediately before sealing", async (t) => {
+  const fixture = await preparationFixture(t, { lightweightTagAfterSmoke: true })
+
+  await assert.rejects(prepareReleaseArtifacts(fixture.options), /annotated.*tag|tag.*type/iu)
+
+  assert.ok(fixture.operations.includes("smoke"))
+  assert.ok(!fixture.operations.includes("write-manifest"))
+})
+
 test("preparation accepts the production command adapter stdout envelope", async (t) => {
   const fixture = await preparationFixture(t, { commandEnvelope: true })
   await prepareReleaseArtifacts(fixture.options)
@@ -244,6 +261,59 @@ test("packed publication metadata cannot redirect npm or escape the registry", (
       /dependency.*registry|specifier|unsafe/iu,
     )
   }
+
+  for (const field of ["bundledDependencies", "bundleDependencies"]) {
+    assert.throws(
+      () => assertSafePackedPublicationManifest({ ...base, [field]: ["zod"] }),
+      /bundled|bundleDependencies|embedded.*dependencies/iu,
+    )
+  }
+})
+
+test("tarball preflight rejects root shrinkwrap and bundled node_modules payloads", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "dawn-tar-bundling-"))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+
+  for (const name of [
+    "package/npm-shrinkwrap.json",
+    "package/package-lock.json",
+    "package/./package-lock.json",
+    "package/pnpm-lock.yaml",
+    "package/yarn.lock",
+    "package/node_modules/embedded/package.json",
+    "package/subdirectory/../node_modules/embedded/package.json",
+  ]) {
+    const tarball = path.join(temporary, `${path.basename(name)}.tgz`)
+    await writeFile(
+      tarball,
+      gzipSync(
+        tarArchive([
+          { name: "package/package.json", bytes: Buffer.from("{}") },
+          { name, bytes: Buffer.from("{}") },
+        ]),
+      ),
+    )
+
+    await assert.rejects(
+      scanPreparedTarball(tarball),
+      /lockfile|shrinkwrap|bundled.*node_modules|embedded.*dependencies/iu,
+    )
+  }
+
+  const standalone = path.join(temporary, "inspector-standalone.tgz")
+  await writeFile(
+    standalone,
+    gzipSync(
+      tarArchive([
+        { name: "package/package.json", bytes: Buffer.from("{}") },
+        {
+          name: "package/.next/standalone/node_modules/next/package.json",
+          bytes: Buffer.from("{}"),
+        },
+      ]),
+    ),
+  )
+  assert.equal((await scanPreparedTarball(standalone)).entries, 2)
 })
 
 test("tarball preflight bounds entry count and expanded bytes before extraction", async (t) => {
@@ -633,7 +703,12 @@ async function preparationFixture(t, overrides = {}) {
   const output = (stdout) => (overrides.commandEnvelope ? { stdout, stderr: "" } : stdout)
   const run = async (command, args) => {
     if (command === "git" && args.join(" ") === "rev-parse HEAD") return output(`${headSha}\n`)
-    if (command === "git" && args.join(" ") === `rev-list -n 1 v${VERSION}`) {
+    if (command === "git" && args.join(" ") === `cat-file -t refs/tags/v${VERSION}`) {
+      return output(
+        `${overrides.lightweightTagAfterSmoke && operations.includes("smoke") ? "commit" : (overrides.tagType ?? "tag")}\n`,
+      )
+    }
+    if (command === "git" && args.join(" ") === `rev-parse refs/tags/v${VERSION}^{commit}`) {
       return output(`${tagSha}\n`)
     }
     if (command === "git" && args.join(" ") === "status --porcelain=v1 --untracked-files=all") {

@@ -422,6 +422,11 @@ export function assertSafePackedPublicationManifest(manifest) {
   ) {
     throw new Error("Packed publishConfig must contain public access only")
   }
+  for (const field of ["bundledDependencies", "bundleDependencies"]) {
+    if (Object.hasOwn(manifest, field)) {
+      throw new Error("Packed publication manifest must not embed bundled dependencies")
+    }
+  }
   for (const field of [
     "dependencies",
     "devDependencies",
@@ -546,6 +551,7 @@ export async function scanPreparedTarball(
           ) {
             throw new Error("Prepared tarball contains an unsafe archive path")
           }
+          assertNoEmbeddedPublicationPayload(path.posix.normalize(name))
         }
         currentType = type
         remainingContentBytes = size
@@ -677,6 +683,22 @@ function safePackageArchivePath(name) {
     (normalized === "package" || normalized.startsWith("package/")) &&
     !normalized.split("/").includes("..")
   )
+}
+
+function assertNoEmbeddedPublicationPayload(name) {
+  if (
+    [
+      "package/npm-shrinkwrap.json",
+      "package/package-lock.json",
+      "package/pnpm-lock.yaml",
+      "package/yarn.lock",
+    ].includes(name)
+  ) {
+    throw new Error("Prepared tarball contains a root publication lockfile")
+  }
+  if (name === "package/node_modules" || name.startsWith("package/node_modules/")) {
+    throw new Error("Prepared tarball contains bundled root node_modules dependencies")
+  }
 }
 
 function commandStdout(result) {

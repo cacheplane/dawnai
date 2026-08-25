@@ -309,15 +309,19 @@ function validatePreparationAuthority(authority) {
 }
 
 async function assertExactCheckout({ root, candidate, run }) {
-  const [headSource, tagSource, statusSource] = await Promise.all([
+  const tagRef = `refs/tags/v${candidate.version}`
+  const [headSource, tagTypeSource, tagSource, statusSource] = await Promise.all([
     run("git", ["rev-parse", "HEAD"], { cwd: root }),
-    run("git", ["rev-list", "-n", "1", `v${candidate.version}`], { cwd: root }),
+    run("git", ["cat-file", "-t", tagRef], { cwd: root }),
+    run("git", ["rev-parse", `${tagRef}^{commit}`], { cwd: root }),
     run("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: root }),
   ])
   const head = normalizeCommandSha(headSource, "HEAD")
+  const tagType = normalizeCommandStdout(tagTypeSource, "candidate tag type").trim()
   const tag = normalizeCommandSha(tagSource, "candidate tag")
   const status = normalizeCommandStdout(statusSource, "checkout status")
   if (head !== candidate.commitSha) throw new Error("HEAD does not match candidate SHA")
+  if (tagType !== "tag") throw new Error("Candidate ref must be an annotated Git tag")
   if (tag !== candidate.commitSha) throw new Error("Candidate tag does not match candidate SHA")
   if (status !== "") {
     throw new Error("Preparation requires a clean checkout with no dirty or untracked files")
