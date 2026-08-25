@@ -1046,7 +1046,12 @@ git commit -m "feat(release): correlate independent release audits"
 - Create or modify: `scripts/release/test/observe-production.test.mjs`
 - Modify: `scripts/release/test/preflight.test.mjs`
 - Modify: `scripts/release/test/support/fault-harness.mjs`
+- Modify: `scripts/release/test/support/fault-proxy.mjs`
+- Create: `scripts/release/test/support/release-rehearsal.mjs`
+- Create: `scripts/release/test/support/release-rehearsal-github.mjs`
 - Modify: `scripts/release/test/fault-harness.integration.mjs`
+- Create: `scripts/release/test/rehearsal.test.mjs`
+- Create: `docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md`
 - Modify: `package.json`
 
 - [ ] **Step 1: Write one-transition controller tests**
@@ -1167,17 +1172,26 @@ npm-publishing job.
 
 - [ ] **Step 3: Expand failure after every transition**
 
-The three-package harness must inject before/after tag, prepare, attest, draft
-creation, escrow asset 1/middle/final, first/middle/last npm publish, registry
-convergence, `reconcile-npm`, each smoke result, and `reconcile-smokes`. It then
-injects before/after audit dispatch, dispatch-receipt output, the separate
+Keep the three-package Verdaccio/proxy/Git fixture as the lower-layer fault suite:
+it proves real process lifecycle, proxy faults, Git isolation, bounded tarball
+publication, and byte-for-byte registry downloads. It is not a complete release
+inventory and must not cross production validators by weakening their canonical
+21-package, 22-subject, or 45-asset invariants.
+
+Run the complete transition rehearsal with the canonical fixed-group inventory.
+It injects before/after tag, prepare, attest, draft creation, escrow asset
+1/middle/final, first/middle/last npm publish, registry convergence,
+`reconcile-npm`, each smoke result, and `reconcile-smokes`. It then injects
+before/after audit dispatch, dispatch-receipt output, the separate
 `AUDIT_DISPATCHED` body CAS, failed attempt attachment, retry dispatch and receipt
 CAS, successful attempt attachment, canonical success attachment,
 `AUDIT_VERIFIED` marker CAS, final Release publication, and immutable re-read—in
-that order. Include runner loss
-after npm accepts a publish, dispatch-response loss without run guessing, and
-Actions artifact expiry with valid escrow fallback. Every resume preserves the
-exact 45 base assets and uses attempt-scoped names to avoid retry collisions.
+that order. Include runner loss after npm accepts a publish, dispatch-response
+loss without run guessing, and Actions artifact expiry with valid escrow fallback.
+Every resume preserves the exact 45 base assets and uses attempt-scoped names to
+avoid retry collisions. The rehearsal must call the production transition
+modules/adapters wherever they define the release boundary; it may not substitute
+a parallel release-state simulator or a test-only validation escape hatch.
 
 - [ ] **Step 4: Add local rehearsal scripts**
 
@@ -1193,25 +1207,37 @@ exact 45 base assets and uses attempt-scoped names to avoid retry collisions.
 Support:
 
 ```text
-pnpm release:rehearse -- --fixture three-package --all-faults
+pnpm release:rehearse -- --all-faults
 pnpm release:rehearse -- --inventory fixed-group --inject after-publish:11 --resume
 ```
+
+`--all-faults` defaults to `--inventory fixed-group`. Reject
+`--fixture three-package --all-faults` with an explanation that the small fixture
+is limited to the lower-layer fault-harness suite and cannot prove the canonical
+45-asset release protocol.
 
 - [ ] **Step 5: Run fault recovery and commit**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   corepack pnpm test:release-controller
-PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   corepack pnpm test:release-fault-harness
-PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
-  corepack pnpm release:rehearse -- --fixture three-package --all-faults
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  corepack pnpm release:rehearse -- --all-faults
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  corepack pnpm release:rehearse -- --inventory fixed-group --inject after-publish:11 --resume
 git add scripts/release/controller.mjs scripts/release/cli.mjs \
   scripts/release/observe.mjs scripts/release/preflight.mjs \
   scripts/release/test/controller.test.mjs scripts/release/test/support/fault-harness.mjs \
+  scripts/release/test/support/fault-proxy.mjs \
+  scripts/release/test/support/release-rehearsal.mjs \
+  scripts/release/test/support/release-rehearsal-github.mjs \
   scripts/release/test/fault-harness.integration.mjs \
+  scripts/release/test/rehearsal.test.mjs \
   scripts/release/test/observe-production.test.mjs scripts/release/test/preflight.test.mjs \
-  package.json
+  docs/superpowers/plans/2026-08-09-release-integrity-controller-pr2.md \
+  docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md package.json
 git commit -m "test(release): exercise resumable release faults"
 ```
 
@@ -1222,8 +1248,8 @@ Do not edit active workflows or delete legacy scripts until every checkpoint pas
 - [ ] **Checkpoint 1: Full fixed-group artifact rehearsal**
 
 ```bash
-PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" corepack pnpm build
-PATH="/Users/blove/.nvm/versions/node/v24.18.0/bin:$PATH" \
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" corepack pnpm build
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   corepack pnpm release:rehearse -- --inventory fixed-group --inject after-publish:11 --resume
 ```
 

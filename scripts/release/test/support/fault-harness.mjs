@@ -14,10 +14,12 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { orderReleasePackages } from "../../topology.mjs"
 import { startFaultProxy } from "./fault-proxy.mjs"
 import { createGitFixture } from "./git-fixture.mjs"
+import { runCanonicalFixedGroupRehearsal, runReleaseRehearsal } from "./release-rehearsal.mjs"
 import { startVerdaccio } from "./verdaccio.mjs"
 
 const COMMAND_TIMEOUT_MS = 30_000
@@ -29,6 +31,18 @@ const MAX_CLEANUP_ATTEMPTS = 2
 const MIN_CLEANUP_ATTEMPT_MS = 10
 const TOOL_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u
 const lateAcquisitionSupervisors = new WeakMap()
+const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("../../../..", import.meta.url)))
+
+export async function executeReleaseRehearsal(argv) {
+  const normalizedArgs = Array.isArray(argv) && argv[0] === "--" ? argv.slice(1) : argv
+  return runReleaseRehearsal(normalizedArgs, {
+    runFixedGroup: (options) =>
+      runCanonicalFixedGroupRehearsal(options, {
+        root: REPOSITORY_ROOT,
+        createFaultHarness,
+      }),
+  })
+}
 
 export function createLateAcquisitionSupervisor() {
   const state = { pending: new Set(), reports: [] }
@@ -64,6 +78,7 @@ export function createLateAcquisitionSupervisor() {
 
 export async function createFaultHarness({
   fixtureDirectory,
+  publishRoots = [],
   startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
   cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
   packageTools,
@@ -73,11 +88,19 @@ export async function createFaultHarness({
   if (typeof fixtureDirectory !== "string" || !isAbsolute(fixtureDirectory)) {
     throw new TypeError("Fault workspace fixture must be an absolute path")
   }
+  if (
+    !Array.isArray(publishRoots) ||
+    publishRoots.some((root) => typeof root !== "string" || !isAbsolute(root))
+  ) {
+    throw new TypeError("Fault harness publish roots are invalid")
+  }
   assertLifecycleTimeout(startupTimeoutMs, "startup")
   assertLifecycleTimeout(cleanupTimeoutMs, "cleanup")
   assertLateAcquisitionSupervisor(lateAcquisitionSupervisor)
   const factories = harnessFactories(dependencies)
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), "dawn-release-fault-harness-"))
+  const runtimeDirectory = await realpath(
+    await mkdtemp(join(tmpdir(), "dawn-release-fault-harness-")),
+  )
   const resources = [
     resource("runtime directory", () => rm(runtimeDirectory, { recursive: true, force: true })),
   ]
@@ -150,84 +173,109 @@ export async function createFaultHarness({
       environment,
       startupDeadline,
     )
-    let published = false
+    const allowedPublishRoots = Object.freeze([
+      await realpath(packsDirectory),
+      ...(await Promise.all(publishRoots.map((root) => canonicalPublishRoot(root)))),
+    ])
+    let packedFixture = null
+    let bulkPublished = false
     let closePromise = null
+    const packFixtureTarballs = async () => {
+      if (packedFixture !== null) return packedFixture
+      assertDisposableRegistry(registry.url)
+      const { orderedPackages: ordered } = await discoverFaultWorkspace({
+        fixtureDirectory: git.workingDirectory,
+      })
+      assertNoLifecycleScripts(ordered)
+      await toolCommand(
+        tools.pnpm,
+        ["install", "--offline", "--ignore-scripts", "--frozen-lockfile=false"],
+        {
+          cwd: git.workingDirectory,
+          env: environment,
+          operation: "pnpm-install",
+        },
+      )
+      const packed = []
+      for (const packageJson of ordered) {
+        const packageDirectory = packageJson.directory
+        const packedOutput = await toolCommand(
+          tools.pnpm,
+          ["pack", "--pack-destination", packsDirectory],
+          {
+            cwd: packageDirectory,
+            env: environment,
+            operation: "pnpm-pack",
+          },
+        )
+        const tarballName = packedOutput
+          .split("\n")
+          .map((line) => line.trim())
+          .findLast((line) => line.endsWith(".tgz"))
+        if (tarballName === undefined) throw new Error("Package manager did not report a tarball")
+        const tarballPath = join(packsDirectory, basename(tarballName))
+        const bytes = await readFile(tarballPath)
+        packed.push(
+          Object.freeze({
+            name: packageJson.name,
+            version: packageJson.version,
+            tarballPath,
+            size: bytes.byteLength,
+            sha256: digest("sha256", bytes, "hex"),
+            sha512: digest("sha512", bytes, "hex"),
+            integrity: `sha512-${digest("sha512", bytes, "base64")}`,
+            registryUrl: registry.url,
+          }),
+        )
+      }
+      packedFixture = Object.freeze(packed)
+      return packedFixture
+    }
+    const publishPreparedTarball = async (input) => {
+      if (!isExactObject(input, ["tarballPath"])) {
+        throw new TypeError("Prepared tarball publication input is invalid")
+      }
+      assertDisposableRegistry(registry.url)
+      const tarballPath = await canonicalPreparedTarball(input.tarballPath, allowedPublishRoots)
+      await toolCommand(
+        tools.npm,
+        [
+          "publish",
+          tarballPath,
+          "--registry",
+          registry.url,
+          "--tag",
+          "latest",
+          "--access",
+          "public",
+          "--provenance=false",
+          "--userconfig",
+          userConfig,
+          "--scope=",
+          "--ignore-scripts",
+        ],
+        {
+          cwd: dirname(tarballPath),
+          env: environment,
+          operation: "npm-publish",
+        },
+      )
+    }
     const harness = {
       runtimeDirectory,
       registry,
       proxy,
       git,
+      packFixtureTarballs,
+      publishPreparedTarball,
       async packAndPublish() {
-        if (published) throw new Error("Fault workspace was already published")
-        assertDisposableRegistry(registry.url)
-        const { orderedPackages: ordered } = await discoverFaultWorkspace({
-          fixtureDirectory: git.workingDirectory,
-        })
-        assertNoLifecycleScripts(ordered)
-        await toolCommand(
-          tools.pnpm,
-          ["install", "--offline", "--ignore-scripts", "--frozen-lockfile=false"],
-          {
-            cwd: git.workingDirectory,
-            env: environment,
-            operation: "pnpm-install",
-          },
-        )
-        const publication = []
-        for (const packageJson of ordered) {
-          const packageDirectory = packageJson.directory
-          const packedOutput = await toolCommand(
-            tools.pnpm,
-            ["pack", "--pack-destination", packsDirectory],
-            {
-              cwd: packageDirectory,
-              env: environment,
-              operation: "pnpm-pack",
-            },
-          )
-          const tarballName = packedOutput
-            .split("\n")
-            .map((line) => line.trim())
-            .findLast((line) => line.endsWith(".tgz"))
-          if (tarballName === undefined) throw new Error("Package manager did not report a tarball")
-          const tarballPath = join(packsDirectory, basename(tarballName))
-          const bytes = await readFile(tarballPath)
-          await toolCommand(
-            tools.npm,
-            [
-              "publish",
-              tarballPath,
-              "--registry",
-              registry.url,
-              "--tag",
-              "latest",
-              "--access",
-              "public",
-              "--provenance=false",
-              "--userconfig",
-              userConfig,
-              "--scope=",
-              "--ignore-scripts",
-            ],
-            {
-              cwd: packageDirectory,
-              env: environment,
-              operation: "npm-publish",
-            },
-          )
-          publication.push(
-            Object.freeze({
-              name: packageJson.name,
-              version: packageJson.version,
-              tarballPath,
-              sha256: digest("sha256", bytes, "hex"),
-              integrity: `sha512-${digest("sha512", bytes, "base64")}`,
-              registryUrl: registry.url,
-            }),
-          )
+        if (bulkPublished) throw new Error("Fault workspace was already published")
+        const publication = await packFixtureTarballs()
+        for (const packed of publication) {
+          await publishPreparedTarball({ tarballPath: packed.tarballPath })
         }
-        published = true
-        return Object.freeze(publication)
+        bulkPublished = true
+        return publication
       },
       close() {
         if (closePromise !== null) return closePromise
@@ -586,6 +634,35 @@ function withinRoot(root, target) {
   return path !== "" && !path.startsWith("..") && !isAbsolute(path)
 }
 
+async function canonicalPublishRoot(value) {
+  const root = resolve(value)
+  if (root !== value) throw new TypeError("Fault harness publish root is not canonical")
+  const metadata = await lstat(root)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (await realpath(root)) !== root) {
+    throw new TypeError("Fault harness publish root is not a canonical directory")
+  }
+  return root
+}
+
+async function canonicalPreparedTarball(value, allowedRoots) {
+  if (
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    resolve(value) !== value ||
+    !value.endsWith(".tgz")
+  ) {
+    throw new TypeError("Prepared tarball path is invalid")
+  }
+  const metadata = await lstat(value)
+  if (!metadata.isFile() || metadata.isSymbolicLink() || (await realpath(value)) !== value) {
+    throw new TypeError("Prepared tarball must be one canonical regular file")
+  }
+  if (!allowedRoots.some((root) => withinRoot(root, value))) {
+    throw new TypeError("Prepared tarball is outside every allowed publish root")
+  }
+  return value
+}
+
 function sameSet(left, right) {
   const sortedLeft = [...left].sort()
   const sortedRight = [...right].sort()
@@ -842,4 +919,19 @@ function assertDisposableRegistry(value) {
 
 function digest(algorithm, bytes, encoding) {
   return createHash(algorithm).update(bytes).digest(encoding)
+}
+
+const invokedDirectly =
+  typeof process.argv[1] === "string" &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+
+if (invokedDirectly) {
+  try {
+    const summary = await executeReleaseRehearsal(process.argv.slice(2))
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Release rehearsal failed"
+    process.stderr.write(`${message}\n`)
+    process.exitCode = 1
+  }
 }

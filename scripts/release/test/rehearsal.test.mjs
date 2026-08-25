@@ -1,0 +1,562 @@
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { once } from "node:events"
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { createServer } from "node:http"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import test from "node:test"
+import { fileURLToPath } from "node:url"
+
+import { createNpmReader } from "../adapters/npm.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import { canonicalBaseAssetSet, escrowCandidate, parseReleaseMarker } from "../metadata.mjs"
+import { createReleaseRecord } from "../release-record.mjs"
+import { createFaultHarness, executeReleaseRehearsal } from "./support/fault-harness.mjs"
+import { startFaultProxy } from "./support/fault-proxy.mjs"
+import {
+  createOrderedFaultGate,
+  createRehearsalDurableState,
+  FIXED_GROUP_REHEARSAL_FAULTS,
+  parseReleaseRehearsalArguments,
+  RehearsalCrashError,
+  resumeFixedGroupEvidence,
+  runReleaseRehearsal,
+  verifyExpiredActionsEscrowFallback,
+} from "./support/release-rehearsal.mjs"
+import { createRehearsalGitHub } from "./support/release-rehearsal-github.mjs"
+
+const THREE_PACKAGE_FIXTURE = fileURLToPath(new URL("./fixtures/fault-workspace", import.meta.url))
+
+test("full release rehearsal defaults to the canonical fixed group", async () => {
+  assert.deepEqual(parseReleaseRehearsalArguments(["--all-faults"]), {
+    inventory: "fixed-group",
+    allFaults: true,
+    inject: null,
+    resume: true,
+  })
+
+  const calls = []
+  const result = await runReleaseRehearsal(["--all-faults"], {
+    async runFixedGroup(options) {
+      calls.push(options)
+      return { status: "verified" }
+    },
+  })
+  assert.deepEqual(calls, [
+    {
+      inventory: "fixed-group",
+      allFaults: true,
+      inject: null,
+      resume: true,
+    },
+  ])
+  assert.deepEqual(result, { status: "verified" })
+})
+
+test("the three-package fixture cannot claim full release-transition coverage", () => {
+  assert.throws(
+    () => parseReleaseRehearsalArguments(["--fixture", "three-package", "--all-faults"]),
+    /three-package.*Git.*registry.*fixed-group.*45-asset/iu,
+  )
+})
+
+test("the executable rehearsal entrypoint applies the same full-coverage boundary", async () => {
+  await assert.rejects(
+    executeReleaseRehearsal(["--", "--fixture", "three-package", "--all-faults"]),
+    /three-package.*Git.*registry.*fixed-group.*45-asset/iu,
+  )
+})
+
+test("one fixed-group crash point requires explicit automatic resume", () => {
+  assert.deepEqual(
+    parseReleaseRehearsalArguments([
+      "--inventory",
+      "fixed-group",
+      "--inject",
+      "after-publish:11",
+      "--resume",
+    ]),
+    {
+      inventory: "fixed-group",
+      allFaults: false,
+      inject: "after-publish:11",
+      resume: true,
+    },
+  )
+
+  for (const argv of [
+    ["--inventory", "fixed-group", "--inject", "after-publish:11"],
+    ["--inventory", "fixed-group", "--inject", "after-publish:0", "--resume"],
+    ["--inventory", "fixed-group", "--inject", "after-publish:22", "--resume"],
+    ["--inventory", "fixed-group", "--all-faults", "--inject", "after-publish:11"],
+    ["--inventory", "fixed-group", "--resume"],
+    ["--inventory", "other", "--all-faults"],
+    ["--all-faults", "--unknown"],
+  ]) {
+    assert.throws(() => parseReleaseRehearsalArguments(argv), /rehears|argument|fault|resume/iu)
+  }
+})
+
+test("fixed-group fault inventory covers every durable external transition in order", () => {
+  const required = [
+    "tag",
+    "prepare",
+    "attest",
+    "draft-create",
+    "escrow-asset:1",
+    "escrow-asset:23",
+    "escrow-asset:45",
+    "publish:1",
+    "publish:11",
+    "publish:21",
+    "registry-convergence",
+    "reconcile-npm",
+    "smoke-result:published-harness",
+    "smoke-result:runtime-targets",
+    "smoke-result:scaffold",
+    "smoke-result:storage",
+    "reconcile-smokes",
+    "audit-dispatch",
+    "audit-dispatch-receipt",
+    "audit-dispatched-cas",
+    "failed-audit-attempt",
+    "audit-retryable-cas",
+    "retry-audit-dispatch",
+    "retry-audit-dispatch-receipt",
+    "retry-audit-dispatched-cas",
+    "successful-audit-attempt",
+    "canonical-audit-success",
+    "audit-verified-cas",
+    "release-publication",
+    "immutable-reread",
+  ]
+  assert.deepEqual(
+    FIXED_GROUP_REHEARSAL_FAULTS,
+    required.flatMap((transition) => [`before-${transition}`, `after-${transition}`]),
+  )
+  assert.equal(new Set(FIXED_GROUP_REHEARSAL_FAULTS).size, FIXED_GROUP_REHEARSAL_FAULTS.length)
+})
+
+test("ordered crash gate distinguishes pre-mutation and accepted-mutation runner loss", async () => {
+  const gate = createOrderedFaultGate(["before-tag", "after-tag"])
+  let externalMutations = 0
+  const attempt = () =>
+    gate.around("tag", async () => {
+      if (externalMutations === 0) externalMutations += 1
+      return { status: "present" }
+    })
+
+  await assert.rejects(attempt(), (error) => {
+    assert.equal(error instanceof RehearsalCrashError, true)
+    assert.equal(error.point, "before-tag")
+    return true
+  })
+  assert.equal(externalMutations, 0)
+
+  await assert.rejects(attempt(), (error) => {
+    assert.equal(error instanceof RehearsalCrashError, true)
+    assert.equal(error.point, "after-tag")
+    return true
+  })
+  assert.equal(externalMutations, 1)
+
+  assert.deepEqual(await attempt(), { status: "present" })
+  assert.equal(externalMutations, 1)
+  assert.deepEqual(gate.snapshot(), {
+    injected: ["before-tag", "after-tag"],
+    remaining: [],
+  })
+})
+
+test("lost audit dispatch responses create an orphan but resume only from a new direct receipt", async () => {
+  const gate = createOrderedFaultGate(["before-audit-dispatch", "after-audit-dispatch"])
+  const remote = createRehearsalGitHub({
+    candidate: {
+      version: "0.8.22",
+      commitSha: "a".repeat(40),
+      ciWorkflow: "CI",
+      ciCheck: "validate",
+      publisherWorkflow: ".github/workflows/release.yml",
+    },
+    gate,
+  })
+
+  await assert.rejects(
+    remote.actionsWriter.dispatchWorkflowAtRef(auditDispatchInput("0.8.22", "a".repeat(40))),
+    (error) => error.point === "before-audit-dispatch",
+  )
+  assert.deepEqual(remote.snapshot().dispatchedRunIds, [])
+
+  await assert.rejects(
+    remote.actionsWriter.dispatchWorkflowAtRef(auditDispatchInput("0.8.22", "a".repeat(40))),
+    (error) => error.point === "after-audit-dispatch",
+  )
+  assert.deepEqual(remote.snapshot().dispatchedRunIds, [501])
+
+  const receipt = await remote.actionsWriter.dispatchWorkflowAtRef(
+    auditDispatchInput("0.8.22", "a".repeat(40)),
+  )
+  assert.equal(receipt.workflowRunId, 502)
+  assert.deepEqual(remote.snapshot().dispatchedRunIds, [501, 502])
+  assert.equal(Object.hasOwn(remote.actionsWriter, "listWorkflowRuns"), false)
+})
+
+test("real escrow transition resumes draft creation and selected 45-asset crash points", async () => {
+  const fixture = fixedGroupArtifactFixture()
+  const faults = [
+    "before-draft-create",
+    "after-draft-create",
+    "before-escrow-asset:1",
+    "after-escrow-asset:1",
+    "before-escrow-asset:23",
+    "after-escrow-asset:23",
+    "before-escrow-asset:45",
+    "after-escrow-asset:45",
+  ]
+  const gate = createOrderedFaultGate(faults)
+  const base = canonicalBaseAssetSet(fixture)
+  const remote = createRehearsalGitHub({
+    candidate: fixture.candidate,
+    gate,
+    baseAssetNames: base.assets.map(({ name }) => name),
+  })
+  let result
+  for (let attempt = 0; attempt <= faults.length; attempt += 1) {
+    try {
+      result = await escrowCandidate({
+        ...fixture,
+        publicationState: absentPublicationState(fixture),
+        attestations: {
+          async verify({ subjects }) {
+            return { status: "VERIFIED", subjects }
+          },
+        },
+        github: remote.releaseGitHub,
+      })
+      break
+    } catch (error) {
+      if (!(error instanceof RehearsalCrashError)) throw error
+    }
+  }
+
+  assert.equal(result.phase, "ESCROWED")
+  assert.equal(result.assetCount, 45)
+  const snapshot = remote.snapshot()
+  assert.equal(snapshot.assets.length, 45)
+  assert.equal(parseReleaseMarker(snapshot.release.body).phase, "ESCROWED")
+  assert.deepEqual(gate.snapshot().remaining, [])
+})
+
+test("expired exact Actions artifacts recover only from the attested 45-asset draft escrow", async () => {
+  const fixture = fixedGroupArtifactFixture()
+  const gate = createOrderedFaultGate([])
+  const base = canonicalBaseAssetSet(fixture)
+  const remote = createRehearsalGitHub({
+    candidate: fixture.candidate,
+    gate,
+    baseAssetNames: base.assets.map(({ name }) => name),
+  })
+  await escrowCandidate({
+    ...fixture,
+    publicationState: absentPublicationState(fixture),
+    attestations: {
+      async verify({ subjects }) {
+        return { status: "VERIFIED", subjects }
+      },
+    },
+    github: remote.releaseGitHub,
+  })
+
+  const result = await verifyExpiredActionsEscrowFallback({
+    record: fixture.record,
+    remote,
+  })
+  assert.deepEqual(result, {
+    source: "escrow",
+    fileCount: 22,
+    actionsExpired: true,
+  })
+})
+
+test("real reconciliation, audit retry, publication, and immutable replay survive every crash", async () => {
+  const fixture = fixedGroupArtifactFixture()
+  const faults = FIXED_GROUP_REHEARSAL_FAULTS.slice(
+    FIXED_GROUP_REHEARSAL_FAULTS.indexOf("before-reconcile-npm"),
+  )
+  const gate = createOrderedFaultGate(faults)
+  const base = canonicalBaseAssetSet(fixture)
+  const remote = createRehearsalGitHub({
+    candidate: fixture.candidate,
+    gate,
+    baseAssetNames: base.assets.map(({ name }) => name),
+  })
+  await escrowCandidate({
+    ...fixture,
+    publicationState: absentPublicationState(fixture),
+    attestations: {
+      async verify({ subjects }) {
+        return { status: "VERIFIED", subjects }
+      },
+    },
+    github: remote.releaseGitHub,
+  })
+  const durable = createRehearsalDurableState()
+  let result
+  for (let attempt = 0; attempt <= faults.length; attempt += 1) {
+    try {
+      result = await resumeFixedGroupEvidence({
+        candidate: fixture.candidate,
+        record: fixture.record,
+        manifest: fixture.artifact.manifest,
+        npmEvidence: completeNpmEvidence(fixture),
+        gate,
+        remote,
+        durable,
+      })
+      if (result.status === "AUDIT_COMPLETE") break
+    } catch (error) {
+      if (!(error instanceof RehearsalCrashError)) throw error
+    }
+  }
+
+  assert.equal(result.status, "AUDIT_COMPLETE")
+  assert.equal(result.immutable, true)
+  assert.deepEqual(gate.snapshot().remaining, [])
+  const snapshot = remote.snapshot()
+  assert.deepEqual(snapshot.dispatchedRunIds, [501, 502, 503, 504, 505, 506])
+  assert.equal(snapshot.release.draft, false)
+  assert.equal(snapshot.release.immutable, true)
+  assert.equal(snapshot.assets.length, 48)
+  assert.deepEqual(
+    snapshot.assets
+      .map(({ name }) => name)
+      .filter((name) => name.startsWith("audit-attempt-") || name === "audit-result.json"),
+    ["audit-attempt-503-1.json", "audit-attempt-506-1.json", "audit-result.json"],
+  )
+
+  const replay = await resumeFixedGroupEvidence({
+    candidate: fixture.candidate,
+    record: fixture.record,
+    manifest: fixture.artifact.manifest,
+    npmEvidence: completeNpmEvidence(fixture),
+    gate,
+    remote,
+    durable,
+  })
+  assert.equal(replay.status, "AUDIT_COMPLETE")
+  assert.equal(replay.mutations, 0)
+})
+
+test("registry harness packs without publishing and exposes one bounded real publish primitive", async (t) => {
+  const outside = await realpath(await mkdtemp(join(tmpdir(), "dawn-rehearsal-outside-")))
+  t.after(() => rm(outside, { recursive: true, force: true }))
+  const harness = await createFaultHarness({ fixtureDirectory: THREE_PACKAGE_FIXTURE })
+  t.after(() => harness.close())
+
+  const packed = await harness.packFixtureTarballs()
+  assert.equal(packed.length, 3)
+  const registryOrigin = new URL(harness.registry.url).origin
+  const reader = createNpmReader({
+    registryUrl: harness.registry.url,
+    trustedRegistryOrigins: [registryOrigin],
+    fetchImpl(url, options) {
+      const target = new URL(url)
+      assert.equal(target.origin, registryOrigin)
+      return fetch(new URL(`${target.pathname}${target.search}`, harness.proxy.url), options)
+    },
+  })
+  harness.proxy.setMode("exact-version-e404")
+  assert.equal(
+    (await reader.observePackageVersion({ name: packed[0].name, version: packed[0].version }))
+      .status,
+    "ABSENT",
+  )
+
+  harness.proxy.reset()
+  await harness.publishPreparedTarball({ tarballPath: packed[0].tarballPath })
+  const present = await reader.observePackageVersion({
+    name: packed[0].name,
+    version: packed[0].version,
+  })
+  assert.equal(present.status, "PRESENT")
+  const downloaded = Buffer.from(await (await fetch(present.package.tarballUrl)).arrayBuffer())
+  assert.equal(downloaded.equals(await readFile(packed[0].tarballPath)), true)
+
+  const untrustedTarball = join(outside, "outside.tgz")
+  await writeFile(untrustedTarball, "not trusted")
+  await assert.rejects(
+    harness.publishPreparedTarball({ tarballPath: untrustedTarball }),
+    /allowed.*root|tarball.*root/iu,
+  )
+})
+
+test("fault proxy preserves a canonical release tarball larger than the small fixture", async (t) => {
+  const bytes = Buffer.alloc(4 * 1024 * 1024 + 1, 0x61)
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-length": String(bytes.length),
+      "content-type": "application/octet-stream",
+    })
+    response.end(bytes)
+  })
+  upstream.listen(0, "127.0.0.1")
+  await once(upstream, "listening")
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        upstream.close(resolve)
+        upstream.closeAllConnections()
+      }),
+  )
+  const address = upstream.address()
+  assert.notEqual(address, null)
+  assert.equal(typeof address, "object")
+  const proxy = await startFaultProxy({
+    upstreamUrl: `http://127.0.0.1:${address.port}/`,
+  })
+  t.after(() => proxy.close())
+
+  const response = await fetch(new URL("canonical-package.tgz", proxy.url))
+  assert.equal(response.status, 200)
+  assert.equal(Buffer.from(await response.arrayBuffer()).equals(bytes), true)
+})
+
+function auditDispatchInput(version, commitSha) {
+  return {
+    workflow: ".github/workflows/published-artifact-verify.yml",
+    ref: `v${version}`,
+    inputs: {
+      version,
+      commitSha,
+      manifestSha256: "b".repeat(64),
+    },
+  }
+}
+
+function fixedGroupArtifactFixture() {
+  const version = "0.8.22"
+  const commitSha = "a".repeat(40)
+  const candidate = {
+    version,
+    commitSha,
+    ciWorkflow: "CI",
+    ciCheck: "validate",
+    publisherWorkflow: ".github/workflows/release.yml",
+  }
+  const files = []
+  const packages = CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+    const bytes = Buffer.from(`packed:${name}`)
+    const sha512 = hash("sha512", bytes)
+    const filename = `${name.replace(/^@/u, "").replace("/", "-")}-${version}.tgz`
+    files.push({ name: filename, bytes })
+    return {
+      name,
+      version,
+      filename,
+      size: bytes.byteLength,
+      sha256: hash("sha256", bytes),
+      sha512,
+      npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+      access: "public",
+    }
+  })
+  const manifest = {
+    schemaVersion: 1,
+    version,
+    commitSha,
+    ci: { workflow: "CI", runId: 10, runAttempt: 1 },
+    artifact: {
+      name: `release-v${version}-${commitSha.slice(0, 12)}`,
+      prepareRunId: 11,
+      prepareRunAttempt: 1,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages,
+  }
+  files.unshift({ name: "manifest.json", bytes: canonicalManifestBytes(manifest) })
+  const record = createReleaseRecord({
+    candidate,
+    manifestSha256: hash("sha256", canonicalManifestBytes(manifest)),
+    artifact: { name: manifest.artifact.name },
+    artifactUpload: { id: "12", digest: `sha256:${"b".repeat(64)}` },
+    prepareRun: { id: 11, attempt: 1 },
+  })
+  const bundles = files.map(({ name }) => ({
+    name: `${name}.intoto.jsonl`,
+    bytes: Buffer.from(`bundle:${name}`),
+  }))
+  const attestationSet = {
+    repository: "cacheplane/dawnai",
+    workflow: ".github/workflows/release.yml",
+    sourceRef: `refs/tags/v${version}`,
+    commitSha,
+    workflowRunId: 13,
+    runAttempt: 1,
+    subjects: files.map((file, index) => ({
+      subjectName: file.name,
+      subjectSha256: hash("sha256", file.bytes),
+      bundleName: bundles[index].name,
+      bundleSha256: hash("sha256", bundles[index].bytes),
+    })),
+  }
+  return {
+    candidate,
+    record,
+    artifact: { manifest, files },
+    attestationSet,
+    bundles,
+  }
+}
+
+function absentPublicationState(fixture) {
+  return {
+    schemaVersion: 1,
+    version: fixture.candidate.version,
+    commitSha: fixture.candidate.commitSha,
+    tag: `v${fixture.candidate.version}`,
+    observedAt: "2026-08-25T00:00:00Z",
+    candidateRuns: [],
+    registryMutationReceipts: [],
+    packages: fixture.artifact.manifest.packages.map(({ name }) => ({
+      name,
+      version: fixture.candidate.version,
+      status: "ABSENT",
+      httpStatus: 404,
+      observedAt: "2026-08-25T00:00:00Z",
+    })),
+  }
+}
+
+function completeNpmEvidence(fixture) {
+  return {
+    schemaVersion: 1,
+    version: fixture.candidate.version,
+    commitSha: fixture.candidate.commitSha,
+    manifestSha256: fixture.record.manifestSha256,
+    complete: true,
+    status: "NPM_COMPLETE",
+    packages: fixture.artifact.manifest.packages.map((pkg) => ({
+      name: pkg.name,
+      version: pkg.version,
+      status: "present",
+      size: pkg.size,
+      tarballSha256: pkg.sha256,
+      tarballSha512: pkg.sha512,
+      integrity: pkg.npmIntegrity,
+      latest: { status: "present", version: pkg.version },
+      signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+      provenance: {
+        predicateType: "https://slsa.dev/provenance/v1",
+        workflow: ".github/workflows/release.yml",
+        commitSha: fixture.candidate.commitSha,
+        repository: "https://github.com/cacheplane/dawnai",
+        ref: `refs/tags/v${fixture.candidate.version}`,
+      },
+    })),
+  }
+}
+
+function hash(algorithm, bytes) {
+  return createHash(algorithm).update(bytes).digest("hex")
+}
