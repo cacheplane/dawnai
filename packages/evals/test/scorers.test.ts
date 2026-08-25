@@ -1,4 +1,5 @@
 import type { AgentRunResult } from "@dawn-ai/testing"
+import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 import { createSafeRegexTester } from "../src/regex-safety.js"
 import { normalizeScore } from "../src/score.js"
@@ -11,6 +12,22 @@ import {
   tokensUnder,
   toolCalled,
 } from "../src/scorers.js"
+
+const REGEX_TIMEOUT_PROBE = `
+const { createSafeRegexTester } = await import(process.argv[1])
+
+try {
+  createSafeRegexTester(/(a|aa)+$/u)("a".repeat(40) + "!")
+  process.stdout.write(JSON.stringify({ result: "completed" }))
+} catch (error) {
+  process.stdout.write(
+    JSON.stringify({
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  )
+}
+`
 
 function run(partial: Partial<AgentRunResult>): AgentRunResult {
   return {
@@ -68,11 +85,11 @@ describe("built-in scorers", () => {
 })
 
 describe("regex scorer safety policy", () => {
-  it("rejects structurally unsafe expressions during scorer construction", () => {
-    const createScorer = () => regex(/^(a+)+$/u)
+  it("preserves overlapping-alternative semantics when matching finishes within the budget", async () => {
+    const scorer = regex(/^(a|aa)+$/u)
 
-    expect(createScorer).toThrow(TypeError)
-    expect(createScorer).toThrow("Regular expression is unsafe for synchronous matching")
+    expect(normalizeScore(await scorer.score(run({ finalMessage: "aaaa" }), noCase)).score).toBe(1)
+    expect(normalizeScore(await scorer.score(run({ finalMessage: "aaab" }), noCase)).score).toBe(0)
   })
 
   it("rejects oversized final messages before evaluation", () => {
@@ -126,11 +143,70 @@ describe("regex scorer safety policy", () => {
 })
 
 describe("private regex safety adapter", () => {
-  it("rejects structurally unsafe expressions with the exact error", () => {
-    const createTester = () => createSafeRegexTester(/^(a+)+$/u)
+  it("interrupts catastrophic matching with the exact bounded error", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        REGEX_TIMEOUT_PROBE,
+        new URL("../src/regex-safety.ts", import.meta.url).href,
+      ],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 2_000,
+      },
+    )
 
-    expect(createTester).toThrow(TypeError)
-    expect(createTester).toThrow("Regular expression is unsafe for synchronous matching")
+    expect(result.error).toBeUndefined()
+    expect(result.signal).toBeNull()
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({
+      message: "Regular expression evaluation exceeded 100ms execution limit",
+      name: "RangeError",
+    })
+  })
+
+  it("rejects sources over 4,096 UTF-16 code units with the exact error", () => {
+    const createTester = () => createSafeRegexTester(new RegExp("a".repeat(4_097), "u"))
+
+    expect(createTester).toThrow(RangeError)
+    expect(createTester).toThrow("Regular expression source exceeds 4096 UTF-16 code units")
+  })
+
+  it("accepts sources at the 4,096-code-unit boundary", () => {
+    expect(() => createSafeRegexTester(new RegExp("a".repeat(4_096), "u"))).not.toThrow()
+  })
+
+  it("snapshots source and flags through intrinsic RegExp accessors", () => {
+    class RegExpWithThrowingAccessors extends RegExp {
+      override get source(): string {
+        throw new Error("caller source getter must not run")
+      }
+
+      override get flags(): string {
+        throw new Error("caller flags getter must not run")
+      }
+    }
+
+    const expression = new RegExpWithThrowingAccessors("^safe$", "iu")
+    const test = createSafeRegexTester(expression)
+
+    expect(test("SAFE")).toBe(true)
+  })
+
+  it("rejects RegExp proxies without invoking their property traps", () => {
+    let propertyReads = 0
+    const expression = new Proxy(/^safe$/u, {
+      get(target, property) {
+        propertyReads += 1
+        return Reflect.get(target, property, target)
+      },
+    })
+
+    expect(() => createSafeRegexTester(expression)).toThrow(TypeError)
+    expect(propertyReads).toBe(0)
   })
 
   it.each([

@@ -565,10 +565,6 @@ importers:
         version: 26.1.2
 
   packages/evals:
-    dependencies:
-      safe-regex2:
-        specifier: ^5.1.1
-        version: 5.1.1
     devDependencies:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
@@ -884,9 +880,6 @@ importers:
       '@dawn-ai/memory':
         specifier: workspace:*
         version: link:../memory
-      safe-regex2:
-        specifier: ^5.1.1
-        version: 5.1.1
     devDependencies:
       '@dawn-ai/cli':
         specifier: workspace:*
@@ -7907,10 +7900,6 @@ packages:
     resolution: {integrity: sha512-cGk8IbWEAnaCpdAt1BHzJ3Ahz5ewDJa0KseTsE3qIRMJ3C698W8psM7byCeWVpd/Ha7FUYzuRVzXoKoM6nRUbA==}
     engines: {node: '>=20'}
 
-  ret@0.5.0:
-    resolution: {integrity: sha512-I1XxrZSQ+oErkRR4jYbAyEEu2I0avBvvMM5JN+6EBprOGRCs63ENqZ3vjavq8fBw2+62G5LF5XelKwuJpcvcxw==}
-    engines: {node: '>=10'}
-
   retry@0.12.0:
     resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
     engines: {node: '>= 4'}
@@ -7967,10 +7956,6 @@ packages:
 
   safe-buffer@5.2.1:
     resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
-
-  safe-regex2@5.1.1:
-    resolution: {integrity: sha512-mOSBvHGDZMuIEZMdOz/aCEYDCv0E7nfcNsIhUF+/P+xC7Hyf3FkvymqgPbg9D1EdSGu+uKbJgy09K/RKKc7kJA==}
-    hasBin: true
 
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
@@ -16827,8 +16812,6 @@ snapshots:
     dependencies:
       lowercase-keys: 3.0.0
 
-  ret@0.5.0: {}
-
   retry@0.12.0: {}
 
   retry@0.13.1: {}
@@ -16930,10 +16913,6 @@ snapshots:
   safe-buffer@5.1.2: {}
 
   safe-buffer@5.2.1: {}
-
-  safe-regex2@5.1.1:
-    dependencies:
-      ret: 0.5.0
 
   safe-stable-stringify@2.5.0: {}
 

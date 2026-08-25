@@ -3,6 +3,6 @@
 "@dawn-ai/testing": patch
 ---
 
-Reject structurally unsafe regular expressions and over-limit matcher inputs
-before evaluation, and make global and sticky expression matching deterministic
-across repeated calls.
+Evaluate regular expression compilation and matching inside a fresh, time-bounded
+Node context, reject over-limit expression sources and matcher inputs, and make
+global and sticky expression matching deterministic across repeated calls.
