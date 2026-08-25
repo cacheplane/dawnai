@@ -159,6 +159,46 @@ test("a failed audit is attempt-scoped, retryable, idempotent, and preserves bas
   assert.equal(remote.assets.has("audit-attempt-501-1.json"), true)
 })
 
+test("an audit retry rejects every previously recorded workflow run ID", async () => {
+  const remote = auditRemote()
+  await recordAuditDispatch({
+    candidate: CANDIDATE,
+    dispatch: dispatch(501),
+    github: remote.releaseGitHub,
+  })
+  await recordAuditAttempt({
+    candidate: CANDIDATE,
+    dispatch: dispatch(501),
+    result: auditResult({ workflowRunId: 501, conclusion: "failure" }),
+    github: remote.releaseGitHub,
+  })
+  await recordAuditDispatch({
+    candidate: CANDIDATE,
+    dispatch: dispatch(502),
+    github: remote.releaseGitHub,
+  })
+  await recordAuditAttempt({
+    candidate: CANDIDATE,
+    dispatch: dispatch(502),
+    result: auditResult({ workflowRunId: 502, conclusion: "failure" }),
+    github: remote.releaseGitHub,
+  })
+
+  const updates = remote.updateCount
+  await assert.rejects(
+    recordAuditDispatch({
+      candidate: CANDIDATE,
+      dispatch: dispatch(501),
+      github: remote.releaseGitHub,
+    }),
+    /new|historical|previous|replay|workflow run/iu,
+  )
+  const marker = parseReleaseMarker(remote.release.body)
+  assert.equal(marker.phase, "AUDIT_RETRYABLE")
+  assert.equal(marker.audit.workflowRunId, 502)
+  assert.equal(remote.updateCount, updates)
+})
+
 test("successful audit writes attempt then byte-identical canonical receipt before marker CAS", async () => {
   const remote = auditRemote()
   await recordAuditDispatch({
@@ -312,6 +352,7 @@ test("waitForAudit polls the exact run and returns only its one canonical result
   let delays = 0
   const observed = await waitForAudit({
     runId: 501,
+    candidate: CANDIDATE,
     github: remote.github,
     attempts: 3,
     delayMs: 1,
@@ -334,6 +375,7 @@ test("waitForAudit polls the exact run and returns only its one canonical result
   assert.deepEqual(
     await waitForAudit({
       runId: 501,
+      candidate: CANDIDATE,
       github: pending.github,
       attempts: 2,
       delayMs: 0,
@@ -352,6 +394,7 @@ test("waitForAudit treats requested and waiting runs as bounded nonterminal stat
   })
   const observed = await waitForAudit({
     runId: 501,
+    candidate: CANDIDATE,
     github: remote.github,
     attempts: 3,
     delayMs: 0,
@@ -381,6 +424,12 @@ test("waitForAudit rejects missing, duplicate, cross-run, wrong-attempt, and non
       pattern: /run|correlat|artifact|commit/iu,
     },
     {
+      mutate: (remote) => {
+        remote.artifacts[0].workflow_run.head_branch = "v0.8.23"
+      },
+      pattern: /run|correlat|artifact|ref|tag/iu,
+    },
+    {
       result: auditResult({ workflowRunId: 501, runAttempt: 2 }),
       runAttempt: 1,
       pattern: /attempt|name|correlat/iu,
@@ -402,6 +451,7 @@ test("waitForAudit rejects missing, duplicate, cross-run, wrong-attempt, and non
     await assert.rejects(
       waitForAudit({
         runId: 501,
+        candidate: CANDIDATE,
         github: remote.github,
         attempts: 1,
         delayMs: 0,
@@ -419,6 +469,7 @@ test("waitForAudit rejects missing, duplicate, cross-run, wrong-attempt, and non
   await assert.rejects(
     waitForAudit({
       runId: 501,
+      candidate: CANDIDATE,
       github: malformedRef.github,
       attempts: 1,
       delayMs: 0,
@@ -426,6 +477,86 @@ test("waitForAudit rejects missing, duplicate, cross-run, wrong-attempt, and non
     }),
     /run|identity|branch|tag/iu,
   )
+
+  const coherentWrongCandidate = actionsRemote({
+    result: auditResult({ workflowRunId: 501 }),
+    statuses: ["completed"],
+  })
+  coherentWrongCandidate.headSha = "f".repeat(40)
+  coherentWrongCandidate.headBranch = "v0.8.23"
+  coherentWrongCandidate.artifacts[0].workflow_run.head_sha = coherentWrongCandidate.headSha
+  coherentWrongCandidate.artifacts[0].workflow_run.head_branch = coherentWrongCandidate.headBranch
+  await assert.rejects(
+    waitForAudit({
+      runId: 501,
+      candidate: CANDIDATE,
+      github: coherentWrongCandidate.github,
+      attempts: 1,
+      delayMs: 0,
+      delay: async () => {},
+    }),
+    /candidate|commit|ref|run|tag/iu,
+  )
+})
+
+test("waitForAudit enforces one aggregate thirty-minute deadline", async () => {
+  const result = auditResult({ workflowRunId: 501 })
+  const remote = actionsRemote({
+    result,
+    statuses: Array.from({ length: 1_000 }, () => "queued"),
+  })
+  let currentTime = 0
+  const delays = []
+  const observed = await waitForAudit({
+    runId: 501,
+    candidate: CANDIDATE,
+    github: remote.github,
+    attempts: 1_000,
+    delayMs: 300_000,
+    delay: async (milliseconds) => {
+      delays.push(milliseconds)
+      currentTime += milliseconds
+    },
+    now: () => currentTime,
+  })
+
+  assert.deepEqual(observed, { status: "pending", workflowRunId: 501 })
+  assert.equal(currentTime, 30 * 60 * 1_000)
+  assert.deepEqual(
+    delays,
+    Array.from({ length: 6 }, () => 300_000),
+  )
+  assert.equal(remote.calls.filter(([method]) => method === "getActionsRun").length, 6)
+})
+
+test("waitForAudit returns pending within its deadline when an Actions read stalls", async () => {
+  const github = Object.freeze({
+    async getActionsRun() {
+      return new Promise(() => {})
+    },
+    async listActionsRunArtifacts() {
+      assert.fail("a stalled run read cannot advance to artifacts")
+    },
+    async getActionsArtifact() {
+      assert.fail("a stalled run read cannot advance to artifact metadata")
+    },
+    async downloadActionsArtifact() {
+      assert.fail("a stalled run read cannot advance to artifact bytes")
+    },
+  })
+  const startedAt = Date.now()
+  const observed = await waitForAudit({
+    runId: 501,
+    candidate: CANDIDATE,
+    github,
+    attempts: 1,
+    delayMs: 0,
+    delay: async () => {},
+    timeoutMs: 20,
+  })
+
+  assert.deepEqual(observed, { status: "pending", workflowRunId: 501 })
+  assert.ok(Date.now() - startedAt < 500)
 })
 
 test("correlation binds dispatch, candidate, manifest, run identity, and aggregate conclusion", () => {
@@ -633,11 +764,16 @@ function actionsRemote({
         id: 801,
         name: `audit-result-${result.workflowRunId}-${runAttempt}`,
         expired: false,
-        workflow_run: { id: result.workflowRunId, head_sha: COMMIT_SHA },
+        workflow_run: {
+          id: result.workflowRunId,
+          head_branch: `v${VERSION}`,
+          head_sha: COMMIT_SHA,
+        },
       },
     ],
     zip: zip([{ name: "audit-result.json", bytes: canonicalAuditResultBytes(result) }]),
     headBranch: `v${VERSION}`,
+    headSha: COMMIT_SHA,
   }
   remote.github = Object.freeze({
     async getActionsRun({ runId }) {
@@ -650,7 +786,7 @@ function actionsRemote({
         conclusion: status === "completed" ? terminalConclusion : null,
         event: "workflow_dispatch",
         path: WORKFLOW,
-        head_sha: COMMIT_SHA,
+        head_sha: remote.headSha,
         head_branch: remote.headBranch,
       })
     },

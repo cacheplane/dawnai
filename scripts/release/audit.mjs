@@ -28,6 +28,9 @@ const CANDIDATE_FIELDS = Object.freeze([
 const DISPATCH_FIELDS = Object.freeze(["workflow", "workflowRunId", "runUrl", "htmlUrl"])
 const MAX_POLL_ATTEMPTS = 1_000
 const MAX_DELAY_MS = 300_000
+const AUDIT_WAIT_BUDGET_MS = 30 * 60 * 1_000
+
+class AuditWaitDeadlineError extends Error {}
 
 export async function dispatchIndependentAudit({ candidate, manifestSha256, github }) {
   const identity = validateCandidate(snapshotJson(candidate))
@@ -58,7 +61,7 @@ export async function recordAuditDispatch({ candidate, dispatch, github }) {
   let release = await requireDraftRelease(effects.reader, identity)
   let marker = parseReleaseMarker(release.body)
   assertMarkerIdentity(marker, identity)
-  await observeAuditAssets(effects.reader, release.id, marker)
+  const observed = await observeAuditAssets(effects.reader, release.id, marker)
 
   if (marker.phase === "AUDIT_DISPATCHED") {
     if (!sameDispatch(marker.audit, receipt)) {
@@ -72,6 +75,16 @@ export async function recordAuditDispatch({ candidate, dispatch, github }) {
   }
   if (marker.phase === "AUDIT_RETRYABLE" && marker.audit.workflowRunId === receipt.workflowRunId) {
     throw new Error("An audit retry requires a new directly returned workflow run")
+  }
+  if (
+    marker.phase === "AUDIT_RETRYABLE" &&
+    observed.auditFiles.some(
+      ({ name, bytes }) =>
+        name !== "audit-result.json" &&
+        parseCanonicalAuditBytes(bytes).workflowRunId === receipt.workflowRunId,
+    )
+  ) {
+    throw new Error("An audit retry cannot replay a historical workflow run ID")
   }
 
   const next = {
@@ -99,25 +112,64 @@ export async function recordAuditDispatch({ candidate, dispatch, github }) {
   return transitionResult(release, marker, "updated")
 }
 
-export async function waitForAudit({ runId, github, attempts, delayMs, delay }) {
+export async function waitForAudit({
+  runId,
+  candidate,
+  github,
+  attempts,
+  delayMs,
+  delay,
+  now = Date.now,
+  timeoutMs = AUDIT_WAIT_BUDGET_MS,
+}) {
   assertPositiveId(runId, "Audit workflow run ID")
+  const identity = validateCandidate(snapshotJson(candidate))
   assertInteger(attempts, 1, MAX_POLL_ATTEMPTS, "Audit poll attempts")
   assertInteger(delayMs, 0, MAX_DELAY_MS, "Audit poll delay")
+  assertInteger(timeoutMs, 1, AUDIT_WAIT_BUDGET_MS, "Audit poll timeout")
   if (typeof delay !== "function") throw new TypeError("Audit poll delay function is invalid")
+  const clock = monotonicAuditClock(now)
+  const deadline = clock() + timeoutMs
+  if (!Number.isSafeInteger(deadline)) throw new TypeError("Audit poll deadline is invalid")
   const actions = bindMethods(
     github,
     ["getActionsRun", "listActionsRunArtifacts", "getActionsArtifact", "downloadActionsArtifact"],
     "Independent audit reader",
   )
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const run = await readValue(actions.getActionsRun({ runId }), "actions-run")
-    validateActionsRun(run, runId)
-    if (run.status !== "completed") {
-      if (attempt < attempts) await delay(delayMs)
-      continue
+  try {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      assertAuditTimeRemaining(deadline, clock)
+      const run = await withinAuditDeadline(
+        readValue(actions.getActionsRun({ runId }), "actions-run"),
+        deadline,
+        clock,
+      )
+      validateActionsRun(run, runId, identity)
+      if (run.status !== "completed") {
+        if (attempt < attempts) {
+          const remaining = auditTimeRemaining(deadline, clock)
+          if (remaining <= 0) throw new AuditWaitDeadlineError()
+          const waitMs = Math.min(delayMs, remaining)
+          await withinAuditDeadline(
+            Promise.resolve().then(() => delay(waitMs)),
+            deadline,
+            clock,
+          )
+        }
+        continue
+      }
+      return await readTerminalAudit({
+        actions,
+        run,
+        runId,
+        candidate: identity,
+        deadline,
+        clock,
+      })
     }
-    return readTerminalAudit({ actions, run, runId })
+  } catch (error) {
+    if (!(error instanceof AuditWaitDeadlineError)) throw error
   }
   return deepFreeze({ status: "pending", workflowRunId: runId })
 }
@@ -307,12 +359,13 @@ export async function verifyAuditSuccess({ candidate, dispatch, result, github }
   return transitionResult(release, marker, "updated")
 }
 
-async function readTerminalAudit({ actions, run, runId }) {
+async function readTerminalAudit({ actions, run, runId, candidate, deadline, clock }) {
   if (!isPositiveId(run.run_attempt)) throw new Error("Terminal audit run attempt is invalid")
   const expectedName = `audit-result-${runId}-${run.run_attempt}`
-  const listed = await readValue(
-    actions.listActionsRunArtifacts({ runId }),
-    "actions-run-artifacts",
+  const listed = await withinAuditDeadline(
+    readValue(actions.listActionsRunArtifacts({ runId }), "actions-run-artifacts"),
+    deadline,
+    clock,
   )
   if (!Array.isArray(listed)) throw new Error("Audit result artifact list is malformed")
   const matches = listed.filter((artifact) => artifact?.name === expectedName)
@@ -323,28 +376,37 @@ async function readTerminalAudit({ actions, run, runId }) {
     runId,
     runAttempt: run.run_attempt,
     name: expectedName,
-    headSha: run.head_sha,
+    headBranch: `v${candidate.version}`,
+    headSha: candidate.commitSha,
   })
-  const exactArtifact = await readValue(
-    actions.getActionsArtifact({ artifactId: listedArtifact.id }),
-    "actions-artifact",
+  const exactArtifact = await withinAuditDeadline(
+    readValue(actions.getActionsArtifact({ artifactId: listedArtifact.id }), "actions-artifact"),
+    deadline,
+    clock,
   )
   const artifact = validateActionsArtifact(exactArtifact, {
     runId,
     runAttempt: run.run_attempt,
     name: expectedName,
-    headSha: run.head_sha,
+    headBranch: `v${candidate.version}`,
+    headSha: candidate.commitSha,
   })
   if (artifact.id !== listedArtifact.id) {
     throw new Error("Audit result artifact identity changed on exact re-read")
   }
-  const download = await readBinary(
-    actions.downloadActionsArtifact({ artifactId: artifact.id }),
-    "actions-artifact-download",
+  const download = await withinAuditDeadline(
+    readBinary(
+      actions.downloadActionsArtifact({ artifactId: artifact.id }),
+      "actions-artifact-download",
+    ),
+    deadline,
+    clock,
   )
+  assertAuditTimeRemaining(deadline, clock)
   const files = extractActionsArtifactZip(download, {
     maxOutputBytes: RELEASE_PAYLOAD_LIMITS.auditReceiptBytes,
   })
+  assertAuditTimeRemaining(deadline, clock)
   if (files.length !== 1 || files[0].name !== "audit-result.json") {
     throw new Error("Audit result artifact must contain exactly audit-result.json")
   }
@@ -368,7 +430,7 @@ async function readTerminalAudit({ actions, run, runId }) {
   })
 }
 
-function validateActionsRun(value, runId) {
+function validateActionsRun(value, runId, candidate) {
   if (
     !isRecord(value) ||
     value.id !== runId ||
@@ -378,9 +440,8 @@ function validateActionsRun(value, runId) {
     ) ||
     value.event !== "workflow_dispatch" ||
     value.path !== WORKFLOW ||
-    typeof value.head_sha !== "string" ||
-    !SHA_PATTERN.test(value.head_sha) ||
-    !isExactTag(value.head_branch)
+    value.head_sha !== candidate.commitSha ||
+    value.head_branch !== `v${candidate.version}`
   ) {
     throw new Error("Audit Actions run identity is malformed")
   }
@@ -403,7 +464,7 @@ function validateActionsRun(value, runId) {
   }
 }
 
-function validateActionsArtifact(value, { runId, runAttempt, name, headSha }) {
+function validateActionsArtifact(value, { runId, runAttempt, name, headBranch, headSha }) {
   if (
     !isRecord(value) ||
     !isPositiveId(value.id) ||
@@ -411,18 +472,13 @@ function validateActionsArtifact(value, { runId, runAttempt, name, headSha }) {
     value.expired !== false ||
     !isRecord(value.workflow_run) ||
     value.workflow_run.id !== runId ||
+    value.workflow_run.head_branch !== headBranch ||
     value.workflow_run.head_sha !== headSha ||
     (value.workflow_run.run_attempt !== undefined && value.workflow_run.run_attempt !== runAttempt)
   ) {
     throw new Error("Audit result artifact is not correlated to its workflow run attempt")
   }
   return value
-}
-
-function isExactTag(value) {
-  if (typeof value !== "string" || !value.startsWith("v")) return false
-  const version = value.slice(1)
-  return isExactSemver(version) && parseSemver(version).build.length === 0
 }
 
 async function observeAuditAssets(reader, releaseId, marker) {
@@ -814,6 +870,39 @@ function assertSha256(value, label) {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
     throw new TypeError(`${label} is invalid`)
   }
+}
+
+function monotonicAuditClock(now) {
+  if (typeof now !== "function") throw new TypeError("Audit poll clock is invalid")
+  let previous = null
+  return () => {
+    const value = now()
+    if (!Number.isSafeInteger(value) || value < 0 || (previous !== null && value < previous)) {
+      throw new TypeError("Audit poll clock is invalid")
+    }
+    previous = value
+    return value
+  }
+}
+
+function auditTimeRemaining(deadline, clock) {
+  return Math.max(0, deadline - clock())
+}
+
+function assertAuditTimeRemaining(deadline, clock) {
+  if (auditTimeRemaining(deadline, clock) <= 0) throw new AuditWaitDeadlineError()
+}
+
+function withinAuditDeadline(promise, deadline, clock) {
+  const remaining = auditTimeRemaining(deadline, clock)
+  if (remaining <= 0) return Promise.reject(new AuditWaitDeadlineError())
+  let timer
+  return Promise.race([
+    promise,
+    new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new AuditWaitDeadlineError()), remaining)
+    }),
+  ]).finally(() => clearTimeout(timer))
 }
 
 function sha256(bytes) {
