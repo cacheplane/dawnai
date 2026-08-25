@@ -8,6 +8,7 @@ import { promisify } from "node:util"
 import { inflateRawSync } from "node:zlib"
 
 import { createGitHubReader } from "./adapters/github.mjs"
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { canonicalManifestBytes, parseSealedReleaseManifest } from "./manifest.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "./release-record.mjs"
 
@@ -24,9 +25,6 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const ZIP_LOCAL_SIGNATURE = 0x04034b50
 const ZIP_CENTRAL_SIGNATURE = 0x02014b50
 const ZIP_END_SIGNATURE = 0x06054b50
-const MAX_ARCHIVE_ENTRIES = 64
-const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
-const MAX_ESCROW_BYTES = 64 * 1024 * 1024
 const execFileAsync = promisify(execFile)
 const VERIFIED_MATERIALIZATIONS = new WeakMap()
 
@@ -34,6 +32,7 @@ export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
   "scripts/release/adapters/github.mjs",
   "scripts/release/adapters/http.mjs",
   "scripts/release/artifact-store.mjs",
+  "scripts/release/limits.mjs",
   "scripts/release/manifest.mjs",
   "scripts/release/release-record.mjs",
   "scripts/release/semver.mjs",
@@ -90,7 +89,14 @@ export async function runArtifactStoreCli(
   const input = parseArtifactStoreArguments(argv)
   const recordPath = path.resolve(input.recordPath)
   const outputDir = path.resolve(input.outputDir)
-  const record = parseReleaseRecord(await fileSystem.readFile(recordPath))
+  const record = parseReleaseRecord(
+    await readBoundedRegularFile(
+      fileSystem,
+      recordPath,
+      RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+      "Release record",
+    ),
+  )
   const repository = parseRepository(environment.GITHUB_REPOSITORY)
   const token = environment.GITHUB_TOKEN
   if (typeof token !== "string" || token.length === 0 || /[\r\n]/u.test(token)) {
@@ -163,6 +169,11 @@ export async function loadVerifiedReleaseArtifact({
   if (download?.status !== "PRESENT" || !(download.archiveBytes instanceof Uint8Array)) {
     throw new Error(`Actions artifact download could not be verified: ${resultCode(download)}`)
   }
+  assertPayloadByteLength(
+    download.archiveBytes.byteLength,
+    RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
+    "Actions artifact ZIP",
+  )
   const archiveBytes = Buffer.from(download.archiveBytes)
   const archiveDigest = `sha256:${createHash("sha256").update(archiveBytes).digest("hex")}`
   if (archiveDigest !== releaseRecord.actionsArtifact.serviceDigest) {
@@ -177,17 +188,20 @@ export async function loadVerifiedReleaseArtifact({
   })
 }
 
-export function extractActionsArtifactZip(raw, { maxOutputBytes = MAX_ARCHIVE_BYTES } = {}) {
+export function extractActionsArtifactZip(
+  raw,
+  { maxOutputBytes = RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes } = {},
+) {
   if (!(raw instanceof Uint8Array)) throw new TypeError("Actions artifact ZIP must be bytes")
   if (
     !Number.isSafeInteger(maxOutputBytes) ||
     maxOutputBytes < 1 ||
-    maxOutputBytes > MAX_ARCHIVE_BYTES
+    maxOutputBytes > RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes
   ) {
     throw new TypeError("Actions artifact ZIP output limit is invalid")
   }
   const archive = Buffer.from(raw)
-  if (archive.length < 22 || archive.length > MAX_ARCHIVE_BYTES) {
+  if (archive.length < 22 || archive.length > RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes) {
     throw new Error("Actions artifact ZIP size is invalid")
   }
   const endOffset = findZipEnd(archive)
@@ -202,7 +216,7 @@ export function extractActionsArtifactZip(raw, { maxOutputBytes = MAX_ARCHIVE_BY
     centralDisk !== 0 ||
     diskEntries !== totalEntries ||
     totalEntries < 1 ||
-    totalEntries > MAX_ARCHIVE_ENTRIES ||
+    totalEntries > RELEASE_PAYLOAD_LIMITS.zipEntries ||
     centralOffset + centralSize > endOffset
   ) {
     throw new Error("Actions artifact ZIP directory is invalid or unsupported")
@@ -225,6 +239,9 @@ export function extractActionsArtifactZip(raw, { maxOutputBytes = MAX_ARCHIVE_BY
     const localOffset = archive.readUInt32LE(cursor + 42)
     assertZipRange(archive, cursor + 46, nameLength + extraLength + commentLength)
     const name = decodeZipName(archive.subarray(cursor + 46, cursor + 46 + nameLength))
+    if (nameLength > RELEASE_PAYLOAD_LIMITS.archiveFilenameBytes) {
+      throw new Error("Actions artifact ZIP entry name exceeds its byte limit")
+    }
     if (
       name.length === 0 ||
       path.posix.basename(name) !== name ||
@@ -254,7 +271,15 @@ export function extractActionsArtifactZip(raw, { maxOutputBytes = MAX_ARCHIVE_BY
     assertZipRange(archive, dataOffset, compressedSize)
     const compressed = archive.subarray(dataOffset, dataOffset + compressedSize)
     totalUncompressedSize += uncompressedSize
-    if (uncompressedSize > maxOutputBytes || totalUncompressedSize > maxOutputBytes) {
+    const entryLimit =
+      name === "manifest.json"
+        ? RELEASE_PAYLOAD_LIMITS.manifestBytes
+        : RELEASE_PAYLOAD_LIMITS.tarballBytes
+    if (
+      uncompressedSize > entryLimit ||
+      uncompressedSize > maxOutputBytes ||
+      totalUncompressedSize > maxOutputBytes
+    ) {
       throw new Error("Actions artifact ZIP entry size exceeds the output limit")
     }
     const bytes =
@@ -536,12 +561,12 @@ async function assertAbsent(target, fileSystem) {
 export function createArtifactStoreGitHubRuntime({
   metadataReader,
   binaryReader,
-  maxEscrowBytes = MAX_ESCROW_BYTES,
+  maxEscrowBytes = RELEASE_PAYLOAD_LIMITS.escrowBytes,
 }) {
   if (
     !Number.isSafeInteger(maxEscrowBytes) ||
     maxEscrowBytes < 1 ||
-    maxEscrowBytes > MAX_ESCROW_BYTES
+    maxEscrowBytes > RELEASE_PAYLOAD_LIMITS.escrowBytes
   ) {
     throw new TypeError("Release escrow byte budget is invalid")
   }
@@ -585,13 +610,24 @@ export function createArtifactStoreGitHubRuntime({
           return { status: "GONE", httpStatus: 410, code: "RETENTION_EXPIRED" }
         }
         return result.status === "PRESENT"
-          ? { status: "PRESENT", archiveBytes: decodeCanonicalBase64(result.contentBase64) }
+          ? {
+              status: "PRESENT",
+              archiveBytes: decodeCanonicalBase64(
+                result.contentBase64,
+                RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
+                "Actions artifact ZIP",
+              ),
+            }
           : result
       },
     },
     releaseReader: {
       async loadEscrow({ tag, record }) {
-        const budget = { remaining: maxEscrowBytes }
+        const budget = {
+          remaining: maxEscrowBytes,
+          payloadRemaining: RELEASE_PAYLOAD_LIMITS.actionsExpandedBytes,
+          bundlesRemaining: RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes,
+        }
         const releasesResult = await metadataReader.listReleases()
         if (releasesResult.status !== "PRESENT") return releasesResult
         const matching = releasesResult.value.filter((release) => release?.tag_name === tag)
@@ -619,13 +655,26 @@ export function createArtifactStoreGitHubRuntime({
           binaryReader,
           releaseRecordAsset,
           budget,
+          {
+            classLimit: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+            label: "release-record.json",
+          },
         )
         const manifestAsset = requireReleaseAsset(byName, "manifest.json")
-        const manifestBytes = await downloadReleaseAsset(binaryReader, manifestAsset, budget)
+        const manifestBytes = await downloadReleaseAsset(binaryReader, manifestAsset, budget, {
+          classLimit: RELEASE_PAYLOAD_LIMITS.manifestBytes,
+          label: "manifest.json",
+          remainingField: "payloadRemaining",
+        })
         const manifest = parseSealedReleaseManifest(manifestBytes, {
           candidate: { version: record.version, commitSha: record.commitSha },
         })
         const names = ["manifest.json", ...manifest.packages.map((entry) => entry.filename)]
+        const bundleNames = names.map((name) => `${name}.intoto.jsonl`)
+        const expectedAssetNames = ["release-record.json", ...names, ...bundleNames]
+        if (!sameSortedSet([...byName.keys()], expectedAssetNames)) {
+          return { status: "ERROR", httpStatus: 200, code: "ESCROW_ASSET_SET_CONFLICT" }
+        }
         const files = [{ name: "manifest.json", bytes: manifestBytes }]
         for (const name of names.slice(1)) {
           files.push({
@@ -634,13 +683,13 @@ export function createArtifactStoreGitHubRuntime({
               binaryReader,
               requireReleaseAsset(byName, name),
               budget,
+              {
+                classLimit: RELEASE_PAYLOAD_LIMITS.tarballBytes,
+                label: name,
+                remainingField: "payloadRemaining",
+              },
             ),
           })
-        }
-        const bundleNames = names.map((name) => `${name}.intoto.jsonl`)
-        const expectedAssetNames = ["release-record.json", ...names, ...bundleNames]
-        if (!sameSortedSet([...byName.keys()], expectedAssetNames)) {
-          return { status: "ERROR", httpStatus: 200, code: "ESCROW_ASSET_SET_CONFLICT" }
         }
         const bundles = []
         for (const name of bundleNames) {
@@ -650,6 +699,11 @@ export function createArtifactStoreGitHubRuntime({
               binaryReader,
               requireReleaseAsset(byName, name),
               budget,
+              {
+                classLimit: RELEASE_PAYLOAD_LIMITS.attestationBundleBytes,
+                label: name,
+                remainingField: "bundlesRemaining",
+              },
             ),
           })
         }
@@ -760,7 +814,9 @@ function indexReleaseAssets(assets) {
       asset === null ||
       typeof asset !== "object" ||
       typeof asset.name !== "string" ||
-      !Number.isSafeInteger(asset.id)
+      !Number.isSafeInteger(asset.id) ||
+      !Number.isSafeInteger(asset.size) ||
+      asset.size < 1
     ) {
       throw new Error("Release escrow asset metadata is malformed")
     }
@@ -776,14 +832,29 @@ function requireReleaseAsset(byName, name) {
   return asset
 }
 
-async function downloadReleaseAsset(reader, asset, budget) {
+async function downloadReleaseAsset(
+  reader,
+  asset,
+  budget,
+  { classLimit, label, remainingField } = {},
+) {
+  assertPayloadByteLength(asset.size, classLimit, `Release escrow asset ${label}`)
+  if (asset.size > budget.remaining) {
+    throw new Error("Release escrow download byte budget exceeded")
+  }
+  if (remainingField !== undefined && asset.size > budget[remainingField]) {
+    throw new Error(`Release escrow ${label} cumulative byte budget exceeded`)
+  }
   const result = await reader.downloadReleaseAsset({ assetId: asset.id })
   if (result.status !== "PRESENT") {
     throw new Error(`Release escrow asset ${asset.name} could not be downloaded`)
   }
-  const bytes = decodeCanonicalBase64(result.contentBase64)
+  const bytes = decodeCanonicalBase64(result.contentBase64, asset.size, `Release escrow ${label}`)
+  if (bytes.length !== asset.size) {
+    throw new Error(`Release escrow asset ${label} size differs from metadata`)
+  }
   budget.remaining -= bytes.length
-  if (budget.remaining < 0) throw new Error("Release escrow download byte budget exceeded")
+  if (remainingField !== undefined) budget[remainingField] -= bytes.length
   return bytes
 }
 
@@ -799,11 +870,27 @@ async function runGhCommand(args, options) {
   await execFileAsync("gh", args, { ...options, maxBuffer: 4 * 1024 * 1024 })
 }
 
-function decodeCanonicalBase64(value) {
+function decodeCanonicalBase64(value, maximumBytes, label) {
   if (typeof value !== "string") throw new Error("GitHub binary response is missing base64 bytes")
+  const maximumBase64Length = 4 * Math.ceil(maximumBytes / 3)
+  if (value.length > maximumBase64Length) {
+    throw new Error(`${label} exceeds its encoded byte limit`)
+  }
   const bytes = Buffer.from(value, "base64")
   if (bytes.toString("base64") !== value)
     throw new Error("GitHub binary response is not canonical base64")
+  return bytes
+}
+
+async function readBoundedRegularFile(fileSystem, target, maximumBytes, label) {
+  const stat = await fileSystem.lstat(target)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1) {
+    throw new Error(`${label} must be one positive regular file`)
+  }
+  assertPayloadByteLength(stat.size, maximumBytes, label)
+  const bytes = await fileSystem.readFile(target)
+  assertPayloadByteLength(bytes.byteLength, maximumBytes, label)
+  if (bytes.byteLength !== stat.size) throw new Error(`${label} changed while being read`)
   return bytes
 }
 

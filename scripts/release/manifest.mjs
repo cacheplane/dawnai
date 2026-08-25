@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto"
 import { posix, win32 } from "node:path"
-
+import {
+  assertPayloadByteLength,
+  assertPreparedTarballPayload,
+  RELEASE_PAYLOAD_LIMITS,
+} from "./limits.mjs"
 import { isExactSemver } from "./semver.mjs"
 import { orderReleasePackages } from "./topology.mjs"
 
@@ -53,6 +57,7 @@ const PACKAGE_FIELDS = [
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 
 export function parseReleaseManifest(raw, context) {
+  assertManifestInputSize(raw, "release manifest")
   let source
   if (typeof raw === "string") {
     source = raw
@@ -105,6 +110,7 @@ export function validateReleaseManifest(value, context) {
 }
 
 export function parseSealedReleaseManifest(raw, context) {
+  assertManifestInputSize(raw, "sealed release manifest")
   let source
   if (typeof raw === "string") {
     source = raw
@@ -156,7 +162,9 @@ export function validateSealedReleaseManifest(value, { candidate } = {}) {
 }
 
 export function canonicalManifestBytes(manifest) {
-  return Buffer.from(`${JSON.stringify(canonicalize(manifest), null, 2)}\n`, "utf8")
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(manifest), null, 2)}\n`, "utf8")
+  assertPayloadByteLength(bytes.length, RELEASE_PAYLOAD_LIMITS.manifestBytes, "Release manifest")
+  return bytes
 }
 
 export function manifestSha256(manifest) {
@@ -253,6 +261,7 @@ function validatePackages(packages, { inventoryNames, packageOrder, version }) {
   for (const entry of packages) {
     validatePackage(entry, version)
   }
+  assertPreparedTarballPayload(packages)
 }
 
 function validatePackage(entry, version) {
@@ -396,4 +405,16 @@ function compareNames(left, right) {
 
 function formatCause(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function assertManifestInputSize(raw, label) {
+  if (typeof raw === "string") {
+    assertPayloadByteLength(
+      Buffer.byteLength(raw, "utf8"),
+      RELEASE_PAYLOAD_LIMITS.manifestBytes,
+      label,
+    )
+  } else if (raw instanceof Uint8Array) {
+    assertPayloadByteLength(raw.byteLength, RELEASE_PAYLOAD_LIMITS.manifestBytes, label)
+  }
 }

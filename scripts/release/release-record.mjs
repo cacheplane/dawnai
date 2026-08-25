@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 
+import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 export const RELEASE_RECORD_SCHEMA_VERSION = 1
@@ -26,7 +27,8 @@ const CANDIDATE_FIELDS = Object.freeze([
   "ciCheck",
   "publisherWorkflow",
 ])
-const UPLOAD_FIELDS = Object.freeze(["id", "name", "serviceDigest"])
+const PREPARED_ARTIFACT_FIELDS = Object.freeze(["name"])
+const UPLOAD_FIELDS = Object.freeze(["id", "digest"])
 const RUN_FIELDS = Object.freeze(["id", "attempt"])
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
@@ -37,6 +39,11 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 export function parseReleaseRecord(raw) {
   let value
   if (typeof raw === "string" || raw instanceof Uint8Array) {
+    assertPayloadByteLength(
+      typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : raw.byteLength,
+      RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+      "Release record",
+    )
     let source
     try {
       source = typeof raw === "string" ? raw : UTF8_DECODER.decode(raw)
@@ -50,8 +57,21 @@ export function parseReleaseRecord(raw) {
   return validateReleaseRecord(value)
 }
 
-export function createReleaseRecord({ candidate, manifestSha256, artifactUpload, prepareRun }) {
+export function createReleaseRecord({
+  candidate,
+  manifestSha256,
+  artifact,
+  artifactUpload,
+  prepareRun,
+}) {
   const identity = validateCandidate(candidate)
+  const preparedArtifact = snapshotData(artifact, "prepared artifact")
+  assertObject(preparedArtifact, "prepared artifact")
+  assertExactFields(preparedArtifact, PREPARED_ARTIFACT_FIELDS, "prepared artifact")
+  const expectedArtifactName = `release-v${identity.version}-${identity.commitSha.slice(0, 12)}`
+  if (preparedArtifact.name !== expectedArtifactName) {
+    throw new TypeError(`Prepared artifact name must be ${expectedArtifactName}`)
+  }
   if (artifactUpload === undefined) {
     throw new TypeError("Exact artifact upload receipt is required")
   }
@@ -69,8 +89,8 @@ export function createReleaseRecord({ candidate, manifestSha256, artifactUpload,
     manifestSha256,
     actionsArtifact: {
       id: normalizeDecimalId(upload.id, "artifact ID"),
-      name: upload.name,
-      serviceDigest: normalizeServiceDigest(upload.serviceDigest, { normalize: true }),
+      name: preparedArtifact.name,
+      serviceDigest: normalizeServiceDigest(upload.digest, { normalize: true }),
       prepareRunId: normalizeDecimalId(run.id, "prepare run ID", { allowNumber: true }),
       prepareRunAttempt: run.attempt,
     },
@@ -79,7 +99,9 @@ export function createReleaseRecord({ candidate, manifestSha256, artifactUpload,
 
 export function canonicalReleaseRecordBytes(record) {
   const parsed = parseReleaseRecord(record)
-  return Buffer.from(`${JSON.stringify(canonicalize(parsed), null, 2)}\n`, "utf8")
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(parsed), null, 2)}\n`, "utf8")
+  assertPayloadByteLength(bytes.length, RELEASE_PAYLOAD_LIMITS.releaseRecordBytes, "Release record")
+  return bytes
 }
 
 export function releaseRecordSha256(record) {

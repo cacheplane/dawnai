@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import {
   canonicalManifestBytes,
   manifestSha256,
@@ -47,6 +47,14 @@ test("parseReleaseManifest fatally rejects malformed UTF-8 bytes", () => {
   }
 })
 
+test("manifest parsing rejects oversized bytes before JSON decoding", () => {
+  assert.throws(
+    () =>
+      parseReleaseManifest(Buffer.alloc(RELEASE_PAYLOAD_LIMITS.manifestBytes + 1, 0x20), context),
+    /manifest.*byte limit|manifest.*too large/iu,
+  )
+})
+
 test("validateReleaseManifest validates and returns one snapshot of changing accessors", () => {
   const manifest = validManifest()
   let reads = 0
@@ -72,6 +80,23 @@ test("validateReleaseManifest rejects required fields lost while snapshotting", 
   assert.throws(
     () => validateReleaseManifest(manifest, context),
     /release manifest is missing field schemaVersion/u,
+  )
+})
+
+test("release manifests enforce shared per-tarball and cumulative prepared payload limits", () => {
+  const oversized = validManifest()
+  oversized.packages[0].size = RELEASE_PAYLOAD_LIMITS.tarballBytes + 1
+  assert.throws(
+    () => validateReleaseManifest(oversized, context),
+    /base.*size.*limit|tarball.*limit/iu,
+  )
+
+  const cumulative = validManifest()
+  const each = Math.floor(RELEASE_PAYLOAD_LIMITS.preparedTarballsBytes / 3) + 1
+  for (const entry of cumulative.packages) entry.size = each
+  assert.throws(
+    () => validateReleaseManifest(cumulative, context),
+    /cumulative|prepared.*payload/iu,
   )
 })
 
@@ -261,6 +286,13 @@ test("canonicalManifestBytes rejects sparse arrays", () => {
   packages[1] = { name: "present" }
 
   assert.throws(() => canonicalManifestBytes({ packages }), /Manifest arrays must not be sparse/u)
+})
+
+test("canonical manifest encoding reserves the shared resolver headroom", () => {
+  assert.throws(
+    () => canonicalManifestBytes({ value: "x".repeat(RELEASE_PAYLOAD_LIMITS.manifestBytes) }),
+    /manifest.*byte limit|manifest.*too large/iu,
+  )
 })
 
 test("manifestSha256 hashes the canonical manifest bytes", () => {

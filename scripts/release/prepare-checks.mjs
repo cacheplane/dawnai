@@ -1,4 +1,4 @@
-import { constants } from "node:fs"
+import { constants, createReadStream } from "node:fs"
 import {
   access,
   lstat,
@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { createGunzip } from "node:zlib"
 
 import { runServer } from "verdaccio"
 
@@ -23,7 +24,7 @@ import {
   packages as packConfigurations,
   validatePackManifest,
 } from "../lib/pack-check.mjs"
-import { assertCleanDependencySpecs, validatePackageMetadata } from "../lib/published-artifacts.mjs"
+import { validatePackageMetadata } from "../lib/published-artifacts.mjs"
 import { runTypeScriptToolingProbe } from "../lib/typescript-tooling-probe.mjs"
 import {
   assertNoNativeLifecycleScripts,
@@ -32,6 +33,7 @@ import {
   TYPESCRIPT_VERSION,
   ZOD_VERSION,
 } from "../published-artifact-smoke.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 
 const LOOPBACK = "127.0.0.1"
 const REGISTRY_BODY_LIMIT = "64mb"
@@ -54,6 +56,7 @@ export async function inspectPreparedTarball({
   entry,
   root,
   run,
+  scanTarball = scanPreparedTarball,
   fileSystem = { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile },
 }) {
   const packageDirectory = path.posix.dirname(packageJson.path)
@@ -64,6 +67,7 @@ export async function inspectPreparedTarball({
   const createdTemporary = await fileSystem.mkdtemp(path.join(tmpdir(), "dawn-release-inspect-"))
   const temporary = await fileSystem.realpath(createdTemporary)
   try {
+    await scanTarball(tarballPath)
     const listing = commandStdout(await run("tar", ["-tzf", tarballPath], { cwd: root }))
     const archiveEntries = listing.split("\n").filter(Boolean)
     if (
@@ -88,17 +92,25 @@ export async function inspectPreparedTarball({
       throw new Error(`${packageJson.name} packed root resolves through a symlink`)
     }
     await assertNoExtractedLinks(packedRoot, fileSystem)
-    const packedManifest = JSON.parse(
-      await fileSystem.readFile(path.join(packedRoot, "package.json"), "utf8"),
-    )
+    const packedManifestPath = path.join(packedRoot, "package.json")
+    const packedManifestStat = await fileSystem.lstat(packedManifestPath)
+    if (
+      !packedManifestStat.isFile() ||
+      packedManifestStat.isSymbolicLink() ||
+      packedManifestStat.size < 1 ||
+      packedManifestStat.size > RELEASE_PAYLOAD_LIMITS.packedManifestBytes
+    ) {
+      throw new Error(`${packageJson.name} packed package.json exceeds its byte limit`)
+    }
+    const packedManifest = JSON.parse(await fileSystem.readFile(packedManifestPath, "utf8"))
     const metadataFailures = validatePackageMetadata(entry.name, packedManifest, entry.version)
     if (metadataFailures.length > 0) {
       throw new Error(`${entry.name} packed metadata failed: ${metadataFailures.join("; ")}`)
     }
-    if (packedManifest.publishConfig?.access !== entry.access || entry.access !== "public") {
+    if (entry.access !== "public") {
       throw new Error(`${entry.name} packed access does not match public release access`)
     }
-    assertCleanDependencySpecs(`${entry.name}@${entry.version}`, packedManifest)
+    assertSafePackedPublicationManifest(packedManifest)
 
     const failures = []
     for (const relativePath of configuration.expectedFiles) {
@@ -142,8 +154,11 @@ export async function smokePreparedTarballs({
 }) {
   const temporary = await fileSystem.mkdtemp(path.join(tmpdir(), "dawn-release-smoke-"))
   let registry
+  let result
+  let primaryError
   try {
     registry = await startRegistry()
+    assertLoopbackRegistryUrl(registry?.url)
     const npmCache = path.join(temporary, "npm-cache")
     const userConfig = path.join(temporary, "npmrc")
     await fileSystem.mkdir(npmCache)
@@ -151,7 +166,10 @@ export async function smokePreparedTarballs({
     const environment = registryEnvironment({ registryUrl: registry.url, npmCache, userConfig })
 
     for (const tarball of tarballs) {
-      await run("npm", localPublishArguments(tarball), { cwd: temporary, env: environment })
+      await run("npm", localPublishArguments(tarball, registry.url), {
+        cwd: temporary,
+        env: environment,
+      })
     }
 
     const consumer = path.join(temporary, "consumer")
@@ -160,6 +178,8 @@ export async function smokePreparedTarballs({
       "npm",
       [
         "install",
+        "--registry",
+        registry.url,
         "--save-exact",
         "--package-lock=false",
         ...manifest.packages.map(({ name, version }) => `${name}@${version}`),
@@ -176,6 +196,8 @@ export async function smokePreparedTarballs({
       "npm",
       [
         "install",
+        "--registry",
+        registry.url,
         "--ignore-scripts",
         "--save-exact",
         "--package-lock=false",
@@ -200,11 +222,34 @@ export async function smokePreparedTarballs({
       run,
       fileSystem,
     })
-    return Object.freeze({ cleanInstall: "passed", typeScript: "passed", scaffold: "passed" })
-  } finally {
-    await registry?.close()
-    await fileSystem.rm(temporary, { recursive: true, force: true })
+    result = Object.freeze({ cleanInstall: "passed", typeScript: "passed", scaffold: "passed" })
+  } catch (error) {
+    primaryError = error
   }
+  const cleanupErrors = []
+  try {
+    await registry?.close()
+  } catch (error) {
+    cleanupErrors.push(
+      new Error(`Release smoke registry close failed: ${formatError(error)}`, { cause: error }),
+    )
+  }
+  try {
+    await fileSystem.rm(temporary, { recursive: true, force: true })
+  } catch (error) {
+    cleanupErrors.push(
+      new Error(`Release smoke temporary cleanup failed: ${formatError(error)}`, { cause: error }),
+    )
+  }
+  if (primaryError !== undefined || cleanupErrors.length > 0) {
+    const errors = [...(primaryError === undefined ? [] : [primaryError]), ...cleanupErrors]
+    if (errors.length === 1) throw errors[0]
+    throw new AggregateError(
+      errors,
+      `Release smoke failed and cleanup also failed: ${errors.map(formatError).join("; ")}`,
+    )
+  }
+  return result
 }
 
 async function smokeScaffolder({ candidate, manifest, temporary, environment, run, fileSystem }) {
@@ -215,6 +260,8 @@ async function smokeScaffolder({ candidate, manifest, temporary, environment, ru
     "npm",
     [
       "install",
+      "--registry",
+      environment.npm_config_registry,
       "--ignore-scripts",
       "--save-exact",
       "--package-lock=false",
@@ -232,7 +279,11 @@ async function smokeScaffolder({ candidate, manifest, temporary, environment, ru
     environment.npm_config_registry,
     fileSystem,
   )
-  await run("npm", ["install", "--package-lock=false"], { cwd: scaffold, env: environment })
+  await run(
+    "npm",
+    ["install", "--registry", environment.npm_config_registry, "--package-lock=false"],
+    { cwd: scaffold, env: environment },
+  )
   await assertNoPackageLock(scaffold, fileSystem)
   await verifyInstalledCandidate({ root: scaffold, manifest, fileSystem, installedOnly: true })
   await run("npm", ["run", "typecheck"], { cwd: scaffold, env: environment })
@@ -340,10 +391,13 @@ function withEnvironment(run, environment) {
     run(command, args, { ...options, env: { ...environment, ...options.env } })
 }
 
-export function localPublishArguments(tarball) {
+export function localPublishArguments(tarball, registryUrl) {
+  assertLoopbackRegistryUrl(registryUrl)
   return [
     "publish",
     tarball,
+    "--registry",
+    registryUrl,
     "--ignore-scripts",
     "--tag",
     "latest",
@@ -351,6 +405,180 @@ export function localPublishArguments(tarball) {
     "public",
     "--scope=",
   ]
+}
+
+export function assertSafePackedPublicationManifest(manifest) {
+  if (manifest === null || Array.isArray(manifest) || typeof manifest !== "object") {
+    throw new TypeError("Packed publication manifest must be an object")
+  }
+  const publishConfig = manifest.publishConfig
+  if (
+    publishConfig === null ||
+    Array.isArray(publishConfig) ||
+    typeof publishConfig !== "object" ||
+    Object.getPrototypeOf(publishConfig) !== Object.prototype ||
+    !arraysEqual(Object.keys(publishConfig).sort(), ["access"]) ||
+    publishConfig.access !== "public"
+  ) {
+    throw new Error("Packed publishConfig must contain public access only")
+  }
+  for (const field of [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ]) {
+    const dependencies = manifest[field]
+    if (dependencies === undefined) continue
+    if (
+      dependencies === null ||
+      Array.isArray(dependencies) ||
+      typeof dependencies !== "object" ||
+      Object.getPrototypeOf(dependencies) !== Object.prototype
+    ) {
+      throw new TypeError(`Packed ${field} must be an object`)
+    }
+    for (const [name, specifier] of Object.entries(dependencies)) {
+      if (!isRegistryDependencySpecifier(specifier)) {
+        throw new Error(`Packed dependency ${field}.${name} has an unsafe registry specifier`)
+      }
+    }
+  }
+}
+
+export async function scanPreparedTarball(
+  tarballPath,
+  {
+    maxEntries = RELEASE_PAYLOAD_LIMITS.tarEntries,
+    maxExpandedBytes = RELEASE_PAYLOAD_LIMITS.tarExpandedBytes,
+    createReadStreamImpl = createReadStream,
+  } = {},
+) {
+  if (
+    typeof tarballPath !== "string" ||
+    !Number.isSafeInteger(maxEntries) ||
+    maxEntries < 1 ||
+    maxEntries > RELEASE_PAYLOAD_LIMITS.tarEntries ||
+    !Number.isSafeInteger(maxExpandedBytes) ||
+    maxExpandedBytes < 1 ||
+    maxExpandedBytes > RELEASE_PAYLOAD_LIMITS.tarExpandedBytes ||
+    typeof createReadStreamImpl !== "function"
+  ) {
+    throw new TypeError("Prepared tarball scan limits are invalid")
+  }
+  const input = createReadStreamImpl(tarballPath, {
+    flags: constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  })
+  const gunzip = createGunzip()
+  input.pipe(gunzip)
+  let expandedBytes = 0
+  let entries = 0
+  let remainingContentBytes = 0
+  let remainingPaddingBytes = 0
+  let currentType
+  let capturedPaxChunks = []
+  let pendingPaxPath
+  let header = Buffer.alloc(0)
+  let zeroBlocks = 0
+  try {
+    for await (const rawChunk of gunzip) {
+      const chunk = Buffer.from(rawChunk)
+      expandedBytes += chunk.length
+      if (expandedBytes > maxExpandedBytes) {
+        throw new Error("Prepared tarball expanded byte limit exceeded")
+      }
+      let cursor = 0
+      while (cursor < chunk.length) {
+        if (remainingContentBytes > 0) {
+          const consumed = Math.min(remainingContentBytes, chunk.length - cursor)
+          if (currentType === "x") {
+            capturedPaxChunks.push(Buffer.from(chunk.subarray(cursor, cursor + consumed)))
+          }
+          remainingContentBytes -= consumed
+          cursor += consumed
+          if (remainingContentBytes === 0 && remainingPaddingBytes === 0) finishEntry()
+          continue
+        }
+        if (remainingPaddingBytes > 0) {
+          const consumed = Math.min(remainingPaddingBytes, chunk.length - cursor)
+          remainingPaddingBytes -= consumed
+          cursor += consumed
+          if (remainingPaddingBytes === 0) finishEntry()
+          continue
+        }
+        const needed = 512 - header.length
+        const consumed = Math.min(needed, chunk.length - cursor)
+        header = Buffer.concat([header, chunk.subarray(cursor, cursor + consumed)])
+        cursor += consumed
+        if (header.length !== 512) continue
+        if (header.every((byte) => byte === 0)) {
+          zeroBlocks += 1
+          header = Buffer.alloc(0)
+          continue
+        }
+        if (zeroBlocks >= 2) throw new Error("Prepared tarball has data after its end marker")
+        zeroBlocks = 0
+        validateTarHeader(header)
+        entries += 1
+        if (entries > maxEntries) throw new Error("Prepared tarball entry count limit exceeded")
+        const size = parseTarOctal(header.subarray(124, 136), "entry size")
+        const type = String.fromCharCode(header[156] || 0x30)
+        if (type === "1" || type === "2") {
+          throw new Error("Prepared tarball contains a symlink or hardlink entry")
+        }
+        if (!["0", "5", "x"].includes(type)) {
+          throw new Error(`Prepared tarball contains unsupported entry type ${type}`)
+        }
+        if (type === "x") {
+          if (
+            pendingPaxPath !== undefined ||
+            size < 1 ||
+            size > RELEASE_PAYLOAD_LIMITS.tarPaxHeaderBytes
+          ) {
+            throw new Error("Prepared tarball PAX path header is invalid or oversized")
+          }
+        } else {
+          const name = pendingPaxPath ?? tarHeaderName(header)
+          pendingPaxPath = undefined
+          if (
+            Buffer.byteLength(name, "utf8") > RELEASE_PAYLOAD_LIMITS.tarPathBytes ||
+            !safePackageArchivePath(name)
+          ) {
+            throw new Error("Prepared tarball contains an unsafe archive path")
+          }
+        }
+        currentType = type
+        remainingContentBytes = size
+        remainingPaddingBytes = (512 - (size % 512)) % 512
+        capturedPaxChunks = []
+        header = Buffer.alloc(0)
+        if (remainingContentBytes === 0 && remainingPaddingBytes === 0) finishEntry()
+      }
+    }
+  } finally {
+    input.destroy()
+    gunzip.destroy()
+  }
+  if (
+    entries < 1 ||
+    remainingContentBytes !== 0 ||
+    remainingPaddingBytes !== 0 ||
+    currentType !== undefined ||
+    pendingPaxPath !== undefined ||
+    header.length !== 0 ||
+    zeroBlocks < 2
+  ) {
+    throw new Error("Prepared tarball is truncated or missing its end marker")
+  }
+  return Object.freeze({ entries, expandedBytes })
+
+  function finishEntry() {
+    if (currentType === "x") {
+      pendingPaxPath = parsePaxPath(Buffer.concat(capturedPaxChunks))
+    }
+    currentType = undefined
+    capturedPaxChunks = []
+  }
 }
 
 export async function startLoopbackRegistry({
@@ -459,4 +687,139 @@ function commandStdout(result) {
 
 function readField(value, dottedPath) {
   return dottedPath.split(".").reduce((current, segment) => current?.[segment], value)
+}
+
+function assertLoopbackRegistryUrl(value) {
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new TypeError("Release smoke registry must be an exact loopback URL")
+  }
+  if (
+    url.protocol !== "http:" ||
+    url.hostname !== LOOPBACK ||
+    url.port === "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    throw new TypeError("Release smoke registry must be an exact loopback URL")
+  }
+}
+
+function isRegistryDependencySpecifier(value) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 256 ||
+    value.trim() !== value ||
+    /[\0\r\n]/u.test(value)
+  ) {
+    return false
+  }
+  if (value.startsWith("npm:")) {
+    const alias = value.slice(4)
+    const separator = alias.lastIndexOf("@")
+    if (separator < 1) return false
+    const name = alias.slice(0, separator)
+    const range = alias.slice(separator + 1)
+    if (!/^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u.test(name)) {
+      return false
+    }
+    return isRegistrySemverRange(range)
+  }
+  return isRegistrySemverRange(value)
+}
+
+function isRegistrySemverRange(value) {
+  const version = String.raw`(?:0|[1-9][0-9]*|[xX*])(?:\.(?:0|[1-9][0-9]*|[xX*])){0,2}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`
+  const comparator = new RegExp(`^(?:[~^]|>=?|<=?|=)?v?${version}$`, "u")
+  return value.split(/\s*\|\|\s*/u).every((alternative) => {
+    const hyphen = alternative.split(/\s+-\s+/u)
+    if (hyphen.length === 2) return hyphen.every((entry) => comparator.test(entry))
+    if (hyphen.length > 2) return false
+    const tokens = alternative.split(/\s+/u)
+    return tokens.length > 0 && tokens.every((entry) => comparator.test(entry))
+  })
+}
+
+function validateTarHeader(header) {
+  const expected = parseTarOctal(header.subarray(148, 156), "checksum")
+  const copy = Buffer.from(header)
+  copy.fill(0x20, 148, 156)
+  const actual = copy.reduce((total, byte) => total + byte, 0)
+  if (actual !== expected) throw new Error("Prepared tarball header checksum is invalid")
+}
+
+function parseTarOctal(bytes, label) {
+  const source = Buffer.from(bytes)
+    .toString("ascii")
+    .replace(/[\0 ]+$/u, "")
+    .trimStart()
+  if (!/^[0-7]+$/u.test(source)) throw new Error(`Prepared tarball ${label} is invalid`)
+  const value = Number.parseInt(source, 8)
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Prepared tarball ${label} is outside the safe range`)
+  }
+  return value
+}
+
+function tarHeaderName(header) {
+  const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/su, "")
+  const prefix = header.subarray(345, 500).toString("utf8").replace(/\0.*$/su, "")
+  return prefix.length === 0 ? name : `${prefix}/${name}`
+}
+
+function parsePaxPath(bytes) {
+  let cursor = 0
+  let pathValue
+  while (cursor < bytes.length) {
+    const space = bytes.indexOf(0x20, cursor)
+    if (space <= cursor) throw new Error("Prepared tarball PAX record length is invalid")
+    const lengthSource = bytes.subarray(cursor, space).toString("ascii")
+    if (!/^[1-9][0-9]*$/u.test(lengthSource)) {
+      throw new Error("Prepared tarball PAX record length is invalid")
+    }
+    const length = Number(lengthSource)
+    const end = cursor + length
+    if (!Number.isSafeInteger(length) || end > bytes.length || bytes[end - 1] !== 0x0a) {
+      throw new Error("Prepared tarball PAX record exceeds its header")
+    }
+    const equals = bytes.indexOf(0x3d, space + 1)
+    if (equals < 0 || equals >= end - 1) {
+      throw new Error("Prepared tarball PAX record is malformed")
+    }
+    const key = bytes.subarray(space + 1, equals).toString("ascii")
+    if (key !== "path" || pathValue !== undefined) {
+      throw new Error("Prepared tarball PAX header contains unsupported metadata")
+    }
+    try {
+      pathValue = new TextDecoder("utf-8", { fatal: true }).decode(
+        bytes.subarray(equals + 1, end - 1),
+      )
+    } catch (error) {
+      throw new Error("Prepared tarball PAX path is not valid UTF-8", { cause: error })
+    }
+    cursor = end
+  }
+  if (
+    pathValue === undefined ||
+    Buffer.byteLength(pathValue, "utf8") > RELEASE_PAYLOAD_LIMITS.tarPathBytes ||
+    !safePackageArchivePath(pathValue)
+  ) {
+    throw new Error("Prepared tarball PAX header contains an unsafe archive path")
+  }
+  return pathValue
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function formatError(error) {
+  if (error instanceof AggregateError) return error.message
+  return error instanceof Error ? error.message : String(error)
 }

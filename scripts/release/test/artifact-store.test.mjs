@@ -14,7 +14,9 @@ import {
   loadVerifiedReleaseArtifact,
   materializeVerifiedReleaseArtifact,
   parseArtifactStoreArguments,
+  runArtifactStoreCli,
 } from "../artifact-store.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
 
@@ -155,6 +157,33 @@ test("trusted ZIP extraction binds the archive bytes to exact basename entries",
   )
 })
 
+test("trusted ZIP extraction enforces the shared entry and basename limits", () => {
+  assert.throws(
+    () =>
+      extractActionsArtifactZip(
+        storedZip(
+          Array.from({ length: RELEASE_PAYLOAD_LIMITS.zipEntries + 1 }, (_value, index) => ({
+            name: `file-${index}`,
+            bytes: Buffer.from("x"),
+          })),
+        ),
+      ),
+    /directory.*invalid|entry.*limit/iu,
+  )
+  assert.throws(
+    () =>
+      extractActionsArtifactZip(
+        storedZip([
+          {
+            name: "x".repeat(RELEASE_PAYLOAD_LIMITS.archiveFilenameBytes + 1),
+            bytes: Buffer.from("x"),
+          },
+        ]),
+      ),
+    /name.*byte|basename.*limit/iu,
+  )
+})
+
 test("the documented four-argument resolver defaults to its built-in ZIP extractor", async () => {
   const fixture = artifactFixture({ useZipArchive: true })
   delete fixture.inputs.extractArchive
@@ -170,6 +199,7 @@ test("the sparse executable dependency allowlist covers its exact local import c
     "scripts/release/adapters/github.mjs",
     "scripts/release/adapters/http.mjs",
     "scripts/release/artifact-store.mjs",
+    "scripts/release/limits.mjs",
     "scripts/release/manifest.mjs",
     "scripts/release/release-record.mjs",
     "scripts/release/semver.mjs",
@@ -218,7 +248,16 @@ test("production escrow downloads share one bounded byte budget", async () => {
         }
       },
       async listReleaseAssets() {
-        return { status: "PRESENT", value: [{ id: 2, name: "release-record.json" }] }
+        return {
+          status: "PRESENT",
+          value: [
+            {
+              id: 2,
+              name: "release-record.json",
+              size: canonicalReleaseRecordBytes(fixture.record).length,
+            },
+          ],
+        }
       },
     },
     binaryReader: {
@@ -235,6 +274,80 @@ test("production escrow downloads share one bounded byte budget", async () => {
     runtime.releaseReader.loadEscrow({ tag: fixture.record.tag, record: fixture.record }),
     /escrow.*byte|download.*budget/iu,
   )
+})
+
+test("escrow rejects an oversized asset from metadata before downloading it", async () => {
+  const fixture = artifactFixture()
+  let downloads = 0
+  const runtime = createArtifactStoreGitHubRuntime({
+    metadataReader: {
+      async listReleases() {
+        return {
+          status: "PRESENT",
+          value: [
+            {
+              id: 1,
+              tag_name: fixture.record.tag,
+              target_commitish: SHA,
+              draft: true,
+              prerelease: false,
+            },
+          ],
+        }
+      },
+      async listReleaseAssets() {
+        return {
+          status: "PRESENT",
+          value: [
+            {
+              id: 2,
+              name: "release-record.json",
+              size: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes + 1,
+            },
+          ],
+        }
+      },
+    },
+    binaryReader: {
+      async downloadReleaseAsset() {
+        downloads += 1
+        throw new Error("must not download")
+      },
+    },
+  })
+
+  await assert.rejects(
+    runtime.releaseReader.loadEscrow({ tag: fixture.record.tag, record: fixture.record }),
+    /release-record.*size|byte limit/iu,
+  )
+  assert.equal(downloads, 0)
+})
+
+test("the executable rejects an oversized release record before readFile", async () => {
+  let reads = 0
+  await assert.rejects(
+    runArtifactStoreCli(
+      ["resolve", "--record", "/tmp/record.json", "--output-dir", "/tmp/output"],
+      {
+        environment: {},
+        fileSystem: {
+          async lstat() {
+            return {
+              isFile: () => true,
+              isSymbolicLink: () => false,
+              size: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes + 1,
+            }
+          },
+          async readFile() {
+            reads += 1
+            throw new Error("must not read")
+          },
+        },
+      },
+    ),
+    /release record.*byte limit|record.*too large/iu,
+  )
+  assert.equal(reads, 0)
 })
 
 test("materialization writes only after verification into a fresh destination", async (t) => {

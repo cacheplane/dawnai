@@ -24,10 +24,10 @@ test("createReleaseRecord binds the candidate to the exact artifact upload recei
   const record = createReleaseRecord({
     candidate: CANDIDATE,
     manifestSha256: MANIFEST_SHA,
+    artifact: { name: `release-v${VERSION}-${SHA.slice(0, 12)}` },
     artifactUpload: {
       id: "12345678901234567890",
-      name: `release-v${VERSION}-${SHA.slice(0, 12)}`,
-      serviceDigest: SERVICE_DIGEST,
+      digest: SERVICE_DIGEST,
     },
     prepareRun: { id: "987654321", attempt: 2 },
   })
@@ -42,10 +42,10 @@ test("createReleaseRecord canonicalizes the upload action's bare SHA-256 digest"
   const record = createReleaseRecord({
     candidate: CANDIDATE,
     manifestSha256: MANIFEST_SHA,
+    artifact: { name: `release-v${VERSION}-${SHA.slice(0, 12)}` },
     artifactUpload: {
       id: "12345678901234567890",
-      name: `release-v${VERSION}-${SHA.slice(0, 12)}`,
-      serviceDigest: "C".repeat(64),
+      digest: "C".repeat(64),
     },
     prepareRun: { id: "987654321", attempt: 2 },
   })
@@ -111,8 +111,7 @@ test("createReleaseRecord never infers an Actions artifact from its name", () =>
     { name: `release-v${VERSION}-${SHA.slice(0, 12)}` },
     {
       id: "123",
-      name: `release-v${VERSION}-${SHA.slice(0, 12)}`,
-      serviceDigest: undefined,
+      digest: undefined,
     },
   ]) {
     assert.throws(
@@ -120,12 +119,53 @@ test("createReleaseRecord never infers an Actions artifact from its name", () =>
         createReleaseRecord({
           candidate: CANDIDATE,
           manifestSha256: MANIFEST_SHA,
+          artifact: { name: `release-v${VERSION}-${SHA.slice(0, 12)}` },
           artifactUpload,
           prepareRun: { id: "987", attempt: 1 },
         }),
       /upload receipt|service digest/iu,
     )
   }
+})
+
+test("createReleaseRecord takes the deterministic name separately and never reads a name output", () => {
+  let reads = 0
+  const artifactUpload = {
+    id: "12345678901234567890",
+    digest: "c".repeat(64),
+  }
+  Object.defineProperty(artifactUpload, "name", {
+    enumerable: true,
+    get() {
+      reads += 1
+      return "forged-action-output"
+    },
+  })
+
+  assert.throws(
+    () =>
+      createReleaseRecord({
+        candidate: CANDIDATE,
+        manifestSha256: MANIFEST_SHA,
+        artifact: { name: `release-v${VERSION}-${SHA.slice(0, 12)}` },
+        artifactUpload,
+        prepareRun: { id: "987", attempt: 1 },
+      }),
+    /snapshot|unknown field name/iu,
+  )
+  assert.equal(reads, 0)
+
+  assert.throws(
+    () =>
+      createReleaseRecord({
+        candidate: CANDIDATE,
+        manifestSha256: MANIFEST_SHA,
+        artifact: { name: "caller-selected-name" },
+        artifactUpload: { id: "123", digest: "c".repeat(64) },
+        prepareRun: { id: "987", attempt: 1 },
+      }),
+    /artifact name/iu,
+  )
 })
 
 function releaseRecord() {

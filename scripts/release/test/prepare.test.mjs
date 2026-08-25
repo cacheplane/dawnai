@@ -4,12 +4,16 @@ import * as defaultFileSystem from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { gzipSync } from "node:zlib"
 import { readReleaseInventory } from "../inventory.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import { prepareReleaseArtifacts } from "../prepare.mjs"
 import {
+  assertSafePackedPublicationManifest,
   inspectPreparedTarball,
   localPublishArguments,
+  scanPreparedTarball,
   smokePreparedTarballs,
   startLoopbackRegistry,
 } from "../prepare-checks.mjs"
@@ -156,6 +160,7 @@ test("production inspection rejects tar symlinks and hardlinks before extraction
         tarballPath: "/tmp/evals.tgz",
         entry: { name: "@dawn-ai/evals", version: VERSION, access: "public" },
         root: "/tmp/repository",
+        async scanTarball() {},
         async run(command, args) {
           commands.push([command, ...args])
           if (args[0] === "-tzf") return { stdout: "package/package.json\n", stderr: "" }
@@ -184,9 +189,11 @@ test("production inspection rejects tar symlinks and hardlinks before extraction
 })
 
 test("local registry publication reuses exact tgzs without lifecycle scripts", () => {
-  assert.deepEqual(localPublishArguments("/tmp/exact.tgz"), [
+  assert.deepEqual(localPublishArguments("/tmp/exact.tgz", "http://127.0.0.1:4873/"), [
     "publish",
     "/tmp/exact.tgz",
+    "--registry",
+    "http://127.0.0.1:4873/",
     "--ignore-scripts",
     "--tag",
     "latest",
@@ -194,6 +201,98 @@ test("local registry publication reuses exact tgzs without lifecycle scripts", (
     "public",
     "--scope=",
   ])
+})
+
+test("packed publication metadata cannot redirect npm or escape the registry", () => {
+  const base = {
+    name: "@dawn-ai/example",
+    version: VERSION,
+    publishConfig: { access: "public" },
+    dependencies: {
+      zod: "^4.4.3",
+      typescript: "npm:@typescript/typescript6@6.0.2",
+    },
+  }
+  assert.doesNotThrow(() => assertSafePackedPublicationManifest(base))
+
+  for (const publishConfig of [
+    { access: "public", registry: "https://registry.npmjs.org/" },
+    { access: "public", tag: "foreign" },
+  ]) {
+    assert.throws(
+      () => assertSafePackedPublicationManifest({ ...base, publishConfig }),
+      /publishConfig|redirect|access.*only/iu,
+    )
+  }
+  for (const specifier of [
+    "https://example.test/package.tgz",
+    "git+ssh://git@example.test/repository.git",
+    "github:owner/repository",
+    "owner/repository",
+    "file:../package",
+    "link:../package",
+    "workspace:*",
+    "../package",
+    "/absolute/package",
+  ]) {
+    assert.throws(
+      () =>
+        assertSafePackedPublicationManifest({
+          ...base,
+          dependencies: { unsafe: specifier },
+        }),
+      /dependency.*registry|specifier|unsafe/iu,
+    )
+  }
+})
+
+test("tarball preflight bounds entry count and expanded bytes before extraction", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "dawn-tar-preflight-"))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+  const tarball = path.join(temporary, "fixture.tgz")
+  await writeFile(
+    tarball,
+    gzipSync(
+      tarArchive([
+        { name: "package/package.json", bytes: Buffer.from("{}") },
+        { name: "package/index.js", bytes: Buffer.from("export {}") },
+      ]),
+    ),
+  )
+
+  await assert.rejects(
+    scanPreparedTarball(tarball, { maxEntries: 1 }),
+    /entry count|too many.*entries/iu,
+  )
+  await assert.rejects(
+    scanPreparedTarball(tarball, { maxExpandedBytes: 1_000 }),
+    /expanded.*byte|tar.*size/iu,
+  )
+})
+
+test("tarball preflight validates npm PAX path headers without weakening path checks", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "dawn-tar-pax-"))
+  t.after(() => rm(temporary, { recursive: true, force: true }))
+  for (const [name, expected] of [
+    ["package/a-very-long-safe-path/index.js", "verified"],
+    ["../escape.js", "rejected"],
+  ]) {
+    const tarball = path.join(temporary, `${expected}.tgz`)
+    await writeFile(
+      tarball,
+      gzipSync(
+        tarArchive([
+          { name: "PaxHeader", type: "x", bytes: Buffer.from(paxRecord("path", name)) },
+          { name: "PaxHeader", bytes: Buffer.from("export {}") },
+        ]),
+      ),
+    )
+    if (expected === "verified") {
+      assert.equal((await scanPreparedTarball(tarball)).entries, 2)
+    } else {
+      await assert.rejects(scanPreparedTarball(tarball), /unsafe.*path|archive path/iu)
+    }
+  }
 })
 
 test("loopback registry startup has a hard deadline", async () => {
@@ -218,6 +317,12 @@ test("production smoke orchestrates exact tgz publication, install, TypeScript, 
     },
   }
   const run = async (command, args, { cwd }) => {
+    if (command === "npm" && ["publish", "install"].includes(args[0])) {
+      assert.deepEqual(args.slice(args.indexOf("--registry"), args.indexOf("--registry") + 2), [
+        "--registry",
+        registry.url,
+      ])
+    }
     if (command === "npm" && args[0] === "publish") {
       events.push(`publish:${args[1]}`)
       return { stdout: "", stderr: "" }
@@ -293,6 +398,53 @@ test("production smoke orchestrates exact tgz publication, install, TypeScript, 
   ])
 })
 
+test("production smoke rejects non-loopback registry injection", async () => {
+  await assert.rejects(
+    smokePreparedTarballs({
+      candidate: CANDIDATE,
+      manifest: { packages: [] },
+      tarballs: [],
+      async run() {
+        throw new Error("npm must not run")
+      },
+      startRegistry: async () => ({
+        url: "https://registry.npmjs.org/",
+        async close() {},
+      }),
+    }),
+    /loopback.*registry|registry.*loopback/iu,
+  )
+})
+
+test("production smoke attempts temp cleanup even when registry shutdown fails", async () => {
+  const removals = []
+  await assert.rejects(
+    smokePreparedTarballs({
+      candidate: CANDIDATE,
+      manifest: { packages: [{ name: "@dawn-ai/sdk", version: VERSION }] },
+      tarballs: ["/sealed/sdk.tgz"],
+      async run() {
+        throw new Error("primary smoke failure")
+      },
+      startRegistry: async () => ({
+        url: "http://127.0.0.1:4873/",
+        async close() {
+          throw new Error("registry close failure")
+        },
+      }),
+      fileSystem: {
+        ...defaultFileSystem,
+        async rm(target, options) {
+          removals.push(target)
+          return defaultFileSystem.rm(target, options)
+        },
+      },
+    }),
+    /primary smoke failure.*registry close fail|multiple.*smoke.*cleanup/isu,
+  )
+  assert.equal(removals.length, 1)
+})
+
 test("only candidate-tag-only authority can prepare or retry lost preparation", async (t) => {
   for (const authority of [
     { state: "ARTIFACTS_PREPARED", releaseRecord: "present", npm: "absent" },
@@ -323,8 +475,8 @@ test("preparation rejects extra pack output and tarballs changed by smoke before
 
 test("preparation rejects an output parent that resolves through a symlink", async (t) => {
   const fixture = await preparationFixture(t)
-  const target = path.join(fixture.root, "real-parent")
-  const linked = path.join(fixture.root, "linked-parent")
+  const target = path.join(path.dirname(fixture.root), "real-parent")
+  const linked = path.join(path.dirname(fixture.root), "linked-parent")
   await mkdir(target)
   await symlink(target, linked)
   fixture.options.outputDir = path.join(linked, "release-output")
@@ -332,10 +484,134 @@ test("preparation rejects an output parent that resolves through a symlink", asy
   await assert.rejects(prepareReleaseArtifacts(fixture.options), /output parent.*symlink/u)
 })
 
+test("preparation requires output outside the canonical repository root", async (t) => {
+  const fixture = await preparationFixture(t)
+  fixture.options.outputDir = path.join(fixture.root, "release-output")
+
+  await assert.rejects(prepareReleaseArtifacts(fixture.options), /output.*outside.*repository/iu)
+  assert.ok(!fixture.operations.includes("pnpm build"))
+})
+
+test("preparation revalidates the exact clean checkout immediately before sealing", async (t) => {
+  const fixture = await preparationFixture(t, { mutateRepositoryAfterSmoke: true })
+
+  await assert.rejects(prepareReleaseArtifacts(fixture.options), /clean checkout|dirty|untracked/iu)
+  await assert.rejects(readFile(path.join(fixture.outputDir, "manifest.json")), /ENOENT/u)
+  assert.equal(fixture.checkoutChecks, 2)
+})
+
+test("preparation rejects oversized tarballs before readFile", async (t) => {
+  const fixture = await preparationFixture(t, { oversizedTarball: true })
+
+  await assert.rejects(
+    prepareReleaseArtifacts(fixture.options),
+    /tarball.*byte limit|size.*limit/iu,
+  )
+  assert.equal(fixture.tarballReads, 0)
+})
+
+test("preparation snapshots security inputs without invoking accessors", async (t) => {
+  for (const target of ["candidate", "ci", "prepareRun", "preparationAuthority", "inventory"]) {
+    const fixture = await preparationFixture(t)
+    let reads = 0
+    const object =
+      target === "inventory"
+        ? fixture.options.inventory.workspacePackages[0]
+        : fixture.options[target]
+    const field = target === "inventory" ? "name" : Object.keys(object)[0]
+    Object.defineProperty(object, field, {
+      enumerable: true,
+      get() {
+        reads += 1
+        return "forged"
+      },
+    })
+
+    await assert.rejects(
+      prepareReleaseArtifacts(fixture.options),
+      /snapshot|accessor|data property/iu,
+    )
+    assert.equal(reads, 0)
+    assert.equal(fixture.operations.length, 0)
+  }
+})
+
+test("preparation snapshots reject symbols, hidden fields, unsafe keys, and prototypes", async (t) => {
+  const cases = [
+    (options) => {
+      options.candidate[Symbol("unsafe")] = true
+    },
+    (options) => {
+      Object.defineProperty(options.ci, "hidden", { value: true })
+    },
+    (options) => {
+      Object.setPrototypeOf(options.prepareRun, { unsafe: true })
+    },
+    (options) => {
+      Object.defineProperty(options.preparationAuthority, "__proto__", {
+        value: "unsafe",
+        enumerable: true,
+      })
+    },
+    (options) => {
+      options.inventory.workspacePackages[0][Symbol("unsafe")] = true
+    },
+  ]
+  for (const mutate of cases) {
+    const fixture = await preparationFixture(t)
+    mutate(fixture.options)
+    await assert.rejects(
+      prepareReleaseArtifacts(fixture.options),
+      /snapshot|unsafe|symbol|non-enumerable/iu,
+    )
+    assert.equal(fixture.operations.length, 0)
+  }
+})
+
+test("preparation uses deep-frozen snapshots despite caller mutation during await", async (t) => {
+  const fixture = await preparationFixture(t)
+  let productionInputs
+  delete fixture.options.inspectTarball
+  delete fixture.options.smokeTarballs
+  fixture.options.createProductionChecks = (inputs) => {
+    productionInputs = inputs
+    return {
+      async inspectTarball() {
+        return { status: "verified" }
+      },
+      async smokeTarballs() {
+        return { cleanInstall: "passed", typeScript: "passed", scaffold: "passed" }
+      },
+    }
+  }
+  const originalRun = fixture.options.run
+  let mutated = false
+  fixture.options.run = async (...args) => {
+    if (!mutated) {
+      mutated = true
+      fixture.options.candidate.version = "9.9.9"
+      fixture.options.ci.commitSha = "b".repeat(40)
+      fixture.options.prepareRun.attempt = 99
+      fixture.options.preparationAuthority.npm = "complete"
+      fixture.options.inventory.workspacePackages[0].name = "mutated"
+    }
+    return originalRun(...args)
+  }
+
+  const result = await prepareReleaseArtifacts(fixture.options)
+
+  assert.equal(result.manifest.version, VERSION)
+  assert.deepEqual(result.manifest.packageOrder, CANONICAL_RELEASE_PACKAGE_ORDER)
+  assertRecursivelyFrozen(productionInputs.candidate)
+  assertRecursivelyFrozen(productionInputs.inventory)
+})
+
 async function preparationFixture(t, overrides = {}) {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dawn-prepare-root-")))
-  const outputDir = path.join(root, "release-output")
-  t.after(() => rm(root, { recursive: true, force: true }))
+  const temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), "dawn-prepare-fixture-")))
+  const root = path.join(temporary, "repository")
+  await mkdir(root)
+  const outputDir = path.join(temporary, "release-output")
+  t.after(() => rm(temporary, { recursive: true, force: true }))
   const operations = []
   const packages = CANONICAL_RELEASE_PACKAGE_ORDER.map((name, index) => ({
     name,
@@ -352,6 +628,8 @@ async function preparationFixture(t, overrides = {}) {
   }
   const headSha = overrides.headSha ?? SHA
   const tagSha = overrides.tagSha ?? SHA
+  let checkoutChecks = 0
+  let tarballReads = 0
   const output = (stdout) => (overrides.commandEnvelope ? { stdout, stderr: "" } : stdout)
   const run = async (command, args) => {
     if (command === "git" && args.join(" ") === "rev-parse HEAD") return output(`${headSha}\n`)
@@ -359,7 +637,13 @@ async function preparationFixture(t, overrides = {}) {
       return output(`${tagSha}\n`)
     }
     if (command === "git" && args.join(" ") === "status --porcelain=v1 --untracked-files=all") {
-      return output(overrides.checkoutStatus ?? "")
+      checkoutChecks += 1
+      return output(
+        overrides.checkoutStatus ??
+          (overrides.mutateRepositoryAfterSmoke && operations.includes("smoke")
+            ? " M packages/sdk/package.json\n"
+            : ""),
+      )
     }
     if (command === "pnpm" && args.join(" ") === "build") {
       operations.push("pnpm build")
@@ -378,13 +662,13 @@ async function preparationFixture(t, overrides = {}) {
     throw new Error(`Unexpected command: ${command} ${args.join(" ")}`)
   }
   const options = {
-    candidate: CANDIDATE,
+    candidate: { ...CANDIDATE },
     inventory,
     root,
     outputDir,
-    ci: CI,
-    prepareRun: PREPARE_RUN,
-    preparationAuthority: overrides.authority ?? AUTHORITY,
+    ci: { ...CI },
+    prepareRun: { ...PREPARE_RUN },
+    preparationAuthority: { ...(overrides.authority ?? AUTHORITY) },
     sourceRef: overrides.sourceRef ?? `refs/tags/v${VERSION}`,
     run,
     async inspectTarball({ entry, bytes }) {
@@ -407,6 +691,22 @@ async function preparationFixture(t, overrides = {}) {
     },
     fileSystem: {
       ...defaultFileSystem,
+      async lstat(target) {
+        const stat = await defaultFileSystem.lstat(target)
+        if (overrides.oversizedTarball && target.endsWith(".tgz")) {
+          return {
+            isDirectory: () => stat.isDirectory(),
+            isFile: () => stat.isFile(),
+            isSymbolicLink: () => stat.isSymbolicLink(),
+            size: RELEASE_PAYLOAD_LIMITS.tarballBytes + 1,
+          }
+        }
+        return stat
+      },
+      async readFile(target, ...args) {
+        if (target.endsWith(".tgz")) tarballReads += 1
+        return defaultFileSystem.readFile(target, ...args)
+      },
       async writeFile(target, ...args) {
         const result = await defaultFileSystem.writeFile(target, ...args)
         if (path.basename(target) === "manifest.json") operations.push("write-manifest")
@@ -414,7 +714,57 @@ async function preparationFixture(t, overrides = {}) {
       },
     },
   }
-  return { options, operations, outputDir, root }
+  return {
+    options,
+    operations,
+    outputDir,
+    root,
+    get checkoutChecks() {
+      return checkoutChecks
+    },
+    get tarballReads() {
+      return tarballReads
+    },
+  }
+}
+
+function tarArchive(entries) {
+  const blocks = []
+  for (const entry of entries) {
+    const header = Buffer.alloc(512)
+    header.write(entry.name, 0, 100, "utf8")
+    header.write("0000644\0", 100, 8, "ascii")
+    header.write("0000000\0", 108, 8, "ascii")
+    header.write("0000000\0", 116, 8, "ascii")
+    header.write(`${entry.bytes.length.toString(8).padStart(11, "0")}\0`, 124, 12, "ascii")
+    header.write("00000000000\0", 136, 12, "ascii")
+    header.fill(0x20, 148, 156)
+    header.write(entry.type ?? "0", 156, 1, "ascii")
+    header.write("ustar\0", 257, 6, "ascii")
+    header.write("00", 263, 2, "ascii")
+    const checksum = [...header].reduce((total, byte) => total + byte, 0)
+    header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii")
+    const padding = Buffer.alloc((512 - (entry.bytes.length % 512)) % 512)
+    blocks.push(header, Buffer.from(entry.bytes), padding)
+  }
+  blocks.push(Buffer.alloc(1024))
+  return Buffer.concat(blocks)
+}
+
+function paxRecord(key, value) {
+  let length = Buffer.byteLength(` ${key}=${value}\n`) + 1
+  while (true) {
+    const record = `${length} ${key}=${value}\n`
+    const actual = Buffer.byteLength(record)
+    if (actual === length) return record
+    length = actual
+  }
+}
+
+function assertRecursivelyFrozen(value) {
+  if (value === null || typeof value !== "object") return
+  assert.equal(Object.isFrozen(value), true)
+  for (const child of Object.values(value)) assertRecursivelyFrozen(child)
 }
 
 function tarballStem(name) {
