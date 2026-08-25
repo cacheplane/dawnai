@@ -1010,7 +1010,7 @@ export const workflow = async (_input: unknown, context: RuntimeContext) => {
             url: "__SERVER_URL__",
           },
         },
-      ]).replace("__SERVER_URL__", "__SERVER_URL__"),
+      ]),
     })
     const server = await startFakeAgentServer(async () => ({
       body: {
@@ -1276,6 +1276,30 @@ export const workflow = async (_input: unknown, context: RuntimeContext) => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain("Scenario missing input requires input to be set exactly once")
   })
+
+  test("replaceInFile rejects missing search text", async () => {
+    const appRoot = await createFixtureApp({
+      "sentinel.txt": "before __SERVER_URL__ after\n",
+    })
+    const filePath = join(appRoot, "sentinel.txt")
+
+    await expect(replaceInFile(filePath, "__MISSING__", "server-url")).rejects.toThrow(
+      "replaceInFile search text was not found",
+    )
+    await expect(readFile(filePath, "utf8")).resolves.toBe("before __SERVER_URL__ after\n")
+  })
+
+  test("replaceInFile rejects identity replacements", async () => {
+    const appRoot = await createFixtureApp({
+      "sentinel.txt": "before __SERVER_URL__ after\n",
+    })
+    const filePath = join(appRoot, "sentinel.txt")
+
+    await expect(replaceInFile(filePath, "__SERVER_URL__", "__SERVER_URL__")).rejects.toThrow(
+      "replaceInFile requires distinct search and replacement text",
+    )
+    await expect(readFile(filePath, "utf8")).resolves.toBe("before __SERVER_URL__ after\n")
+  })
 })
 
 async function createFixtureApp(files: Readonly<Record<string, string>>) {
@@ -1335,7 +1359,15 @@ export const workflow = async (
 }
 
 async function replaceInFile(filePath: string, search: string, replacement: string): Promise<void> {
+  if (search === replacement) {
+    throw new Error("replaceInFile requires distinct search and replacement text")
+  }
+
   const source = await readFile(filePath, "utf8")
+  if (!source.includes(search)) {
+    throw new Error("replaceInFile search text was not found")
+  }
+
   await writeFile(filePath, source.replace(search, replacement), "utf8")
 }
 
