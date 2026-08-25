@@ -189,7 +189,7 @@ export function parseAbandonmentRecord(value, options) {
 
   const [first, second] = record.observations
   if (
-    first.workflowRunId === second.workflowRunId ||
+    new Set([history.workflowRunId, first.workflowRunId, second.workflowRunId]).size !== 3 ||
     Date.parse(first.observedAt) >= Date.parse(second.observedAt) ||
     Date.parse(approval.approvedAt) > Date.parse(history.observedAt) ||
     Date.parse(history.observedAt) > Date.parse(first.observedAt) ||

@@ -93,7 +93,11 @@ export function planRelease(input) {
         type: nextTransition,
         version: candidate.version,
         commitSha: candidate.commitSha,
-        ...(nextTransition === "dispatch-release-audit" ? { tag: observation.release.tag } : {}),
+        ...(nextTransition === "dispatch-release-audit"
+          ? { tag: observation.release.tag }
+          : nextTransition === "record-prepublication-abandonment"
+            ? { tag: `v${candidate.version}` }
+            : {}),
       },
     ],
   })

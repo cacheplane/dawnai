@@ -703,6 +703,14 @@ test("abandonment is manual and permitted only from tagged through escrowed", ()
 
     assert.equal(plan.state, state)
     assert.equal(plan.nextTransition, "record-prepublication-abandonment")
+    assert.deepEqual(plan.proposedMutations, [
+      {
+        type: "record-prepublication-abandonment",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        tag: `v${VERSION}`,
+      },
+    ])
   }
 
   const untagged = baseObservation()

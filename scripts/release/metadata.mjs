@@ -207,6 +207,53 @@ export function canonicalReleaseBody(input) {
   return body
 }
 
+export function abandonmentReleaseMarker({
+  candidate,
+  artifact,
+  abandonmentSha256,
+  previousMarker = null,
+}) {
+  const identity = validateCandidate(snapshotJson(candidate), { policyFieldsOptional: true })
+  const evidence = snapshotJson(artifact)
+  assertExactFields(
+    evidence,
+    ["manifestSha256", "releaseRecordSha256", "baseAssetSetSha256", "attestationSet"],
+    "abandonment artifact context",
+  )
+  if (!isSha256(abandonmentSha256)) {
+    throw new TypeError("Abandonment evidence digest is invalid")
+  }
+  const previous = previousMarker === null ? null : validateMarker(previousMarker)
+  if (
+    previous !== null &&
+    (!["ESCROWING", "ESCROWED"].includes(previous.phase) ||
+      previous.version !== identity.version ||
+      previous.commitSha !== identity.commitSha ||
+      previous.tag !== `v${identity.version}`)
+  ) {
+    throw new TypeError("Abandonment predecessor marker is invalid")
+  }
+  const marker = validateMarker({
+    schemaVersion: 1,
+    epoch: "fixed-group-v1",
+    revision: previous === null ? 1 : previous.revision + 1,
+    phase: "ABANDONED_PREPUBLICATION",
+    version: identity.version,
+    commitSha: identity.commitSha,
+    tag: `v${identity.version}`,
+    manifestSha256: evidence.manifestSha256,
+    releaseRecordSha256: evidence.releaseRecordSha256,
+    baseAssetSetSha256: evidence.baseAssetSetSha256,
+    attestationSet: evidence.attestationSet,
+    npmEvidenceSha256: null,
+    smokeAggregateSha256: null,
+    audit: null,
+    abandonmentSha256,
+  })
+  if (previous !== null) validateMarkerTransition(previous, marker)
+  return marker
+}
+
 export function releaseBodySha256(body) {
   if (typeof body !== "string") throw new TypeError("Release body must be a string")
   assertPayloadByteLength(Buffer.byteLength(body, "utf8"), 1024 * 1024, "Release body")

@@ -30,6 +30,7 @@ test("parseAbandonmentRecord rejects incomplete or noncanonical protected eviden
     (value) => (value.actionsHistory.registryMutationStarted = true),
     (value) => value.observations.pop(),
     (value) => (value.observations[1].workflowRunId = value.observations[0].workflowRunId),
+    (value) => (value.actionsHistory.workflowRunId = value.observations[0].workflowRunId),
     (value) => (value.observations[1].runAttempt = 0),
     (value) => (value.observations[1].observedAt = value.observations[0].observedAt),
     (value) => value.observations[1].packages.pop(),
