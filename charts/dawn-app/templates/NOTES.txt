@@ -39,11 +39,12 @@ namespace.
 
 {{- if .Values.serviceAccount.create }}
 
-serviceAccount.create=true — this chart created the ServiceAccount above in
-THIS namespace ("{{ .Release.Namespace }}").
+serviceAccount.create=true (default) — this chart created the ServiceAccount
+above in THIS namespace ("{{ .Release.Namespace }}"). An empty
+serviceAccount.name resolves to the release-scoped chart fullname.
 {{- else }}
 
-serviceAccount.create=false (default) — this chart is reusing an EXISTING
+serviceAccount.create=false — this chart is using the operator-provided
 ServiceAccount named "{{ include "dawn-app.serviceAccountName" . }}" in the
 management namespace. Confirm it exists before sending traffic.
 {{- end }}

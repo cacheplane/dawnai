@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { describe, expect, test } from "vitest"
+import { parse } from "yaml"
 
 import { KUBERNETES_COMPAT_USAGE } from "../../scripts/kubernetes-compat/harness.ts"
 import {
@@ -11,10 +12,13 @@ import {
 
 const repoRoot = resolve(__dirname, "../..")
 const documentationPaths = {
+  contributorStandards: resolve(repoRoot, "AGENTS.md"),
   chart: resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
   chartValues: resolve(repoRoot, "charts/dawn-sandbox-infra/values.yaml"),
   chartNotes: resolve(repoRoot, "charts/dawn-sandbox-infra/templates/NOTES.txt"),
+  dawnAppChart: resolve(repoRoot, "charts/dawn-app/Chart.yaml"),
   dawnAppReadme: resolve(repoRoot, "charts/dawn-app/README.md"),
+  dawnAppValues: resolve(repoRoot, "charts/dawn-app/values.yaml"),
   dawnAppNotes: resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
   sandboxGuide: resolve(repoRoot, "apps/web/content/docs/sandbox/kubernetes.mdx"),
   deploymentGuide: resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
@@ -540,7 +544,10 @@ Managed Kubernetes services require separate validation.`,
   })
 
   test("defines the canonical app subject before the initial infrastructure and app installs", async () => {
-    const { deploymentGuide } = await loadDocumentation()
+    const { chart, deploymentGuide } = await loadDocumentation()
+    const standaloneValuesMarker = "For a fresh release, prepare `dawn-sandbox-infra-values.yaml`"
+    const standaloneValuesSource = chart.slice(chart.indexOf(standaloneValuesMarker))
+    const standaloneValues = /```yaml[^\n]*\n([\s\S]*?)```/.exec(standaloneValuesSource)?.[1].trim()
     const initialValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
 ${canonicalAppSubjectValues}
 \`\`\``
@@ -555,6 +562,10 @@ ${canonicalAppSubjectValues}
       "helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
     )
 
+    expect(
+      standaloneValues,
+      "standalone infra README must define the exact fresh-release app subject",
+    ).toBe(canonicalAppSubjectValues)
     expect(
       initialValuesIndex,
       "deployment must define the exact initial app subject",
@@ -581,7 +592,52 @@ ${canonicalAppSubjectValues}
   })
 
   test("describes application-owned cross-namespace ServiceAccount wiring", async () => {
-    const { dawnAppReadme } = await loadDocumentation()
+    const {
+      contributorStandards,
+      dawnAppChart,
+      dawnAppNotes,
+      dawnAppReadme,
+      dawnAppValues,
+      deploymentGuide,
+    } = await loadDocumentation()
+    const parsedValues = parse(dawnAppValues) as {
+      readonly serviceAccount?: {
+        readonly create?: unknown
+        readonly name?: unknown
+      }
+    }
+
+    expect(parsedValues.serviceAccount).toMatchObject({ create: true, name: "" })
+    expect(dawnAppReadme).toContain(
+      "| `serviceAccount.create` | `true` | Creates an application-owned ServiceAccount in the release namespace. |",
+    )
+    expect(dawnAppReadme).toContain(
+      '| `serviceAccount.name` | `""` | Defaults to the release-scoped chart fullname (`dawn-app` for the canonical release). |',
+    )
+    expect(deploymentGuide).toContain("- `serviceAccount.create=true`;")
+    expect(deploymentGuide).toContain(
+      '- `serviceAccount.name=""`, which resolves to the release-scoped chart fullname (`dawn-app` for the canonical release);',
+    )
+    expect(dawnAppNotes).toContain("serviceAccount.create=true (default)")
+    expect(dawnAppChart).toContain("application-owned ServiceAccount")
+    expect(contributorStandards).toContain(
+      "with an application-owned ServiceAccount in the chart release namespace",
+    )
+
+    for (const [name, source] of Object.entries({
+      contributorStandards,
+      dawnAppChart,
+      dawnAppNotes,
+      dawnAppReadme,
+      dawnAppValues,
+      deploymentGuide,
+    })) {
+      expect(
+        source,
+        `${name} must not retain the retired orchestrator ServiceAccount default`,
+      ).not.toContain("dawn-orchestrator")
+    }
+
     expect(dawnAppReadme).toContain(
       "The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.",
     )

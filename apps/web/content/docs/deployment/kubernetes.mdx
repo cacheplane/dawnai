@@ -45,9 +45,7 @@ After the infrastructure RoleBinding contains the app ServiceAccount, install th
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace dawn-app \
   --set image.repository=ghcr.io/you/my-dawn-app \
-  --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app
+  --set image.tag=2026-08-10
 ```
 
 Use the same namespace and image values for upgrades:
@@ -56,9 +54,7 @@ Use the same namespace and image values for upgrades:
 helm upgrade dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace dawn-app \
   --set image.repository=ghcr.io/you/my-dawn-app \
-  --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app
+  --set image.tag=2026-08-10
 ```
 
 `image.repository` is required. Pin an immutable tag or set `image.digest` in production.
@@ -90,16 +86,16 @@ The `dawn-app` chart mounts only an `emptyDir` at `/tmp`. It does not mount the 
 
 Use external durable stores where replacement must preserve state. Sandbox-provider workspaces have their own volume lifecycle and are not made durable by the app Pod's `/tmp` mount.
 
-## ServiceAccount modes
+## ServiceAccount ownership
 
 The chart defaults are:
 
-- `serviceAccount.create=false`;
-- `serviceAccount.name=dawn-orchestrator`;
+- `serviceAccount.create=true`;
+- `serviceAccount.name=""`, which resolves to the release-scoped chart fullname (`dawn-app` for the canonical release);
 - `sandboxNamespace=dawn-sandboxes`, which is informational only;
 - `automountServiceAccountToken=true` on the app Pod.
 
-For an app that uses `kubernetesSandbox`, set `serviceAccount.create=true` and use an application-owned ServiceAccount in the management namespace. Add that planned ServiceAccount as a cross-namespace subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
+For an app that uses `kubernetesSandbox`, use the default application-owned ServiceAccount in the management namespace. Add that planned ServiceAccount as a cross-namespace subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
 
 First export the release's effective values, including every existing RoleBinding subject:
 
@@ -136,8 +132,6 @@ helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace my-app --create-namespace \
   --set image.repository=ghcr.io/you/my-dawn-app \
   --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app \
   --set automountServiceAccountToken=false
 ```
 

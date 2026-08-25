@@ -15,13 +15,13 @@ refute() { if grep -qE "$2"; then echo "FAIL (expected absent): $1"; exit 1; fi;
 APP_VERSION="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$CHART/Chart.yaml")"
 [ -n "$APP_VERSION" ] || { echo "FAIL: could not read appVersion from Chart.yaml"; exit 1; }
 
-# Deployment: image, probes on /healthz, SA, hardened securityContext
+# Deployment: image, probes on /healthz, release-scoped SA, hardened securityContext
 DEPLOY="$(tmpl --show-only templates/deployment.yaml)"
 printf '%s\n' "$DEPLOY" | assert "deployment kind" 'kind: Deployment'
 printf '%s\n' "$DEPLOY" | assert "image repository+tag" "image: example/app:$APP_VERSION"
 printf '%s\n' "$DEPLOY" | assert "named http port" 'containerPort: 8000'
 printf '%s\n' "$DEPLOY" | assert "liveness probe path" 'path: /healthz'
-printf '%s\n' "$DEPLOY" | assert "serviceAccountName default" 'serviceAccountName: dawn-orchestrator'
+printf '%s\n' "$DEPLOY" | assert "serviceAccountName defaults to release fullname" 'serviceAccountName: test-dawn-app'
 printf '%s\n' "$DEPLOY" | assert "automountServiceAccountToken true" 'automountServiceAccountToken: true'
 printf '%s\n' "$DEPLOY" | assert "runAsNonRoot" 'runAsNonRoot: true'
 printf '%s\n' "$DEPLOY" | assert "allowPrivilegeEscalation false" 'allowPrivilegeEscalation: false'
@@ -61,6 +61,12 @@ echo "ok: no bare env: when only secretName is set"
 # Custom serviceAccount name
 CUSTOM_SA="$(tmpl --set serviceAccount.name=my-custom-sa --show-only templates/deployment.yaml)"
 printf '%s\n' "$CUSTOM_SA" | assert "custom SA name" 'serviceAccountName: my-custom-sa'
+
+# Explicitly disabling creation still supports an operator-provided,
+# application-owned ServiceAccount name.
+EXISTING_SA="$(tmpl --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa)"
+printf '%s\n' "$EXISTING_SA" | assert "existing SA selected" 'serviceAccountName: my-existing-sa'
+printf '%s\n' "$EXISTING_SA" | refute "existing SA not created" 'kind: ServiceAccount'
 
 # replicas absent when autoscaling on
 AUTOSCALE_DEPLOY="$(tmpl --set autoscaling.enabled=true --show-only templates/deployment.yaml)"
@@ -132,35 +138,34 @@ printf '%s\n' "$PDB" | assert "pdb apiVersion policy/v1" 'apiVersion: policy/v1'
 printf '%s\n' "$PDB" | assert "pdb minAvailable" 'minAvailable: 2'
 printf '%s\n' "$PDB" | assert "pdb selector matches app labels" 'app.kubernetes.io/name: dawn-app'
 
-# ServiceAccount: absent by default (serviceAccount.create=false)
-if tmpl --show-only templates/serviceaccount.yaml 2>/dev/null | grep -q 'kind: ServiceAccount'; then
-  echo "FAIL: ServiceAccount should be absent when serviceAccount.create=false (default)"; exit 1
-fi
-echo "ok: ServiceAccount absent by default"
+# ServiceAccount: created with the release-scoped fullname by default
+DEFAULT_SA="$(tmpl --show-only templates/serviceaccount.yaml)"
+printf '%s\n' "$DEFAULT_SA" | assert "default ServiceAccount rendered" 'kind: ServiceAccount'
+printf '%s\n' "$DEFAULT_SA" | assert "default ServiceAccount release fullname" 'name: test-dawn-app'
+
+# The canonical release name resolves both the created account and Pod binding
+# to dawn-app without explicit ServiceAccount overrides.
+CANONICAL="$(helm template dawn-app "$CHART" --namespace dawn-app --set image.repository=example/app)"
+printf '%s\n' "$CANONICAL" | assert "canonical ServiceAccount rendered" 'kind: ServiceAccount'
+printf '%s\n' "$CANONICAL" | assert "canonical ServiceAccount name" 'name: dawn-app'
+printf '%s\n' "$CANONICAL" | assert "canonical Pod ServiceAccount" 'serviceAccountName: dawn-app'
 
 # ServiceAccount: present + named correctly when created
 SA="$(tmpl --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke --show-only templates/serviceaccount.yaml)"
 printf '%s\n' "$SA" | assert "serviceaccount kind" 'kind: ServiceAccount'
 printf '%s\n' "$SA" | assert "serviceaccount name" 'name: dawn-app-smoke'
 
-# The README's advertised same-namespace sandbox mode reuses the orchestrator
-# ServiceAccount created first by dawn-sandbox-infra.
-README_SANDBOX="$(tmpl --namespace dawn-sandboxes --set image.tag=2026-08-10)"
-printf '%s\n' "$README_SANDBOX" | assert "README sandbox image tag" 'image: example/app:2026-08-10'
-printf '%s\n' "$README_SANDBOX" | assert "README sandbox orchestrator SA" 'serviceAccountName: dawn-orchestrator'
-printf '%s\n' "$README_SANDBOX" | assert "README sandbox token mounted" 'automountServiceAccountToken: true'
+# Canonical management namespace with kubernetesSandbox: immutable image
+# selection, app-owned ServiceAccount, and API token available for the provider.
+SANDBOX_APP="$(helm template dawn-app "$CHART" --namespace dawn-app --set image.repository=example/app --set image.tag=2026-08-10)"
+printf '%s\n' "$SANDBOX_APP" | assert "sandbox app image tag" 'image: example/app:2026-08-10'
+printf '%s\n' "$SANDBOX_APP" | assert "sandbox app-owned SA" 'serviceAccountName: dawn-app'
+printf '%s\n' "$SANDBOX_APP" | assert "sandbox app token mounted" 'automountServiceAccountToken: true'
+printf '%s\n' "$SANDBOX_APP" | assert "sandbox app SA rendered" 'kind: ServiceAccount'
 
-# Separate app namespace with kubernetesSandbox: immutable image selection,
-# app-owned ServiceAccount, and API token available for the sandbox provider.
-SEPARATE_SANDBOX="$(tmpl --namespace my-app --set image.tag=2026-08-10 --set serviceAccount.create=true --set serviceAccount.name=dawn-app)"
-printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace image tag" 'image: example/app:2026-08-10'
-printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace app SA" 'serviceAccountName: dawn-app'
-printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace token mounted" 'automountServiceAccountToken: true'
-printf '%s\n' "$SEPARATE_SANDBOX" | assert "separate-namespace SA rendered" 'kind: ServiceAccount'
-
-# No kubernetesSandbox: the app still selects a real ServiceAccount instead of
-# the absent default dawn-orchestrator, but does not mount a Kubernetes API token.
-NO_SANDBOX="$(tmpl --namespace my-app --set image.tag=2026-08-10 --set serviceAccount.create=true --set serviceAccount.name=dawn-app --set automountServiceAccountToken=false)"
+# No kubernetesSandbox: the app keeps its application-owned ServiceAccount but
+# does not mount a Kubernetes API token.
+NO_SANDBOX="$(helm template dawn-app "$CHART" --namespace my-app --set image.repository=example/app --set image.tag=2026-08-10 --set automountServiceAccountToken=false)"
 printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox image tag" 'image: example/app:2026-08-10'
 printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox app SA" 'serviceAccountName: dawn-app'
 printf '%s\n' "$NO_SANDBOX" | assert "no-sandbox token disabled" 'automountServiceAccountToken: false'

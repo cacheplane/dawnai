@@ -1,6 +1,6 @@
 apiVersion: v2
 name: dawn-app
-description: Runs a built Dawn app image (from `langgraphjs dockerfile`) on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget, wired to the in-cluster kubernetesSandbox orchestrator ServiceAccount.
+description: Runs a built Dawn app image on Kubernetes with an application-owned ServiceAccount, Deployment, Service, and optional scaling and ingress resources.
 type: application
 version: 0.1.1
 appVersion: "0.8.22"

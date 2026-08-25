@@ -77,9 +77,7 @@ ServiceAccount in the management namespace:
 helm upgrade --install dawn-app ./charts/dawn-app \
   --namespace dawn-app \
   --set image.repository=ghcr.io/you/your-app \
-  --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app
+  --set image.tag=2026-08-10
 ```
 
 Or, once published, from GHCR:
@@ -88,9 +86,7 @@ Or, once published, from GHCR:
 helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace dawn-app \
   --set image.repository=ghcr.io/you/your-app \
-  --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app
+  --set image.tag=2026-08-10
 ```
 
 `image.repository` is required — `helm install`/`helm upgrade` will fail
@@ -104,12 +100,13 @@ The app process calls the Kubernetes API to create sandbox Pods, so its Pod
 must run under a ServiceAccount bound to the `dawn-sandbox-infra` chart's
 orchestrator Role:
 
-- **`create: true` (recommended for sandbox apps)** — this chart creates the
-  application ServiceAccount in the management namespace. Bind it as a
-  cross-namespace `orchestrator.subjects` entry before installing the app.
-- **`create: false` (chart default)** — reuse an existing ServiceAccount in
-  the management namespace. That ServiceAccount still needs the same
-  cross-namespace RoleBinding entry.
+By default, this chart creates an application-owned ServiceAccount in the
+release namespace. An empty `serviceAccount.name` resolves to the
+release-scoped chart fullname (`dawn-app` for the canonical release). Bind that
+identity as a cross-namespace `orchestrator.subjects` entry before installing
+the app. Setting `serviceAccount.create=false` is an explicit operator choice;
+set `serviceAccount.name` to the application-owned account that already exists
+in the management namespace.
 
 For an existing infrastructure release, export its effective values before an
 RBAC update. The edited `orchestrator.subjects` must be the complete intended subject list:
@@ -118,7 +115,7 @@ Helm replaces arrays, so never use a guessed numeric subject index. The
 [Kubernetes app guide](../../apps/web/content/docs/deployment/kubernetes.mdx)
 and post-install NOTES provide the ordered commands.
 
-Either way, keep `sandboxNamespace` (informational only) in sync with your
+Keep `sandboxNamespace` (informational only) in sync with your
 app's `dawn.config.ts`:
 
 ```ts
@@ -148,8 +145,8 @@ sandbox: {
 | `autoscaling.minReplicas` / `maxReplicas` / `targetCPUUtilizationPercentage` / `targetMemoryUtilizationPercentage` | see `values.yaml` | |
 | `podDisruptionBudget.enabled` | `false` | Gate the PodDisruptionBudget (`policy/v1`). |
 | `podDisruptionBudget.minAvailable` | `1` | |
-| `serviceAccount.create` | `false` | See "Sandbox ServiceAccount wiring" above. |
-| `serviceAccount.name` | `dawn-orchestrator` | |
+| `serviceAccount.create` | `true` | Creates an application-owned ServiceAccount in the release namespace. |
+| `serviceAccount.name` | `""` | Defaults to the release-scoped chart fullname (`dawn-app` for the canonical release). |
 | `automountServiceAccountToken` | `true` | Required when the app calls the Kubernetes API for `kubernetesSandbox`; disable it for apps without that provider where the setup allows. |
 | `sandboxNamespace` | `dawn-sandboxes` | Informational; must match `dawn-sandbox-infra`'s `namespace.name` and the app's `kubernetesSandbox({ namespace })`. |
 | `env` / `envFrom` | `[]` | Standard container env / envFrom. |

@@ -65,7 +65,10 @@
       "additionalProperties": false,
       "required": ["type", "port"],
       "properties": {
-        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"] },
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"]
+        },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     },
@@ -94,7 +97,13 @@
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage", "targetMemoryUtilizationPercentage"],
+      "required": [
+        "enabled",
+        "minReplicas",
+        "maxReplicas",
+        "targetCPUUtilizationPercentage",
+        "targetMemoryUtilizationPercentage"
+      ],
       "properties": {
         "enabled": { "type": "boolean" },
         "minReplicas": { "type": "integer", "minimum": 1 },
@@ -118,7 +127,10 @@
       "required": ["create", "name", "annotations"],
       "properties": {
         "create": { "type": "boolean" },
-        "name": { "type": "string", "minLength": 1 },
+        "name": {
+          "type": "string",
+          "description": "Optional explicit ServiceAccount name; an empty value resolves to the release-scoped chart fullname."
+        },
         "annotations": { "type": "object" }
       }
     },
@@ -137,7 +149,13 @@
     "securityContext": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["runAsNonRoot", "allowPrivilegeEscalation", "capabilities", "seccompProfile", "readOnlyRootFilesystem"],
+      "required": [
+        "runAsNonRoot",
+        "allowPrivilegeEscalation",
+        "capabilities",
+        "seccompProfile",
+        "readOnlyRootFilesystem"
+      ],
       "properties": {
         "runAsNonRoot": { "type": "boolean" },
         "allowPrivilegeEscalation": { "type": "boolean" },

@@ -20,6 +20,7 @@ import {
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
+import { parse as parseYaml } from "yaml"
 import tsCompiler from "../packages/core/node_modules/typescript/lib/typescript.js"
 import {
   analyzeApiInventoryBatch,
@@ -2444,7 +2445,8 @@ const accuracyContracts = [
       "liveness",
       "not dependency readiness",
       "dawn-sandboxes",
-      "dawn-orchestrator",
+      "serviceAccount.create=true",
+      'serviceAccount.name=""',
       "shared durable stores",
       "thread-aware",
       "No orchestrator RoleBinding is needed",
@@ -2452,7 +2454,13 @@ const accuracyContracts = [
       "complete intended subject list",
       "dawn-sandbox-infra-rbac-values.yaml",
     ],
-    forbidden: ["/healthz proves dependency readiness", "HPA makes", "orchestrator.subjects[0]"],
+    forbidden: [
+      "/healthz proves dependency readiness",
+      "HPA makes",
+      "orchestrator.subjects[0]",
+      "dawn-orchestrator",
+      "serviceAccount.create=false",
+    ],
   },
   {
     file: "apps/web/content/docs/sandbox.mdx",
@@ -2638,8 +2646,13 @@ const accuracyContracts = [
       "helm get values dawn-sandbox-infra --all",
       "complete intended subject list",
       "dawn-sandbox-infra-rbac-values.yaml",
+      "serviceAccount.create=true (default)",
     ],
-    forbidden: ["orchestrator.subjects[0]", "same command shown above"],
+    forbidden: [
+      "orchestrator.subjects[0]",
+      "same command shown above",
+      "serviceAccount.create=false (default)",
+    ],
   },
   {
     file: "charts/dawn-sandbox-infra/README.md",
@@ -2677,6 +2690,8 @@ const accuracyContracts = [
       "helm upgrade --install dawn-sandbox-infra ./charts/dawn-sandbox-infra",
       "The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.",
       "That ServiceAccount is bound as a cross-namespace subject to the `dawn-sandbox-infra` orchestrator Role in `dawn-sandboxes`.",
+      "| `serviceAccount.create` | `true` | Creates an application-owned ServiceAccount in the release namespace. |",
+      '| `serviceAccount.name` | `""` | Defaults to the release-scoped chart fullname (`dawn-app` for the canonical release). |',
     ],
     forbidden: [
       "backend that does not exist yet",
@@ -2690,7 +2705,14 @@ const accuracyContracts = [
       "same namespace",
       "orchestrator.subjects[0]",
       "via the ServiceAccount +\nnamespace provisioned by the `dawn-sandbox-infra` chart",
+      "dawn-orchestrator",
+      "create: false` (chart default)",
     ],
+  },
+  {
+    file: "charts/dawn-app/Chart.yaml",
+    required: ["application-owned ServiceAccount"],
+    forbidden: ["orchestrator ServiceAccount", "langgraphjs dockerfile"],
   },
   {
     file: "charts/dawn-app/values.yaml",
@@ -3280,6 +3302,20 @@ for (const requiredExampleText of [
 }
 
 const appChartValuesSource = readFileSync(resolve(repoRoot, "charts/dawn-app/values.yaml"), "utf8")
+const appChartValues = parseYaml(appChartValuesSource)
+if (
+  appChartValues?.serviceAccount?.create !== true ||
+  appChartValues?.serviceAccount?.name !== ""
+) {
+  failures.push(
+    'charts/dawn-app/values.yaml must default serviceAccount.create=true and serviceAccount.name=""',
+  )
+}
+if (appChartValuesSource.includes("dawn-orchestrator")) {
+  failures.push(
+    "charts/dawn-app/values.yaml must not retain the retired dawn-orchestrator ServiceAccount topology",
+  )
+}
 const canonicalKubernetesSandboxUrl = "https://dawnai.org/docs/sandbox/kubernetes"
 const canonicalKubernetesSandboxUrlCount =
   appChartValuesSource.split(canonicalKubernetesSandboxUrl).length - 1
@@ -3302,8 +3338,6 @@ const helmInstallExampleContracts = [
       "--namespace dawn-app",
       "--set image.repository=ghcr.io/you/your-app",
       "--set image.tag=2026-08-10",
-      "--set serviceAccount.create=true",
-      "--set serviceAccount.name=dawn-app",
     ],
   },
 ]
@@ -3380,6 +3414,22 @@ const canonicalAppSubjectValues = `orchestrator:
     - kind: ServiceAccount
       name: dawn-app
       namespace: dawn-app`
+const infrastructureChartReadmeSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
+  "utf8",
+)
+const standaloneValuesMarker = "For a fresh release, prepare `dawn-sandbox-infra-values.yaml`"
+const standaloneValuesSource = infrastructureChartReadmeSource.slice(
+  infrastructureChartReadmeSource.indexOf(standaloneValuesMarker),
+)
+const standaloneSubjectValues = /```yaml[^\n]*\n([\s\S]*?)```/
+  .exec(standaloneValuesSource)?.[1]
+  .trim()
+if (standaloneSubjectValues !== canonicalAppSubjectValues) {
+  failures.push(
+    "charts/dawn-sandbox-infra/README.md fresh-release values must bind ServiceAccount dawn-app from namespace dawn-app",
+  )
+}
 const initialSubjectValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
 ${canonicalAppSubjectValues}
 \`\`\``
@@ -3466,8 +3516,6 @@ if (!noSandboxInstall) {
     "--namespace my-app",
     "--set image.repository=ghcr.io/you/my-dawn-app",
     "--set image.tag=2026-08-10",
-    "--set serviceAccount.create=true",
-    "--set serviceAccount.name=dawn-app",
   ]) {
     if (!noSandboxInstall.includes(required)) {
       failures.push(
