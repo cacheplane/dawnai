@@ -1,4 +1,5 @@
 import type { AgentRunResult } from "@dawn-ai/testing"
+import { createSafeRegexTester } from "./regex-safety.js"
 import type { EvalCase, Score, Scorer } from "./types.js"
 
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -23,10 +24,12 @@ export function contains(substring: string, opts?: { threshold?: number }): Scor
 }
 
 export function regex(re: RegExp, opts?: { threshold?: number }): Scorer {
+  const test = createSafeRegexTester(re)
+
   return {
     name: `regex(${re.source})`,
     ...(opts?.threshold !== undefined ? { threshold: opts.threshold } : {}),
-    score: (run) => (re.test(run.finalMessage) ? 1 : 0),
+    score: (run) => (test(run.finalMessage) ? 1 : 0),
   }
 }
 

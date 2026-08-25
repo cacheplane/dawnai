@@ -270,6 +270,57 @@ it("expectNoToolErrors treats a HITL interrupt as NOT a tool error", () => {
   expectNoToolErrors(run)
 })
 
+const publicRegexMatchers = [
+  {
+    match(input: string, expression: RegExp) {
+      expectFinalMessage({ ...base, finalMessage: input }).toMatch(expression)
+    },
+    name: "expectFinalMessage.toMatch",
+  },
+  {
+    match(input: string, expression: RegExp) {
+      expectSystemPrompt({ ...base, systemPrompt: input }).toMatch(expression)
+    },
+    name: "expectSystemPrompt.toMatch",
+  },
+]
+
+describe.each(publicRegexMatchers)("$name safety policy", ({ match }) => {
+  it("rejects structurally unsafe expressions", () => {
+    const matchUnsafeExpression = () => match("a", /^(a+)+$/u)
+
+    expect(matchUnsafeExpression).toThrow(TypeError)
+    expect(matchUnsafeExpression).toThrow("Regular expression is unsafe for synchronous matching")
+  })
+
+  it("rejects oversized inputs before evaluation", () => {
+    const matchOversizedInput = () => match("a".repeat(65_537), /^a+$/u)
+
+    expect(matchOversizedInput).toThrow(RangeError)
+    expect(matchOversizedInput).toThrow("Regular expression input exceeds 65536 UTF-16 code units")
+  })
+
+  it("preserves ordinary flags and matching semantics", () => {
+    match("12 ITEMS", /\d+ items/iu)
+    expect(() => match("none", /\d+ items/iu)).toThrow()
+  })
+
+  it.each([
+    { createExpression: () => /items/gu, name: "global" },
+    { createExpression: () => /items/uy, name: "sticky" },
+  ])(
+    "keeps $name expressions deterministic without changing caller state",
+    ({ createExpression }) => {
+      const expression = createExpression()
+      expression.lastIndex = 2
+
+      match("items", expression)
+      match("items", expression)
+      expect(expression.lastIndex).toBe(2)
+    },
+  )
+})
+
 describe("private regex safety adapter", () => {
   it("rejects structurally unsafe expressions with the exact error", () => {
     const createTester = () => createSafeRegexTester(/^(a+)+$/u)

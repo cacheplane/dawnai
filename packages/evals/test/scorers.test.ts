@@ -67,6 +67,55 @@ describe("built-in scorers", () => {
   })
 })
 
+describe("regex scorer safety policy", () => {
+  it("rejects structurally unsafe expressions during scorer construction", () => {
+    const createScorer = () => regex(/^(a+)+$/u)
+
+    expect(createScorer).toThrow(TypeError)
+    expect(createScorer).toThrow("Regular expression is unsafe for synchronous matching")
+  })
+
+  it("rejects oversized final messages before evaluation", () => {
+    const scorer = regex(/^a+$/u)
+    const scoreOversizedMessage = () =>
+      scorer.score(run({ finalMessage: "a".repeat(65_537) }), noCase)
+
+    expect(scoreOversizedMessage).toThrow(RangeError)
+    expect(scoreOversizedMessage).toThrow(
+      "Regular expression input exceeds 65536 UTF-16 code units",
+    )
+  })
+
+  it.each([
+    { expected: 1, input: "12 ITEMS", name: "matching input" },
+    { expected: 0, input: "none", name: "non-matching input" },
+  ])("preserves ordinary flags and scoring semantics for $name", async ({ expected, input }) => {
+    const scorer = regex(/\d+ items/iu)
+
+    expect(normalizeScore(await scorer.score(run({ finalMessage: input }), noCase)).score).toBe(
+      expected,
+    )
+  })
+
+  it.each([
+    { createExpression: () => /items/gu, name: "global" },
+    { createExpression: () => /items/uy, name: "sticky" },
+  ])(
+    "keeps $name expressions deterministic without changing caller state",
+    async ({ createExpression }) => {
+      const expression = createExpression()
+      expression.lastIndex = 2
+      const scorer = regex(expression)
+      const score = async () =>
+        normalizeScore(await scorer.score(run({ finalMessage: "items" }), noCase)).score
+
+      expect(await score()).toBe(1)
+      expect(await score()).toBe(1)
+      expect(expression.lastIndex).toBe(2)
+    },
+  )
+})
+
 describe("private regex safety adapter", () => {
   it("rejects structurally unsafe expressions with the exact error", () => {
     const createTester = () => createSafeRegexTester(/^(a+)+$/u)

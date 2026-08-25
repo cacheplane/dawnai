@@ -1,4 +1,5 @@
 import { AssertionError } from "node:assert"
+import { createSafeRegexTester } from "./regex-safety.js"
 import type {
   AgentRunResult,
   InterruptInfo,
@@ -97,7 +98,7 @@ export function expectFinalMessage(run: AgentRunResult) {
         )
     },
     toMatch(re: RegExp) {
-      if (!re.test(run.finalMessage))
+      if (!createSafeRegexTester(re)(run.finalMessage))
         fail(`final message ${JSON.stringify(run.finalMessage)} does not match ${re}`)
     },
     toEqual(s: string) {
@@ -260,7 +261,7 @@ export function expectSystemPrompt(run: AgentRunResult) {
       }
     },
     toMatch(re: RegExp) {
-      if (!re.test(run.systemPrompt))
+      if (!createSafeRegexTester(re)(run.systemPrompt))
         fail(
           `expected systemPrompt to match ${re}; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
         )
