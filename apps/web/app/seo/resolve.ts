@@ -1,8 +1,8 @@
 import type { Metadata } from "next"
-import { AUTHORS, type Post } from "../components/blog/post-index"
+import { AUTHORS, getAllPosts, type Post } from "../components/blog/post-index"
 import type { DocsPageHref } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
-import { requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
+import { DOCS_SEO_PAGES, requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
 import { SOCIAL_CARD, SOCIAL_IMAGE, SOCIAL_SITE_NAME } from "./social"
 import type {
   BlogPostingSeoPage,
@@ -29,6 +29,7 @@ export function resolveBlogIndexSeoPage(): CollectionPageSeoPage {
     title: "Blog",
     description: BLOG_INDEX_DESCRIPTION,
     kind: "CollectionPage",
+    routeKind: "blog-index",
     breadcrumbs: [{ label: "Home", href: "/" }, { label: "Blog" }],
     lastModified: requireValidLastModified(STATIC_LASTMOD, path),
     alternateTypes: { "application/rss+xml": "/blog/rss.xml" },
@@ -56,6 +57,7 @@ export function resolveBlogTagSeoPage(tag: string, posts: readonly Post[]): Coll
     title,
     description: tagDescription(tag, posts),
     kind: "CollectionPage",
+    routeKind: "blog-tag",
     breadcrumbs: [{ label: "Home", href: "/" }, { label: "Blog", href: "/blog" }, { label: title }],
     lastModified: requireValidLastModified(STATIC_LASTMOD, path),
   }
@@ -72,6 +74,7 @@ export function resolveBlogSeoPage(post: Post): BlogPostingSeoPage {
     title: post.title,
     description: post.description,
     kind: "BlogPosting",
+    routeKind: "blog-post",
     breadcrumbs: [
       { label: "Home", href: "/" },
       { label: "Blog", href: "/blog" },
@@ -82,6 +85,38 @@ export function resolveBlogSeoPage(post: Post): BlogPostingSeoPage {
     author,
     ...(post.ogImage !== undefined ? { socialImage: post.ogImage } : {}),
   }
+}
+
+function visibleTags(posts: readonly Post[]): readonly string[] {
+  const counts = new Map<string, number>()
+  for (const post of posts) {
+    for (const tag of post.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+  }
+  return [...counts].sort((left, right) => right[1] - left[1]).map(([tag]) => tag)
+}
+
+export function buildSeoPageInventory(posts: readonly Post[]): readonly SeoPage[] {
+  const home = resolveStaticSeoPage("/")
+  if (!home) throw new Error("Homepage SEO page is not registered")
+
+  return [
+    home,
+    resolveBlogIndexSeoPage(),
+    ...Object.values(DOCS_SEO_PAGES),
+    ...posts.map(resolveBlogSeoPage),
+    ...visibleTags(posts).map((tag) =>
+      resolveBlogTagSeoPage(
+        tag,
+        posts.filter((post) => post.tags.includes(tag)),
+      ),
+    ),
+  ]
+}
+
+export function resolveProductionSeoPages(): readonly SeoPage[] {
+  const currentDate = new Date().toISOString().slice(0, 10)
+  const posts = getAllPosts().filter((post) => !post.draft && post.date <= currentDate)
+  return buildSeoPageInventory(posts)
 }
 
 export function toMetadata(page: SeoPage | undefined): Metadata {
@@ -99,14 +134,14 @@ export function toMetadata(page: SeoPage | undefined): Metadata {
       : {}
 
   return {
-    title: page.title,
+    title: page.kind === "WebPage" ? { absolute: page.title } : page.title,
     description: page.description,
     alternates: {
       canonical: page.canonical,
       ...(page.alternateTypes !== undefined ? { types: page.alternateTypes } : {}),
     },
     openGraph: {
-      type: page.kind === "CollectionPage" ? "website" : "article",
+      type: page.kind === "CollectionPage" || page.kind === "WebPage" ? "website" : "article",
       url: page.canonical,
       siteName: SOCIAL_SITE_NAME,
       title: page.title,

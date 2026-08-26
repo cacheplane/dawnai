@@ -2,7 +2,7 @@ import "server-only"
 
 import { ALL_DOCS_PAGES, breadcrumbsFor, type DocsPageHref } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
-import type { SeoPage, TechArticleSeoPage } from "./types"
+import type { SeoPage, TechArticleSeoPage, WebPageSeoPage } from "./types"
 
 export interface DocsSeoEntry {
   readonly path: DocsPageHref
@@ -12,6 +12,10 @@ export interface DocsSeoEntry {
 }
 
 export interface StaticDocsSeoPage extends TechArticleSeoPage {
+  readonly sourcePath: string
+}
+
+export interface StaticWebSeoPage extends WebPageSeoPage {
   readonly sourcePath: string
 }
 
@@ -570,6 +574,7 @@ function toStaticDocsSeoPage(entry: DocsSeoEntry): StaticDocsSeoPage {
     ...entry,
     canonical: `https://dawnai.org${entry.path}`,
     kind: "TechArticle",
+    routeKind: "docs",
     breadcrumbs: breadcrumbsFor(entry.path),
     lastModified: requireValidLastModified(STATIC_LASTMOD, entry.path),
   }
@@ -599,6 +604,19 @@ export function buildDocsSeoRegistry(entries: readonly DocsSeoEntry[]): DocsSeoR
 }
 
 export const DOCS_SEO_PAGES: DocsSeoRegistry = buildDocsSeoRegistry(DOCS_SEO_ENTRIES)
+export const HOME_SEO_PAGE: StaticWebSeoPage = {
+  path: "/",
+  canonical: "https://dawnai.org/",
+  title: "Dawn AI — TypeScript Meta-Framework for LangGraph.js",
+  description:
+    "Dawn AI is the TypeScript meta-framework for LangGraph.js, with file-system routes, route-local tools, generated types, and durable threads.",
+  kind: "WebPage",
+  routeKind: "home",
+  breadcrumbs: [],
+  lastModified: requireValidLastModified(STATIC_LASTMOD, "/"),
+  sourcePath: "apps/web/app/page.tsx",
+}
 export const STATIC_SEO_PAGES: Readonly<Record<string, SeoPage>> = {
+  [HOME_SEO_PAGE.path]: HOME_SEO_PAGE,
   ...DOCS_SEO_PAGES,
 }

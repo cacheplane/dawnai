@@ -3,6 +3,7 @@ import type {
   CollectionPageSeoPage,
   SeoPage,
   TechArticleSeoPage,
+  WebPageSeoPage,
 } from "./types"
 
 const SITE_URL = "https://dawnai.org/"
@@ -69,6 +70,19 @@ export function collectionPageJsonLd(page: CollectionPageSeoPage) {
     description: page.description,
     isPartOf: { "@id": WEBSITE_ID },
     breadcrumb: { "@id": `${page.canonical}#breadcrumb` },
+  } as const
+}
+
+export function webPageJsonLd(page: WebPageSeoPage) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "@id": `${page.canonical}#webpage`,
+    url: page.canonical,
+    name: page.title,
+    description: page.description,
+    isPartOf: { "@id": WEBSITE_ID },
+    publisher: { "@id": ORGANIZATION_ID },
   } as const
 }
 

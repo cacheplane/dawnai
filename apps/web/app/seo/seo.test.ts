@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createElement } from "react"
+import { Children, createElement, isValidElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { AUTHORS, loadPostsFromDir, type Post } from "../components/blog/post-index"
@@ -40,6 +40,9 @@ const GETTING_STARTED_DESCRIPTION =
   "Build a typed Dawn research agent with file-system routes, generated types, local tools, offline tests, and production build targets."
 const BLOG_INDEX_DESCRIPTION =
   "Writing on the agent stack, type-safety, and the tools we're building."
+const HOME_TITLE = "Dawn AI — TypeScript Meta-Framework for LangGraph.js"
+const HOME_DESCRIPTION =
+  "Dawn AI is the TypeScript meta-framework for LangGraph.js, with file-system routes, route-local tools, generated types, and durable threads."
 const BLOG_CONTENT_DIRECTORY = resolve(seoDirectory, "../../content/blog")
 const REPO_ROOT = resolve(seoDirectory, "../../../..")
 
@@ -70,6 +73,216 @@ function expectValidDescription(description: string) {
   expect(description.length).toBeGreaterThanOrEqual(50)
   expect(description.length).toBeLessThanOrEqual(155)
 }
+
+describe("homepage SEO", () => {
+  it("normalizes the homepage with a distinctive absolute title and one complete social descriptor", () => {
+    const page = resolveStaticSeoPage("/")
+
+    expect(page).toBeDefined()
+    if (!page) return
+
+    expect(page).toMatchObject({
+      path: "/",
+      canonical: "https://dawnai.org/",
+      title: HOME_TITLE,
+      description: HOME_DESCRIPTION,
+      kind: "WebPage",
+      breadcrumbs: [],
+    })
+    expect(new Date(page.lastModified).toISOString()).toBe(page.lastModified)
+    expect(HOME_TITLE).toMatch(/^Dawn AI\b.*(?:TypeScript|LangGraph)/)
+    expect(HOME_TITLE.length).toBeLessThanOrEqual(60)
+    expectValidDescription(page.description)
+
+    expect(toMetadata(page)).toEqual({
+      title: { absolute: HOME_TITLE },
+      description: HOME_DESCRIPTION,
+      alternates: { canonical: "https://dawnai.org/" },
+      openGraph: {
+        type: "website",
+        url: "https://dawnai.org/",
+        siteName: "Dawn AI",
+        title: HOME_TITLE,
+        description: HOME_DESCRIPTION,
+        images: [
+          {
+            url: "/opengraph-image",
+            type: "image/png",
+            width: 1200,
+            height: 630,
+            alt: "Dawn — TypeScript meta-framework for LangGraph.js",
+          },
+        ],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title: HOME_TITLE,
+        description: HOME_DESCRIPTION,
+        images: [
+          {
+            url: "/opengraph-image",
+            type: "image/png",
+            width: 1200,
+            height: 630,
+            alt: "Dawn — TypeScript meta-framework for LangGraph.js",
+          },
+        ],
+      },
+    })
+  })
+
+  it("links homepage WebPage data only to the sitewide WebSite and Organization", () => {
+    const page = resolveStaticSeoPage("/")
+    expect(page).toBeDefined()
+    if (!page) return
+    expect(page.kind).toBe("WebPage")
+    if (page.kind !== "WebPage") return
+
+    const webPageJsonLd = Reflect.get(structuredData, "webPageJsonLd")
+    expect(webPageJsonLd).toBeTypeOf("function")
+    if (typeof webPageJsonLd !== "function") return
+
+    expect(webPageJsonLd(page)).toEqual({
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "@id": "https://dawnai.org/#webpage",
+      url: "https://dawnai.org/",
+      name: HOME_TITLE,
+      description: HOME_DESCRIPTION,
+      isPartOf: { "@id": "https://dawnai.org/#website" },
+      publisher: { "@id": "https://dawnai.org/#organization" },
+    })
+  })
+
+  it("renders resolver-backed metadata and WebPage data from the homepage module", async () => {
+    const page = resolveStaticSeoPage("/")
+    expect(page).toBeDefined()
+    if (!page) return
+
+    const homeModule = await import("../page")
+    expect(Reflect.get(homeModule, "metadata")).toEqual(toMetadata(page))
+
+    const tree = homeModule.default()
+    const children = Children.toArray(tree.props.children)
+    const homepageData = children.flatMap((child) =>
+      isValidElement(child) && child.type === JsonLd
+        ? [(child.props as { readonly data: unknown }).data]
+        : [],
+    )
+
+    expect(homepageData).toEqual([
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "@id": "https://dawnai.org/#webpage",
+        url: "https://dawnai.org/",
+        name: HOME_TITLE,
+        description: HOME_DESCRIPTION,
+        isPartOf: { "@id": "https://dawnai.org/#website" },
+        publisher: { "@id": "https://dawnai.org/#organization" },
+      },
+    ])
+  })
+
+  it("bases every snippet claim on visibly rendered homepage sections", () => {
+    const homeSource = readFileSync(resolve(seoDirectory, "../page.tsx"), "utf8")
+    const visibleSources = [
+      "Hero.tsx",
+      "FeatureRouting.tsx",
+      "FeatureTools.tsx",
+      "FeatureTypes.tsx",
+      "DurableByDefault.tsx",
+    ]
+      .map((file) => readFileSync(resolve(seoDirectory, `../components/landing/${file}`), "utf8"))
+      .join("\n")
+
+    for (const component of [
+      "Hero",
+      "FeatureRouting",
+      "FeatureTools",
+      "FeatureTypes",
+      "DurableByDefault",
+    ]) {
+      expect(homeSource).toContain(`<${component} />`)
+    }
+    for (const factualTerm of [
+      "TypeScript meta-framework",
+      "LangGraph.js",
+      "File-system routing",
+      "Route-local tools",
+      "generated types",
+      "durable threads",
+    ]) {
+      expect(visibleSources.toLowerCase()).toContain(factualTerm.toLowerCase())
+    }
+
+    expect(readFileSync(resolve(seoDirectory, "../layout.tsx"), "utf8")).not.toContain(
+      "webPageJsonLd",
+    )
+  })
+})
+
+describe("production SEO inventory", () => {
+  it("builds one normalized route-kind union for the current 83 indexable routes", () => {
+    const buildSeoPageInventory = Reflect.get(seoResolvers, "buildSeoPageInventory")
+    expect(buildSeoPageInventory).toBeTypeOf("function")
+    if (typeof buildSeoPageInventory !== "function") return
+
+    const pages = buildSeoPageInventory(productionPosts()) as readonly {
+      readonly path: string
+      readonly routeKind: string
+    }[]
+
+    expect(pages.map(({ path }) => path)).toEqual([
+      "/",
+      "/blog",
+      ...ALL_DOCS_PAGES.map(({ href }) => href),
+      "/blog/eve-validates-the-shape",
+      "/blog/app-router-for-ai-agents",
+      "/blog/why-we-built-dawn",
+      "/blog/tags/philosophy",
+      "/blog/tags/agents",
+      "/blog/tags/typescript",
+    ])
+    expect(pages).toHaveLength(83)
+    expect(pages.map(({ routeKind }) => routeKind)).toEqual([
+      "home",
+      "blog-index",
+      ...Array.from({ length: 75 }, () => "docs"),
+      ...Array.from({ length: 3 }, () => "blog-post"),
+      ...Array.from({ length: 3 }, () => "blog-tag"),
+    ])
+  })
+
+  it("keeps all 83 production descriptions normalized and globally unique", () => {
+    const buildSeoPageInventory = Reflect.get(seoResolvers, "buildSeoPageInventory")
+    expect(buildSeoPageInventory).toBeTypeOf("function")
+    if (typeof buildSeoPageInventory !== "function") return
+
+    const pages = buildSeoPageInventory(productionPosts()) as readonly {
+      readonly path: string
+      readonly description: string
+    }[]
+    const firstRouteByDescription = new Map<string, string>()
+    const duplicateRoutePairs: string[] = []
+
+    for (const page of pages) {
+      const firstRoute = firstRouteByDescription.get(page.description)
+      if (firstRoute !== undefined) duplicateRoutePairs.push(`${firstRoute} = ${page.path}`)
+      else firstRouteByDescription.set(page.description, page.path)
+
+      expect(page.description, page.path).toBe(page.description.trim())
+      expect(page.description.length, page.path).toBeGreaterThanOrEqual(50)
+      expect(page.description.length, page.path).toBeLessThanOrEqual(155)
+      expect(page.description, page.path).not.toMatch(/[\r\n]|\s{2,}/)
+      expect(page.description, page.path).toMatch(/[.!?]$/)
+    }
+
+    expect(pages).toHaveLength(83)
+    expect(firstRouteByDescription).toHaveLength(83)
+    expect(duplicateRoutePairs).toEqual([])
+  })
+})
 
 describe("blog SEO API", () => {
   it("exposes shared blog resolvers and structured-data builders", () => {
