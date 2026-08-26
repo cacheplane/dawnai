@@ -3,6 +3,7 @@ import { Fraunces, Inter, JetBrains_Mono } from "next/font/google"
 import type { ReactNode } from "react"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
+import { SOCIAL_CARD, SOCIAL_SITE_NAME } from "./seo/social"
 import "./globals.css"
 
 const inter = Inter({
@@ -47,14 +48,14 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: "https://dawnai.org",
-    siteName: "Dawn AI",
+    siteName: SOCIAL_SITE_NAME,
     title: "Dawn AI — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
     // Image is provided by app/opengraph-image.tsx (1200×630, cream palette).
   },
   twitter: {
-    card: "summary_large_image",
+    card: SOCIAL_CARD,
     title: "Dawn AI — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
