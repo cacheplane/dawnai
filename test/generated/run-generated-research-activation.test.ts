@@ -12,6 +12,7 @@ import {
   cleanupTrackedTempDirs,
   createTrackedTempDir,
   GENERATED_APP_UNSET_ENV,
+  httpOkReadiness,
   installRegistryScaffolderWithNpm,
   markTrackedTempDirForPreserve,
   runGeneratedAppNpmCommand,
@@ -22,22 +23,40 @@ import {
 import { writeRegistryNpmrc } from "../harness/scaffold-packaging.ts"
 
 const tempDirs: TrackedTempDir[] = []
-// Measured on 2026-08-25 (macOS, node 24.19.0 / npm 11.17.0, warm npm cache,
-// Verdaccio uplink already populated), whole test body 144s:
-//   root `npm install`  92.2s   typegen 2.0s   check 1.2s   typecheck 4.0s
-//   `npm test` 4.4s     eval 1.6s   verify 1.6s   `npm run build` 16.1s
-//   dev session (boot + 3 AG-UI journeys + shutdown) 3.2s   start session 1.6s
+// Measured on 2026-08-26, two-process session (macOS, node 24.19.0 / npm
+// 11.17.0, warm npm cache, Verdaccio uplink already populated, box running
+// other agents' builds). Body totals across three green runs: 174s / 203s /
+// 230s. Per-command, from the 203s run:
+//   root `npm install` 136.6s          `npm run build` 23.1s
+//   `dawn dev` boot+readiness 4.9s     `npm start` boot+readiness 1.6s
+//   dev session total 12.3s, of which the NESTED web client is:
+//     `npm run dev:web` boot + /api/dawn/memory/candidates readiness  2.6s
+//     the six web assertions (incl. a 3.8s cold /api/copilotkit compile) 3.9s
+//     web teardown 87ms; the Dawn child's own teardown after it, 58ms
+// So the web tier costs ~6.6s. Do not read a body total as a regression signal:
+// `npm install` alone swung 92-137s across measurements, several times the
+// web tier's whole cost.
+// (2026-08-25 single-process reference, body 144s: install 92.2s, typegen 2.0s,
+// check 1.2s, typecheck 4.0s, `npm test` 4.4s, eval 1.6s, verify 1.6s, build
+// 16.1s, dev session 3.2s, start session 1.6s.)
 // Raised from 600_000 because the workspace restructure added the web client's
 // dependency set to the install and a `next build` to the build. A cold CI
 // runner is the pessimistic case: ~3x on the network-bound install, ~4x on the
-// rest, which lands near 350s — this leaves better than 3x headroom on that.
+// rest. Off the 144s reference that landed near 350s; off the slowest install
+// measured here it lands near 670s, which still leaves ~1.8x headroom.
 const ACTIVATION_TIMEOUT_MS = 1_200_000
+// Covers everything after the lifecycle deadline fires. The non-aborted cost is
+// tiny — 87ms + 58ms + 29ms to reap all three children — but the ABORTED path is
+// what this reserves for: each nesting level waits up to
+// PACKAGED_NPM_ACTION_SETTLE_MS (5s) for its action to unwind, then up to a 2s
+// grace plus a 2s force window per child, plus the transcript appends.
 const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
 // The install is the one command with no headroom under the harness-wide
-// PACKAGED_COMMAND_TIMEOUT_MS (180_000): 92.2s measured warm, and it resolves
-// ~1.3GB across both workspace members through Verdaccio's npmjs uplink, so a
-// cold registry plausibly overruns 180s. Nothing else does — `npm run build`
-// measured 16.1s against that same 180s budget — so this is the only override.
+// PACKAGED_COMMAND_TIMEOUT_MS (180_000): 92.2-136.6s measured warm, and it
+// resolves ~1.3GB across both workspace members through Verdaccio's npmjs
+// uplink, so a cold registry plausibly overruns 180s. Nothing else does —
+// `npm run build` measured 16.1-23.1s against that same 180s budget — so this
+// is the only override.
 const WORKSPACE_INSTALL_TIMEOUT_MS = 600_000
 const SAFE_PROMPT = "What are common agent architectures? Write a short cited report."
 const SUBQUESTION = "Identify common agent architectures and cite the corpus."
@@ -51,6 +70,24 @@ const GATED_REPLY = "Fetched external context after approval."
 const BUILT_REPLY = "built-env-smoke-ok"
 const FETCH_STDOUT =
   'No external source configured for "quantum computing". Edit workspace/scripts/fetch-source.mjs to fetch real content.\n'
+// The web hop's own journeys. Dedicated prompts, not SAFE_PROMPT/GATED_PROMPT:
+// they keep the three direct journeys' aimock accounting untouched and remove
+// any dependence on whether an aimock fixture is consumed or reusable.
+const WEB_PROMPT = "Web hop smoke: outline the workbench check."
+const WEB_REPLY = "Workbench reached the Dawn server through the CopilotKit runtime."
+const WEB_TODOS = [
+  { content: "Confirm the web client reaches the Dawn server", status: "completed" },
+]
+const WEB_GATED_PROMPT = "Web hop gate: run the external fetch script for the workbench check."
+const WEB_FETCH_COMMAND = "node scripts/fetch-source.mjs workbench hop"
+const WEB_GATED_REPLY = "Fetched external context after approval through the web client."
+// CopilotKit's fetch-router matches `agent/<agentId>/run`; `default` is the id
+// the runtime route registers and every CopilotKit hook resolves.
+const COPILOTKIT_RUN_PATH = "/api/copilotkit/agent/default/run"
+// The allowlisted read the generated app itself treats as "the Dawn server
+// answered" (`AppShell.tsx`'s SERVER_PROBE_PATH). A 2xx means the route's whole
+// module graph compiled AND the proxy reached a Dawn server.
+const WEB_READY_PATH = "/api/dawn/memory/candidates"
 const todos = [
   { content: "Restate the question and list the sub-questions to research", status: "completed" },
   { content: "Search the corpus for each sub-question", status: "in_progress" },
@@ -109,6 +146,21 @@ function createGatedAndBuiltFixtures() {
       .replies(GATED_REPLY)
       .build(),
     ...script().user(BUILT_PROMPT).replies(BUILT_REPLY).build(),
+  ]
+}
+
+function createWebHopFixtures() {
+  return [
+    ...script()
+      .user(WEB_PROMPT)
+      .callsTool("writeTodos", { todos: WEB_TODOS })
+      .replies(WEB_REPLY)
+      .build(),
+    ...script()
+      .user(WEB_GATED_PROMPT)
+      .callsTool("runBash", { command: WEB_FETCH_COMMAND })
+      .replies(WEB_GATED_REPLY)
+      .build(),
   ]
 }
 
@@ -364,6 +416,13 @@ async function appendAgUiFailure(
 
 async function postAgui(options: {
   readonly baseUrl: string
+  /**
+   * Where to POST. Defaults to the Dawn server's own AG-UI route; the web hop
+   * points it at CopilotKit's runtime instead. Nothing else changes: the
+   * runtime accepts a plain AG-UI `RunAgentInput` — the same object built below
+   * — and answers `text/event-stream` of raw `data: {...}` AG-UI frames.
+   */
+  readonly endpointPath?: string
   readonly messages: readonly {
     readonly content: string
     readonly id: string
@@ -386,7 +445,7 @@ async function postAgui(options: {
     ...options.resumeFields,
   }
   const routeKey = encodeURIComponent("/research#agent")
-  const endpoint = new URL(`/agui/${routeKey}`, options.baseUrl)
+  const endpoint = new URL(options.endpointPath ?? `/agui/${routeKey}`, options.baseUrl)
   const requestSignal = AbortSignal.any([options.signal, AbortSignal.timeout(60_000)])
   await options.recorder.append({ type: "request", endpoint: endpoint.href, body })
 
@@ -803,15 +862,139 @@ function assertBuiltArtifactJourney(
   expectNoActivitySnapshots(events)
 }
 
+/**
+ * W4 — Dawn's events survive a third-party runtime that re-validates and
+ * re-encodes every frame.
+ *
+ * Deliberately without run/thread id equality on the terminal frames: CopilotKit
+ * adds an `input` echo to RUN_STARTED, and id echo is a property of a
+ * third-party runtime rather than of Dawn. The thread-state read at the call
+ * site proves the id round-trip in a way that does not depend on it.
+ */
+function assertWebHopJourney(events: readonly AgUiEvent[]): void {
+  expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([])
+  const finished = events.filter((event) => event.type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]?.outcome).toEqual({ type: "success" })
+  expect(events.at(-1)).toEqual(finished[0])
+  expect(reconstructAssistantText(events)).toBe(WEB_REPLY)
+
+  // CONTENT equality, not mere presence: a runtime that dropped `content` would
+  // still emit the event, and this assertion would still be green.
+  const activities = events.filter((event) => event.type === "ACTIVITY_SNAPSHOT")
+  expect(activities).toHaveLength(1)
+  expect(activities[0]).toMatchObject({
+    activityType: "dawn.plan",
+    content: { todos: WEB_TODOS },
+    replace: true,
+  })
+  expect(String(activities[0]?.messageId)).toMatch(/^dawn:plan:/)
+  expect(
+    events.filter((event) => event.type === "TOOL_CALL_START").map((event) => event.toolCallName),
+  ).not.toContain("writeTodos")
+}
+
+/**
+ * W5, first half — the interrupt outcome survives the CopilotKit hop. Mirrors
+ * `assertGatedResearchInterrupt` minus the run/thread id equality.
+ */
+function assertWebGatedInterrupt(events: readonly AgUiEvent[]): {
+  readonly gatedToolCallId: string
+  readonly interruptId: string
+} {
+  expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([])
+  const finished = events.filter((event) => event.type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]).toMatchObject({ outcome: { type: "interrupt" } })
+  expect(events.at(-1)).toEqual(finished[0])
+
+  const outcome = finished[0]?.outcome as
+    | { readonly interrupts?: readonly unknown[]; readonly type?: unknown }
+    | undefined
+  expect(outcome?.interrupts).toHaveLength(1)
+  const interrupt = outcome?.interrupts?.[0]
+  if (interrupt === null || typeof interrupt !== "object" || Array.isArray(interrupt)) {
+    throw new Error("Web gated journey omitted its permission interrupt")
+  }
+  const interruptRecord = interrupt as Record<string, unknown>
+  const interruptId = interruptRecord.id
+  if (typeof interruptId !== "string") {
+    throw new Error("Web gated permission interrupt omitted its id")
+  }
+  expect(interruptRecord.reason).toBe("command")
+  expect(interruptRecord.metadata).toMatchObject({
+    type: "permission-request",
+    kind: "command",
+    detail: { command: WEB_FETCH_COMMAND },
+  })
+
+  const starts = events.filter((event) => event.type === "TOOL_CALL_START")
+  expect(starts.map((event) => event.toolCallName)).toEqual(["runBash"])
+  const toolCallId = starts[0]?.toolCallId
+  if (typeof toolCallId !== "string") {
+    throw new Error("Web gated runBash start omitted its tool-call id")
+  }
+  expect(events.filter((event) => event.type === "TOOL_CALL_RESULT")).toEqual([])
+  expect(events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT")).toEqual([])
+  expectNoActivitySnapshots(events)
+
+  return { gatedToolCallId: toolCallId, interruptId }
+}
+
+/**
+ * W5, second half — the resume envelope survives the hop and lands on the SAME
+ * tool call. The serialized ToolMessage envelope is deliberately not re-checked:
+ * `assertResumedGatedJourney` already pins that against the server directly.
+ */
+function assertWebResumedJourney(events: readonly AgUiEvent[], gatedToolCallId: string): void {
+  expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([])
+  const finished = events.filter((event) => event.type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]?.outcome).toEqual({ type: "success" })
+  expect(events.at(-1)).toEqual(finished[0])
+
+  const starts = events.filter((event) => event.type === "TOOL_CALL_START")
+  expect(starts.map((event) => event.toolCallName)).toEqual(["runBash"])
+  expect(starts[0]?.toolCallId).toBe(gatedToolCallId)
+  const correlated = events.filter((event) => event.toolCallId === gatedToolCallId)
+  const result = correlated.find((event) => event.type === "TOOL_CALL_RESULT")
+  if (result === undefined) {
+    throw new Error("Resumed web runBash omitted its tool result")
+  }
+  const resultIndex = events.indexOf(result)
+  const firstTextIndex = events.findIndex((event) => event.type === "TEXT_MESSAGE_CONTENT")
+  expect(firstTextIndex).toBeGreaterThan(resultIndex)
+  expect(reconstructAssistantText(events)).toBe(WEB_GATED_REPLY)
+}
+
 function assertRecordedServerExit(
   transcript: string,
-  options: { readonly appRoot: string; readonly script: "dev" | "start" },
+  options: { readonly appRoot: string; readonly script: "dev" | "dev:web" | "start" },
 ): void {
-  const commandPrefix = `$ (cd ${options.appRoot} && npm run ${options.script}`
-  const commandIndex = transcript.lastIndexOf(commandPrefix)
-  expect(commandIndex).toBeGreaterThanOrEqual(0)
-  if (commandIndex < 0) throw new Error(`Missing ${options.script} server transcript`)
-  const commandBlock = transcript.slice(commandIndex)
+  // `npm run dev` is a PREFIX of `npm run dev:web`, and the two-process dev
+  // session records both. `lastIndexOf` on a bare prefix happens to land on the
+  // right block today only because nesting appends the inner child FIRST — a
+  // green-by-accident that would flip the day the ordering changes. Match the
+  // whole command line instead.
+  const lines = transcript.split("\n")
+  const opening = `$ (cd ${options.appRoot} && npm run ${options.script}`
+  const commandLineIndex = lines.findLastIndex(
+    (line) =>
+      line.startsWith(opening) && (line[opening.length] === " " || line[opening.length] === ")"),
+  )
+  expect(commandLineIndex).toBeGreaterThanOrEqual(0)
+  // Bound the block at the NEXT recorded command too. Nesting appends the inner
+  // (web) child FIRST, so a slice that ran to the end of the file would read the
+  // SERVER block's exit line and pronounce the web child recorded no matter what
+  // the web block actually says.
+  const nextCommandOffset = lines
+    .slice(commandLineIndex + 1)
+    .findIndex((line) => /^\$ \(cd .+ && .+\)$/.test(line))
+  const commandBlock = (
+    nextCommandOffset < 0
+      ? lines.slice(commandLineIndex)
+      : lines.slice(commandLineIndex, commandLineIndex + 1 + nextCommandOffset)
+  ).join("\n")
   expect(commandBlock).not.toContain("[exit pending")
   expect(commandBlock).not.toContain("[exit unavailable")
   expect(commandBlock).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
@@ -826,8 +1009,55 @@ async function assertReadyHealth(baseUrl: string, signal: AbortSignal): Promise<
   expect(body).toEqual({ status: "ready" })
 }
 
+async function fetchWeb(baseUrl: string, path: string, signal: AbortSignal): Promise<Response> {
+  // 60s, not the 10s `assertReadyHealth` uses: Next compiles route handlers
+  // lazily and `/api/copilotkit/*` took 2.4-8.6s on its first hit, worst
+  // immediately after a `next build` — which is exactly the sequence this lane
+  // runs. Never request `/`: 15-36s cold, and a prior `next build` does not warm
+  // the dev compile.
+  return await fetch(new URL(path, baseUrl), {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
+  })
+}
+
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
+})
+
+// Proves the anchor before the lane has a second block to disambiguate: the
+// `dev:web` line starts with the whole `npm run dev` prefix, so an unanchored
+// `lastIndexOf` selects the WRONG block the moment a web child is recorded after
+// the server child.
+test("anchors the recorded server exit to a whole command line", () => {
+  const appRoot = "/tmp/anchored-activation-app"
+  const serverBlock = [
+    `$ (cd ${appRoot} && npm run dev -- --port 4711)`,
+    "dawn dev stdout",
+    "[exit 0 signal none]",
+    "",
+  ]
+  const leakedWebBlock = [
+    `$ (cd ${appRoot} && npm run dev:web -- --port 4712 -H 127.0.0.1)`,
+    "next dev stdout",
+    "[exit pending signal pending]",
+    "",
+  ]
+
+  // A `dev:web` block recorded AFTER the server block must not be mistaken for it.
+  const webLast = [...serverBlock, ...leakedWebBlock].join("\n")
+  assertRecordedServerExit(webLast, { appRoot, script: "dev" })
+  expect(() => assertRecordedServerExit(webLast, { appRoot, script: "dev:web" })).toThrow()
+
+  // And in the order nesting actually produces — inner (web) first, server last —
+  // a web block whose own exit line never landed must not borrow the server's.
+  const webFirst = [
+    `$ (cd ${appRoot} && npm run dev:web -- --port 4712 -H 127.0.0.1)`,
+    "next dev stdout",
+    "",
+    ...serverBlock,
+  ].join("\n")
+  assertRecordedServerExit(webFirst, { appRoot, script: "dev" })
+  expect(() => assertRecordedServerExit(webFirst, { appRoot, script: "dev:web" })).toThrow()
 })
 
 test("activates the default research scaffold through the complete npm lifecycle", {
@@ -884,7 +1114,11 @@ test("activates the default research scaffold through the complete npm lifecycle
     await writeFile(agUiTranscriptPath, "", "utf8")
 
     aimock = await createAimock({ fixtures: [] })
-    aimock.addFixtures([...createSafeResearchFixtures(), ...createGatedAndBuiltFixtures()])
+    aimock.addFixtures([
+      ...createSafeResearchFixtures(),
+      ...createGatedAndBuiltFixtures(),
+      ...createWebHopFixtures(),
+    ])
     const activeAimock = aimock
     const agUiRecorder = createAgUiTranscriptRecorder({
       aimockUrl: activeAimock.baseUrl,
@@ -1100,7 +1334,15 @@ test("activates the default research scaffold through the complete npm lifecycle
     const builtThreadId = `built-thread-${randomUUID()}`
     const builtRunId = `built-run-${randomUUID()}`
     const builtMessageId = `built-message-${randomUUID()}`
+    const webThreadId = `web-thread-${randomUUID()}`
+    const webRunId = `web-run-${randomUUID()}`
+    const webMessageId = `web-message-${randomUUID()}`
+    const webGatedThreadId = `web-gated-thread-${randomUUID()}`
+    const webGatedRunId = `web-gated-run-${randomUUID()}`
+    const webGatedMessageId = `web-gated-message-${randomUUID()}`
+    const webResumeRunId = `web-resume-run-${randomUUID()}`
     let devServerUrl: string | undefined
+    let webClientUrl: string | undefined
     const devResult = await withPackagedNpmServer(
       {
         appRoot,
@@ -1168,13 +1410,182 @@ test("activates the default research scaffold through the complete npm lifecycle
           },
           gatedToolCallId,
         )
-        return { interruptId }
+
+        // The generated web client, against the SAME Dawn server. Nested rather
+        // than sequential: the server is already BOUND when the web child
+        // allocates its port, and LIFO teardown kills the web half first.
+        const webResult = await withPackagedNpmServer(
+          {
+            appRoot,
+            env: {
+              DAWN_SERVER_URL: url,
+              // Both route handlers read DAWN_SERVER_URL at module scope under
+              // `runtime = "nodejs"`, and Next does NOT inline it — the built
+              // chunk carries `process.env.DAWN_SERVER_URL??"http://127.0.0.1:3002"`
+              // verbatim — so injecting it at spawn is what points this child at
+              // this server rather than at that hard-coded default.
+              //
+              // Without the two below, the CopilotKit runtime prints "anonymous
+              // telemetry enabled" and makes an outbound call, in a lane whose
+              // whole claim is that a generated app inherits no ambient
+              // endpoints or credentials.
+              COPILOTKIT_TELEMETRY_DISABLED: "true",
+              DO_NOT_TRACK: "1",
+            },
+            // Next has no `/healthz`, and readying on its stdout is not merely
+            // imprecise — it is wrong in a way that HANGS: `Ready in Xms` prints
+            // 12-29s before the process can serve, and a request issued at that
+            // line blocked 20.7s. A 2xx on the proxy route means the route's
+            // whole module graph compiled AND the proxy reached a Dawn server.
+            readiness: httpOkReadiness(WEB_READY_PATH),
+            script: "dev:web",
+            signal: lifecycleSignal,
+            transcriptPath: commandsTranscriptPath,
+          },
+          async ({ url: webUrl }) => {
+            webClientUrl = webUrl
+            agUiRecorder.registerServerUrl(webUrl)
+            expect(new URL(webUrl).port).not.toBe(new URL(url).port)
+
+            const webIdleJournalStart = activeAimock.getRequests().length
+
+            // W1 — the allowlist denies by default in a real Next process.
+            const denied = await fetchWeb(webUrl, "/api/dawn/threads", lifecycleSignal)
+            expect(denied.status).toBe(403)
+            await expect(denied.json()).resolves.toEqual({ error: "Not proxied" })
+
+            // W2 — the proxy reached THIS server. A mis-wired DAWN_SERVER_URL
+            // cannot pass: only this server has a checkpoint for the thread the
+            // safe journey just drove, so a stray Dawn server on the hard-coded
+            // :3002 default answers 404 here while W1 and W3 stay green. Do not
+            // weaken the 200 to a "not 502" check — that is the whole assertion.
+            const state = await fetchWeb(
+              webUrl,
+              `/api/dawn/threads/${encodeURIComponent(safeThreadId)}/state`,
+              lifecycleSignal,
+            )
+            expect(state.status).toBe(200)
+            const threadState = (await state.json()) as {
+              readonly config?: unknown
+              readonly values?: unknown
+            }
+            expect(JSON.stringify(threadState.config)).toContain(safeThreadId)
+            expect(JSON.stringify(threadState.values)).toContain("[corpus/agent-architectures.md]")
+            // 403 (refused) and 404 (no checkpoint) stay distinguishable, which
+            // is the distinction the proxy route argues for — and it is what
+            // makes the 200 above evidence rather than coincidence.
+            const absent = await fetchWeb(
+              webUrl,
+              `/api/dawn/threads/${encodeURIComponent(`absent-${randomUUID()}`)}/state`,
+              lifecycleSignal,
+            )
+            expect(absent.status).toBe(404)
+
+            // W3 — the CopilotKit runtime is mounted at the basePath the client
+            // uses, under the agent id every hook resolves. Never assert
+            // `agents.default.className`: it is MINIFIED and varies by build.
+            const info = await fetchWeb(webUrl, "/api/copilotkit/info", lifecycleSignal)
+            expect(info.status).toBe(200)
+            const infoBody = (await info.json()) as {
+              readonly agents?: Record<string, unknown>
+              readonly mode?: unknown
+              readonly telemetryDisabled?: unknown
+            }
+            expect(Object.keys(infoBody.agents ?? {})).toContain("default")
+            expect(infoBody.mode).toBe("sse")
+            expect(infoBody.telemetryDisabled).toBe(true)
+
+            // W6 — the web tier's ONLY path to a model is through Dawn, and only
+            // for an actual run. Nothing above may move the journal.
+            expect(activeAimock.getRequests()).toHaveLength(webIdleJournalStart)
+
+            // W4 — Next route -> CopilotRuntime -> HttpAgent -> Dawn /agui ->
+            // LangGraph -> aimock, and back. The +2 is one tool turn plus one
+            // text turn. `assertWebHopJourney` already proves the run reached a
+            // model — `WEB_REPLY` exists nowhere but the fixture — so what this
+            // adds is the EXACT count: a run the hop invoked twice would land
+            // +4 with the same reply text and pass every other assertion here.
+            // If it ever disagrees, correct the constant rather than loosening
+            // it to a lower bound.
+            const webJournalStart = activeAimock.getRequests().length
+            const webJourney = await postAgui({
+              baseUrl: webUrl,
+              endpointPath: COPILOTKIT_RUN_PATH,
+              messages: [{ id: webMessageId, role: "user", content: WEB_PROMPT }],
+              recorder: agUiRecorder,
+              runId: webRunId,
+              signal: lifecycleSignal,
+              threadId: webThreadId,
+            })
+            expect(webJourney.status).toBe(200)
+            expect(activeAimock.getRequests()).toHaveLength(webJournalStart + 2)
+            assertWebHopJourney(webJourney.events)
+            // Our thread id survived the hop into Dawn's checkpointer.
+            const webState = await fetchWeb(
+              webUrl,
+              `/api/dawn/threads/${encodeURIComponent(webThreadId)}/state`,
+              lifecycleSignal,
+            )
+            expect(webState.status).toBe(200)
+
+            // W5 — the interrupt outcome and the resume envelope survive the
+            // hop. Highest-risk contract in the app; it regressed once.
+            const webGatedJournalStart = activeAimock.getRequests().length
+            const webGated = await postAgui({
+              baseUrl: webUrl,
+              endpointPath: COPILOTKIT_RUN_PATH,
+              messages: [{ id: webGatedMessageId, role: "user", content: WEB_GATED_PROMPT }],
+              recorder: agUiRecorder,
+              runId: webGatedRunId,
+              signal: lifecycleSignal,
+              threadId: webGatedThreadId,
+            })
+            expect(webGated.status).toBe(200)
+            expect(activeAimock.getRequests()).toHaveLength(webGatedJournalStart + 1)
+            const webInterrupt = assertWebGatedInterrupt(webGated.events)
+
+            const webResumeJournalStart = activeAimock.getRequests().length
+            const webResumed = await postAgui({
+              baseUrl: webUrl,
+              endpointPath: COPILOTKIT_RUN_PATH,
+              messages: [],
+              recorder: agUiRecorder,
+              resumeFields: {
+                resume: [
+                  { interruptId: webInterrupt.interruptId, status: "resolved", payload: "once" },
+                ],
+              },
+              runId: webResumeRunId,
+              signal: lifecycleSignal,
+              threadId: webGatedThreadId,
+            })
+            expect(webResumed.status).toBe(200)
+            expect(activeAimock.getRequests()).toHaveLength(webResumeJournalStart + 1)
+            expect(webResumeRunId).not.toBe(webGatedRunId)
+            assertWebResumedJourney(webResumed.events, webInterrupt.gatedToolCallId)
+
+            return { webInterruptId: webInterrupt.interruptId }
+          },
+        )
+        return { interruptId, ...webResult }
       },
     )
     if (devServerUrl === undefined) throw new Error("Generated dev server did not start")
+    if (webClientUrl === undefined) throw new Error("Generated web client did not start")
 
     const transcriptAfterDev = await readFile(commandsTranscriptPath, "utf8")
     assertRecordedServerExit(transcriptAfterDev, { appRoot, script: "dev" })
+    // W6, second half — the SECOND child dies too, and its own block says so.
+    assertRecordedServerExit(transcriptAfterDev, { appRoot, script: "dev:web" })
+    // A leak canary, not a proof of the strip. It says only that nothing echoed
+    // the ambient key into a transcript this lane preserves and CI uploads —
+    // which holds largely because the web tier has no model path except through
+    // Dawn, so there is little to echo it. Breaking `GENERATED_APP_UNSET_ENV`
+    // for `dev:web` leaves this green; the assertion that actually fails is
+    // `observed.runtimeEnv` in `test/harness/packaged-app.test.ts:1114`. Kept
+    // anyway: it is nearly free and mirrors the same sweep over the AG-UI
+    // transcript below.
+    expect(transcriptAfterDev).not.toContain("ambient-secret")
     expect(transcriptAfterDev).not.toContain(`$ (cd ${appRoot} && npm run start`)
 
     let builtServerUrl: string | undefined
@@ -1222,8 +1633,10 @@ test("activates the default research scaffold through the complete npm lifecycle
     expect(() => JSON.parse(sanitizedAgUiTranscript)).not.toThrow()
     expect(sanitizedAgUiTranscript).toContain("<temp-root>")
     expect(sanitizedAgUiTranscript).toContain("<server-url-1>")
-    if (builtServerUrl !== devServerUrl) {
-      expect(sanitizedAgUiTranscript).toContain("<server-url-2>")
+    // The web client registers second, so the built server takes the third slot.
+    expect(sanitizedAgUiTranscript).toContain("<server-url-2>")
+    if (builtServerUrl !== devServerUrl && builtServerUrl !== webClientUrl) {
+      expect(sanitizedAgUiTranscript).toContain("<server-url-3>")
     }
     expect(sanitizedAgUiTranscript).toContain("<aimock-url>")
     expect(sanitizedAgUiTranscript).toContain("<aimock-origin>")
@@ -1236,6 +1649,7 @@ test("activates the default research scaffold through the complete npm lifecycle
       tempRoot,
       `/private${tempRoot}`,
       devServerUrl,
+      webClientUrl,
       builtServerUrl,
       activeAimock.baseUrl,
       new URL(activeAimock.baseUrl).origin,
@@ -1250,6 +1664,14 @@ test("activates the default research scaffold through the complete npm lifecycle
       builtThreadId,
       builtRunId,
       builtMessageId,
+      webThreadId,
+      webRunId,
+      webMessageId,
+      webGatedThreadId,
+      webGatedRunId,
+      webGatedMessageId,
+      webResumeRunId,
+      devResult.webInterruptId,
       "test-not-used",
       "ambient-secret",
     ]) {
