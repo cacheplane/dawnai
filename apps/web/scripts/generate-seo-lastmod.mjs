@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process"
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import matter from "gray-matter"
 
-const scriptFile = fileURLToPath(import.meta.url)
+const scriptFile = realpathSync(fileURLToPath(import.meta.url))
 const scriptDir = dirname(scriptFile)
 const appRoot = resolve(scriptDir, "..")
 const repoRoot = resolve(appRoot, "..", "..")
@@ -13,6 +13,12 @@ const defaultOutputFile = join(appRoot, "app", "seo", "lastmod.generated.ts")
 
 export function normalizeRelativePath(path) {
   return path.replaceAll("\\", "/")
+}
+
+export function isDirectExecution(invokedPath, modulePath) {
+  return (
+    invokedPath !== undefined && realpathSync(resolve(invokedPath)) === realpathSync(modulePath)
+  )
 }
 
 function filesUnder(directory, extension) {
@@ -151,7 +157,7 @@ function main(argv) {
     }
     if (existing !== content) {
       console.error(
-        `SEO last-modified manifest is stale: regenerate with pnpm --dir apps/web seo:lastmod -- --as-of ${asOf}`,
+        `SEO last-modified manifest is stale: regenerate with pnpm --dir apps/web seo:lastmod --as-of ${asOf}`,
       )
       process.exitCode = 1
     }
@@ -162,6 +168,6 @@ function main(argv) {
   writeFileSync(outputFile, content)
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === scriptFile) {
+if (isDirectExecution(process.argv[1], scriptFile)) {
   main(process.argv.slice(2))
 }
