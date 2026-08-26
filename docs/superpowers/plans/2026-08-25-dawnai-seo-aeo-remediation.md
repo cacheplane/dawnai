@@ -125,7 +125,7 @@ pnpm --filter @dawn-ai/web test -- app/sitemap.test.ts
 pnpm --filter @dawn-ai/web build
 ```
 
-Expected: tests PASS; `/sitemap.xml` remains static; its URL count equals `2 + ALL_DOCS_PAGES.length + getAllPosts().length + getAllTags().length` (88 for the current checked-out inventory), and it has more than ten distinct dates. Keep the deployed 66-URL count only as the production baseline; do not force the newer source inventory to match it.
+Expected: tests PASS; `/sitemap.xml` remains static; its URL count equals `2 + ALL_DOCS_PAGES.length + productionPosts.length + productionTags.length` (83 for the current production inventory, excluding drafts), and it has more than ten distinct dates. Keep the deployed 66-URL count only as the historical baseline; do not force the newer source inventory to match it.
 
 - [ ] **Step 6: Commit**
 
