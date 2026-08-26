@@ -31,9 +31,16 @@ import { SubagentCard } from "./SubagentCard"
  *
  * In practice that puts the card's own box out of reach from here: `background`,
  * `border`, `border-radius`, `color`, `font-size`, `margin` and `padding` are
- * all claimed on `.dawn-activity`. Radius and font-size have `--dawn-activity-*`
- * tokens instead (rung 1, applied in `app/theme.css`); padding and margin have
- * no token, so they cannot be changed at any rung short of ejecting.
+ * all claimed on `.dawn-activity`, as is `font-weight` on `.dawn-activity__header`.
+ * Rung 1 reaches every one of them: the package has a `--dawn-activity-*` token
+ * for surface, border color, text, radius, font-size, margin, padding and
+ * header-weight. (Only the border's COLOR is a token — its 1px width and solid
+ * style stay the package's.) `app/theme.css` overrides the five palette ones and
+ * leaves the geometry and weight at the package's defaults.
+ *
+ * Still tokenless, and so still rung-4 work: the badge's radius, font-size,
+ * weight and padding, the section label's weight and size, the item-status and
+ * overflow font-sizes, and the list and item geometry.
  */
 const planRenderer = {
   activityType: DAWN_PLAN_ACTIVITY_TYPE,
