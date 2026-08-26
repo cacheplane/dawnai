@@ -112,7 +112,7 @@ export function breadcrumbJsonLd(page: SeoPage): BreadcrumbListJsonLd {
     itemListElement: page.breadcrumbs.map((crumb, index) => {
       const item = crumb.href
         ? new URL(crumb.href, page.canonical).href
-        : index === page.breadcrumbs.length - 1
+        : page.kind !== "TechArticle" && index === page.breadcrumbs.length - 1
           ? page.canonical
           : undefined
 

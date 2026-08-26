@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import { AUTHORS, type Post } from "../components/blog/post-index"
+import type { DocsPageHref } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
 import { requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
 import { SOCIAL_CARD, SOCIAL_IMAGE, SOCIAL_SITE_NAME } from "./social"
@@ -14,7 +15,9 @@ const SITE_URL = "https://dawnai.org"
 const BLOG_INDEX_DESCRIPTION =
   "Writing on the agent stack, type-safety, and the tools we're building."
 
-export function resolveStaticSeoPage(path: string): TechArticleSeoPage | undefined {
+export function resolveStaticSeoPage(path: DocsPageHref): TechArticleSeoPage
+export function resolveStaticSeoPage(path: string): SeoPage | undefined
+export function resolveStaticSeoPage(path: string): SeoPage | undefined {
   return STATIC_SEO_PAGES[path]
 }
 

@@ -8,7 +8,7 @@ import { Fragment, jsx, jsxs } from "react/jsx-runtime"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
-import { STATIC_SEO_PAGES } from "../../seo/registry"
+import { DOCS_SEO_PAGES } from "../../seo/registry"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
 import {
   ALL_DOCS_PAGES,
@@ -25,7 +25,7 @@ const WRAPPERS_ROOT = join(WEB_ROOT, "app/docs")
 const NAV_PATH = join(dirname(fileURLToPath(import.meta.url)), "nav.ts")
 const CHECK_DOCS_PATH = join(WEB_ROOT, "../../scripts/check-docs.mjs")
 const SEO_TITLES_BY_PATH = Object.fromEntries(
-  Object.entries(STATIC_SEO_PAGES).map(([path, page]) => [path, page.title]),
+  Object.entries(DOCS_SEO_PAGES).map(([path, page]) => [path, page.title]),
 )
 
 const FOUNDATION_DOCS_NAV = [
@@ -168,6 +168,7 @@ interface DocTitleAnalysis {
 interface DocTitleFixture {
   readonly mdxSource: string
   readonly wrapperSource: string
+  readonly wrapperPath?: string
   readonly seoTitlesByPath?: Readonly<Record<string, string>>
   readonly canonicalHref?: string
 }
@@ -302,6 +303,7 @@ function analyzeDocTitles(
     {
       mdxSource,
       wrapperSource,
+      wrapperPath: join(WRAPPERS_ROOT, "real", "page.tsx"),
       seoTitlesByPath,
       ...(canonicalHref !== undefined ? { canonicalHref } : {}),
     },
@@ -448,8 +450,8 @@ describe("documentation registry invariants", () => {
 
   it("derives breadcrumbs and siblings from the registered order", () => {
     expect(breadcrumbsFor("/docs/ag-ui")).toEqual([
+      { label: "Home", href: "/" },
       { label: "Docs", href: "/docs/getting-started" },
-      { label: "Integrate" },
       { label: "AG-UI and Web Clients" },
     ])
     expect(siblingsFor("/docs/dev-server/agent-protocol").prev?.href).toBe("/docs/dev-server")
@@ -459,15 +461,33 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 
-  it("gives hidden API leaves a four-part breadcrumb and no journey siblings", () => {
+  it("gives hidden API leaves a linked API hub and no journey siblings", () => {
     for (const leaf of API_REFERENCE_PAGES) {
       expect(breadcrumbsFor(leaf.href)).toEqual([
+        { label: "Home", href: "/" },
         { label: "Docs", href: "/docs/getting-started" },
-        { label: "Reference" },
         { label: "API Reference", href: "/docs/api" },
         { label: leaf.label },
       ])
       expect(siblingsFor(leaf.href)).toEqual({ prev: null, next: null })
+    }
+  })
+
+  it("uses a real-link trail with the current route as the final crumb for all 75 pages", () => {
+    for (const page of ALL_DOCS_PAGES) {
+      const crumbs = breadcrumbsFor(page.href)
+      const finalCrumb = crumbs.at(-1)
+
+      expect(crumbs[0], `${page.href} Home crumb`).toEqual({ label: "Home", href: "/" })
+      expect(finalCrumb, `${page.href} final crumb`).toEqual({ label: page.label })
+      expect(
+        crumbs.slice(0, -1).every((crumb) => typeof crumb.href === "string"),
+        `${page.href} linked ancestors`,
+      ).toBe(true)
+      expect(new Set(crumbs.flatMap((crumb) => (crumb.href ? [crumb.href] : []))).size).toBe(
+        crumbs.length - 1,
+      )
+      expect(crumbs.flatMap((crumb) => (crumb.href ? [crumb.href] : []))).not.toContain(page.href)
     }
   })
 
@@ -558,6 +578,7 @@ describe("documentation registry invariants", () => {
       return {
         mdxSource: readFileSync(contentPath, "utf8"),
         wrapperSource: readFileSync(wrapperPath, "utf8"),
+        wrapperPath,
         canonicalHref: item.href,
       }
     })
@@ -605,7 +626,7 @@ describe("documentation registry invariants", () => {
   )
 
   it("uses registered labels for every visible RelatedCards destination", () => {
-    const labels = new Map(ALL_DOCS_PAGES.map((item) => [item.href, item.label]))
+    const labels = new Map<string, string>(ALL_DOCS_PAGES.map((item) => [item.href, item.label]))
     const mismatches: string[] = []
 
     for (const file of filesUnder(CONTENT_ROOT, (name) => name.endsWith(".mdx"))) {
@@ -883,6 +904,26 @@ export default function Page() {
     })
   })
 
+  it("ignores a correct DocsPage in a dead helper when the default export is not a docs page", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+function DeadHelper() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+export default function Page() {
+  return null
+}
+void DeadHelper`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
   it("resolves a literal resolver-backed metadata route through the SEO registry", () => {
     const analysis = analyzeDocTitles(
       "# Getting Started\n",
@@ -956,6 +997,27 @@ export default function Page() {
       `import Content from "../../../content/docs/getting-started.mdx"
 import { DocsPage } from "../../components/docs/DocsPage"
 import { resolveStaticSeoPage, toMetadata } from "../../seo/not-the-resolver"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
+  })
+
+  it("rejects a same-suffix resolver module resolved from the wrapper path", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../fake/seo/resolve"
 export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
 export default function Page() {
   return <DocsPage href="/docs/getting-started" Content={Content} />

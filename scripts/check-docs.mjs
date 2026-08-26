@@ -222,7 +222,18 @@ function objectLiteralMetadataTitle(initializer) {
   return titles.length === 1 ? titles[0] : null
 }
 
-function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
+const canonicalSeoResolverPath = resolve(repoRoot, "apps/web/app/seo/resolve.ts")
+
+function canonicalResolverImport(wrapperPath, importTarget) {
+  if (typeof wrapperPath !== "string" || !importTarget.startsWith(".")) return false
+  const resolvedImport = resolve(dirname(wrapperPath), importTarget)
+  const resolvedModulePath = resolvedImport.endsWith(".ts")
+    ? resolvedImport
+    : `${resolvedImport}.ts`
+  return resolvedModulePath === canonicalSeoResolverPath
+}
+
+function resolverBackedMetadata(initializer, checker, seoTitlesByPath, wrapperPath) {
   if (
     !tsCompiler.isCallExpression(initializer) ||
     !tsCompiler.isIdentifier(initializer.expression) ||
@@ -234,7 +245,8 @@ function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
   const outerImport = importTargetForSymbol(checker, initializer.expression, "toMetadata")
   const resolution = unwrapExpression(initializer.arguments[0])
   if (
-    !outerImport?.replaceAll("\\", "/").endsWith("/seo/resolve") ||
+    !outerImport ||
+    !canonicalResolverImport(wrapperPath, outerImport) ||
     !tsCompiler.isCallExpression(resolution) ||
     !tsCompiler.isIdentifier(resolution.expression) ||
     resolution.arguments.length !== 1
@@ -253,7 +265,7 @@ function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
   }
 }
 
-function exportedMetadata(sourceFile, checker, seoTitlesByPath) {
+function exportedMetadata(sourceFile, checker, seoTitlesByPath, wrapperPath) {
   for (const statement of sourceFile.statements) {
     if (!tsCompiler.isVariableStatement(statement)) continue
     if (
@@ -276,7 +288,7 @@ function exportedMetadata(sourceFile, checker, seoTitlesByPath) {
         }
       }
       return (
-        resolverBackedMetadata(initializer, checker, seoTitlesByPath) ?? {
+        resolverBackedMetadata(initializer, checker, seoTitlesByPath, wrapperPath) ?? {
           metadataTitle: null,
           metadataRoute: null,
         }
@@ -341,63 +353,107 @@ function importTargetForSymbol(checker, identifier, expectedImportedName) {
     : null
 }
 
-function wrapperContract(sourceFile, checker) {
-  const matches = []
-  function visit(node) {
-    if (tsCompiler.isJsxSelfClosingElement(node) && tsCompiler.isIdentifier(node.tagName)) {
-      let href = null
-      let contentExpression = null
-      let validAttributes = true
-      let hrefCount = 0
-      let contentCount = 0
-      for (const property of node.attributes.properties) {
-        if (tsCompiler.isJsxSpreadAttribute(property)) {
-          validAttributes = false
-          continue
-        }
-        if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name))
-          continue
-        if (property.name.text === "href") {
-          hrefCount++
-          if (property.initializer && tsCompiler.isStringLiteral(property.initializer))
-            href = property.initializer.text
-        }
-        if (property.name.text === "Content") {
-          contentCount++
-          if (
-            property.initializer &&
-            tsCompiler.isJsxExpression(property.initializer) &&
-            property.initializer.expression &&
-            tsCompiler.isIdentifier(property.initializer.expression)
-          ) {
-            contentExpression = property.initializer.expression
-          }
-        }
-      }
-      validAttributes &&= hrefCount === 1 && contentCount === 1
-      matches.push({
-        contentImportTarget:
-          !validAttributes || contentExpression === null
-            ? null
-            : importTargetForSymbol(checker, contentExpression, "default"),
-        docsPageImportTarget: validAttributes
-          ? importTargetForSymbol(checker, node.tagName, "DocsPage")
-          : null,
-        docsPageHref: validAttributes ? href : null,
-      })
+function defaultExportedFunction(sourceFile, checker) {
+  for (const statement of sourceFile.statements) {
+    if (
+      tsCompiler.isFunctionDeclaration(statement) &&
+      statement.modifiers?.some(
+        (modifier) => modifier.kind === tsCompiler.SyntaxKind.DefaultKeyword,
+      ) &&
+      statement.modifiers.some((modifier) => modifier.kind === tsCompiler.SyntaxKind.ExportKeyword)
+    ) {
+      return statement
     }
-    node.forEachChild(visit)
-  }
-  sourceFile.forEachChild(visit)
+    if (!tsCompiler.isExportAssignment(statement) || statement.isExportEquals) continue
 
-  return matches.length === 1
-    ? matches[0]
-    : { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
+    const expression = unwrapExpression(statement.expression)
+    if (tsCompiler.isFunctionExpression(expression) || tsCompiler.isArrowFunction(expression)) {
+      return expression
+    }
+    if (!tsCompiler.isIdentifier(expression)) continue
+
+    const declaration = checker.getSymbolAtLocation(expression)?.declarations?.[0]
+    if (declaration && tsCompiler.isFunctionDeclaration(declaration)) return declaration
+    if (declaration && tsCompiler.isVariableDeclaration(declaration) && declaration.initializer) {
+      const initializer = unwrapExpression(declaration.initializer)
+      if (tsCompiler.isFunctionExpression(initializer) || tsCompiler.isArrowFunction(initializer)) {
+        return initializer
+      }
+    }
+  }
+  return null
+}
+
+function defaultPageReturn(functionNode) {
+  if (tsCompiler.isArrowFunction(functionNode) && !tsCompiler.isBlock(functionNode.body)) {
+    return unwrapExpression(functionNode.body)
+  }
+  if (!functionNode.body || !tsCompiler.isBlock(functionNode.body)) return null
+  const returns = functionNode.body.statements.filter(tsCompiler.isReturnStatement)
+  return returns.length === 1 && returns[0].expression
+    ? unwrapExpression(returns[0].expression)
+    : null
+}
+
+function wrapperContract(sourceFile, checker) {
+  const pageFunction = defaultExportedFunction(sourceFile, checker)
+  const node = pageFunction ? defaultPageReturn(pageFunction) : null
+  if (
+    !node ||
+    !tsCompiler.isJsxSelfClosingElement(node) ||
+    !tsCompiler.isIdentifier(node.tagName)
+  ) {
+    return { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
+  }
+
+  let href = null
+  let contentExpression = null
+  let validAttributes = true
+  let hrefCount = 0
+  let contentCount = 0
+  for (const property of node.attributes.properties) {
+    if (tsCompiler.isJsxSpreadAttribute(property)) {
+      validAttributes = false
+      continue
+    }
+    if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name)) continue
+    if (property.name.text === "href") {
+      hrefCount++
+      if (property.initializer && tsCompiler.isStringLiteral(property.initializer)) {
+        href = property.initializer.text
+      }
+    }
+    if (property.name.text === "Content") {
+      contentCount++
+      if (
+        property.initializer &&
+        tsCompiler.isJsxExpression(property.initializer) &&
+        property.initializer.expression &&
+        tsCompiler.isIdentifier(property.initializer.expression)
+      ) {
+        contentExpression = property.initializer.expression
+      }
+    }
+  }
+  validAttributes &&= hrefCount === 1 && contentCount === 1
+  return {
+    contentImportTarget:
+      !validAttributes || contentExpression === null
+        ? null
+        : importTargetForSymbol(checker, contentExpression, "default"),
+    docsPageImportTarget: validAttributes
+      ? importTargetForSymbol(checker, node.tagName, "DocsPage")
+      : null,
+    docsPageHref: validAttributes ? href : null,
+  }
 }
 
 function analyzeDocTitlesBatch(fixtures) {
+  const wrapperPaths = fixtures.map(
+    ({ wrapperPath }, index) => wrapperPath ?? `/wrapper-${index}.tsx`,
+  )
   const sourceByPath = new Map(
-    fixtures.map(({ wrapperSource }, index) => [`/wrapper-${index}.tsx`, wrapperSource]),
+    fixtures.map(({ wrapperSource }, index) => [wrapperPaths[index], wrapperSource]),
   )
   const compilerHost = {
     ...tsCompiler.createCompilerHost({ jsx: tsCompiler.JsxEmit.Preserve, noLib: true }),
@@ -423,9 +479,10 @@ function analyzeDocTitlesBatch(fixtures) {
   })
   const checker = program.getTypeChecker()
   return fixtures.map(({ mdxSource, seoTitlesByPath, canonicalHref }, index) => {
-    const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
+    const wrapperPath = wrapperPaths[index]
+    const sourceFile = program.getSourceFile(wrapperPath)
     const metadata = sourceFile
-      ? exportedMetadata(sourceFile, checker, seoTitlesByPath)
+      ? exportedMetadata(sourceFile, checker, seoTitlesByPath, wrapperPath)
       : { metadataTitle: null, metadataRoute: null }
     const wrapper = sourceFile
       ? wrapperContract(sourceFile, checker)
@@ -4519,6 +4576,7 @@ const registeredDocAnalyses = analyzeDocTitlesBatch(
   analyzableRegisteredDocs.map(({ href }) => ({
     mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
     wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
+    wrapperPath: resolve(repoRoot, docHrefToPagePath(href)),
     seoTitlesByPath,
     canonicalHref: href,
   })),

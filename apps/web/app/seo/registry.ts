@@ -1,11 +1,11 @@
 import "server-only"
 
-import { breadcrumbsFor } from "../components/docs/nav"
+import { ALL_DOCS_PAGES, breadcrumbsFor, type DocsPageHref } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
-import type { TechArticleSeoPage } from "./types"
+import type { SeoPage, TechArticleSeoPage } from "./types"
 
-interface DocsSeoEntry {
-  readonly path: string
+export interface DocsSeoEntry {
+  readonly path: DocsPageHref
   readonly title: string
   readonly description: string
   readonly sourcePath: string
@@ -13,6 +13,10 @@ interface DocsSeoEntry {
 
 export interface StaticDocsSeoPage extends TechArticleSeoPage {
   readonly sourcePath: string
+}
+
+export type DocsSeoRegistry = {
+  readonly [Path in DocsPageHref]: StaticDocsSeoPage
 }
 
 export function requireValidLastModified(
@@ -33,7 +37,7 @@ export function requireValidLastModified(
   return value
 }
 
-const DOCS_SEO_ENTRIES = [
+export const DOCS_SEO_ENTRIES = [
   {
     path: "/docs/getting-started",
     title: "Getting Started",
@@ -571,6 +575,30 @@ function toStaticDocsSeoPage(entry: DocsSeoEntry): StaticDocsSeoPage {
   }
 }
 
-export const STATIC_SEO_PAGES: Readonly<Record<string, StaticDocsSeoPage>> = Object.fromEntries(
-  DOCS_SEO_ENTRIES.map((entry) => [entry.path, toStaticDocsSeoPage(entry)]),
-)
+export function buildDocsSeoRegistry(entries: readonly DocsSeoEntry[]): DocsSeoRegistry {
+  const expectedHrefs = new Set<DocsPageHref>(ALL_DOCS_PAGES.map(({ href }) => href))
+  const pages: Partial<Record<DocsPageHref, StaticDocsSeoPage>> = {}
+
+  for (const entry of entries) {
+    if (Object.hasOwn(pages, entry.path)) {
+      throw new Error(`Duplicate docs SEO entry: ${entry.path}`)
+    }
+    if (!expectedHrefs.has(entry.path)) {
+      throw new Error(`Extra docs SEO entry: ${entry.path}`)
+    }
+    pages[entry.path] = toStaticDocsSeoPage(entry)
+  }
+
+  for (const href of expectedHrefs) {
+    if (!Object.hasOwn(pages, href)) {
+      throw new Error(`Missing docs SEO entry: ${href}`)
+    }
+  }
+
+  return pages as DocsSeoRegistry
+}
+
+export const DOCS_SEO_PAGES: DocsSeoRegistry = buildDocsSeoRegistry(DOCS_SEO_ENTRIES)
+export const STATIC_SEO_PAGES: Readonly<Record<string, SeoPage>> = {
+  ...DOCS_SEO_PAGES,
+}

@@ -113,38 +113,46 @@ export const DOCS_NAV = [
 ] as const
 
 // Flat ordered list of pages — used for prev/next navigation.
-export const DOCS_PAGES: readonly DocsNavItem[] = DOCS_NAV.flatMap(
-  (section) => section.items as readonly DocsNavItem[],
+type JourneyDocsPage = (typeof DOCS_NAV)[number]["items"][number]
+type ApiDocsPage = (typeof API_REFERENCE_PAGES)[number]
+
+export const DOCS_PAGES: readonly JourneyDocsPage[] = DOCS_NAV.flatMap(
+  (section) => section.items as readonly JourneyDocsPage[],
 )
 
-export const ALL_DOCS_PAGES: readonly DocsNavItem[] = DOCS_PAGES.flatMap((page) =>
-  page.href === "/docs/api" ? [page, ...API_REFERENCE_PAGES] : [page],
+export const ALL_DOCS_PAGES: readonly (JourneyDocsPage | ApiDocsPage)[] = DOCS_PAGES.flatMap(
+  (page): readonly (JourneyDocsPage | ApiDocsPage)[] =>
+    page.href === "/docs/api" ? [page, ...API_REFERENCE_PAGES] : [page],
 )
+
+export type DocsPageHref = (typeof ALL_DOCS_PAGES)[number]["href"]
 
 export interface DocsCrumb {
   readonly label: string
   readonly href?: string
 }
 
-// Build breadcrumbs for a given href. Reference leaves include their parent API hub.
+// Build breadcrumbs for a given href. Every ancestor is a real route and the
+// current page is the final, unlinked crumb.
 export function breadcrumbsFor(href: string): readonly DocsCrumb[] {
   const referencePage = API_REFERENCE_PAGES.find((page) => page.href === href)
   if (referencePage) {
     return [
+      { label: "Home", href: "/" },
       {
         label: "Docs",
         href: "/docs/getting-started",
       },
-      { label: "Reference" },
       { label: referencePage.parent.label, href: referencePage.parent.href },
       { label: referencePage.label },
     ]
   }
 
-  const section = DOCS_NAV.find((s) => s.items.some((i) => i.href === href))
-  const page = section?.items.find((i) => i.href === href)
-  const crumbs: DocsCrumb[] = [{ label: "Docs", href: "/docs/getting-started" }]
-  if (section) crumbs.push({ label: section.label })
+  const page = DOCS_PAGES.find((item) => item.href === href)
+  const crumbs: DocsCrumb[] = [{ label: "Home", href: "/" }]
+  if (href !== "/docs/getting-started") {
+    crumbs.push({ label: "Docs", href: "/docs/getting-started" })
+  }
   if (page) crumbs.push({ label: page.label })
   return crumbs
 }

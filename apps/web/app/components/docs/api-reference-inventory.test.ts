@@ -73,9 +73,15 @@ function analyzeWrapperContracts(sources: readonly string[]): readonly WrapperCo
     cwd: REPO_ROOT,
     encoding: "utf8",
     input: JSON.stringify(
-      sources.map((wrapperSource) => ({
+      sources.map((wrapperSource, index) => ({
         mdxSource: "",
         wrapperSource,
+        wrapperPath: join(
+          REPO_ROOT,
+          "apps/web/app/docs/api",
+          `fixture-${String(index)}`,
+          "page.tsx",
+        ),
         seoTitlesByPath: SEO_TITLES_BY_PATH,
       })),
     ),

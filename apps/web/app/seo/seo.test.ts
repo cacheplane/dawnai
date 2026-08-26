@@ -5,10 +5,18 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { AUTHORS, loadPostsFromDir, type Post } from "../components/blog/post-index"
+import { DocsBreadcrumb } from "../components/docs/DocsBreadcrumb"
 import { DocsPage } from "../components/docs/DocsPage"
 import { ALL_DOCS_PAGES, breadcrumbsFor } from "../components/docs/nav"
 import { JsonLd } from "./JsonLd"
-import { requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
+import {
+  buildDocsSeoRegistry,
+  DOCS_SEO_ENTRIES,
+  DOCS_SEO_PAGES,
+  type DocsSeoEntry,
+  requireValidLastModified,
+  STATIC_SEO_PAGES,
+} from "./registry"
 import * as seoResolvers from "./resolve"
 import {
   resolveBlogIndexSeoPage,
@@ -375,25 +383,43 @@ describe("static SEO pages", () => {
     expect(techArticleJsonLd(page).url).toBe(page.canonical)
   })
 
-  it("derives BreadcrumbList names, order, and URLs from docs navigation breadcrumbs", () => {
-    const page = resolveStaticSeoPage(GETTING_STARTED_PATH)
-    expect(page).toBeDefined()
-    if (!page) throw new Error("Getting Started SEO page is not registered")
+  it("derives valid BreadcrumbList trails from the visible breadcrumbs for all 75 docs routes", () => {
+    for (const { href, label } of ALL_DOCS_PAGES) {
+      const page = resolveStaticSeoPage(href)
+      expect(page, `${href} SEO page`).toBeDefined()
+      if (!page) continue
 
-    const expectedBreadcrumbs = breadcrumbsFor(GETTING_STARTED_PATH)
-    const breadcrumbList = breadcrumbJsonLd(page)
+      const visibleBreadcrumbs = breadcrumbsFor(href)
+      const visibleMarkup = renderToStaticMarkup(createElement(DocsBreadcrumb, { href }))
+      const visibleLabels = [...visibleMarkup.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map(
+        (match) => match[1]?.match(/<(?:a [^>]*|span class="text-ink-muted")>([^<]+)</)?.[1] ?? "",
+      )
+      const breadcrumbItems = breadcrumbJsonLd(page).itemListElement
 
-    expect(page.breadcrumbs).toEqual(expectedBreadcrumbs)
-    expect(breadcrumbList.itemListElement.map(({ name, item }) => ({ name, item }))).toEqual(
-      expectedBreadcrumbs.map((crumb, index) => ({
-        name: crumb.label,
-        item: crumb.href
-          ? new URL(crumb.href, page.canonical).href
-          : index === expectedBreadcrumbs.length - 1
-            ? page.canonical
-            : undefined,
-      })),
-    )
+      expect(page.breadcrumbs, `${href} shared visible trail`).toEqual(visibleBreadcrumbs)
+      expect(visibleLabels, `${href} rendered visible labels`).toEqual(
+        visibleBreadcrumbs.map(({ label: crumbLabel }) => crumbLabel),
+      )
+      expect(
+        breadcrumbItems.map(({ name }) => name),
+        `${href} JSON-LD labels and order`,
+      ).toEqual(visibleBreadcrumbs.map(({ label: crumbLabel }) => crumbLabel))
+      expect(breadcrumbItems.at(-1), `${href} current-page crumb`).toEqual({
+        "@type": "ListItem",
+        position: breadcrumbItems.length,
+        name: label,
+      })
+
+      const ancestorItems = breadcrumbItems.slice(0, -1).map(({ item }) => item)
+      expect(
+        ancestorItems.every((item) => typeof item === "string" && item.startsWith("https://")),
+        `${href} absolute ancestor items`,
+      ).toBe(true)
+      expect(new Set(ancestorItems).size, `${href} unique ancestor URLs`).toBe(ancestorItems.length)
+      expect(ancestorItems, `${href} excludes current canonical from ancestors`).not.toContain(
+        page.canonical,
+      )
+    }
   })
 
   it("returns undefined for an unregistered page", () => {
@@ -402,15 +428,40 @@ describe("static SEO pages", () => {
 
   it("registers exactly the 75 authored docs routes without the redirect", () => {
     const expectedHrefs = ALL_DOCS_PAGES.map(({ href }) => href).sort()
-    const registeredHrefs = Object.keys(STATIC_SEO_PAGES).sort()
+    const registeredHrefs = Object.keys(DOCS_SEO_PAGES).sort()
 
     expect(expectedHrefs).toHaveLength(75)
     expect(registeredHrefs).toEqual(expectedHrefs)
     expect(registeredHrefs).not.toContain("/docs")
   })
 
+  it("keeps the exact docs registry distinct from the future-wide static registry", () => {
+    expect(STATIC_SEO_PAGES).not.toBe(DOCS_SEO_PAGES)
+    expect(STATIC_SEO_PAGES).toMatchObject(DOCS_SEO_PAGES)
+  })
+
+  it("rejects duplicate, missing, and extra source entries before registry keys can collapse", () => {
+    const firstEntry = DOCS_SEO_ENTRIES[0]
+    expect(firstEntry).toBeDefined()
+    if (!firstEntry) return
+
+    expect(() => buildDocsSeoRegistry([...DOCS_SEO_ENTRIES, firstEntry])).toThrow(
+      "Duplicate docs SEO entry: /docs/getting-started",
+    )
+    expect(() => buildDocsSeoRegistry(DOCS_SEO_ENTRIES.slice(1))).toThrow(
+      "Missing docs SEO entry: /docs/getting-started",
+    )
+    const extraEntry = {
+      ...firstEntry,
+      path: "/docs/not-authored",
+    } as unknown as DocsSeoEntry
+    expect(() => buildDocsSeoRegistry([...DOCS_SEO_ENTRIES, extraEntry])).toThrow(
+      "Extra docs SEO entry: /docs/not-authored",
+    )
+  })
+
   it("uses one unique, normalized, query-answering description per docs route", () => {
-    const descriptions = Object.values(STATIC_SEO_PAGES).map((page) => page.description)
+    const descriptions = Object.values(DOCS_SEO_PAGES).map((page) => page.description)
 
     expect(descriptions).toHaveLength(75)
     expect(new Set(descriptions).size).toBe(descriptions.length)
@@ -429,7 +480,7 @@ describe("static SEO pages", () => {
 
     for (const { href } of ALL_DOCS_PAGES) {
       const expectedSourcePath = docsSourcePath(href)
-      const page = STATIC_SEO_PAGES[href]
+      const page = DOCS_SEO_PAGES[href]
       const sourcePath = page && "sourcePath" in page ? page.sourcePath : undefined
 
       if (sourcePath !== expectedSourcePath) {

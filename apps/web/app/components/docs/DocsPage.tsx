@@ -21,7 +21,7 @@ export function DocsPage({ href, Content, promptSlug }: Props) {
 
   return (
     <>
-      {seoPage ? (
+      {seoPage?.kind === "TechArticle" ? (
         <>
           <JsonLd data={techArticleJsonLd(seoPage)} />
           <JsonLd data={breadcrumbJsonLd(seoPage)} />
