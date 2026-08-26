@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createElement } from "react"
@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { AUTHORS, loadPostsFromDir, type Post } from "../components/blog/post-index"
 import { DocsPage } from "../components/docs/DocsPage"
-import { breadcrumbsFor } from "../components/docs/nav"
+import { ALL_DOCS_PAGES, breadcrumbsFor } from "../components/docs/nav"
 import { JsonLd } from "./JsonLd"
 import { requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
 import * as seoResolvers from "./resolve"
@@ -33,6 +33,12 @@ const GETTING_STARTED_DESCRIPTION =
 const BLOG_INDEX_DESCRIPTION =
   "Writing on the agent stack, type-safety, and the tools we're building."
 const BLOG_CONTENT_DIRECTORY = resolve(seoDirectory, "../../content/blog")
+const REPO_ROOT = resolve(seoDirectory, "../../../..")
+
+function docsSourcePath(href: string): string {
+  const slug = href.replace(/^\/docs\//, "")
+  return `apps/web/content/docs/${slug === "recipes" ? "recipes/index" : slug}.mdx`
+}
 
 function authoredPosts(): readonly Post[] {
   return loadPostsFromDir(BLOG_CONTENT_DIRECTORY, {
@@ -394,8 +400,46 @@ describe("static SEO pages", () => {
     expect(resolveStaticSeoPage("/docs/not-registered")).toBeUndefined()
   })
 
-  it("keeps the partial registry locked to Getting Started", () => {
-    expect(Object.keys(STATIC_SEO_PAGES)).toEqual([GETTING_STARTED_PATH])
+  it("registers exactly the 75 authored docs routes without the redirect", () => {
+    const expectedHrefs = ALL_DOCS_PAGES.map(({ href }) => href).sort()
+    const registeredHrefs = Object.keys(STATIC_SEO_PAGES).sort()
+
+    expect(expectedHrefs).toHaveLength(75)
+    expect(registeredHrefs).toEqual(expectedHrefs)
+    expect(registeredHrefs).not.toContain("/docs")
+  })
+
+  it("uses one unique, normalized, query-answering description per docs route", () => {
+    const descriptions = Object.values(STATIC_SEO_PAGES).map((page) => page.description)
+
+    expect(descriptions).toHaveLength(75)
+    expect(new Set(descriptions).size).toBe(descriptions.length)
+    for (const description of descriptions) {
+      expect(description).toBe(description.trim())
+      expect(description.length).toBeGreaterThanOrEqual(75)
+      expect(description.length).toBeLessThanOrEqual(155)
+      expect(description).not.toMatch(/[\r\n]/)
+      expect(description).not.toMatch(/\s{2,}/)
+      expect(description).toMatch(/[.!?]$/)
+    }
+  })
+
+  it("binds every docs registry entry to its exact existing MDX source", () => {
+    const failures: string[] = []
+
+    for (const { href } of ALL_DOCS_PAGES) {
+      const expectedSourcePath = docsSourcePath(href)
+      const page = STATIC_SEO_PAGES[href]
+      const sourcePath = page && "sourcePath" in page ? page.sourcePath : undefined
+
+      if (sourcePath !== expectedSourcePath) {
+        failures.push(`${href}: expected ${expectedSourcePath}, received ${String(sourcePath)}`)
+      } else if (!existsSync(resolve(REPO_ROOT, sourcePath))) {
+        failures.push(`${href}: missing ${sourcePath}`)
+      }
+    }
+
+    expect(failures).toEqual([])
   })
 
   it("requires a checked valid last-modified value", () => {
@@ -425,7 +469,7 @@ describe("static SEO pages", () => {
     expect(registrySource).toMatch(/^import ["']server-only["']/m)
   })
 
-  it("renders structured data only for the registered docs route", () => {
+  it("renders structured data for registered docs routes only", () => {
     function Content() {
       return createElement("h1", null, "Docs page")
     }
@@ -433,13 +477,18 @@ describe("static SEO pages", () => {
     const registered = renderToStaticMarkup(
       createElement(DocsPage, { href: GETTING_STARTED_PATH, Content }),
     )
-    const unregistered = renderToStaticMarkup(
+    const secondRegistered = renderToStaticMarkup(
       createElement(DocsPage, { href: "/docs/agents", Content }),
+    )
+    const unregistered = renderToStaticMarkup(
+      createElement(DocsPage, { href: "/unregistered", Content }),
     )
 
     expect(registered).toContain('type="application/ld+json"')
     expect(registered).toContain('"@type":"TechArticle"')
     expect(registered).toContain('"@type":"BreadcrumbList"')
+    expect(secondRegistered).toContain('"@type":"TechArticle"')
+    expect(secondRegistered).toContain('"@type":"BreadcrumbList"')
     expect(unregistered).not.toContain('type="application/ld+json"')
   })
 })

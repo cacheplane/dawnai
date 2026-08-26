@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render-route-types"
+import { STATIC_SEO_PAGES } from "../../seo/registry"
 import {
   API_BEHAVIOR_CONTRACTS,
   API_REFERENCE_PAGES,
@@ -17,6 +18,9 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
+const SEO_TITLES_BY_PATH = Object.fromEntries(
+  Object.entries(STATIC_SEO_PAGES).map(([path, page]) => [path, page.title]),
+)
 
 const foundationalPages = [
   { slug: "sdk", label: "@dawn-ai/sdk", href: "/docs/api/sdk" },
@@ -68,7 +72,13 @@ function analyzeWrapperContracts(sources: readonly string[]): readonly WrapperCo
   const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
-    input: JSON.stringify(sources.map((wrapperSource) => ({ mdxSource: "", wrapperSource }))),
+    input: JSON.stringify(
+      sources.map((wrapperSource) => ({
+        mdxSource: "",
+        wrapperSource,
+        seoTitlesByPath: SEO_TITLES_BY_PATH,
+      })),
+    ),
   })
   expect(result.status, result.stderr || result.stdout).toBe(0)
   return JSON.parse(result.stdout) as readonly WrapperContractAnalysis[]
@@ -1830,12 +1840,12 @@ describe("API reference wrapper contracts", () => {
     const [wrongImport, wrongHref, wrongMetadata] = analyzeWrapperContracts([
       `// import Content from "../../../../content/docs/api/sdk.mdx"\nconst decoy = '../../../../content/docs/api/sdk.mdx'\n${source.replace("../../../../content/docs/api/sdk.mdx", "../../../../content/docs/api/cli.mdx")}\nvoid decoy`,
       `// <DocsPage href="/docs/api/sdk" Content={Content} />\nconst decoy = '/docs/api/sdk'\n${source.replace('href="/docs/api/sdk"', 'href="/docs/api/cli"')}\nvoid decoy`,
-      `// export const metadata = { title: "@dawn-ai/sdk" }\nconst decoy = '@dawn-ai/sdk'\n${source.replace('title: "@dawn-ai/sdk"', 'title: "Wrong"')}\nvoid decoy`,
+      `// toMetadata(resolveStaticSeoPage("/docs/api/sdk"))\nconst decoy = '/docs/api/sdk'\n${source.replace('resolveStaticSeoPage("/docs/api/sdk")', 'resolveStaticSeoPage("/docs/api/cli")')}\nvoid decoy`,
     ])
 
     expect(wrongImport?.contentImportTarget).toBe("../../../../content/docs/api/cli.mdx")
     expect(wrongHref?.docsPageHref).toBe("/docs/api/cli")
-    expect(wrongMetadata?.metadataTitle).toBe("Wrong")
+    expect(wrongMetadata?.metadataTitle).toBe("@dawn-ai/cli")
   })
 
   it("rejects JSX bindings that shadow the canonical imports", () => {

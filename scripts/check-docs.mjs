@@ -492,6 +492,30 @@ function staticSeoTitles(source) {
   for (const statement of sourceFile.statements) {
     if (!tsCompiler.isVariableStatement(statement)) continue
     for (const declaration of statement.declarationList.declarations) {
+      if (
+        !tsCompiler.isIdentifier(declaration.name) ||
+        declaration.name.text !== "DOCS_SEO_ENTRIES" ||
+        !declaration.initializer
+      )
+        continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isArrayLiteralExpression(initializer)) continue
+
+      const titles = {}
+      for (const element of initializer.elements) {
+        const entry = unwrapExpression(element)
+        if (!tsCompiler.isObjectLiteralExpression(entry)) continue
+        const path = stringProperty(entry, "path")
+        const title = stringProperty(entry, "title")
+        if (path !== null && title !== null) titles[path] = title
+      }
+      if (Object.keys(titles).length > 0) return titles
+    }
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
       if (!tsCompiler.isIdentifier(declaration.name) || !declaration.initializer) continue
       const initializer = unwrapExpression(declaration.initializer)
       if (!tsCompiler.isObjectLiteralExpression(initializer)) continue

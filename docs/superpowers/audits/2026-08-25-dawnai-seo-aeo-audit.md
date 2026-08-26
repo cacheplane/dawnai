@@ -500,3 +500,87 @@ The unrelated transient failure was
 `@dawn-ai/cli test/dev-command.test.ts`:
 `dawn dev lifecycle > coalesces bursty edits during restart into at most one follow-up restart`.
 Its exact targeted rerun passed one test and skipped 16.
+
+## Documentation metadata content evidence
+
+The route-specific descriptions added during remediation are grounded in the
+owning page sections below. Source paths are repository-relative; section
+references are concise review pointers rather than quotations.
+
+| href | Source path | Supporting page section or content |
+| --- | --- | --- |
+| `/docs/getting-started` | `apps/web/content/docs/getting-started.mdx` | What you got; Verify and test; Run it live; deployment guidance. |
+| `/docs/mental-model` | `apps/web/content/docs/mental-model.mdx` | The pieces; The runtime; Build vs runtime; Dawn and LangGraph boundaries. |
+| `/docs/migrating-from-langgraph` | `apps/web/content/docs/migrating-from-langgraph.mdx` | StateGraph to route; preserved graph code; boundary validation; migration order. |
+| `/docs/routes` | `apps/web/content/docs/routes.mdx` | Route entry kinds; pathname rules; typed workflows; route dispatch. |
+| `/docs/agents` | `apps/web/content/docs/agents.mdx` | Minimal agent; model providers; retry; built-in agent features. |
+| `/docs/tools` | `apps/web/content/docs/tools.mdx` | Discovery and generated types; shared tools; scoping; approvals; constraints; runtime signature. |
+| `/docs/state` | `apps/web/content/docs/state.mdx` | State schema and defaults; dynamic segments; custom reducers; state flow. |
+| `/docs/workspace` | `apps/web/content/docs/workspace.mdx` | Pluggable backend; middleware; four agent tools; `ctx.fs`; permissions. |
+| `/docs/memory` | `apps/web/content/docs/memory.mdx` | Comparison of workspace prompt, route prompt, and typed long-term memory. |
+| `/docs/memory/long-term` | `apps/web/content/docs/memory/long-term.mdx` | Collection schema; generated tools; identity reconciliation; governance; stores. |
+| `/docs/memory/retrieval` | `apps/web/content/docs/memory/retrieval.mdx` | Generated recall tool; ranking; semantic recall; Postgres backend; evaluation. |
+| `/docs/memory/episodes` | `apps/web/content/docs/memory/episodes.mdx` | Run recorder; recorded data; retention; time-windowed recall; authored episodes. |
+| `/docs/memory/distillation` | `apps/web/content/docs/memory/distillation.mdx` | Consolidation; reflection; provenance; cost controls; scheduling. |
+| `/docs/planning` | `apps/web/content/docs/planning.mdx` | Quick start; `writeTodos`; state and prompts; streaming; generated types. |
+| `/docs/skills` | `apps/web/content/docs/skills.mdx` | Route skill discovery; frontmatter; model-visible list; `readSkill`; generated types. |
+| `/docs/subagents` | `apps/web/content/docs/subagents.mdx` | Convention and keyed registration; tool inheritance; delegation policy; approvals; streaming. |
+| `/docs/context-management` | `apps/web/content/docs/context-management.mdx` | Tool-output offloading; cleanup; conversation summarization; composition. |
+| `/docs/reasoning-effort` | `apps/web/content/docs/reasoning-effort.mdx` | Quick start; supported values; scope; provider pass-through; subagent configuration. |
+| `/docs/dev-server` | `apps/web/content/docs/dev-server.mdx` | Starting and invoking the server; restart cycle; logging; protocol links. |
+| `/docs/dev-server/agent-protocol` | `apps/web/content/docs/dev-server/agent-protocol.mdx` | Endpoint table; SSE; interrupts and resume; run coordination; memory candidates. |
+| `/docs/middleware` | `apps/web/content/docs/middleware.mdx` | Global middleware; context flow; endpoint coverage; load failures. |
+| `/docs/ag-ui` | `apps/web/content/docs/ag-ui.mdx` | Endpoint and web client; adapter API; activities; threading; disconnect behavior. |
+| `/docs/embedding` | `apps/web/content/docs/embedding.mdx` | Standalone versus embedded; fetch composition; rooted paths; resource ownership and shutdown. |
+| `/docs/blueprints` | `apps/web/content/docs/blueprints.mdx` | Listing, applying, self-hosting, and authoring blueprint guides. |
+| `/docs/testing` | `apps/web/content/docs/testing.mdx` | Scenario builder; typed tool mocks; server execution; tool and filesystem harnesses. |
+| `/docs/testing-agents` | `apps/web/content/docs/testing-agents.mdx` | Deterministic fixtures; harness execution; assertions; execution-boundary factories. |
+| `/docs/testing-agents/fixtures` | `apps/web/content/docs/testing-agents/fixtures.mdx` | Fixture choice and matching; file replay; recording; live mode; CI and cleanup. |
+| `/docs/evals` | `apps/web/content/docs/evals.mdx` | Datasets; scorers; gates; replay versus live execution; reports. |
+| `/docs/persistence` | `apps/web/content/docs/persistence.mdx` | Persistence matrix; local and shared stores; tenant ownership; deletion; migration. |
+| `/docs/production-topology` | `apps/web/content/docs/production-topology.mdx` | Single process; shared persistence; replicas; streaming; readiness; shutdown. |
+| `/docs/security-architecture` | `apps/web/content/docs/security-architecture.mdx` | Service edge; endpoint coverage; tenant authorization; inner agent controls. |
+| `/docs/access-control` | `apps/web/content/docs/access-control.mdx` | Tool scoping; permission gates; execution sandbox; guarded delegation. |
+| `/docs/thread-access` | `apps/web/content/docs/thread-access.mdx` | Policy shape; ownership stamp; resume handling; denials; failure modes; endpoint composition. |
+| `/docs/permissions` | `apps/web/content/docs/permissions.mdx` | Modes; command and path gates; tool and subagent approval; memory writes; resume. |
+| `/docs/retry` | `apps/web/content/docs/retry.mdx` | Retry configuration; retryable errors; backoff; streaming; abort signals. |
+| `/docs/observability` | `apps/web/content/docs/observability.mdx` | LangSmith tracing; trace inspection; nested activity; live SSE. |
+| `/docs/inspector` | `apps/web/content/docs/inspector.mdx` | Memory store selection; search and filters; timeline; candidate decisions; security posture. |
+| `/docs/memory/browse` | `apps/web/content/docs/memory/browse.mdx` | Server-owned boundary; filters; sorting; cursor pagination; mutations. |
+| `/docs/upgrading` | `apps/web/content/docs/upgrading.mdx` | Fixed-group versions; release notes; upgrade workflow; Node and import migrations. |
+| `/docs/deployment` | `apps/web/content/docs/deployment.mdx` | Target comparison; validation and build; target guides; explicit non-goals. |
+| `/docs/deployment/node` | `apps/web/content/docs/deployment/node.mdx` | Node requirements; Docker image; secrets; durable storage; health and shutdown. |
+| `/docs/deployment/kubernetes` | `apps/web/content/docs/deployment/kubernetes.mdx` | Helm install; probes; ServiceAccounts; persistence; rollouts; replica coordination. |
+| `/docs/deployment/langsmith` | `apps/web/content/docs/deployment/langsmith.mdx` | Build output; assistant IDs; platform boundary and missing HTTP surfaces; Node mismatch. |
+| `/docs/deployment/edge` | `apps/web/content/docs/deployment/edge.mdx` | Fit and evidence boundary; emitted artifacts; rejected filesystem capabilities. |
+| `/docs/sandbox` | `apps/web/content/docs/sandbox.mdx` | Isolation layers; configuration; lifecycle; provider policies; conformance and testing. |
+| `/docs/sandbox/kubernetes` | `apps/web/content/docs/sandbox/kubernetes.mdx` | Infrastructure chart; provider setup; RBAC; PVC lifecycle; network and resource controls. |
+| `/docs/recipes` | `apps/web/content/docs/recipes/index.mdx` | Build, integrate, test, and deploy recipe catalog. |
+| `/docs/recipes/add-a-tool` | `apps/web/content/docs/recipes/add-a-tool.mdx` | Route and shared tool placement; typegen; typed workflow invocation. |
+| `/docs/recipes/typed-state` | `apps/web/content/docs/recipes/typed-state.mdx` | Zod state; workflow parsing; defaults; parameterized route input. |
+| `/docs/recipes/auth-middleware` | `apps/web/content/docs/recipes/auth-middleware.mdx` | Authentication middleware; verified context; endpoint coverage warning. |
+| `/docs/recipes/stream-output` | `apps/web/content/docs/recipes/stream-output.mdx` | Streaming endpoint; SSE parser; event types; heartbeats; retry caveat. |
+| `/docs/recipes/retry-flaky-tools` | `apps/web/content/docs/recipes/retry-flaky-tools.mdx` | Per-route retry example; transient failures; backoff; stream and tool-retry boundaries. |
+| `/docs/recipes/dispatch-from-route` | `apps/web/content/docs/recipes/dispatch-from-route.mdx` | Generated subagent task dispatch; cross-service Agent Protocol HTTP path. |
+| `/docs/recipes/research-web-ui` | `apps/web/content/docs/recipes/research-web-ui.mdx` | CopilotKit connection; workbench shell; activities; permissions; memory review. |
+| `/docs/configuration` | `apps/web/content/docs/configuration.mdx` | Annotated config and references for discovery, backends, stores, targets, sandbox, and memory. |
+| `/docs/cli` | `apps/web/content/docs/cli.mdx` | Command inventory and individual command reference sections. |
+| `/docs/api` | `apps/web/content/docs/api.mdx` | Package and surface index; reference conventions for exports and lifecycle behavior. |
+| `/docs/api/sdk` | `apps/web/content/docs/api/sdk.mdx` | Root, pure, and testing exports; route-authoring contracts. |
+| `/docs/api/cli` | `apps/web/content/docs/api/cli.mdx` | Root, fetch, and runtime exports; `serveRuntime` contract. |
+| `/docs/api/core` | `apps/web/content/docs/api/core.mdx` | Root and Node exports; config loading; route discovery; state and type generation. |
+| `/docs/api/ag-ui` | `apps/web/content/docs/api/ag-ui.mdx` | Root, SSE, and React exports; translation calls; activity payloads. |
+| `/docs/api/memory` | `apps/web/content/docs/api/memory.mdx` | Store and query APIs; namespace and ranking utilities; persistence and recall. |
+| `/docs/api/memory-pgvector` | `apps/web/content/docs/api/memory-pgvector.mdx` | Store configuration; dimensions; initialization; pool ownership; retrieval. |
+| `/docs/api/postgres-storage` | `apps/web/content/docs/api/postgres-storage.mdx` | Checkpoint, thread, and permission stores; entry points; migrations; pool ownership. |
+| `/docs/api/testing` | `apps/web/content/docs/api/testing.mdx` | Harness, fixture, matcher, recorder, and conformance exports. |
+| `/docs/api/evals` | `apps/web/content/docs/api/evals.mdx` | Evaluation definition; runner; scorers; aggregation and gates. |
+| `/docs/api/generated-routes` | `apps/web/content/docs/api/generated-routes.mdx` | Route paths and parameters; generated tool and state types; regeneration rules. |
+| `/docs/api/permissions` | `apps/web/content/docs/api/permissions.mdx` | Matching rules; request types; modes; pattern boundaries; store lifecycle. |
+| `/docs/api/workspace` | `apps/web/content/docs/api/workspace.mdx` | Filesystem, command, middleware, sandbox, and Node backend contracts. |
+| `/docs/api/sandbox` | `apps/web/content/docs/api/sandbox.mdx` | Docker and Kubernetes providers; lifecycle; network caveats; conformance suite. |
+| `/docs/api/langgraph` | `apps/web/content/docs/api/langgraph.mdx` | Graph and workflow contracts; normalization; adapter lifecycle and failures. |
+| `/docs/api/langchain` | `apps/web/content/docs/api/langchain.mdx` | Agent materialization; providers; retry; tool loops; offload; summarization; subagents. |
+| `/docs/api/sqlite-storage` | `apps/web/content/docs/api/sqlite-storage.mdx` | Checkpoint and thread stores; ordering; database modes; lifecycle. |
+| `/docs/errors` | `apps/web/content/docs/errors.mdx` | Error-code ranges and generated category table. |
+| `/docs/faq` | `apps/web/content/docs/faq.mdx` | Adopting, working in, and operating Dawn question groups. |
