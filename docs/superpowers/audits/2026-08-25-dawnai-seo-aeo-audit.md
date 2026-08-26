@@ -305,8 +305,9 @@ canonical fields preserved.
   the two canonical-less crawled-not-indexed docs pages and all 10 URLs
   unknown to Google.
 - The earlier live audit found no JSON-LD on any of the 66 routes.
-- 58 documentation routes inherited the homepage description, and one
-  rendered meta description was 201 characters.
+- 58 total routes matched the homepage description: the homepage itself plus
+  57 documentation routes. `/docs/testing-agents` had a distinct description;
+  one rendered meta description was 201 characters.
 - The 13 non-indexed exceptions documented above are a crawl/index coverage
   gap at this baseline: 10 unknown to Google and 3 crawled but not indexed.
 
@@ -330,7 +331,9 @@ canonical fields preserved.
 The following safe direct requests were rerun on 2026-08-26. They are kept
 separate from the 2026-08-25 baseline because the live sitemap has since
 changed from 66 to 83 URLs. Commands and concise output are reproduced
-exactly below (header dates/ages are intentionally omitted by the commands).
+exactly below. The header commands show only their first eight response lines
+via `sed -n '1,8p'`; those shown lines are unnormalized and include the
+returned `age` and `date` headers.
 
 ```console
 $ curl -sS -D - -o /dev/null https://dawnai.org/sitemap_index.xml | sed -n '1,8p'
@@ -378,8 +381,9 @@ These safe, direct `curl` checks were also rerun on 2026-08-26 against the
 real production URLs. Unlike the sitemap inventory, these current results
 reproduced the 2026-08-25 captured findings: the representative blog OG route
 still returned 500, no JSON-LD markers were found across the captured 66 URL
-list, 58 routes matched the homepage description, and the same blog post had
-a 201-character description. This is confirmation of the current response,
+list, 58 total routes matched the homepage description (the homepage plus 57
+documentation routes), and the same blog post had a 201-character description.
+`/docs/testing-agents` was distinct. This is confirmation of the current response,
 not a claim that a current request can recreate an earlier crawl or Search
 Console state.
 
