@@ -27,11 +27,15 @@ afterEach(() => {
 })
 
 describe("generate-seo-lastmod", () => {
-  it("runs a freshness check for the checked-in manifest using today's production visibility", () => {
-    const result = runGenerator("--check")
+  it(
+    "runs a freshness check for the checked-in manifest using today's production visibility",
+    () => {
+      const result = runGenerator("--check")
 
-    expect(result.status).toBe(0)
-  }, GIT_HISTORY_TEST_TIMEOUT_MS)
+      expect(result.status).toBe(0)
+    },
+    GIT_HISTORY_TEST_TIMEOUT_MS,
+  )
 
   it("uses a full-history checkout for the canonical source-test job", () => {
     const workflow = readFileSync(ciWorkflow, "utf8")
