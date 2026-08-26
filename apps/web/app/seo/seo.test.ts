@@ -47,13 +47,29 @@ describe("static SEO pages", () => {
         siteName: "Dawn AI",
         title: "Getting Started",
         description: GETTING_STARTED_DESCRIPTION,
-        images: ["/opengraph-image"],
+        images: [
+          {
+            url: "/opengraph-image",
+            type: "image/png",
+            width: 1200,
+            height: 630,
+            alt: "Dawn — TypeScript meta-framework for LangGraph.js",
+          },
+        ],
       },
       twitter: {
         card: "summary_large_image",
         title: "Getting Started",
         description: GETTING_STARTED_DESCRIPTION,
-        images: ["/opengraph-image"],
+        images: [
+          {
+            url: "/opengraph-image",
+            type: "image/png",
+            width: 1200,
+            height: 630,
+            alt: "Dawn — TypeScript meta-framework for LangGraph.js",
+          },
+        ],
       },
     })
   })

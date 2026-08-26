@@ -8,6 +8,7 @@ import { Fragment, jsx, jsxs } from "react/jsx-runtime"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
+import { STATIC_SEO_PAGES } from "../../seo/registry"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
 import {
   ALL_DOCS_PAGES,
@@ -23,6 +24,9 @@ const CONTENT_ROOT = join(WEB_ROOT, "content/docs")
 const WRAPPERS_ROOT = join(WEB_ROOT, "app/docs")
 const NAV_PATH = join(dirname(fileURLToPath(import.meta.url)), "nav.ts")
 const CHECK_DOCS_PATH = join(WEB_ROOT, "../../scripts/check-docs.mjs")
+const SEO_TITLES_BY_PATH = Object.fromEntries(
+  Object.entries(STATIC_SEO_PAGES).map(([path, page]) => [path, page.title]),
+)
 
 const FOUNDATION_DOCS_NAV = [
   {
@@ -154,6 +158,7 @@ interface CompatibilityStubAnalysis {
 interface DocTitleAnalysis {
   readonly firstH1: string | null
   readonly metadataTitle: string | null
+  readonly metadataRoute: string | null
   readonly contentImportTarget: string | null
   readonly docsPageImportTarget: string | null
   readonly docsPageHref: string | null
@@ -162,6 +167,7 @@ interface DocTitleAnalysis {
 interface DocTitleFixture {
   readonly mdxSource: string
   readonly wrapperSource: string
+  readonly seoTitlesByPath?: Readonly<Record<string, string>>
 }
 
 interface DocLinkGuardAnalysis {
@@ -260,7 +266,12 @@ function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly D
   docTitleAnalysisProcessCount++
   const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
     encoding: "utf8",
-    input: JSON.stringify(fixtures),
+    input: JSON.stringify(
+      fixtures.map((fixture) => ({
+        ...fixture,
+        seoTitlesByPath: fixture.seoTitlesByPath ?? SEO_TITLES_BY_PATH,
+      })),
+    ),
   })
   const stderr = result.stderr ?? ""
 
@@ -279,8 +290,12 @@ function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly D
   return JSON.parse(result.stdout) as readonly DocTitleAnalysis[]
 }
 
-function analyzeDocTitles(mdxSource: string, wrapperSource: string): DocTitleAnalysis {
-  const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource }])[0]
+function analyzeDocTitles(
+  mdxSource: string,
+  wrapperSource: string,
+  seoTitlesByPath: Readonly<Record<string, string>> = SEO_TITLES_BY_PATH,
+): DocTitleAnalysis {
+  const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource, seoTitlesByPath }])[0]
   expect(analysis).toBeDefined()
   return analysis as DocTitleAnalysis
 }
@@ -540,8 +555,14 @@ describe("documentation registry invariants", () => {
     expect(docTitleAnalysisProcessCount - processCountBefore).toBe(1)
     expect(analyses).toHaveLength(authoredPages.length)
     for (const [index, item] of authoredPages.entries()) {
-      const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
-        analyses[index] ?? {}
+      const {
+        firstH1,
+        metadataTitle,
+        metadataRoute,
+        contentImportTarget,
+        docsPageImportTarget,
+        docsPageHref,
+      } = analyses[index] ?? {}
       const slug = item.href.replace(/^\/docs\//, "")
       const wrapperPath = join(WRAPPERS_ROOT, slug, "page.tsx")
       const contentPath = join(
@@ -551,6 +572,10 @@ describe("documentation registry invariants", () => {
 
       expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
       expect(metadataTitle, `${item.href} metadata.title`).toBe(item.label)
+      if (metadataRoute !== null) {
+        expect(metadataRoute, `${item.href} metadata route`).toBe(item.href)
+        expect(metadataRoute, `${item.href} metadata/DocsPage route`).toBe(docsPageHref)
+      }
       expect(
         resolve(dirname(wrapperPath), contentImportTarget ?? ""),
         `${item.href} MDX import`,
@@ -657,6 +682,7 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(JSON.parse(result.stdout)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -818,6 +844,7 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(analyzeDocTitles("## Lead-in\n# `Real` Title\n# Later Title\n", wrapper)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -838,10 +865,88 @@ export default function Page() {
     expect(analysis).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
       contentImportTarget: "../../../content/docs/real.mdx",
       docsPageImportTarget: "../../components/docs/DocsPage",
       docsPageHref: "/docs/real",
     })
+  })
+
+  it("resolves a literal resolver-backed metadata route through the SEO registry", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+    )
+
+    expect(analysis).toEqual({
+      firstH1: "Getting Started",
+      metadataTitle: "Getting Started",
+      metadataRoute: "/docs/getting-started",
+      contentImportTarget: "../../../content/docs/getting-started.mdx",
+      docsPageImportTarget: "../../components/docs/DocsPage",
+      docsPageHref: "/docs/getting-started",
+    })
+  })
+
+  it("exposes a resolver route mismatch with the DocsPage href", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/getting-started")
+    expect(analysis.metadataRoute).not.toBe(analysis.docsPageHref)
+  })
+
+  it("rejects nonliteral resolver arguments despite valid decoys in comments and strings", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+// export const metadata = toMetadata(resolveStaticSeoPage("/docs/real"))
+const decoy = 'toMetadata(resolveStaticSeoPage("/docs/real"))'
+const route = "/docs/real"
+export const metadata = toMetadata(resolveStaticSeoPage(route))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+void decoy`,
+      { "/docs/real": "Real Title" },
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+  })
+
+  it("uses the registry title instead of trusting the resolver call", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/real"))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+      { "/docs/real": "Wrong Registry Title" },
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/real")
+    expect(analysis.metadataTitle).toBe("Wrong Registry Title")
+    expect(analysis.metadataTitle).not.toBe(analysis.firstH1)
   })
 
   it("rejects a wrong MDX import despite a correct decoy string and comment", () => {

@@ -204,7 +204,58 @@ function unwrapExpression(expression) {
   return current
 }
 
-function exportedMetadataTitle(sourceFile) {
+function objectLiteralMetadataTitle(initializer) {
+  const titles = []
+  for (const property of initializer.properties) {
+    if (tsCompiler.isSpreadAssignment(property)) return null
+    const name = property.name
+    if (
+      (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
+      name.text !== "title"
+    )
+      continue
+    if (!tsCompiler.isPropertyAssignment(property)) return null
+    const title = unwrapExpression(property.initializer)
+    if (!tsCompiler.isStringLiteral(title)) return null
+    titles.push(title.text)
+  }
+  return titles.length === 1 ? titles[0] : null
+}
+
+function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
+  if (
+    !tsCompiler.isCallExpression(initializer) ||
+    !tsCompiler.isIdentifier(initializer.expression) ||
+    initializer.expression.text !== "toMetadata" ||
+    initializer.arguments.length !== 1
+  ) {
+    return null
+  }
+
+  const outerImport = importTargetForSymbol(checker, initializer.expression, "toMetadata")
+  const resolution = unwrapExpression(initializer.arguments[0])
+  if (
+    !outerImport?.replaceAll("\\", "/").endsWith("/seo/resolve") ||
+    !tsCompiler.isCallExpression(resolution) ||
+    !tsCompiler.isIdentifier(resolution.expression) ||
+    resolution.expression.text !== "resolveStaticSeoPage" ||
+    resolution.arguments.length !== 1
+  ) {
+    return null
+  }
+
+  const innerImport = importTargetForSymbol(checker, resolution.expression, "resolveStaticSeoPage")
+  const route = unwrapExpression(resolution.arguments[0])
+  if (innerImport !== outerImport || !tsCompiler.isStringLiteral(route)) return null
+
+  return {
+    metadataRoute: route.text,
+    metadataTitle:
+      typeof seoTitlesByPath?.[route.text] === "string" ? seoTitlesByPath[route.text] : null,
+  }
+}
+
+function exportedMetadata(sourceFile, checker, seoTitlesByPath) {
   for (const statement of sourceFile.statements) {
     if (!tsCompiler.isVariableStatement(statement)) continue
     if (
@@ -218,28 +269,23 @@ function exportedMetadataTitle(sourceFile) {
     for (const declaration of statement.declarationList.declarations) {
       if (!tsCompiler.isIdentifier(declaration.name) || declaration.name.text !== "metadata")
         continue
-      if (!declaration.initializer) return null
+      if (!declaration.initializer) return { metadataTitle: null, metadataRoute: null }
       const initializer = unwrapExpression(declaration.initializer)
-      if (!tsCompiler.isObjectLiteralExpression(initializer)) return null
-
-      const titles = []
-      for (const property of initializer.properties) {
-        if (tsCompiler.isSpreadAssignment(property)) return null
-        const name = property.name
-        if (
-          (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
-          name.text !== "title"
-        )
-          continue
-        if (!tsCompiler.isPropertyAssignment(property)) return null
-        const title = unwrapExpression(property.initializer)
-        if (!tsCompiler.isStringLiteral(title)) return null
-        titles.push(title.text)
+      if (tsCompiler.isObjectLiteralExpression(initializer)) {
+        return {
+          metadataTitle: objectLiteralMetadataTitle(initializer),
+          metadataRoute: null,
+        }
       }
-      return titles.length === 1 ? titles[0] : null
+      return (
+        resolverBackedMetadata(initializer, checker, seoTitlesByPath) ?? {
+          metadataTitle: null,
+          metadataRoute: null,
+        }
+      )
     }
   }
-  return null
+  return { metadataTitle: null, metadataRoute: null }
 }
 
 function importTargetForSymbol(checker, identifier, expectedImportedName) {
@@ -351,11 +397,13 @@ function analyzeDocTitlesBatch(fixtures) {
     host: compilerHost,
   })
   const checker = program.getTypeChecker()
-  return fixtures.map(({ mdxSource }, index) => {
+  return fixtures.map(({ mdxSource, seoTitlesByPath }, index) => {
     const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
     return {
       firstH1: firstRenderedMdxH1(mdxSource),
-      metadataTitle: sourceFile ? exportedMetadataTitle(sourceFile) : null,
+      ...(sourceFile
+        ? exportedMetadata(sourceFile, checker, seoTitlesByPath)
+        : { metadataTitle: null, metadataRoute: null }),
       ...(sourceFile
         ? wrapperContract(sourceFile, checker)
         : {
@@ -369,6 +417,85 @@ function analyzeDocTitlesBatch(fixtures) {
 
 function analyzeDocTitles(fixture) {
   return analyzeDocTitlesBatch([fixture])[0]
+}
+
+function staticSeoTitles(source) {
+  const sourceFile = tsCompiler.createSourceFile(
+    "/seo-registry.ts",
+    source,
+    tsCompiler.ScriptTarget.Latest,
+    true,
+    tsCompiler.ScriptKind.TS,
+  )
+  const stringConstants = new Map()
+  const pageConstants = new Map()
+
+  function stringValue(expression) {
+    const value = unwrapExpression(expression)
+    if (tsCompiler.isStringLiteral(value)) return value.text
+    return tsCompiler.isIdentifier(value) ? (stringConstants.get(value.text) ?? null) : null
+  }
+
+  function stringProperty(object, propertyName) {
+    const matches = object.properties.filter(
+      (property) =>
+        tsCompiler.isPropertyAssignment(property) &&
+        ((tsCompiler.isIdentifier(property.name) && property.name.text === propertyName) ||
+          (tsCompiler.isStringLiteral(property.name) && property.name.text === propertyName)),
+    )
+    if (matches.length !== 1) return null
+    return stringValue(matches[0].initializer)
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!tsCompiler.isIdentifier(declaration.name) || !declaration.initializer) continue
+      const value = stringValue(declaration.initializer)
+      if (value !== null) stringConstants.set(declaration.name.text, value)
+    }
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!tsCompiler.isIdentifier(declaration.name) || !declaration.initializer) continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) continue
+      const path = stringProperty(initializer, "path")
+      const title = stringProperty(initializer, "title")
+      if (path !== null && title !== null) pageConstants.set(declaration.name.text, { path, title })
+    }
+  }
+
+  const titles = {}
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !tsCompiler.isIdentifier(declaration.name) ||
+        declaration.name.text !== "STATIC_SEO_PAGES" ||
+        !declaration.initializer
+      )
+        continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) continue
+      for (const property of initializer.properties) {
+        if (!tsCompiler.isPropertyAssignment(property)) continue
+        const key = tsCompiler.isComputedPropertyName(property.name)
+          ? stringValue(property.name.expression)
+          : tsCompiler.isStringLiteral(property.name)
+            ? property.name.text
+            : null
+        const pageExpression = unwrapExpression(property.initializer)
+        const page = tsCompiler.isIdentifier(pageExpression)
+          ? pageConstants.get(pageExpression.text)
+          : undefined
+        if (key !== null && page?.path === key) titles[key] = page.title
+      }
+    }
+  }
+  return titles
 }
 
 function isMarkdownImage(source, linkStart) {
@@ -4328,18 +4455,28 @@ const authoredRegisteredDocs = [
 const analyzableRegisteredDocs = authoredRegisteredDocs.filter(
   ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
 )
+const seoTitlesByPath = staticSeoTitles(
+  readFileSync(resolve(repoRoot, "apps/web/app/seo/registry.ts"), "utf8"),
+)
 const registeredDocAnalyses = analyzeDocTitlesBatch(
   analyzableRegisteredDocs.map(({ href }) => ({
     mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
     wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
+    seoTitlesByPath,
   })),
 )
 
 for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   const contentPath = resolve(repoRoot, docHrefToContentPath(href))
   const wrapperPath = resolve(repoRoot, docHrefToPagePath(href))
-  const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
-    registeredDocAnalyses[index] ?? {}
+  const {
+    firstH1,
+    metadataTitle,
+    metadataRoute,
+    contentImportTarget,
+    docsPageImportTarget,
+    docsPageHref,
+  } = registeredDocAnalyses[index] ?? {}
 
   if (firstH1 !== label) {
     failures.push(
@@ -4349,6 +4486,16 @@ for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   if (metadataTitle !== label) {
     failures.push(
       `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
+    )
+  }
+  if (metadataRoute !== null && metadataRoute !== href) {
+    failures.push(
+      `${docHrefToPagePath(href)} metadata resolver route ${JSON.stringify(metadataRoute)} does not match canonical route ${JSON.stringify(href)}`,
+    )
+  }
+  if (metadataRoute !== null && metadataRoute !== docsPageHref) {
+    failures.push(
+      `${docHrefToPagePath(href)} metadata resolver route ${JSON.stringify(metadataRoute)} does not match DocsPage href ${JSON.stringify(docsPageHref ?? null)}`,
     )
   }
   const importedContentPath =
