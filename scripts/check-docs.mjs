@@ -389,9 +389,12 @@ function defaultPageReturn(functionNode) {
     return unwrapExpression(functionNode.body)
   }
   if (!functionNode.body || !tsCompiler.isBlock(functionNode.body)) return null
-  const returns = functionNode.body.statements.filter(tsCompiler.isReturnStatement)
-  return returns.length === 1 && returns[0].expression
-    ? unwrapExpression(returns[0].expression)
+  const [statement] = functionNode.body.statements
+  return functionNode.body.statements.length === 1 &&
+    statement &&
+    tsCompiler.isReturnStatement(statement) &&
+    statement.expression
+    ? unwrapExpression(statement.expression)
     : null
 }
 

@@ -924,6 +924,45 @@ void DeadHelper`,
     expect(analysis.docsPageHref).toBeNull()
   })
 
+  it.each([
+    [
+      "conditional early return",
+      `if (true) return null
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "dead conditional branch",
+      `if (false) {
+    return null
+  }
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "preceding executable statement",
+      `void Article
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "following executable statement",
+      `return <RenderDocsPage href="/docs/real" Content={Article} />
+  void Article`,
+    ],
+  ])("rejects a canonical return with a bypassing %s", (_name, pageBody) => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+export default function Page() {
+  ${pageBody}
+}`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
   it("resolves a literal resolver-backed metadata route through the SEO registry", () => {
     const analysis = analyzeDocTitles(
       "# Getting Started\n",
