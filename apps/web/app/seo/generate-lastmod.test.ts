@@ -29,7 +29,7 @@ describe("generate-seo-lastmod", () => {
     const result = runGenerator("--check")
 
     expect(result.status).toBe(0)
-  })
+  }, 15_000) // Git history traversal can exceed Vitest's default timeout under parallel suite load.
 
   it("uses a full-history checkout for the canonical source-test job", () => {
     const workflow = readFileSync(ciWorkflow, "utf8")
