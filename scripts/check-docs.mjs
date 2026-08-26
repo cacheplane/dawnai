@@ -353,6 +353,10 @@ function importTargetForSymbol(checker, identifier, expectedImportedName) {
     : null
 }
 
+function nonGeneratorPageFunction(functionNode) {
+  return functionNode.asteriskToken ? null : functionNode
+}
+
 function defaultExportedFunction(sourceFile, checker) {
   for (const statement of sourceFile.statements) {
     if (
@@ -362,22 +366,24 @@ function defaultExportedFunction(sourceFile, checker) {
       ) &&
       statement.modifiers.some((modifier) => modifier.kind === tsCompiler.SyntaxKind.ExportKeyword)
     ) {
-      return statement
+      return nonGeneratorPageFunction(statement)
     }
     if (!tsCompiler.isExportAssignment(statement) || statement.isExportEquals) continue
 
     const expression = unwrapExpression(statement.expression)
     if (tsCompiler.isFunctionExpression(expression) || tsCompiler.isArrowFunction(expression)) {
-      return expression
+      return nonGeneratorPageFunction(expression)
     }
     if (!tsCompiler.isIdentifier(expression)) continue
 
     const declaration = checker.getSymbolAtLocation(expression)?.declarations?.[0]
-    if (declaration && tsCompiler.isFunctionDeclaration(declaration)) return declaration
+    if (declaration && tsCompiler.isFunctionDeclaration(declaration)) {
+      return nonGeneratorPageFunction(declaration)
+    }
     if (declaration && tsCompiler.isVariableDeclaration(declaration) && declaration.initializer) {
       const initializer = unwrapExpression(declaration.initializer)
       if (tsCompiler.isFunctionExpression(initializer) || tsCompiler.isArrowFunction(initializer)) {
-        return initializer
+        return nonGeneratorPageFunction(initializer)
       }
     }
   }

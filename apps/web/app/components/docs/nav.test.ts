@@ -904,6 +904,62 @@ export default function Page() {
     })
   })
 
+  it("accepts a normal async default page with imported aliases", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+export default async function Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    )
+
+    expect(analysis.contentImportTarget).toBe("../../../content/docs/real.mdx")
+    expect(analysis.docsPageImportTarget).toBe("../../components/docs/DocsPage")
+    expect(analysis.docsPageHref).toBe("/docs/real")
+  })
+
+  it.each([
+    [
+      "default generator declaration",
+      `export default function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    ],
+    [
+      "named generator exported as default",
+      `function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}
+export default Page`,
+    ],
+    [
+      "default generator function expression",
+      `export default (function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+})`,
+    ],
+    [
+      "default async-generator declaration",
+      `export default async function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    ],
+  ])("rejects a %s", (_name, defaultPageSource) => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+${defaultPageSource}`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
   it("ignores a correct DocsPage in a dead helper when the default export is not a docs page", () => {
     const analysis = analyzeDocTitles(
       "# Real Title\n",
