@@ -26,11 +26,13 @@ const SUBAGENT = {
 const EVERY_PART: Required<DawnActivityClassNames> = {
   root: "my-root",
   header: "my-header",
+  marker: "my-marker",
   title: "my-title",
   meta: "my-meta",
   badge: "my-badge",
   section: "my-section",
   sectionLabel: "my-section-label",
+  checklist: "my-checklist",
   list: "my-list",
   item: "my-item",
   itemGlyph: "my-item-glyph",
@@ -48,11 +50,13 @@ const EVERY_PART: Required<DawnActivityClassNames> = {
 const APPENDED_ATTRIBUTE: Record<keyof DawnActivityClassNames, RegExp> = {
   root: /class="dawn-activity my-root"/,
   header: /class="dawn-activity__header my-header"/,
+  marker: /class="dawn-activity__marker my-marker"/,
   title: /class="dawn-activity__title my-title"/,
   meta: /class="dawn-activity__meta my-meta"/,
   badge: /class="dawn-activity__badge my-badge"/,
   section: /class="dawn-activity__section my-section"/,
   sectionLabel: /class="dawn-activity__section-label my-section-label"/,
+  checklist: /class="dawn-activity__checklist my-checklist"/,
   list: /class="dawn-activity__list my-list"/,
   item: /class="dawn-activity__item dawn-activity__item--\w+ my-item"/,
   itemGlyph: /class="dawn-activity__item-glyph my-item-glyph"/,
@@ -66,11 +70,13 @@ const APPENDED_ATTRIBUTE: Record<keyof DawnActivityClassNames, RegExp> = {
 const DEFAULT_CLASS: Record<keyof DawnActivityClassNames, string> = {
   root: "dawn-activity",
   header: "dawn-activity__header",
+  marker: "dawn-activity__marker",
   title: "dawn-activity__title",
   meta: "dawn-activity__meta",
   badge: "dawn-activity__badge",
   section: "dawn-activity__section",
   sectionLabel: "dawn-activity__section-label",
+  checklist: "dawn-activity__checklist",
   list: "dawn-activity__list",
   item: "dawn-activity__item ",
   itemGlyph: "dawn-activity__item-glyph",
@@ -105,8 +111,15 @@ const EXHAUSTIVE_SUBAGENT = {
   totalToolCount: 3,
 }
 
-/** Parts the plan card has no markup for — it has no badge, label, or error. */
-const PARTS_ABSENT_FROM_PLAN_CARD = ["badge", "sectionLabel", "error"] as const
+/**
+ * Parts the plan card has no markup for.
+ *
+ * `section` is here deliberately, pinning a documented behaviour change rather
+ * than hiding it: the plan card has no labelled region, so `section` pairs with
+ * `sectionLabel` and reaches neither card's checklist wrapper. `checklist` is
+ * the key for that wrapper now.
+ */
+const PARTS_ABSENT_FROM_PLAN_CARD = ["badge", "section", "sectionLabel", "error"] as const
 
 describe("customization ladder", () => {
   test("rung 2: every part the plan card renders appends its consumer class", () => {
@@ -140,6 +153,34 @@ describe("customization ladder", () => {
     for (const part of ALL_PARTS) {
       expect(html, `part ${part} must append its consumer class`).toMatch(APPENDED_ATTRIBUTE[part])
     }
+  })
+
+  test("rung 2: a consumer section class lands on the region, not on the checklist too", () => {
+    // The regression pin for the `section`/`checklist` split. The subagent card
+    // renders two labelled regions, and it used to render the checklist wrapper
+    // with the same class — three matches, two of them nested, so any box-like
+    // utility passed to `section` drew twice. The lookahead keeps
+    // `my-section-label` from being counted as a `my-section` match.
+    const html = renderToStaticMarkup(
+      <SubagentActivityCard content={EXHAUSTIVE_SUBAGENT} classNames={EVERY_PART} />,
+    )
+    expect(html.match(/my-section(?![\w-])/g)).toHaveLength(2)
+    expect(html.match(/my-checklist/g)).toHaveLength(1)
+  })
+
+  test("rung 2: the marker is the first child of the header and hidden from a11y", () => {
+    // Structure, position, and `aria-hidden` in one pattern. The glyph was a
+    // `::before` with no key; Chrome put its content in the summary's accessible
+    // name, so the span must stay `aria-hidden` and stay first.
+    const markerFirst =
+      /<summary class="dawn-activity__header[^"]*"><span aria-hidden="true" class="dawn-activity__marker/
+    expect(
+      renderToStaticMarkup(<PlanActivityCard content={PLAN} classNames={EVERY_PART} />),
+    ).toMatch(markerFirst)
+    expect(
+      renderToStaticMarkup(<SubagentActivityCard content={SUBAGENT} classNames={EVERY_PART} />),
+    ).toMatch(markerFirst)
+    expect(renderToStaticMarkup(<PlanActivityCard content={PLAN} />)).toMatch(markerFirst)
   })
 
   test("rung 2: omitted parts keep bare defaults", () => {
