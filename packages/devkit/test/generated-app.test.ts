@@ -72,42 +72,82 @@ describe("generated app helper", () => {
         template: "research",
       })
 
-      const packageJson = await readFile(resolve(generatedApp.appRoot, "package.json"), "utf8")
-      const packageManifest = JSON.parse(packageJson) as {
+      // The research template is a two-package npm workspace. Only the
+      // orchestrator manifest, the pnpm config, the tour README, and the
+      // ignore file stay at the app root; the Dawn app lives in `server/`.
+      const rootPackageJson = await readFile(resolve(generatedApp.appRoot, "package.json"), "utf8")
+      const rootManifest = JSON.parse(rootPackageJson) as {
+        scripts: Record<string, string>
+        workspaces: readonly string[]
+      }
+      const serverPackageJson = await readFile(
+        resolve(generatedApp.appRoot, "server/package.json"),
+        "utf8",
+      )
+      const serverManifest = JSON.parse(serverPackageJson) as {
         scripts: Record<string, string>
       }
+      const webPackageJson = await readFile(
+        resolve(generatedApp.appRoot, "web/package.json"),
+        "utf8",
+      )
       const pnpmWorkspace = await readFile(
         resolve(generatedApp.appRoot, "pnpm-workspace.yaml"),
         "utf8",
       )
-      const readDoc = await readFile(resolve(generatedApp.appRoot, "src/tools/readDoc.ts"), "utf8")
+      const readDoc = await readFile(
+        resolve(generatedApp.appRoot, "server/src/tools/readDoc.ts"),
+        "utf8",
+      )
       const searchCorpus = await readFile(
-        resolve(generatedApp.appRoot, "src/tools/searchCorpus.ts"),
+        resolve(generatedApp.appRoot, "server/src/tools/searchCorpus.ts"),
         "utf8",
       )
       const prompt = await readFile(
-        resolve(generatedApp.appRoot, "src/app/research/index.ts"),
+        resolve(generatedApp.appRoot, "server/src/app/research/index.ts"),
         "utf8",
       )
       const generatedTypes = await readFile(
-        resolve(generatedApp.appRoot, ".dawn/dawn.generated.d.ts"),
+        resolve(generatedApp.appRoot, "server/.dawn/dawn.generated.d.ts"),
         "utf8",
       )
-      const readme = await readFile(resolve(generatedApp.appRoot, "README.md"), "utf8")
+      const rootReadme = await readFile(resolve(generatedApp.appRoot, "README.md"), "utf8")
+      const readme = await readFile(resolve(generatedApp.appRoot, "server/README.md"), "utf8")
       const researchTest = await readFile(
-        resolve(generatedApp.appRoot, "test/research.test.ts"),
+        resolve(generatedApp.appRoot, "server/test/research.test.ts"),
         "utf8",
       )
       const sandboxTest = await readFile(
-        resolve(generatedApp.appRoot, "test/sandbox-docker.test.ts"),
+        resolve(generatedApp.appRoot, "server/test/sandbox-docker.test.ts"),
         "utf8",
       )
-      const envExample = await readFile(resolve(generatedApp.appRoot, ".env.example"), "utf8")
+      const envExample = await readFile(
+        resolve(generatedApp.appRoot, "server/.env.example"),
+        "utf8",
+      )
       const gitignore = await readFile(resolve(generatedApp.appRoot, ".gitignore"), "utf8")
 
-      expect(packageJson).toContain('"@dawn-ai/sandbox": "workspace:*"')
-      expect(packageManifest.scripts).toEqual({
-        dev: "dawn dev --port 3000",
+      expect(serverPackageJson).toContain('"@dawn-ai/sandbox": "workspace:*"')
+      expect(rootManifest.workspaces).toEqual(["server", "web"])
+      // Each single-workspace delegator keeps its literal trailing ` --`; see
+      // `template-root-scripts.test.ts` for why deleting it breaks the harness.
+      expect(rootManifest.scripts).toEqual({
+        dev: "npm run dev --workspace server --",
+        "dev:server": "npm run dev --workspace server --",
+        "dev:web": "npm run dev --workspace web --",
+        verify: "npm run verify --workspace server --",
+        typegen: "npm run typegen --workspace server --",
+        check: "npm run check --workspace server --",
+        typecheck: "npm run typecheck --workspaces --if-present",
+        test: "npm run test --workspaces --if-present",
+        eval: "npm run eval --workspace server --",
+        build: "npm run build --workspaces --if-present",
+        start: "npm start --workspace server --",
+        "memory:list": "npm run memory:list --workspace server --",
+        "memory:approve": "npm run memory:approve --workspace server --",
+      })
+      expect(serverManifest.scripts).toEqual({
+        dev: "dawn dev --port 3002",
         verify: "dawn verify",
         typegen: "dawn typegen",
         check: "dawn check",
@@ -120,7 +160,14 @@ describe("generated app helper", () => {
         "memory:list": "dawn memory list",
         "memory:approve": "dawn memory approve",
       })
-      expect(packageJson).not.toContain('"pnpm"')
+      expect(rootPackageJson).not.toContain('"pnpm"')
+      expect(serverPackageJson).not.toContain('"pnpm"')
+      expect(rootReadme).toContain("npm run dev:web")
+      // `writeTemplate` copies an unrecognized `{{token}}` through verbatim, so
+      // a specifier missing from this helper's map ships the literal token into
+      // the generated manifest instead of failing.
+      expect(webPackageJson).toContain('"@dawn-ai/ag-ui": "workspace:*"')
+      expect(webPackageJson).not.toContain("{{")
       expect(pnpmWorkspace).toContain("allowBuilds:")
       expect(pnpmWorkspace).toContain("esbuild: true")
       expect(readDoc).toContain("ctx.fs.readFile")
@@ -145,10 +192,19 @@ describe("generated app helper", () => {
   })`)
       expect(sandboxTest).toContain("DAWN_DEMO_DOCKER_SANDBOX")
       expect(sandboxTest).toContain("dockerSandbox")
+      // The corpus tools are shared at `server/src/tools/`, never route-local.
       await expect(
-        access(resolve(generatedApp.appRoot, "src/app/research/tools/readDoc.ts"), constants.F_OK),
+        access(
+          resolve(generatedApp.appRoot, "server/src/app/research/tools/readDoc.ts"),
+          constants.F_OK,
+        ),
       ).rejects.toThrow()
+      // The template ships `.env.example` only — never a real `.env`, at either
+      // level of the workspace.
       await expect(access(resolve(generatedApp.appRoot, ".env"), constants.F_OK)).rejects.toThrow()
+      await expect(
+        access(resolve(generatedApp.appRoot, "server/.env"), constants.F_OK),
+      ).rejects.toThrow()
     } finally {
       await rm(baseDir, { force: true, recursive: true })
     }

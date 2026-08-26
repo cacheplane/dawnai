@@ -1,11 +1,11 @@
 node_modules/
+.DS_Store
 dist/
+# A stray `dawn inspect`/`dawn memory` run from the workspace root creates this;
+# server/.gitignore cannot cover a sibling directory at the root.
 .dawn/
+*.tsbuildinfo
 .vercel/
 .env
 .env.*
 !.env.example
-
-# Runtime workspace outputs (the agent writes these at run time).
-workspace/reports/
-workspace/tool-outputs/

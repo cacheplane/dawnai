@@ -22,8 +22,23 @@ import {
 import { writeRegistryNpmrc } from "../harness/scaffold-packaging.ts"
 
 const tempDirs: TrackedTempDir[] = []
-const ACTIVATION_TIMEOUT_MS = 600_000
+// Measured on 2026-08-25 (macOS, node 24.19.0 / npm 11.17.0, warm npm cache,
+// Verdaccio uplink already populated), whole test body 144s:
+//   root `npm install`  92.2s   typegen 2.0s   check 1.2s   typecheck 4.0s
+//   `npm test` 4.4s     eval 1.6s   verify 1.6s   `npm run build` 16.1s
+//   dev session (boot + 3 AG-UI journeys + shutdown) 3.2s   start session 1.6s
+// Raised from 600_000 because the workspace restructure added the web client's
+// dependency set to the install and a `next build` to the build. A cold CI
+// runner is the pessimistic case: ~3x on the network-bound install, ~4x on the
+// rest, which lands near 350s — this leaves better than 3x headroom on that.
+const ACTIVATION_TIMEOUT_MS = 1_200_000
 const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
+// The install is the one command with no headroom under the harness-wide
+// PACKAGED_COMMAND_TIMEOUT_MS (180_000): 92.2s measured warm, and it resolves
+// ~1.3GB across both workspace members through Verdaccio's npmjs uplink, so a
+// cold registry plausibly overruns 180s. Nothing else does — `npm run build`
+// measured 16.1s against that same 180s budget — so this is the only override.
+const WORKSPACE_INSTALL_TIMEOUT_MS = 600_000
 const SAFE_PROMPT = "What are common agent architectures? Write a short cited report."
 const SUBQUESTION = "Identify common agent architectures and cite the corpus."
 const CHILD_REPLY =
@@ -900,11 +915,17 @@ test("activates the default research scaffold through the complete npm lifecycle
     })
 
     await expect(
-      access(join(appRoot, "src/app/research/index.ts"), constants.F_OK),
+      access(join(appRoot, "server/src/app/research/index.ts"), constants.F_OK),
     ).resolves.toBeUndefined()
+    // Proves the RESEARCH template was generated, not the BASIC one: the basic
+    // template's marker route must be absent from where the server actually
+    // lives. Pointed at `server/` deliberately — asserting against the app root
+    // would pass vacuously now that nothing but the orchestrator lives there.
     await expect(
-      access(join(appRoot, "src/app/(public)/hello/[tenant]/index.ts"), constants.F_OK),
+      access(join(appRoot, "server/src/app/(public)/hello/[tenant]/index.ts"), constants.F_OK),
     ).rejects.toThrow()
+    // The other half of the workspace: the scaffold ships a web client too.
+    await expect(access(join(appRoot, "web/app/page.tsx"), constants.F_OK)).resolves.toBeUndefined()
     expect(creatorResult.stdout).toContain("(research template)")
 
     const scaffoldTranscript = await readFile(commandsTranscriptPath, "utf8")
@@ -917,15 +938,47 @@ test("activates the default research scaffold through the complete npm lifecycle
     expect(creatorCommandLines[0]?.split(/\s+/)).not.toContain("--template")
 
     await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
+    // The Dawn server lives in `server/`, and its `start` script is
+    // `node --env-file-if-exists=.env …` resolved from ITS cwd. A `.env` left at
+    // the workspace root is invisible to it: `npm run verify` starts warning
+    // about missing environment variables, and the built-artifact journey boots
+    // a server that never learns the aimock URL — which surfaces far away, as a
+    // request-count mismatch on the aimock journal.
     const envContent = `OPENAI_BASE_URL=${aimock.baseUrl}\nOPENAI_API_KEY=test-not-used\n`
-    await writeFile(join(appRoot, ".env"), envContent, "utf8")
+    await writeFile(join(appRoot, "server/.env"), envContent, "utf8")
 
     await runGeneratedAppNpmCommand({
       args: ["install"],
       cwd: appRoot,
       signal: lifecycleSignal,
+      // The workspace install now resolves the web client's dependency set
+      // (next, react, CopilotKit, tailwind) on top of the server's, through
+      // Verdaccio's npmjs uplink. That overruns the shared per-command budget on
+      // a cold registry cache, so this one call carries its own.
+      timeoutMs: WORKSPACE_INSTALL_TIMEOUT_MS,
       transcriptPath: commandsTranscriptPath,
     })
+
+    const rootManifest = JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as {
+      readonly scripts: Record<string, string>
+      readonly workspaces: readonly string[]
+    }
+    const serverManifest = JSON.parse(
+      await readFile(join(appRoot, "server/package.json"), "utf8"),
+    ) as { readonly name: string; readonly scripts: Record<string, string> }
+    const webManifest = JSON.parse(await readFile(join(appRoot, "web/package.json"), "utf8")) as {
+      readonly name: string
+    }
+    expect(rootManifest.workspaces).toEqual(["server", "web"])
+    // npm links every workspace member into the root `node_modules`. Following
+    // those links is the proof both packages actually installed rather than the
+    // web half being skipped as an unreferenced directory.
+    for (const workspaceName of [serverManifest.name, webManifest.name]) {
+      await expect(
+        access(join(appRoot, "node_modules", workspaceName), constants.F_OK),
+      ).resolves.toBeUndefined()
+    }
+
     const typegenResult = await runGeneratedAppNpmCommand({
       args: ["run", "typegen"],
       cwd: appRoot,
@@ -933,7 +986,7 @@ test("activates the default research scaffold through the complete npm lifecycle
       transcriptPath: commandsTranscriptPath,
     })
     expect(typegenResult.stdout).toContain("Wrote types for")
-    const generatedTypesPath = join(appRoot, ".dawn/dawn.generated.d.ts")
+    const generatedTypesPath = join(appRoot, "server/.dawn/dawn.generated.d.ts")
     await expect(access(generatedTypesPath, constants.F_OK)).resolves.toBeUndefined()
     const generatedTypes = await readFile(generatedTypesPath, "utf8")
     const checkSentinel = "// sentinel: dawn check must not generate types\n"
@@ -976,6 +1029,12 @@ test("activates the default research scaffold through the complete npm lifecycle
       transcriptPath: commandsTranscriptPath,
     })
     expect(verifyResult.stdout).not.toContain("Missing environment variables")
+    // The workspace restructure hoisted every dependency to the root
+    // node_modules while appRoot stayed at <app>/server, so verify's package
+    // probe warned "Missing packages: @langchain/core, ..." on a fully installed
+    // app — and this lane ran green through all of it because nothing asserted
+    // on the deps warning. It does now.
+    expect(verifyResult.stdout).not.toContain("Missing packages")
     await runGeneratedAppNpmCommand({
       args: ["run", "build"],
       cwd: appRoot,
@@ -983,14 +1042,38 @@ test("activates the default research scaffold through the complete npm lifecycle
       transcriptPath: commandsTranscriptPath,
     })
 
+    // One root `npm run build` fans out across both workspace members, so both
+    // halves must have produced their artifact.
     await expect(
-      access(join(appRoot, ".dawn/build/server.mjs"), constants.F_OK),
+      access(join(appRoot, "server/.dawn/build/server.mjs"), constants.F_OK),
     ).resolves.toBeUndefined()
-    const packageManifest = JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as {
-      scripts: Record<string, string>
-    }
-    expect(packageManifest.scripts).toEqual({
-      dev: "dawn dev --port 3000",
+    await expect(access(join(appRoot, "web/.next"), constants.F_OK)).resolves.toBeUndefined()
+
+    // The root manifest is pure orchestration: every entry delegates into a
+    // workspace member. The trailing ` --` on each single-workspace delegator is
+    // load-bearing — without it npm swallows the flag NAME out of
+    // `npm run dev -- --port 4123` and `dawn dev` hard-errors — which is why the
+    // harness can boot these apps at all. `packages/devkit/test/template-root-scripts.test.ts`
+    // guards the rule at the template; this pins what a real scaffold produced.
+    expect(rootManifest.scripts).toEqual({
+      dev: "npm run dev --workspace server --",
+      "dev:server": "npm run dev --workspace server --",
+      "dev:web": "npm run dev --workspace web --",
+      verify: "npm run verify --workspace server --",
+      typegen: "npm run typegen --workspace server --",
+      check: "npm run check --workspace server --",
+      typecheck: "npm run typecheck --workspaces --if-present",
+      test: "npm run test --workspaces --if-present",
+      eval: "npm run eval --workspace server --",
+      build: "npm run build --workspaces --if-present",
+      start: "npm start --workspace server --",
+      "memory:list": "npm run memory:list --workspace server --",
+      "memory:approve": "npm run memory:approve --workspace server --",
+    })
+    // The delegation targets. Pinned separately so a rename on either side of
+    // the hand-off reds here rather than silently going nowhere.
+    expect(serverManifest.scripts).toEqual({
+      dev: "dawn dev --port 3002",
       verify: "dawn verify",
       typegen: "dawn typegen",
       check: "dawn check",
@@ -1003,9 +1086,9 @@ test("activates the default research scaffold through the complete npm lifecycle
       "memory:list": "dawn memory list",
       "memory:approve": "dawn memory approve",
     })
-    await expect(readFile(join(appRoot, "src/app/research/index.ts"), "utf8")).resolves.toContain(
-      "recursionLimit: 100",
-    )
+    await expect(
+      readFile(join(appRoot, "server/src/app/research/index.ts"), "utf8"),
+    ).resolves.toContain("recursionLimit: 100")
 
     const safeThreadId = `safe-thread-${randomUUID()}`
     const safeRunId = `safe-run-${randomUUID()}`
@@ -1131,7 +1214,7 @@ test("activates the default research scaffold through the complete npm lifecycle
 
     const transcriptAfterStart = await readFile(commandsTranscriptPath, "utf8")
     assertRecordedServerExit(transcriptAfterStart, { appRoot, script: "start" })
-    const reportPath = join(appRoot, "workspace/reports/agent-architectures.md")
+    const reportPath = join(appRoot, "server/workspace/reports/agent-architectures.md")
     await expect(access(reportPath, constants.F_OK)).resolves.toBeUndefined()
     await expect(readFile(reportPath, "utf8")).resolves.toContain("[corpus/agent-architectures.md]")
 
