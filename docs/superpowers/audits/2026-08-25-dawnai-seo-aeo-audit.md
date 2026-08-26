@@ -296,8 +296,9 @@ canonical fields preserved.
   the live sitemap is `/sitemap.xml`. Its API record is stale, with a last
   download in 2024 and three warnings plus one error.
 - Blog-route Open Graph image generation returned HTTP 500 in the earlier live
-  audit because a remote Fraunces variable-font fetch failed. The root OG
-  route returned 200.
+  audit while the route depended on a request-time remote variable font. The
+  root OG route returned 200; without production logs, the status is not
+  attributed to that dependency.
 
 ## Missing
 
@@ -371,8 +372,32 @@ $ curl -sS https://dawnai.org/sitemap.xml | awk 'BEGIN { RS="<url>"; FS="</url>"
 80 2026-08-26T01:59:52.970Z
 urls=83
 
-$ curl -sS https://dawnai.org/sitemap.xml | awk 'BEGIN { RS="<url>" } NR > 1 && match($0, /<loc>[^<]+/) { print substr($0,RSTART+5,RLENGTH-5) }' | xargs -n 1 -P 8 -I {} sh -c 'curl -sS -o /dev/null -w "%{http_code}\t%{content_type}\n" "{}"' | awk 'BEGIN { n=0; bad=0 } { n++; if ($1 != 200 || $2 !~ /^text\/html/) bad++ } END { print "urls=" n "; unexpected=" bad }'
+# Historical output from the previously recorded 2026-08-26 URL-status run:
 urls=83; unexpected=0
+
+# Safe reproduction rerun: each sitemap URL is data read by the loop and is
+# passed to curl only as a quoted argument (no URL interpolation into a shell).
+$ bash <<'BASH'
+set -euo pipefail
+processed=0
+curl_failures=0
+unexpected=0
+while IFS= read -r url; do
+  processed=$((processed + 1))
+  if response=$(curl -sS -o /dev/null -w '%{http_code}\t%{content_type}' "$url"); then
+    http=${response%%$'\t'*}
+    content=${response#*$'\t'}
+    if [ "$http" != 200 ] || [[ "$content" != text/html* ]]; then
+      unexpected=$((unexpected + 1))
+    fi
+  else
+    curl_failures=$((curl_failures + 1))
+  fi
+done < <(curl -fsS https://dawnai.org/sitemap.xml | awk 'BEGIN { RS="<url>" } NR > 1 && match($0, /<loc>[^<]+/) { print substr($0,RSTART+5,RLENGTH-5) }')
+printf 'urls=%s; unexpected=%s; curl-failures=%s\n' "$processed" "$unexpected" "$curl_failures"
+test "$curl_failures" -eq 0
+BASH
+urls=83; unexpected=0; curl-failures=0
 ```
 
 ### Current verification of OG, structured data, and descriptions
@@ -387,20 +412,76 @@ documentation routes), and the same blog post had a 201-character description.
 not a claim that a current request can recreate an earlier crawl or Search
 Console state.
 
+The two 66-route checks below are portable from the repository root. Their
+`baseline_urls` function extracts the preserved URL inventory from this
+report's embedded HTTP table, rather than relying on ignored capture files.
+
 ```console
 $ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://dawnai.org/opengraph-image
 200 image/png
 $ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://dawnai.org/blog/why-we-built-dawn/opengraph-image
 500 text/html; charset=utf-8
 
-$ json_ld=0; while IFS=$'\t' read -r _ _ url; do count=$(curl -sS "$url" | rg -o 'application/ld\+json' | wc -l | tr -d ' '); json_ld=$((json_ld + count)); done < /Users/blove/repos/dawn/keys/live-url-status.tsv; printf 'routes=66; json-ld-script-markers=%s\n' "$json_ld"
-routes=66; json-ld-script-markers=0
+$ bash <<'BASH'
+set -euo pipefail
+report=docs/superpowers/audits/2026-08-25-dawnai-seo-aeo-audit.md
+baseline_urls() {
+  awk -F '|' '/^\| 200 \| text\/html; charset=utf-8 \| https:\/\/dawnai\.org/ { gsub(/^ +| +$/, "", $4); print $4 }' "$report"
+}
+processed=0
+curl_failures=0
+json_ld=0
+while IFS= read -r url; do
+  processed=$((processed + 1))
+  if page=$(curl -fsS "$url"); then
+    count=$(printf '%s' "$page" | { rg -o 'application/ld\+json' || true; } | wc -l | tr -d ' ')
+    json_ld=$((json_ld + count))
+  else
+    curl_failures=$((curl_failures + 1))
+  fi
+done < <(baseline_urls)
+printf 'routes=%s; curl-failures=%s; json-ld-script-markers=%s\n' "$processed" "$curl_failures" "$json_ld"
+test "$processed" -gt 0
+test "$curl_failures" -eq 0
+BASH
+routes=66; curl-failures=0; json-ld-script-markers=0
 
-$ : > /tmp/dawn-descriptions-2026-08-26.tsv; while IFS=$'\t' read -r _ _ url; do meta=$(curl -sS "$url" | rg -o '<meta[^>]+name="description"[^>]*>' | head -n 1); desc=$(printf '%s' "$meta" | sed -n 's/.*content="\([^"]*\)".*/\1/p'); printf '%s\t%s\t%s\n' "$url" "${#desc}" "$desc" >> /tmp/dawn-descriptions-2026-08-26.tsv; done < /Users/blove/repos/dawn/keys/live-url-status.tsv; root_desc=$(awk -F '\t' '$1 == "https://dawnai.org/" { print $3 }' /tmp/dawn-descriptions-2026-08-26.tsv); awk -F '\t' -v root="$root_desc" '$3 == root {same++} length($3)>200 {long++; longurl=$1; longlen=length($3)} END {print "routes=" NR "; matching-homepage-description=" same "; descriptions-over-200-chars=" (long+0); if (long) print "overlength=" longurl "\t" longlen}' /tmp/dawn-descriptions-2026-08-26.tsv; awk -F '\t' '$1 == "https://dawnai.org/" || $1 == "https://dawnai.org/docs/agents" {print $1 "\tlength=" $2 "\t" $3}' /tmp/dawn-descriptions-2026-08-26.tsv
-routes=66; matching-homepage-description=58; descriptions-over-200-chars=1
-overlength=https://dawnai.org/blog/eve-validates-the-shape	201
+$ bash <<'BASH'
+set -euo pipefail
+report=docs/superpowers/audits/2026-08-25-dawnai-seo-aeo-audit.md
+baseline_urls() {
+  awk -F '|' '/^\| 200 \| text\/html; charset=utf-8 \| https:\/\/dawnai\.org/ { gsub(/^ +| +$/, "", $4); print $4 }' "$report"
+}
+processed=0
+curl_failures=0
+matching=0
+overlong=0
+root_desc=''
+while IFS= read -r url; do
+  processed=$((processed + 1))
+  if ! page=$(curl -fsS "$url"); then
+    curl_failures=$((curl_failures + 1))
+    continue
+  fi
+  meta=$(printf '%s' "$page" | rg -o '<meta[^>]+name="description"[^>]*>' | head -n 1)
+  desc=$(printf '%s' "$meta" | sed -n 's/.*content="\([^"]*\)".*/\1/p')
+  if [ "$url" = 'https://dawnai.org/' ]; then root_desc=$desc; fi
+  if [ "$desc" = "$root_desc" ]; then matching=$((matching + 1)); fi
+  if [ "${#desc}" -gt 200 ]; then overlong=$((overlong + 1)); printf 'overlength=%s\t%s\n' "$url" "${#desc}"; fi
+  case "$url" in
+    https://dawnai.org/|https://dawnai.org/docs/agents|https://dawnai.org/docs/testing-agents)
+      printf '%s\tlength=%s\t%s\n' "$url" "${#desc}" "$desc" ;;
+  esac
+done < <(baseline_urls)
+printf 'routes=%s; curl-failures=%s; matching-homepage-description=%s; descriptions-over-200-chars=%s\n' "$processed" "$curl_failures" "$matching" "$overlong"
+test "$processed" -gt 0
+test "$curl_failures" -eq 0
+BASH
 https://dawnai.org/	length=151	Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.
 https://dawnai.org/docs/agents	length=151	Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.
+https://dawnai.org/docs/testing-agents	length=63	Test Dawn agents deterministically with the in-process harness.
+overlength=https://dawnai.org/blog/eve-validates-the-shape	201
+routes=66; curl-failures=0; matching-homepage-description=58; descriptions-over-200-chars=1
 ```
 
 ## Repository verification baseline
