@@ -507,7 +507,15 @@ function localUrl(productionUrl, baseUrl) {
   if (requested.origin !== productionOrigin) {
     throw new Error(`refusing to substitute non-production origin: ${requested.origin}`)
   }
-  return new URL(`${requested.pathname}${requested.search}`, baseUrl).href
+  const localOrigin = new URL(baseUrl).origin
+  const local = new URL(localOrigin)
+  local.pathname = requested.pathname
+  local.search = requested.search
+  local.hash = ""
+  if (local.origin !== localOrigin) {
+    throw new Error(`refusing local URL origin escape: ${local.origin}`)
+  }
+  return local.href
 }
 
 async function fetchResponse(url) {
@@ -711,9 +719,10 @@ export async function auditBuiltSeo({ asOf, baseUrl }) {
       imageUrls.push(result.parsed.openGraphImages[0])
     }
   }
-  if (imageUrls.length !== 3 || new Set(imageUrls).size !== 3) {
+  const expectedImageCount = inventory.visiblePosts.length
+  if (imageUrls.length !== expectedImageCount || new Set(imageUrls).size !== expectedImageCount) {
     failures.push(
-      `production post OG image inventory must contain exactly 3 unique URLs; found ${new Set(imageUrls).size}`,
+      `production post OG image inventory must contain exactly ${expectedImageCount} unique URLs; found ${new Set(imageUrls).size}`,
     )
   }
   for (const imageUrl of [...new Set(imageUrls)]) {

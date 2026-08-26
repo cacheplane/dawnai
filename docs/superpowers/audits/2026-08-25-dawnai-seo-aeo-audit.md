@@ -614,7 +614,8 @@ mechanism.
 | Pre-deployment evidence | `69ee520b` | Independent built-site audit, focused parser tests, package command, and this report section. |
 | Sitemap date-distribution regression | `e3736d66` | Executable 2026-08-26 minimum of 25 distinct sitemap dates, 24/25 boundary tests, and repeated built-site evidence. |
 | Generator integration-test stabilization | `10fa9631`, `1c45a891` | Fifteen-second bounds for the three full-Git-history generator tests, followed by the owning formatter correction. |
-| Final pre-deployment evidence | `docs: finalize pre-deployment verification` (report-only follow-up commit) | Final green web lane, complete repository validation, repeated built-site audit, and chronological failure evidence. |
+| Pre-deployment evidence finalization | `6961d150` | Green web lane, complete repository validation, repeated built-site audit, and chronological failure evidence before the request-containment review follow-up. |
+| Built-audit request containment | `fix: constrain search audit requests` (review follow-up commit) | Local-origin containment for build-derived sitemap and OG requests, inventory-derived image counts, RED/GREEN regressions, and a repeated built-site audit. Final full-repository validation is pending after review. |
 
 The Task 9 commit contains only:
 
@@ -705,6 +706,50 @@ Test Files  1 passed (1)
 Tests       10 passed (10)
 Duration    315ms
 ```
+
+Security review later found that substituting a build-derived pathname with
+`new URL(pathname, baseUrl)` treated leading double or triple slashes as a new
+authority. The audit could therefore attempt a request outside its configured
+local origin even though the rendered URL began on the production origin.
+Three boundary tests were added before the fix. Their fetch observer blocked
+network work and recorded the escaped targets:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/seo/audit-built-seo.test.ts
+
+# RED
+Test Files  1 failed (1)
+Tests       3 failed | 10 passed (13)
+Duration    351ms
+
+received http://169.254.169.254/latest/meta-data
+received http://outside.example/escape
+received http://169.254.169.254/latest/og-image
+```
+
+The replacement starts with the configured local origin, assigns the
+production URL's pathname and search directly, clears its fragment, and
+asserts that the resulting origin is unchanged. The tests cover double- and
+triple-slash sitemap paths and a rendered post OG image path; no escaped target
+reached the fetch boundary after the fix. The production OG count also derives
+from the visible-post inventory instead of a separate literal.
+
+```console
+# GREEN after scoped formatting
+Test Files  1 passed (1)
+Tests       13 passed (13)
+Duration    259ms
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/sitemap.test.ts
+Test Files  1 passed (1)
+Tests       8 passed (8)
+Duration    495ms
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm exec biome check --config-path packages/config-biome/biome.json apps/web/app/seo/audit-built-seo.test.ts apps/web/scripts/audit-built-seo.mjs
+Checked 2 files in 41ms. No fixes applied.
+```
+
+The sitemap suite repeated the recorded Vite dynamic-import analysis warning.
 
 ### Focused web gates
 
@@ -855,6 +900,25 @@ failures=0
 The final server was interrupted and a bounded request confirmed
 `server-stopped`.
 
+The request-containment follow-up changed only the audit script, its tests, and
+this report, so it reused the same validated product build for a mechanism
+check. The exact port-3018 server command and readiness loop were unchanged;
+Next reported ready in 194ms and the first readiness request succeeded. The
+complete audit remained green:
+
+```console
+SEO built audit: PASS
+base=http://127.0.0.1:3018 asOf=2026-08-26
+inventory=83 docs=75 posts=3 tags=3
+sitemap=83 lastmodDates=25 html=83 jsonLdEntities=331
+robotsGroups=11 llms=2 llmsDocs=75 ogImages=3 og404s=2
+failures=0
+```
+
+The server was interrupted and a bounded request confirmed `server-stopped`.
+This verifies the corrected local audit mechanism; it is not a deployment or a
+new production claim.
+
 The summary represents all of these local-build assertions:
 
 | Surface | Result |
@@ -956,6 +1020,12 @@ The final web production build inside that run compiled in 4.0 seconds and
 generated 105 of 105 static pages in 2.1 seconds. The original transient CLI
 port race and the generator timeout did not recur, so no targeted rerun was
 performed in the successful final validation.
+
+The request-containment review follow-up was added after that run. Its focused
+and built-audit evidence is recorded above, but the successful complete
+validation remains historical evidence for `1c45a891` plus the report-only
+`6961d150`; it is not presented as a fresh `ci:validate` result for the current
+follow-up HEAD. A new complete validation is pending the next review gate.
 
 ### Warnings, limitations, and unknowns
 

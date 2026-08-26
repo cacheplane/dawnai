@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   assertExactRobots,
+  auditBuiltSeo,
   CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES,
   canonicalForPath,
   compareOrderedInventory,
@@ -28,6 +29,84 @@ const APPROVED_AGENTS = [
   "CCBot",
 ] as const
 
+const LOCAL_ORIGIN = "http://127.0.0.1:3018"
+const POST_PATH = "/blog/eve-validates-the-shape"
+
+function sitemapXml(url: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${url}</loc><lastmod>2026-08-26T00:00:00.000Z</lastmod></url>
+</urlset>`
+}
+
+function auditablePostHtml(imageUrl: string): string {
+  const description = "A production-visible post description."
+  const jsonLd = [
+    {
+      "@id": "https://dawnai.org/#organization",
+      "@type": "Organization",
+      logo: {
+        "@id": "https://dawnai.org/#logo",
+        "@type": "ImageObject",
+        url: "https://dawnai.org/brand/dawn-logo-horizontal-black.svg",
+      },
+      name: "Dawn AI",
+      url: "https://dawnai.org/",
+    },
+    {
+      "@id": "https://dawnai.org/#website",
+      "@type": "WebSite",
+      name: "Dawn AI",
+      publisher: { "@id": "https://dawnai.org/#organization" },
+      url: "https://dawnai.org/",
+    },
+    { "@type": "BlogPosting", description },
+    { "@type": "BreadcrumbList" },
+  ]
+  return `<!doctype html><html><head>
+    <meta name="description" content="${description}">
+    <meta property="og:description" content="${description}">
+    <meta name="twitter:description" content="${description}">
+    <meta property="og:image" content="${imageUrl}">
+    <link rel="canonical" href="https://dawnai.org${POST_PATH}">
+  </head><body><main>Visible post content</main>
+    <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+  </body></html>`
+}
+
+function observeAuditFetches(options: { pageHtml?: string; sitemapUrl: string }): string[] {
+  const escapedTargets: string[] = []
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const requested =
+        input instanceof Request
+          ? new URL(input.url)
+          : input instanceof URL
+            ? input
+            : new URL(input)
+      if (requested.origin !== LOCAL_ORIGIN) {
+        escapedTargets.push(requested.href)
+        throw new Error(`outbound fetch attempted: ${requested.href}`)
+      }
+      if (requested.pathname === "/sitemap.xml") {
+        return new Response(sitemapXml(options.sitemapUrl), {
+          headers: { "content-type": "application/xml" },
+          status: 200,
+        })
+      }
+      if (requested.pathname === POST_PATH && options.pageHtml !== undefined) {
+        return new Response(options.pageHtml, {
+          headers: { "content-type": "text/html" },
+          status: 200,
+        })
+      }
+      return new Response("fixture rejection", { status: 500 })
+    }),
+  )
+  return escapedTargets
+}
+
 function pageHtml(jsonLd: unknown): string {
   return `<!doctype html>
     <html><head>
@@ -52,6 +131,10 @@ Sitemap: https://dawnai.org/sitemap.xml
 }
 
 describe("built SEO audit parsing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it("extracts metadata and flattens JSON-LD graph entities", () => {
     const parsed = extractPageMetadata(
       pageHtml({
@@ -191,5 +274,37 @@ describe("built SEO audit parsing", () => {
 
   it("accepts 25 distinct lastmod dates for the current production inventory snapshot", () => {
     expect(lastmodDateDistributionFailure(25, "2026-08-26")).toBeUndefined()
+  })
+
+  it("keeps a double-slash sitemap path on the configured local origin", async () => {
+    const escapedTargets = observeAuditFetches({
+      sitemapUrl: "https://dawnai.org//169.254.169.254/latest/meta-data",
+    })
+
+    await auditBuiltSeo({ asOf: "2026-08-26", baseUrl: LOCAL_ORIGIN })
+
+    expect(escapedTargets).toEqual([])
+  })
+
+  it("keeps a triple-slash sitemap path on the configured local origin", async () => {
+    const escapedTargets = observeAuditFetches({
+      sitemapUrl: "https://dawnai.org///outside.example/escape",
+    })
+
+    await auditBuiltSeo({ asOf: "2026-08-26", baseUrl: LOCAL_ORIGIN })
+
+    expect(escapedTargets).toEqual([])
+  })
+
+  it("keeps a rendered OG image path on the configured local origin", async () => {
+    const imageUrl = "https://dawnai.org//169.254.169.254/latest/og-image"
+    const escapedTargets = observeAuditFetches({
+      pageHtml: auditablePostHtml(imageUrl),
+      sitemapUrl: `https://dawnai.org${POST_PATH}`,
+    })
+
+    await auditBuiltSeo({ asOf: "2026-08-26", baseUrl: LOCAL_ORIGIN })
+
+    expect(escapedTargets).toEqual([])
   })
 })
