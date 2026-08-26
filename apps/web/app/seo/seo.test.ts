@@ -66,6 +66,28 @@ function productionPosts(): readonly Post[] {
   })
 }
 
+function expectNormalizedDescriptions(
+  pages: readonly { readonly path: string; readonly description: string }[],
+) {
+  const firstRouteByDescription = new Map<string, string>()
+  const duplicateRoutePairs: string[] = []
+
+  for (const page of pages) {
+    const firstRoute = firstRouteByDescription.get(page.description)
+    if (firstRoute !== undefined) duplicateRoutePairs.push(`${firstRoute} = ${page.path}`)
+    else firstRouteByDescription.set(page.description, page.path)
+
+    expect(page.description, page.path).toBe(page.description.trim())
+    expect(page.description.length, page.path).toBeGreaterThanOrEqual(50)
+    expect(page.description.length, page.path).toBeLessThanOrEqual(155)
+    expect(page.description, page.path).not.toMatch(/[\r\n]|\s{2,}/)
+    expect(page.description, page.path).toMatch(/[.!?]$/)
+  }
+
+  expect(firstRouteByDescription).toHaveLength(pages.length)
+  expect(duplicateRoutePairs).toEqual([])
+}
+
 function productionTags(posts: readonly Post[]): readonly string[] {
   return [...new Set(posts.flatMap((post) => post.tags))].sort()
 }
@@ -225,7 +247,10 @@ describe("homepage SEO", () => {
 
 describe("production SEO inventory", () => {
   it("applies an explicit UTC as-of date before normalizing posts, tags, and descriptions", () => {
-    const visiblePosts = productionPosts()
+    const visiblePosts = productionPosts().map((post) => ({
+      ...post,
+      tags: post.tags.filter((tag) => tag !== "typescript"),
+    }))
     const sourcePost = visiblePosts[0]
     expect(sourcePost).toBeDefined()
     if (!sourcePost) return
@@ -237,7 +262,7 @@ describe("production SEO inventory", () => {
       description:
         "A scheduled Dawn article that verifies date-bound production SEO inventory selection.",
       date: "2026-08-27",
-      tags: ["agents"],
+      tags: ["typescript"],
       draft: false,
       sourceFile: "2026-08-27-scheduled-inventory-post.mdx",
     }
@@ -248,6 +273,7 @@ describe("production SEO inventory", () => {
       description:
         "A draft Dawn article that must remain outside production SEO inventory on every date.",
       date: "2026-08-20",
+      tags: ["patterns"],
       draft: true,
       sourceFile: "2026-08-20-draft-inventory-post.mdx",
     }
@@ -269,12 +295,17 @@ describe("production SEO inventory", () => {
 
     expect(before.map(({ path }) => path)).not.toContain("/blog/scheduled-inventory-post")
     expect(before.map(({ path }) => path)).not.toContain("/blog/draft-inventory-post")
-    expect(before).toHaveLength(83)
+    expect(before.map(({ path }) => path)).not.toContain("/blog/tags/typescript")
+    expect(before.map(({ path }) => path)).not.toContain("/blog/tags/patterns")
+    expect(before).toHaveLength(82)
+    expectNormalizedDescriptions(before)
     for (const pages of [publicationDate, after]) {
       expect(pages.map(({ path }) => path)).toContain("/blog/scheduled-inventory-post")
       expect(pages.map(({ path }) => path)).not.toContain("/blog/draft-inventory-post")
+      expect(pages.map(({ path }) => path)).toContain("/blog/tags/typescript")
+      expect(pages.map(({ path }) => path)).not.toContain("/blog/tags/patterns")
       expect(pages).toHaveLength(84)
-      expect(new Set(pages.map(({ description }) => description))).toHaveLength(84)
+      expectNormalizedDescriptions(pages)
     }
   })
 
@@ -357,24 +388,8 @@ describe("production SEO inventory", () => {
       readonly path: string
       readonly description: string
     }[]
-    const firstRouteByDescription = new Map<string, string>()
-    const duplicateRoutePairs: string[] = []
-
-    for (const page of pages) {
-      const firstRoute = firstRouteByDescription.get(page.description)
-      if (firstRoute !== undefined) duplicateRoutePairs.push(`${firstRoute} = ${page.path}`)
-      else firstRouteByDescription.set(page.description, page.path)
-
-      expect(page.description, page.path).toBe(page.description.trim())
-      expect(page.description.length, page.path).toBeGreaterThanOrEqual(50)
-      expect(page.description.length, page.path).toBeLessThanOrEqual(155)
-      expect(page.description, page.path).not.toMatch(/[\r\n]|\s{2,}/)
-      expect(page.description, page.path).toMatch(/[.!?]$/)
-    }
-
     expect(pages).toHaveLength(83)
-    expect(firstRouteByDescription).toHaveLength(83)
-    expect(duplicateRoutePairs).toEqual([])
+    expectNormalizedDescriptions(pages)
   })
 })
 

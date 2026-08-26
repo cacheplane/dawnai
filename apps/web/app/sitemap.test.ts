@@ -1,22 +1,41 @@
-import { readFileSync } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { readdirSync, readFileSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import matter from "gray-matter"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { loadPostsFromDir, type Post } from "./components/blog/post-index"
 import { ALL_DOCS_PAGES, DOCS_PAGES } from "./components/docs/nav"
 
 const appDirectory = dirname(fileURLToPath(import.meta.url))
 const blogContentDirectory = resolve(appDirectory, "../content/blog")
 const PRODUCTION_AS_OF = "2026-08-26"
 
-function visibleProductionPosts(currentDate: string): readonly Post[] {
-  return loadPostsFromDir(blogContentDirectory, {
-    currentDate,
-    includeDrafts: false,
-  })
+interface ExpectedPost {
+  readonly slug: string
+  readonly tags: readonly string[]
 }
 
-function visibleProductionTags(posts: readonly Post[]): readonly string[] {
+function visibleProductionPosts(currentDate: string): readonly ExpectedPost[] {
+  return readdirSync(blogContentDirectory)
+    .filter((filename) => filename.endsWith(".mdx"))
+    .map((filename) => {
+      const { data } = matter(readFileSync(join(blogContentDirectory, filename), "utf8"))
+      const date =
+        data.date instanceof Date
+          ? data.date.toISOString().slice(0, 10)
+          : String(data.date).slice(0, 10)
+      const tags = (data.tags ?? []).map((tag: string) => tag.toLowerCase())
+      return {
+        slug: filename.replace(/\.mdx?$/, "").replace(/^\d{4}-\d{2}-\d{2}-/, ""),
+        date,
+        draft: data.draft === true,
+        tags: data.type === "release" && !tags.includes("releases") ? [...tags, "releases"] : tags,
+      }
+    })
+    .filter((post) => !post.draft && post.date <= currentDate)
+    .sort((left, right) => (left.date < right.date ? 1 : left.date > right.date ? -1 : 0))
+}
+
+function visibleProductionTags(posts: readonly ExpectedPost[]): readonly string[] {
   const counts = new Map<string, number>()
   for (const post of posts) {
     for (const tag of post.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
@@ -32,6 +51,7 @@ async function productionSitemap(currentDate = PRODUCTION_AS_OF) {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.doUnmock("./seo/resolve")
   vi.doUnmock("./seo/lastmod.generated")
@@ -39,13 +59,42 @@ afterEach(() => {
 })
 
 describe("sitemap documentation entries", () => {
-  it("exposes a deterministic as-of sitemap builder while retaining the default route", async () => {
+  it("forwards an explicit as-of date and defaults the route to the real current UTC date", async () => {
     vi.resetModules()
     vi.stubEnv("NODE_ENV", "production")
-    const sitemapModule = await import("./sitemap")
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-09-02T23:59:59.000Z"))
+    const scheduledInventory = [
+      {
+        canonical: "https://dawnai.org/blog/scheduled-post",
+        lastModified: "2026-09-01T00:00:00.000Z",
+        routeKind: "blog-post",
+      },
+      {
+        canonical: "https://dawnai.org/blog/tags/scheduled",
+        lastModified: "2026-09-01T00:00:00.000Z",
+        routeKind: "blog-tag",
+      },
+    ]
+    const resolveProductionSeoPages = vi.fn((currentDate: string) =>
+      currentDate < "2026-09-01" ? [] : scheduledInventory,
+    )
+    vi.doMock("./seo/resolve", () => ({ resolveProductionSeoPages }))
+    const { buildSitemap, default: sitemap } = await import("./sitemap")
 
-    expect(Reflect.get(sitemapModule, "buildSitemap")).toBeTypeOf("function")
-    expect(sitemapModule.default).toBeTypeOf("function")
+    expect(buildSitemap("2026-08-31")).toEqual([])
+    expect(buildSitemap("2026-09-01").map(({ url }) => url)).toEqual(
+      scheduledInventory.map(({ canonical }) => canonical),
+    )
+    expect(resolveProductionSeoPages).toHaveBeenLastCalledWith("2026-09-01")
+    expect(buildSitemap("2026-09-02").map(({ url }) => url)).toEqual(
+      scheduledInventory.map(({ canonical }) => canonical),
+    )
+
+    expect(sitemap().map(({ url }) => url)).toEqual(
+      scheduledInventory.map(({ canonical }) => canonical),
+    )
+    expect(resolveProductionSeoPages).toHaveBeenLastCalledWith("2026-09-02")
   })
 
   it("maps the resolver inventory by route kind without rebuilding route sources", async () => {
@@ -127,6 +176,22 @@ describe("sitemap documentation entries", () => {
     expect(resolvedPaths).not.toContain("/blog/dawn-0-4-release")
     expect(entries).toHaveLength(2 + ALL_DOCS_PAGES.length + posts.length + tags.length)
     expect(entries).toHaveLength(83)
+  })
+
+  it("keeps production post and tag static params aligned with the frozen sitemap inventory", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${PRODUCTION_AS_OF}T12:00:00.000Z`))
+    const entries = await productionSitemap(PRODUCTION_AS_OF)
+    const sitemapPaths = entries.map((entry) => new URL(entry.url).pathname)
+    const [{ generateStaticParams: postParams }, { generateStaticParams: tagParams }] =
+      await Promise.all([import("./blog/[slug]/page"), import("./blog/tags/[tag]/page")])
+
+    expect(
+      sitemapPaths.filter((path) => path.startsWith("/blog/") && !path.startsWith("/blog/tags/")),
+    ).toEqual(postParams().map(({ slug }) => `/blog/${slug}`))
+    expect(sitemapPaths.filter((path) => path.startsWith("/blog/tags/"))).toEqual(
+      tagParams().map(({ tag }) => `/blog/tags/${tag}`),
+    )
   })
 
   it("uses valid, content-derived ISO last-modified dates", async () => {
