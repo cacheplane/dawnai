@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Children, createElement, isValidElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { AUTHORS, loadPostsFromDir, type Post } from "../components/blog/post-index"
 import { DocsBreadcrumb } from "../components/docs/DocsBreadcrumb"
 import { DocsPage } from "../components/docs/DocsPage"
@@ -40,6 +40,7 @@ const GETTING_STARTED_DESCRIPTION =
   "Build a typed Dawn research agent with file-system routes, generated types, local tools, offline tests, and production build targets."
 const BLOG_INDEX_DESCRIPTION =
   "Writing on the agent stack, type-safety, and the tools we're building."
+const PRODUCTION_AS_OF = "2026-08-26"
 const HOME_TITLE = "Dawn AI — TypeScript Meta-Framework for LangGraph.js"
 const HOME_DESCRIPTION =
   "Dawn AI is the TypeScript meta-framework for LangGraph.js, with file-system routes, route-local tools, generated types, and durable threads."
@@ -60,7 +61,7 @@ function authoredPosts(): readonly Post[] {
 
 function productionPosts(): readonly Post[] {
   return loadPostsFromDir(BLOG_CONTENT_DIRECTORY, {
-    currentDate: "2026-08-26",
+    currentDate: PRODUCTION_AS_OF,
     includeDrafts: false,
   })
 }
@@ -223,12 +224,105 @@ describe("homepage SEO", () => {
 })
 
 describe("production SEO inventory", () => {
+  it("applies an explicit UTC as-of date before normalizing posts, tags, and descriptions", () => {
+    const visiblePosts = productionPosts()
+    const sourcePost = visiblePosts[0]
+    expect(sourcePost).toBeDefined()
+    if (!sourcePost) return
+
+    const futurePost: Post = {
+      ...sourcePost,
+      slug: "scheduled-inventory-post",
+      title: "Scheduled inventory post",
+      description:
+        "A scheduled Dawn article that verifies date-bound production SEO inventory selection.",
+      date: "2026-08-27",
+      tags: ["agents"],
+      draft: false,
+      sourceFile: "2026-08-27-scheduled-inventory-post.mdx",
+    }
+    const draftPost: Post = {
+      ...futurePost,
+      slug: "draft-inventory-post",
+      title: "Draft inventory post",
+      description:
+        "A draft Dawn article that must remain outside production SEO inventory on every date.",
+      date: "2026-08-20",
+      draft: true,
+      sourceFile: "2026-08-20-draft-inventory-post.mdx",
+    }
+    const buildSeoPageInventory = Reflect.get(seoResolvers, "buildSeoPageInventory")
+    expect(buildSeoPageInventory).toBeTypeOf("function")
+    if (typeof buildSeoPageInventory !== "function") return
+
+    const pathsAsOf = (currentDate: string) =>
+      (
+        buildSeoPageInventory([...visiblePosts, futurePost, draftPost], currentDate) as readonly {
+          readonly path: string
+          readonly description: string
+        }[]
+      ).map(({ path, description }) => ({ path, description }))
+
+    const before = pathsAsOf("2026-08-26")
+    const publicationDate = pathsAsOf("2026-08-27")
+    const after = pathsAsOf("2026-08-28")
+
+    expect(before.map(({ path }) => path)).not.toContain("/blog/scheduled-inventory-post")
+    expect(before.map(({ path }) => path)).not.toContain("/blog/draft-inventory-post")
+    expect(before).toHaveLength(83)
+    for (const pages of [publicationDate, after]) {
+      expect(pages.map(({ path }) => path)).toContain("/blog/scheduled-inventory-post")
+      expect(pages.map(({ path }) => path)).not.toContain("/blog/draft-inventory-post")
+      expect(pages).toHaveLength(84)
+      expect(new Set(pages.map(({ description }) => description))).toHaveLength(84)
+    }
+  })
+
+  it("resolves an injected publication date from authored posts, not the environment route cache", async () => {
+    const sourcePost = productionPosts()[0]
+    expect(sourcePost).toBeDefined()
+    if (!sourcePost) return
+
+    const futurePost: Post = {
+      ...sourcePost,
+      slug: "scheduled-authored-post",
+      title: "Scheduled authored post",
+      description:
+        "A scheduled authored Dawn article used to verify production resolver date injection.",
+      date: "2026-08-27",
+      tags: ["agents"],
+      draft: false,
+      sourceFile: "2026-08-27-scheduled-authored-post.mdx",
+    }
+
+    vi.resetModules()
+    vi.doMock("../components/blog/post-index", async () => {
+      const actual = await vi.importActual<typeof import("../components/blog/post-index")>(
+        "../components/blog/post-index",
+      )
+      return {
+        ...actual,
+        getAllPosts: () => [sourcePost],
+        getAuthoredPosts: () => [sourcePost, futurePost],
+      }
+    })
+
+    try {
+      const { resolveProductionSeoPages } = await import("./resolve")
+      const paths = resolveProductionSeoPages("2026-08-27").map(({ path }) => path)
+      expect(paths).toContain("/blog/scheduled-authored-post")
+    } finally {
+      vi.doUnmock("../components/blog/post-index")
+      vi.resetModules()
+    }
+  })
+
   it("builds one normalized route-kind union for the current 83 indexable routes", () => {
     const buildSeoPageInventory = Reflect.get(seoResolvers, "buildSeoPageInventory")
     expect(buildSeoPageInventory).toBeTypeOf("function")
     if (typeof buildSeoPageInventory !== "function") return
 
-    const pages = buildSeoPageInventory(productionPosts()) as readonly {
+    const pages = buildSeoPageInventory(authoredPosts(), PRODUCTION_AS_OF) as readonly {
       readonly path: string
       readonly routeKind: string
     }[]
@@ -259,7 +353,7 @@ describe("production SEO inventory", () => {
     expect(buildSeoPageInventory).toBeTypeOf("function")
     if (typeof buildSeoPageInventory !== "function") return
 
-    const pages = buildSeoPageInventory(productionPosts()) as readonly {
+    const pages = buildSeoPageInventory(authoredPosts(), PRODUCTION_AS_OF) as readonly {
       readonly path: string
       readonly description: string
     }[]

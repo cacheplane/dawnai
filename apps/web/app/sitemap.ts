@@ -27,6 +27,12 @@ export function toSitemapEntry(page: SeoPage): MetadataRoute.Sitemap[number] {
   }
 }
 
+export function buildSitemap(
+  currentDate = new Date().toISOString().slice(0, 10),
+): MetadataRoute.Sitemap {
+  return resolveProductionSeoPages(currentDate).map(toSitemapEntry)
+}
+
 export default function sitemap(): MetadataRoute.Sitemap {
-  return resolveProductionSeoPages().map(toSitemapEntry)
+  return buildSitemap()
 }

@@ -1,5 +1,11 @@
 import type { Metadata } from "next"
-import { AUTHORS, getAllPosts, type Post } from "../components/blog/post-index"
+import {
+  AUTHORS,
+  collectPostTags,
+  getAuthoredPosts,
+  type Post,
+  selectVisiblePosts,
+} from "../components/blog/post-index"
 import type { DocsPageHref } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
 import { DOCS_SEO_PAGES, requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
@@ -87,36 +93,32 @@ export function resolveBlogSeoPage(post: Post): BlogPostingSeoPage {
   }
 }
 
-function visibleTags(posts: readonly Post[]): readonly string[] {
-  const counts = new Map<string, number>()
-  for (const post of posts) {
-    for (const tag of post.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
-  }
-  return [...counts].sort((left, right) => right[1] - left[1]).map(([tag]) => tag)
-}
-
-export function buildSeoPageInventory(posts: readonly Post[]): readonly SeoPage[] {
+export function buildSeoPageInventory(
+  posts: readonly Post[],
+  currentDate = new Date().toISOString().slice(0, 10),
+): readonly SeoPage[] {
   const home = resolveStaticSeoPage("/")
   if (!home) throw new Error("Homepage SEO page is not registered")
+  const visiblePosts = selectVisiblePosts(posts, currentDate)
 
   return [
     home,
     resolveBlogIndexSeoPage(),
     ...Object.values(DOCS_SEO_PAGES),
-    ...posts.map(resolveBlogSeoPage),
-    ...visibleTags(posts).map((tag) =>
+    ...visiblePosts.map(resolveBlogSeoPage),
+    ...collectPostTags(visiblePosts).map((tag) =>
       resolveBlogTagSeoPage(
         tag,
-        posts.filter((post) => post.tags.includes(tag)),
+        visiblePosts.filter((post) => post.tags.includes(tag)),
       ),
     ),
   ]
 }
 
-export function resolveProductionSeoPages(): readonly SeoPage[] {
-  const currentDate = new Date().toISOString().slice(0, 10)
-  const posts = getAllPosts().filter((post) => !post.draft && post.date <= currentDate)
-  return buildSeoPageInventory(posts)
+export function resolveProductionSeoPages(
+  currentDate = new Date().toISOString().slice(0, 10),
+): readonly SeoPage[] {
+  return buildSeoPageInventory(getAuthoredPosts(), currentDate)
 }
 
 export function toMetadata(page: SeoPage | undefined): Metadata {

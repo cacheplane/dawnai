@@ -7,10 +7,11 @@ import { ALL_DOCS_PAGES, DOCS_PAGES } from "./components/docs/nav"
 
 const appDirectory = dirname(fileURLToPath(import.meta.url))
 const blogContentDirectory = resolve(appDirectory, "../content/blog")
+const PRODUCTION_AS_OF = "2026-08-26"
 
-function visibleProductionPosts(): readonly Post[] {
+function visibleProductionPosts(currentDate: string): readonly Post[] {
   return loadPostsFromDir(blogContentDirectory, {
-    currentDate: "2026-08-26",
+    currentDate,
     includeDrafts: false,
   })
 }
@@ -23,11 +24,11 @@ function visibleProductionTags(posts: readonly Post[]): readonly string[] {
   return [...counts].sort((left, right) => right[1] - left[1]).map(([tag]) => tag)
 }
 
-async function productionSitemap() {
+async function productionSitemap(currentDate = PRODUCTION_AS_OF) {
   vi.resetModules()
   vi.stubEnv("NODE_ENV", "production")
-  const { default: sitemap } = await import("./sitemap")
-  return sitemap()
+  const { buildSitemap } = await import("./sitemap")
+  return buildSitemap(currentDate)
 }
 
 afterEach(() => {
@@ -38,6 +39,15 @@ afterEach(() => {
 })
 
 describe("sitemap documentation entries", () => {
+  it("exposes a deterministic as-of sitemap builder while retaining the default route", async () => {
+    vi.resetModules()
+    vi.stubEnv("NODE_ENV", "production")
+    const sitemapModule = await import("./sitemap")
+
+    expect(Reflect.get(sitemapModule, "buildSitemap")).toBeTypeOf("function")
+    expect(sitemapModule.default).toBeTypeOf("function")
+  })
+
   it("maps the resolver inventory by route kind without rebuilding route sources", async () => {
     const lastModified = "2026-08-26T12:00:00.000Z"
     const inventory = [
@@ -97,7 +107,7 @@ describe("sitemap documentation entries", () => {
 
   it("contains the complete resolved production static, docs, and tag inventory", async () => {
     const entries = await productionSitemap()
-    const posts = visibleProductionPosts()
+    const posts = visibleProductionPosts(PRODUCTION_AS_OF)
     const tags = visibleProductionTags(posts)
     const resolvedPaths = entries.map((entry) => new URL(entry.url).pathname)
     const expectedPaths = [
