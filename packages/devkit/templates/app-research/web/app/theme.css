@@ -63,14 +63,13 @@
 /*
  * Rung 1: the packaged activity cards inherit the workbench palette.
  *
- * `:root:root`, not `:root`. @dawn-ai/ag-ui's own dark palette is applied by
- * `:root:not([data-dawn-theme="light"])` and `:root[data-dawn-theme="dark"]`,
- * both specificity (0,2,0), so a plain `:root` override loses in dark mode and
- * the cards keep the package's colors. Doubling `:root` ties that specificity;
- * this sheet is imported last, so the tie resolves here. (Reported as a gap in
- * the package — the ladder's rung 1 should not require this.)
+ * A plain `:root` is enough. @dawn-ai/ag-ui wraps all three of its own token
+ * blocks in `:where()`, so they sit at specificity (0,0,0) and this block wins
+ * in both themes and regardless of stylesheet order. (It used to read
+ * `:root:root`: the package's two dark blocks were (0,2,0), so a plain `:root`
+ * lost in dark mode and the cards kept the package's colors.)
  */
-:root:root {
+:root {
   --dawn-activity-surface: var(--wb-surface);
   --dawn-activity-border: var(--wb-border);
   --dawn-activity-text: var(--wb-text);
