@@ -7,6 +7,9 @@ import { DocsTOC } from "../../components/docs/DocsTOC"
 import { RelatedCards } from "../../components/docs/RelatedCards"
 import { FinalCta } from "../../components/landing/FinalCta"
 import { ReadingLayout } from "../../components/ReadingLayout"
+import { JsonLd } from "../../seo/JsonLd"
+import { resolveBlogSeoPage, toMetadata } from "../../seo/resolve"
+import { blogPostingJsonLd, breadcrumbJsonLd } from "../../seo/structured-data"
 
 interface PageProps {
   readonly params: Promise<{ slug: string }>
@@ -20,28 +23,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { slug } = await params
   const post = getPost(slug)
   if (!post) return {}
-  const url = `https://dawnai.org/blog/${post.slug}`
-  return {
-    title: post.title,
-    description: post.description,
-    alternates: { canonical: url },
-    openGraph: {
-      type: "article",
-      url,
-      title: post.title,
-      description: post.description,
-      publishedTime: post.date,
-      authors: [post.author],
-      siteName: "Dawn AI",
-      ...(post.ogImage && { images: [post.ogImage] }),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: post.title,
-      description: post.description,
-      ...(post.ogImage && { images: [post.ogImage] }),
-    },
-  }
+  return toMetadata(resolveBlogSeoPage(post))
 }
 
 export default async function BlogPostPage({ params }: PageProps) {
@@ -55,6 +37,7 @@ export default async function BlogPostPage({ params }: PageProps) {
     default: React.ComponentType
   }
   const MdxContent = mod.default
+  const seoPage = resolveBlogSeoPage(post)
 
   const related = getRelatedPosts(post.slug, 2).map((p) => ({
     href: `/blog/${p.slug}`,
@@ -64,6 +47,8 @@ export default async function BlogPostPage({ params }: PageProps) {
 
   return (
     <>
+      <JsonLd data={blogPostingJsonLd(seoPage)} />
+      <JsonLd data={breadcrumbJsonLd(seoPage)} />
       <ReadingLayout left={<PostMeta post={post} />} right={<DocsTOC />}>
         <article className="prose-dawn">
           <PostHeader post={post} />

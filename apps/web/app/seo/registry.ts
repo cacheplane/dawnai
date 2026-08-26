@@ -2,7 +2,7 @@ import "server-only"
 
 import { breadcrumbsFor } from "../components/docs/nav"
 import { STATIC_LASTMOD } from "./lastmod.generated"
-import type { SeoPage } from "./types"
+import type { TechArticleSeoPage } from "./types"
 
 const GETTING_STARTED_PATH = "/docs/getting-started"
 
@@ -24,7 +24,7 @@ export function requireValidLastModified(
   return value
 }
 
-const gettingStarted: SeoPage = {
+const gettingStarted: TechArticleSeoPage = {
   path: GETTING_STARTED_PATH,
   canonical: `https://dawnai.org${GETTING_STARTED_PATH}`,
   title: "Getting Started",
@@ -35,6 +35,6 @@ const gettingStarted: SeoPage = {
   lastModified: requireValidLastModified(STATIC_LASTMOD, GETTING_STARTED_PATH),
 }
 
-export const STATIC_SEO_PAGES: Readonly<Record<string, SeoPage>> = {
+export const STATIC_SEO_PAGES: Readonly<Record<string, TechArticleSeoPage>> = {
   [GETTING_STARTED_PATH]: gettingStarted,
 }

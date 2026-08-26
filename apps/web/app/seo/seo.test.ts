@@ -4,17 +4,302 @@ import { fileURLToPath } from "node:url"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { AUTHORS, loadPostsFromDir, type Post } from "../components/blog/post-index"
 import { DocsPage } from "../components/docs/DocsPage"
 import { breadcrumbsFor } from "../components/docs/nav"
 import { JsonLd } from "./JsonLd"
 import { requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
-import { resolveStaticSeoPage, toMetadata } from "./resolve"
-import { breadcrumbJsonLd, techArticleJsonLd } from "./structured-data"
+import * as seoResolvers from "./resolve"
+import {
+  resolveBlogIndexSeoPage,
+  resolveBlogSeoPage,
+  resolveBlogTagSeoPage,
+  resolveStaticSeoPage,
+  toMetadata,
+} from "./resolve"
+import * as structuredData from "./structured-data"
+import {
+  blogPostingJsonLd,
+  breadcrumbJsonLd,
+  collectionPageJsonLd,
+  siteJsonLd,
+  techArticleJsonLd,
+} from "./structured-data"
 
 const seoDirectory = dirname(fileURLToPath(import.meta.url))
 const GETTING_STARTED_PATH = "/docs/getting-started"
 const GETTING_STARTED_DESCRIPTION =
   "Build a typed Dawn research agent with file-system routes, generated types, local tools, offline tests, and production build targets."
+const BLOG_INDEX_DESCRIPTION =
+  "Writing on the agent stack, type-safety, and the tools we're building."
+const BLOG_CONTENT_DIRECTORY = resolve(seoDirectory, "../../content/blog")
+
+function authoredPosts(): readonly Post[] {
+  return loadPostsFromDir(BLOG_CONTENT_DIRECTORY, {
+    currentDate: "9999-12-31",
+    includeDrafts: true,
+  })
+}
+
+function productionPosts(): readonly Post[] {
+  return loadPostsFromDir(BLOG_CONTENT_DIRECTORY, {
+    currentDate: "2026-08-26",
+    includeDrafts: false,
+  })
+}
+
+function productionTags(posts: readonly Post[]): readonly string[] {
+  return [...new Set(posts.flatMap((post) => post.tags))].sort()
+}
+
+function expectValidDescription(description: string) {
+  expect(description.length).toBeGreaterThanOrEqual(50)
+  expect(description.length).toBeLessThanOrEqual(155)
+}
+
+describe("blog SEO API", () => {
+  it("exposes shared blog resolvers and structured-data builders", () => {
+    expect(seoResolvers).toEqual(
+      expect.objectContaining({
+        resolveBlogIndexSeoPage: expect.any(Function),
+        resolveBlogTagSeoPage: expect.any(Function),
+        resolveBlogSeoPage: expect.any(Function),
+      }),
+    )
+    expect(structuredData).toEqual(
+      expect.objectContaining({
+        siteJsonLd: expect.any(Function),
+        collectionPageJsonLd: expect.any(Function),
+        blogPostingJsonLd: expect.any(Function),
+      }),
+    )
+  })
+
+  it("normalizes the production blog index, tag routes, and post routes", () => {
+    const posts = productionPosts()
+    const tags = productionTags(posts)
+    const tagPages = tags.map((tag) =>
+      resolveBlogTagSeoPage(
+        tag,
+        posts.filter((post) => post.tags.includes(tag)),
+      ),
+    )
+    const postPages = posts.map(resolveBlogSeoPage)
+
+    expect(posts).toHaveLength(3)
+    expect(tags).toEqual(["agents", "philosophy", "typescript"])
+    expect([
+      resolveBlogIndexSeoPage().path,
+      ...tagPages.map((page) => page.path),
+      ...postPages.map((page) => page.path),
+    ]).toEqual([
+      "/blog",
+      "/blog/tags/agents",
+      "/blog/tags/philosophy",
+      "/blog/tags/typescript",
+      "/blog/eve-validates-the-shape",
+      "/blog/app-router-for-ai-agents",
+      "/blog/why-we-built-dawn",
+    ])
+  })
+
+  it("keeps every resolved blog description factual and between 50 and 155 characters", () => {
+    const visiblePosts = productionPosts()
+    const tags = productionTags(visiblePosts)
+    const index = resolveBlogIndexSeoPage()
+
+    expect(index.description).toBe(BLOG_INDEX_DESCRIPTION)
+    expectValidDescription(index.description)
+
+    const tagDescriptions = tags.map((tag) => {
+      const posts = visiblePosts.filter((post) => post.tags.includes(tag))
+      const description = resolveBlogTagSeoPage(tag, posts).description
+
+      expectValidDescription(description)
+      expect(description).toContain(tag)
+      expect(description).toContain(String(posts.length))
+      for (const post of posts) expect(description).toContain(post.title)
+      return description
+    })
+    expect(new Set(tagDescriptions).size).toBe(tagDescriptions.length)
+
+    for (const post of authoredPosts()) {
+      expect(resolveBlogSeoPage(post).description).toBe(post.description)
+      expectValidDescription(post.description)
+    }
+  })
+
+  it("preserves blog RSS discovery while adding the index canonical", () => {
+    const page = resolveBlogIndexSeoPage()
+
+    expect(toMetadata(page).alternates).toEqual({
+      canonical: page.canonical,
+      types: { "application/rss+xml": "/blog/rss.xml" },
+    })
+  })
+
+  it("uses one exact description across metadata, social metadata, and page JSON-LD", () => {
+    const posts = productionPosts()
+    const collectionPages = [
+      resolveBlogIndexSeoPage(),
+      ...productionTags(posts).map((tag) =>
+        resolveBlogTagSeoPage(
+          tag,
+          posts.filter((post) => post.tags.includes(tag)),
+        ),
+      ),
+    ]
+
+    for (const page of collectionPages) {
+      const metadata = toMetadata(page)
+      const entity = collectionPageJsonLd(page) as Record<string, unknown>
+
+      expect(metadata.description).toBe(page.description)
+      expect(metadata.openGraph?.description).toBe(page.description)
+      expect(metadata.twitter?.description).toBe(page.description)
+      expect(entity.description).toBe(page.description)
+      expect(metadata.openGraph).toMatchObject({
+        type: "website",
+        url: page.canonical,
+        siteName: "Dawn AI",
+        title: page.title,
+        images: expect.any(Array),
+      })
+      expect(metadata.twitter).toMatchObject({
+        card: "summary_large_image",
+        title: page.title,
+        images: expect.any(Array),
+      })
+    }
+
+    for (const post of posts) {
+      const page = resolveBlogSeoPage(post)
+      const metadata = toMetadata(page)
+      const entity = blogPostingJsonLd(page) as Record<string, unknown>
+      const author = AUTHORS[post.author]
+      if (!author) throw new Error(`Expected published author ${post.author}`)
+
+      expect(metadata.description).toBe(page.description)
+      expect(metadata.openGraph?.description).toBe(page.description)
+      expect(metadata.twitter?.description).toBe(page.description)
+      expect(entity.description).toBe(page.description)
+      expect(metadata.openGraph).toMatchObject({
+        type: "article",
+        url: page.canonical,
+        publishedTime: post.date,
+        authors: [author.name],
+        siteName: "Dawn AI",
+        title: page.title,
+      })
+      expect(metadata.twitter).toMatchObject({
+        card: "summary_large_image",
+        title: page.title,
+      })
+    }
+  })
+
+  it("leaves posts without an explicit image to their co-located social image route", () => {
+    const post = productionPosts()[0]
+    if (!post) throw new Error("Expected a production blog post")
+
+    const metadata = toMetadata(resolveBlogSeoPage(post))
+
+    expect(metadata.openGraph).not.toHaveProperty("images")
+    expect(metadata.twitter).not.toHaveProperty("images")
+  })
+
+  it("publishes only supported site identity fields and a real logo URL", () => {
+    expect(siteJsonLd()).toEqual({
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://dawnai.org/#organization",
+          name: "Dawn AI",
+          url: "https://dawnai.org/",
+          logo: {
+            "@type": "ImageObject",
+            "@id": "https://dawnai.org/#logo",
+            url: "https://dawnai.org/brand/dawn-logo-horizontal-black.svg",
+          },
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://dawnai.org/#website",
+          name: "Dawn AI",
+          url: "https://dawnai.org/",
+          publisher: { "@id": "https://dawnai.org/#organization" },
+        },
+      ],
+    })
+
+    const serialized = JSON.stringify(siteJsonLd())
+    expect(serialized).not.toContain('"description"')
+    expect(serialized).not.toContain('"sameAs"')
+    expect(serialized).not.toContain('"potentialAction"')
+  })
+
+  it("publishes each blog author as the display-name Person without biography claims", () => {
+    const forbiddenPersonFields = [
+      "description",
+      "jobTitle",
+      "worksFor",
+      "award",
+      "alumniOf",
+      "knowsAbout",
+      "hasCredential",
+    ]
+
+    for (const post of authoredPosts()) {
+      const entity = blogPostingJsonLd(resolveBlogSeoPage(post)) as {
+        author: Record<string, unknown>
+      }
+      const author = AUTHORS[post.author]
+      if (!author) throw new Error(`Expected published author ${post.author}`)
+
+      expect(entity.author).toEqual({
+        "@type": "Person",
+        "@id": author.url,
+        name: author.name,
+        url: author.url,
+        image: new URL(author.avatar, "https://dawnai.org").href,
+      })
+      expect(entity.author.name).not.toBe(post.author)
+      for (const field of forbiddenPersonFields) {
+        expect(entity.author).not.toHaveProperty(field)
+      }
+    }
+  })
+
+  it("uses absolute Home-to-Blog breadcrumbs for post and tag pages", () => {
+    const posts = productionPosts()
+    const post = posts[0]
+    if (!post) throw new Error("Expected a production blog post")
+    const tag = post.tags[0]
+    if (!tag) throw new Error("Expected a production blog tag")
+
+    const postPage = resolveBlogSeoPage(post)
+    const tagPage = resolveBlogTagSeoPage(
+      tag,
+      posts.filter((candidate) => candidate.tags.includes(tag)),
+    )
+
+    expect(
+      breadcrumbJsonLd(postPage).itemListElement.map(({ name, item }) => ({ name, item })),
+    ).toEqual([
+      { name: "Home", item: "https://dawnai.org/" },
+      { name: "Blog", item: "https://dawnai.org/blog" },
+      { name: post.title, item: postPage.canonical },
+    ])
+    expect(
+      breadcrumbJsonLd(tagPage).itemListElement.map(({ name, item }) => ({ name, item })),
+    ).toEqual([
+      { name: "Home", item: "https://dawnai.org/" },
+      { name: "Blog", item: "https://dawnai.org/blog" },
+      { name: `Posts tagged ${tag}`, item: tagPage.canonical },
+    ])
+  })
+})
 
 describe("static SEO pages", () => {
   it("resolves one normalized Getting Started description across metadata and TechArticle data", () => {

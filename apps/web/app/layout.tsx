@@ -3,7 +3,9 @@ import { Fraunces, Inter, JetBrains_Mono } from "next/font/google"
 import type { ReactNode } from "react"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
+import { JsonLd } from "./seo/JsonLd"
 import { SOCIAL_CARD, SOCIAL_SITE_NAME } from "./seo/social"
+import { siteJsonLd } from "./seo/structured-data"
 import "./globals.css"
 
 const inter = Inter({
@@ -72,6 +74,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable}`}>
       <body>
+        <JsonLd data={siteJsonLd()} />
         <div className="min-h-screen flex flex-col">
           <Header />
           <main className="flex-1">{children}</main>
