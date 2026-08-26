@@ -6,9 +6,10 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app next.config.ts tsconfig.json mdx-components.tsx",
+    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app scripts next.config.ts tsconfig.json mdx-components.tsx",
     "seo:lastmod": "node scripts/generate-seo-lastmod.mjs",
-    "test": "vitest --run --config vitest.config.ts",
+    "seo:lastmod:check": "node scripts/generate-seo-lastmod.mjs --check",
+    "test": "pnpm seo:lastmod:check && vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

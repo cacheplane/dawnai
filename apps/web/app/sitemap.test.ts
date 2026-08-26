@@ -30,18 +30,19 @@ describe("sitemap documentation entries", () => {
 
   it("contains the complete resolved production static, docs, and tag inventory", async () => {
     const { entries, posts, tags } = await productionSitemap()
-    const individualPostPaths = new Set(posts.map((post) => `/blog/${post.slug}`))
-    const resolvedPaths = entries
-      .map((entry) => new URL(entry.url).pathname)
-      .filter((pathname) => !individualPostPaths.has(pathname))
+    const resolvedPaths = entries.map((entry) => new URL(entry.url).pathname)
 
     expect(resolvedPaths).toEqual([
       "/",
       "/blog",
       ...ALL_DOCS_PAGES.map((page) => page.href),
+      ...posts.map((post) => `/blog/${post.slug}`),
       ...tags.map(({ tag }) => `/blog/tags/${tag}`),
     ])
     expect(resolvedPaths).not.toContain("/docs")
+    expect(resolvedPaths).not.toContain("/blog/dawn-0-8-framework-around-the-agent")
+    expect(resolvedPaths).not.toContain("/blog/dawn-at-the-edge")
+    expect(resolvedPaths).not.toContain("/blog/dawn-0-4-release")
     expect(entries).toHaveLength(2 + ALL_DOCS_PAGES.length + posts.length + tags.length)
     expect(entries).toHaveLength(83)
   })
@@ -62,5 +63,16 @@ describe("sitemap documentation entries", () => {
       expect(Number.isNaN(Date.parse(value))).toBe(false)
     }
     expect(new Set(lastModified).size).toBeGreaterThan(10)
+  })
+
+  it("fails closed when a static route lacks a valid manifest date", async () => {
+    vi.resetModules()
+    vi.stubEnv("NODE_ENV", "production")
+    vi.doMock("./seo/lastmod.generated", () => ({
+      STATIC_LASTMOD: { "/": "2026-08-10T18:36:49.000Z" },
+    }))
+    const { default: sitemap } = await import("./sitemap")
+
+    expect(sitemap).toThrow("Missing or invalid sitemap lastModified for /blog")
   })
 })
