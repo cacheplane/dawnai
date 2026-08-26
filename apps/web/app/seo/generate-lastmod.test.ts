@@ -12,6 +12,8 @@ const generator = join(appRoot, "scripts", "generate-seo-lastmod.mjs")
 const generatedManifest = join(appRoot, "app", "seo", "lastmod.generated.ts")
 const ciWorkflow = resolve(appRoot, "..", "..", ".github", "workflows", "ci.yml")
 const temporaryDirectories: string[] = []
+// Each invocation reads Git history for every static/docs/tag content source.
+const GIT_HISTORY_TEST_TIMEOUT_MS = 15_000
 
 function runGenerator(...args: string[]) {
   return spawnSync(process.execPath, [generator, ...args], {
@@ -29,7 +31,7 @@ describe("generate-seo-lastmod", () => {
     const result = runGenerator("--check")
 
     expect(result.status).toBe(0)
-  }, 15_000) // Git history traversal can exceed Vitest's default timeout under parallel suite load.
+  }, GIT_HISTORY_TEST_TIMEOUT_MS)
 
   it("uses a full-history checkout for the canonical source-test job", () => {
     const workflow = readFileSync(ciWorkflow, "utf8")
@@ -56,25 +58,33 @@ describe("generate-seo-lastmod", () => {
     expect(generatorModule.isDirectExecution(symlink, generator)).toBe(true)
   })
 
-  it("fails check mode when a target manifest is stale without changing the checked-in manifest", () => {
-    const originalManifest = readFileSync(generatedManifest, "utf8")
-    const directory = mkdtempSync(join(tmpdir(), "dawn-lastmod-"))
-    temporaryDirectories.push(directory)
-    const staleManifest = join(directory, "lastmod.generated.ts")
-    writeFileSync(staleManifest, "stale\n")
+  it(
+    "fails check mode when a target manifest is stale without changing the checked-in manifest",
+    () => {
+      const originalManifest = readFileSync(generatedManifest, "utf8")
+      const directory = mkdtempSync(join(tmpdir(), "dawn-lastmod-"))
+      temporaryDirectories.push(directory)
+      const staleManifest = join(directory, "lastmod.generated.ts")
+      writeFileSync(staleManifest, "stale\n")
 
-    const result = runGenerator("--as-of", "2026-08-26", "--check", "--output", staleManifest)
+      const result = runGenerator("--as-of", "2026-08-26", "--check", "--output", staleManifest)
 
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain("SEO last-modified manifest is stale")
-    expect(result.stderr).toContain("pnpm --dir apps/web seo:lastmod --as-of 2026-08-26")
-    expect(readFileSync(generatedManifest, "utf8")).toBe(originalManifest)
-  })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain("SEO last-modified manifest is stale")
+      expect(result.stderr).toContain("pnpm --dir apps/web seo:lastmod --as-of 2026-08-26")
+      expect(readFileSync(generatedManifest, "utf8")).toBe(originalManifest)
+    },
+    GIT_HISTORY_TEST_TIMEOUT_MS,
+  )
 
-  it("uses the explicit as-of date when checking the checked-in manifest", () => {
-    const beforeJune = runGenerator("--as-of", "2026-05-18", "--check")
+  it(
+    "uses the explicit as-of date when checking the checked-in manifest",
+    () => {
+      const beforeJune = runGenerator("--as-of", "2026-05-18", "--check")
 
-    expect(beforeJune.status).toBe(1)
-    expect(beforeJune.stderr).toContain("SEO last-modified manifest is stale")
-  })
+      expect(beforeJune.status).toBe(1)
+      expect(beforeJune.stderr).toContain("SEO last-modified manifest is stale")
+    },
+    GIT_HISTORY_TEST_TIMEOUT_MS,
+  )
 })
