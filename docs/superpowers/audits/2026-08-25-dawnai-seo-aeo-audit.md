@@ -122,21 +122,21 @@ absent rather than conflicting.
 
 `—` means the inspection response did not provide that canonical field.
 
-| URL | Coverage state | User-declared canonical | Google-selected canonical |
-| --- | --- | --- | --- |
-| https://dawnai.org/blog/why-we-built-dawn | Crawled - currently not indexed | https://dawnai.org/blog/why-we-built-dawn | https://dawnai.org/blog/why-we-built-dawn |
-| https://dawnai.org/docs/api | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/cli | Crawled - currently not indexed | — | https://dawnai.org/docs/cli |
-| https://dawnai.org/docs/deployment | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/deployment/edge | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/deployment/kubernetes | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/dev-server/agent-protocol | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/evals | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/middleware | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/recipes/auth-middleware | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/recipes/dispatch-from-route | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/recipes/stream-output | URL is unknown to Google | — | — |
-| https://dawnai.org/docs/testing | Crawled - currently not indexed | — | https://dawnai.org/docs/testing |
+| URL | Coverage state | Last crawl time | User-declared canonical | Google-selected canonical |
+| --- | --- | --- | --- | --- |
+| https://dawnai.org/blog/why-we-built-dawn | Crawled - currently not indexed | 2026-05-12T18:30:39Z | https://dawnai.org/blog/why-we-built-dawn | https://dawnai.org/blog/why-we-built-dawn |
+| https://dawnai.org/docs/api | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/cli | Crawled - currently not indexed | 2026-05-28T02:57:17Z | — | https://dawnai.org/docs/cli |
+| https://dawnai.org/docs/deployment | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/deployment/edge | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/deployment/kubernetes | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/dev-server/agent-protocol | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/evals | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/middleware | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/recipes/auth-middleware | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/recipes/dispatch-from-route | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/recipes/stream-output | URL is unknown to Google | — | — | — |
+| https://dawnai.org/docs/testing | Crawled - currently not indexed | 2026-05-22T12:43:48Z | — | https://dawnai.org/docs/testing |
 
 ### Captured 66 URL rows
 
@@ -211,6 +211,81 @@ not a newer source or live sitemap inventory.
 | 200 | text/html; charset=utf-8 | https://dawnai.org/blog/tags/agents |
 | 200 | text/html; charset=utf-8 | https://dawnai.org/blog/tags/typescript |
 | 200 | text/html; charset=utf-8 | https://dawnai.org/blog/why-we-built-dawn |
+
+The following is the URL Inspection continuation of that same 66-row capture,
+in the same order. `Path` is relative to `https://dawnai.org`; `self` means
+the exact inspected URL. `—` means the API did not report the field. Together
+with the HTTP table above, every captured URL has its coverage, crawl, and
+canonical fields preserved.
+
+| Path | Coverage state | Last crawl time | User canonical | Google canonical |
+| --- | --- | --- | --- | --- |
+| /blog | Submitted and indexed | 2026-07-17T02:00:44Z | — | self |
+| / | Submitted and indexed | 2026-08-13T15:33:58Z | — | self |
+| /docs/agents | Submitted and indexed | 2026-05-17T10:01:16Z | — | self |
+| /docs/routes | Submitted and indexed | 2026-07-24T01:38:52Z | — | self |
+| /docs/mental-model | Submitted and indexed | 2026-05-26T06:50:42Z | — | self |
+| /docs/tools | Submitted and indexed | 2026-08-03T20:28:37Z | — | self |
+| /docs/migrating-from-langgraph | Submitted and indexed | 2026-06-22T08:36:40Z | — | self |
+| /docs/getting-started | Submitted and indexed | 2026-07-12T13:19:16Z | — | self |
+| /docs/workspace | Submitted and indexed | 2026-07-03T14:02:06Z | — | self |
+| /docs/memory | Submitted and indexed | 2026-07-03T08:42:12Z | — | self |
+| /docs/memory/long-term | Submitted and indexed | 2026-08-23T23:37:53Z | — | self |
+| /docs/state | Submitted and indexed | 2026-07-16T16:54:33Z | — | self |
+| /docs/memory/episodes | Submitted and indexed | 2026-08-23T23:41:21Z | — | self |
+| /docs/memory/retrieval | Submitted and indexed | 2026-08-24T03:06:20Z | — | self |
+| /docs/planning | Submitted and indexed | 2026-07-03T13:30:42Z | — | self |
+| /docs/memory/distillation | Submitted and indexed | 2026-08-23T22:39:23Z | — | self |
+| /docs/skills | Submitted and indexed | 2026-07-03T00:59:11Z | — | self |
+| /docs/dev-server | Submitted and indexed | 2026-07-23T19:24:32Z | — | self |
+| /docs/subagents | Submitted and indexed | 2026-07-03T01:30:15Z | — | self |
+| /docs/dev-server/agent-protocol | URL is unknown to Google | — | — | — |
+| /docs/context-management | Submitted and indexed | 2026-07-03T08:21:12Z | — | self |
+| /docs/embedding | Submitted and indexed | 2026-08-24T16:03:09Z | — | self |
+| /docs/middleware | URL is unknown to Google | — | — | — |
+| /docs/reasoning-effort | Submitted and indexed | 2026-07-03T04:42:01Z | — | self |
+| /docs/ag-ui | Submitted and indexed | 2026-08-23T19:05:45Z | — | self |
+| /docs/blueprints | Submitted and indexed | 2026-07-03T00:15:44Z | — | self |
+| /docs/testing-agents/fixtures | Submitted and indexed | 2026-08-24T22:15:10Z | — | self |
+| /docs/persistence | Submitted and indexed | 2026-08-23T18:33:03Z | — | self |
+| /docs/security-architecture | Submitted and indexed | 2026-08-23T12:20:13Z | — | self |
+| /docs/evals | URL is unknown to Google | — | — | — |
+| /docs/production-topology | Submitted and indexed | 2026-08-23T21:39:14Z | — | self |
+| /docs/testing | Crawled - currently not indexed | 2026-05-22T12:43:48Z | — | self |
+| /docs/testing-agents | Submitted and indexed | 2026-07-03T01:02:33Z | — | self |
+| /docs/access-control | Submitted and indexed | 2026-08-23T15:11:45Z | — | self |
+| /docs/permissions | Submitted and indexed | 2026-07-03T01:15:56Z | — | self |
+| /docs/retry | Submitted and indexed | 2026-06-12T08:54:09Z | — | self |
+| /docs/observability | Submitted and indexed | 2026-07-03T01:08:38Z | — | self |
+| /docs/deployment | URL is unknown to Google | — | — | — |
+| /docs/memory/browse | Submitted and indexed | 2026-08-24T00:07:39Z | — | self |
+| /docs/inspector | Submitted and indexed | 2026-08-24T12:43:12Z | — | self |
+| /docs/upgrading | Submitted and indexed | 2026-08-24T00:15:27Z | — | self |
+| /docs/deployment/node | Submitted and indexed | 2026-08-23T19:15:44Z | — | self |
+| /docs/deployment/kubernetes | URL is unknown to Google | — | — | — |
+| /docs/deployment/langsmith | Submitted and indexed | 2026-08-23T13:08:02Z | — | self |
+| /docs/sandbox | Submitted and indexed | 2026-08-23T15:57:19Z | — | self |
+| /docs/recipes/add-a-tool | Submitted and indexed | 2026-06-12T12:51:17Z | — | self |
+| /docs/recipes | Submitted and indexed | 2026-07-19T16:44:04Z | — | self |
+| /docs/deployment/edge | URL is unknown to Google | — | — | — |
+| /docs/sandbox/kubernetes | Submitted and indexed | 2026-08-24T00:15:10Z | — | self |
+| /docs/recipes/typed-state | Submitted and indexed | 2026-05-27T01:14:41Z | — | self |
+| /docs/recipes/auth-middleware | URL is unknown to Google | — | — | — |
+| /docs/recipes/stream-output | URL is unknown to Google | — | — | — |
+| /docs/recipes/retry-flaky-tools | Submitted and indexed | 2026-05-27T19:23:15Z | — | self |
+| /docs/recipes/dispatch-from-route | URL is unknown to Google | — | — | — |
+| /docs/recipes/research-web-ui | Submitted and indexed | 2026-08-22T21:56:20Z | — | self |
+| /docs/configuration | Submitted and indexed | 2026-08-23T23:19:38Z | — | self |
+| /docs/cli | Crawled - currently not indexed | 2026-05-28T02:57:17Z | — | self |
+| /docs/errors | Submitted and indexed | 2026-08-23T13:02:51Z | — | self |
+| /blog/eve-validates-the-shape | Submitted and indexed | 2026-08-24T08:34:58Z | self | self |
+| /docs/faq | Submitted and indexed | 2026-05-25T19:13:34Z | — | self |
+| /docs/api | URL is unknown to Google | — | — | — |
+| /blog/app-router-for-ai-agents | Submitted and indexed | 2026-05-25T11:23:54Z | self | self |
+| /blog/tags/philosophy | Submitted and indexed | 2026-05-25T13:28:53Z | self | self |
+| /blog/tags/agents | Submitted and indexed | 2026-05-25T13:03:53Z | self | self |
+| /blog/tags/typescript | Submitted and indexed | 2026-05-25T12:38:54Z | self | self |
+| /blog/why-we-built-dawn | Crawled - currently not indexed | 2026-05-12T18:30:39Z | self | self |
 
 ## Findings classification
 
@@ -295,6 +370,33 @@ urls=83
 
 $ curl -sS https://dawnai.org/sitemap.xml | awk 'BEGIN { RS="<url>" } NR > 1 && match($0, /<loc>[^<]+/) { print substr($0,RSTART+5,RLENGTH-5) }' | xargs -n 1 -P 8 -I {} sh -c 'curl -sS -o /dev/null -w "%{http_code}\t%{content_type}\n" "{}"' | awk 'BEGIN { n=0; bad=0 } { n++; if ($1 != 200 || $2 !~ /^text\/html/) bad++ } END { print "urls=" n "; unexpected=" bad }'
 urls=83; unexpected=0
+```
+
+### Current verification of OG, structured data, and descriptions
+
+These safe, direct `curl` checks were also rerun on 2026-08-26 against the
+real production URLs. Unlike the sitemap inventory, these current results
+reproduced the 2026-08-25 captured findings: the representative blog OG route
+still returned 500, no JSON-LD markers were found across the captured 66 URL
+list, 58 routes matched the homepage description, and the same blog post had
+a 201-character description. This is confirmation of the current response,
+not a claim that a current request can recreate an earlier crawl or Search
+Console state.
+
+```console
+$ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://dawnai.org/opengraph-image
+200 image/png
+$ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://dawnai.org/blog/why-we-built-dawn/opengraph-image
+500 text/html; charset=utf-8
+
+$ json_ld=0; while IFS=$'\t' read -r _ _ url; do count=$(curl -sS "$url" | rg -o 'application/ld\+json' | wc -l | tr -d ' '); json_ld=$((json_ld + count)); done < /Users/blove/repos/dawn/keys/live-url-status.tsv; printf 'routes=66; json-ld-script-markers=%s\n' "$json_ld"
+routes=66; json-ld-script-markers=0
+
+$ : > /tmp/dawn-descriptions-2026-08-26.tsv; while IFS=$'\t' read -r _ _ url; do meta=$(curl -sS "$url" | rg -o '<meta[^>]+name="description"[^>]*>' | head -n 1); desc=$(printf '%s' "$meta" | sed -n 's/.*content="\([^"]*\)".*/\1/p'); printf '%s\t%s\t%s\n' "$url" "${#desc}" "$desc" >> /tmp/dawn-descriptions-2026-08-26.tsv; done < /Users/blove/repos/dawn/keys/live-url-status.tsv; root_desc=$(awk -F '\t' '$1 == "https://dawnai.org/" { print $3 }' /tmp/dawn-descriptions-2026-08-26.tsv); awk -F '\t' -v root="$root_desc" '$3 == root {same++} length($3)>200 {long++; longurl=$1; longlen=length($3)} END {print "routes=" NR "; matching-homepage-description=" same "; descriptions-over-200-chars=" (long+0); if (long) print "overlength=" longurl "\t" longlen}' /tmp/dawn-descriptions-2026-08-26.tsv; awk -F '\t' '$1 == "https://dawnai.org/" || $1 == "https://dawnai.org/docs/agents" {print $1 "\tlength=" $2 "\t" $3}' /tmp/dawn-descriptions-2026-08-26.tsv
+routes=66; matching-homepage-description=58; descriptions-over-200-chars=1
+overlength=https://dawnai.org/blog/eve-validates-the-shape	201
+https://dawnai.org/	length=151	Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.
+https://dawnai.org/docs/agents	length=151	Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.
 ```
 
 ## Repository verification baseline
