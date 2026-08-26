@@ -25,10 +25,17 @@ function routeForDoc(source) {
 
 function readPost(source) {
   const { data } = matter(readFileSync(source, "utf8"))
+  const rawTags = Array.isArray(data.tags) ? data.tags.map((tag) => String(tag).toLowerCase()) : []
+  const tags =
+    data.type === "release" && !rawTags.includes("releases") ? [...rawTags, "releases"] : rawTags
   return {
     source,
     draft: data.draft === true,
-    tags: Array.isArray(data.tags) ? data.tags.map((tag) => String(tag).toLowerCase()) : [],
+    date:
+      data.date instanceof Date
+        ? data.date.toISOString().slice(0, 10)
+        : String(data.date).slice(0, 10),
+    tags,
   }
 }
 
@@ -55,7 +62,8 @@ function lastCommitDate(sources, route) {
 
 const docs = filesUnder(join(contentRoot, "docs"), ".mdx")
 const posts = filesUnder(join(contentRoot, "blog"), ".mdx").map(readPost)
-const publishedPosts = posts.filter((post) => !post.draft)
+const currentDate = new Date().toISOString().slice(0, 10)
+const publishedPosts = posts.filter((post) => !post.draft && post.date <= currentDate)
 const landingComponents = filesUnder(join(appRoot, "app", "components", "landing"), ".tsx")
 
 const sourcesByRoute = new Map([
