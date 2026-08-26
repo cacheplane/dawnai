@@ -93,7 +93,7 @@ W4/W5 use **dedicated prompts and fixtures**, not `SAFE_PROMPT`/`GATED_PROMPT`, 
 
 **C7 — against the background: "`script === "start"` injects `HOST`/`PORT` — a Next process would interpret those differently."** Sharper than that: Next **ignores** them. `PORT=45322 HOST=127.0.0.1 next start -p 3010` binds `*:3010`, and `HOST`/`HOSTNAME` are ignored entirely (wildcard bind). So a hypothetical `script: "start:web"` would boot the web client on hard-coded 3010 — colliding with a developer's own workbench — while the harness polled the allocated port to death. Not a problem in this slice (D1 chooses `dev:web`), but it is why `start:web` must not be added without also fixing the port branch. Recorded in §6.
 
-No other contradictions. All three investigations agree on: nesting over multi-child, `-- --port N` last-flag-wins for Next, module-scope `DAWN_SERVER_URL` read at runtime, `GENERATED_APP_UNSET_ENV` ordering, telemetry env vars, and process-group kill reaping the whole `next dev` tree (5-process group, 0 survivors, 1183ms).
+No other contradictions. All three investigations agree on: nesting over multi-child, `-- --port N` last-flag-wins for Next, module-scope `DAWN_SERVER_URL` read at runtime, `GENERATED_APP_UNSET_ENV` ordering, telemetry env vars, and process-group kill reaping the whole `next dev` tree (5-process group, 0 survivors). *Amended after implementation:* the 1183ms once quoted for that reap does not reproduce — five runs through the real `terminateSubprocess` at load average 21.65 gave 56/57/60/134/145ms, still with zero survivors.
 
 ---
 
@@ -326,8 +326,20 @@ function assertRecordedServerExit(
       (line[opening.length] === " " || line[opening.length] === ")"),
   )
   expect(commandLineIndex).toBeGreaterThanOrEqual(0)
-  const commandBlock = lines.slice(commandLineIndex).join("
-")
+  // Bound the block at the NEXT recorded command too. Nesting appends the inner
+  // (web) child FIRST, so a slice that ran to the end of the file would read the
+  // SERVER block's exit line and pronounce the web child recorded no matter what
+  // the web block actually says. (Amended after implementation: this plan shipped
+  // the unbounded `lines.slice(commandLineIndex)` here, which passes on the very
+  // `webFirst` fixture Step 2 prescribes. The anchor alone is not sufficient.)
+  const nextCommandOffset = lines
+    .slice(commandLineIndex + 1)
+    .findIndex((line) => /^\$ \(cd .+ && .+\)$/.test(line))
+  const commandBlock = (
+    nextCommandOffset < 0
+      ? lines.slice(commandLineIndex)
+      : lines.slice(commandLineIndex, commandLineIndex + 1 + nextCommandOffset)
+  ).join("\n")
   expect(commandBlock).not.toContain("[exit pending")
   expect(commandBlock).not.toContain("[exit unavailable")
   expect(commandBlock).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
@@ -642,7 +654,7 @@ export PATH=~/.nvm/versions/node/v24.19.0/bin:$PATH && pnpm ci:validate
 
 **T1 — A stray Dawn server on port 3002 makes a completely unwired proxy look correct.** If `DAWN_SERVER_URL` never reaches the web child, the handlers fall back to `http://127.0.0.1:3002`. On a clean CI box nothing listens there, so readiness 502s and fails loudly. **On a developer's machine running their own workbench, readiness returns 200 from the wrong server, and W1 and W3 also pass.** W2 — `/threads/<safeThreadId>/state` → 200 — is the only assertion that distinguishes "reached a Dawn server" from "reached THIS one". Do not weaken it, do not make it conditional, and do not replace the 200 with a "not 502" check.
 
-**T2 — `+2` on the W4 aimock delta is the only assertion that proves the run reached a model at all.** If you soften it to `toBeGreaterThanOrEqual` because the first run disagreed, W4 degrades into "CopilotKit returned some SSE" and the whole hop claim goes dark. Correct the constant instead.
+**T2 — `+2` on the W4 aimock delta is the assertion that pins the run to EXACTLY two model calls.** It is not what proves a model was reached — `assertWebHopJourney`'s `reconstructAssistantText(events) === WEB_REPLY` does that, and `WEB_REPLY` appears nowhere in the repo but the aimock fixture. What `+2` catches is a hop that invoked the run twice: that lands `+4` with the same reply text and passes every other W4 assertion. If you soften it to `toBeGreaterThanOrEqual` because the first run disagreed, that whole class goes dark. Correct the constant instead.
 
 **T3 — `assertRecordedServerExit`'s bare prefix is green by accident.** `$ (cd <appRoot> && npm run dev` is a prefix of the `dev:web` line too. It lands on the right block today only because nesting appends the inner child first. Task 3 anchors it; a reviewer will read the anchor as unnecessary churn, so the comment and the commit message must say *why*. Without Task 3 Step 2, the anchor itself is untested until the full lane runs.
 
@@ -660,7 +672,7 @@ export PATH=~/.nvm/versions/node/v24.19.0/bin:$PATH && pnpm ci:validate
 
 **T10 — Next 16 refuses a second `next dev` from the same project directory** ("Another next dev server is already running", PID-liveness based). Every lane run scaffolds a fresh temp dir, so this cannot bite today — but a leaked child breaks the *next* run in that directory, not the current one, so the failure appears unrelated to whatever caused it.
 
-**T11 — `next dev` releases its port ~1183ms after SIGTERM.** `terminateSubprocess`'s stop oracle is "port stopped accepting", and `graceMs` is 2s. Under CI contention it can escalate to SIGKILL — still correct. A `subprocess group … did not stop within 4000ms` error is the grace window, not a leak.
+**T11 — a `next dev` group can escalate to SIGKILL under contention, and that is still correct.** `terminateSubprocess`'s stop oracle is "port stopped accepting", with `graceMs` 2s and `forceMs` 2s. A `subprocess group … did not stop within 4000ms` error is the grace window, not a leak. *Amended after implementation:* the "~1183ms to release the port" figure this trap once led with does not reproduce — five runs through the real `terminateSubprocess` at load average 21.65 gave 56/57/60/134/145ms with zero survivors. Do not use it, or the fixture delays in `packaged-app.test.ts`, to size `PACKAGED_NPM_ACTION_SETTLE_MS`: that constant budgets a nested session's whole `finally` (its own settle, then a 2s + 2s terminate, then a transcript append), not a reap.
 
 **T12 — Two servers double the ways one failure masks another.** With nesting, an inner start failure surfaces the *inner's* message and the outer's stdout only reaches the transcript. The readiness message now names the script (`npm run dev:web`) and the probe; keep it that way or a web failure will read as a Dawn-server failure.
 

@@ -1501,9 +1501,12 @@ test("activates the default research scaffold through the complete npm lifecycle
 
             // W4 — Next route -> CopilotRuntime -> HttpAgent -> Dawn /agui ->
             // LangGraph -> aimock, and back. The +2 is one tool turn plus one
-            // text turn; if it ever disagrees, correct the constant rather than
-            // loosening it — it is the only assertion proving the run reached a
-            // model at all.
+            // text turn. `assertWebHopJourney` already proves the run reached a
+            // model — `WEB_REPLY` exists nowhere but the fixture — so what this
+            // adds is the EXACT count: a run the hop invoked twice would land
+            // +4 with the same reply text and pass every other assertion here.
+            // If it ever disagrees, correct the constant rather than loosening
+            // it to a lower bound.
             const webJournalStart = activeAimock.getRequests().length
             const webJourney = await postAgui({
               baseUrl: webUrl,
@@ -1574,10 +1577,14 @@ test("activates the default research scaffold through the complete npm lifecycle
     assertRecordedServerExit(transcriptAfterDev, { appRoot, script: "dev" })
     // W6, second half — the SECOND child dies too, and its own block says so.
     assertRecordedServerExit(transcriptAfterDev, { appRoot, script: "dev:web" })
-    // The web child inherits the same ambient-credential protection as the
-    // server child: `GENERATED_APP_UNSET_ENV` is stripped before `options.env`
-    // is applied. Nothing asserted this on the transcript before there was a
-    // second child to get it wrong.
+    // A leak canary, not a proof of the strip. It says only that nothing echoed
+    // the ambient key into a transcript this lane preserves and CI uploads —
+    // which holds largely because the web tier has no model path except through
+    // Dawn, so there is little to echo it. Breaking `GENERATED_APP_UNSET_ENV`
+    // for `dev:web` leaves this green; the assertion that actually fails is
+    // `observed.runtimeEnv` in `test/harness/packaged-app.test.ts:1114`. Kept
+    // anyway: it is nearly free and mirrors the same sweep over the AG-UI
+    // transcript below.
     expect(transcriptAfterDev).not.toContain("ambient-secret")
     expect(transcriptAfterDev).not.toContain(`$ (cd ${appRoot} && npm run start`)
 

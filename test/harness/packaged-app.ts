@@ -28,8 +28,23 @@ const PACKAGED_NPM_READY_TIMEOUT_MS = 60_000
 // action, with a live child process of its own. Measured: the outer settled 29ms
 // after abort while the inner child stayed alive another 500-1000ms. Tearing
 // down before the action settles loses LIFO order and lets two children append
-// to one transcript at once. A real `next dev` group takes ~1.2s to reap, so
-// this is ~4x that.
+// to one transcript at once.
+//
+// This does NOT budget for reaping a child — it budgets for a nested session's
+// ENTIRE `finally`: that session's own settle, then its `terminateSubprocess`,
+// then its transcript append. `terminateSubprocess` defaults to graceMs 2_000 +
+// forceMs 2_000 (`packages/testing/src/subprocess.ts:20-24`) and this file
+// passes no timings, so a child that needs SIGKILL puts a hard 4s floor under
+// the wait. 5_000 sits ~1s above that floor.
+//
+// So do not trim this toward what the tests appear to need. The nested fixture
+// releases its port after 600ms, and any value at or above ~1s keeps that test
+// green — while breaking the LIFO/transcript invariant the first time a real
+// inner child escalates to SIGKILL, which T11 concedes happens under CI
+// contention. (The "~1.2s for a `next dev` group" figure this constant once
+// cited does not reproduce: five runs through the real `terminateSubprocess` at
+// load average 21.65 gave 56/57/60/134/145ms with zero survivors. It was never
+// the right bound anyway.)
 const PACKAGED_NPM_ACTION_SETTLE_MS = 5_000
 export const GENERATED_APP_UNSET_ENV = [
   "DAWN_DEMO_DOCKER_SANDBOX",
@@ -691,9 +706,15 @@ export async function withPackagedNpmServer<T>(
   const readiness = options.readiness ?? dawnHealthzReadiness
   const args = ["run", options.script, ...(options.scriptArgs ?? [])]
   const npmLaunch = resolveNpmLaunch()
-  // Port plumbing is keyed on the TARGET, not on the script string. `next` binds
-  // the IPv6 wildcard by default, and `-H 127.0.0.1` is the flag it honours —
-  // `HOST`/`HOSTNAME`/`PORT` are all ignored when a `-p` flag is present.
+  // Which flags go on is decided by the BINARY each script fronts — `dev` fronts
+  // `dawn dev`, `dev:web` fronts `next dev` — even though the branch below can
+  // only read the script name to tell them apart. `next` binds the IPv6 wildcard
+  // by default (contradicting its own help text), and `-H 127.0.0.1` is the flag
+  // it honours. `HOST`/`HOSTNAME` are ignored UNCONDITIONALLY, not merely when a
+  // `-p` is present: Next's commander definition carries `.env('PORT')` on `-p`
+  // and nothing on `-H`, and a live bind with all three set and no `-p` still
+  // took the wildcard while honouring the port. So dropping `-p` does not make
+  // `HOST` start working — it binds the LAN.
   if (options.script === "dev") args.push("--", "--port", String(port))
   else if (options.script === "dev:web") args.push("--", "--port", String(port), "-H", "127.0.0.1")
 
@@ -792,10 +813,23 @@ export async function withPackagedNpmServer<T>(
     // is still tearing down its own child here; without this the two teardowns
     // interleave and both append to `transcriptPath` at once.
     if (pendingAction !== undefined) {
-      await Promise.race([
-        pendingAction.catch(() => undefined),
-        delay(PACKAGED_NPM_ACTION_SETTLE_MS),
-      ])
+      // The timer is cancelled rather than left to fire: on every SUCCESSFUL
+      // teardown this race is decided in a microtask, and a bare `delay()` would
+      // still leave a live 5s handle behind — measured, the call returned at
+      // 264ms and the handle was still in the process census at 5237ms. NOT
+      // `.unref()`: that trades the stray handle for a silent exit-0 in the
+      // middle of teardown whenever an action genuinely never settles.
+      let settleTimer: NodeJS.Timeout | undefined
+      try {
+        await Promise.race([
+          pendingAction.catch(() => undefined),
+          new Promise<void>((settle) => {
+            settleTimer = setTimeout(settle, PACKAGED_NPM_ACTION_SETTLE_MS)
+          }),
+        ])
+      } finally {
+        if (settleTimer !== undefined) clearTimeout(settleTimer)
+      }
     }
 
     if (child && closed && groupPid !== undefined) {

@@ -145,7 +145,9 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       "server.listen(port, host)",
       "const close = () => server.close(() => process.exit(0))",
       // A nested child that dies slower than its parent is the shape the action
-      // settle fix exists for: `next dev` released its port ~1183ms after SIGTERM.
+      // settle fix exists for, so this fixture is slow on purpose. The delay is
+      // NOT a measurement of anything real — see PACKAGED_NPM_ACTION_SETTLE_MS
+      // for what actually sets that budget.
       "const closeAfterDelay = () => { if (sigtermDelayMs > 0) setTimeout(close, sigtermDelayMs); else close() }",
       'process.once("SIGTERM", closeAfterDelay)',
       'process.once("SIGINT", closeAfterDelay)',
@@ -967,9 +969,12 @@ describe("withPackagedNpmServer", () => {
           return await withPackagedNpmServer(
             {
               appRoot: innerRoot,
-              // The inner child releases its port ~600ms after SIGTERM, the way a
-              // real `next dev` group does (~1183ms measured). Without the settle
-              // the outer tears down first and both children append at once.
+              // The inner child releases its port ~600ms after SIGTERM: slower
+              // than its parent on purpose, which is the only property this test
+              // needs. Without the settle the outer tears down first and both
+              // children append at once. Do not read 600ms as a bound on
+              // PACKAGED_NPM_ACTION_SETTLE_MS — that constant explains why any
+              // value large enough to pass here can still be far too small.
               env: { FIXTURE_SIGTERM_DELAY_MS: "600" },
               script: "start",
               signal: controller.signal,
