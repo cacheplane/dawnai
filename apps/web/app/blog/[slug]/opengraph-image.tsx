@@ -1,35 +1,24 @@
 import { ImageResponse } from "next/og"
-import { getAllPosts, getPost } from "../../components/blog/post-index"
+import { getAuthoredPosts, getPost, selectVisiblePosts } from "../../components/blog/post-index"
 
 export const contentType = "image/png"
 export const size = { width: 1200, height: 630 }
 
-export function generateImageParams() {
-  return getAllPosts().map((p) => ({ slug: p.slug }))
+export function generateImageParams(currentDate = new Date().toISOString().slice(0, 10)) {
+  return selectVisiblePosts(getAuthoredPosts(), currentDate).map((post) => ({ slug: post.slug }))
 }
 
-// Fraunces variable font (Open Font License, hosted by google/fonts on GitHub).
-// next/og needs the raw font bytes — fetched at build time per generated image.
-const FRAUNCES_URL =
-  "https://github.com/google/fonts/raw/main/ofl/fraunces/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf"
-
-async function loadFraunces(): Promise<ArrayBuffer | null> {
-  try {
-    const res = await fetch(FRAUNCES_URL)
-    if (!res.ok) return null
-    return await res.arrayBuffer()
-  } catch {
-    return null
-  }
+// Next's metadata-route loader recognizes this export and prerenders the known slugs.
+export function generateStaticParams() {
+  return generateImageParams()
 }
 
-export default async function Image({ params }: { params: { slug: string } }) {
-  const post = getPost(params.slug)
+export default async function Image({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params
+  const post = getPost(slug)
   const title = post?.title ?? "Dawn"
-  const eyebrow = post?.type === "release" ? `Release · v${post.version}` : "Essay"
-
-  const fraunces = await loadFraunces()
-  const titleFontFamily = fraunces ? "Fraunces" : "ui-serif, Georgia, serif"
+  const type = post?.type === "release" ? `Release · v${post.version}` : "Essay"
+  const eyebrow = post ? `${type} · ${post.date}` : type
 
   return new ImageResponse(
     <div
@@ -62,18 +51,13 @@ export default async function Image({ params }: { params: { slug: string } }) {
           lineHeight: 1.05,
           letterSpacing: "-0.02em",
           maxWidth: "1040px",
-          fontFamily: titleFontFamily,
+          fontFamily: "ui-serif, Georgia, serif",
         }}
       >
         {title}
       </div>
       <div style={{ fontSize: 24, color: "#6d5638" }}>dawnai.org/blog</div>
     </div>,
-    {
-      ...size,
-      ...(fraunces && {
-        fonts: [{ name: "Fraunces", data: fraunces, weight: 600, style: "normal" }],
-      }),
-    },
+    { ...size },
   )
 }
