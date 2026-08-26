@@ -1,10 +1,13 @@
 /**
  * Rungs 2 and 3 of the customization ladder.
  *
- * `classNames` entries are APPENDED to the package defaults, never substituted,
- * so a consumer can layer utility classes without fighting specificity. Slot
- * components replace a leaf's rendering while the card keeps ownership of
- * validation, ordering, and the bounded-content rules.
+ * `classNames` entries are APPENDED to the package defaults, never substituted.
+ * Appending is not the same as winning, though: `styles.css` is unlayered, so a
+ * consumer class only takes effect on a property that sheet leaves unset on the
+ * same element. Anything the sheet does claim is reachable at rung 1 instead,
+ * through the `--dawn-activity-*` tokens. Slot components replace a leaf's
+ * rendering while the card keeps ownership of validation, ordering, and the
+ * bounded-content rules.
  */
 import type { ReactNode } from "react"
 
@@ -12,11 +15,20 @@ import type { ReactNode } from "react"
 export interface DawnActivityClassNames {
   readonly root?: string
   readonly header?: string
+  /** The disclosure triangle: an `aria-hidden` span, first child of the header. */
+  readonly marker?: string
   readonly title?: string
   readonly meta?: string
   readonly badge?: string
+  /** A card's labelled region. Not rendered by `PlanActivityCard`. */
   readonly section?: string
   readonly sectionLabel?: string
+  /**
+   * `ActivityChecklist`'s own wrapper. Distinct from `section` because the
+   * subagent card renders the checklist INSIDE a labelled region, and one key
+   * for both landed a consumer class on a nested pair.
+   */
+  readonly checklist?: string
   readonly list?: string
   readonly item?: string
   readonly itemGlyph?: string

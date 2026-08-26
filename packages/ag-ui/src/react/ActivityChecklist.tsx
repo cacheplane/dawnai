@@ -23,7 +23,7 @@ export function ActivityChecklist({
   const TodoRow = components?.TodoRow
 
   return (
-    <div className={cx("dawn-activity__section", classNames?.section)}>
+    <div className={cx("dawn-activity__checklist", classNames?.checklist)}>
       {/* biome-ignore lint/a11y/noRedundantRoles: Markerless lists need explicit list semantics. */}
       <ol role="list" className={cx("dawn-activity__list", classNames?.list)}>
         {visibleTodos.map((todo, index) => {

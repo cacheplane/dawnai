@@ -231,7 +231,11 @@ pass the packaged content schemas, adding only per-part classes through the
 `classNames` prop, so validation and bounds stay in the package where they are
 tested. One constraint governs which classes work: a `classNames` entry can only
 set a property the package stylesheet leaves unset on that element, because the
-package's CSS is unlayered and Tailwind's utilities are not.
+package's CSS is unlayered and Tailwind's utilities are not. What the sheet does
+claim on the card's own box — background, border color, radius, text color,
+font-size, margin and padding — plus the header's font weight and the depth
+badge's background, is reachable at rung 1 instead, through the
+`--dawn-activity-*` tokens the app sets in `app/theme.css`.
 
 React and `@copilotkit/react-core` are optional peer dependencies of
 `@dawn-ai/ag-ui`, and only the `./react` subpath needs them. A server that uses
