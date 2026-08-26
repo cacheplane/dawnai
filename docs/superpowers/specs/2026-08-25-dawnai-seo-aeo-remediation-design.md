@@ -12,10 +12,11 @@ The implementation must preserve this order:
 
 1. verify production and record the repository baseline;
 2. measure Search Console state;
-3. verify each metadata mechanism with one rendered page;
-4. repair broken and missing surfaces;
-5. improve only the content supported by sufficient performance data;
-6. verify the deployed site with direct `curl` requests.
+3. classify the measured findings and lock remediation priority;
+4. verify each metadata mechanism with one rendered page;
+5. repair broken and missing surfaces;
+6. improve only the content supported by sufficient performance data;
+7. verify the deployed site with direct `curl` requests.
 
 ## Measurement baseline
 
@@ -103,15 +104,18 @@ must stop and request owner action at those boundaries.
 
 ### SEO registry
 
-A central server-only registry owns the page title, description, canonical
-path, content type, breadcrumb inputs, and committed modification date for
-each indexable route. The registry is the only source for authored page
-descriptions.
+A central server-only resolver returns the page title, description, canonical
+path, content type, breadcrumb inputs, and modification date for each
+indexable route. Static and documentation routes are authored in a route
+registry. Blog routes are authored in their existing validated frontmatter.
+The resolver normalizes both inputs into one `SeoPage` result, which is the
+only object consumed by metadata, structured data, and sitemap code.
 
-Documentation page modules call one metadata resolver with their route path.
-The existing `DocsPage` component uses the same route path to resolve
-structured data. Blog posts continue to use their existing frontmatter, but a
-shared resolver feeds both metadata and JSON-LD from the same description.
+Documentation page modules call the resolver with their route path. The
+existing `DocsPage` component uses the same route path to resolve structured
+data. Blog metadata and JSON-LD both consume the same normalized `SeoPage`
+result produced from one frontmatter record; neither surface reads or copies
+the frontmatter description independently.
 
 The resolver must guarantee that the meta, Open Graph, Twitter, and page-level
 JSON-LD descriptions are identical strings. The canonical is an absolute,
@@ -142,9 +146,12 @@ manifest rather than querying Git during the build. A maintenance script may
 refresh the manifest from full local Git history, but shallow production
 clones do not affect the emitted values.
 
-The manifest covers every indexable static and documentation route. Blog posts
-use their published or explicitly updated content dates. Tests require exact
-route coverage, valid ISO dates, and a non-collapsed date distribution.
+The checked-in manifest covers every indexable static, documentation, and tag
+route. Blog posts use their published or explicitly updated frontmatter dates.
+A resolved last-modified inventory is the deterministic union of the manifest
+and blog frontmatter. Tests compare that union—not the manifest alone—with the
+sitemap route inventory and require exact coverage, valid ISO dates, and a
+non-collapsed date distribution.
 
 ### Social images
 
@@ -213,7 +220,7 @@ Tests fail when:
 - metadata and JSON-LD descriptions differ;
 - JSON-LD breadcrumbs differ from the visible trail;
 - a sitemap date is missing or invalid;
-- the sitemap route and manifest inventories differ;
+- the sitemap route and resolved last-modified inventories differ;
 - the sitemap dates collapse to one timestamp;
 - a known OG image cannot be generated.
 
