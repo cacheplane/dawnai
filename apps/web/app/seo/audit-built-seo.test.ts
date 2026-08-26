@@ -2,11 +2,13 @@ import { Buffer } from "node:buffer"
 import { describe, expect, it } from "vitest"
 import {
   assertExactRobots,
+  CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES,
   canonicalForPath,
   compareOrderedInventory,
   docSectionOccurrences,
   extractPageMetadata,
   flattenJsonLd,
+  lastmodDateDistributionFailure,
   obviousTextRegression,
   parseAuditOptions,
   readPngDimensions,
@@ -178,5 +180,16 @@ describe("built SEO audit parsing", () => {
     const body = `## Documentation\n\n### Tools\n\n${source}\n\n---\n\n### Agents\n\nOther`
 
     expect(docSectionOccurrences(body, "Tools", source)).toBe(1)
+  })
+
+  it("rejects 24 distinct lastmod dates for the current production inventory snapshot", () => {
+    expect(CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES).toBe(25)
+    expect(lastmodDateDistributionFailure(24, "2026-08-26")).toBe(
+      "sitemap has only 24 distinct lastmod dates; expected at least 25 for the 2026-08-26 production inventory snapshot",
+    )
+  })
+
+  it("accepts 25 distinct lastmod dates for the current production inventory snapshot", () => {
+    expect(lastmodDateDistributionFailure(25, "2026-08-26")).toBeUndefined()
   })
 })

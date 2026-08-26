@@ -611,7 +611,8 @@ mechanism.
 | Route and sitemap visibility contracts | `150de558`, `c53c615e`, `ad4c74da`, `2cccf838`, `7e5003dd` | Docs wrapper rejection, homepage snippet normalization, explicit UTC scheduled visibility, and exact sitemap inventory tests. |
 | Blog social images | `100dda7c`, `a91e5cab` | Co-located production post images and fail-closed draft/unknown image routes. |
 | Crawler policy | `00241407` | Wildcard and ten owner-approved named crawler groups, `/api/` exclusion, canonical host, and one sitemap. |
-| Pre-deployment evidence | `docs: record pre-deployment search verification` (this commit) | Independent built-site audit, focused parser tests, package command, and this report section. |
+| Pre-deployment evidence | `69ee520b` | Independent built-site audit, focused parser tests, package command, and this report section. |
+| Sitemap date-distribution regression | `test: enforce sitemap date distribution` (review follow-up commit) | Executable 2026-08-26 minimum of 25 distinct sitemap dates, 24/25 boundary tests, and repeated built-site evidence. |
 
 The Task 9 commit contains only:
 
@@ -619,6 +620,9 @@ The Task 9 commit contains only:
 - `apps/web/app/seo/audit-built-seo.test.ts`
 - `apps/web/package.json`
 - this report
+
+The review follow-up contains only the audit script, its focused test, and this
+report. It does not change product, CI, or deployment behavior.
 
 ### Manifest final-state gate
 
@@ -647,11 +651,11 @@ zero. No separate manifest commit was required.
 
 ### Audit-tool RED/GREEN evidence
 
-The focused tests were written before the implementation. The first RED run
-failed because `../../scripts/audit-built-seo.mjs` did not exist. Subsequent
-RED/GREEN cycles covered the package-manager argument separator, Next's root
-canonical serialization, legitimate `ENOENT` text inside the full reference,
-and a docs-heading collision. The final focused result was:
+The initial focused tests were written before the implementation. The first
+RED run failed because `../../scripts/audit-built-seo.mjs` did not exist.
+Subsequent RED/GREEN cycles covered the package-manager argument separator,
+Next's root canonical serialization, legitimate `ENOENT` text inside the full
+reference, and a docs-heading collision. The final focused result was:
 
 ```console
 $ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/seo/audit-built-seo.test.ts
@@ -660,7 +664,7 @@ Test Files  1 passed (1)
 Tests       8 passed (8)
 ```
 
-Those tests fail closed on malformed JSON-LD, duplicate description or
+Those initial tests fail closed on malformed JSON-LD, duplicate description or
 canonical metadata, JSON-LD graph flattening errors, an inexact robots group,
 invalid PNG signature or IHDR dimensions, and missing, extra, duplicate, or
 reordered inventory URLs.
@@ -678,9 +682,30 @@ Development exposed three audit-only issues before the final evidence run:
 
 None of those was a product behavior change or a deployed-site claim.
 
+Review then identified that the audit reported 25 distinct sitemap dates but
+would accept as few as 11. A focused RED run added the current-snapshot boundary
+before the implementation and failed two new cases while the original eight
+passed. The implementation defines 25 as the minimum for the 2026-08-26
+production inventory snapshot: 24 fails and 25 passes. A non-current explicit
+date retains the general requirement of more than ten distinct dates.
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/seo/audit-built-seo.test.ts
+
+# RED
+Test Files  1 failed (1)
+Tests       2 failed | 8 passed (10)
+
+# GREEN
+Test Files  1 passed (1)
+Tests       10 passed (10)
+Duration    315ms
+```
+
 ### Focused web gates
 
-Fresh focused gates ran under explicit Node 24 after the audit code was final:
+Fresh focused gates ran under explicit Node 24 after the initial audit code was
+final:
 
 ```console
 $ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web lint
@@ -702,6 +727,30 @@ Duration    54.19s
 A final fresh production build immediately before the black-box audit also
 exited zero, compiled in 3.4 seconds, and generated 105 of 105 static pages in
 3.1 seconds.
+
+After the date-distribution review change, the full web test lane exercised the
+ten audit tests successfully but one unrelated last-modified manifest test hit
+its five-second timeout under the parallel load. The exact failing test passed
+on its one permitted focused rerun:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web test
+Test Files  1 failed | 26 passed (27)
+Tests       1 failed | 583 passed (584)
+Duration    64.61s
+
+FAIL app/seo/generate-lastmod.test.ts > generate-seo-lastmod > fails check mode when a target manifest is stale without changing the checked-in manifest
+Error: Test timed out in 5000ms.
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/seo/generate-lastmod.test.ts -t "fails check mode when a target manifest is stale without changing the checked-in manifest"
+Test Files  1 passed (1)
+Tests       1 passed | 5 skipped (6)
+Duration    4.08s
+```
+
+The review follow-up changes only the audit tool, its test, and this report, so
+the complete repository validation below was not rerun. No product or CI code
+changed after that successful validation.
 
 The original Node 24 repository baseline remains the earlier table: lint,
 build, and typecheck passed; source tests had 4,655 passed, 215 skipped, and one
@@ -746,12 +795,29 @@ failures=0
 The server was interrupted after the audit, and a one-second bounded request
 confirmed `server-stopped`.
 
+The review follow-up reused the unchanged fresh production build because it
+does not modify any product or build input. The same exact server and audit
+commands were run again; the server was ready in 200ms, the first readiness
+request succeeded, and the complete deterministic audit summary was unchanged:
+
+```console
+SEO built audit: PASS
+base=http://127.0.0.1:3018 asOf=2026-08-26
+inventory=83 docs=75 posts=3 tags=3
+sitemap=83 lastmodDates=25 html=83 jsonLdEntities=331
+robotsGroups=11 llms=2 llmsDocs=75 ogImages=3 og404s=2
+failures=0
+```
+
+The server was again interrupted and a bounded request confirmed
+`server-stopped`.
+
 The summary represents all of these local-build assertions:
 
 | Surface | Result |
 | --- | --- |
 | Independent source inventory | Exactly 83 ordered URLs: 2 top-level, 75 docs, 3 visible posts, and 3 visible tags as of 2026-08-26 UTC. |
-| Sitemap | Exact source URL set and order; 83 valid ISO `lastmod` values with 25 distinct dates; no `/docs` redirect, draft, future, missing, extra, or duplicate URL. |
+| Sitemap | Exact source URL set and order; 83 valid ISO `lastmod` values with 25 distinct dates; the executable 2026-08-26 regression floor is at least 25 (24 fails and 25 passes); no `/docs` redirect, draft, future, missing, extra, or duplicate URL. |
 | HTML and metadata | All 83 sitemap URLs returned 200 `text/html`, nonempty visible text, one nonempty description of at most 155 characters, one production self-canonical, and equal standard, Open Graph, Twitter, and page-JSON-LD descriptions. |
 | Structured data | 331 flattened entities: exact constrained sitewide Organization and WebSite data on every page, one expected page type per route, 82 applicable BreadcrumbLists, one homepage WebPage, and no homepage WebPage on another route. Malformed JSON-LD is fatal. |
 | Robots | One wildcard plus exactly ten approved named agents in order; every group has only `Allow: /` and `Disallow: /api/`; one correct Host and one `sitemap.xml`; no `sitemap_index`. |
@@ -827,8 +893,11 @@ performed in the final lane.
 - Runtime fixtures printed that no thread access policy was configured on
   disposable local test apps. That output is not a production access-policy
   assessment.
-- No warning or timeout seen in the final run was silently classified as
-  pre-existing. No loaded-parallel timeout occurred in this final run.
+- No warning or timeout was silently classified as pre-existing. No
+  loaded-parallel timeout occurred in the complete Task 9 `ci:validate` run.
+  The later review-only full web lane timed out in one last-modified manifest
+  test; its exact one-test rerun passed one and skipped five. The cause remains
+  an unresolved load-sensitive recurrence, not a failure in an audit test.
 - This verifies repository and local production-build mechanisms only. It is
   not a deployed Rich Results result, a live crawler result, an indexing
   request, or a production analytics event claim.

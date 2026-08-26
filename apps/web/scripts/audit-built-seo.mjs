@@ -11,6 +11,7 @@ const appRoot = resolve(scriptDirectory, "..")
 const productionOrigin = "https://dawnai.org"
 const currentInventoryDate = "2026-08-26"
 const currentInventoryCount = 83
+export const CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES = 25
 const approvedRobotsAgents = [
   "*",
   "GPTBot",
@@ -259,6 +260,19 @@ export function compareOrderedInventory(expected, actual) {
     )
   }
   return failures
+}
+
+export function lastmodDateDistributionFailure(distinctDates, asOf) {
+  if (
+    asOf === currentInventoryDate &&
+    distinctDates < CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES
+  ) {
+    return `sitemap has only ${distinctDates} distinct lastmod dates; expected at least ${CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES} for the ${currentInventoryDate} production inventory snapshot`
+  }
+  if (asOf !== currentInventoryDate && distinctDates <= 10) {
+    return `sitemap has only ${distinctDates} distinct lastmod dates; expected more than 10`
+  }
+  return undefined
 }
 
 function extractJourneyDocs() {
@@ -609,8 +623,8 @@ export async function auditBuiltSeo({ asOf, baseUrl }) {
       }
     }
     summary.lastmodDates = dates.size
-    if (dates.size <= 10)
-      failures.push(`sitemap has only ${dates.size} distinct lastmod dates; expected more than 10`)
+    const dateDistributionFailure = lastmodDateDistributionFailure(dates.size, asOf)
+    if (dateDistributionFailure !== undefined) failures.push(dateDistributionFailure)
     if (actualUrls.some((url) => new URL(url).pathname === "/docs")) {
       failures.push("sitemap contains the /docs redirect")
     }
