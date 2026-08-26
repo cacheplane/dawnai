@@ -584,3 +584,272 @@ references are concise review pointers rather than quotations.
 | `/docs/api/sqlite-storage` | `apps/web/content/docs/api/sqlite-storage.mdx` | Checkpoint and thread stores; ordering; database modes; lifecycle. |
 | `/docs/errors` | `apps/web/content/docs/errors.mdx` | Error-code ranges and generated category table. |
 | `/docs/faq` | `apps/web/content/docs/faq.mdx` | Adopting, working in, and operating Dawn question groups. |
+
+## Pre-deployment verification — 2026-08-26
+
+This section records verification of the branch's local production build. It
+does not revise the immutable 2026-08-25 Search Console baseline above, and it
+does not claim that the branch has been deployed. The deployed site remains
+described by the direct 2026-08-26 requests in [Read-only live evidence
+rerun](#read-only-live-evidence-rerun): the live sitemap had 83 URLs, while the
+representative post image still returned 500, the preserved production sample
+had no JSON-LD markers, 58 routes shared the homepage description, and one post
+description was 201 characters. Only an owner deployment can change those
+production observations.
+
+### Reviewable units and commits
+
+The remediation was kept in focused commits. The groups below are review
+boundaries, not a claim that commits inside a group all change the same runtime
+mechanism.
+
+| Unit | Commits or pending commit | Scope |
+| --- | --- | --- |
+| Design and baseline evidence | `6a8f15fc`, `beb8747c`, `baaed743`, `cfd25360`, `0a9fe355`, `7fc36bef`, `23dc5703`, `4efc7d5b`, `2992a37b` | Design review, immutable Search Console and deployed-response evidence, and reproducible read-only checks. |
+| Sitemap dates and freshness | `25835ebe`, `45059d1d`, `db83891a`, `5fac332d`, `cd034845` | Durable last-modified dates, visibility alignment, final-state generation checks, full-history CI checkout, and the separately reviewed workflow-contract fixture update. |
+| Shared metadata and structured data | `c9858de8`, `abd53101`, `ae3981f2`, `86591e61`, `52188843`, `26c77625`, `594272ce`, `37186c66`, `477a6da2` | Shared page resolution, canonical and social metadata, factual page JSON-LD, route descriptions, and registry coverage. |
+| Route and sitemap visibility contracts | `150de558`, `c53c615e`, `ad4c74da`, `2cccf838`, `7e5003dd` | Docs wrapper rejection, homepage snippet normalization, explicit UTC scheduled visibility, and exact sitemap inventory tests. |
+| Blog social images | `100dda7c`, `a91e5cab` | Co-located production post images and fail-closed draft/unknown image routes. |
+| Crawler policy | `00241407` | Wildcard and ten owner-approved named crawler groups, `/api/` exclusion, canonical host, and one sitemap. |
+| Pre-deployment evidence | `docs: record pre-deployment search verification` (this commit) | Independent built-site audit, focused parser tests, package command, and this report section. |
+
+The Task 9 commit contains only:
+
+- `apps/web/scripts/audit-built-seo.mjs`
+- `apps/web/app/seo/audit-built-seo.test.ts`
+- `apps/web/package.json`
+- this report
+
+### Manifest final-state gate
+
+All commands in this section ran from the repository root with Node 24.19.0
+selected explicitly. After the preceding content commits, generation made no
+working-tree change and the check mode exited zero:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web seo:lastmod
+
+> @dawn-ai/web@0.0.0 seo:lastmod
+> node scripts/generate-seo-lastmod.mjs
+
+$ git status --short
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web seo:lastmod:check
+
+> @dawn-ai/web@0.0.0 seo:lastmod:check
+> node scripts/generate-seo-lastmod.mjs --check
+
+# exit 0
+```
+
+`git diff --exit-code -- apps/web/app/seo/lastmod.generated.ts` also exited
+zero. No separate manifest commit was required.
+
+### Audit-tool RED/GREEN evidence
+
+The focused tests were written before the implementation. The first RED run
+failed because `../../scripts/audit-built-seo.mjs` did not exist. Subsequent
+RED/GREEN cycles covered the package-manager argument separator, Next's root
+canonical serialization, legitimate `ENOENT` text inside the full reference,
+and a docs-heading collision. The final focused result was:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web exec vitest --run --config vitest.config.ts app/seo/audit-built-seo.test.ts
+
+Test Files  1 passed (1)
+Tests       8 passed (8)
+```
+
+Those tests fail closed on malformed JSON-LD, duplicate description or
+canonical metadata, JSON-LD graph flattening errors, an inexact robots group,
+invalid PNG signature or IHDR dimensions, and missing, extra, duplicate, or
+reordered inventory URLs.
+
+Development exposed three audit-only issues before the final evidence run:
+
+- the first web build found two implicit-`any` callback parameters in the new
+  test (`TS7006`); they were typed and the full build was rerun;
+- the first package invocation forwarded `--` as a literal argument; a RED test
+  was added before accepting the separator;
+- initial black-box rules treated the root canonical's omitted slash,
+  documented `ENOENT` text, and a repeated authored heading as failures; each
+  was traced to the built response or source contract and received a focused
+  regression test before the audit was rerun.
+
+None of those was a product behavior change or a deployed-site claim.
+
+### Focused web gates
+
+Fresh focused gates ran under explicit Node 24 after the audit code was final:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web lint
+Checked 197 files in 68ms. No fixes applied.
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web build
+✓ Compiled successfully in 1912ms
+✓ Generating static pages using 9 workers (105/105) in 1679ms
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web typecheck
+# exit 0
+
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web test
+Test Files  27 passed (27)
+Tests       582 passed (582)
+Duration    54.19s
+```
+
+A final fresh production build immediately before the black-box audit also
+exited zero, compiled in 3.4 seconds, and generated 105 of 105 static pages in
+3.1 seconds.
+
+The original Node 24 repository baseline remains the earlier table: lint,
+build, and typecheck passed; source tests had 4,655 passed, 215 skipped, and one
+unrelated CLI port-race failure; the exact targeted rerun passed one and skipped
+16. The final repository source suite had 4,741 passed, 215 skipped, and zero
+failures: a delta of +86 passed, unchanged skipped, and one fewer failure. The
+baseline did not preserve a web-only test count, so 582 is the final focused
+count but no historical web-only delta is inferred.
+
+### Local production black-box audit
+
+The audit constructs its expected ordered inventory independently from the
+repository sources: `/`, `/blog`, the 75 `ALL_DOCS_PAGES` entries reconstructed
+from the docs navigation sources, and production-visible post and tag sources
+for the explicit UTC date. It does not use the sitemap response as its expected
+URL oracle.
+
+The exact server command was:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --filter @dawn-ai/web exec next start --hostname 127.0.0.1 --port 3018
+▲ Next.js 16.3.0
+- Local: http://127.0.0.1:3018
+✓ Ready in 129ms
+```
+
+Readiness used repeated successful requests to `/sitemap.xml`, not a fixed long
+sleep. The first readiness request succeeded. The audit command and complete
+deterministic summary were:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web seo:audit-built -- --base-url http://127.0.0.1:3018 --as-of 2026-08-26
+
+SEO built audit: PASS
+base=http://127.0.0.1:3018 asOf=2026-08-26
+inventory=83 docs=75 posts=3 tags=3
+sitemap=83 lastmodDates=25 html=83 jsonLdEntities=331
+robotsGroups=11 llms=2 llmsDocs=75 ogImages=3 og404s=2
+failures=0
+```
+
+The server was interrupted after the audit, and a one-second bounded request
+confirmed `server-stopped`.
+
+The summary represents all of these local-build assertions:
+
+| Surface | Result |
+| --- | --- |
+| Independent source inventory | Exactly 83 ordered URLs: 2 top-level, 75 docs, 3 visible posts, and 3 visible tags as of 2026-08-26 UTC. |
+| Sitemap | Exact source URL set and order; 83 valid ISO `lastmod` values with 25 distinct dates; no `/docs` redirect, draft, future, missing, extra, or duplicate URL. |
+| HTML and metadata | All 83 sitemap URLs returned 200 `text/html`, nonempty visible text, one nonempty description of at most 155 characters, one production self-canonical, and equal standard, Open Graph, Twitter, and page-JSON-LD descriptions. |
+| Structured data | 331 flattened entities: exact constrained sitewide Organization and WebSite data on every page, one expected page type per route, 82 applicable BreadcrumbLists, one homepage WebPage, and no homepage WebPage on another route. Malformed JSON-LD is fatal. |
+| Robots | One wildcard plus exactly ten approved named agents in order; every group has only `Allow: /` and `Disallow: /api/`; one correct Host and one `sitemap.xml`; no `sitemap_index`. |
+| LLM files | Both returned 200 `text/plain`, were nonempty and free of obvious error-document regressions; `llms-full.txt` contained the exact authored section for all 75 docs pages. |
+| Post images | Exactly three unique post OG URLs discovered from rendered metadata; all returned 200 `image/png`, valid PNG signatures, and 1200×630 IHDR dimensions. One draft and one unknown post image route each returned 404. |
+
+URL origin substitution changed only the origin from `https://dawnai.org` to
+the task-specific localhost origin; paths and queries were preserved. Fetch,
+parse, count, type, description, canonical, robots, and image errors all produce
+a deterministic failure summary and a nonzero exit.
+
+### Full repository validation
+
+The first Task 9 validation attempt is retained because it found a real
+branch-owned gate failure distinct from the original CLI port race. Source
+tests passed 4,741 with 215 skipped, but release-controller finished 556 of 557
+tests and rejected the CI workflow as not explicitly audited. Root cause was
+commit `5fac332d`: it added `fetch-depth: 0` to the validation checkout without
+updating the workflow descriptor fixture. Task 9 stopped without changing the
+release fixture. The owning change was fixed and reviewed separately in
+`cd034845` (`test: audit full-history validation checkout`).
+
+After that fix, the complete validation was rerun from the beginning:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm ci:validate
+
+Test Files  432 passed | 17 skipped (449)
+Tests       4741 passed | 215 skipped (4956)
+
+release-controller: 557 passed, 0 failed
+release-publish: 8 passed, 0 failed
+upload-release-assets: 5 passed, 0 failed
+backfill-release-tags: 8 passed, 0 failed
+sync-chart-appversion: 6 passed, 0 failed
+Docs completeness check passed.
+pack-check unit tests: 58 passed; Pack check passed.
+TypeScript tooling pack unit tests: 27 passed; runtime and tsc probes passed.
+harness-report self-test passed
+
+run: harness-2026-08-26T223430-418Z-90955
+status: passed
+requested lanes: framework, runtime, smoke
+executed lanes: framework, runtime, smoke
+passed=3 failed=0 skipped=0 errored=0
+[framework] Framework verification: passed (268824ms)
+[runtime] Runtime contract (real dev parity): passed (181585ms)
+[smoke] Runtime smoke: passed (76545ms)
+
+# final exit 0
+```
+
+The original transient CLI port-race did not recur, so no targeted rerun was
+performed in the final lane.
+
+### Warnings, limitations, and unknowns
+
+- The standalone and repository builds warned that Next's Edge Runtime is
+  deprecated and that using it on a page disables static generation for that
+  page. The builds nevertheless exited zero and generated the documented route
+  set. No runtime migration is bundled here.
+- Vitest warned that it could not statically analyze the existing dynamic blog
+  MDX import because the static import portion has no extension.
+- Root lint exited zero with nine `noUndeclaredEnvVars` warnings for existing
+  release and changeset scripts. Cached Biome output also included a schema
+  version information notice and the deprecated `recommended` field notice.
+- Turbo uses a shared worktree cache. Some cache-hit logs replayed paths from
+  other worktrees and Node 22 engine warnings even though the top-level command
+  and fresh focused web gates ran under Node 24.19.0. These are replayed log
+  provenance, not evidence that the recorded top-level validation used Node 22.
+- Expected negative bundling fixtures printed unresolved-package diagnostics
+  for `pg-native` and deliberately missing packages. Their owning tests passed.
+- Runtime fixtures printed that no thread access policy was configured on
+  disposable local test apps. That output is not a production access-policy
+  assessment.
+- No warning or timeout seen in the final run was silently classified as
+  pre-existing. No loaded-parallel timeout occurred in this final run.
+- This verifies repository and local production-build mechanisms only. It is
+  not a deployed Rich Results result, a live crawler result, an indexing
+  request, or a production analytics event claim.
+
+Analytics remains **Blocked**. There is no selected ingest provider or event
+destination, so this branch makes no production analytics or measurement-event
+claim and deliberately does not choose an adapter on the owner's behalf.
+
+### Owner actions and post-deployment measurement
+
+1. The owner must deploy the reviewed branch and identify the deployed commit.
+2. After deployment, the owner must replace the obsolete Search Console
+   `sitemap_index.xml` submission with `https://dawnai.org/sitemap.xml`. The
+   agent did not submit a sitemap, request indexing, or complete any form.
+3. If analytics is desired, the owner must select the ingest provider and
+   destination before any production event claim can be verified.
+4. Recheck direct production responses after deployment before making Rich
+   Results, crawler, OG-rendering, or structured-data production claims.
+
+The Search Console final-data baseline window remains 2026-05-26 through
+2026-08-23. The earliest honest CTR read is roughly one week after deployment,
+after the reporting window and lag can catch up. For crawl conclusions, wait
+until the submitted sitemap's `lastDownloaded` is newer than the deployment;
+an older timestamp cannot establish that Google fetched the remediated build.
