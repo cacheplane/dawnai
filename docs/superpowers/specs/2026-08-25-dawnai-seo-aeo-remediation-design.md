@@ -51,6 +51,29 @@ URL Inspection returned HTTP 200 for all 66 sitemap URLs:
 - 60: no user-declared canonical;
 - 0: chosen-versus-declared canonical disagreements.
 
+The thirteen non-indexed URLs were:
+
+| URL | Search Console state | Last crawl |
+|---|---|---|
+| `/docs/dev-server/agent-protocol` | URL is unknown to Google | none |
+| `/docs/middleware` | URL is unknown to Google | none |
+| `/docs/testing` | Crawled - currently not indexed | 2026-05-22 |
+| `/docs/evals` | URL is unknown to Google | none |
+| `/docs/deployment` | URL is unknown to Google | none |
+| `/docs/deployment/kubernetes` | URL is unknown to Google | none |
+| `/docs/deployment/edge` | URL is unknown to Google | none |
+| `/docs/recipes/auth-middleware` | URL is unknown to Google | none |
+| `/docs/recipes/stream-output` | URL is unknown to Google | none |
+| `/docs/recipes/dispatch-from-route` | URL is unknown to Google | none |
+| `/docs/cli` | Crawled - currently not indexed | 2026-05-28 |
+| `/docs/api` | URL is unknown to Google | none |
+| `/blog/why-we-built-dawn` | Crawled - currently not indexed | 2026-05-12 |
+
+The durable baseline report defined below must enumerate all 66 sitemap URLs,
+including live HTTP status, Search Console coverage state, last crawl time,
+user canonical, and Google canonical. Aggregate counts are a summary, not a
+replacement for the route-level record.
+
 All 66 current sitemap URLs returned `200 text/html` in direct production
 requests. The sitemap exposed only four distinct `lastmod` values; 63 URLs
 shared `2026-08-12T06:48:52.253Z`, demonstrating a build-time timestamp
@@ -70,6 +93,11 @@ agents while retaining the existing `/api/` exclusion.
 
 The owner must perform Search Console form submissions. The implementation
 will not request indexing or submit or remove sitemaps.
+
+Humans also retain exclusive responsibility for deploying or publishing,
+writing biography or first-person claims about a real person, sending email,
+and any action that spends money. The implementation and verification plan
+must stop and request owner action at those boundaries.
 
 ## Architecture
 
@@ -159,6 +187,20 @@ rendered HTML that:
 
 Only after this gate passes may the remaining factual descriptions be added.
 
+## Findings gate
+
+Before remediation begins, a durable audit report must classify every measured
+finding as broken, missing, improvable, or blocked. The implementation plan
+must derive its task order from that classification: broken production
+surfaces first, missing crawler or metadata surfaces second, and content
+improvements last. A finding with insufficient data, such as a query below the
+100-impression threshold, cannot justify a content experiment.
+
+The findings gate must preserve the different remediation meanings of `URL is
+unknown to Google`, `Discovered - currently not indexed`, and `Crawled -
+currently not indexed`; those states cannot be collapsed into a generic
+"unindexed" task.
+
 ## Validation and failure behavior
 
 Tests fail when:
@@ -195,6 +237,26 @@ The implementation is divided into reviewable units:
 The analytics adapter is excluded until an ingest provider is selected.
 
 ## Production verification and human handoff
+
+The implementation must maintain a durable report at
+`docs/superpowers/audits/2026-08-25-dawnai-seo-aeo-audit.md`. It is updated at
+the baseline, pre-deployment, and post-deployment gates and must contain:
+
+- what changed, grouped by reviewable change unit;
+- every verification command exactly as run and its relevant output;
+- the all-URL live and URL Inspection table;
+- the original lint, build, typecheck, and test baseline plus the final delta;
+- every degradation, including unchanged pre-existing failures;
+- anything that could not be verified and why;
+- the analytics-provider blocker;
+- the short list of human actions with sufficient context to perform them;
+- the Search Console window and measurement baseline;
+- the deployment timestamp when supplied by the owner;
+- the statement that the earliest honest CTR read is roughly one week after
+  deployment, after the reporting window and Search Console lag catch up.
+
+Secrets, OAuth codes, access tokens, refresh tokens, client secrets, and raw
+credential file contents must never appear in the report.
 
 After the owner deploys, direct `curl` requests must confirm:
 
