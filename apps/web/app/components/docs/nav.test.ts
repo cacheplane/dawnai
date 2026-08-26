@@ -159,6 +159,7 @@ interface DocTitleAnalysis {
   readonly firstH1: string | null
   readonly metadataTitle: string | null
   readonly metadataRoute: string | null
+  readonly metadataContractFailures: readonly string[]
   readonly contentImportTarget: string | null
   readonly docsPageImportTarget: string | null
   readonly docsPageHref: string | null
@@ -168,6 +169,7 @@ interface DocTitleFixture {
   readonly mdxSource: string
   readonly wrapperSource: string
   readonly seoTitlesByPath?: Readonly<Record<string, string>>
+  readonly canonicalHref?: string
 }
 
 interface DocLinkGuardAnalysis {
@@ -294,8 +296,16 @@ function analyzeDocTitles(
   mdxSource: string,
   wrapperSource: string,
   seoTitlesByPath: Readonly<Record<string, string>> = SEO_TITLES_BY_PATH,
+  canonicalHref?: string,
 ): DocTitleAnalysis {
-  const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource, seoTitlesByPath }])[0]
+  const analysis = analyzeDocTitlesBatch([
+    {
+      mdxSource,
+      wrapperSource,
+      seoTitlesByPath,
+      ...(canonicalHref !== undefined ? { canonicalHref } : {}),
+    },
+  ])[0]
   expect(analysis).toBeDefined()
   return analysis as DocTitleAnalysis
 }
@@ -548,6 +558,7 @@ describe("documentation registry invariants", () => {
       return {
         mdxSource: readFileSync(contentPath, "utf8"),
         wrapperSource: readFileSync(wrapperPath, "utf8"),
+        canonicalHref: item.href,
       }
     })
     const analyses = analyzeDocTitlesBatch(fixtures)
@@ -558,7 +569,7 @@ describe("documentation registry invariants", () => {
       const {
         firstH1,
         metadataTitle,
-        metadataRoute,
+        metadataContractFailures,
         contentImportTarget,
         docsPageImportTarget,
         docsPageHref,
@@ -572,10 +583,7 @@ describe("documentation registry invariants", () => {
 
       expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
       expect(metadataTitle, `${item.href} metadata.title`).toBe(item.label)
-      if (metadataRoute !== null) {
-        expect(metadataRoute, `${item.href} metadata route`).toBe(item.href)
-        expect(metadataRoute, `${item.href} metadata/DocsPage route`).toBe(docsPageHref)
-      }
+      expect(metadataContractFailures, `${item.href} metadata resolver contract`).toEqual([])
       expect(
         resolve(dirname(wrapperPath), contentImportTarget ?? ""),
         `${item.href} MDX import`,
@@ -683,6 +691,7 @@ export const metadata: Metadata = { title: "Real Title" }
       firstH1: "Real Title",
       metadataTitle: "Real Title",
       metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -845,6 +854,7 @@ export const metadata: Metadata = { title: "Real Title" }
       firstH1: "Real Title",
       metadataTitle: "Real Title",
       metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -866,6 +876,7 @@ export default function Page() {
       firstH1: "Real Title",
       metadataTitle: "Real Title",
       metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: "../../../content/docs/real.mdx",
       docsPageImportTarget: "../../components/docs/DocsPage",
       docsPageHref: "/docs/real",
@@ -882,16 +893,82 @@ export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started")
 export default function Page() {
   return <DocsPage href="/docs/getting-started" Content={Content} />
 }`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
     )
 
     expect(analysis).toEqual({
       firstH1: "Getting Started",
       metadataTitle: "Getting Started",
       metadataRoute: "/docs/getting-started",
+      metadataContractFailures: [],
       contentImportTarget: "../../../content/docs/getting-started.mdx",
       docsPageImportTarget: "../../components/docs/DocsPage",
       docsPageHref: "/docs/getting-started",
     })
+  })
+
+  it("rejects legacy literal metadata for a registry-backed route", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Getting Started" }
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataTitle).toBe("Getting Started")
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
+  })
+
+  it("accepts aliased resolver imports by their imported bindings", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import {
+  resolveStaticSeoPage as findSeoPage,
+  toMetadata as buildMetadata,
+} from "../../seo/resolve"
+export const metadata = buildMetadata(findSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/getting-started")
+    expect(analysis.metadataTitle).toBe("Getting Started")
+    expect(analysis.metadataContractFailures).toEqual([])
+  })
+
+  it("rejects resolver-shaped calls imported from the wrong module", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/not-the-resolver"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
   })
 
   it("exposes a resolver route mismatch with the DocsPage href", () => {
@@ -904,10 +981,19 @@ export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started")
 export default function Page() {
   return <DocsPage href="/docs/real" Content={Content} />
 }`,
+      {
+        "/docs/getting-started": "Getting Started",
+        "/docs/real": "Real Title",
+      },
+      "/docs/real",
     )
 
     expect(analysis.metadataRoute).toBe("/docs/getting-started")
     expect(analysis.metadataRoute).not.toBe(analysis.docsPageHref)
+    expect(analysis.metadataContractFailures).toEqual([
+      'metadata resolver route "/docs/getting-started" does not match canonical route "/docs/real"',
+      'metadata resolver route "/docs/getting-started" does not match DocsPage href "/docs/real"',
+    ])
   })
 
   it("rejects nonliteral resolver arguments despite valid decoys in comments and strings", () => {
@@ -925,10 +1011,14 @@ export default function Page() {
 }
 void decoy`,
       { "/docs/real": "Real Title" },
+      "/docs/real",
     )
 
     expect(analysis.metadataRoute).toBeNull()
     expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/real requires resolver metadata",
+    ])
   })
 
   it("uses the registry title instead of trusting the resolver call", () => {
@@ -942,11 +1032,13 @@ export default function Page() {
   return <DocsPage href="/docs/real" Content={Content} />
 }`,
       { "/docs/real": "Wrong Registry Title" },
+      "/docs/real",
     )
 
     expect(analysis.metadataRoute).toBe("/docs/real")
     expect(analysis.metadataTitle).toBe("Wrong Registry Title")
     expect(analysis.metadataTitle).not.toBe(analysis.firstH1)
+    expect(analysis.metadataContractFailures).toEqual([])
   })
 
   it("rejects a wrong MDX import despite a correct decoy string and comment", () => {

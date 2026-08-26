@@ -226,7 +226,6 @@ function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
   if (
     !tsCompiler.isCallExpression(initializer) ||
     !tsCompiler.isIdentifier(initializer.expression) ||
-    initializer.expression.text !== "toMetadata" ||
     initializer.arguments.length !== 1
   ) {
     return null
@@ -238,7 +237,6 @@ function resolverBackedMetadata(initializer, checker, seoTitlesByPath) {
     !outerImport?.replaceAll("\\", "/").endsWith("/seo/resolve") ||
     !tsCompiler.isCallExpression(resolution) ||
     !tsCompiler.isIdentifier(resolution.expression) ||
-    resolution.expression.text !== "resolveStaticSeoPage" ||
     resolution.arguments.length !== 1
   ) {
     return null
@@ -286,6 +284,33 @@ function exportedMetadata(sourceFile, checker, seoTitlesByPath) {
     }
   }
   return { metadataTitle: null, metadataRoute: null }
+}
+
+function resolverMetadataContractFailures({
+  canonicalHref,
+  seoTitlesByPath,
+  metadataRoute,
+  docsPageHref,
+}) {
+  if (typeof canonicalHref !== "string" || !Object.hasOwn(seoTitlesByPath ?? {}, canonicalHref)) {
+    return []
+  }
+  if (metadataRoute === null) {
+    return [`registry-backed route ${canonicalHref} requires resolver metadata`]
+  }
+
+  const failures = []
+  if (metadataRoute !== canonicalHref) {
+    failures.push(
+      `metadata resolver route ${JSON.stringify(metadataRoute)} does not match canonical route ${JSON.stringify(canonicalHref)}`,
+    )
+  }
+  if (metadataRoute !== docsPageHref) {
+    failures.push(
+      `metadata resolver route ${JSON.stringify(metadataRoute)} does not match DocsPage href ${JSON.stringify(docsPageHref)}`,
+    )
+  }
+  return failures
 }
 
 function importTargetForSymbol(checker, identifier, expectedImportedName) {
@@ -397,20 +422,28 @@ function analyzeDocTitlesBatch(fixtures) {
     host: compilerHost,
   })
   const checker = program.getTypeChecker()
-  return fixtures.map(({ mdxSource, seoTitlesByPath }, index) => {
+  return fixtures.map(({ mdxSource, seoTitlesByPath, canonicalHref }, index) => {
     const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
+    const metadata = sourceFile
+      ? exportedMetadata(sourceFile, checker, seoTitlesByPath)
+      : { metadataTitle: null, metadataRoute: null }
+    const wrapper = sourceFile
+      ? wrapperContract(sourceFile, checker)
+      : {
+          contentImportTarget: null,
+          docsPageImportTarget: null,
+          docsPageHref: null,
+        }
     return {
       firstH1: firstRenderedMdxH1(mdxSource),
-      ...(sourceFile
-        ? exportedMetadata(sourceFile, checker, seoTitlesByPath)
-        : { metadataTitle: null, metadataRoute: null }),
-      ...(sourceFile
-        ? wrapperContract(sourceFile, checker)
-        : {
-            contentImportTarget: null,
-            docsPageImportTarget: null,
-            docsPageHref: null,
-          }),
+      ...metadata,
+      metadataContractFailures: resolverMetadataContractFailures({
+        canonicalHref,
+        seoTitlesByPath,
+        metadataRoute: metadata.metadataRoute,
+        docsPageHref: wrapper.docsPageHref,
+      }),
+      ...wrapper,
     }
   })
 }
@@ -4463,6 +4496,7 @@ const registeredDocAnalyses = analyzeDocTitlesBatch(
     mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
     wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
     seoTitlesByPath,
+    canonicalHref: href,
   })),
 )
 
@@ -4472,7 +4506,7 @@ for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   const {
     firstH1,
     metadataTitle,
-    metadataRoute,
+    metadataContractFailures,
     contentImportTarget,
     docsPageImportTarget,
     docsPageHref,
@@ -4488,15 +4522,8 @@ for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
       `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
     )
   }
-  if (metadataRoute !== null && metadataRoute !== href) {
-    failures.push(
-      `${docHrefToPagePath(href)} metadata resolver route ${JSON.stringify(metadataRoute)} does not match canonical route ${JSON.stringify(href)}`,
-    )
-  }
-  if (metadataRoute !== null && metadataRoute !== docsPageHref) {
-    failures.push(
-      `${docHrefToPagePath(href)} metadata resolver route ${JSON.stringify(metadataRoute)} does not match DocsPage href ${JSON.stringify(docsPageHref ?? null)}`,
-    )
+  for (const metadataContractFailure of metadataContractFailures ?? []) {
+    failures.push(`${docHrefToPagePath(href)} ${metadataContractFailure}`)
   }
   const importedContentPath =
     typeof contentImportTarget === "string"
