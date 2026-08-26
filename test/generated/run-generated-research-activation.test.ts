@@ -805,13 +805,32 @@ function assertBuiltArtifactJourney(
 
 function assertRecordedServerExit(
   transcript: string,
-  options: { readonly appRoot: string; readonly script: "dev" | "start" },
+  options: { readonly appRoot: string; readonly script: "dev" | "dev:web" | "start" },
 ): void {
-  const commandPrefix = `$ (cd ${options.appRoot} && npm run ${options.script}`
-  const commandIndex = transcript.lastIndexOf(commandPrefix)
-  expect(commandIndex).toBeGreaterThanOrEqual(0)
-  if (commandIndex < 0) throw new Error(`Missing ${options.script} server transcript`)
-  const commandBlock = transcript.slice(commandIndex)
+  // `npm run dev` is a PREFIX of `npm run dev:web`, and the two-process dev
+  // session records both. `lastIndexOf` on a bare prefix happens to land on the
+  // right block today only because nesting appends the inner child FIRST — a
+  // green-by-accident that would flip the day the ordering changes. Match the
+  // whole command line instead.
+  const lines = transcript.split("\n")
+  const opening = `$ (cd ${options.appRoot} && npm run ${options.script}`
+  const commandLineIndex = lines.findLastIndex(
+    (line) =>
+      line.startsWith(opening) && (line[opening.length] === " " || line[opening.length] === ")"),
+  )
+  expect(commandLineIndex).toBeGreaterThanOrEqual(0)
+  // Bound the block at the NEXT recorded command too. Nesting appends the inner
+  // (web) child FIRST, so a slice that ran to the end of the file would read the
+  // SERVER block's exit line and pronounce the web child recorded no matter what
+  // the web block actually says.
+  const nextCommandOffset = lines
+    .slice(commandLineIndex + 1)
+    .findIndex((line) => /^\$ \(cd .+ && .+\)$/.test(line))
+  const commandBlock = (
+    nextCommandOffset < 0
+      ? lines.slice(commandLineIndex)
+      : lines.slice(commandLineIndex, commandLineIndex + 1 + nextCommandOffset)
+  ).join("\n")
   expect(commandBlock).not.toContain("[exit pending")
   expect(commandBlock).not.toContain("[exit unavailable")
   expect(commandBlock).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
@@ -828,6 +847,42 @@ async function assertReadyHealth(baseUrl: string, signal: AbortSignal): Promise<
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
+})
+
+// Proves the anchor before the lane has a second block to disambiguate: the
+// `dev:web` line starts with the whole `npm run dev` prefix, so an unanchored
+// `lastIndexOf` selects the WRONG block the moment a web child is recorded after
+// the server child.
+test("anchors the recorded server exit to a whole command line", () => {
+  const appRoot = "/tmp/anchored-activation-app"
+  const serverBlock = [
+    `$ (cd ${appRoot} && npm run dev -- --port 4711)`,
+    "dawn dev stdout",
+    "[exit 0 signal none]",
+    "",
+  ]
+  const leakedWebBlock = [
+    `$ (cd ${appRoot} && npm run dev:web -- --port 4712 -H 127.0.0.1)`,
+    "next dev stdout",
+    "[exit pending signal pending]",
+    "",
+  ]
+
+  // A `dev:web` block recorded AFTER the server block must not be mistaken for it.
+  const webLast = [...serverBlock, ...leakedWebBlock].join("\n")
+  assertRecordedServerExit(webLast, { appRoot, script: "dev" })
+  expect(() => assertRecordedServerExit(webLast, { appRoot, script: "dev:web" })).toThrow()
+
+  // And in the order nesting actually produces — inner (web) first, server last —
+  // a web block whose own exit line never landed must not borrow the server's.
+  const webFirst = [
+    `$ (cd ${appRoot} && npm run dev:web -- --port 4712 -H 127.0.0.1)`,
+    "next dev stdout",
+    "",
+    ...serverBlock,
+  ].join("\n")
+  assertRecordedServerExit(webFirst, { appRoot, script: "dev" })
+  expect(() => assertRecordedServerExit(webFirst, { appRoot, script: "dev:web" })).toThrow()
 })
 
 test("activates the default research scaffold through the complete npm lifecycle", {
