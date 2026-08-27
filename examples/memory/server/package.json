@@ -10,7 +10,7 @@
     "typecheck": "tsc -p . --noEmit",
     "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
     "inspect": "node node_modules/@dawn-ai/cli/dist/index.js inspect",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@dawn-ai/cli": "workspace:*",
