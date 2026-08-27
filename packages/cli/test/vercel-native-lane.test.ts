@@ -58,6 +58,7 @@ import {
   deriveNativeAttemptEvidence,
   NATIVE_DIRECT_DAWN_DEPENDENCIES,
   NATIVE_VERCEL_CHILD_TIMEOUT_MS,
+  NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS,
   NATIVE_VERCEL_READINESS_TIMEOUT_MS,
   type NativeAttemptEvidence,
   type NativeLocalCommandRequest,
@@ -1680,6 +1681,8 @@ describe("pinned vercel boundary", () => {
       "--scope",
       "team_Test123",
       "--wait",
+      "--timeout",
+      `${NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS}ms`,
       "--json",
       "--non-interactive",
       "--global-config",
@@ -2453,12 +2456,40 @@ describe("readiness budget", () => {
       NATIVE_VERCEL_CHILD_TIMEOUT_MS,
     )
     expect(NATIVE_VERCEL_READINESS_TIMEOUT_MS).toBeGreaterThan(NATIVE_VERCEL_CHILD_TIMEOUT_MS)
+
+    // The child deadline is only a backstop. `vercel inspect --wait` enforces its own
+    // `--timeout` (default 3m) and on expiry exits 0 with a still-building payload —
+    // so without this flag the child budget is unreachable and raising it buys nothing.
+    const inspectArgs = requests.find((request) => request.args.includes("--wait"))?.args ?? []
+    expect(inspectArgs).toContain("--timeout")
+    expect(inspectArgs[inspectArgs.indexOf("--timeout") + 1]).toBe(
+      `${NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS}ms`,
+    )
+    expect(NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS).toBeLessThan(NATIVE_VERCEL_READINESS_TIMEOUT_MS)
+  })
+
+  test("names the state a not-ready inspect receipt reached", () => {
+    // The overrun path exits 0 with BUILDING, so this message is the only place the
+    // lane can say why readiness ended. A bare "does not match" would read the same
+    // as a wrong deployment id.
+    expect(() =>
+      parseNativeVercelInspectReceipt(
+        '{"id":"dpl_Source123","url":"dawn-source-abc.vercel.app","readyState":"BUILDING"}',
+        {
+          canonicalOrigin: "https://dawn-source-abc.vercel.app",
+          deploymentId: "dpl_Source123",
+        },
+      ),
+    ).toThrow(/readyState=BUILDING/)
   })
 
   test("keeps both readiness waits inside the gated test's own timeout", () => {
     // A budget at or above the test timeout would surface as a bare vitest timeout,
     // losing the lane's diagnostics — the very evidence the budget exists to produce.
-    // The lane waits twice: once for source, once for prebuilt.
+    // This bounds the readiness waits only, not the whole lane: the other steps carry
+    // their own budgets. Both waits count — the orchestration stops at the first
+    // FAILING kind, but source can finish slowly and successfully before prebuilt
+    // overruns, so a failing run can still spend two full caps.
     expect(2 * NATIVE_VERCEL_READINESS_TIMEOUT_MS).toBeLessThan(NATIVE_VERCEL_GATED_TEST_TIMEOUT_MS)
   })
 
