@@ -124,6 +124,7 @@ describe("fromAguiResume", () => {
     const [resume] = fromAguiResume([
       { interruptId: "perm-1", status: "resolved", payload: undefined },
     ])
+    if (!resume) throw new Error("expected fromAguiResume to return one entry")
     expect(resume).toEqual({ interruptId: "perm-1", status: "resolved", payload: undefined })
     expect(Object.hasOwn(resume, "payload")).toBe(true)
   })
