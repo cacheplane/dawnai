@@ -7,7 +7,7 @@
 `providerPackages` is not exported from `@dawn-ai/cli/fetch`.**
 
 Two errata against the docs and changelog that shipped with the `hono` build
-target. The bundled CLI docs (`packages/cli/docs/`) carry the fixes.
+target. `dawn docs` carries the fixes.
 
 - **The `@dawn-ai/cli/fetch` snippet under *Edge runtimes* imported
   `./.dawn/build/modules.mjs`.** That is the `node` target's manifest: it reaches

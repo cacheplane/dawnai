@@ -3,4 +3,6 @@
 "create-dawn-ai-app": patch
 ---
 
-Keep the default research scaffold aligned with the dogfooded example, add a coherent npm lifecycle and environment handoff, and verify packaged AG-UI activation through the built artifact.
+The research scaffold gains a complete npm lifecycle (`install` → `verify` →
+`dev`) and an explicit `.env` handoff, and its AG-UI wiring is checked against
+the packaged build.

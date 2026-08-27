@@ -37,10 +37,5 @@ polling as before.
   prefix answer client-side — otherwise the total and the rows would describe
   different sets.
 
-Column sorting is off in the browse view for now: sorting a server-selected window
-locally presents the wrong sample, not merely the wrong order. It returns with
-server-side ordering.
-
 `useMemoryBrowse` also arbitrates load-more against the poll cadence and keeps a
-separate failure slot for it, but nothing in this release asks for one — the
-control arrives with server-side paging.
+separate failure slot for it.

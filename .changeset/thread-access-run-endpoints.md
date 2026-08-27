@@ -6,20 +6,18 @@
 
 Thread access now authorizes the run endpoints and the pending-interrupts read.
 
-Two things to check before upgrading.
+Two things to know about the shipped surface.
 
-**`ThreadOperation` gains a tenth member, `"thread.pending_interrupts"`.** The
-addition is source-compatible everywhere except an exhaustive `switch` or
-mapped type over the union, which stops compiling until it handles the new
-member. It arrives under `action: "read"`.
+**`ThreadOperation` includes `"thread.pending_interrupts"`**, under
+`action: "read"`. An exhaustive `switch` or mapped type over the union must
+handle every member.
 
-**A policy written against the five endpoints of the previous release will now
-be invoked on five more.** `POST /threads/:id/runs/stream`, `/runs/wait`,
-`/resume`, `POST /agui/:routeId` and `GET /threads/:id/pending_interrupts` are
-gated on the thread-access axis. The migration hazard is a policy whose
-`fallback` returns a bare `{ allow: false }`, or denies any operation it does
-not recognize: it will start denying traffic it permitted before, on endpoints
-that previously answered to route middleware alone. Read your `fallback` before
+**Ten endpoints are gated on the thread-access axis**, including
+`POST /threads/:id/runs/stream`, `/runs/wait`, `/resume`,
+`POST /agui/:routeId` and `GET /threads/:id/pending_interrupts`. The hazard to
+watch is a policy whose `fallback` returns a bare `{ allow: false }`, or denies
+any operation it does not recognize: it denies these endpoints too, where route
+middleware alone used to decide. Read your `fallback` before
 upgrading. A `run.*` operation on a thread that exists arrives under
 `action: "update"`; on a thread id with no row yet, `run.stream`, `run.wait` and
 `run.agui` arrive under `action: "create"` — see the companion note on stamping
@@ -44,15 +42,14 @@ that needed no credential, and reading the `400`/`409` codes as an oracle on a
 guessed `interruptId`/`resumeKey`. A `/pending_interrupts` deny returns the
 handler's own `404 thread_not_found`, indistinguishable from a genuine miss.
 
-`dawn build --target hono` and `--target vercel` now build an app that has a
-policy file, instead of refusing with `DAWN_E1005`. The policy is bundled into
-the static module manifest and runs on those runtimes exactly as it does under
-`dawn dev`. To close the gap that made the refusal necessary, a build that saw a
-policy file stamps that fact into its entry point, and the boot now fails when
-such an entry point is paired with a manifest carrying no thread-access entry —
-a stale manifest would otherwise come up with every thread endpoint open and
-nothing to say so. `--target langsmith` still refuses, permanently: it
-materializes per-route graphs with no Dawn HTTP layer to run a policy in.
+`dawn build --target hono` and `--target vercel` bundle the policy into the
+static module manifest and run it on those runtimes exactly as `dawn dev` does.
+A build that saw a policy file stamps that fact into its entry point, and boot
+fails when such an entry point is paired with a manifest carrying no
+thread-access entry — a stale manifest would otherwise come up with every thread
+endpoint open and nothing to say so. `--target langsmith` refuses with
+`DAWN_E1005`, permanently: it materializes per-route graphs with no Dawn HTTP
+layer to run a policy in.
 
 `create-dawn-app` templates now carry a deny-by-default `src/thread-access.ts`
 and the shared `src/auth.ts` it imports, both as `.example` files that a rename
