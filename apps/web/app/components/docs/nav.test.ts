@@ -8,6 +8,7 @@ import { Fragment, jsx, jsxs } from "react/jsx-runtime"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } from "../../../lib/mdx-plugins"
+import { DOCS_SEO_PAGES } from "../../seo/registry"
 import { API_REFERENCE_PAGES } from "./api-reference-pages"
 import {
   ALL_DOCS_PAGES,
@@ -23,6 +24,9 @@ const CONTENT_ROOT = join(WEB_ROOT, "content/docs")
 const WRAPPERS_ROOT = join(WEB_ROOT, "app/docs")
 const NAV_PATH = join(dirname(fileURLToPath(import.meta.url)), "nav.ts")
 const CHECK_DOCS_PATH = join(WEB_ROOT, "../../scripts/check-docs.mjs")
+const SEO_TITLES_BY_PATH = Object.fromEntries(
+  Object.entries(DOCS_SEO_PAGES).map(([path, page]) => [path, page.title]),
+)
 
 const FOUNDATION_DOCS_NAV = [
   {
@@ -154,6 +158,8 @@ interface CompatibilityStubAnalysis {
 interface DocTitleAnalysis {
   readonly firstH1: string | null
   readonly metadataTitle: string | null
+  readonly metadataRoute: string | null
+  readonly metadataContractFailures: readonly string[]
   readonly contentImportTarget: string | null
   readonly docsPageImportTarget: string | null
   readonly docsPageHref: string | null
@@ -162,6 +168,9 @@ interface DocTitleAnalysis {
 interface DocTitleFixture {
   readonly mdxSource: string
   readonly wrapperSource: string
+  readonly wrapperPath?: string
+  readonly seoTitlesByPath?: Readonly<Record<string, string>>
+  readonly canonicalHref?: string
 }
 
 interface DocLinkGuardAnalysis {
@@ -260,7 +269,12 @@ function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly D
   docTitleAnalysisProcessCount++
   const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
     encoding: "utf8",
-    input: JSON.stringify(fixtures),
+    input: JSON.stringify(
+      fixtures.map((fixture) => ({
+        ...fixture,
+        seoTitlesByPath: fixture.seoTitlesByPath ?? SEO_TITLES_BY_PATH,
+      })),
+    ),
   })
   const stderr = result.stderr ?? ""
 
@@ -279,8 +293,21 @@ function analyzeDocTitlesBatch(fixtures: readonly DocTitleFixture[]): readonly D
   return JSON.parse(result.stdout) as readonly DocTitleAnalysis[]
 }
 
-function analyzeDocTitles(mdxSource: string, wrapperSource: string): DocTitleAnalysis {
-  const analysis = analyzeDocTitlesBatch([{ mdxSource, wrapperSource }])[0]
+function analyzeDocTitles(
+  mdxSource: string,
+  wrapperSource: string,
+  seoTitlesByPath: Readonly<Record<string, string>> = SEO_TITLES_BY_PATH,
+  canonicalHref?: string,
+): DocTitleAnalysis {
+  const analysis = analyzeDocTitlesBatch([
+    {
+      mdxSource,
+      wrapperSource,
+      wrapperPath: join(WRAPPERS_ROOT, "real", "page.tsx"),
+      seoTitlesByPath,
+      ...(canonicalHref !== undefined ? { canonicalHref } : {}),
+    },
+  ])[0]
   expect(analysis).toBeDefined()
   return analysis as DocTitleAnalysis
 }
@@ -423,8 +450,8 @@ describe("documentation registry invariants", () => {
 
   it("derives breadcrumbs and siblings from the registered order", () => {
     expect(breadcrumbsFor("/docs/ag-ui")).toEqual([
+      { label: "Home", href: "/" },
       { label: "Docs", href: "/docs/getting-started" },
-      { label: "Integrate" },
       { label: "AG-UI and Web Clients" },
     ])
     expect(siblingsFor("/docs/dev-server/agent-protocol").prev?.href).toBe("/docs/dev-server")
@@ -434,15 +461,33 @@ describe("documentation registry invariants", () => {
     expect(siblingsFor("/docs/faq").next).toBeNull()
   })
 
-  it("gives hidden API leaves a four-part breadcrumb and no journey siblings", () => {
+  it("gives hidden API leaves a linked API hub and no journey siblings", () => {
     for (const leaf of API_REFERENCE_PAGES) {
       expect(breadcrumbsFor(leaf.href)).toEqual([
+        { label: "Home", href: "/" },
         { label: "Docs", href: "/docs/getting-started" },
-        { label: "Reference" },
         { label: "API Reference", href: "/docs/api" },
         { label: leaf.label },
       ])
       expect(siblingsFor(leaf.href)).toEqual({ prev: null, next: null })
+    }
+  })
+
+  it("uses a real-link trail with the current route as the final crumb for all 75 pages", () => {
+    for (const page of ALL_DOCS_PAGES) {
+      const crumbs = breadcrumbsFor(page.href)
+      const finalCrumb = crumbs.at(-1)
+
+      expect(crumbs[0], `${page.href} Home crumb`).toEqual({ label: "Home", href: "/" })
+      expect(finalCrumb, `${page.href} final crumb`).toEqual({ label: page.label })
+      expect(
+        crumbs.slice(0, -1).every((crumb) => typeof crumb.href === "string"),
+        `${page.href} linked ancestors`,
+      ).toBe(true)
+      expect(new Set(crumbs.flatMap((crumb) => (crumb.href ? [crumb.href] : []))).size).toBe(
+        crumbs.length - 1,
+      )
+      expect(crumbs.flatMap((crumb) => (crumb.href ? [crumb.href] : []))).not.toContain(page.href)
     }
   })
 
@@ -533,6 +578,8 @@ describe("documentation registry invariants", () => {
       return {
         mdxSource: readFileSync(contentPath, "utf8"),
         wrapperSource: readFileSync(wrapperPath, "utf8"),
+        wrapperPath,
+        canonicalHref: item.href,
       }
     })
     const analyses = analyzeDocTitlesBatch(fixtures)
@@ -540,8 +587,14 @@ describe("documentation registry invariants", () => {
     expect(docTitleAnalysisProcessCount - processCountBefore).toBe(1)
     expect(analyses).toHaveLength(authoredPages.length)
     for (const [index, item] of authoredPages.entries()) {
-      const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
-        analyses[index] ?? {}
+      const {
+        firstH1,
+        metadataTitle,
+        metadataContractFailures,
+        contentImportTarget,
+        docsPageImportTarget,
+        docsPageHref,
+      } = analyses[index] ?? {}
       const slug = item.href.replace(/^\/docs\//, "")
       const wrapperPath = join(WRAPPERS_ROOT, slug, "page.tsx")
       const contentPath = join(
@@ -551,6 +604,7 @@ describe("documentation registry invariants", () => {
 
       expect(firstH1, `${item.href} first MDX H1`).toBe(item.label)
       expect(metadataTitle, `${item.href} metadata.title`).toBe(item.label)
+      expect(metadataContractFailures, `${item.href} metadata resolver contract`).toEqual([])
       expect(
         resolve(dirname(wrapperPath), contentImportTarget ?? ""),
         `${item.href} MDX import`,
@@ -572,7 +626,7 @@ describe("documentation registry invariants", () => {
   )
 
   it("uses registered labels for every visible RelatedCards destination", () => {
-    const labels = new Map(ALL_DOCS_PAGES.map((item) => [item.href, item.label]))
+    const labels = new Map<string, string>(ALL_DOCS_PAGES.map((item) => [item.href, item.label]))
     const mismatches: string[] = []
 
     for (const file of filesUnder(CONTENT_ROOT, (name) => name.endsWith(".mdx"))) {
@@ -657,6 +711,8 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(JSON.parse(result.stdout)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -818,6 +874,8 @@ export const metadata: Metadata = { title: "Real Title" }
     expect(analyzeDocTitles("## Lead-in\n# `Real` Title\n# Later Title\n", wrapper)).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: null,
       docsPageImportTarget: null,
       docsPageHref: null,
@@ -838,10 +896,306 @@ export default function Page() {
     expect(analysis).toEqual({
       firstH1: "Real Title",
       metadataTitle: "Real Title",
+      metadataRoute: null,
+      metadataContractFailures: [],
       contentImportTarget: "../../../content/docs/real.mdx",
       docsPageImportTarget: "../../components/docs/DocsPage",
       docsPageHref: "/docs/real",
     })
+  })
+
+  it("accepts a normal async default page with imported aliases", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+export default async function Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    )
+
+    expect(analysis.contentImportTarget).toBe("../../../content/docs/real.mdx")
+    expect(analysis.docsPageImportTarget).toBe("../../components/docs/DocsPage")
+    expect(analysis.docsPageHref).toBe("/docs/real")
+  })
+
+  it.each([
+    [
+      "default generator declaration",
+      `export default function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    ],
+    [
+      "named generator exported as default",
+      `function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}
+export default Page`,
+    ],
+    [
+      "default generator function expression",
+      `export default (function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+})`,
+    ],
+    [
+      "default async-generator declaration",
+      `export default async function* Page() {
+  return <RenderDocsPage href="/docs/real" Content={Article} />
+}`,
+    ],
+  ])("rejects a %s", (_name, defaultPageSource) => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+${defaultPageSource}`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
+  it("ignores a correct DocsPage in a dead helper when the default export is not a docs page", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+function DeadHelper() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+export default function Page() {
+  return null
+}
+void DeadHelper`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
+  it.each([
+    [
+      "conditional early return",
+      `if (true) return null
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "dead conditional branch",
+      `if (false) {
+    return null
+  }
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "preceding executable statement",
+      `void Article
+  return <RenderDocsPage href="/docs/real" Content={Article} />`,
+    ],
+    [
+      "following executable statement",
+      `return <RenderDocsPage href="/docs/real" Content={Article} />
+  void Article`,
+    ],
+  ])("rejects a canonical return with a bypassing %s", (_name, pageBody) => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Article from "../../../content/docs/real.mdx"
+import { DocsPage as RenderDocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Real Title" }
+export default function Page() {
+  ${pageBody}
+}`,
+    )
+
+    expect(analysis.contentImportTarget).toBeNull()
+    expect(analysis.docsPageImportTarget).toBeNull()
+    expect(analysis.docsPageHref).toBeNull()
+  })
+
+  it("resolves a literal resolver-backed metadata route through the SEO registry", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis).toEqual({
+      firstH1: "Getting Started",
+      metadataTitle: "Getting Started",
+      metadataRoute: "/docs/getting-started",
+      metadataContractFailures: [],
+      contentImportTarget: "../../../content/docs/getting-started.mdx",
+      docsPageImportTarget: "../../components/docs/DocsPage",
+      docsPageHref: "/docs/getting-started",
+    })
+  })
+
+  it("rejects legacy literal metadata for a registry-backed route", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+export const metadata = { title: "Getting Started" }
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataTitle).toBe("Getting Started")
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
+  })
+
+  it("accepts aliased resolver imports by their imported bindings", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import {
+  resolveStaticSeoPage as findSeoPage,
+  toMetadata as buildMetadata,
+} from "../../seo/resolve"
+export const metadata = buildMetadata(findSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/getting-started")
+    expect(analysis.metadataTitle).toBe("Getting Started")
+    expect(analysis.metadataContractFailures).toEqual([])
+  })
+
+  it("rejects resolver-shaped calls imported from the wrong module", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/not-the-resolver"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
+  })
+
+  it("rejects a same-suffix resolver module resolved from the wrapper path", () => {
+    const analysis = analyzeDocTitles(
+      "# Getting Started\n",
+      `import Content from "../../../content/docs/getting-started.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../fake/seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/getting-started" Content={Content} />
+}`,
+      SEO_TITLES_BY_PATH,
+      "/docs/getting-started",
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/getting-started requires resolver metadata",
+    ])
+  })
+
+  it("exposes a resolver route mismatch with the DocsPage href", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+      {
+        "/docs/getting-started": "Getting Started",
+        "/docs/real": "Real Title",
+      },
+      "/docs/real",
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/getting-started")
+    expect(analysis.metadataRoute).not.toBe(analysis.docsPageHref)
+    expect(analysis.metadataContractFailures).toEqual([
+      'metadata resolver route "/docs/getting-started" does not match canonical route "/docs/real"',
+      'metadata resolver route "/docs/getting-started" does not match DocsPage href "/docs/real"',
+    ])
+  })
+
+  it("rejects nonliteral resolver arguments despite valid decoys in comments and strings", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+// export const metadata = toMetadata(resolveStaticSeoPage("/docs/real"))
+const decoy = 'toMetadata(resolveStaticSeoPage("/docs/real"))'
+const route = "/docs/real"
+export const metadata = toMetadata(resolveStaticSeoPage(route))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}
+void decoy`,
+      { "/docs/real": "Real Title" },
+      "/docs/real",
+    )
+
+    expect(analysis.metadataRoute).toBeNull()
+    expect(analysis.metadataTitle).toBeNull()
+    expect(analysis.metadataContractFailures).toEqual([
+      "registry-backed route /docs/real requires resolver metadata",
+    ])
+  })
+
+  it("uses the registry title instead of trusting the resolver call", () => {
+    const analysis = analyzeDocTitles(
+      "# Real Title\n",
+      `import Content from "../../../content/docs/real.mdx"
+import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
+export const metadata = toMetadata(resolveStaticSeoPage("/docs/real"))
+export default function Page() {
+  return <DocsPage href="/docs/real" Content={Content} />
+}`,
+      { "/docs/real": "Wrong Registry Title" },
+      "/docs/real",
+    )
+
+    expect(analysis.metadataRoute).toBe("/docs/real")
+    expect(analysis.metadataTitle).toBe("Wrong Registry Title")
+    expect(analysis.metadataTitle).not.toBe(analysis.firstH1)
+    expect(analysis.metadataContractFailures).toEqual([])
   })
 
   it("rejects a wrong MDX import despite a correct decoy string and comment", () => {

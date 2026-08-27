@@ -1,9 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import { loadPostsFromDir } from "./post-index"
+import { collectPostTags, loadPostsFromDir, type Post, selectVisiblePosts } from "./post-index"
 
 function withFixture(files: Record<string, string>, run: (dir: string) => void) {
   const dir = join(tmpdir(), `blog-fixture-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -97,6 +97,88 @@ const invalidFilenameSlugs = [
 ] as const
 
 describe("loadPostsFromDir", () => {
+  it("selects scheduled posts on their UTC publication date while always excluding drafts", () => {
+    const scheduled = `---
+title: Scheduled post
+description: A scheduled article with a unique production description for visibility testing.
+date: 2026-09-01
+tags: [scheduled]
+type: post
+author: brian
+---
+
+Scheduled body.
+`
+    const draft = scheduled
+      .replace("title: Scheduled post", "title: Scheduled draft")
+      .replace("date: 2026-09-01", "date: 2026-08-01\ndraft: true")
+    withFixture(
+      {
+        "2026-09-01-scheduled-post.mdx": scheduled,
+        "2026-08-01-scheduled-draft.mdx": draft,
+      },
+      (dir) => {
+        const authored = loadPostsFromDir(dir, { includeDrafts: true })
+        expect(selectVisiblePosts(authored, "2026-08-31").map(({ slug }) => slug)).toEqual([])
+        expect(selectVisiblePosts(authored, "2026-09-01").map(({ slug }) => slug)).toEqual([
+          "scheduled-post",
+        ])
+        expect(selectVisiblePosts(authored, "2026-09-02").map(({ slug }) => slug)).toEqual([
+          "scheduled-post",
+        ])
+      },
+    )
+  })
+
+  it("publishes a tag only when a post visible on the selected date owns it", () => {
+    const scheduled: Post = {
+      slug: "scheduled-post",
+      title: "Scheduled post",
+      description:
+        "A scheduled article with a unique production description for visibility testing.",
+      date: "2026-09-01",
+      tags: ["scheduled"],
+      type: "post",
+      author: "brian",
+      draft: false,
+      readingTimeMinutes: 1,
+      sourceFile: "2026-09-01-scheduled-post.mdx",
+    }
+    const draft: Post = {
+      ...scheduled,
+      slug: "scheduled-draft",
+      title: "Scheduled draft",
+      tags: ["draft-only"],
+      draft: true,
+      sourceFile: "2026-09-01-scheduled-draft.mdx",
+    }
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-08-31"))).toEqual([])
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-09-01"))).toEqual([
+      "scheduled",
+    ])
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-09-02"))).toEqual([
+      "scheduled",
+    ])
+  })
+
+  it("exposes authored posts independently of the production route cache", async () => {
+    vi.resetModules()
+    vi.stubEnv("NODE_ENV", "production")
+
+    try {
+      const { getAllPosts, getAuthoredPosts } = await import("./post-index")
+      const authored = getAuthoredPosts()
+      const production = getAllPosts()
+
+      expect(authored.some((post) => post.draft)).toBe(true)
+      expect(production.every((post) => !post.draft)).toBe(true)
+      expect(authored.length).toBeGreaterThan(production.length)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
+
   it("parses frontmatter and returns sorted posts (newest first)", () => {
     withFixture(
       {

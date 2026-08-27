@@ -1,32 +1,38 @@
 import type { MetadataRoute } from "next"
-import { getAllPosts, getAllTags } from "./components/blog/post-index"
-import { ALL_DOCS_PAGES } from "./components/docs/nav"
+import { resolveProductionSeoPages } from "./seo/resolve"
+import type { SeoPage } from "./seo/types"
 
-const SITE_URL = "https://dawnai.org"
+type SitemapPolicy = Pick<MetadataRoute.Sitemap[number], "changeFrequency" | "priority">
+
+function sitemapPolicy(page: SeoPage): SitemapPolicy {
+  switch (page.routeKind) {
+    case "home":
+      return { changeFrequency: "weekly", priority: 1 }
+    case "blog-index":
+      return { changeFrequency: "weekly", priority: 0.8 }
+    case "docs":
+      return { changeFrequency: "monthly", priority: 0.7 }
+    case "blog-post":
+      return { changeFrequency: "yearly", priority: 0.6 }
+    case "blog-tag":
+      return { changeFrequency: "weekly", priority: 0.4 }
+  }
+}
+
+export function toSitemapEntry(page: SeoPage): MetadataRoute.Sitemap[number] {
+  return {
+    url: page.canonical,
+    lastModified: page.lastModified,
+    ...sitemapPolicy(page),
+  }
+}
+
+export function buildSitemap(
+  currentDate = new Date().toISOString().slice(0, 10),
+): MetadataRoute.Sitemap {
+  return resolveProductionSeoPages(currentDate).map(toSitemapEntry)
+}
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const now = new Date().toISOString()
-  const staticEntries: MetadataRoute.Sitemap = [
-    { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "weekly", priority: 1 },
-    { url: `${SITE_URL}/blog`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
-    ...ALL_DOCS_PAGES.map((p) => ({
-      url: `${SITE_URL}${p.href}`,
-      lastModified: now,
-      changeFrequency: "monthly" as const,
-      priority: 0.7,
-    })),
-  ]
-  const blog: MetadataRoute.Sitemap = getAllPosts().map((p) => ({
-    url: `${SITE_URL}/blog/${p.slug}`,
-    lastModified: new Date(`${p.date}T00:00:00Z`).toISOString(),
-    changeFrequency: "yearly",
-    priority: 0.6,
-  }))
-  const tags: MetadataRoute.Sitemap = getAllTags().map(({ tag }) => ({
-    url: `${SITE_URL}/blog/tags/${tag}`,
-    lastModified: now,
-    changeFrequency: "weekly",
-    priority: 0.4,
-  }))
-  return [...staticEntries, ...blog, ...tags]
+  return buildSitemap()
 }

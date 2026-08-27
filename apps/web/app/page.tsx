@@ -12,10 +12,24 @@ import { KeepTheRuntime } from "./components/landing/KeepTheRuntime"
 import { ProofStrip } from "./components/landing/ProofStrip"
 import { Quickstart } from "./components/landing/Quickstart"
 import { WhyDawn } from "./components/landing/WhyDawn"
+import { JsonLd } from "./seo/JsonLd"
+import { resolveStaticSeoPage, toMetadata } from "./seo/resolve"
+import { webPageJsonLd } from "./seo/structured-data"
+
+const resolvedSeoPage = resolveStaticSeoPage("/")
+
+if (resolvedSeoPage?.kind !== "WebPage") {
+  throw new Error("Homepage SEO page is not registered")
+}
+
+const seoPage = resolvedSeoPage
+
+export const metadata = toMetadata(seoPage)
 
 export default function HomePage() {
   return (
     <>
+      <JsonLd data={webPageJsonLd(seoPage)} />
       <Hero />
       <ProofStrip />
       <WhyDawn />
