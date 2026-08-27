@@ -232,6 +232,13 @@ final name exists, only stable exact expected bytes, identity, and mode `0400`
 are accepted. Hard-link or mode-hardening unavailability fails before
 advancement.
 
+There are two explicit reservation-race exceptions. A loser racing the fixed
+setup-plan name may adopt the winner only when that stable plan has the same
+accepted evidence digests and canonical path derivation, then uses the winner's
+transaction ID and logical-finalization timestamp. A loser racing a lock claim
+may return `lost` under the stricter lock rule below. Every other `EEXIST`
+requires the caller's exact expected bytes.
+
 Staging files are never authoritative and are not deleted. Their names bind the
 target name, content digest, and lock generation when one exists. A replay may
 ignore only bounded regular files with a strict staging name and current-user
@@ -316,16 +323,26 @@ results projections, and tool-root absence. It repeats those checks after lock
 acquisition and before `intent`; the preliminary pass provides fail-fast
 behavior, while the locked pass provides transaction authority.
 
-Before locking, reconciliation may create only the private checkout-scope
-directory, its exact `repository.json`, and the lock directory needed to
-serialize controllers. After lock acquisition it may create the exact legacy
-run directory and an empty `cleanup-transaction` directory. It never creates
-`tool-root` or a future run's `control.json`. A crash before `intent` is
-replayable only when those directories and repository marker have the exact
-identities and content captured by the same allocation attempt and the
-transaction directory contains no records. Conflicting or extra content fails
-closed and is never removed. The subsequent `intent` is the legacy run's
-durable control record.
+After the preliminary evidence pass and before any external control-directory
+creation, reconciliation publishes
+`<run-root>/durable-reconciliation-setup.json` with the immutable publisher
+staging directly in the already-authenticated run root. The setup plan commits
+the transaction ID, canonical state base, checkout-scope derivation inputs,
+exact repository-marker bytes and digest, planned lock/run/transaction paths,
+required owners and modes, and the accepted evidence digests.
+
+Only that setup plan authorizes creation or reuse of the private checkout-scope
+directory, exact `repository.json`, and lock directory. After lock acquisition
+it authorizes the exact legacy run directory and empty `cleanup-transaction`
+directory. Replay does not need lost in-memory identities from the creating
+process: it reauthenticates every planned path as a nonsymlink, current-user,
+private directory with exact expected marker content and only explained planned
+entries. The first locked `intent` captures their stable identities. A mismatch
+fails closed and is never removed.
+
+Reconciliation never creates `tool-root` or a future run's `control.json`. The
+subsequent `intent` is the legacy run's durable control record and includes the
+setup-plan identity and digest.
 
 ### Required State Shape
 
@@ -437,23 +454,24 @@ labels that are intentionally not generalized by the overlay.
 
 ## Attestation and Journal
 
-Reconciliation writes authoritative mode-`0400` records under the exact
-durable run-control directory:
+Reconciliation writes authoritative mode-`0400` records at these exact planned
+locations:
 
 ```text
-cleanup-transaction/
-  absent-tool-root-attestation.json
-  00-intent.json
-  01-absence-attested.json
-  staging/
+<repository-run-root>/
+  durable-reconciliation-setup.json
 
-lease-events/
-  <generation>-legacy-lease-retired.json
+<durable-run-control>/
+  cleanup-transaction/
+    absent-tool-root-attestation.json
+    00-intent.json
+    01-absence-attested.json
+    staging/
+
+<durable-checkout-scope>/
+  lease-events/
+    <generation>-legacy-lease-retired.json
 ```
-
-After completion it may write a create-only copy of the attestation under the
-repository run root for convenient review. That copy is evidence only; replay
-and lease authority come from the durable records.
 
 The attestation uses the immutable publisher and includes:
 
@@ -488,14 +506,23 @@ and the phase-specific evidence.
 `intent` commits the accepted arguments; all initial evidence paths,
 identities, and digests; the expected attestation body and digest; the fixed
 logical-finalization timestamp; the exact immutable legacy state, results, and
-lease identities and digests; and the expected legacy lease retirement event.
-Later reconciliation records hash-chain to it. The terminal lease event records
-the `absence-attested` digest, uses a null lease predecessor, and is valid only
-as the empty ledger's genesis event. It has inactive active-run semantics and
-binds the accepted legacy lease path, identity, content digest, run identity,
-owner nonce, and logical-finalization timestamp. Replays accept only the unique
-contiguous chain for the same transaction. Gaps, forks, extra records,
-malformed fields, wrong-action records, and out-of-order records fail closed.
+lease identities and digests; and a canonical legacy-retirement template plus
+its digest. The template binds the accepted legacy lease path, identity,
+content digest, run identity, owner nonce, logical-finalization timestamp, and
+null `leasePredecessorSha256`, but deliberately omits
+`reconciliationPredecessorSha256`.
+
+Later reconciliation records hash-chain to `intent`. After
+`absence-attested` is published, the terminal lease event is derived by adding
+that phase record's digest as `reconciliationPredecessorSha256` to the exact
+intent-committed template. The terminal event is valid only as the empty
+ledger's genesis event and has inactive active-run semantics. Separating the
+lease-ledger predecessor from the reconciliation predecessor avoids a hash
+cycle: `intent` commits the template, `absence-attested` names the intent
+digest, and the terminal event names the absence digest. Replays accept only
+the unique contiguous chain for the same transaction. Gaps, forks, extra
+records, malformed fields, wrong-action records, and out-of-order records fail
+closed.
 
 The transaction performs these mutations in order:
 
@@ -540,10 +567,10 @@ the single create-exclusive claim name. A loser closes its server and does not
 enter the critical section. A crash before claim publication leaves only
 non-authoritative staging residue and an operating-system-released port.
 
-Lock claim publication is the one expected-content exception in the immutable
-publisher: on `EEXIST`, a contender may return `lost` only after the winning
-claim is a stable valid record for the same generation and predecessor. Any
-other target still requires the caller's exact expected bytes.
+For lock claim publication, on `EEXIST` a contender may return `lost` only
+after the winning claim is a stable valid record for the same generation and
+predecessor. Any other non-reservation target still requires the caller's exact
+expected bytes.
 
 The winning server answers a random challenge with a digest bound to the claim
 nonce and challenge. A second controller treats the claim as live only after an
@@ -578,7 +605,8 @@ state and remains the same across replay attempts.
 
 | Highest durable phase | Accepted protected evidence | Lease ledger | Next action |
 |---|---|---|---|
-| none | every accepted file has its original exact bytes, hash, and identity | empty | publish `intent` |
+| none | every accepted file has its original exact bytes, hash, and identity | empty | publish the run-root setup plan; no setup-authorized mutation for this transaction has occurred |
+| `setup-planned` | unchanged exact evidence | empty | create or authenticate only planned control paths, acquire the durable lock, then publish `intent` |
 | `intent` | unchanged exact evidence | empty | publish or authenticate attestation, then `absence-attested` |
 | `absence-attested` | unchanged exact evidence | empty | publish the genesis `legacy-lease-retired` event |
 | `legacy-lease-retired` | unchanged exact evidence | the terminal event is the unique genesis/latest event | verify both chains and return success |
@@ -594,7 +622,9 @@ the highest phase and completes without another mutation.
 
 If interruption occurs:
 
-- before `intent`, no mutation occurred;
+- before the setup plan, no mutation occurred;
+- after `setup-planned`, replay authenticates only the exact planned external
+  directories and marker, then reacquires the lock and publishes `intent`;
 - after `intent`, replay verifies all accepted initial evidence and republishes
   or verifies the exact attestation;
 - after `absence-attested`, replay verifies unchanged protected evidence before
@@ -698,6 +728,11 @@ never the active production run.
 - validates the immutable publisher for every target directory, including
   target-parent sync, retained staging residue, and restart recovery at each
   boundary; and
+- crashes after the run-root setup plan and each planned external-directory
+  creation, then proves replay authenticates exact planned paths without
+  deletion or lost in-memory identities;
+- races setup-plan publication and proves the loser adopts only a winner bound
+  to the same accepted evidence and path plan;
 - rejects unexplained staging files and every lock/lease grammar gap, fork, or
   invalid transition.
 
@@ -721,6 +756,9 @@ never the active production run.
 - writes a complete immutable attestation with cause `unproven`;
 - fault-injects before and after every intent, attestation, absence-phase, and
   terminal lease-event publication boundary;
+- proves `intent` commits a retirement template with an explicit null lease
+  predecessor and no reconciliation predecessor, then derives one terminal
+  event by adding the exact absence-phase digest without a hash cycle;
 - restarts in a new process from every durable phase and reaches the same final
   bytes;
 - rejects malformed, replaced, forked, wrong-action, and out-of-order replay
