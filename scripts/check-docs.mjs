@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { createRequire } from "node:module"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { tsImport } from "tsx/esm/api"
@@ -27,9 +28,6 @@ import {
 } from "./lib/docs-api-inventory.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
-const { default: GithubSlugger } = await import(
-  pathToFileURL(resolve(repoRoot, "apps/web/node_modules/github-slugger/index.js")).href
-)
 
 function maskText(value) {
   return value.replace(/[^\r\n]/g, " ")
@@ -206,7 +204,68 @@ function unwrapExpression(expression) {
   return current
 }
 
-function exportedMetadataTitle(sourceFile) {
+function objectLiteralMetadataTitle(initializer) {
+  const titles = []
+  for (const property of initializer.properties) {
+    if (tsCompiler.isSpreadAssignment(property)) return null
+    const name = property.name
+    if (
+      (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
+      name.text !== "title"
+    )
+      continue
+    if (!tsCompiler.isPropertyAssignment(property)) return null
+    const title = unwrapExpression(property.initializer)
+    if (!tsCompiler.isStringLiteral(title)) return null
+    titles.push(title.text)
+  }
+  return titles.length === 1 ? titles[0] : null
+}
+
+const canonicalSeoResolverPath = resolve(repoRoot, "apps/web/app/seo/resolve.ts")
+
+function canonicalResolverImport(wrapperPath, importTarget) {
+  if (typeof wrapperPath !== "string" || !importTarget.startsWith(".")) return false
+  const resolvedImport = resolve(dirname(wrapperPath), importTarget)
+  const resolvedModulePath = resolvedImport.endsWith(".ts")
+    ? resolvedImport
+    : `${resolvedImport}.ts`
+  return resolvedModulePath === canonicalSeoResolverPath
+}
+
+function resolverBackedMetadata(initializer, checker, seoTitlesByPath, wrapperPath) {
+  if (
+    !tsCompiler.isCallExpression(initializer) ||
+    !tsCompiler.isIdentifier(initializer.expression) ||
+    initializer.arguments.length !== 1
+  ) {
+    return null
+  }
+
+  const outerImport = importTargetForSymbol(checker, initializer.expression, "toMetadata")
+  const resolution = unwrapExpression(initializer.arguments[0])
+  if (
+    !outerImport ||
+    !canonicalResolverImport(wrapperPath, outerImport) ||
+    !tsCompiler.isCallExpression(resolution) ||
+    !tsCompiler.isIdentifier(resolution.expression) ||
+    resolution.arguments.length !== 1
+  ) {
+    return null
+  }
+
+  const innerImport = importTargetForSymbol(checker, resolution.expression, "resolveStaticSeoPage")
+  const route = unwrapExpression(resolution.arguments[0])
+  if (innerImport !== outerImport || !tsCompiler.isStringLiteral(route)) return null
+
+  return {
+    metadataRoute: route.text,
+    metadataTitle:
+      typeof seoTitlesByPath?.[route.text] === "string" ? seoTitlesByPath[route.text] : null,
+  }
+}
+
+function exportedMetadata(sourceFile, checker, seoTitlesByPath, wrapperPath) {
   for (const statement of sourceFile.statements) {
     if (!tsCompiler.isVariableStatement(statement)) continue
     if (
@@ -220,28 +279,50 @@ function exportedMetadataTitle(sourceFile) {
     for (const declaration of statement.declarationList.declarations) {
       if (!tsCompiler.isIdentifier(declaration.name) || declaration.name.text !== "metadata")
         continue
-      if (!declaration.initializer) return null
+      if (!declaration.initializer) return { metadataTitle: null, metadataRoute: null }
       const initializer = unwrapExpression(declaration.initializer)
-      if (!tsCompiler.isObjectLiteralExpression(initializer)) return null
-
-      const titles = []
-      for (const property of initializer.properties) {
-        if (tsCompiler.isSpreadAssignment(property)) return null
-        const name = property.name
-        if (
-          (!tsCompiler.isIdentifier(name) && !tsCompiler.isStringLiteral(name)) ||
-          name.text !== "title"
-        )
-          continue
-        if (!tsCompiler.isPropertyAssignment(property)) return null
-        const title = unwrapExpression(property.initializer)
-        if (!tsCompiler.isStringLiteral(title)) return null
-        titles.push(title.text)
+      if (tsCompiler.isObjectLiteralExpression(initializer)) {
+        return {
+          metadataTitle: objectLiteralMetadataTitle(initializer),
+          metadataRoute: null,
+        }
       }
-      return titles.length === 1 ? titles[0] : null
+      return (
+        resolverBackedMetadata(initializer, checker, seoTitlesByPath, wrapperPath) ?? {
+          metadataTitle: null,
+          metadataRoute: null,
+        }
+      )
     }
   }
-  return null
+  return { metadataTitle: null, metadataRoute: null }
+}
+
+function resolverMetadataContractFailures({
+  canonicalHref,
+  seoTitlesByPath,
+  metadataRoute,
+  docsPageHref,
+}) {
+  if (typeof canonicalHref !== "string" || !Object.hasOwn(seoTitlesByPath ?? {}, canonicalHref)) {
+    return []
+  }
+  if (metadataRoute === null) {
+    return [`registry-backed route ${canonicalHref} requires resolver metadata`]
+  }
+
+  const failures = []
+  if (metadataRoute !== canonicalHref) {
+    failures.push(
+      `metadata resolver route ${JSON.stringify(metadataRoute)} does not match canonical route ${JSON.stringify(canonicalHref)}`,
+    )
+  }
+  if (metadataRoute !== docsPageHref) {
+    failures.push(
+      `metadata resolver route ${JSON.stringify(metadataRoute)} does not match DocsPage href ${JSON.stringify(docsPageHref)}`,
+    )
+  }
+  return failures
 }
 
 function importTargetForSymbol(checker, identifier, expectedImportedName) {
@@ -272,63 +353,116 @@ function importTargetForSymbol(checker, identifier, expectedImportedName) {
     : null
 }
 
-function wrapperContract(sourceFile, checker) {
-  const matches = []
-  function visit(node) {
-    if (tsCompiler.isJsxSelfClosingElement(node) && tsCompiler.isIdentifier(node.tagName)) {
-      let href = null
-      let contentExpression = null
-      let validAttributes = true
-      let hrefCount = 0
-      let contentCount = 0
-      for (const property of node.attributes.properties) {
-        if (tsCompiler.isJsxSpreadAttribute(property)) {
-          validAttributes = false
-          continue
-        }
-        if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name))
-          continue
-        if (property.name.text === "href") {
-          hrefCount++
-          if (property.initializer && tsCompiler.isStringLiteral(property.initializer))
-            href = property.initializer.text
-        }
-        if (property.name.text === "Content") {
-          contentCount++
-          if (
-            property.initializer &&
-            tsCompiler.isJsxExpression(property.initializer) &&
-            property.initializer.expression &&
-            tsCompiler.isIdentifier(property.initializer.expression)
-          ) {
-            contentExpression = property.initializer.expression
-          }
-        }
-      }
-      validAttributes &&= hrefCount === 1 && contentCount === 1
-      matches.push({
-        contentImportTarget:
-          !validAttributes || contentExpression === null
-            ? null
-            : importTargetForSymbol(checker, contentExpression, "default"),
-        docsPageImportTarget: validAttributes
-          ? importTargetForSymbol(checker, node.tagName, "DocsPage")
-          : null,
-        docsPageHref: validAttributes ? href : null,
-      })
-    }
-    node.forEachChild(visit)
-  }
-  sourceFile.forEachChild(visit)
+function nonGeneratorPageFunction(functionNode) {
+  return functionNode.asteriskToken ? null : functionNode
+}
 
-  return matches.length === 1
-    ? matches[0]
-    : { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
+function defaultExportedFunction(sourceFile, checker) {
+  for (const statement of sourceFile.statements) {
+    if (
+      tsCompiler.isFunctionDeclaration(statement) &&
+      statement.modifiers?.some(
+        (modifier) => modifier.kind === tsCompiler.SyntaxKind.DefaultKeyword,
+      ) &&
+      statement.modifiers.some((modifier) => modifier.kind === tsCompiler.SyntaxKind.ExportKeyword)
+    ) {
+      return nonGeneratorPageFunction(statement)
+    }
+    if (!tsCompiler.isExportAssignment(statement) || statement.isExportEquals) continue
+
+    const expression = unwrapExpression(statement.expression)
+    if (tsCompiler.isFunctionExpression(expression) || tsCompiler.isArrowFunction(expression)) {
+      return nonGeneratorPageFunction(expression)
+    }
+    if (!tsCompiler.isIdentifier(expression)) continue
+
+    const declaration = checker.getSymbolAtLocation(expression)?.declarations?.[0]
+    if (declaration && tsCompiler.isFunctionDeclaration(declaration)) {
+      return nonGeneratorPageFunction(declaration)
+    }
+    if (declaration && tsCompiler.isVariableDeclaration(declaration) && declaration.initializer) {
+      const initializer = unwrapExpression(declaration.initializer)
+      if (tsCompiler.isFunctionExpression(initializer) || tsCompiler.isArrowFunction(initializer)) {
+        return nonGeneratorPageFunction(initializer)
+      }
+    }
+  }
+  return null
+}
+
+function defaultPageReturn(functionNode) {
+  if (tsCompiler.isArrowFunction(functionNode) && !tsCompiler.isBlock(functionNode.body)) {
+    return unwrapExpression(functionNode.body)
+  }
+  if (!functionNode.body || !tsCompiler.isBlock(functionNode.body)) return null
+  const [statement] = functionNode.body.statements
+  return functionNode.body.statements.length === 1 &&
+    statement &&
+    tsCompiler.isReturnStatement(statement) &&
+    statement.expression
+    ? unwrapExpression(statement.expression)
+    : null
+}
+
+function wrapperContract(sourceFile, checker) {
+  const pageFunction = defaultExportedFunction(sourceFile, checker)
+  const node = pageFunction ? defaultPageReturn(pageFunction) : null
+  if (
+    !node ||
+    !tsCompiler.isJsxSelfClosingElement(node) ||
+    !tsCompiler.isIdentifier(node.tagName)
+  ) {
+    return { contentImportTarget: null, docsPageImportTarget: null, docsPageHref: null }
+  }
+
+  let href = null
+  let contentExpression = null
+  let validAttributes = true
+  let hrefCount = 0
+  let contentCount = 0
+  for (const property of node.attributes.properties) {
+    if (tsCompiler.isJsxSpreadAttribute(property)) {
+      validAttributes = false
+      continue
+    }
+    if (!tsCompiler.isJsxAttribute(property) || !tsCompiler.isIdentifier(property.name)) continue
+    if (property.name.text === "href") {
+      hrefCount++
+      if (property.initializer && tsCompiler.isStringLiteral(property.initializer)) {
+        href = property.initializer.text
+      }
+    }
+    if (property.name.text === "Content") {
+      contentCount++
+      if (
+        property.initializer &&
+        tsCompiler.isJsxExpression(property.initializer) &&
+        property.initializer.expression &&
+        tsCompiler.isIdentifier(property.initializer.expression)
+      ) {
+        contentExpression = property.initializer.expression
+      }
+    }
+  }
+  validAttributes &&= hrefCount === 1 && contentCount === 1
+  return {
+    contentImportTarget:
+      !validAttributes || contentExpression === null
+        ? null
+        : importTargetForSymbol(checker, contentExpression, "default"),
+    docsPageImportTarget: validAttributes
+      ? importTargetForSymbol(checker, node.tagName, "DocsPage")
+      : null,
+    docsPageHref: validAttributes ? href : null,
+  }
 }
 
 function analyzeDocTitlesBatch(fixtures) {
+  const wrapperPaths = fixtures.map(
+    ({ wrapperPath }, index) => wrapperPath ?? `/wrapper-${index}.tsx`,
+  )
   const sourceByPath = new Map(
-    fixtures.map(({ wrapperSource }, index) => [`/wrapper-${index}.tsx`, wrapperSource]),
+    fixtures.map(({ wrapperSource }, index) => [wrapperPaths[index], wrapperSource]),
   )
   const compilerHost = {
     ...tsCompiler.createCompilerHost({ jsx: tsCompiler.JsxEmit.Preserve, noLib: true }),
@@ -353,24 +487,138 @@ function analyzeDocTitlesBatch(fixtures) {
     host: compilerHost,
   })
   const checker = program.getTypeChecker()
-  return fixtures.map(({ mdxSource }, index) => {
-    const sourceFile = program.getSourceFile(`/wrapper-${index}.tsx`)
+  return fixtures.map(({ mdxSource, seoTitlesByPath, canonicalHref }, index) => {
+    const wrapperPath = wrapperPaths[index]
+    const sourceFile = program.getSourceFile(wrapperPath)
+    const metadata = sourceFile
+      ? exportedMetadata(sourceFile, checker, seoTitlesByPath, wrapperPath)
+      : { metadataTitle: null, metadataRoute: null }
+    const wrapper = sourceFile
+      ? wrapperContract(sourceFile, checker)
+      : {
+          contentImportTarget: null,
+          docsPageImportTarget: null,
+          docsPageHref: null,
+        }
     return {
       firstH1: firstRenderedMdxH1(mdxSource),
-      metadataTitle: sourceFile ? exportedMetadataTitle(sourceFile) : null,
-      ...(sourceFile
-        ? wrapperContract(sourceFile, checker)
-        : {
-            contentImportTarget: null,
-            docsPageImportTarget: null,
-            docsPageHref: null,
-          }),
+      ...metadata,
+      metadataContractFailures: resolverMetadataContractFailures({
+        canonicalHref,
+        seoTitlesByPath,
+        metadataRoute: metadata.metadataRoute,
+        docsPageHref: wrapper.docsPageHref,
+      }),
+      ...wrapper,
     }
   })
 }
 
 function analyzeDocTitles(fixture) {
   return analyzeDocTitlesBatch([fixture])[0]
+}
+
+function staticSeoTitles(source) {
+  const sourceFile = tsCompiler.createSourceFile(
+    "/seo-registry.ts",
+    source,
+    tsCompiler.ScriptTarget.Latest,
+    true,
+    tsCompiler.ScriptKind.TS,
+  )
+  const stringConstants = new Map()
+  const pageConstants = new Map()
+
+  function stringValue(expression) {
+    const value = unwrapExpression(expression)
+    if (tsCompiler.isStringLiteral(value)) return value.text
+    return tsCompiler.isIdentifier(value) ? (stringConstants.get(value.text) ?? null) : null
+  }
+
+  function stringProperty(object, propertyName) {
+    const matches = object.properties.filter(
+      (property) =>
+        tsCompiler.isPropertyAssignment(property) &&
+        ((tsCompiler.isIdentifier(property.name) && property.name.text === propertyName) ||
+          (tsCompiler.isStringLiteral(property.name) && property.name.text === propertyName)),
+    )
+    if (matches.length !== 1) return null
+    return stringValue(matches[0].initializer)
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!tsCompiler.isIdentifier(declaration.name) || !declaration.initializer) continue
+      const value = stringValue(declaration.initializer)
+      if (value !== null) stringConstants.set(declaration.name.text, value)
+    }
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !tsCompiler.isIdentifier(declaration.name) ||
+        declaration.name.text !== "DOCS_SEO_ENTRIES" ||
+        !declaration.initializer
+      )
+        continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isArrayLiteralExpression(initializer)) continue
+
+      const titles = {}
+      for (const element of initializer.elements) {
+        const entry = unwrapExpression(element)
+        if (!tsCompiler.isObjectLiteralExpression(entry)) continue
+        const path = stringProperty(entry, "path")
+        const title = stringProperty(entry, "title")
+        if (path !== null && title !== null) titles[path] = title
+      }
+      if (Object.keys(titles).length > 0) return titles
+    }
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!tsCompiler.isIdentifier(declaration.name) || !declaration.initializer) continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) continue
+      const path = stringProperty(initializer, "path")
+      const title = stringProperty(initializer, "title")
+      if (path !== null && title !== null) pageConstants.set(declaration.name.text, { path, title })
+    }
+  }
+
+  const titles = {}
+  for (const statement of sourceFile.statements) {
+    if (!tsCompiler.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !tsCompiler.isIdentifier(declaration.name) ||
+        declaration.name.text !== "STATIC_SEO_PAGES" ||
+        !declaration.initializer
+      )
+        continue
+      const initializer = unwrapExpression(declaration.initializer)
+      if (!tsCompiler.isObjectLiteralExpression(initializer)) continue
+      for (const property of initializer.properties) {
+        if (!tsCompiler.isPropertyAssignment(property)) continue
+        const key = tsCompiler.isComputedPropertyName(property.name)
+          ? stringValue(property.name.expression)
+          : tsCompiler.isStringLiteral(property.name)
+            ? property.name.text
+            : null
+        const pageExpression = unwrapExpression(property.initializer)
+        const page = tsCompiler.isIdentifier(pageExpression)
+          ? pageConstants.get(pageExpression.text)
+          : undefined
+        if (key !== null && page?.path === key) titles[key] = page.title
+      }
+    }
+  }
+  return titles
 }
 
 function isMarkdownImage(source, linkStart) {
@@ -453,23 +701,115 @@ function analyzeCompatibilityStub({ source, retainedHeading, canonicalHref, maxC
   }
 }
 
-function markdownHeadings(source) {
-  const masked = maskMarkdownCodeAndComments(source)
-  const slugger = new GithubSlugger()
-  return [...masked.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*$/gm)].flatMap((match) => {
-    if (match.index === undefined || !match[1]) return []
-    const lineEnd = source.indexOf("\n", match.index)
-    const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
-    const text = normalizeCodeSpans(
-      originalLine
-        .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
-        .replace(/[ \t]+#+[ \t]*$/, "")
-        .trim(),
-    )
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .trim()
-    return [{ id: slugger.slug(text), index: match.index, level: match[1].length, text }]
+function hastText(node) {
+  if (node.type === "text") return typeof node.value === "string" ? node.value : ""
+  return (node.children ?? []).map(hastText).join("")
+}
+
+function effectiveLiteralMdxId(attributes = []) {
+  for (let index = attributes.length - 1; index >= 0; index--) {
+    const attribute = attributes[index]
+    if (attribute.type === "mdxJsxExpressionAttribute") return null
+    if (attribute.type !== "mdxJsxAttribute" || attribute.name !== "id") continue
+    return typeof attribute.value === "string" && attribute.value !== "" ? attribute.value : null
+  }
+  return null
+}
+
+function collectMarkdownAnalysisNodes() {
+  return (tree, file) => {
+    const headings = []
+    const explicitIds = []
+    function visit(node) {
+      if (node.type === "element" && /^h[1-6]$/.test(node.tagName ?? "")) {
+        const id = node.properties?.id
+        const index = node.position?.start?.offset
+        if (typeof id === "string" && typeof index === "number") {
+          headings.push({
+            id,
+            index,
+            level: Number(node.tagName.slice(1)),
+            text: hastText(node),
+          })
+        }
+      }
+      if (
+        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") &&
+        node.name === "span"
+      ) {
+        const id = effectiveLiteralMdxId(node.attributes)
+        if (id) explicitIds.push(id)
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(tree)
+    file.data.maintainedMarkdownAnalysis = { headings, explicitIds }
+  }
+}
+
+async function resolveMdxPlugins(specs, requireFromWeb) {
+  return await Promise.all(
+    specs.map(async ([name, options]) => {
+      const module = await import(pathToFileURL(requireFromWeb.resolve(name)).href)
+      return [module.default, options]
+    }),
+  )
+}
+
+const requireFromWeb = createRequire(resolve(repoRoot, "apps/web/package.json"))
+const { createProcessor } = await import(pathToFileURL(requireFromWeb.resolve("@mdx-js/mdx")).href)
+const { MDX_REHYPE_PLUGINS, MDX_REMARK_PLUGINS } = await tsImport(
+  pathToFileURL(resolve(repoRoot, "apps/web/lib/mdx-plugins.ts")).href,
+  import.meta.url,
+)
+const markdownRemarkPlugins = await resolveMdxPlugins(MDX_REMARK_PLUGINS, requireFromWeb)
+const markdownRehypePlugins = await resolveMdxPlugins(
+  MDX_REHYPE_PLUGINS.filter(([name]) => name !== "rehype-pretty-code"),
+  requireFromWeb,
+)
+function createMarkdownAnalysisProcessor(format) {
+  return createProcessor({
+    format,
+    remarkPlugins: markdownRemarkPlugins,
+    // Syntax highlighting cannot affect heading identity and is intentionally
+    // omitted from this otherwise shipped MDX/rehype-slug pipeline.
+    rehypePlugins: [...markdownRehypePlugins, collectMarkdownAnalysisNodes],
   })
+}
+
+const markdownAnalysisProcessors = {
+  md: createMarkdownAnalysisProcessor("md"),
+  mdx: createMarkdownAnalysisProcessor("mdx"),
+}
+
+function markdownAnalysis(file, source) {
+  const format = file.toLowerCase().endsWith(".mdx")
+    ? "mdx"
+    : file.toLowerCase().endsWith(".md")
+      ? "md"
+      : null
+  if (!format) throw new Error(`Unsupported documentation format: ${file}`)
+
+  const processed = markdownAnalysisProcessors[format].processSync({ path: file, value: source })
+  const analysis = processed.data.maintainedMarkdownAnalysis
+  if (!analysis || !Array.isArray(analysis.headings) || !Array.isArray(analysis.explicitIds)) {
+    throw new Error(`${file}: documentation analysis did not produce heading identities`)
+  }
+  return analysis
+}
+
+function markdownHeadings(file, source) {
+  return markdownAnalysis(file, source).headings
+}
+
+function maintainedHeadingIds(file, source, onDuplicateId = () => {}) {
+  const { headings, explicitIds } = markdownAnalysis(file, source)
+  const ids = new Set(headings.map(({ id }) => id))
+  for (const id of explicitIds) {
+    if (ids.has(id)) onDuplicateId(id)
+    ids.add(id)
+  }
+  return ids
 }
 
 function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
@@ -516,8 +856,8 @@ function hasExhaustiveApiSymbolInventory(source, knownSymbols, threshold = 5) {
   return false
 }
 
-function markdownSectionRange(source, predicate) {
-  const headings = markdownHeadings(source)
+function markdownSectionRange(file, source, predicate) {
+  const headings = markdownHeadings(file, source)
   const headingIndex = headings.findIndex(predicate)
   const heading = headings[headingIndex]
   if (!heading) return null
@@ -533,7 +873,7 @@ function movedLinkGuardViolations(file, source, contracts) {
     if (!contract) return []
     const fragment = contract.legacyHref.split("#")[1]
     const compatibilityRange = fragment
-      ? markdownSectionRange(source, (heading) => heading.id === fragment)
+      ? markdownSectionRange(file, source, (heading) => heading.id === fragment)
       : null
     if (
       file === contract.legacyFile &&
@@ -547,9 +887,9 @@ function movedLinkGuardViolations(file, source, contracts) {
   })
 }
 
-function canonicalOwnerGuardViolations(source, contracts) {
+function canonicalOwnerGuardViolations(file, source, contracts) {
   return contracts.flatMap(({ heading, required }) => {
-    const range = markdownSectionRange(source, (candidate) => candidate.text === heading)
+    const range = markdownSectionRange(file, source, (candidate) => candidate.text === heading)
     const destinations = range
       ? linkDestinationOccurrences(source.slice(range.start, range.end)).flatMap(
           ({ destination }) => {
@@ -1179,10 +1519,37 @@ if (process.argv[2] === "--analyze-doc-link-guards") {
         fixture.movedContracts ?? [],
       ),
       canonicalViolations: canonicalOwnerGuardViolations(
+        fixture.file ?? "fixture.mdx",
         fixture.source ?? "",
         fixture.canonicalContracts ?? [],
       ),
     })}\n`,
+  )
+  process.exit(0)
+}
+
+async function readStdin() {
+  let input = ""
+  process.stdin.setEncoding("utf8")
+  for await (const chunk of process.stdin) input += chunk
+  return input
+}
+
+async function writeStdout(output) {
+  await new Promise((resolveWrite, rejectWrite) => {
+    process.stdout.write(output, (error) => {
+      if (error) rejectWrite(error)
+      else resolveWrite()
+    })
+  })
+}
+
+if (process.argv[2] === "--analyze-maintained-heading-ids") {
+  const fixture = JSON.parse(await readStdin())
+  await writeStdout(
+    `${JSON.stringify([
+      ...maintainedHeadingIds(fixture.file ?? "fixture.mdx", fixture.source ?? ""),
+    ])}\n`,
   )
   process.exit(0)
 }
@@ -1194,11 +1561,11 @@ if (process.argv[2] === "--analyze-compatibility-stub") {
 }
 
 if (process.argv[2] === "--analyze-doc-titles") {
-  const fixture = JSON.parse(process.argv[3] ?? readFileSync(0, "utf8"))
+  const fixture = JSON.parse(process.argv[3] ?? (await readStdin()))
   const analysis = Array.isArray(fixture)
     ? analyzeDocTitlesBatch(fixture)
     : analyzeDocTitles(fixture)
-  process.stdout.write(`${JSON.stringify(analysis)}\n`)
+  await writeStdout(`${JSON.stringify(analysis)}\n`)
   process.exit(0)
 }
 
@@ -1215,7 +1582,7 @@ if (process.argv[2] === "--analyze-api-reference-manifests") {
 }
 
 if (process.argv[2] === "--analyze-api-inventory") {
-  const fixtures = JSON.parse(readFileSync(0, "utf8"))
+  const fixtures = JSON.parse(await readStdin())
   if (!Array.isArray(fixtures)) {
     throw new Error("--analyze-api-inventory expects one JSON fixture batch on stdin")
   }
@@ -3532,7 +3899,7 @@ const canonicalOwnerContracts = [
 
 for (const { file, heading, required } of canonicalOwnerContracts) {
   failures.push(
-    ...canonicalOwnerGuardViolations(readFileSync(resolve(repoRoot, file), "utf8"), [
+    ...canonicalOwnerGuardViolations(file, readFileSync(resolve(repoRoot, file), "utf8"), [
       { heading, required },
     ]).map((violation) => `${file} ${violation}`),
   )
@@ -3546,31 +3913,10 @@ const maintainedDocsPages = new Map(
       ? `/docs/${relativePath.slice(0, -"/index.mdx".length)}`
       : `/docs/${relativePath.slice(0, -".mdx".length)}`
     const source = readFileSync(file, "utf8")
-    const masked = maskMarkdownCodeAndComments(source)
-    const slugger = new GithubSlugger()
-    const ids = new Set(
-      [...masked.matchAll(/^(?:#{1,6})\s+(.+?)[ \t]*$/gm)].flatMap((match) => {
-        if (match.index === undefined) return []
-        const lineEnd = source.indexOf("\n", match.index)
-        const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd)
-        const text = normalizeCodeSpans(
-          originalLine
-            .replace(/^[ \t]{0,3}#{1,6}[ \t]+/, "")
-            .replace(/[ \t]+#+[ \t]*$/, "")
-            .trim(),
-        )
-          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-          .replace(/<[^>]+>/g, "")
-          .trim()
-        return [slugger.slug(text)]
-      }),
+    const relativeFile = relativeToRoot(file)
+    const ids = maintainedHeadingIds(relativeFile, source, (id) =>
+      failures.push(`${relativeFile} has duplicate id ${id}`),
     )
-    for (const match of masked.matchAll(/<span\s+id=["']([^"']+)["']\s*><\/span>/g)) {
-      const id = match[1]
-      if (!id) continue
-      if (ids.has(id)) failures.push(`${relativeToRoot(file)} has duplicate id ${id}`)
-      ids.add(id)
-    }
     return [route, ids]
   }),
 )
@@ -3950,8 +4296,10 @@ if (apiReferenceRegistry) {
     }
   }
 
-  const apiHubSource = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+  const apiHubFile = "apps/web/content/docs/api.mdx"
+  const apiHubSource = readFileSync(resolve(repoRoot, apiHubFile), "utf8")
   const catalogRange = markdownSectionRange(
+    apiHubFile,
     apiHubSource,
     ({ text }) => text === "Package and surface index",
   )
@@ -4070,7 +4418,7 @@ if (apiReferenceRegistry) {
   )
   if (
     !/Application shortcuts:/i.test(maskMarkdownCodeAndComments(shortcutSource)) ||
-    markdownHeadings(shortcutSource).length !== 0 ||
+    markdownHeadings("apps/web/content/docs/api.mdx", shortcutSource).length !== 0 ||
     JSON.stringify(shortcutDestinations) !== JSON.stringify(applicationShortcutDestinations)
   ) {
     failures.push(
@@ -4230,18 +4578,30 @@ const authoredRegisteredDocs = [
 const analyzableRegisteredDocs = authoredRegisteredDocs.filter(
   ({ href }) => contentDocHrefSet.has(href) && wrapperDocHrefSet.has(href),
 )
+const seoTitlesByPath = staticSeoTitles(
+  readFileSync(resolve(repoRoot, "apps/web/app/seo/registry.ts"), "utf8"),
+)
 const registeredDocAnalyses = analyzeDocTitlesBatch(
   analyzableRegisteredDocs.map(({ href }) => ({
     mdxSource: readFileSync(resolve(repoRoot, docHrefToContentPath(href)), "utf8"),
     wrapperSource: readFileSync(resolve(repoRoot, docHrefToPagePath(href)), "utf8"),
+    wrapperPath: resolve(repoRoot, docHrefToPagePath(href)),
+    seoTitlesByPath,
+    canonicalHref: href,
   })),
 )
 
 for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
   const contentPath = resolve(repoRoot, docHrefToContentPath(href))
   const wrapperPath = resolve(repoRoot, docHrefToPagePath(href))
-  const { firstH1, metadataTitle, contentImportTarget, docsPageImportTarget, docsPageHref } =
-    registeredDocAnalyses[index] ?? {}
+  const {
+    firstH1,
+    metadataTitle,
+    metadataContractFailures,
+    contentImportTarget,
+    docsPageImportTarget,
+    docsPageHref,
+  } = registeredDocAnalyses[index] ?? {}
 
   if (firstH1 !== label) {
     failures.push(
@@ -4252,6 +4612,9 @@ for (const [index, { label, href }] of analyzableRegisteredDocs.entries()) {
     failures.push(
       `${docHrefToPagePath(href)} metadata.title ${JSON.stringify(metadataTitle)} does not match DOCS_NAV label ${JSON.stringify(label)}`,
     )
+  }
+  for (const metadataContractFailure of metadataContractFailures ?? []) {
+    failures.push(`${docHrefToPagePath(href)} ${metadataContractFailure}`)
   }
   const importedContentPath =
     typeof contentImportTarget === "string"
@@ -4544,7 +4907,7 @@ const frozenApiHeadingIds = [
   "where-to-read-more",
   "related",
 ]
-const apiHeadingIds = markdownHeadings(apiMdx).map(({ id }) => id)
+const apiHeadingIds = markdownHeadings("apps/web/content/docs/api.mdx", apiMdx).map(({ id }) => id)
 if (JSON.stringify(apiHeadingIds) !== JSON.stringify(frozenApiHeadingIds)) {
   failures.push(
     `apps/web/content/docs/api.mdx must retain exactly ${frozenApiHeadingIds.length} frozen heading ids in order with no additions`,

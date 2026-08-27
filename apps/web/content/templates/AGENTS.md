@@ -4,7 +4,7 @@ This project uses **Dawn**, a TypeScript-first meta-framework for building graph
 
 ## Project Shape
 
-- **`dawn.config.ts`** at the repo root. Supported keys include:
+- **`dawn.config.ts`** at the Dawn app root. Every path below is relative to that root — the project root in a single-package app, and the `server/` package in an app scaffolded from the default research template. Supported keys include:
   - `appDir` — route directory root; defaults to `src/app`.
   - `backends` — custom filesystem and exec backends for workspace tools.
   - `permissions` — mode plus allow/deny maps for tool and workspace gates.

@@ -1,29 +1,15 @@
 import { randomUUID } from "node:crypto"
 import type { BackendContext, ExecBackend } from "@dawn-ai/workspace"
-import type { Docker, SpawnResult } from "./docker-cli.js"
+import type { Docker } from "./docker-cli.js"
+import {
+  type DockerPidExhaustionRecovery,
+  isDockerExecAdmissionPidExhaustion,
+} from "./docker-pid-exhaustion.js"
 
 interface DockerExecOptions {
   readonly timeoutMs?: number
   readonly runWithExecLease?: <T>(operation: () => Promise<T>) => Promise<T>
-  readonly pidExhaustionRecovery?: {
-    readonly captureToken: () => unknown
-    readonly recoverAndRetry: (
-      token: unknown,
-      retry: () => Promise<SpawnResult>,
-    ) => Promise<SpawnResult | undefined>
-  }
-}
-
-function isPidExhaustion(result: SpawnResult): boolean {
-  if (result.exitCode === 0) return false
-  const output = `${result.stdout}\n${result.stderr}`
-  return (
-    output.includes("OCI runtime exec failed") &&
-    (output.includes("Resource temporarily unavailable") ||
-      output.includes("read init-p: connection reset by peer") ||
-      (output.includes("unable to start container process") &&
-        output.includes("procReady not received")))
-  )
+  readonly pidExhaustionRecovery?: DockerPidExhaustionRecovery
 }
 
 function shellQuote(s: string): string {
@@ -89,7 +75,7 @@ export function dockerExec(
         recoveryToken !== undefined &&
         !isConfiguredTimeout &&
         !firstAttempt.started &&
-        isPidExhaustion(r)
+        isDockerExecAdmissionPidExhaustion(r)
       ) {
         const recovered = await opts.pidExhaustionRecovery.recoverAndRetry(
           recoveryToken,

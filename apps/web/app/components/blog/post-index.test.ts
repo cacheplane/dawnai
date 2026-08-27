@@ -1,9 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import { loadPostsFromDir } from "./post-index"
+import { collectPostTags, loadPostsFromDir, type Post, selectVisiblePosts } from "./post-index"
 
 function withFixture(files: Record<string, string>, run: (dir: string) => void) {
   const dir = join(tmpdir(), `blog-fixture-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -45,7 +45,140 @@ author: brian
 Release body.
 `
 
+function withFrontmatterSlug(slug: unknown): string {
+  return samplePost.replace(
+    "tags: [philosophy]",
+    `tags: [philosophy]\nslug: ${JSON.stringify(slug)}`,
+  )
+}
+
+function expectInvalidSlug(filename: string, raw: string): void {
+  withFixture({ [filename]: raw }, (dir) => {
+    let caught: unknown
+    try {
+      loadPostsFromDir(dir, { includeDrafts: false })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe(`Post ${filename} has an invalid slug`)
+  })
+}
+
+const invalidFrontmatterSlugs = [
+  ["protocol-like text", "https://evil.example/post"],
+  ["network-path text", "//evil.example/post"],
+  ["a single quote", "single'quote"],
+  ["a double quote", 'double"quote'],
+  ["a backslash", "path\\segment"],
+  ["a current-directory dot segment", "."],
+  ["a parent-directory dot segment", ".."],
+  ["a control character", "line\nbreak"],
+  ["uppercase text", "Uppercase"],
+  ["a leading hyphen", "-leading"],
+  ["a trailing hyphen", "trailing-"],
+  ["repeated hyphens", "repeated--hyphens"],
+] as const
+
+const invalidFilenameSlugs = [
+  ["protocol-like text", "https:evil.example.mdx"],
+  ["an encoded network path", "%2F%2Fevil.example.mdx"],
+  ["a single quote", "single'quote.mdx"],
+  ["a double quote", 'double"quote.mdx'],
+  ["a backslash", "path\\segment.mdx"],
+  ["a current-directory dot segment", "..mdx"],
+  ["a parent-directory dot segment", "...mdx"],
+  ["a control character", "line\nbreak.mdx"],
+  ["uppercase text", "Uppercase.mdx"],
+  ["a leading hyphen", "-leading.mdx"],
+  ["a trailing hyphen", "trailing-.mdx"],
+  ["repeated hyphens", "repeated--hyphens.mdx"],
+] as const
+
 describe("loadPostsFromDir", () => {
+  it("selects scheduled posts on their UTC publication date while always excluding drafts", () => {
+    const scheduled = `---
+title: Scheduled post
+description: A scheduled article with a unique production description for visibility testing.
+date: 2026-09-01
+tags: [scheduled]
+type: post
+author: brian
+---
+
+Scheduled body.
+`
+    const draft = scheduled
+      .replace("title: Scheduled post", "title: Scheduled draft")
+      .replace("date: 2026-09-01", "date: 2026-08-01\ndraft: true")
+    withFixture(
+      {
+        "2026-09-01-scheduled-post.mdx": scheduled,
+        "2026-08-01-scheduled-draft.mdx": draft,
+      },
+      (dir) => {
+        const authored = loadPostsFromDir(dir, { includeDrafts: true })
+        expect(selectVisiblePosts(authored, "2026-08-31").map(({ slug }) => slug)).toEqual([])
+        expect(selectVisiblePosts(authored, "2026-09-01").map(({ slug }) => slug)).toEqual([
+          "scheduled-post",
+        ])
+        expect(selectVisiblePosts(authored, "2026-09-02").map(({ slug }) => slug)).toEqual([
+          "scheduled-post",
+        ])
+      },
+    )
+  })
+
+  it("publishes a tag only when a post visible on the selected date owns it", () => {
+    const scheduled: Post = {
+      slug: "scheduled-post",
+      title: "Scheduled post",
+      description:
+        "A scheduled article with a unique production description for visibility testing.",
+      date: "2026-09-01",
+      tags: ["scheduled"],
+      type: "post",
+      author: "brian",
+      draft: false,
+      readingTimeMinutes: 1,
+      sourceFile: "2026-09-01-scheduled-post.mdx",
+    }
+    const draft: Post = {
+      ...scheduled,
+      slug: "scheduled-draft",
+      title: "Scheduled draft",
+      tags: ["draft-only"],
+      draft: true,
+      sourceFile: "2026-09-01-scheduled-draft.mdx",
+    }
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-08-31"))).toEqual([])
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-09-01"))).toEqual([
+      "scheduled",
+    ])
+    expect(collectPostTags(selectVisiblePosts([scheduled, draft], "2026-09-02"))).toEqual([
+      "scheduled",
+    ])
+  })
+
+  it("exposes authored posts independently of the production route cache", async () => {
+    vi.resetModules()
+    vi.stubEnv("NODE_ENV", "production")
+
+    try {
+      const { getAllPosts, getAuthoredPosts } = await import("./post-index")
+      const authored = getAuthoredPosts()
+      const production = getAllPosts()
+
+      expect(authored.some((post) => post.draft)).toBe(true)
+      expect(production.every((post) => !post.draft)).toBe(true)
+      expect(authored.length).toBeGreaterThan(production.length)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
+
   it("parses frontmatter and returns sorted posts (newest first)", () => {
     withFixture(
       {
@@ -67,6 +200,42 @@ describe("loadPostsFromDir", () => {
       expect(p?.slug).toBe("why-we-built-dawn")
     })
   })
+
+  it.each([
+    [
+      "frontmatter",
+      "2026-05-12-source-post.mdx",
+      withFrontmatterSlug("valid-explicit-123"),
+      "valid-explicit-123",
+    ],
+    ["filename", "2026-05-12-valid-derived-123.mdx", samplePost, "valid-derived-123"],
+  ])("round-trips a valid lowercase %s slug", (_source, filename, raw, expectedSlug) => {
+    withFixture({ [filename]: raw }, (dir) => {
+      const [post] = loadPostsFromDir(dir, { includeDrafts: false })
+      expect(post?.slug).toBe(expectedSlug)
+    })
+  })
+
+  it.each(invalidFrontmatterSlugs)(
+    "rejects frontmatter slugs containing %s without echoing the value",
+    (_description, slug) => {
+      expectInvalidSlug("2026-05-12-source-post.mdx", withFrontmatterSlug(slug))
+    },
+  )
+
+  it.each([
+    ["null", null],
+    ["a number", 123],
+  ])("rejects %s as a non-string frontmatter slug", (_description, slug) => {
+    expectInvalidSlug("2026-05-12-source-post.mdx", withFrontmatterSlug(slug))
+  })
+
+  it.each(invalidFilenameSlugs)(
+    "rejects filename-derived slugs containing %s",
+    (_description, filename) => {
+      expectInvalidSlug(filename, samplePost)
+    },
+  )
 
   it("preserves the on-disk filename as sourceFile", () => {
     withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {

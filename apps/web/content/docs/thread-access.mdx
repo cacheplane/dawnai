@@ -42,7 +42,7 @@ export default defineThreadAccess({
 
 Dawn probes four paths, in order: `src/thread-access.ts`, `src/thread-access.js`, `thread-access.ts`, `thread-access.js`. The `default` export wins; a named `threadAccess` export is the fallback.
 
-`create-dawn-app` scaffolds this file, and the `src/auth.ts` it imports, as `src/thread-access.ts.example` and `src/auth.ts.example`. Drop both `.example` suffixes to activate them — Dawn probes for the exact names above, so an unrenamed scaffold changes nothing. They ship inert because a deny-by-default policy denies every request from a caller the app cannot yet authenticate, and a generated app has no identity provider on its first run.
+`create-dawn-app` scaffolds this file, and the `src/auth.ts` it imports, as `src/thread-access.ts.example` and `src/auth.ts.example` inside the Dawn app — that is the generated root in the `basic` template, and the `server/` package in the research workspace. Drop both `.example` suffixes to activate them — Dawn probes for the exact names above, so an unrenamed scaffold changes nothing. They ship inert because a deny-by-default policy denies every request from a caller the app cannot yet authenticate, and a generated app has no identity provider on its first run.
 
 `fallback` is required. "I forgot to handle delete" is a compile error rather than a silent allow — or a silent deny — on every request of that action.
 

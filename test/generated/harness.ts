@@ -235,9 +235,7 @@ export async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
   ).resolves.toBeUndefined()
 }
 
-export async function typecheckGeneratedRuntimeApp(
-  prepared: GeneratedRuntimeApp,
-): Promise<void> {
+export async function typecheckGeneratedRuntimeApp(prepared: GeneratedRuntimeApp): Promise<void> {
   await runPackagedCommand({
     args: ["exec", "dawn", "typegen"],
     command: "pnpm",

@@ -15,7 +15,7 @@ export function PostCard({ post }: { readonly post: Post }) {
   const isRelease = post.type === "release"
   return (
     <Link
-      href={`/blog/${post.slug}`}
+      href={`/blog/${encodeURIComponent(post.slug)}`}
       className={`block p-5 rounded-xl border transition-colors ${
         isRelease
           ? "border-divider bg-surface/30 hover:bg-surface/60"

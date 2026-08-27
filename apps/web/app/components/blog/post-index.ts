@@ -44,6 +44,7 @@ export interface Post {
 }
 
 const DATE_PREFIX = /^\d{4}-\d{2}-\d{2}-/
+const BLOG_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 function slugFromFilename(filename: string): string {
   return filename.replace(/\.mdx?$/, "").replace(DATE_PREFIX, "")
@@ -59,7 +60,7 @@ interface Frontmatter {
   author?: AuthorId
   ogImage?: string
   draft?: boolean
-  slug?: string
+  slug?: unknown
 }
 
 function parsePost(filename: string, raw: string): Post {
@@ -88,13 +89,18 @@ function parsePost(filename: string, raw: string): Post {
     throw new Error(`Release post ${filename} is missing required "version" frontmatter`)
   }
 
+  const slug = Object.hasOwn(fm, "slug") ? fm.slug : slugFromFilename(filename)
+  if (typeof slug !== "string" || !BLOG_SLUG_PATTERN.test(slug)) {
+    throw new Error(`Post ${filename} has an invalid slug`)
+  }
+
   // gray-matter parses YAML date scalars as JS Date objects; normalise to YYYY-MM-DD string.
   const dateStr =
     fm.date instanceof Date ? fm.date.toISOString().slice(0, 10) : String(fm.date).slice(0, 10)
 
   const stats = readingTime(content)
   return {
-    slug: fm.slug ?? slugFromFilename(filename),
+    slug,
     title: fm.title,
     description: fm.description,
     date: dateStr,
@@ -109,6 +115,23 @@ function parsePost(filename: string, raw: string): Post {
   }
 }
 
+export function selectVisiblePosts(posts: readonly Post[], currentDate: string): Post[] {
+  return posts.filter((post) => !post.draft && post.date <= currentDate)
+}
+
+function countPostTags(posts: readonly Post[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const post of posts) {
+    for (const tag of post.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+  }
+  return counts
+}
+
+export function collectPostTags(posts: readonly Post[]): string[] {
+  const counts = countPostTags(posts)
+  return [...counts].sort((left, right) => right[1] - left[1]).map(([tag]) => tag)
+}
+
 export function loadPostsFromDir(
   dir: string,
   opts: { currentDate?: string; includeDrafts: boolean },
@@ -116,21 +139,29 @@ export function loadPostsFromDir(
   const files = readdirSync(dir).filter((f) => f.endsWith(".mdx"))
   const posts = files.map((f) => parsePost(f, readFileSync(join(dir, f), "utf8")))
   const currentDate = opts.currentDate ?? new Date().toISOString().slice(0, 10)
-  const visible = opts.includeDrafts
-    ? posts
-    : posts.filter((p) => !p.draft && p.date <= currentDate)
+  const visible = opts.includeDrafts ? posts : selectVisiblePosts(posts, currentDate)
   return visible.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 
 const CONTENT_DIR = join(webContentRoot(), "blog")
 
-let cache: Post[] | null = null
+let authoredCache: Post[] | null = null
 
-function loadAll(): Post[] {
+export function getAuthoredPosts(): readonly Post[] {
+  if (authoredCache) return authoredCache
+  authoredCache = loadPostsFromDir(CONTENT_DIR, { includeDrafts: true })
+  return authoredCache
+}
+
+let cache: readonly Post[] | null = null
+
+function loadAll(): readonly Post[] {
   if (cache) return cache
-  cache = loadPostsFromDir(CONTENT_DIR, {
-    includeDrafts: process.env.NODE_ENV !== "production",
-  })
+  const authoredPosts = getAuthoredPosts()
+  cache =
+    process.env.NODE_ENV === "production"
+      ? selectVisiblePosts(authoredPosts, new Date().toISOString().slice(0, 10))
+      : authoredPosts
   return cache
 }
 
@@ -147,13 +178,12 @@ export function getPostsByTag(tag: string): readonly Post[] {
 }
 
 export function getAllTags(): readonly { tag: string; count: number }[] {
-  const counts = new Map<string, number>()
-  for (const p of loadAll()) {
-    for (const t of p.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
-  }
-  return [...counts.entries()]
-    .map(([tag, count]) => ({ tag, count }))
-    .sort((a, b) => b.count - a.count)
+  const posts = loadAll()
+  const counts = countPostTags(posts)
+  return collectPostTags(posts).map((tag) => ({
+    tag,
+    count: counts.get(tag) ?? 0,
+  }))
 }
 
 export function getRelatedPosts(slug: string, limit = 2): readonly Post[] {

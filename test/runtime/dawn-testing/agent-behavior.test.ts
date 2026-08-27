@@ -3,20 +3,19 @@
  * Layer A harness (in-process, no pnpm pack / install required).
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-
-import { afterAll, expect, it } from "vitest"
 import {
   createAgentHarness,
   expectFinalMessage,
   expectOffloaded,
   expectState,
   expectToolCalled,
-  script,
   type FixtureSet,
+  script,
 } from "@dawn-ai/testing"
+import { afterAll, expect, it } from "vitest"
 
 const probeAppRoot = fileURLToPath(new URL("./probe-app", import.meta.url))
 const probeAppSummarizeRoot = fileURLToPath(new URL("./probe-app-summarize", import.meta.url))
@@ -58,10 +57,9 @@ it("SP5: discriminated-union tool argument is accepted and anyOf schema is prese
       properties?: Record<string, unknown>
     }>) {
       expect(member.type, "each anyOf member has type=object").toBe("object")
-      expect(
-        JSON.stringify(member),
-        "no charAt leak in member (original #188 bug)",
-      ).not.toContain("charAt")
+      expect(JSON.stringify(member), "no charAt leak in member (original #188 bug)").not.toContain(
+        "charAt",
+      )
     }
 
     // --- (b) Run: model calls applyFilter with union arg, succeeds ---
@@ -113,7 +111,9 @@ it("SP5: discriminated-union tool argument is accepted and anyOf schema is prese
 
     const toolMsg = run.messages.find((m) => isToolMsg(m, "applyFilter"))
     const content = toolMsg ? getToolContent(toolMsg) : ""
-    expect(content, "no schema-rejection in tool content").not.toContain("did not match expected schema")
+    expect(content, "no schema-rejection in tool content").not.toContain(
+      "did not match expected schema",
+    )
     expect(content, "no Invalid input in tool content").not.toContain("Invalid input")
     expect(content, 'expected "matched":2 in tool echo').toContain('"matched":2')
   } finally {

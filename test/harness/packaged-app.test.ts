@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest"
 
 import { getTestRegistryUrl } from "./local-registry.ts"
 import {
+  httpOkReadiness,
   installRegistryScaffolderWithNpm,
   resolveNpmLaunch,
   runGeneratedAppNpmCommand,
@@ -87,6 +88,7 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
         private: true,
         scripts: {
           dev: "node server.mjs dev",
+          "dev:web": "node server.mjs dev:web",
           start: "node server.mjs start",
         },
         type: "module",
@@ -104,13 +106,15 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       'import { createServer } from "node:http"',
       "const mode = process.argv[2]",
       "const args = process.argv.slice(3)",
-      'const portIndex = args.indexOf("--port")',
-      'const port = mode === "dev" ? Number(args[portIndex + 1]) : Number(process.env.PORT)',
-      'const host = mode === "start" ? process.env.HOST : "127.0.0.1"',
+      'const port = mode === "start" ? Number(process.env.PORT) : Number(args[args.indexOf("--port") + 1])',
+      'const host = mode === "start" ? process.env.HOST : (args.includes("-H") ? args[args.indexOf("-H") + 1] : "127.0.0.1")',
       'const startingResponses = Number(process.env.FIXTURE_STARTING_RESPONSES ?? "0")',
+      'const readyAfter = Number(process.env.FIXTURE_READY_AFTER ?? "0")',
       'const exitCode = Number(process.env.FIXTURE_EXIT_CODE ?? "0")',
       'const forcedExitMs = Number(process.env.FIXTURE_FORCED_EXIT_MS ?? "0")',
+      'const sigtermDelayMs = Number(process.env.FIXTURE_SIGTERM_DELAY_MS ?? "0")',
       "let healthRequestCount = 0",
+      "let readyRequestCount = 0",
       'await writeFile(new URL("./observed.json", import.meta.url), JSON.stringify({ args, host, mode, pid: process.pid, port, runtimeEnv: { apiKey: process.env.OPENAI_API_KEY ?? "missing", baseUrl: process.env.OPENAI_BASE_URL ?? "missing", dockerSandbox: process.env.DAWN_DEMO_DOCKER_SANDBOX ?? "missing" }, unsetEnv: process.env.DAWN_TEST_SERVER_UNSET_ENV ?? "missing" }))',
       'process.stdout.write("fixture " + mode + " stdout\\n")',
       'process.stderr.write("fixture " + mode + " stderr\\n")',
@@ -120,6 +124,14 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       "  process.exit(exitCode)",
       "}",
       "const server = createServer((request, response) => {",
+      '  if (request.url === "/ready") {',
+      "    readyRequestCount += 1",
+      '    writeFileSync(new URL("./ready-count.txt", import.meta.url), String(readyRequestCount))',
+      "    const ok = readyRequestCount > readyAfter",
+      '    response.writeHead(ok ? 200 : 503, { "content-type": "application/json" })',
+      '    response.end(JSON.stringify(ok ? { ok: true } : { error: "fixture not ready yet" }))',
+      "    return",
+      "  }",
       '  if (request.url !== "/healthz") {',
       "    response.writeHead(404)",
       "    response.end()",
@@ -132,8 +144,13 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       "})",
       "server.listen(port, host)",
       "const close = () => server.close(() => process.exit(0))",
-      'process.once("SIGTERM", close)',
-      'process.once("SIGINT", close)',
+      // A nested child that dies slower than its parent is the shape the action
+      // settle fix exists for, so this fixture is slow on purpose. The delay is
+      // NOT a measurement of anything real — see PACKAGED_NPM_ACTION_SETTLE_MS
+      // for what actually sets that budget.
+      "const closeAfterDelay = () => { if (sigtermDelayMs > 0) setTimeout(close, sigtermDelayMs); else close() }",
+      'process.once("SIGTERM", closeAfterDelay)',
+      'process.once("SIGINT", closeAfterDelay)',
       "if (forcedExitMs > 0) setTimeout(close, forcedExitMs).unref()",
       "",
     ].join("\n"),
@@ -826,7 +843,9 @@ describe("withPackagedNpmServer", () => {
     const actionWait = new Promise<void>((resolvePromise) => {
       releaseAction = resolvePromise
     })
-    const fallback = setTimeout(() => releaseAction?.(), 5_000)
+    // Long enough that only the harness's own settle budget can end this test:
+    // the action deliberately never unwinds, which is the case the budget bounds.
+    const fallback = setTimeout(() => releaseAction?.(), 30_000)
     fallback.unref()
     let serverResult: Promise<string> | undefined
     let serverUrl = ""
@@ -852,7 +871,11 @@ describe("withPackagedNpmServer", () => {
         thrown = error
       }
 
-      expect(Date.now() - abortedAt).toBeLessThan(3_000)
+      // Teardown now gives the action PACKAGED_NPM_ACTION_SETTLE_MS (5s) to finish
+      // unwinding before killing the child, so a hung action costs that budget —
+      // and no more. Without the upper bound a nested lane could hang cleanup for
+      // the whole run; the nested test below covers the fast path (~1s).
+      expect(Date.now() - abortedAt).toBeLessThan(10_000)
       expect(thrown).toBe(abortReason)
       await expectServerStopped(serverUrl)
       const transcript = await readFile(transcriptPath, "utf8")
@@ -917,6 +940,91 @@ describe("withPackagedNpmServer", () => {
     }
   })
 
+  it("settles a nested server before tearing down the outer one", async () => {
+    const outerRoot = await createNpmServerFixture("dawn-npm-nested-outer-")
+    const innerRoot = await createNpmServerFixture("dawn-npm-nested-inner-")
+    // One transcript for both children, exactly as the activation lane does.
+    const transcriptPath = join(outerRoot, "nested.log")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel the nested npm servers")
+    let innerStartedResolve: (() => void) | undefined
+    const innerStarted = new Promise<void>((resolvePromise) => {
+      innerStartedResolve = resolvePromise
+    })
+    let releaseInner: (() => void) | undefined
+    const innerWait = new Promise<void>((resolvePromise) => {
+      releaseInner = resolvePromise
+    })
+    const fallback = setTimeout(() => releaseInner?.(), 5_000)
+    fallback.unref()
+    let outerResult: Promise<string> | undefined
+    let outerUrl = ""
+    let innerUrl = ""
+
+    try {
+      outerResult = withPackagedNpmServer(
+        { appRoot: outerRoot, script: "start", signal: controller.signal, transcriptPath },
+        async ({ url }) => {
+          outerUrl = url
+          return await withPackagedNpmServer(
+            {
+              appRoot: innerRoot,
+              // The inner child releases its port ~600ms after SIGTERM: slower
+              // than its parent on purpose, which is the only property this test
+              // needs. Without the settle the outer tears down first and both
+              // children append at once. Do not read 600ms as a bound on
+              // PACKAGED_NPM_ACTION_SETTLE_MS — that constant explains why any
+              // value large enough to pass here can still be far too small.
+              env: { FIXTURE_SIGTERM_DELAY_MS: "600" },
+              script: "start",
+              signal: controller.signal,
+              transcriptPath,
+            },
+            async ({ url: nestedUrl }) => {
+              innerUrl = nestedUrl
+              innerStartedResolve?.()
+              await innerWait
+              return "inner-action-complete"
+            },
+          )
+        },
+      )
+
+      await innerStarted
+      controller.abort(abortReason)
+      // The inner action keeps unwinding past the abort — that is the whole point.
+      await delay(50)
+      releaseInner?.()
+
+      let thrown: unknown
+      try {
+        await outerResult
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBe(abortReason)
+      // LIFO: both children are gone by the time the OUTER promise settles.
+      await expectServerStopped(innerUrl)
+      await expectServerStopped(outerUrl)
+
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).not.toContain("[exit pending")
+      expect(transcript.match(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/g)).toHaveLength(2)
+      const innerIndex = transcript.indexOf(`$ (cd ${innerRoot} && npm run start)`)
+      const outerIndex = transcript.indexOf(`$ (cd ${outerRoot} && npm run start)`)
+      expect(innerIndex).toBeGreaterThanOrEqual(0)
+      expect(outerIndex).toBeGreaterThan(innerIndex)
+    } finally {
+      clearTimeout(fallback)
+      releaseInner?.()
+      controller.abort(abortReason)
+      await outerResult?.catch(() => undefined)
+      await rm(outerRoot, { force: true, recursive: true })
+      await rm(innerRoot, { force: true, recursive: true })
+    }
+  })
+
   it.skipIf(process.platform !== "win32")(
     "launches npm scripts through argv from a Windows metacharacter path",
     async () => {
@@ -964,6 +1072,96 @@ describe("withPackagedNpmServer", () => {
 
       expect(healthRequestCount).toBeGreaterThanOrEqual(3)
       await expectServerStopped(serverUrl)
+    } finally {
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("waits for a custom readiness probe on a child with no health endpoint", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-web-readiness-")
+    const transcriptPath = join(appRoot, "web-readiness.log")
+    const restoreDockerSandbox = setTestEnvironmentVariable("DAWN_DEMO_DOCKER_SANDBOX", "1")
+    const restoreBaseUrl = setTestEnvironmentVariable("OPENAI_BASE_URL", "ambient-base-url")
+    const restoreApiKey = setTestEnvironmentVariable("OPENAI_API_KEY", "ambient-api-key")
+    let serverUrl = ""
+
+    try {
+      const session = await withPackagedNpmServer(
+        {
+          appRoot,
+          env: { FIXTURE_READY_AFTER: "2" },
+          readiness: httpOkReadiness("/ready"),
+          script: "dev:web",
+          transcriptPath,
+        },
+        async ({ url }) => {
+          serverUrl = url
+          // The default `/healthz` probe never ran: the fixture only writes
+          // health-count.txt when something asks for `/healthz`.
+          await expect(readFile(join(appRoot, "health-count.txt"), "utf8")).rejects.toMatchObject({
+            code: "ENOENT",
+          })
+          return {
+            observed: await readObservedServer(appRoot),
+            readyRequestCount: Number(await readFile(join(appRoot, "ready-count.txt"), "utf8")),
+          }
+        },
+      )
+
+      const port = new URL(serverUrl).port
+      // Two 503s were rejected before the 200 released the action.
+      expect(session.readyRequestCount).toBeGreaterThanOrEqual(3)
+      expect(session.observed.args).toEqual(["--port", port, "-H", "127.0.0.1"])
+      expect(session.observed.host).toBe("127.0.0.1")
+      expect(session.observed.mode).toBe("dev:web")
+      expect(session.observed.port).toBe(Number(port))
+      // GENERATED_APP_UNSET_ENV protection holds on the web spawn path too.
+      expect(session.observed.runtimeEnv).toEqual({
+        apiKey: "missing",
+        baseUrl: "missing",
+        dockerSandbox: "missing",
+      })
+      await expectServerStopped(serverUrl)
+      await expect(readFile(transcriptPath, "utf8")).resolves.toContain(
+        `$ (cd ${appRoot} && npm run dev:web -- --port ${port} -H 127.0.0.1)`,
+      )
+    } finally {
+      restoreApiKey()
+      restoreBaseUrl()
+      restoreDockerSandbox()
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("names the readiness contract when the child exits first", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-web-early-exit-")
+    const transcriptPath = join(appRoot, "web-early-exit.log")
+    let actionRan = false
+    let thrown: unknown
+
+    try {
+      try {
+        await withPackagedNpmServer(
+          {
+            appRoot,
+            env: { FIXTURE_EXIT_CODE: "23" },
+            readiness: httpOkReadiness("/ready"),
+            script: "dev:web",
+            transcriptPath,
+          },
+          async () => {
+            actionRan = true
+          },
+        )
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(actionRan).toBe(false)
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toContain("npm run dev:web")
+      expect((thrown as Error).message).toContain("GET /ready -> 2xx")
+      expect((thrown as Error).message).toContain("exit 23, signal none")
     } finally {
       await rm(appRoot, { force: true, recursive: true })
     }

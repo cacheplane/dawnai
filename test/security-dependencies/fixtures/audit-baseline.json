@@ -1,0 +1,345 @@
+{
+  "schemaVersion": 1,
+  "full": {
+    "muted": [],
+    "records": [
+      {
+        "package": "@ai-sdk/provider-utils",
+        "version": "3.0.28",
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "severity": "low"
+      },
+      {
+        "package": "@hono/node-server",
+        "version": "1.19.14",
+        "ghsa": "GHSA-frvp-7c67-39w9",
+        "severity": "moderate"
+      },
+      {
+        "package": "body-parser",
+        "version": "1.20.5",
+        "ghsa": "GHSA-v422-hmwv-36x6",
+        "severity": "low"
+      },
+      {
+        "package": "brace-expansion",
+        "version": "2.1.1",
+        "ghsa": "GHSA-3jxr-9vmj-r5cp",
+        "severity": "high"
+      },
+      {
+        "package": "brace-expansion",
+        "version": "2.1.1",
+        "ghsa": "GHSA-mh99-v99m-4gvg",
+        "severity": "high"
+      },
+      {
+        "package": "brace-expansion",
+        "version": "2.1.1",
+        "ghsa": "GHSA-rgw5-rvv9-x895",
+        "severity": "high"
+      },
+      {
+        "package": "dompurify",
+        "version": "3.4.11",
+        "ghsa": "GHSA-55q2-fjhq-7xh7",
+        "severity": "moderate"
+      },
+      {
+        "package": "dompurify",
+        "version": "3.4.11",
+        "ghsa": "GHSA-c2j3-45gr-mqc4",
+        "severity": "low"
+      },
+      {
+        "package": "fast-uri",
+        "version": "3.1.3",
+        "ghsa": "GHSA-7p8r-x3mc-p8w7",
+        "severity": "high"
+      },
+      {
+        "package": "fast-uri",
+        "version": "3.1.3",
+        "ghsa": "GHSA-v2hh-gcrm-f6hx",
+        "severity": "high"
+      },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-54fx-42gc-7vw4",
+        "severity": "moderate"
+      },
+      { "package": "hono", "version": "4.12.28", "ghsa": "GHSA-79qm-7rj5-m7r9", "severity": "low" },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-8j4g-w8fx-2239",
+        "severity": "moderate"
+      },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-f23p-vx2j-j53r",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-22jq-vg5j-6vgg",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-4xrf-jv44-h6hh",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-mwp4-54f8-5fhr",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "3.15.0",
+        "ghsa": "GHSA-5p4m-2wfm-xmqj",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "4.2.0",
+        "ghsa": "GHSA-52cp-r559-cp3m",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "4.2.0",
+        "ghsa": "GHSA-5p4m-2wfm-xmqj",
+        "severity": "high"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-2v8p-3f2j-5mp7",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-3rrr-jr9j-h3q3",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-6x64-9x62-f2gx",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-c4c3-pg64-4m4v",
+        "severity": "low"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-rhh3-jpg6-66xh",
+        "severity": "moderate"
+      },
+      {
+        "package": "nanoid",
+        "version": "3.3.15",
+        "ghsa": "GHSA-28wg-ghj8-5hjv",
+        "severity": "high"
+      },
+      {
+        "package": "nanoid",
+        "version": "3.3.15",
+        "ghsa": "GHSA-2v37-7h3g-55p8",
+        "severity": "high"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-6g55-p6wh-862q",
+        "severity": "high"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-fxqj-rqcc-2cmp",
+        "severity": "moderate"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-r28c-9q8g-f849",
+        "severity": "high"
+      }
+    ]
+  },
+  "production": {
+    "muted": [],
+    "records": [
+      {
+        "package": "@ai-sdk/provider-utils",
+        "version": "3.0.28",
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "severity": "low"
+      },
+      {
+        "package": "@hono/node-server",
+        "version": "1.19.14",
+        "ghsa": "GHSA-frvp-7c67-39w9",
+        "severity": "moderate"
+      },
+      {
+        "package": "body-parser",
+        "version": "1.20.5",
+        "ghsa": "GHSA-v422-hmwv-36x6",
+        "severity": "low"
+      },
+      {
+        "package": "dompurify",
+        "version": "3.4.11",
+        "ghsa": "GHSA-55q2-fjhq-7xh7",
+        "severity": "moderate"
+      },
+      {
+        "package": "dompurify",
+        "version": "3.4.11",
+        "ghsa": "GHSA-c2j3-45gr-mqc4",
+        "severity": "low"
+      },
+      {
+        "package": "fast-uri",
+        "version": "3.1.3",
+        "ghsa": "GHSA-7p8r-x3mc-p8w7",
+        "severity": "high"
+      },
+      {
+        "package": "fast-uri",
+        "version": "3.1.3",
+        "ghsa": "GHSA-v2hh-gcrm-f6hx",
+        "severity": "high"
+      },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-54fx-42gc-7vw4",
+        "severity": "moderate"
+      },
+      { "package": "hono", "version": "4.12.28", "ghsa": "GHSA-79qm-7rj5-m7r9", "severity": "low" },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-8j4g-w8fx-2239",
+        "severity": "moderate"
+      },
+      {
+        "package": "hono",
+        "version": "4.12.28",
+        "ghsa": "GHSA-f23p-vx2j-j53r",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-22jq-vg5j-6vgg",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-4xrf-jv44-h6hh",
+        "severity": "moderate"
+      },
+      {
+        "package": "ip-address",
+        "version": "10.2.0",
+        "ghsa": "GHSA-mwp4-54f8-5fhr",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "3.15.0",
+        "ghsa": "GHSA-5p4m-2wfm-xmqj",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "4.2.0",
+        "ghsa": "GHSA-52cp-r559-cp3m",
+        "severity": "high"
+      },
+      {
+        "package": "js-yaml",
+        "version": "4.2.0",
+        "ghsa": "GHSA-5p4m-2wfm-xmqj",
+        "severity": "high"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-2v8p-3f2j-5mp7",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-3rrr-jr9j-h3q3",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-6x64-9x62-f2gx",
+        "severity": "moderate"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-c4c3-pg64-4m4v",
+        "severity": "low"
+      },
+      {
+        "package": "mermaid",
+        "version": "11.16.0",
+        "ghsa": "GHSA-rhh3-jpg6-66xh",
+        "severity": "moderate"
+      },
+      {
+        "package": "nanoid",
+        "version": "3.3.15",
+        "ghsa": "GHSA-28wg-ghj8-5hjv",
+        "severity": "high"
+      },
+      {
+        "package": "nanoid",
+        "version": "3.3.15",
+        "ghsa": "GHSA-2v37-7h3g-55p8",
+        "severity": "high"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-6g55-p6wh-862q",
+        "severity": "high"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-fxqj-rqcc-2cmp",
+        "severity": "moderate"
+      },
+      {
+        "package": "postcss",
+        "version": "8.5.10",
+        "ghsa": "GHSA-r28c-9q8g-f849",
+        "severity": "high"
+      }
+    ]
+  }
+}

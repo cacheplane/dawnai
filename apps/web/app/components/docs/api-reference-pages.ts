@@ -1,7 +1,10 @@
-export interface ApiReferencePage {
-  readonly label: string
-  readonly href: string
-  readonly surfaceName: string
+export interface ApiReferencePage<
+  SurfaceName extends string = string,
+  Href extends string = string,
+> {
+  readonly label: SurfaceName
+  readonly href: Href
+  readonly surfaceName: SurfaceName
   readonly ownerPackageNames: readonly string[]
   readonly parent: {
     readonly label: "API Reference"
@@ -34,11 +37,11 @@ export const API_REFERENCE_PAGES = [
   referencePage("@dawn-ai/sqlite-storage", "/docs/api/sqlite-storage", ["@dawn-ai/sqlite-storage"]),
 ] as const satisfies readonly ApiReferencePage[]
 
-function referencePage(
-  surfaceName: string,
-  href: string,
+function referencePage<const SurfaceName extends string, const Href extends string>(
+  surfaceName: SurfaceName,
+  href: Href,
   ownerPackageNames: readonly string[],
-): ApiReferencePage {
+): ApiReferencePage<SurfaceName, Href> {
   return {
     label: surfaceName,
     href,

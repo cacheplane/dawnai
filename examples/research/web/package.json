@@ -9,12 +9,13 @@
     "lint": "biome check --config-path ../../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app tsconfig.json vitest.config.ts next.config.mjs postcss.config.mjs",
     "start": "next start -p 3010",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "test:e2e": "playwright test --config playwright.config.ts",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.57",
-    "@copilotkit/react-core": "^1.66.0",
-    "@copilotkit/runtime": "^1.66.0",
+    "@copilotkit/react-core": "^1.68.3",
+    "@copilotkit/runtime": "^1.68.3",
     "@dawn-ai/ag-ui": "workspace:*",
     "@tailwindcss/postcss": "^4.3.3",
     "next": "16.3.0",
@@ -23,7 +24,7 @@
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
-    "@dawn-ai/config-typescript": "workspace:*",
+    "@playwright/test": "1.62.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",

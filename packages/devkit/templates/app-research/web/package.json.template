@@ -1,0 +1,32 @@
+{
+  "name": "{{appName}}-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3010",
+    "build": "next build",
+    "start": "next start -p 3010",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@ag-ui/client": "0.0.57",
+    "@copilotkit/react-core": "^1.68.3",
+    "@copilotkit/runtime": "^1.68.3",
+    "@dawn-ai/ag-ui": "{{dawnAgUiSpecifier}}",
+    "@tailwindcss/postcss": "^4.3.3",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "jsdom": "^30.0.1",
+    "typescript": "7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

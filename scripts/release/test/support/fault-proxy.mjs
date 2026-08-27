@@ -232,7 +232,18 @@ async function routeRequest({
     jsonResponse(response, 405, { code: "METHOD_NOT_ALLOWED" })
     return
   }
-  const target = new URL(request.url ?? "/", upstream)
+  const requestTarget = request.url ?? "/"
+  if (requestTarget.startsWith("//")) {
+    jsonResponse(response, 400, { code: "INVALID_TARGET" })
+    return
+  }
+  let target
+  try {
+    target = new URL(requestTarget, upstream)
+  } catch {
+    jsonResponse(response, 400, { code: "INVALID_TARGET" })
+    return
+  }
   if (target.origin !== upstream.origin) {
     jsonResponse(response, 400, { code: "INVALID_TARGET" })
     return
@@ -272,13 +283,19 @@ async function routeRequest({
   }
   recordForwardStart()
   try {
-    await forward({ request, response, target, forwardDeadlineMs })
+    await forward({
+      request,
+      response,
+      upstream,
+      path: `${target.pathname}${target.search}`,
+      forwardDeadlineMs,
+    })
   } finally {
     recordForwardEnd()
   }
 }
 
-async function forward({ request, response, target, forwardDeadlineMs }) {
+async function forward({ request, response, upstream, path, forwardDeadlineMs }) {
   let upstreamRequest
   let upstreamResponse
   let deadlineTimer
@@ -298,14 +315,15 @@ async function forward({ request, response, target, forwardDeadlineMs }) {
       settled = true
       callback(value)
     }
-    const headers = {}
-    if (typeof request.headers.accept === "string") headers.Accept = request.headers.accept
-    if (typeof request.headers.host === "string") headers.Host = request.headers.host
     upstreamRequest = httpRequest(
-      target,
       {
+        protocol: upstream.protocol,
+        hostname: upstream.hostname,
+        port: upstream.port,
         method: request.method,
-        headers,
+        path,
+        headers:
+          typeof request.headers.accept === "string" ? { Accept: request.headers.accept } : {},
         timeout: FORWARD_TIMEOUT_MS,
       },
       (incoming) => {

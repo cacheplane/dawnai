@@ -230,13 +230,13 @@ Commit the eval and any fixture files alongside your route. In CI, run `dawn eva
 
 ## Your scaffolded app already has an eval
 
-`create-dawn-ai-app` generates `src/app/research/evals/research-quality.eval.ts` next to the default research route, adds `@dawn-ai/evals` as a dev dependency, and wires an `eval` npm script. Run it right after scaffolding:
+`create-dawn-ai-app` generates `server/src/app/research/evals/research-quality.eval.ts` next to the default research route, adds `@dawn-ai/evals` as a dev dependency of the `server` package, and wires an `eval` npm script at the workspace root. Run it right after scaffolding:
 
 ```bash
 npm run eval
 ```
 
-This wraps `dawn eval` and runs the agent cases in **replay mode** by default. The generated eval (`src/app/research/evals/research-quality.eval.ts`) has two dataset cases and four scorers:
+This wraps `dawn eval` and runs the agent cases in **replay mode** by default. The generated eval (`server/src/app/research/evals/research-quality.eval.ts`) has two dataset cases and four scorers:
 
 - `toolCalled("searchCorpus", { threshold: 1 })` — asserts the agent called `searchCorpus`.
 - `contains("[corpus/", { threshold: 1 })` — asserts the reply cites a corpus source.
