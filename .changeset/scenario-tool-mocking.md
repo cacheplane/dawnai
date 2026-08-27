@@ -14,5 +14,4 @@ migrate.
 
 Add route-scoped fluent `dawn test` scenarios with generated application-tool
 types, invocation-local in-process tool mocks, and declarative mock call
-assertions. Scenario files now use `scenarios("/route")`; plain default-exported
-arrays are no longer supported.
+assertions.

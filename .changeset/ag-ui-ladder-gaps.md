@@ -37,8 +37,7 @@ Four details worth knowing about the resulting surface:
   them at values that are themselves theme-aware, so a half-overridden palette
   does not mix with the package's.
 
-The package README documents this precisely. `classNames`
-entries are appended to the package defaults and never substituted, but the
-stylesheet is unlayered, so an appended class only takes effect on a property the
-sheet leaves unset on that element. The docs now say which properties those are
-and which remain rung-4 work.
+`classNames` entries are appended to the package defaults and never
+substituted, but the stylesheet is unlayered, so an appended class only takes
+effect on a property the sheet leaves unset on that element. The README says
+which properties those are and which remain rung-4 work.
