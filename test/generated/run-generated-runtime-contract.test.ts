@@ -10,8 +10,8 @@ import {
   prepareGeneratedRuntimeApp,
   readGeneratedExpectedFixture,
   runGeneratedRuntimeScenario,
-  typecheckGeneratedRuntimeApp,
   type TrackedTempDir,
+  typecheckGeneratedRuntimeApp,
 } from "./harness.ts"
 
 const tempDirs: TrackedTempDir[] = []
@@ -94,9 +94,7 @@ describe("generated app runtime contract", () => {
     const transcript = await readFile(prepared.transcriptPath, "utf8")
 
     expectGeneratedRuntimeScenario(result, expected)
-    expect(transcript).toContain(
-      `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`,
-    )
+    expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`)
     expect(transcript).toContain(
       `node packages/create-dawn-app/dist/bin.js ${prepared.appRoot} --mode internal --template basic`,
     )
@@ -133,7 +131,7 @@ function stripGeneratedRuntimeProof(result: unknown): unknown {
     devServerHealth: _devServerHealth,
     serverRequestUrl: _serverRequestUrl,
     ...rest
-  } = result
+  } = result as Record<string, unknown>
 
   return rest
 }

@@ -140,7 +140,7 @@ async function runTurn(opts: {
     routeFile: resolved.routeFile,
     routeId: resolved.routeId,
     routePath: resolved.routePath,
-    sandboxManager: manager,
+    ...(manager ? { sandboxManager: manager } : {}),
     threadId: opts.threadId,
   })
   return collectRunResult(stream, opts.threadId)
