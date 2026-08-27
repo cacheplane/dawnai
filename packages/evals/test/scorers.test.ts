@@ -34,6 +34,7 @@ function run(partial: Partial<AgentRunResult>): AgentRunResult {
     finalMessage: "",
     messages: [],
     toolCalls: [],
+    toolResults: [],
     tokens: [],
     state: {},
     threadId: "t",

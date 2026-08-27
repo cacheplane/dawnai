@@ -9,6 +9,7 @@ function run(finalMessage: string, toolCalls: AgentRunResult["toolCalls"] = []):
     finalMessage,
     messages: [],
     toolCalls,
+    toolResults: [],
     tokens: [],
     state: {},
     threadId: "t",

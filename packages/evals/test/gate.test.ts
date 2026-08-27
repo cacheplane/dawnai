@@ -46,11 +46,11 @@ describe("gate policies", () => {
   })
   it("resolveGate prefers gate, then threshold sugar, then informational", () => {
     expect(
-      resolveGate({ name: "e", dataset: [], scorers: [], gate: gate.mean(0.9) })(report).passed,
+      resolveGate({ gate: gate.mean(0.9) })(report).passed,
     ).toBe(false)
     expect(
-      resolveGate({ name: "e", dataset: [], scorers: [], threshold: 0.7 })(report).passed,
+      resolveGate({ threshold: 0.7 })(report).passed,
     ).toBe(true)
-    expect(resolveGate({ name: "e", dataset: [], scorers: [] })(report).passed).toBe(true) // informational
+    expect(resolveGate({})(report).passed).toBe(true) // informational
   })
 })

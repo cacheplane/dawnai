@@ -185,7 +185,9 @@ describe("DawnSqliteSaver", () => {
 
     // Pending writes must also round-trip correctly
     expect(tuple!.pendingWrites).toHaveLength(1)
-    const [taskId, channel, value] = tuple!.pendingWrites![0]
+    const pendingWrite = tuple!.pendingWrites?.[0]
+    if (!pendingWrite) throw new Error("expected exactly one pending write to round-trip")
+    const [taskId, channel, value] = pendingWrite
     expect(taskId).toBe("tools-task-1")
     expect(channel).toBe("__interrupt__")
     expect((value as Record<string, unknown>).id).toBe("test-interrupt")
