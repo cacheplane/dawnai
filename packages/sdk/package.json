@@ -39,9 +39,9 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json tsconfig.contracts.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json tsconfig.contracts.json tsconfig.test.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json && tsc -p tsconfig.test.json"
   },
   "peerDependencies": {
     "zod": "^4.0.0"

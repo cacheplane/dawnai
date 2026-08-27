@@ -7,7 +7,7 @@ declare module "../src/testing/index.js" {
     "/research": {
       readonly tools: {
         readonly ping: () => Promise<string>
-        readonly searchWeb: (input: { readonly query: string }) => Promise<{
+        readonly searchWeb: (input: { readonly query: string; readonly limit: number }) => Promise<{
           readonly results: readonly string[]
         }>
       }
@@ -94,8 +94,24 @@ describe("scenarios", () => {
   })
 
   test("rejects incomplete and conflicting states at runtime", () => {
-    // biome-ignore lint/suspicious/noExplicitAny: this test deliberately bypasses the public type states.
-    type UnsafeBuilder = Record<string, (...args: any[]) => any>
+    // Deliberately bypasses the public staged builder types so each guard can
+    // be violated at runtime; every method is total so the calls typecheck.
+    interface UnsafeCall {
+      called(): UnsafeCall
+      calledOnce(): UnsafeCall
+      notCalled(): UnsafeCall
+      withArgs(args: unknown): UnsafeCall
+    }
+    interface UnsafeBuilder {
+      input(value: unknown): UnsafeBuilder
+      server(url: string): UnsafeBuilder
+      mockTool(name: string, impl: (input: never) => unknown): UnsafeBuilder
+      expectPassed(): UnsafeBuilder
+      expectFailed(): UnsafeBuilder
+      expectError(expectation: unknown): UnsafeBuilder
+      expectOutput(output: unknown): UnsafeBuilder
+      expectTool(name: string, expect: (call: UnsafeCall) => unknown): UnsafeBuilder
+    }
 
     const suite = scenarios("/research") as unknown as {
       scenario(name: string, configure: (builder: UnsafeBuilder) => UnsafeBuilder): unknown
