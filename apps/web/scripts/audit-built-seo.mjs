@@ -110,7 +110,7 @@ export function extractPageMetadata(html) {
 
   const jsonLdEntities = []
   let jsonLdScriptCount = 0
-  const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi
+  const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi
   for (const match of html.matchAll(scriptPattern)) {
     const attributes = attributesFor(match[1] ?? "")
     if (attributes.get("type")?.toLowerCase() !== "application/ld+json") continue
@@ -125,8 +125,8 @@ export function extractPageMetadata(html) {
 
   const visibleText = decodeEntities(
     html
-      .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, " ")
-      .replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+      .replace(/<head\b[^>]*>[\s\S]*?<\/head\b[^>]*>/gi, " ")
+      .replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1\b[^>]*>/gi, " ")
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/\s+/g, " ")

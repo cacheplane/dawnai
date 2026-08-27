@@ -163,12 +163,12 @@ describe("built SEO audit parsing", () => {
     ).toEqual(["TechArticle", "BreadcrumbList"])
   })
 
-  it("accepts whitespace before HTML closing-tag brackets", () => {
+  it("accepts ignored text before HTML closing-tag brackets", () => {
     const html = pageHtml({ "@type": "TechArticle" })
-      .replace("</script>", "</script >")
+      .replace("</script>", "</script\t\n ignored>")
       .replace(
         "<main>Visible route content</main>",
-        "<main>Visible route content</main><style>Hidden style text</style ><noscript>Hidden fallback text</noscript >",
+        "<main>Visible route content</main><style>Hidden style text</style ignored><noscript>Hidden fallback text</noscript ignored>",
       )
 
     const parsed = extractPageMetadata(html)
