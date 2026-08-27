@@ -1153,3 +1153,91 @@ The Search Console final-data baseline window remains 2026-05-26 through
 after the reporting window and lag can catch up. For crawl conclusions, wait
 until the submitted sitemap's `lastDownloaded` is newer than the deployment;
 an older timestamp cannot establish that Google fetched the remediated build.
+
+## Integration and final pre-PR verification — 2026-08-26
+
+This section is additive. It preserves the original measurement and validation
+evidence above while recording what changed when the remediation branch was
+integrated with the then-current `origin/main` before review and deployment.
+
+### Main integration and failure attribution
+
+The branch was updated from `origin/main` twice, ending at upstream commit
+`805fc0de`. The first integration changed seven Git-derived documentation
+modification dates; the generator was rerun and its freshness check passed.
+
+The first integrated repository validation exposed two TypeScript errors for
+CSS imports in `examples/chat/web/app/layout.tsx`. The SEO branch had no diff
+from `main` in either failing file, so this was recorded as an upstream build
+graph/type-declaration problem rather than attributed to the SEO work. A
+separate prerequisite PR was opened, then closed without merge when upstream
+PR #499 landed the same declaration plus the complete Turbo dependency-graph
+fix. The SEO branch then merged that upstream fix.
+
+After the second integration, one branch-owned exact-date assertion failed
+because upstream had legitimately modified the Getting Started page. The
+expected Git-derived date was refreshed and the focused 46-test SEO suite
+passed. The sitemap distribution also changed from the earlier 25-date
+snapshot to 23 distinct dates because upstream edits grouped additional pages
+under shared commits. A test-first boundary check rejected 22 and accepted 23;
+the generated registry still contains 20 distinct documentation dates, with
+the sitemap's non-document routes bringing the deployed expectation to 23.
+This is not a build-date collapse.
+
+### Complete current-code validation
+
+After all integration fixes, the complete repository validation was rerun from
+the beginning on code HEAD `0fd29cab` with Node 24.19.0 selected explicitly:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm ci:validate
+
+Test Files  434 passed | 17 skipped (451)
+Tests       4769 passed | 215 skipped (4984)
+Duration    164.93s
+
+release-controller: 557 passed, 0 failed
+release-publish: 8 passed, 0 failed
+upload-release-assets: 5 passed, 0 failed
+backfill-release-tags: 8 passed, 0 failed
+sync-chart-appversion: 6 passed, 0 failed
+Docs completeness check passed.
+pack-check unit tests: 58 passed; Pack check passed.
+TypeScript tooling pack unit tests: 27 passed; runtime and tsc probes passed.
+harness-report self-test passed
+
+run: harness-2026-08-27T010926-994Z-62787
+status: passed
+started: 2026-08-27T01:09:26.995Z
+finished: 2026-08-27T01:18:03.125Z
+requested lanes: framework, runtime, smoke
+executed lanes: framework, runtime, smoke
+passed=3 failed=0 skipped=0 errored=0
+[framework] Framework verification: passed (316749ms)
+[runtime] Runtime contract (real dev parity): passed (141299ms)
+[smoke] Runtime smoke: passed (58078ms)
+
+# final exit 0
+```
+
+Expected negative bundling fixtures again printed unresolved-package messages
+for `pg-native` and deliberately missing packages; their owning tests passed.
+
+The exact build produced by that validation was started locally and audited
+through HTTP rather than inferred from source files:
+
+```console
+$ pnpm --filter @dawn-ai/web seo:audit-built -- \
+    --base-url http://127.0.0.1:3018
+
+SEO built audit: PASS
+base=http://127.0.0.1:3018 asOf=2026-08-27
+inventory=83 docs=75 posts=3 tags=3
+sitemap=83 lastmodDates=23 html=83 jsonLdEntities=331
+robotsGroups=11 llms=2 llmsDocs=75 ogImages=3 og404s=2
+failures=0
+```
+
+This remains pre-deployment evidence. No statement in this section claims that
+`dawnai.org` serves this build; that is verified separately with direct live
+requests after the production deployment completes.
