@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { localFilesystem } from "../src/local-filesystem.js"
 
 function ctx(workspaceRoot: string) {
@@ -130,8 +130,10 @@ describe("localFilesystem", () => {
     const fs = localFilesystem({ maxFileBytes: 10 })
     const p = join(root, "big.txt")
     await fs.writeFile(p, "x".repeat(100), ctx(root))
-    await expect(fs.readFile(p, ctx(root))).rejects.toThrow(/too large/)            // default cap rejects
-    expect(await fs.readFile(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })).toBe("x".repeat(100)) // override allows
+    await expect(fs.readFile(p, ctx(root))).rejects.toThrow(/too large/) // default cap rejects
+    expect(await fs.readFile(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })).toBe(
+      "x".repeat(100),
+    ) // override allows
   })
 
   it("readBinaryFile returns the exact bytes as a Uint8Array", async () => {
@@ -146,7 +148,9 @@ describe("localFilesystem", () => {
   it("readBinaryFile rejects files larger than maxFileBytes", async () => {
     writeFileSync(join(root, "big.bin"), Buffer.alloc(2048))
     const fs = localFilesystem({ maxFileBytes: 1024 })
-    await expect(fs.readBinaryFile?.(join(root, "big.bin"), ctx(root))).rejects.toThrow(/too large/i)
+    await expect(fs.readBinaryFile?.(join(root, "big.bin"), ctx(root))).rejects.toThrow(
+      /too large/i,
+    )
   })
 
   it("readBinaryFile honors a per-call maxBytes override", async () => {

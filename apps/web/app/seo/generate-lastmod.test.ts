@@ -26,7 +26,12 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true })
 })
 
-describe("generate-seo-lastmod", () => {
+// These suites shell out to Node subprocesses (`check-docs.mjs`, bundling
+// probes, the sitemap generator), so their runtime tracks machine load rather
+// than the work in the test. Under a saturated parallel run they have exceeded
+// vitest's 5000ms default and failed as timeouts rather than as anything real.
+// The explicit suite timeout leaves room for that without hiding a genuine hang.
+describe("generate-seo-lastmod", { timeout: 30_000 }, () => {
   it(
     "runs a freshness check for the checked-in manifest using today's production visibility",
     () => {

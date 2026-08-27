@@ -2,14 +2,9 @@ import { constants } from "node:fs"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { expect, it } from "vitest"
-import {
-  createAgentHarness,
-  expectFinalMessage,
-  expectToolCalled,
-  script,
-} from "@dawn-ai/testing"
 import { dockerSandbox } from "@dawn-ai/sandbox"
+import { createAgentHarness, expectFinalMessage, expectToolCalled, script } from "@dawn-ai/testing"
+import { expect, it } from "vitest"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const enabled = process.env.DAWN_DEMO_DOCKER_SANDBOX === "1"

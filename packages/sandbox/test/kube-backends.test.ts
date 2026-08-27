@@ -9,8 +9,15 @@ async function withPod() {
   const k = fakeKubeClient()
   await k.createNamespacedPvcIfAbsent("ns", { name: "vol", labels: {}, storageGi: 1 })
   await k.createNamespacedPod("ns", {
-    name: "p", image: "i", labels: {}, pvcName: "vol", env: [], limits: {},
-    podSecurityContext: {}, containerSecurityContext: {}, readOnlyRootFilesystem: true,
+    name: "p",
+    image: "i",
+    labels: {},
+    pvcName: "vol",
+    env: [],
+    limits: {},
+    podSecurityContext: {},
+    containerSecurityContext: {},
+    readOnlyRootFilesystem: true,
     automountServiceAccountToken: false,
   })
   return k
@@ -26,9 +33,13 @@ test("runCommand execs sh -c and returns the exit code", async () => {
 test("cwd defaults to workspaceRoot; invalid env key throws", async () => {
   const k = await withPod()
   const seen: string[] = []
-  const spy = { ...k, exec: async (ns: string, pod: string, argv: readonly string[]) => {
-    seen.push(argv.join(" ")); return k.exec(ns, pod, argv)
-  } }
+  const spy = {
+    ...k,
+    exec: async (ns: string, pod: string, argv: readonly string[]) => {
+      seen.push(argv.join(" "))
+      return k.exec(ns, pod, argv)
+    },
+  }
   const exec = kubeExec(spy, "ns", "p", {})
   await exec.runCommand({ command: "true" }, ctx("/workspace"))
   expect(seen[0]).toContain("cd '/workspace' &&")
@@ -59,7 +70,7 @@ test("kubeFilesystem readFile honors maxBytes", async () => {
   const k = await withPod()
   const fs = kubeFilesystem(k, "ns", "p")
   await fs.writeFile("/workspace/big", "0123456789", ctx("/workspace"))
-  await expect(
-    fs.readFile("/workspace/big", ctx("/workspace"), { maxBytes: 4 }),
-  ).rejects.toThrow(/exceeds maxBytes/)
+  await expect(fs.readFile("/workspace/big", ctx("/workspace"), { maxBytes: 4 })).rejects.toThrow(
+    /exceeds maxBytes/,
+  )
 })

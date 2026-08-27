@@ -3,10 +3,18 @@ import { compose } from "../src/compose.js"
 import type { FilesystemBackend, FilesystemMiddleware } from "../src/types.js"
 
 const base: FilesystemBackend = {
-  async readFile() { return "BASE" },
-  async writeFile() { return { bytesWritten: 0 } },
-  async listDir() { return [] },
-  async realPath(p) { return p },
+  async readFile() {
+    return "BASE"
+  },
+  async writeFile() {
+    return { bytesWritten: 0 }
+  },
+  async listDir() {
+    return []
+  },
+  async realPath(p) {
+    return p
+  },
 }
 
 describe("compose", () => {
@@ -45,7 +53,10 @@ describe("compose", () => {
         return r
       },
     })
-    await compose(a, b)(base).readFile("x", {
+    await compose(
+      a,
+      b,
+    )(base).readFile("x", {
       signal: new AbortController().signal,
       workspaceRoot: "/",
     })

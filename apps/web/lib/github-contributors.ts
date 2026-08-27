@@ -17,7 +17,7 @@ export async function getGitHubContributors(): Promise<number> {
     }
     const response = await fetch(
       `https://api.github.com/repos/${REPO}/contributors?per_page=1&anon=true`,
-      { headers, next: { revalidate: 3600 } }
+      { headers, next: { revalidate: 3600 } },
     )
     if (!response.ok) return FALLBACK
     const link = response.headers.get("link") ?? ""

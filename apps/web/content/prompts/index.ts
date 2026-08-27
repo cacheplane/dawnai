@@ -1,15 +1,10 @@
-export type PromptSlug =
-	| "scaffold"
-	| "add-a-tool"
-	| "write-a-route"
-	| "write-a-test"
-	| "deploy";
+export type PromptSlug = "scaffold" | "add-a-tool" | "write-a-route" | "write-a-test" | "deploy"
 
 export interface PromptEntry {
-	readonly slug: PromptSlug;
-	readonly title: string;
-	readonly description: string;
-	readonly body: string;
+  readonly slug: PromptSlug
+  readonly title: string
+  readonly description: string
+  readonly body: string
 }
 
 const SCAFFOLD = `Help me scaffold a new Dawn app from the default research starter. Dawn is a TypeScript-first meta-framework for building graph-based AI agents with file-system routing, shared and route-local tools, and inferred types.
@@ -75,7 +70,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const ADD_A_TOOL = `Help me add a new tool to an existing Dawn app. Dawn discovers shared tools in \`src/tools/*.ts\` and route-local tools in \`src/app/<route>/tools/*.ts\`; their types are generated from TypeScript — no Zod schemas or manual type wiring.
 
@@ -107,7 +102,7 @@ Constraints:
 - \`readonly\` is recommended on input fields; Dawn preserves it through type generation.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes are directories under \`src/app/\` where each directory maps to a URL-style pathname (minus route groups).
 
@@ -169,7 +164,7 @@ Constraints:
 - The \`RouteTools<"/path">\` type is generated from the shared and route-local tools available to that route.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const WRITE_A_TEST = `Help me write tests for a Dawn route. Pick the right style for the route kind:
 
@@ -263,7 +258,7 @@ Constraints:
 - In-process scenarios can replace selected application tools with \`.mockTool()\` and assert calls with \`.expectTool()\`; server-backed scenarios cannot use tool mocks.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can emit a self-hosted Node server, an opt-in edge app, generated LangGraph entries, or any combination named in \`build.targets\`.
 
@@ -315,45 +310,45 @@ const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can 
 5. Show me the exact files the build emitted, the command that starts or deploys them, the required runtime environment and storage, and one target-boundary smoke test. Refer to https://dawnai.org/docs/deployment for the full service and limitation matrix rather than reproducing it.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 export const PROMPTS: readonly PromptEntry[] = [
-	{
-		slug: "scaffold",
-		title: "Scaffold a new Dawn app",
-		description: "Create a new Dawn project and walk through the structure.",
-		body: SCAFFOLD,
-	},
-	{
-		slug: "add-a-tool",
-		title: "Add a tool",
-		description: "Add a type-inferred tool to an existing route.",
-		body: ADD_A_TOOL,
-	},
-	{
-		slug: "write-a-route",
-		title: "Write a route",
-		description: "Create a new route with workflow/graph/chain.",
-		body: WRITE_A_ROUTE,
-	},
-	{
-		slug: "write-a-test",
-		title: "Write a test",
-		description: "Choose agent harness tests or deterministic route scenarios.",
-		body: WRITE_A_TEST,
-	},
-	{
-		slug: "deploy",
-		title: "Choose a deployment target",
-		description: "Build for the Dawn Node runtime, a compatible edge app, or LangSmith.",
-		body: DEPLOY,
-	},
-];
+  {
+    slug: "scaffold",
+    title: "Scaffold a new Dawn app",
+    description: "Create a new Dawn project and walk through the structure.",
+    body: SCAFFOLD,
+  },
+  {
+    slug: "add-a-tool",
+    title: "Add a tool",
+    description: "Add a type-inferred tool to an existing route.",
+    body: ADD_A_TOOL,
+  },
+  {
+    slug: "write-a-route",
+    title: "Write a route",
+    description: "Create a new route with workflow/graph/chain.",
+    body: WRITE_A_ROUTE,
+  },
+  {
+    slug: "write-a-test",
+    title: "Write a test",
+    description: "Choose agent harness tests or deterministic route scenarios.",
+    body: WRITE_A_TEST,
+  },
+  {
+    slug: "deploy",
+    title: "Choose a deployment target",
+    description: "Build for the Dawn Node runtime, a compatible edge app, or LangSmith.",
+    body: DEPLOY,
+  },
+]
 
 export function getPrompt(slug: PromptSlug): PromptEntry {
-	const entry = PROMPTS.find((p) => p.slug === slug);
-	if (!entry) {
-		throw new Error(`Unknown prompt slug: ${slug}`);
-	}
-	return entry;
+  const entry = PROMPTS.find((p) => p.slug === slug)
+  if (!entry) {
+    throw new Error(`Unknown prompt slug: ${slug}`)
+  }
+  return entry
 }

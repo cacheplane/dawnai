@@ -663,7 +663,7 @@ export const API_BEHAVIOR_CONTRACTS = [
         file: "packages/workspace/test/local-exec.test.ts",
         testNames: ["runCommand enforces timeout"],
         assertionFingerprint:
-          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) , ) . rejects . toThrow ( /timeout/i )',
+          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) ) . rejects . toThrow ( /timeout/i )',
       },
     ],
   },

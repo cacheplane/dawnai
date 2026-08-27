@@ -26,8 +26,8 @@ describe("defineEval", () => {
     expect(defineEval({ name: "e", dataset: "cases.jsonl", scorers: [scorer] }).dataset).toBe(
       "cases.jsonl",
     )
-    expect(typeof defineEval({ name: "e", dataset: () => [{ input: "x" }], scorers: [scorer] }).dataset).toBe(
-      "function",
-    )
+    expect(
+      typeof defineEval({ name: "e", dataset: () => [{ input: "x" }], scorers: [scorer] }).dataset,
+    ).toBe("function")
   })
 })

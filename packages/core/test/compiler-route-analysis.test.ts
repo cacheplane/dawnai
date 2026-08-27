@@ -107,7 +107,13 @@ function compileScenarioDeclaration(options: {
   return { diagnostics }
 }
 
-describe("analyzeRouteTools", () => {
+// These suites drive the TypeScript compiler through
+// `src/compiler/typescript-backend.ts`, so their runtime tracks machine load
+// rather than the work in the test. Idle they finish well inside a second; under
+// a saturated parallel run they have exceeded vitest's 5000ms default and failed
+// as timeouts rather than as anything real. The explicit suite timeout leaves
+// room for that without hiding a genuine hang.
+describe("analyzeRouteTools", { timeout: 30_000 }, () => {
   test("analyzes the effective sorted tool set with one compiler program", () => {
     const routeDir = join(tempDir, "route")
     const sharedToolsDir = join(tempDir, "shared")

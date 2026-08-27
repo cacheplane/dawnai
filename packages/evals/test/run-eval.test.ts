@@ -1,13 +1,23 @@
-import { describe, expect, it } from "vitest"
 import type { AgentRunResult } from "@dawn-ai/testing"
+import { describe, expect, it } from "vitest"
+import { gate } from "../src/gate.js"
 import { runEval } from "../src/run-eval.js"
 import { contains, toolCalled } from "../src/scorers.js"
-import { gate } from "../src/gate.js"
 
 function run(finalMessage: string, toolCalls: AgentRunResult["toolCalls"] = []): AgentRunResult {
   return {
-    finalMessage, messages: [], toolCalls, tokens: [], state: {}, threadId: "t",
-    interrupts: [], planUpdates: [], todos: [], subagents: [], subagentEvents: [], systemPrompt: "",
+    finalMessage,
+    messages: [],
+    toolCalls,
+    tokens: [],
+    state: {},
+    threadId: "t",
+    interrupts: [],
+    planUpdates: [],
+    todos: [],
+    subagents: [],
+    subagentEvents: [],
+    systemPrompt: "",
   }
 }
 
@@ -43,7 +53,12 @@ describe("runEval", () => {
         name: "e",
         dataset: [{ input: "x" }],
         scorers: [
-          { name: "boom", score: () => { throw new Error("kaboom") } },
+          {
+            name: "boom",
+            score: () => {
+              throw new Error("kaboom")
+            },
+          },
           contains("x"),
         ],
         threshold: 0,

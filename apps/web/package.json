@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app scripts next.config.ts tsconfig.json mdx-components.tsx",
+    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app content lib scripts mdx-components.tsx next.config.ts postcss.config.mjs vercel.json vitest.config.ts tsconfig.json",
     "seo:audit-built": "node scripts/audit-built-seo.mjs",
     "seo:lastmod": "node scripts/generate-seo-lastmod.mjs",
     "seo:lastmod:check": "node scripts/generate-seo-lastmod.mjs --check",

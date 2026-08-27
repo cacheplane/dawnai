@@ -415,7 +415,12 @@ function topologyFailures(
   return failures
 }
 
-describe("documentation registry invariants", () => {
+// These suites shell out to Node subprocesses (`check-docs.mjs`, bundling
+// probes, the sitemap generator), so their runtime tracks machine load rather
+// than the work in the test. Under a saturated parallel run they have exceeded
+// vitest's 5000ms default and failed as timeouts rather than as anything real.
+// The explicit suite timeout leaves room for that without hiding a genuine hang.
+describe("documentation registry invariants", { timeout: 30_000 }, () => {
   it("uses the exact eight-section foundation", () => {
     expect(DOCS_NAV).toEqual(FOUNDATION_DOCS_NAV)
   })
@@ -693,7 +698,7 @@ describe("documentation registry invariants", () => {
   })
 })
 
-describe("documentation title analysis", () => {
+describe("documentation title analysis", { timeout: 30_000 }, () => {
   const wrapper = `import type { Metadata } from "next"
 export const metadata: Metadata = { title: "Real Title" }
 `
@@ -1289,7 +1294,7 @@ ${pageSource}`,
   })
 })
 
-describe("maintained documentation heading identity analysis", () => {
+describe("maintained documentation heading identity analysis", { timeout: 30_000 }, () => {
   it("accepts analyzer input larger than an argv payload", () => {
     const source = `## Large fixture\n${" ".repeat(1_100_000)}`
 
@@ -1391,7 +1396,7 @@ describe("maintained documentation heading identity analysis", () => {
   })
 })
 
-describe("compatibility stub analysis", () => {
+describe("compatibility stub analysis", { timeout: 30_000 }, () => {
   const canonicalHref = "/docs/canonical"
 
   it("recognizes retained heading text that contains inline code", () => {
@@ -1556,7 +1561,7 @@ ${"x".repeat(650)}
   })
 })
 
-describe("canonical docs link guard analysis", () => {
+describe("canonical docs link guard analysis", { timeout: 30_000 }, () => {
   it("uses standard Markdown grammar for README ownership guards", () => {
     const requiredHref = "/docs/ag-ui"
     const source = `<!-- README ownership note -->
