@@ -4,6 +4,25 @@ import { describe, expect, test, vi } from "vitest"
 
 import { createScenarioSnapshotter } from "../src/testing/scenario-snapshot.js"
 
+// The ES2022 lib carries no WebAssembly declarations (they live in lib.dom),
+// and this suite feature-detects the global at runtime anyway — declare only
+// the narrow slice it touches.
+declare global {
+  var WebAssembly: {
+    readonly Module: (new (
+      bytes: Uint8Array,
+    ) => object) & {
+      exports(module: object): unknown[]
+    }
+    readonly Memory: new (descriptor: { initial: number }) => object
+    readonly Table: new (descriptor: { element: string; initial: number }) => object
+    readonly Global: new (
+      descriptor: { mutable: boolean; value: string },
+      value?: unknown,
+    ) => object
+  }
+}
+
 describe("createScenarioSnapshotter", () => {
   test("preserves all array data properties and cycles", () => {
     const marker = Symbol("marker")

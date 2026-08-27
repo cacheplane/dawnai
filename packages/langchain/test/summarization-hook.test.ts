@@ -1,6 +1,6 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { describe, expect, it, vi } from "vitest"
-import { buildSummarizationHook } from "../src/summarization/hook.js"
+import { buildSummarizationHook, type SummarizeFn } from "../src/summarization/hook.js"
 
 const H = (c: string) => new HumanMessage(c)
 const A = (c: string) => new AIMessage(c)
@@ -36,14 +36,12 @@ describe("buildSummarizationHook", () => {
   })
 
   it("incrementally folds only the newly-aged delta (previousSummary + delta)", async () => {
-    const summarize = vi.fn(async () => "S2")
+    const summarize = vi.fn<SummarizeFn>(async () => "S2")
     const hook = makeHook({ maxTokens: 5, keepRecentTurns: 1, summarize })
     const msgs = [H("u1"), A("a1"), H("u2"), A("a2"), H("u3"), A("a3")]
     await hook({ messages: msgs, runningSummary: { summary: "S1", coveredCount: 2 } })
-    const arg = summarize.mock.calls[0]?.[0] as {
-      previousSummary?: string
-      messages: Array<{ content: string }>
-    }
+    const arg = summarize.mock.calls[0]?.[0]
+    if (!arg) throw new Error("summarize was never called")
     expect(arg.previousSummary).toBe("S1")
     expect(arg.messages.map((m) => m.content)).toEqual(["u2", "a2"]) // delta only (toSummarize=[u1,a1,u2,a2], minus covered 2)
   })

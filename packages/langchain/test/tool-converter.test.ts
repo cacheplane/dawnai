@@ -384,7 +384,9 @@ describe("convertToolToLangChain — {result, state} wrapped returns", () => {
 
 describe("convertToolToLangChain — config.configurable forwarding", () => {
   it("forwards thread_id and route params from config.configurable into the tool run context", async () => {
-    let seen: { threadId?: string; params?: Record<string, string> } | undefined
+    let seen:
+      | { threadId: string | undefined; params: Record<string, string> | undefined }
+      | undefined
     const tool = {
       name: "probe",
       run: (_input: unknown, ctx: { threadId?: string; params?: Record<string, string> }) => {

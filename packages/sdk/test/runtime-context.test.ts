@@ -1,5 +1,12 @@
-import type { RuntimeContext, RuntimeTool } from "@dawn-ai/sdk"
+import type { RuntimeContext, RuntimeTool, WorkspaceFs } from "@dawn-ai/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
+
+const stubWorkspaceFs: WorkspaceFs = {
+  readFile: async () => "",
+  readBinaryFile: async () => new Uint8Array(),
+  writeFile: async () => ({ bytesWritten: 0 }),
+  listDir: async () => [],
+}
 
 describe("@dawn-ai/sdk runtime-context type surface", () => {
   test("runtime-context types are exported from the package root", () => {
@@ -10,6 +17,7 @@ describe("@dawn-ai/sdk runtime-context type surface", () => {
     expectTypeOf<RuntimeContext<Tools>>().toEqualTypeOf<{
       readonly signal: AbortSignal
       readonly tools: Tools
+      readonly fs: WorkspaceFs
     }>()
   })
 
@@ -28,6 +36,7 @@ describe("@dawn-ai/sdk runtime-context type surface", () => {
         tools: {
           lookupCustomer: async ({ id }) => ({ id }),
         },
+        fs: stubWorkspaceFs,
       },
     )
 
