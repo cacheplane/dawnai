@@ -615,7 +615,8 @@ mechanism.
 | Sitemap date-distribution regression | `e3736d66` | Executable 2026-08-26 minimum of 25 distinct sitemap dates, 24/25 boundary tests, and repeated built-site evidence. |
 | Generator integration-test stabilization | `10fa9631`, `1c45a891` | Fifteen-second bounds for the three full-Git-history generator tests, followed by the owning formatter correction. |
 | Pre-deployment evidence finalization | `6961d150` | Green web lane, complete repository validation, repeated built-site audit, and chronological failure evidence before the request-containment review follow-up. |
-| Built-audit request containment | `fix: constrain search audit requests` (review follow-up commit) | Local-origin containment for build-derived sitemap and OG requests, inventory-derived image counts, RED/GREEN regressions, and a repeated built-site audit. Final full-repository validation is pending after review. |
+| Built-audit request containment | `2f779f9f` | Local-origin containment for build-derived sitemap and OG requests, inventory-derived image counts, RED/GREEN regressions, and a repeated built-site audit. |
+| Final current-HEAD pre-deployment verification | `docs: refresh pre-deployment verification` (report-only follow-up commit) | Full web lane, complete repository validation, and fresh built-site audit after the approved request-containment fix. |
 
 The Task 9 commit contains only:
 
@@ -628,6 +629,8 @@ The review follow-up contains only the audit script, its focused test, and this
 report. It does not change product, CI, or deployment behavior.
 
 The finalization follow-up contains only this report.
+
+The final current-HEAD refresh also contains only this report.
 
 ### Manifest final-state gate
 
@@ -821,12 +824,25 @@ Duration    45.14s
 The same dynamic-import analysis warning recorded below appeared, and no
 generator test timed out.
 
+After the approved request-containment fix in `2f779f9f`, the unchanged full
+parallel web lane was rerun from a clean worktree under Node 24.19.0. All 13
+built-audit tests were included, and no generator test timed out:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web test
+Test Files  27 passed (27)
+Tests       587 passed (587)
+Duration    49.01s
+```
+
+The dynamic-import analysis warning recurred in this final current-HEAD run.
+
 The original Node 24 repository baseline remains the earlier table: lint,
 build, and typecheck passed; source tests had 4,655 passed, 215 skipped, and one
 unrelated CLI port-race failure; the exact targeted rerun passed one and skipped
-16. The final repository source suite had 4,743 passed, 215 skipped, and zero
-failures: a delta of +88 passed, unchanged skipped, and one fewer failure. The
-baseline did not preserve a web-only test count, so 584 is the final focused
+16. The final repository source suite had 4,746 passed, 215 skipped, and zero
+failures: a delta of +91 passed, unchanged skipped, and one fewer failure. The
+baseline did not preserve a web-only test count, so 587 is the final focused
 count but no historical web-only delta is inferred.
 
 ### Local production black-box audit
@@ -918,6 +934,26 @@ failures=0
 The server was interrupted and a bounded request confirmed `server-stopped`.
 This verifies the corrected local audit mechanism; it is not a deployment or a
 new production claim.
+
+After the complete current-HEAD validation below, the audit was run again
+against the fresh build produced by that exact run. The server command and
+readiness loop remained unchanged; Next reported ready in 221ms and the first
+readiness request succeeded:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm --dir apps/web seo:audit-built -- --base-url http://127.0.0.1:3018 --as-of 2026-08-26
+
+SEO built audit: PASS
+base=http://127.0.0.1:3018 asOf=2026-08-26
+inventory=83 docs=75 posts=3 tags=3
+sitemap=83 lastmodDates=25 html=83 jsonLdEntities=331
+robotsGroups=11 llms=2 llmsDocs=75 ogImages=3 og404s=2
+failures=0
+```
+
+The final server was interrupted and a bounded request confirmed
+`server-stopped`. This is the final local-build mechanism result for code HEAD
+`2f779f9f`; it is not a deployed production result.
 
 The summary represents all of these local-build assertions:
 
@@ -1022,10 +1058,46 @@ port race and the generator timeout did not recur, so no targeted rerun was
 performed in the successful final validation.
 
 The request-containment review follow-up was added after that run. Its focused
-and built-audit evidence is recorded above, but the successful complete
-validation remains historical evidence for `1c45a891` plus the report-only
-`6961d150`; it is not presented as a fresh `ci:validate` result for the current
-follow-up HEAD. A new complete validation is pending the next review gate.
+evidence is retained above. After the safety fix was approved, the complete
+command was rerun from the beginning on clean code HEAD `2f779f9f` with Node
+24.19.0 selected explicitly:
+
+```console
+$ PATH=/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH pnpm ci:validate
+
+Test Files  432 passed | 17 skipped (449)
+Tests       4746 passed | 215 skipped (4961)
+Duration    232.06s
+
+release-controller: 557 passed, 0 failed
+release-publish: 8 passed, 0 failed
+upload-release-assets: 5 passed, 0 failed
+backfill-release-tags: 8 passed, 0 failed
+sync-chart-appversion: 6 passed, 0 failed
+Docs completeness check passed.
+pack-check unit tests: 58 passed; Pack check passed.
+TypeScript tooling pack unit tests: 27 passed; runtime and tsc probes passed.
+harness-report self-test passed
+
+run: harness-2026-08-26T235218-270Z-80557
+status: passed
+started: 2026-08-26T23:52:18.271Z
+finished: 2026-08-27T00:02:50.928Z
+requested lanes: framework, runtime, smoke
+executed lanes: framework, runtime, smoke
+passed=3 failed=0 skipped=0 errored=0
+[framework] Framework verification: passed (263761ms)
+[runtime] Runtime contract (real dev parity): passed (273683ms)
+[smoke] Runtime smoke: passed (95206ms)
+
+# final exit 0
+```
+
+The current-HEAD web build inside that run compiled in 1.036 seconds and
+generated 105 of 105 static pages in 1.518 seconds. Neither the original CLI
+port race nor the generator timeout recurred, so no targeted rerun was needed.
+This is the final complete pre-deployment repository validation for code HEAD
+`2f779f9f`; the only subsequent change is this report-only evidence refresh.
 
 ### Warnings, limitations, and unknowns
 
@@ -1048,13 +1120,15 @@ follow-up HEAD. A new complete validation is pending the next review gate.
   disposable local test apps. That output is not a production access-policy
   assessment.
 - No warning or timeout was silently classified as pre-existing. No
-  loaded-parallel timeout occurred in either successful complete Task 9
+  loaded-parallel timeout occurred in any successful complete Task 9
   `ci:validate` run. The review-only full web lane did time out in one
   last-modified manifest test; its exact one-test rerun passed one and skipped
   five. Commit `10fa9631` then assigned all three full-Git-history generator
   tests a 15-second bound. Its first validation attempt exposed the formatting
-  failure recorded above; after `1c45a891`, the final 584-test web lane and the
-  complete 4,743-test source lane were green with no generator timeout.
+  failure recorded above; after `1c45a891`, the 584-test web lane and the
+  complete 4,743-test source lane were green with no generator timeout. After
+  request containment, the final current-HEAD web and source lanes were also
+  green at 587 and 4,746 passed respectively, with no timeout.
 - This verifies repository and local production-build mechanisms only. It is
   not a deployed Rich Results result, a live crawler result, an indexing
   request, or a production analytics event claim.
