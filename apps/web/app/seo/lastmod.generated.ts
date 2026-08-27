@@ -35,7 +35,7 @@ export const STATIC_LASTMOD: Readonly<Record<string, string>> = {
   "/docs/deployment/langsmith": "2026-08-11T18:35:09.000Z",
   "/docs/deployment/node": "2026-08-11T18:35:09.000Z",
   "/docs/dev-server": "2026-08-13T16:34:02.000Z",
-  "/docs/dev-server/agent-protocol": "2026-08-13T16:34:02.000Z",
+  "/docs/dev-server/agent-protocol": "2026-08-24T17:17:11.000Z",
   "/docs/embedding": "2026-08-11T18:35:09.000Z",
   "/docs/errors": "2026-08-12T20:31:46.000Z",
   "/docs/evals": "2026-08-25T19:40:17.000Z",
