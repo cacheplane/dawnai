@@ -46,7 +46,13 @@ async function parametersFromSource(source: string): Promise<{
   return { existing: extracted.map((tool) => tool.parameters), projected }
 }
 
-describe("compiler-neutral JSON Schema behavior", () => {
+// These suites drive the TypeScript compiler through
+// `src/compiler/typescript-backend.ts`, so their runtime tracks machine load
+// rather than the work in the test. Idle they finish well inside a second; under
+// a saturated parallel run they have exceeded vitest's 5000ms default and failed
+// as timeouts rather than as anything real. The explicit suite timeout leaves
+// room for that without hiding a genuine hang.
+describe("compiler-neutral JSON Schema behavior", { timeout: 30_000 }, () => {
   test("keeps a top-level optional object parameter empty", async () => {
     await compareParameters(
       "export default async function tool(input?: { id: string }) { return input }",
