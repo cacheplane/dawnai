@@ -8,6 +8,9 @@ export default defineConfig({
   // `next.config.ts` keeps JSX in `preserve` for Next to compile; tests render
   // components themselves, so they need the automatic runtime.
   esbuild: { jsx: "automatic" },
+  resolve: {
+    alias: { "server-only": "next/dist/compiled/server-only/empty" },
+  },
   test: {
     name: "web",
     environment: "node",

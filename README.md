@@ -111,7 +111,7 @@ cd my-dawn-app
 npm install
 ```
 
-Requires Node.js 24 (the active LTS) or later.
+Requires Node.js 24 (the active LTS) or later. The default template generates a two-package npm workspace — `server/` (the Dawn app) and `web/` (the Dawn Workbench UI) — and the root `npm install` wires both. Every command below runs from the workspace root and delegates into the package that owns it.
 
 2. Validate the app and generate types.
 
@@ -129,28 +129,34 @@ npm test
 
 ```bash
 export OPENAI_API_KEY=sk-...
-npx dawn dev --port 2024
+npm run dev:server
 ```
 
-In another terminal, create a thread and run the research route through the Agent Protocol:
+In a second terminal, start the Dawn Workbench and open [http://localhost:3010](http://localhost:3010):
 
 ```bash
-THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \
+npm run dev:web
+```
+
+Or drive the same agent over the Agent Protocol — create a thread and run the research route on it:
+
+```bash
+THREAD_ID=$(curl -s -X POST http://127.0.0.1:3002/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+curl -s -X POST http://127.0.0.1:3002/threads/$THREAD_ID/runs/wait \
   -H 'content-type: application/json' \
   -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}' | jq .
 ```
 
 Use `/threads/$THREAD_ID/runs/stream` with the same body when you want SSE events instead of a blocking JSON response.
 
-4. Ship it. `dawn build` emits a runnable production server (`server.mjs` plus a hardened `Dockerfile`) alongside the LangSmith `langgraph.json` target; serve it locally with `dawn start`, or build and run the Docker image:
+4. Ship it. `dawn build` emits a runnable production server (`server.mjs` plus a hardened `Dockerfile`) alongside the LangSmith `langgraph.json` target; serve it locally with the generated `start` script, or build and run the Docker image:
 
 ```bash
-dawn build
-npx dawn start
+npm run build
+npm start
 ```
 
-The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `npm create dawn-ai-app@latest my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
+The default scaffold is the deep-research app at `/research`, with the workbench UI in front of it. For the smaller greeter scaffold, run `npm create dawn-ai-app@latest my-dawn-app -- --template basic`; that optional template is a single flat package, serves on port 3000, and uses `/hello/[tenant]`.
 
 Prefer pnpm or yarn? Swap `npm create dawn-ai-app@latest` for `pnpm create dawn-ai-app` / `yarn create dawn-ai-app`, and `npm install`/`npm run`/`npx` for your package manager's equivalents.
 

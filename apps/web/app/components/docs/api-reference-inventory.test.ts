@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
 import { renderDawnTypes } from "../../../../../packages/core/src/typegen/render-route-types"
+import { STATIC_SEO_PAGES } from "../../seo/registry"
 import {
   API_BEHAVIOR_CONTRACTS,
   API_REFERENCE_PAGES,
@@ -17,6 +18,9 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
+const SEO_TITLES_BY_PATH = Object.fromEntries(
+  Object.entries(STATIC_SEO_PAGES).map(([path, page]) => [path, page.title]),
+)
 
 const foundationalPages = [
   { slug: "sdk", label: "@dawn-ai/sdk", href: "/docs/api/sdk" },
@@ -68,7 +72,19 @@ function analyzeWrapperContracts(sources: readonly string[]): readonly WrapperCo
   const result = spawnSync(process.execPath, [CHECK_DOCS_PATH, "--analyze-doc-titles"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
-    input: JSON.stringify(sources.map((wrapperSource) => ({ mdxSource: "", wrapperSource }))),
+    input: JSON.stringify(
+      sources.map((wrapperSource, index) => ({
+        mdxSource: "",
+        wrapperSource,
+        wrapperPath: join(
+          REPO_ROOT,
+          "apps/web/app/docs/api",
+          `fixture-${String(index)}`,
+          "page.tsx",
+        ),
+        seoTitlesByPath: SEO_TITLES_BY_PATH,
+      })),
+    ),
   })
   expect(result.status, result.stderr || result.stdout).toBe(0)
   return JSON.parse(result.stdout) as readonly WrapperContractAnalysis[]
@@ -1803,7 +1819,12 @@ const analyses = subprocesses.flatMap((subprocess) =>
 )
 const byName = new Map(analyses.map((analysis) => [analysis.name, analysis]))
 
-describe("API reference wrapper contracts", () => {
+// These suites shell out to Node subprocesses (`check-docs.mjs`, bundling
+// probes, the sitemap generator), so their runtime tracks machine load rather
+// than the work in the test. Under a saturated parallel run they have exceeded
+// vitest's 5000ms default and failed as timeouts rather than as anything real.
+// The explicit suite timeout leaves room for that without hiding a genuine hang.
+describe("API reference wrapper contracts", { timeout: 30_000 }, () => {
   it("structurally pairs every API wrapper with its canonical content, route, and title", () => {
     const wrapperSources = allReferencePages.map((page) => foundationalWrapper(page.slug))
     const wrapperAnalyses = analyzeWrapperContracts(wrapperSources)
@@ -1830,12 +1851,12 @@ describe("API reference wrapper contracts", () => {
     const [wrongImport, wrongHref, wrongMetadata] = analyzeWrapperContracts([
       `// import Content from "../../../../content/docs/api/sdk.mdx"\nconst decoy = '../../../../content/docs/api/sdk.mdx'\n${source.replace("../../../../content/docs/api/sdk.mdx", "../../../../content/docs/api/cli.mdx")}\nvoid decoy`,
       `// <DocsPage href="/docs/api/sdk" Content={Content} />\nconst decoy = '/docs/api/sdk'\n${source.replace('href="/docs/api/sdk"', 'href="/docs/api/cli"')}\nvoid decoy`,
-      `// export const metadata = { title: "@dawn-ai/sdk" }\nconst decoy = '@dawn-ai/sdk'\n${source.replace('title: "@dawn-ai/sdk"', 'title: "Wrong"')}\nvoid decoy`,
+      `// toMetadata(resolveStaticSeoPage("/docs/api/sdk"))\nconst decoy = '/docs/api/sdk'\n${source.replace('resolveStaticSeoPage("/docs/api/sdk")', 'resolveStaticSeoPage("/docs/api/cli")')}\nvoid decoy`,
     ])
 
     expect(wrongImport?.contentImportTarget).toBe("../../../../content/docs/api/cli.mdx")
     expect(wrongHref?.docsPageHref).toBe("/docs/api/cli")
-    expect(wrongMetadata?.metadataTitle).toBe("Wrong")
+    expect(wrongMetadata?.metadataTitle).toBe("@dawn-ai/cli")
   })
 
   it("rejects JSX bindings that shadow the canonical imports", () => {
@@ -1850,7 +1871,7 @@ describe("API reference wrapper contracts", () => {
   })
 })
 
-describe("foundational API reference pages", () => {
+describe("foundational API reference pages", { timeout: 30_000 }, () => {
   it.each(foundationalPages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
 
@@ -2004,7 +2025,7 @@ describe("foundational API reference pages", () => {
   })
 })
 
-describe("package API reference pages", () => {
+describe("package API reference pages", { timeout: 30_000 }, () => {
   it.each(packagePages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
 
@@ -2465,7 +2486,7 @@ ${packageExample("memory-pgvector").replace(
   })
 })
 
-describe("source-derived API inventory", () => {
+describe("source-derived API inventory", { timeout: 30_000 }, () => {
   it("runs every isolated fixture through one compact stdin-fed process", () => {
     expect(fixtures).toHaveLength(165)
     expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)

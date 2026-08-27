@@ -48,7 +48,7 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.build.json && node scripts/generate-docs.mjs",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json tsconfig.build.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src test scripts tsconfig.json tsconfig.build.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json"
   },

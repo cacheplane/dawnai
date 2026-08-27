@@ -6,8 +6,12 @@ import { openDb } from "../src/internal/db.js"
 
 describe("openDb", () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "dawn-sqlite-")) })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dawn-sqlite-"))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
 
   it("opens a database with WAL journal_mode, foreign_keys ON, and synchronous=NORMAL", () => {
     const db = openDb(join(dir, "test.sqlite"))

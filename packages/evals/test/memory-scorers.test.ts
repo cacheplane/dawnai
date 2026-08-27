@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest"
 import type { AgentRunResult } from "@dawn-ai/testing"
-import { memoryFresh, memoryIsolated, memoryRecalled } from "../src/scorers.js"
+import { describe, expect, it } from "vitest"
 import { normalizeScore } from "../src/score.js"
+import { memoryFresh, memoryIsolated, memoryRecalled } from "../src/scorers.js"
 
 function run(partial: Partial<AgentRunResult>): AgentRunResult {
   return {
@@ -31,7 +31,10 @@ function recallResult(content: string) {
 describe("memoryRecalled", () => {
   it("scores 1 when all expected ids appear in recall tool output", async () => {
     const r = run({
-      toolResults: [recallResult('{"id":"mem-1","value":"foo"}'), recallResult('{"id":"mem-2","value":"bar"}')],
+      toolResults: [
+        recallResult('{"id":"mem-1","value":"foo"}'),
+        recallResult('{"id":"mem-2","value":"bar"}'),
+      ],
     })
     const result = normalizeScore(await memoryRecalled(["mem-1", "mem-2"]).score(r, noCase))
     expect(result.score).toBe(1)
@@ -54,10 +57,7 @@ describe("memoryRecalled", () => {
 
   it("ignores tool results from other tools", async () => {
     const r = run({
-      toolResults: [
-        { name: "store", content: "mem-1", isError: false },
-        recallResult("mem-2"),
-      ],
+      toolResults: [{ name: "store", content: "mem-1", isError: false }, recallResult("mem-2")],
     })
     const result = normalizeScore(await memoryRecalled(["mem-1", "mem-2"]).score(r, noCase))
     expect(result.score).toBe(0)

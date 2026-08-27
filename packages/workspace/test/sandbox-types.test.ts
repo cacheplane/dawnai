@@ -32,7 +32,12 @@ describe("sandbox contract types", () => {
   test("a handle exposes workspace backends + an in-sandbox root", () => {
     const fs = {} as FilesystemBackend
     const exec = {} as ExecBackend
-    const handle: SandboxHandle = { threadId: "t1", filesystem: fs, exec, workspaceRoot: "/workspace" }
+    const handle: SandboxHandle = {
+      threadId: "t1",
+      filesystem: fs,
+      exec,
+      workspaceRoot: "/workspace",
+    }
     expect(handle.workspaceRoot).toBe("/workspace")
   })
 
@@ -55,7 +60,11 @@ describe("sandbox contract types", () => {
       release: async () => {},
       destroy: async () => {},
     }
-    const h = await provider.acquire({ threadId: "t1", policy: { network: { mode: "allow" } }, signal: new AbortController().signal })
+    const h = await provider.acquire({
+      threadId: "t1",
+      policy: { network: { mode: "allow" } },
+      signal: new AbortController().signal,
+    })
     expect(h.threadId).toBe("t1")
     const cfg: SandboxConfig = { provider }
     expect(cfg.provider.name).toBe("noop")

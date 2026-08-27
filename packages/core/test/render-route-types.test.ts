@@ -83,7 +83,13 @@ function ambientModuleExports(
     .sort()
 }
 
-describe("renderDawnTypes", () => {
+// These suites drive the TypeScript compiler through
+// `src/compiler/typescript-backend.ts`, so their runtime tracks machine load
+// rather than the work in the test. Idle they finish well inside a second; under
+// a saturated parallel run they have exceeded vitest's 5000ms default and failed
+// as timeouts rather than as anything real. The explicit suite timeout leaves
+// room for that without hiding a genuine hang.
+describe("renderDawnTypes", { timeout: 30_000 }, () => {
   test("loads the exact stable no-state dawn:routes exports through TypeScript", () => {
     const manifest: RouteManifest = {
       appRoot: "/tmp/example-app",
@@ -333,7 +339,7 @@ describe("renderDawnTypes", () => {
   })
 })
 
-describe("renderScenarioTypes", () => {
+describe("renderScenarioTypes", { timeout: 30_000 }, () => {
   test("renders an external testing module augmentation with route-aware tool types", () => {
     const manifest: RouteManifest = {
       appRoot: "/tmp/example-app",
@@ -425,7 +431,7 @@ describe("renderScenarioTypes", () => {
   })
 })
 
-describe("renderRouteTypes", () => {
+describe("renderRouteTypes", { timeout: 30_000 }, () => {
   test("renders valid TypeScript for an empty manifest", () => {
     const manifest: RouteManifest = {
       appRoot: "/tmp/example-app",

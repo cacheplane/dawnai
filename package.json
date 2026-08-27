@@ -25,8 +25,8 @@
     "ci:validate": "pnpm lint && pnpm check:build-cache && pnpm build && pnpm typecheck && pnpm test && pnpm check:release-inventory && pnpm test:release-controller && pnpm test:sync-chart-appversion && node scripts/check-docs.mjs && pnpm pack:check && pnpm verify:typescript-tooling-pack && pnpm verify:harness:self-test && pnpm verify:harness",
     "dev": "turbo run dev --parallel",
     "docs:errors": "node scripts/generate-error-docs.mjs",
-    "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json scripts && turbo run lint",
-    "lint:fix": "pnpm exec biome check --write --unsafe --config-path packages/config-biome/biome.json package.json scripts && turbo run lint -- --write",
+    "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json scripts test && turbo run lint",
+    "lint:fix": "pnpm exec biome check --write --unsafe --config-path packages/config-biome/biome.json package.json scripts test && turbo run lint -- --write",
     "pack:check": "pnpm test:pack-check && node scripts/pack-check.mjs",
     "published:smoke": "node scripts/published-artifact-smoke.mjs",
     "published:verify": "node scripts/published-artifact-verify.mjs",
@@ -48,7 +48,7 @@
     "verify:harness:runtime": "node scripts/harness-report.mjs runtime",
     "verify:harness:self-test": "node scripts/harness-report.mjs --self-test",
     "verify:harness:smoke": "node scripts/harness-report.mjs smoke",
-    "typecheck": "turbo run typecheck && tsc -p test/security-dependencies/tsconfig.json --noEmit",
+    "typecheck": "turbo run typecheck && tsc -p test/tsconfig.json --noEmit && tsc -p test/security-dependencies/tsconfig.json --noEmit",
     "verify:typescript-tooling-pack": "pnpm test:typescript-tooling-pack-smoke && node scripts/typescript-tooling-pack-smoke.mjs"
   },
   "devDependencies": {

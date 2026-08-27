@@ -6,11 +6,15 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app next.config.ts tsconfig.json tsconfig.build.json mdx-components.tsx",
+    "lint": "biome check --config-path ../../packages/config-biome/biome.json --css-parse-tailwind-directives=true package.json app content lib scripts mdx-components.tsx next.config.ts postcss.config.mjs vercel.json vitest.config.ts tsconfig.json tsconfig.build.json",
+    "seo:audit-built": "node scripts/audit-built-seo.mjs",
+    "seo:lastmod": "node scripts/generate-seo-lastmod.mjs",
+    "seo:lastmod:check": "node scripts/generate-seo-lastmod.mjs --check",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dawn-ai/sdk": "workspace:*",
     "@mdx-js/loader": "^3.1.1",
     "@mdx-js/mdx": "^3.1.1",
     "@mdx-js/react": "^3.1.1",
@@ -32,6 +36,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/core": "workspace:*",
     "@types/mdx": "^2.0.14",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",

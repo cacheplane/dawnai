@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3002",
     "build": "node node_modules/@dawn-ai/cli/dist/index.js build",
+    "lint": "biome check --config-path ../../../packages/config-biome/biome.json package.json dawn.config.ts src tsconfig.json",
     "typecheck": "tsc -p . --noEmit",
     "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
     "inspect": "node node_modules/@dawn-ai/cli/dist/index.js inspect",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@dawn-ai/cli": "workspace:*",

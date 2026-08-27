@@ -29,7 +29,13 @@ function analyzeRootIntersection(source: string) {
   return parameter
 }
 
-describe("analyzeToolSource", () => {
+// These suites drive the TypeScript compiler through
+// `src/compiler/typescript-backend.ts`, so their runtime tracks machine load
+// rather than the work in the test. Idle they finish well inside a second; under
+// a saturated parallel run they have exceeded vitest's 5000ms default and failed
+// as timeouts rather than as anything real. The explicit suite timeout leaves
+// room for that without hiding a genuine hang.
+describe("analyzeToolSource", { timeout: 30_000 }, () => {
   test("analyzes a typed default-exported tool from one callable signature", () => {
     const source = `
 /**

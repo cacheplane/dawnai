@@ -53,13 +53,9 @@
       },
       {
         "missingEnvVars": [],
-        "missingPackages": [
-          "@langchain/core",
-          "@langchain/openai",
-          "@langchain/langgraph"
-        ],
+        "missingPackages": [],
         "name": "deps",
-        "status": "warning"
+        "status": "passed"
       },
       {
         "name": "runtime",

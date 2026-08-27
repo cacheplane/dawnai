@@ -429,8 +429,12 @@ describe("local Mermaid UI compatibility harness", () => {
       readManifest(resolve(repositoryRoot, "package.json")).scripts,
       "root scripts",
     )
+    // The security-dependencies hook must stay on the end of the root
+    // typecheck; `test/tsconfig.json` in front of it covers the rest of the
+    // root test tree, which no gate reached before.
     expect(scripts.typecheck).toBe(
-      "turbo run typecheck && tsc -p test/security-dependencies/tsconfig.json --noEmit",
+      "turbo run typecheck && tsc -p test/tsconfig.json --noEmit " +
+        "&& tsc -p test/security-dependencies/tsconfig.json --noEmit",
     )
   })
 

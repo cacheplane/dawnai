@@ -1,10 +1,9 @@
 import type { Metadata } from "next"
 import GettingStarted from "../../../content/docs/getting-started.mdx"
 import { DocsPage } from "../../components/docs/DocsPage"
+import { resolveStaticSeoPage, toMetadata } from "../../seo/resolve"
 
-export const metadata: Metadata = {
-  title: "Getting Started",
-}
+export const metadata: Metadata = toMetadata(resolveStaticSeoPage("/docs/getting-started"))
 
 export default function Page() {
   return (

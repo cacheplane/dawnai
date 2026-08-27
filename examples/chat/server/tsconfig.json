@@ -5,9 +5,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": [
-    "dawn.config.ts",
-    "src/**/*.ts",
-    ".dawn/dawn.generated.d.ts"
-  ]
+  "include": ["dawn.config.ts", "src/**/*.ts", ".dawn/dawn.generated.d.ts"]
 }

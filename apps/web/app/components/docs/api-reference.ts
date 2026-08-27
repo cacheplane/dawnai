@@ -569,7 +569,7 @@ export const API_BEHAVIOR_CONTRACTS = [
           "resolveGate prefers gate, then threshold sugar, then informational",
         ],
         assertionFingerprint:
-          'expect ( gate . perScorer ( ) ( report ) . passed ) . toBe ( false )\nexpect ( gate . perScorer ( ) ( { ... report , byScorer : [ { scorer : "informational" , mean : 0 } ] , } ) . passed , ) . toBe ( true )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] , gate : gate . mean ( 0.9 ) } ) ( report ) . passed , ) . toBe ( false )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] , threshold : 0.7 } ) ( report ) . passed , ) . toBe ( true )\nexpect ( resolveGate ( { name : "e" , dataset : [ ] , scorers : [ ] } ) ( report ) . passed ) . toBe ( true )',
+          'expect ( gate . perScorer ( ) ( report ) . passed ) . toBe ( false )\nexpect ( gate . perScorer ( ) ( { ... report , byScorer : [ { scorer : "informational" , mean : 0 } ] , } ) . passed , ) . toBe ( true )\nexpect ( resolveGate ( { gate : gate . mean ( 0.9 ) } ) ( report ) . passed ) . toBe ( false )\nexpect ( resolveGate ( { threshold : 0.7 } ) ( report ) . passed ) . toBe ( true )\nexpect ( resolveGate ( { } ) ( report ) . passed ) . toBe ( true )',
       },
     ],
   },
@@ -663,7 +663,7 @@ export const API_BEHAVIOR_CONTRACTS = [
         file: "packages/workspace/test/local-exec.test.ts",
         testNames: ["runCommand enforces timeout"],
         assertionFingerprint:
-          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) , ) . rejects . toThrow ( /timeout/i )',
+          'await expect ( exec . runCommand ( { command : "sleep 1" } , ctx ( root ) ) ) . rejects . toThrow ( /timeout/i )',
       },
     ],
   },

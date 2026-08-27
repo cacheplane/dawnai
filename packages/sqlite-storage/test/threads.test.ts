@@ -6,10 +6,16 @@ import { createThreadsStore } from "../src/threads/index.js"
 
 describe("createThreadsStore", () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "dawn-threads-")) })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dawn-threads-"))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
 
-  function newStore() { return createThreadsStore({ path: join(dir, "threads.sqlite") }) }
+  function newStore() {
+    return createThreadsStore({ path: join(dir, "threads.sqlite") })
+  }
 
   it("create + get round-trips metadata and assigns timestamps", async () => {
     const store = newStore()

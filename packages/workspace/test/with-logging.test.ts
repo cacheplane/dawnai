@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest"
-import { withFilesystemLogging } from "../src/with-logging.js"
 import type { FilesystemBackend } from "../src/types.js"
+import { withFilesystemLogging } from "../src/with-logging.js"
 
 const base: FilesystemBackend = {
-  async readFile() { return "ok" },
-  async writeFile() { return { bytesWritten: 5 } },
-  async listDir() { return ["a"] },
-  async realPath(p) { return p },
+  async readFile() {
+    return "ok"
+  },
+  async writeFile() {
+    return { bytesWritten: 5 }
+  },
+  async listDir() {
+    return ["a"]
+  },
+  async realPath(p) {
+    return p
+  },
 }
 
 const ctx = { signal: new AbortController().signal, workspaceRoot: "/r" }

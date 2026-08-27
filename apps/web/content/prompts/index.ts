@@ -1,15 +1,10 @@
-export type PromptSlug =
-	| "scaffold"
-	| "add-a-tool"
-	| "write-a-route"
-	| "write-a-test"
-	| "deploy";
+export type PromptSlug = "scaffold" | "add-a-tool" | "write-a-route" | "write-a-test" | "deploy"
 
 export interface PromptEntry {
-	readonly slug: PromptSlug;
-	readonly title: string;
-	readonly description: string;
-	readonly body: string;
+  readonly slug: PromptSlug
+  readonly title: string
+  readonly description: string
+  readonly body: string
 }
 
 const SCAFFOLD = `Help me scaffold a new Dawn app from the default research starter. Dawn is a TypeScript-first meta-framework for building graph-based AI agents with file-system routing, shared and route-local tools, and inferred types.
@@ -22,6 +17,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    \`\`\`
 
 2. Walk me through the generated project structure. Explain:
+   - The two-package npm workspace: \`server/\` is the Dawn app and \`web/\` is the Dawn Workbench browser client. Every path below is relative to \`server/\`, and the root \`package.json\` scripts delegate into whichever package owns them.
    - How routes are directories containing an \`index.ts\` that exports exactly one of: default \`agent(...)\`, named \`workflow\` (async function), named \`graph\` (LangGraph graph), or named \`chain\` (LangChain LCEL Runnable).
    - \`state.ts\` — the optional Zod route state schema.
    - \`src/tools/*.ts\` — shared tools available across routes. The default research scaffold puts \`searchCorpus\` and \`readDoc\` here.
@@ -45,30 +41,36 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    npm run eval
    \`\`\`
 
-4. Only then opt into a live model run. Copy the environment template, require the user to add a real \`OPENAI_API_KEY\`, run the preflight, and start the tested dev script. Never invent or commit a key:
+4. Only then opt into a live model run. Copy the server package's environment template, require the user to add a real \`OPENAI_API_KEY\`, run the preflight, and start the tested dev script. Never invent or commit a key:
    \`\`\`
-   cp .env.example .env
-   # Add a real OPENAI_API_KEY to .env
+   cp server/.env.example server/.env
+   # Add a real OPENAI_API_KEY to server/.env
    npm run verify
-   npm run dev
+   npm run dev:server
    \`\`\`
-   The generated dev script serves \`http://127.0.0.1:3000\`.
+   The generated dev script serves \`http://127.0.0.1:3002\`.
 
-5. In another terminal, show the Agent Protocol shape for the same route:
+5. In a second terminal, start the Dawn Workbench — the generated \`web/\` package, an AG-UI/CopilotKit client with a thread rail, streaming transcript, plan and subagent activity cards, permission prompts, and memory review:
    \`\`\`
-   THREAD_ID=$(curl -s -X POST http://127.0.0.1:3000/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-   curl -s -X POST http://127.0.0.1:3000/threads/$THREAD_ID/runs/wait \\
+   npm run dev:web
+   \`\`\`
+   It serves \`http://localhost:3010\` and reaches the agent server through a same-origin proxy. No model key belongs in this package.
+
+6. Show the Agent Protocol shape for the same route:
+   \`\`\`
+   THREAD_ID=$(curl -s -X POST http://127.0.0.1:3002/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+   curl -s -X POST http://127.0.0.1:3002/threads/$THREAD_ID/runs/wait \\
      -H 'content-type: application/json' \\
      -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}'
    \`\`\`
    For streaming, use the same body with \`POST /threads/$THREAD_ID/runs/stream\` and consume the SSE events.
 
-6. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
+7. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
 
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const ADD_A_TOOL = `Help me add a new tool to an existing Dawn app. Dawn discovers shared tools in \`src/tools/*.ts\` and route-local tools in \`src/app/<route>/tools/*.ts\`; their types are generated from TypeScript — no Zod schemas or manual type wiring.
 
@@ -100,7 +102,7 @@ Constraints:
 - \`readonly\` is recommended on input fields; Dawn preserves it through type generation.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes are directories under \`src/app/\` where each directory maps to a URL-style pathname (minus route groups).
 
@@ -162,7 +164,7 @@ Constraints:
 - The \`RouteTools<"/path">\` type is generated from the shared and route-local tools available to that route.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const WRITE_A_TEST = `Help me write tests for a Dawn route. Pick the right style for the route kind:
 
@@ -256,7 +258,7 @@ Constraints:
 - In-process scenarios can replace selected application tools with \`.mockTool()\` and assert calls with \`.expectTool()\`; server-backed scenarios cannot use tool mocks.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can emit a self-hosted Node server, an opt-in edge app, generated LangGraph entries, or any combination named in \`build.targets\`.
 
@@ -308,45 +310,45 @@ const DEPLOY = `Help me choose and deploy the right Dawn build target. Dawn can 
 5. Show me the exact files the build emitted, the command that starts or deploys them, the required runtime environment and storage, and one target-boundary smoke test. Refer to https://dawnai.org/docs/deployment for the full service and limitation matrix rather than reproducing it.
 
 Reference: https://dawnai.org/llms.txt
-`;
+`
 
 export const PROMPTS: readonly PromptEntry[] = [
-	{
-		slug: "scaffold",
-		title: "Scaffold a new Dawn app",
-		description: "Create a new Dawn project and walk through the structure.",
-		body: SCAFFOLD,
-	},
-	{
-		slug: "add-a-tool",
-		title: "Add a tool",
-		description: "Add a type-inferred tool to an existing route.",
-		body: ADD_A_TOOL,
-	},
-	{
-		slug: "write-a-route",
-		title: "Write a route",
-		description: "Create a new route with workflow/graph/chain.",
-		body: WRITE_A_ROUTE,
-	},
-	{
-		slug: "write-a-test",
-		title: "Write a test",
-		description: "Choose agent harness tests or deterministic route scenarios.",
-		body: WRITE_A_TEST,
-	},
-	{
-		slug: "deploy",
-		title: "Choose a deployment target",
-		description: "Build for the Dawn Node runtime, a compatible edge app, or LangSmith.",
-		body: DEPLOY,
-	},
-];
+  {
+    slug: "scaffold",
+    title: "Scaffold a new Dawn app",
+    description: "Create a new Dawn project and walk through the structure.",
+    body: SCAFFOLD,
+  },
+  {
+    slug: "add-a-tool",
+    title: "Add a tool",
+    description: "Add a type-inferred tool to an existing route.",
+    body: ADD_A_TOOL,
+  },
+  {
+    slug: "write-a-route",
+    title: "Write a route",
+    description: "Create a new route with workflow/graph/chain.",
+    body: WRITE_A_ROUTE,
+  },
+  {
+    slug: "write-a-test",
+    title: "Write a test",
+    description: "Choose agent harness tests or deterministic route scenarios.",
+    body: WRITE_A_TEST,
+  },
+  {
+    slug: "deploy",
+    title: "Choose a deployment target",
+    description: "Build for the Dawn Node runtime, a compatible edge app, or LangSmith.",
+    body: DEPLOY,
+  },
+]
 
 export function getPrompt(slug: PromptSlug): PromptEntry {
-	const entry = PROMPTS.find((p) => p.slug === slug);
-	if (!entry) {
-		throw new Error(`Unknown prompt slug: ${slug}`);
-	}
-	return entry;
+  const entry = PROMPTS.find((p) => p.slug === slug)
+  if (!entry) {
+    throw new Error(`Unknown prompt slug: ${slug}`)
+  }
+  return entry
 }

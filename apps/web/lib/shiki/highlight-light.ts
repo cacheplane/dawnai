@@ -1,4 +1,4 @@
-import { createHighlighter, type BundledLanguage } from "shiki"
+import { type BundledLanguage, createHighlighter } from "shiki"
 
 let highlighterPromise: ReturnType<typeof createHighlighter> | null = null
 
@@ -17,10 +17,7 @@ function getHighlighter() {
  * cream SaaS-rebrand surfaces where a dark theme would be unreadable.
  * Background is owned by the surrounding container (transparent).
  */
-export async function highlightLight(
-  code: string,
-  lang: BundledLanguage
-): Promise<string> {
+export async function highlightLight(code: string, lang: BundledLanguage): Promise<string> {
   const highlighter = await getHighlighter()
   return highlighter.codeToHtml(code, {
     lang,

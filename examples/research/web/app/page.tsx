@@ -89,6 +89,13 @@ export default function Home() {
       runtimeUrl="/api/copilotkit"
       useSingleEndpoint={false}
       defaultThrottleMs={100}
+      // Off deliberately. `enableInspector` defaults to CopilotKit's own
+      // `isLocalhost()` check -- NOT to NODE_ENV -- so leaving it unset mounts a
+      // vendor-branded panel over the workbench on the documented `npm run
+      // dev:web`, and fetches an announcement banner from cdn.copilotkit.ai.
+      // This is the first screen of a freshly scaffolded app; it should be the
+      // agent, not an ad. Set it to `true` if you want CopilotKit's inspector.
+      enableInspector={false}
       renderActivityMessages={workbenchActivityRenderers}
     >
       <CopilotChatConfigurationProvider threadId={activeThreadId}>

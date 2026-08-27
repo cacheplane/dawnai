@@ -1,1 +1,5 @@
-{ "name": "dt-probe-app-summarize", "private": true, "type": "module" }
+{
+  "name": "dt-probe-app-summarize",
+  "private": true,
+  "type": "module"
+}
