@@ -244,6 +244,37 @@ describe("dawn threads tail — integration against a real bound server", () => 
     expect((caught as CliError).message).toContain("nope")
   })
 
+  it("explains that a thread which has never run cannot be tailed (409)", async () => {
+    const appRoot = await fixtureApp()
+    const server = await createServer(appRoot)
+    const { io } = collectIo()
+
+    // A bare row with no route identity: created, never run. The server answers
+    // 409 `thread_route_unknown`, whose code lives at `error.details.code` —
+    // reading it off the top level silently misses it and degrades this to the
+    // generic transport error.
+    const created = await fetch(new URL("/threads", server.url), {
+      body: JSON.stringify({}),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+    const { thread_id: threadId } = (await created.json()) as { thread_id: string }
+
+    let caught: unknown
+    try {
+      await runThreadsCommand("tail", [threadId], { url: server.url }, io)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CliError)
+    expect((caught as CliError).exitCode).toBe(2)
+    // The FRIENDLY message, not the generic fallback: this phrase exists only
+    // in the client's own 409 branch, so it fails if the code lookup misses.
+    expect((caught as CliError).message).toContain("there is nothing to tail")
+    expect((caught as CliError).message).not.toContain('{"error"')
+  })
+
   it("is gated by middleware: fails without --header, succeeds with it", async () => {
     const appRoot = await fixtureApp({ "src/middleware.ts": ECHO_MIDDLEWARE })
     const server = await createServer(appRoot)

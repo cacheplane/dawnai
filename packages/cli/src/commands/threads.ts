@@ -73,20 +73,42 @@ function unwrapCause(error: unknown): string {
   return String(error)
 }
 
-async function readErrorCode(response: Response): Promise<string | undefined> {
-  try {
-    const body: unknown = await response.clone().json()
-    if (typeof body === "object" && body !== null && "code" in body) {
-      const code = (body as Record<string, unknown>).code
-      return typeof code === "string" ? code : undefined
-    }
-  } catch {
-    // Not JSON, or already consumed — fall through to the generic error path.
-  }
-  return undefined
+function own(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null && Object.hasOwn(value, key)
+    ? (value as Record<string, unknown>)[key]
+    : undefined
 }
 
+/**
+ * Dawn's error envelope is `{error: {kind, message, details?: {code?}, code?}}`
+ * — see `createRequestErrorBody`/`buildBody` in the runtime. The code a caller
+ * branches on rides at `error.details.code` when the handler passed it as
+ * DETAILS (which every thread endpoint does) and at `error.code` only when it
+ * came from the registry `options`. Reading a top-level `code` finds neither,
+ * which silently degrades every coded failure to the generic branch.
+ *
+ * Own-property reads throughout: this is server-supplied JSON.
+ */
+async function readErrorBody(response: Response): Promise<{ code?: string; message?: string }> {
+  let body: unknown
+  try {
+    body = await response.clone().json()
+  } catch {
+    return {}
+  }
+  const error = own(body, "error")
+  const code = own(own(error, "details"), "code") ?? own(error, "code")
+  const message = own(error, "message")
+  return {
+    ...(typeof code === "string" ? { code } : {}),
+    ...(typeof message === "string" ? { message } : {}),
+  }
+}
+
+/** The server's own sentence when it has one, never the raw envelope. */
 async function readErrorMessage(response: Response): Promise<string> {
+  const { message } = await readErrorBody(response)
+  if (message) return message
   try {
     const text = await response.clone().text()
     return text.length > 0 ? text : response.statusText
@@ -115,7 +137,7 @@ async function runTail(threadId: string, options: ThreadsOptions, io: CommandIo)
       throw new CliError(`Thread "${threadId}" not found.`, 2)
     }
     if (response.status === 409) {
-      const code = await readErrorCode(response)
+      const { code } = await readErrorBody(response)
       if (code === "thread_route_unknown") {
         throw new CliError(`Thread "${threadId}" has never run; there is nothing to tail.`, 2)
       }
