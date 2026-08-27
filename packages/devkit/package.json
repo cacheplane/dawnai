@@ -32,7 +32,7 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json --css-parse-tailwind-directives=true package.json src test templates tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

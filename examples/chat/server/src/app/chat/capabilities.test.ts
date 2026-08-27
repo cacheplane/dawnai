@@ -45,24 +45,28 @@ describe("chat route — autowired capabilities", () => {
   })
 
   it("includes both planning and agents-md contributions for the chat route", async () => {
-    const registry = createCapabilityRegistry([
-      createPlanningMarker(),
-      createAgentsMdMarker(),
-    ])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
+    const registry = createCapabilityRegistry([createPlanningMarker(), createAgentsMdMarker()])
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: ROUTE_DIR, routes: [] },
+      descriptor: undefined,
+      appRoot: ROUTE_DIR,
+      markerFs: nodeMarkerFs,
+    })
 
     expect(result.errors).toEqual([])
-    expect(result.contributions.map((c) => c.markerName)).toEqual([
-      "planning",
-      "agents-md",
-    ])
+    expect(result.contributions.map((c) => c.markerName)).toEqual(["planning", "agents-md"])
   })
 
   it("planning contribution comes from this route's plan.md", async () => {
     expect(existsSync(resolve(ROUTE_DIR, "plan.md"))).toBe(true)
 
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: ROUTE_DIR, routes: [] },
+      descriptor: undefined,
+      appRoot: ROUTE_DIR,
+      markerFs: nodeMarkerFs,
+    })
     const planning = result.contributions[0]?.contribution
 
     expect(planning?.tools?.map((t) => t.name)).toEqual(["writeTodos"])
@@ -79,7 +83,12 @@ describe("chat route — autowired capabilities", () => {
 
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     // Pass workDir as appRoot so the marker resolves AGENTS.md from workDir/workspace/.
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir, markerFs: nodeMarkerFs })
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: workDir, routes: [] },
+      descriptor: undefined,
+      appRoot: workDir,
+      markerFs: nodeMarkerFs,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const rendered = fragment?.render({}) ?? ""
 
@@ -89,7 +98,11 @@ describe("chat route — autowired capabilities", () => {
 
   it("agents-md fragment is empty when workspace/AGENTS.md is absent", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir })
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: workDir, routes: [] },
+      descriptor: undefined,
+      appRoot: workDir,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toBe("")
   })
@@ -101,7 +114,12 @@ describe("chat route — autowired capabilities", () => {
     writeFileSync(path, "Iteration 1: tools should be camelCase")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     // Pass workDir as appRoot so AGENTS.md is read from workDir/workspace/.
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir, markerFs: nodeMarkerFs })
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: workDir, routes: [] },
+      descriptor: undefined,
+      appRoot: workDir,
+      markerFs: nodeMarkerFs,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const first = fragment?.render({}) ?? ""
@@ -117,7 +135,12 @@ describe("chat route — autowired capabilities", () => {
 
   it("planning prompt re-renders todos from live state on each call", async () => {
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
+    const result = await applyCapabilities(registry, ROUTE_DIR, {
+      routeManifest: { appRoot: ROUTE_DIR, routes: [] },
+      descriptor: undefined,
+      appRoot: ROUTE_DIR,
+      markerFs: nodeMarkerFs,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const empty = fragment?.render({ todos: [] }) ?? ""

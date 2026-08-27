@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
 import { DatabaseSync } from "node:sqlite"
+import { describe, expect, it } from "vitest"
 import { runMigrations } from "../src/internal/migrate.js"
 
 function memDb(): DatabaseSync {

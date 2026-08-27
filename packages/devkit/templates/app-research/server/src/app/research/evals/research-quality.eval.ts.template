@@ -1,8 +1,7 @@
 import { contains, custom, defineEval, gate, llmJudge, toolCalled } from "@dawn-ai/evals"
 import { script } from "@dawn-ai/testing"
 
-const JUDGE_CRITERIA =
-  "The report answers the question and cites at least one source document."
+const JUDGE_CRITERIA = "The report answers the question and cites at least one source document."
 
 export default defineEval({
   name: "research quality",
@@ -25,9 +24,7 @@ export default defineEval({
       fixtures: script()
         .user("How should I evaluate an LLM app?")
         .callsTool("searchCorpus", { query: "evaluate llm app" })
-        .replies(
-          "Use scorers and a gate over a dataset of cases. [corpus/evaluating-llm-apps.md]",
-        )
+        .replies("Use scorers and a gate over a dataset of cases. [corpus/evaluating-llm-apps.md]")
         .user("cites at least one source")
         .replies('{"score":1,"reason":"answers and cites a source"}'),
     },

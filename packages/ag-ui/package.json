@@ -40,7 +40,7 @@
   },
   "scripts": {
     "build": "node -e \"const fs = require('node:fs'); const path = require('node:path'); if (fs.existsSync('dist')) for (const entry of fs.readdirSync('dist', { withFileTypes: true })) if (entry.isFile() && /^(?:encode|run-input|translate)\\./.test(entry.name)) fs.rmSync(path.join('dist', entry.name))\" && tsc -b tsconfig.json && node -e \"const fs = require('node:fs'); fs.mkdirSync('dist/react', { recursive: true }); fs.copyFileSync('src/react/styles.css', 'dist/react/styles.css')\"",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },

@@ -48,7 +48,11 @@ describe("fromRunAgentInput", () => {
 
   test("falls back to String() when JSON.stringify returns undefined", () => {
     const content = Symbol.for("x")
-    const message = { id: "m1", role: "user", content } as unknown as RunAgentInput["messages"][number]
+    const message = {
+      id: "m1",
+      role: "user",
+      content,
+    } as unknown as RunAgentInput["messages"][number]
     const input = baseInput({ messages: [message] })
     expect(fromRunAgentInput(input).messages[0]?.content).toBe(String(content))
   })
