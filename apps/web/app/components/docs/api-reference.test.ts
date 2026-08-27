@@ -437,7 +437,12 @@ function expectRegistryRejection(artifact: Record<string, unknown>, message: Reg
   ).toThrow(message)
 }
 
-describe("API reference page registry", () => {
+// These suites shell out to Node subprocesses (`check-docs.mjs`, bundling
+// probes, the sitemap generator), so their runtime tracks machine load rather
+// than the work in the test. Under a saturated parallel run they have exceeded
+// vitest's 5000ms default and failed as timeouts rather than as anything real.
+// The explicit suite timeout leaves room for that without hiding a genuine hang.
+describe("API reference page registry", { timeout: 30_000 }, () => {
   it("pins the approved surfaces, destinations, ownership, and parent hub", () => {
     expect(
       API_REFERENCE_PAGES.map(({ label, href, surfaceName, ownerPackageNames }) => [
@@ -481,7 +486,7 @@ describe("API reference page registry", () => {
   })
 })
 
-describe("client navigation dependency boundary", () => {
+describe("client navigation dependency boundary", { timeout: 30_000 }, () => {
   it("preserves the page registry exports on the server registry entrypoint", () => {
     const exports = apiReferenceExports as Record<string, unknown>
     const registrySource = readFileSync(
@@ -516,7 +521,7 @@ describe("client navigation dependency boundary", () => {
   })
 })
 
-describe("artifact registry", () => {
+describe("artifact registry", { timeout: 30_000 }, () => {
   it("renders stable public documentation labels without delivery-state coverage names", () => {
     const forbidden = /\b(?:detailed|catalog-only)\b/
     for (const artifact of ARTIFACT_REGISTRY) {
@@ -936,7 +941,7 @@ describe("artifact registry", () => {
   })
 })
 
-describe("published manifest address inventory", () => {
+describe("published manifest address inventory", { timeout: 30_000 }, () => {
   it("matches exports, bins, and the Inspector server while ignoring package imports", () => {
     const manifests = publicPackageManifests()
     expect(analyzeApiReferenceManifests(manifests).failures).toEqual([])
@@ -1031,7 +1036,7 @@ describe("published manifest address inventory", () => {
   })
 })
 
-describe("package catalog", () => {
+describe("package catalog", { timeout: 30_000 }, () => {
   it("pins the exact twelve-package patch changeset", () => {
     const source = readFileSync(CHANGESET_PATH, "utf8")
     const entries = [...source.matchAll(/^"([^"]+)": (\w+)$/gm)].map((match) => [

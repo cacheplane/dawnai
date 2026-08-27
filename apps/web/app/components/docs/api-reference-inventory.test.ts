@@ -1819,7 +1819,12 @@ const analyses = subprocesses.flatMap((subprocess) =>
 )
 const byName = new Map(analyses.map((analysis) => [analysis.name, analysis]))
 
-describe("API reference wrapper contracts", () => {
+// These suites shell out to Node subprocesses (`check-docs.mjs`, bundling
+// probes, the sitemap generator), so their runtime tracks machine load rather
+// than the work in the test. Under a saturated parallel run they have exceeded
+// vitest's 5000ms default and failed as timeouts rather than as anything real.
+// The explicit suite timeout leaves room for that without hiding a genuine hang.
+describe("API reference wrapper contracts", { timeout: 30_000 }, () => {
   it("structurally pairs every API wrapper with its canonical content, route, and title", () => {
     const wrapperSources = allReferencePages.map((page) => foundationalWrapper(page.slug))
     const wrapperAnalyses = analyzeWrapperContracts(wrapperSources)
@@ -1866,7 +1871,7 @@ describe("API reference wrapper contracts", () => {
   })
 })
 
-describe("foundational API reference pages", () => {
+describe("foundational API reference pages", { timeout: 30_000 }, () => {
   it.each(foundationalPages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
 
@@ -2020,7 +2025,7 @@ describe("foundational API reference pages", () => {
   })
 })
 
-describe("package API reference pages", () => {
+describe("package API reference pages", { timeout: 30_000 }, () => {
   it.each(packagePages)("uses the exact H1 for $href", (page) => {
     const content = foundationalContent(page.slug)
 
@@ -2481,7 +2486,7 @@ ${packageExample("memory-pgvector").replace(
   })
 })
 
-describe("source-derived API inventory", () => {
+describe("source-derived API inventory", { timeout: 30_000 }, () => {
   it("runs every isolated fixture through one compact stdin-fed process", () => {
     expect(fixtures).toHaveLength(165)
     expect(Buffer.byteLength(JSON.stringify(baseline()))).toBeLessThan(16 * 1024)
