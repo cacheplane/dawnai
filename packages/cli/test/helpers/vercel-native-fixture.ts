@@ -3206,9 +3206,82 @@ export async function runNativeDeployAttempt(options: {
     projectId: options.projectId,
   })
   await options.persistDeploymentBinding(binding)
-  const ready = await options.boundary.inspect(deployment)
+  let ready: Awaited<ReturnType<typeof options.boundary.inspect>>
+  try {
+    ready = await options.boundary.inspect(deployment)
+  } catch (cause) {
+    // The lane's cleanup deletes this deployment the moment the attempt fails;
+    // afterwards the API answers not_found and the failure reason is gone for
+    // good. Read the deployment's terminal state now, best-effort, and carry
+    // it on the thrown error so the uploaded diagnostics say WHY the build
+    // failed, not just that a deployment id existed and was DELETED.
+    throw new Error(
+      `native Vercel deployment ${deployment.deploymentId} failed before readiness; ` +
+        `state captured before cleanup: ${await captureNativeDeploymentState(
+          options.apiClient,
+          options.orgId,
+          deployment.deploymentId,
+        )}`,
+      { cause },
+    )
+  }
   await options.persistStage?.("readiness", ready)
   return { attempt, binding, commandEvidence, config, ...deployment, ...ready }
+}
+
+/**
+ * Best-effort read of a deployment's terminal state for failure diagnostics.
+ * Extracts only the short, non-sensitive status fields from the deployment
+ * read — never the full body — because this string travels on an Error
+ * message, ahead of writeDiagnostic's redaction.
+ */
+async function captureNativeDeploymentState(
+  apiClient: NativeVercelApiClient,
+  orgId: string,
+  deploymentId: string,
+): Promise<string> {
+  try {
+    const response = await apiClient.request(
+      "GET",
+      `/v13/deployments/${encodeURIComponent(deploymentId)}?teamId=${encodeURIComponent(orgId)}`,
+    )
+    const body =
+      typeof response.body === "object" && response.body !== null
+        ? (response.body as Record<string, unknown>)
+        : {}
+    const field = (name: string): string | undefined => {
+      const value = body[name]
+      return typeof value === "string" ? value : undefined
+    }
+    return JSON.stringify({
+      status: response.status,
+      readyState: field("readyState"),
+      errorCode: field("errorCode"),
+      errorMessage: field("errorMessage"),
+      errorStep: field("errorStep"),
+    })
+  } catch {
+    return "unavailable (deployment state read failed)"
+  }
+}
+
+/**
+ * Render an error's cause chain as one readable block for a diagnostic file.
+ * Messages only — stacks stay in the test runner's own output.
+ */
+function flattenNativeFailureChain(failure: unknown): string {
+  const lines: string[] = []
+  let current: unknown = failure
+  for (let depth = 0; depth < 10 && current !== undefined && current !== null; depth += 1) {
+    if (current instanceof Error) {
+      lines.push(current.message)
+      current = current.cause
+      continue
+    }
+    lines.push(String(current))
+    break
+  }
+  return lines.length > 0 ? lines.join("\ncaused by: ") : "unknown failure"
 }
 
 export function parseNativeVercelProjectBinding(
@@ -5847,8 +5920,21 @@ export async function prepareNativeFixtureDeployment<
   let deployment: Deployment
   try {
     deployment = await options.deploy()
-  } catch {
-    throw new Error(`native Vercel ${options.kind} deploy attempt failed`)
+  } catch (cause) {
+    // Persist the real failure before rethrowing: the lane's cleanup deletes
+    // the deployment as soon as this attempt fails, after which the Vercel API
+    // returns not_found and the reason is unrecoverable. Every message on this
+    // chain is either fixture-authored or already redacted at its source, and
+    // writeDiagnostic redacts again before anything reaches the artifact.
+    try {
+      await options.writeDiagnostic(
+        `${options.kind}-deploy-failure.log`,
+        `${flattenNativeFailureChain(cause)}\n`,
+      )
+    } catch {
+      // Diagnostic persistence must never mask the deploy failure itself.
+    }
+    throw new Error(`native Vercel ${options.kind} deploy attempt failed`, { cause })
   }
   assertDeploymentId(deployment.deploymentId)
   canonicalizeVercelOrigin(deployment.canonicalOrigin)
@@ -6007,10 +6093,12 @@ interface NativeCleanupAttemptRecord {
 
 const NATIVE_DIAGNOSTIC_NAMES = new Set([
   "prebuilt-build.log",
+  "prebuilt-deploy-failure.log",
   "prebuilt-events.json",
   "prebuilt-local-build.log",
   "prebuilt-runtime.jsonl",
   "source-build.log",
+  "source-deploy-failure.log",
   "source-events.json",
   "source-runtime.jsonl",
 ])
