@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../packages/config-typescript/node.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "composite": false,
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "@dawn-ai/cli/runtime": ["../packages/cli/src/runtime-exports.ts"],
+      "@dawn-ai/core": ["../packages/core/src/index.ts"],
+      "@dawn-ai/core/internal/compiler": ["../packages/core/src/compiler/index.ts"],
+      "@dawn-ai/core/node": ["../packages/core/src/node.ts"],
+      "@dawn-ai/langchain": ["../packages/langchain/src/index.ts"],
+      "@dawn-ai/langgraph": ["../packages/langgraph/src/index.ts"],
+      "@dawn-ai/sdk": ["../packages/sdk/src/index.ts"],
+      "@dawn-ai/sdk/pure": ["../packages/sdk/src/pure/index.ts"],
+      "@dawn-ai/sdk/testing": ["../packages/sdk/src/testing/index.ts"],
+      "@dawn-ai/testing": ["../packages/testing/src/index.ts"]
+    },
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "./fixtures/**/*.ts",
+    "./generated/**/*.ts",
+    "./harness/**/*.ts",
+    "./k8s-smoke/**/*.ts",
+    "./runtime/**/*.ts",
+    "./smoke/**/*.ts"
+  ],
+  "exclude": [
+    "./fixtures/contracts/invalid-config/**",
+    "./generated/fixtures/handwritten-runtime-app/**",
+    "./k8s-smoke/app/**"
+  ]
+}

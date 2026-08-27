@@ -452,13 +452,15 @@ describe("agent protocol permission interrupt + resume", () => {
         ).toBeDefined()
 
         const interruptData = interruptEvent?.data as Record<string, unknown> | undefined
-        expect(typeof interruptData?.interruptId).toBe("string")
-        expect((interruptData?.interruptId as string).startsWith("perm-")).toBe(true)
+        const interruptId = interruptData?.interruptId
+        expect(typeof interruptId).toBe("string")
+        expect(String(interruptId).startsWith("perm-")).toBe(true)
         expect(interruptData?.kind).toBe("command")
 
         const detail = interruptData?.detail as Record<string, unknown> | undefined
-        expect(typeof detail?.command).toBe("string")
-        expect((detail?.command as string).toLowerCase()).toContain("npm")
+        const command = detail?.command
+        expect(typeof command).toBe("string")
+        expect(String(command).toLowerCase()).toContain("npm")
         expect(typeof detail?.suggestedPattern).toBe("string")
 
         capturedInterruptId = interruptData?.interruptId as string
@@ -682,8 +684,9 @@ describe("agent protocol state persistence", () => {
       // Sanity-check: the checkpoint has messages
       const values = stateBefore.values as Record<string, unknown> | undefined
       expect(values).toBeDefined()
-      expect(Array.isArray(values?.messages)).toBe(true)
-      expect((values?.messages as unknown[]).length).toBeGreaterThan(0)
+      const messages = values?.messages
+      expect(Array.isArray(messages)).toBe(true)
+      expect(((messages ?? []) as unknown[]).length).toBeGreaterThan(0)
     } finally {
       await server1.stop()
       await appendDevServerTranscript(transcriptPath, server1)
