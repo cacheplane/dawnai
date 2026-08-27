@@ -57,6 +57,9 @@ import {
   deriveDawnPackageClosure,
   deriveNativeAttemptEvidence,
   NATIVE_DIRECT_DAWN_DEPENDENCIES,
+  NATIVE_VERCEL_CHILD_TIMEOUT_MS,
+  NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS,
+  NATIVE_VERCEL_READINESS_TIMEOUT_MS,
   type NativeAttemptEvidence,
   type NativeLocalCommandRequest,
   type NativePackedArtifact,
@@ -1678,6 +1681,8 @@ describe("pinned vercel boundary", () => {
       "--scope",
       "team_Test123",
       "--wait",
+      "--timeout",
+      `${NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS}ms`,
       "--json",
       "--non-interactive",
       "--global-config",
@@ -2362,6 +2367,156 @@ describe("pinned vercel boundary", () => {
       /method/,
     )
     expect(JSON.stringify(requests)).not.toContain("postgres://")
+  })
+})
+
+describe("readiness budget", () => {
+  const makeReadinessBoundary = async (
+    runChild: (request: NativeVercelChildRequest) => Promise<{
+      readonly exitCode: number
+      readonly stderr: string
+      readonly stdout: string
+    }>,
+  ): Promise<{
+    readonly boundary: Awaited<ReturnType<typeof createNativePinnedVercelBoundary>>
+    readonly fixtureRoot: string
+  }> => {
+    const jobRoot = await realpath(await makeTempDir())
+    const fixtureRoot = join(jobRoot, "source")
+    const prebuiltRoot = join(jobRoot, "prebuilt")
+    const globalConfigDir = join(jobRoot, "global-config")
+    await mkdir(fixtureRoot)
+    await mkdir(prebuiltRoot)
+    await mkdir(globalConfigDir, { mode: 0o700 })
+    await writeFile(join(fixtureRoot, "vercel.json"), '{"fluid":true}\n', "utf8")
+    const boundary = await createNativePinnedVercelBoundary({
+      cliPackageRoot,
+      databaseUrl: "postgres://native-secret",
+      fixtureRoots: [fixtureRoot, prebuiltRoot],
+      globalConfigDir,
+      jobRoot,
+      orgId: "team_Test123",
+      parentEnv: { PATH: process.env.PATH },
+      projectId: "prj_Test456",
+      releaseCredential: "private-release-value",
+      runChild,
+      token: "vercel-token-secret",
+    })
+    return { boundary, fixtureRoot }
+  }
+
+  test("gives the readiness wait its own budget and leaves the bounded commands alone", async () => {
+    const requests: NativeVercelChildRequest[] = []
+    const { boundary, fixtureRoot } = await makeReadinessBoundary(async (request) => {
+      requests.push(request)
+      if (request.args[0] === "--version") {
+        return { exitCode: 0, stderr: pinnedVercelVersionStderr, stdout: "58.9.0\n" }
+      }
+      if (request.args[0] === "inspect") {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout:
+            '{"id":"dpl_Source123","url":"dawn-source-abc.vercel.app","readyState":"READY"}\n',
+        }
+      }
+      return {
+        exitCode: 0,
+        stderr: "",
+        stdout: '{"id":"dpl_Source123","url":"dawn-source-abc.vercel.app"}\n',
+      }
+    })
+
+    await boundary.assertVersion()
+    await boundary.deploy({
+      fixtureRoot,
+      kind: "source",
+      localConfigPath: join(fixtureRoot, "vercel.json"),
+      marker: `vclrun_${"a".repeat(32)}`,
+    })
+    await boundary.inspect({
+      canonicalOrigin: "https://dawn-source-abc.vercel.app",
+      deploymentId: "dpl_Source123",
+    })
+
+    const budgetFor = (predicate: (request: NativeVercelChildRequest) => boolean): number => {
+      const match = requests.find(predicate)
+      if (!match) throw new Error("expected a matching child request")
+      return match.timeoutMs
+    }
+    // `inspect --wait` blocks on Vercel's build queue; the others are bounded by
+    // their own work and must not silently inherit the longer budget.
+    expect(budgetFor((request) => request.args.includes("--wait"))).toBe(
+      NATIVE_VERCEL_READINESS_TIMEOUT_MS,
+    )
+    expect(budgetFor((request) => request.args[0] === "--version")).toBe(
+      NATIVE_VERCEL_CHILD_TIMEOUT_MS,
+    )
+    expect(budgetFor((request) => request.args[0] === "deploy")).toBe(
+      NATIVE_VERCEL_CHILD_TIMEOUT_MS,
+    )
+    expect(NATIVE_VERCEL_READINESS_TIMEOUT_MS).toBeGreaterThan(NATIVE_VERCEL_CHILD_TIMEOUT_MS)
+
+    // The child deadline is only a backstop. `vercel inspect --wait` enforces its own
+    // `--timeout` (default 3m) and on expiry exits 0 with a still-building payload —
+    // so without this flag the child budget is unreachable and raising it buys nothing.
+    const inspectArgs = requests.find((request) => request.args.includes("--wait"))?.args ?? []
+    expect(inspectArgs).toContain("--timeout")
+    expect(inspectArgs[inspectArgs.indexOf("--timeout") + 1]).toBe(
+      `${NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS}ms`,
+    )
+    expect(NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS).toBeLessThan(NATIVE_VERCEL_READINESS_TIMEOUT_MS)
+  })
+
+  test("names the state a not-ready inspect receipt reached", () => {
+    // The overrun path exits 0 with BUILDING, so this message is the only place the
+    // lane can say why readiness ended. A bare "does not match" would read the same
+    // as a wrong deployment id.
+    expect(() =>
+      parseNativeVercelInspectReceipt(
+        '{"id":"dpl_Source123","url":"dawn-source-abc.vercel.app","readyState":"BUILDING"}',
+        {
+          canonicalOrigin: "https://dawn-source-abc.vercel.app",
+          deploymentId: "dpl_Source123",
+        },
+      ),
+    ).toThrow(/readyState=BUILDING/)
+  })
+
+  test("keeps both readiness waits inside the gated test's own timeout", () => {
+    // A budget at or above the test timeout would surface as a bare vitest timeout,
+    // losing the lane's diagnostics — the very evidence the budget exists to produce.
+    // This bounds the readiness waits only, not the whole lane: the other steps carry
+    // their own budgets. Both waits count — the orchestration stops at the first
+    // FAILING kind, but source can finish slowly and successfully before prebuilt
+    // overruns, so a failing run can still spend two full caps.
+    expect(2 * NATIVE_VERCEL_READINESS_TIMEOUT_MS).toBeLessThan(NATIVE_VERCEL_GATED_TEST_TIMEOUT_MS)
+  })
+
+  test("carries the child runner's own failure as the cause of a transport failure", async () => {
+    const { boundary } = await makeReadinessBoundary(async (request) => {
+      if (request.args[0] === "--version") {
+        return { exitCode: 0, stderr: pinnedVercelVersionStderr, stdout: "58.9.0\n" }
+      }
+      throw new Error("native child timeout deadline exceeded")
+    })
+    await boundary.assertVersion()
+    const caught = await boundary
+      .inspect({
+        canonicalOrigin: "https://dawn-source-abc.vercel.app",
+        deploymentId: "dpl_Source123",
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+    expect(caught).toBeInstanceOf(Error)
+    // Without the cause the lane cannot tell "we ran out of budget" from "Vercel
+    // rejected the deployment" — the two have opposite fixes.
+    expect((caught as Error).message).toContain(String(NATIVE_VERCEL_READINESS_TIMEOUT_MS))
+    expect(((caught as Error).cause as Error).message).toBe(
+      "native child timeout deadline exceeded",
+    )
   })
 })
 

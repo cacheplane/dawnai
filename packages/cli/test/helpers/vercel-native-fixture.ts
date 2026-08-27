@@ -2663,7 +2663,30 @@ export interface NativeDeployCommandEvidence {
   readonly prebuiltFlagCount: 0 | 1
 }
 
-const NATIVE_VERCEL_CHILD_TIMEOUT_MS = 120_000
+/**
+ * Budget for the Vercel CLI invocations whose duration is bounded by their own
+ * work: `--version`, `deploy --no-wait` (upload, then return), and the log reads.
+ */
+export const NATIVE_VERCEL_CHILD_TIMEOUT_MS = 120_000
+/**
+ * How long the readiness wait asks the Vercel CLI to block for. `vercel inspect
+ * --wait` defaults to `--timeout 3m`, and on expiry it does NOT fail: it warns
+ * "stopped waiting after ...", stops polling, and returns `exitCode(readyState)`,
+ * which is 0 for BUILDING and QUEUED. So the CLI's own cap — not the child budget
+ * below — is what actually bounds the wait, and overrunning it surfaces as a
+ * not-ready receipt rather than as an error. Passing this explicitly is the only
+ * way to raise that bound.
+ */
+export const NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS = 300_000
+/**
+ * Backstop budget for the readiness child. Strictly above the CLI timeout above so
+ * the CLI always reports first, with a payload naming the state it reached; this
+ * deadline fires only if the CLI itself stops making progress. The lane waits twice
+ * (source, then prebuilt) and the lane test pins both inside the gated test's own
+ * timeout, so a blown budget still reports through the lane's diagnostics rather
+ * than as a bare vitest timeout.
+ */
+export const NATIVE_VERCEL_READINESS_TIMEOUT_MS = 360_000
 const NATIVE_VERCEL_API_TIMEOUT_MS = 30_000
 
 function pathIsInsideOrEqual(parent: string, candidate: string): boolean {
@@ -2808,18 +2831,21 @@ export async function createNativePinnedVercelBoundary(
 
   const run = async (
     label: string,
-    request: Omit<NativeVercelChildRequest, "executable" | "timeoutMs">,
+    request: Omit<NativeVercelChildRequest, "executable" | "timeoutMs"> & {
+      readonly timeoutMs?: number
+    },
     validateSuccessStderr?: (stderr: string) => void,
   ): Promise<NativeLocalCommandResult> => {
+    const timeoutMs = request.timeoutMs ?? NATIVE_VERCEL_CHILD_TIMEOUT_MS
     let result: NativeLocalCommandResult
     try {
-      result = await options.runChild({
-        ...request,
-        executable: cliPath,
-        timeoutMs: NATIVE_VERCEL_CHILD_TIMEOUT_MS,
-      })
-    } catch {
-      throw new Error(`${label} child transport failed`)
+      result = await options.runChild({ ...request, executable: cliPath, timeoutMs })
+    } catch (cause) {
+      // The child runner's own message is the only thing separating a blown budget
+      // from a spawn failure or a killed process, and the lane writes its
+      // deploy-failure diagnostic from this chain. Every message the runner can
+      // produce is fixture-authored, so none of them can carry a secret.
+      throw new Error(`${label} child transport failed under its ${timeoutMs}ms budget`, { cause })
     }
     if (result.exitCode !== 0) throw protectedChildError(result, label, redactor)
     if (validateSuccessStderr) validateSuccessStderr(result.stderr)
@@ -2912,6 +2938,8 @@ export async function createNativePinnedVercelBoundary(
           "--scope",
           options.orgId,
           "--wait",
+          "--timeout",
+          `${NATIVE_VERCEL_READINESS_CLI_TIMEOUT_MS}ms`,
           "--json",
           "--non-interactive",
           "--global-config",
@@ -2919,6 +2947,7 @@ export async function createNativePinnedVercelBoundary(
         ],
         cwd: options.jobRoot,
         env: credentialEnv(false),
+        timeoutMs: NATIVE_VERCEL_READINESS_TIMEOUT_MS,
       })
       return parseNativeVercelInspectReceipt(result.stdout, {
         canonicalOrigin: expectedOrigin,
@@ -3431,10 +3460,19 @@ export function parseNativeVercelInspectReceipt(
   if (
     receipt.id !== expected.deploymentId ||
     typeof receipt.url !== "string" ||
-    canonicalizeVercelOrigin(receipt.url) !== expectedOrigin ||
-    receipt.readyState !== "READY"
+    canonicalizeVercelOrigin(receipt.url) !== expectedOrigin
   ) {
-    throw new Error("native Vercel inspect receipt does not match the ready deployment")
+    throw new Error("native Vercel inspect receipt does not match the deployment under test")
+  }
+  if (receipt.readyState !== "READY") {
+    // `vercel inspect --wait` exits 0 with the deployment still BUILDING or QUEUED
+    // once it gives up waiting, so this branch — not a thrown child error — is the
+    // shape an overrun readiness wait takes. Name the state: it is what separates
+    // "Vercel was still building" from "Vercel failed the build", and the two have
+    // opposite fixes. readyState is a short status enum, never a credential.
+    const state =
+      typeof receipt.readyState === "string" ? receipt.readyState.slice(0, 32) : "unknown"
+    throw new Error(`native Vercel inspect receipt is not ready: readyState=${state}`)
   }
   for (const field of [
     "error",
