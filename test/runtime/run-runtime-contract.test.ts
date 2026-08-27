@@ -46,20 +46,37 @@ type RuntimeFixtureName =
   | "workflow-basic"
   | "workflow-failure"
 
+/**
+ * What an overlay fixture claims the run will produce, keyed on `status` the
+ * same way {@link RuntimeExecutionResult} is.
+ *
+ * `mode` and the failure branch's `error` were optional here and are not
+ * optional in any fixture under `fixtures/*.overlay.json`. Optional was worse
+ * than wrong: `toMatchObject({ mode: undefined })` asserts the property IS
+ * undefined rather than skipping it, and an optional `error` let the failure
+ * assertions read `error.kind` off a value the compiler knew could be missing.
+ */
+type RuntimeOverlayExpectation =
+  | {
+      readonly mode: RuntimeExecutionMode
+      readonly output?: unknown
+      readonly status: "passed"
+    }
+  | {
+      readonly error: {
+        readonly kind: RuntimeExecutionErrorKind
+        readonly message?: string
+      }
+      readonly mode: RuntimeExecutionMode
+      readonly status: "failed"
+    }
+
 interface RuntimeOverlay {
   readonly deleteFiles?: readonly string[]
   readonly files?: Readonly<Record<string, string>>
   readonly input: Record<string, unknown>
   readonly routeFile: string
-  readonly expected: {
-    readonly error?: {
-      readonly kind: RuntimeExecutionErrorKind
-      readonly message?: string
-    }
-    readonly mode?: RuntimeExecutionMode
-    readonly output?: unknown
-    readonly status: "failed" | "passed"
-  }
+  readonly expected: RuntimeOverlayExpectation
 }
 
 afterEach(async () => {
@@ -549,8 +566,17 @@ async function expectRuntimeParityArtifacts(
   )
 
   assertExecutionMatchesOverlay(directExecution, overlay)
-  assertCliExecutionMatchesOverlay(cliExecution, overlay, directExecution.appRoot, "in-process")
-  assertCliExecutionMatchesOverlay(serverExecution, overlay, directExecution.appRoot, "server")
+
+  // `appRoot` is nullable on the failure branch of the union. The assertion
+  // above already requires a string, but that is a matcher and narrows nothing,
+  // so resolve it once here and let a null fail with a sentence.
+  const { appRoot } = directExecution
+  if (appRoot === null) {
+    throw new Error(`Direct execution for ${overlay.routeFile} reported a null appRoot.`)
+  }
+
+  assertCliExecutionMatchesOverlay(cliExecution, overlay, appRoot, "in-process")
+  assertCliExecutionMatchesOverlay(serverExecution, overlay, appRoot, "server")
 
   expect(toComparableExecution(cliExecution)).toEqual(toComparableExecution(directExecution))
   expect(toComparableExecution(serverExecution)).toEqual({
@@ -581,36 +607,33 @@ function assertExecutionMatchesOverlay(
     return
   }
 
+  // `toMatchObject` cannot narrow the union for TypeScript, and reading `.error`
+  // off a passed result throws a TypeError that buries the real problem. Narrow
+  // first so a wrong status fails with a sentence instead.
+  if (execution.status !== "failed") {
+    throw new Error(
+      `Expected ${overlay.routeFile} to fail, but the execution reported "${execution.status}".`,
+    )
+  }
+
   expect(execution).toMatchObject({
     appRoot: expect.any(String),
     error: {
-      kind: overlay.expected.error?.kind,
+      kind: overlay.expected.error.kind,
     },
     mode: overlay.expected.mode,
     routeId: expectedRouteId(overlay.routeFile),
     routePath: overlay.routeFile,
     status: "failed",
-  } satisfies Partial<RuntimeExecutionResult>)
+  })
 
-  if (overlay.expected.error?.message) {
+  if (overlay.expected.error.message) {
     expect(execution.error.message).toBe(overlay.expected.error.message)
   }
 }
 
 function assertCliExecutionMatchesOverlay(
-  execution: {
-    readonly appRoot: string | null
-    readonly error?: {
-      readonly kind: RuntimeExecutionErrorKind
-      readonly message: string
-    }
-    readonly mode: RuntimeExecutionMode | null
-    readonly output?: unknown
-    readonly routeId?: string | null
-    readonly routePath: string
-    readonly executionSource?: "in-process" | "server"
-    readonly status: "failed" | "passed"
-  },
+  execution: RuntimeExecutionResult,
   overlay: RuntimeOverlay,
   appRoot: string,
   executionSource: "in-process" | "server",
@@ -633,16 +656,24 @@ function assertCliExecutionMatchesOverlay(
     return
   }
 
+  // Same reason as assertExecutionMatchesOverlay: narrow before the union's
+  // failure-only fields are touched.
+  if (execution.status !== "failed") {
+    throw new Error(
+      `Expected ${overlay.routeFile} to fail, but the execution reported "${execution.status}".`,
+    )
+  }
+
   expect(execution).toMatchObject({
     error: {
-      kind: overlay.expected.error?.kind,
+      kind: overlay.expected.error.kind,
     },
     mode: overlay.expected.mode,
     status: "failed",
   })
 
-  if (overlay.expected.error?.message) {
-    expect(execution.error?.message).toBe(overlay.expected.error.message)
+  if (overlay.expected.error.message) {
+    expect(execution.error.message).toBe(overlay.expected.error.message)
   }
 }
 
@@ -790,19 +821,9 @@ async function runCliExecution(options: {
     throw new Error(`dawn run wrote to stderr: ${result.stderr.trim()}`)
   }
 
-  return JSON.parse(result.stdout) as {
-    readonly appRoot: string | null
-    readonly error?: {
-      readonly kind: RuntimeExecutionErrorKind
-      readonly message: string
-    }
-    readonly executionSource?: "in-process" | "server"
-    readonly mode: RuntimeExecutionMode | null
-    readonly output?: unknown
-    readonly routeId?: string | null
-    readonly routePath: string
-    readonly status: "failed" | "passed"
-  }
+  // The same envelope `readExecutionArtifact` reads back off disk — `dawn run`
+  // prints exactly one `RuntimeExecutionResult`.
+  return JSON.parse(result.stdout) as RuntimeExecutionResult
 }
 
 async function readExecutionArtifact(
@@ -822,17 +843,7 @@ async function readJsonArtifact<T>(artifacts: readonly string[], artifactName: s
   return JSON.parse(await readFile(artifactPath, "utf8")) as T
 }
 
-function toComparableExecution(
-  execution: Pick<
-    RuntimeExecutionResult,
-    "executionSource" | "mode" | "output" | "routeId" | "routePath" | "status"
-  > & {
-    readonly error?: {
-      readonly kind: RuntimeExecutionErrorKind
-      readonly message: string
-    }
-  },
-) {
+function toComparableExecution(execution: RuntimeExecutionResult) {
   return execution.status === "passed"
     ? {
         executionSource: execution.executionSource,

@@ -3,13 +3,23 @@
   "full": {
     "muted": [],
     "records": [
-      { "package": "@ai-sdk/provider-utils", "version": "3.0.28", "ghsa": "GHSA-866g-f22w-33x8", "severity": "low" }
+      {
+        "package": "@ai-sdk/provider-utils",
+        "version": "3.0.28",
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "severity": "low"
+      }
     ]
   },
   "production": {
     "muted": [],
     "records": [
-      { "package": "@ai-sdk/provider-utils", "version": "3.0.28", "ghsa": "GHSA-866g-f22w-33x8", "severity": "low" }
+      {
+        "package": "@ai-sdk/provider-utils",
+        "version": "3.0.28",
+        "ghsa": "GHSA-866g-f22w-33x8",
+        "severity": "low"
+      }
     ]
   }
 }

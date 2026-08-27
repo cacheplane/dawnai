@@ -1,15 +1,19 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { type ChildProcess, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { dirname, join } from "node:path"
+
+import type { RuntimeExecutionMode } from "../../../packages/cli/src/lib/runtime/result.ts"
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000
 
 export interface RunsWaitInvocation {
   readonly assistantId: string
   readonly input: unknown
-  readonly mode: "graph" | "workflow"
+  // Every mode the runtime can report, not just the two graph-ish ones: the
+  // agent overlays invoke this with "agent".
+  readonly mode: RuntimeExecutionMode
   readonly routeId: string
   readonly routePath: string
 }
@@ -70,7 +74,10 @@ export async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function invokeRunsWait(baseUrl: string, invocation: RunsWaitInvocation): Promise<Response> {
+export async function invokeRunsWait(
+  baseUrl: string,
+  invocation: RunsWaitInvocation,
+): Promise<Response> {
   const threadId = `t-test-${randomUUID().slice(0, 8)}`
   return await fetch(new URL(`/threads/${encodeURIComponent(threadId)}/runs/wait`, baseUrl), {
     body: JSON.stringify({
@@ -84,10 +91,13 @@ export async function invokeRunsWait(baseUrl: string, invocation: RunsWaitInvoca
   })
 }
 
-export async function postRunsWait(baseUrl: string, options: {
-  readonly body: string
-  readonly headers?: Readonly<Record<string, string>>
-}): Promise<Response> {
+export async function postRunsWait(
+  baseUrl: string,
+  options: {
+    readonly body: string
+    readonly headers?: Readonly<Record<string, string>>
+  },
+): Promise<Response> {
   const threadId = `t-test-${randomUUID().slice(0, 8)}`
   return await fetch(new URL(`/threads/${encodeURIComponent(threadId)}/runs/wait`, baseUrl), {
     body: options.body,
@@ -212,7 +222,9 @@ export class DevServerHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   async waitForReady(timeoutMs = DEFAULT_READY_TIMEOUT_MS): Promise<string> {
@@ -259,7 +271,9 @@ export class DevServerHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev readiness\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev readiness\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   async waitForNotReady(timeoutMs = 5_000): Promise<void> {
@@ -284,7 +298,9 @@ export class DevServerHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev to become not-ready\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev to become not-ready\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   async writeFile(relativePath: string, source: string): Promise<void> {
@@ -310,6 +326,8 @@ export class DevServerHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev URL\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev URL\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 }
