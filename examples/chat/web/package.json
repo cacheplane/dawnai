@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\" && next build",
+    "lint": "biome check --config-path ../../../packages/config-biome/biome.json package.json app e2e tsconfig.json next.config.mjs playwright.config.ts",
     "start": "next start -p 3000",
     "test:e2e": "playwright test --config playwright.config.ts",
     "typecheck": "tsc -p . --noEmit"

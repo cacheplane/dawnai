@@ -126,6 +126,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../packages/config-typescript
+      '@dawn-ai/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@types/mdx':
         specifier: ^2.0.14
         version: 2.0.14
