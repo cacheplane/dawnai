@@ -26,7 +26,7 @@ export const STATIC_LASTMOD: Readonly<Record<string, string>> = {
   "/docs/api/testing": "2026-08-12T16:14:07.000Z",
   "/docs/api/workspace": "2026-08-18T19:54:03.000Z",
   "/docs/blueprints": "2026-06-27T17:09:32.000Z",
-  "/docs/cli": "2026-08-11T18:35:09.000Z",
+  "/docs/cli": "2026-08-27T05:19:27.000Z",
   "/docs/configuration": "2026-08-11T18:35:09.000Z",
   "/docs/context-management": "2026-08-11T18:35:09.000Z",
   "/docs/deployment": "2026-08-11T18:35:09.000Z",

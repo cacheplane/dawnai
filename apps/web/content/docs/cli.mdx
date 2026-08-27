@@ -310,6 +310,53 @@ the `.md` suffix); an unknown topic exits non-zero and lists the available
 topics. Running from a source checkout requires the CLI to be built first
 (`pnpm --filter @dawn-ai/cli build`) so the bundled docs exist.
 
+## `dawn threads`
+
+Inspects and reattaches to Agent Protocol threads on a running Dawn server.
+
+```
+dawn threads tail <thread-id>
+dawn threads tail <thread-id> --url http://127.0.0.1:3000
+dawn threads tail <thread-id> --header "authorization: Bearer $TOKEN"
+dawn threads tail <thread-id> --json
+```
+
+`tail` rejoins a thread through
+[`GET /threads/:thread_id/runs/stream`](/docs/dev-server/agent-protocol) — the
+reattach endpoint — and is the recovery path after a disconnect, a reload, or a
+lost terminal. It prints a snapshot first, then follows whatever comes next:
+
+- When a turn is **streaming in that server process**, the snapshot carries the
+  committed transcript plus the turn's output so far, and the command then tails
+  live frames until the turn emits `done`.
+- When **no turn is live** there, the snapshot is the durable one — the latest
+  checkpoint plus any parked human-in-the-loop prompts — and the command exits
+  immediately. This path works across restarts and replicas because it is
+  checkpoint-backed.
+
+The header line reports `status`, whether the attach is `live`, the turn's
+`run_started_at`, and the checkpoint `anchor`. Comparing `run_started_at` across
+reattachments tells you whether a *different* turn now owns the thread; `anchor`
+correlates a resumed turn back to the run it continues.
+
+Attaching never cancels anything and never takes the thread's run slot, so it is
+safe to tail a thread someone else is driving. To stop a run, use
+`POST /threads/:thread_id/cancel` instead.
+
+Flags:
+- `--url <url>` — base URL of the running Dawn server (default
+  `http://127.0.0.1:3000`).
+- `--header <name: value>` — extra request header, repeatable. Use it when the
+  server's middleware authenticates the thread's route.
+- `--json` — print raw SSE frames as JSON, one per line, instead of rendered
+  text.
+
+Exit codes follow the table below: `1` when the stream ends without a terminal
+`done` frame or the server detaches the viewer (the per-thread viewer cap, or a
+consumer too slow to keep up — reconnect for a fresh snapshot), and `2` when the
+server is unreachable, the thread does not exist, or the thread has never run
+and so has no route identity to authorize against.
+
 ## Exit codes
 
 | Code | Meaning |
