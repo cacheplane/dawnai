@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -7,9 +7,10 @@ import { describe, expect, it } from "vitest"
 import { resolveTemplateDir, TEMPLATE_NAMES } from "../src/templates.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
-const exampleRoot = resolve(repoRoot, "examples/research/server")
+const serverExampleRoot = resolve(repoRoot, "examples/research/server")
+const webExampleRoot = resolve(repoRoot, "examples/research/web")
 
-const RESEARCH_PARITY_ROOTS = [
+const SERVER_PARITY_ROOTS = [
   ".env.example",
   "AGENTS.md",
   "dawn.config.ts",
@@ -18,7 +19,42 @@ const RESEARCH_PARITY_ROOTS = [
   "workspace",
 ] as const
 
-const RESEARCH_PARITY_IGNORED_PATHS = new Set(["workspace/reports", "workspace/tool-outputs"])
+const SERVER_PARITY_IGNORED_PATHS = new Set(["workspace/reports", "workspace/tool-outputs"])
+
+const WEB_PARITY_ROOTS = [
+  ".env.example",
+  ".gitignore",
+  "app",
+  "next.config.mjs",
+  "postcss.config.mjs",
+  "tsconfig.json",
+  "vitest.config.ts",
+] as const
+
+const WEB_PARITY_IGNORED_PATHS = new Set<string>()
+
+/**
+ * A parity scope pins the comparison to one example/template tree pair.
+ *
+ * `roots` is an allowlist, not a convenience: files outside it (`package.json`,
+ * `README.md`) carry generation tokens and are deliberately excluded from the
+ * byte comparison. Passing the wrong scope silently compares an empty set, so
+ * every {@link compareParityTrees} caller states its scope explicitly.
+ */
+interface ParityScope {
+  readonly ignoredPaths: ReadonlySet<string>
+  readonly roots: readonly string[]
+}
+
+const SERVER_PARITY_SCOPE: ParityScope = {
+  ignoredPaths: SERVER_PARITY_IGNORED_PATHS,
+  roots: SERVER_PARITY_ROOTS,
+}
+
+const WEB_PARITY_SCOPE: ParityScope = {
+  ignoredPaths: WEB_PARITY_IGNORED_PATHS,
+  roots: WEB_PARITY_ROOTS,
+}
 
 interface ParityEntry {
   readonly kind: "directory" | "file"
@@ -56,7 +92,7 @@ function isMissingPathError(error: unknown): boolean {
 
 async function inventoryParityTree(
   root: string,
-  options: { readonly normalizeTemplateSuffix: boolean },
+  options: { readonly normalizeTemplateSuffix: boolean; readonly scope: ParityScope },
 ): Promise<readonly ParityEntry[]> {
   const entries: ParityEntry[] = []
 
@@ -66,7 +102,7 @@ async function inventoryParityTree(
   ): Promise<void> {
     const physicalPath = physicalSegments.join("/")
     const normalizedPath = normalizedSegments.join("/")
-    if (RESEARCH_PARITY_IGNORED_PATHS.has(normalizedPath)) return
+    if (options.scope.ignoredPaths.has(normalizedPath)) return
 
     const stats = await lstat(join(root, ...physicalSegments)).catch((error: unknown) => {
       if (isMissingPathError(error)) return undefined
@@ -92,7 +128,7 @@ async function inventoryParityTree(
   }
 
   if (options.normalizeTemplateSuffix) {
-    const parityRoots = new Set<string>(RESEARCH_PARITY_ROOTS)
+    const parityRoots = new Set<string>(options.scope.roots)
     const physicalRootNames = await readdir(root).catch((error: unknown) => {
       if (isMissingPathError(error)) return []
       throw error
@@ -106,7 +142,7 @@ async function inventoryParityTree(
       }
     }
   } else {
-    for (const parityRoot of RESEARCH_PARITY_ROOTS) {
+    for (const parityRoot of options.scope.roots) {
       await visit([parityRoot], [parityRoot])
     }
   }
@@ -121,10 +157,11 @@ async function inventoryParityTree(
 async function compareParityTrees(
   exampleRoot: string,
   templateRoot: string,
+  scope: ParityScope,
 ): Promise<ParityReport> {
   const [exampleEntries, templateEntries] = await Promise.all([
-    inventoryParityTree(exampleRoot, { normalizeTemplateSuffix: false }),
-    inventoryParityTree(templateRoot, { normalizeTemplateSuffix: true }),
+    inventoryParityTree(exampleRoot, { normalizeTemplateSuffix: false, scope }),
+    inventoryParityTree(templateRoot, { normalizeTemplateSuffix: true, scope }),
   ])
 
   function findCollisions(
@@ -206,6 +243,52 @@ async function compareParityTrees(
   }
 }
 
+/** Counts the compared paths on each side so a scope can never silently compare nothing. */
+async function countComparedParityPaths(
+  exampleRoot: string,
+  templateRoot: string,
+  scope: ParityScope,
+): Promise<{ readonly exampleFiles: number; readonly templateFiles: number }> {
+  const [exampleEntries, templateEntries] = await Promise.all([
+    inventoryParityTree(exampleRoot, { normalizeTemplateSuffix: false, scope }),
+    inventoryParityTree(templateRoot, { normalizeTemplateSuffix: true, scope }),
+  ])
+
+  return {
+    exampleFiles: exampleEntries.filter(({ kind }) => kind === "file").length,
+    templateFiles: templateEntries.filter(({ kind }) => kind === "file").length,
+  }
+}
+
+/** Every `*.template` path under `root`, relative and slash-joined, sorted. */
+async function collectTemplateSuffixedPaths(root: string): Promise<readonly string[]> {
+  const paths: string[] = []
+
+  async function visit(segments: readonly string[]): Promise<void> {
+    const dirEntries = await readdir(join(root, ...segments), { withFileTypes: true })
+    for (const dirEntry of dirEntries) {
+      if (dirEntry.isDirectory()) {
+        await visit([...segments, dirEntry.name])
+        continue
+      }
+      if (dirEntry.name.endsWith(".template")) paths.push([...segments, dirEntry.name].join("/"))
+    }
+  }
+
+  await visit([])
+  return paths.sort(compareCodeUnits)
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return await stat(path).then(
+    () => true,
+    (error: unknown) => {
+      if (isMissingPathError(error)) return false
+      throw error
+    },
+  )
+}
+
 describe("template registry", () => {
   it("registers the research template", () => {
     expect(TEMPLATE_NAMES).toContain("research")
@@ -219,12 +302,27 @@ describe("template registry", () => {
 
 describe("research template parity with examples/research/server", () => {
   it("keeps the complete research behavior tree in byte-for-byte parity", async () => {
-    expect(await compareParityTrees(exampleRoot, await resolveTemplateDir("research"))).toEqual({
+    const templateServerRoot = join(await resolveTemplateDir("research"), "server")
+    expect(
+      await compareParityTrees(serverExampleRoot, templateServerRoot, SERVER_PARITY_SCOPE),
+    ).toEqual({
       contentDriftedPaths: [],
       missingTemplatePaths: [],
       normalizedPathCollisions: [],
       unexpectedTemplatePaths: [],
     })
+  })
+
+  it("compares a non-empty server tree on both sides", async () => {
+    const templateServerRoot = join(await resolveTemplateDir("research"), "server")
+    const counts = await countComparedParityPaths(
+      serverExampleRoot,
+      templateServerRoot,
+      SERVER_PARITY_SCOPE,
+    )
+
+    expect(counts.exampleFiles).toBeGreaterThan(20)
+    expect(counts.templateFiles).toBe(counts.exampleFiles)
   })
 
   it("ignores gitignored runtime workspace outputs", async () => {
@@ -248,7 +346,9 @@ describe("research template parity with examples/research/server", () => {
         writeFile(join(fixtureTemplateRoot, "workspace/gitignore.template"), "same"),
       ])
 
-      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+      expect(
+        await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot, SERVER_PARITY_SCOPE),
+      ).toEqual({
         contentDriftedPaths: [],
         missingTemplatePaths: [],
         normalizedPathCollisions: [],
@@ -287,7 +387,9 @@ describe("research template parity with examples/research/server", () => {
         writeFile(join(fixtureTemplateRoot, "src/unexpected.ts.template"), "template only"),
       ])
 
-      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+      expect(
+        await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot, SERVER_PARITY_SCOPE),
+      ).toEqual({
         contentDriftedPaths: ["dawn.config.ts"],
         missingTemplatePaths: ["src/missing.ts"],
         normalizedPathCollisions: [
@@ -332,7 +434,9 @@ describe("research template parity with examples/research/server", () => {
         writeFile(join(fixtureTemplateRoot, "workspace/npmrc.template"), "same npmrc"),
       ])
 
-      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+      expect(
+        await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot, SERVER_PARITY_SCOPE),
+      ).toEqual({
         contentDriftedPaths: [],
         missingTemplatePaths: [],
         normalizedPathCollisions: [
@@ -347,5 +451,64 @@ describe("research template parity with examples/research/server", () => {
     } finally {
       await rm(fixtureRoot, { force: true, recursive: true })
     }
+  })
+})
+
+describe("research template parity with examples/research/web", () => {
+  it("keeps the complete research web tree in byte-for-byte parity", async () => {
+    const templateWebRoot = join(await resolveTemplateDir("research"), "web")
+    expect(await compareParityTrees(webExampleRoot, templateWebRoot, WEB_PARITY_SCOPE)).toEqual({
+      contentDriftedPaths: [],
+      missingTemplatePaths: [],
+      normalizedPathCollisions: [],
+      unexpectedTemplatePaths: [],
+    })
+  })
+
+  it("compares a non-empty web tree on both sides", async () => {
+    const templateWebRoot = join(await resolveTemplateDir("research"), "web")
+    const counts = await countComparedParityPaths(webExampleRoot, templateWebRoot, WEB_PARITY_SCOPE)
+
+    expect(counts.exampleFiles).toBeGreaterThan(40)
+    expect(counts.templateFiles).toBe(counts.exampleFiles)
+  })
+
+  it("normalizes every template-suffixed web path onto an existing example path", async () => {
+    const templateWebRoot = join(await resolveTemplateDir("research"), "web")
+    const templateSuffixedPaths = await collectTemplateSuffixedPaths(templateWebRoot)
+
+    expect(templateSuffixedPaths.filter((path) => path.endsWith(".test.ts.template"))).toHaveLength(
+      5,
+    )
+    expect(
+      templateSuffixedPaths.filter((path) => path.endsWith(".test.tsx.template")),
+    ).toHaveLength(10)
+    expect(templateSuffixedPaths).toContain("gitignore.template")
+    expect(templateSuffixedPaths).toContain("tsconfig.json.template")
+
+    const normalizedPaths = templateSuffixedPaths.map((path) =>
+      path
+        .split("/")
+        .map((segment) => normalizeParitySegment(segment, true))
+        .join("/"),
+    )
+
+    expect(normalizedPaths.filter((path) => path.includes(".template"))).toEqual([])
+    expect(normalizedPaths).toContain(".gitignore")
+    expect(normalizedPaths).toContain("tsconfig.json")
+
+    const unresolvedPaths: string[] = []
+    for (const normalizedPath of normalizedPaths) {
+      if (!(await pathExists(join(webExampleRoot, normalizedPath)))) {
+        unresolvedPaths.push(normalizedPath)
+      }
+    }
+
+    expect(unresolvedPaths).toEqual([])
+  })
+
+  it("excludes token-bearing files from the web parity roots", () => {
+    expect(WEB_PARITY_ROOTS).not.toContain("package.json")
+    expect(WEB_PARITY_ROOTS).not.toContain("README.md")
   })
 })

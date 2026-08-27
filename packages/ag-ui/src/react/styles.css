@@ -7,9 +7,21 @@
  * Rung 1 of the customization ladder: override any token below in your own CSS
  * to restyle without touching markup. Every selector here is scoped to the
  * `dawn-activity` prefix, so this sheet cannot affect the rest of your app.
+ *
+ * All three token blocks are wrapped in `:where()`, which zeroes their
+ * specificity to (0,0,0). A consumer's own plain `:root { --dawn-activity-*: ... }`
+ * therefore wins in every theme and regardless of which sheet the browser parses
+ * first — without it, the two dark blocks sit at (0,2,0) and rung 1 is only true
+ * in light mode.
+ *
+ * All three or none. Wrapping only the dark blocks is the tempting edit and it
+ * silently breaks dark mode: the light block would then be the most specific of
+ * the three and render a light card under a dark system theme. Internal
+ * precedence is preserved because the three stay equal-specificity, and source
+ * order already runs light -> media-dark -> explicit-dark.
  */
 
-:root {
+:where(:root) {
   --dawn-activity-surface: #ffffff;
   --dawn-activity-border: #e4e4e7;
   --dawn-activity-text: #18181b;
@@ -20,10 +32,17 @@
   --dawn-activity-radius: 10px;
   --dawn-activity-gap: 8px;
   --dawn-activity-font-size: 13px;
+  /*
+   * Geometry and weight are palette-independent, so they also live only here:
+   * the dark blocks below change colors and nothing else.
+   */
+  --dawn-activity-margin: 6px 0;
+  --dawn-activity-padding: 8px 10px;
+  --dawn-activity-header-weight: 600;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-dawn-theme="light"]) {
+  :where(:root:not([data-dawn-theme="light"])) {
     --dawn-activity-surface: #141519;
     --dawn-activity-border: #26272d;
     --dawn-activity-text: #e4e6eb;
@@ -34,7 +53,7 @@
   }
 }
 
-:root[data-dawn-theme="dark"] {
+:where(:root[data-dawn-theme="dark"]) {
   --dawn-activity-surface: #141519;
   --dawn-activity-border: #26272d;
   --dawn-activity-text: #e4e6eb;
@@ -50,13 +69,13 @@
   border-radius: var(--dawn-activity-radius);
   color: var(--dawn-activity-text);
   font-size: var(--dawn-activity-font-size);
-  margin: 6px 0;
-  padding: 8px 10px;
+  margin: var(--dawn-activity-margin);
+  padding: var(--dawn-activity-padding);
 }
 
 .dawn-activity__header {
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--dawn-activity-header-weight);
   list-style: none;
 }
 
@@ -64,15 +83,25 @@
   display: none;
 }
 
-.dawn-activity__header::before {
+/*
+ * A real element, not a `::before`. A pseudo-element has no `classNames` key, so
+ * the disclosure marker was the one visible part of the card rung 2 could not
+ * reach, and Chrome exposes generated content to the accessibility tree, which
+ * put the glyph inside the summary's accessible name. A span carrying
+ * `aria-hidden` fixes both.
+ *
+ * Tailwind's `before:` variants were never a substitute: the variant always
+ * emits `content: var(--tw-content)`, whose initial value is empty, so a class
+ * written to merely recolor the marker deletes it instead.
+ */
+.dawn-activity__marker {
   color: var(--dawn-activity-muted);
-  content: "▸";
   display: inline-block;
   margin-right: var(--dawn-activity-gap);
   transition: transform 0.1s ease-in-out;
 }
 
-.dawn-activity[open] > .dawn-activity__header::before {
+.dawn-activity[open] > .dawn-activity__header > .dawn-activity__marker {
   transform: rotate(90deg);
 }
 
@@ -87,7 +116,17 @@
 }
 
 .dawn-activity__badge {
-  background: var(--dawn-activity-border);
+  /*
+   * The default lives HERE, as a fallback, not as a `:root` declaration.
+   * A custom property whose value contains `var()` is substituted at
+   * computed-value time on the element that DECLARES it, so
+   * `--dawn-activity-badge-bg: var(--dawn-activity-border)` on `:root` would
+   * freeze the badge to the root's border colour. A subtree that re-points
+   * `--dawn-activity-border` would then recolour the card and leave the chip
+   * behind. The fallback form resolves on the badge itself, so the chip
+   * follows whichever border colour is in force wherever it renders.
+   */
+  background: var(--dawn-activity-badge-bg, var(--dawn-activity-border));
   border-radius: 4px;
   font-size: 11px;
   font-weight: 400;
@@ -95,7 +134,14 @@
   padding: 1px 5px;
 }
 
-.dawn-activity__section {
+/*
+ * Two classes, one rule. `__section` is a card's labelled region; `__checklist`
+ * is `ActivityChecklist`'s own wrapper. They shared a class until the subagent
+ * card started nesting one inside the other, at which point a consumer's plain
+ * `.dawn-activity__section` rule matched three elements, two of them nested.
+ */
+.dawn-activity__section,
+.dawn-activity__checklist {
   margin-top: var(--dawn-activity-gap);
 }
 

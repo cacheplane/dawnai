@@ -223,7 +223,7 @@ See [Fixtures and Recording](/docs/testing-agents/fixtures).
 
 ## Your scaffolded app already has a test
 
-`create-dawn-ai-app` generates `test/research.test.ts` that imports `@dawn-ai/testing` and covers the default `/research#agent` route. Run it immediately after scaffolding:
+`create-dawn-ai-app` generates `server/test/research.test.ts` that imports `@dawn-ai/testing` and covers the default `/research#agent` route. Run it immediately after scaffolding, from the workspace root:
 
 ```bash
 npm test
@@ -231,7 +231,7 @@ npm test
 
 The generated suite starts by verifying the corpus search and citation path:
 
-```ts title="test/research.test.ts"
+```ts title="server/test/research.test.ts"
 import { fileURLToPath } from "node:url"
 import { afterAll, it } from "vitest"
 import type { FixtureSet } from "@dawn-ai/testing"
@@ -275,7 +275,7 @@ The suite also exercises:
 - Offloading of a large `readDoc` result.
 - The HITL permission gate for `runBash`, followed by resume.
 
-These scenarios share one harness and call `h.reset()` per test — `reset()` starts a fresh thread and clears the previous scenario's fixtures, so the tests stay isolated. The separately gated `test/sandbox-docker.test.ts` verifies that shared tools operate inside an isolated Docker workspace without leaking files to the host or a fresh thread sandbox.
+These scenarios share one harness and call `h.reset()` per test — `reset()` starts a fresh thread and clears the previous scenario's fixtures, so the tests stay isolated. The separately gated `server/test/sandbox-docker.test.ts` verifies that shared tools operate inside an isolated Docker workspace without leaking files to the host or a fresh thread sandbox.
 
 Grow it by:
 

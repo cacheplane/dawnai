@@ -22,6 +22,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    \`\`\`
 
 2. Walk me through the generated project structure. Explain:
+   - The two-package npm workspace: \`server/\` is the Dawn app and \`web/\` is the Dawn Workbench browser client. Every path below is relative to \`server/\`, and the root \`package.json\` scripts delegate into whichever package owns them.
    - How routes are directories containing an \`index.ts\` that exports exactly one of: default \`agent(...)\`, named \`workflow\` (async function), named \`graph\` (LangGraph graph), or named \`chain\` (LangChain LCEL Runnable).
    - \`state.ts\` — the optional Zod route state schema.
    - \`src/tools/*.ts\` — shared tools available across routes. The default research scaffold puts \`searchCorpus\` and \`readDoc\` here.
@@ -45,25 +46,31 @@ const SCAFFOLD = `Help me scaffold a new Dawn app from the default research star
    npm run eval
    \`\`\`
 
-4. Only then opt into a live model run. Copy the environment template, require the user to add a real \`OPENAI_API_KEY\`, run the preflight, and start the tested dev script. Never invent or commit a key:
+4. Only then opt into a live model run. Copy the server package's environment template, require the user to add a real \`OPENAI_API_KEY\`, run the preflight, and start the tested dev script. Never invent or commit a key:
    \`\`\`
-   cp .env.example .env
-   # Add a real OPENAI_API_KEY to .env
+   cp server/.env.example server/.env
+   # Add a real OPENAI_API_KEY to server/.env
    npm run verify
-   npm run dev
+   npm run dev:server
    \`\`\`
-   The generated dev script serves \`http://127.0.0.1:3000\`.
+   The generated dev script serves \`http://127.0.0.1:3002\`.
 
-5. In another terminal, show the Agent Protocol shape for the same route:
+5. In a second terminal, start the Dawn Workbench — the generated \`web/\` package, an AG-UI/CopilotKit client with a thread rail, streaming transcript, plan and subagent activity cards, permission prompts, and memory review:
    \`\`\`
-   THREAD_ID=$(curl -s -X POST http://127.0.0.1:3000/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-   curl -s -X POST http://127.0.0.1:3000/threads/$THREAD_ID/runs/wait \\
+   npm run dev:web
+   \`\`\`
+   It serves \`http://localhost:3010\` and reaches the agent server through a same-origin proxy. No model key belongs in this package.
+
+6. Show the Agent Protocol shape for the same route:
+   \`\`\`
+   THREAD_ID=$(curl -s -X POST http://127.0.0.1:3002/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+   curl -s -X POST http://127.0.0.1:3002/threads/$THREAD_ID/runs/wait \\
      -H 'content-type: application/json' \\
      -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}'
    \`\`\`
    For streaming, use the same body with \`POST /threads/$THREAD_ID/runs/stream\` and consume the SSE events.
 
-6. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
+7. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
 
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 

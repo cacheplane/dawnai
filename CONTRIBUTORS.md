@@ -34,7 +34,7 @@ For local authoring work, the canonical contributor-local path is:
 
 ```bash
 pnpm --filter create-dawn-ai-app build
-node packages/create-dawn-app/dist/bin.js ../my-dawn-app --mode internal
+node packages/create-dawn-app/dist/bin.js ../my-dawn-app --mode internal --template basic
 cd ../my-dawn-app
 pnpm install
 ```
@@ -48,10 +48,12 @@ pnpm exec dawn test
 pnpm exec dawn dev
 ```
 
-The generated `basic` app now demonstrates the route authoring lane with:
+The generated `basic` app is a single flat package, and demonstrates the route authoring lane with:
 
 - `src/app/(public)/hello/[tenant]/index.ts`
 - `src/app/(public)/hello/[tenant]/tools/greet.ts`
+
+Drop `--template basic` to scaffold the default `research` app instead. That one is a two-package workspace (`server/` holds the Dawn app, `web/` the Dawn Workbench UI), so the Dawn CLI runs from `server/` rather than the generated root, and the root `package.json` scripts delegate there for you.
 
 Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-ai-app`.
 

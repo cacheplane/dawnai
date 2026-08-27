@@ -338,9 +338,6 @@ importers:
         specifier: ^4.3.3
         version: 4.3.3
     devDependencies:
-      '@dawn-ai/config-typescript':
-        specifier: workspace:*
-        version: link:../../../packages/config-typescript
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1

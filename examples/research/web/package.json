@@ -24,7 +24,6 @@
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
-    "@dawn-ai/config-typescript": "workspace:*",
     "@playwright/test": "1.62.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
