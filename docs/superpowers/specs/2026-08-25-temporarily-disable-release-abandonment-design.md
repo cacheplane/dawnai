@@ -6,6 +6,10 @@ Approved for specification on 2026-08-25. This design allows normal fixed-group
 releases to proceed without configuring an independent GitHub environment
 reviewer, while making the terminal abandonment operation unreachable.
 
+The activation sequence was reassessed against the deployed workflow states on
+2026-08-27. The dependency and release-train reconciliation is specified in
+[Release Controller Reconciliation After Main Integration](./2026-08-27-release-controller-main-reconciliation-design.md).
+
 ## Context
 
 The release controller currently exposes two manual operations:
@@ -173,18 +177,25 @@ historical evidence format and must not be overloaded as a live feature flag.
 
 Normal release activation follows this order:
 
-1. keep the Release, chart, verification, and version workflows disabled;
-2. merge the ownership switch containing the disabled workflow;
-3. synchronize the local checkout to the exact remote `main` SHA;
-4. capture fresh strict pre-enable evidence proving matching local/remote
-   workflow bytes, zero `v*` controller tags, and zero nonterminal Release runs;
-5. enable and re-read Immutable Releases;
-6. activate the release, chart, verification, and version workflows;
-7. immediately capture strict post-enable evidence at the same `main` SHA and
-   unchanged empty ref/run snapshot;
-8. run the required no-candidate reconciliation;
-9. merge the generated Version Packages pull request and let the controller
-   publish, audit, and verify the fixed group.
+1. before merge, keep the mutating Release and Publish Chart workflows manually
+   disabled while the read-only Published Artifact Verification workflow stays
+   active; the Version Packages workflow is not deployed yet;
+2. merge the ownership switch containing the disabled release workflow and the
+   Version Packages workflow;
+3. allow Version Packages to become active and, if its push trigger runs, create
+   or update its pull request, but do not merge that pull request;
+4. synchronize the local checkout to the exact remote `main` SHA;
+5. capture fresh strict pre-enable evidence proving matching local/remote
+   workflow bytes, Release and Publish Chart still manually disabled, Published
+   Artifact Verification and Version Packages active, zero `v*` controller
+   tags, and zero nonterminal Release runs;
+6. enable and re-read Immutable Releases;
+7. activate Release and Publish Chart, require all four controller workflows to
+   be active, and immediately capture strict post-enable evidence at the same
+   `main` SHA and unchanged empty ref/run snapshot;
+8. run the required no-candidate reconciliation; and
+9. only then merge the generated Version Packages pull request and let the
+   controller publish, audit, and verify the fixed group.
 
 No `release-abandonment` environment is created during this cutover.
 
@@ -234,6 +245,9 @@ Required coverage:
   empty;
 - nonterminal Release run evidence is complete and initially empty;
 - disabled mode passes strict pre-enable and post-enable verification;
+- pre-enable requires Release and Publish Chart to be manually disabled while
+  Published Artifact Verification and Version Packages are active, and
+  post-enable requires all four workflows to be active;
 - protected mode retains the current exact reviewer requirements;
 - disabled, protected, unavailable, and mixed evidence cannot be confused;
 - any partial abandonment workflow surface fails closed;
