@@ -31,6 +31,7 @@ import { registerRoutesCommand } from "./commands/routes.js"
 import { registerRunCommand } from "./commands/run.js"
 import { registerStartCommand } from "./commands/start.js"
 import { registerTestCommand } from "./commands/test.js"
+import { registerThreadsCommand } from "./commands/threads.js"
 import { registerTypegenCommand } from "./commands/typegen.js"
 import { registerVerifyCommand } from "./commands/verify.js"
 import { registerDevChildCommand } from "./lib/dev/dev-child.js"
@@ -74,6 +75,7 @@ export function createProgram(io: CommandIo): Command {
   registerRoutesCommand(program, io)
   registerStartCommand(program, io)
   registerTestCommand(program, io)
+  registerThreadsCommand(program, io)
   registerTypegenCommand(program, io)
   registerVerifyCommand(program, io)
   registerDevChildCommand(program)
