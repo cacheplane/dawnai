@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { materializeStateSchema } from "../src/state-adapter"
+import { materializeStateSchema } from "../src/state-adapter.js"
 
 describe("materializeStateSchema", () => {
   test("produces an annotation root with messages + custom fields", () => {
