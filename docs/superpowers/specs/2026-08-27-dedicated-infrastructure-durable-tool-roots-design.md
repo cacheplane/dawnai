@@ -14,7 +14,7 @@ fail-closed recovery transaction for the already-observed pre-resource case.
 Future tool roots live in private per-user state storage until their run is
 finalized. Normal cleanup keeps its existing exact-ownership requirement. A
 separate `reconcile-absent-pre-resource` command can finalize a run only when
-the accepted runner and all protected evidence match operator-supplied hashes,
+the accepted reconciler and all protected evidence match operator-supplied hashes,
 the state has the exact pre-resource failure shape, and the recorded tool root
 remains absent through repeated checks. Reconciliation writes a durable
 attestation and append-only phase chain but never creates, adopts, quarantines,
@@ -129,6 +129,13 @@ identities. Recreating a different checkout at the same path cannot adopt the
 scope when the Git common-directory identity differs. Moving a checkout creates
 a different scope; the runner never searches for or adopts old scopes.
 
+Reconciliation resolves the Git common directory without launching Git: it
+stably reads either the checkout's real `.git` directory or its strict
+single-line `gitdir:` indirection, then the optional strict `commondir` file,
+rejecting symlinks, path escapes, extra lines, malformed relative paths, and
+identity changes. The normal runner must derive the same canonical path and
+identity.
+
 `run-id` is the already-generated validated run ID. The durable `control.json`
 records the run ID, owner nonce, repository and run roots, state path, tool-root
 path, owner-marker identity, and initial state digest before credentials or
@@ -145,6 +152,11 @@ enumerate the private checkout scopes and inspect `repository.json` and
 Future runs stop creating `artifacts/testing/dedicated-infrastructure/active-run.json`.
 That legacy file is accepted only as explicitly hashed evidence for the current
 reconciliation. It is never deleted or overwritten by the new controller.
+Schema-version-2 bootstrap still checks that exact legacy path. If a file is
+present, bootstrap refuses unless the ledger's genesis event is
+`legacy-lease-retired` and binds that exact stable path, identity, content, and
+digest. Reconciliation requires an empty lease ledger and refuses to append
+after any schema-version-2 event.
 
 ### Creation and Authentication
 
@@ -163,24 +175,70 @@ reused only after exact `repository.json` authentication. Any pre-existing run
 ID is a conflict and aborts bootstrap.
 
 Immediately after tool-root creation, the runner writes the existing owner
-marker with create-only, mode-`0600`, durable publication. It then writes the
-create-only durable control record and a create-only `acquired` lease event,
-syncing each file and parent directory before downloading tools or creating a
-kubeconfig. The repository state is published only after those durable records
-exist. Before the `acquired` event exists, an unambiguous allocation failure may
-retire only empty create-exclusive identities captured by that attempt. After
-the event exists, no allocation rollback removes the tool root or control
-record; the run remains active for normal authenticated cleanup. If any
-identity or publication result is ambiguous, the path and control records
-remain for manual recovery and the run fails closed.
+marker with immutable publication. It then constructs the exact initial
+schema-version-2 state bytes. A create-only `allocation-prepared` lease event
+stores those bytes and their digest, the tool-root and marker identities, and
+the future state and control paths. This event reserves the checkout and blocks
+another run.
 
-Lease events are immutable, create-exclusive JSON records with a monotonic
-generation, predecessor digest, checkout identity, run identity, owner nonce,
-control-record digest, timestamp, and event kind. The authoritative active run
-is the latest valid hash-linked event: `acquired` makes its run active and
-`finalized` retires that same acquisition. Gaps, forks, replacements, malformed
-events, or more than one valid successor are conflicts. Events are retained;
-normal cleanup does not unlink an active-lease file.
+The runner next publishes the still-absent repository state with the immutable
+publisher, stably rereads it, publishes `control.json` referencing the prepared
+event and initial state identity/digest, and finally publishes `acquired`
+referencing the control-record digest. Only then may it download tools, create a
+kubeconfig, or execute bootstrap. References are directional: state contains
+control and prepared paths but not their digests; prepared contains the exact
+state bytes; control references prepared and state; acquired references
+control. There is no digest cycle.
+
+A crash after `allocation-prepared` is exactly resumable from the stored state
+bytes. Replay accepts only absent state/control, or their exact expected stable
+files, and advances through the same order. Before `allocation-prepared`, an
+unambiguous failure may retire only empty create-exclusive identities captured
+by that attempt. At or after `allocation-prepared`, no rollback removes the tool
+root or control evidence; the reserved run must be resumed and normally
+cleaned. Any identity or publication ambiguity preserves all paths and fails
+closed.
+
+Lease events are immutable JSON records with a monotonic generation,
+predecessor digest, checkout identity, run identity, owner nonce, timestamp,
+and event-specific references. The grammar is:
+
+- an empty ledger accepts either `allocation-prepared` for a clean checkout or
+  the one genesis-only `legacy-lease-retired` migration event;
+- `legacy-lease-retired` and `finalized` are inactive states and may be followed
+  only by a new run's `allocation-prepared`;
+- `allocation-prepared` is a blocking reservation and may be followed only by
+  `acquired` for the same run and control record;
+- `acquired` is active and may be followed only by `finalized` for the same run
+  after authenticated cleanup; and
+- every successor names the exact predecessor digest.
+
+Gaps, forks, replacements, malformed events, invalid transitions, or more than
+one valid successor are conflicts. Events are retained; normal cleanup does not
+unlink an active-lease file.
+
+### Immutable Publication
+
+Every new authoritative JSON file in the durable control tree, including
+repository markers, allocation and lease events, control records, lock events,
+attestations, and reconciliation phases, uses one primitive. The publisher
+writes complete canonical bytes to a create-exclusive mode-`0600` staging file
+under the authenticated target parent, syncs it, changes it to mode `0400`,
+syncs that metadata, hard-links the now-read-only inode to the absent final
+name, and syncs the final name's direct parent directory. The retained staging
+name therefore cannot normally mutate the authoritative hard link. A target in
+`lease-events/` syncs `lease-events/`, not the transaction directory. If the
+final name exists, only stable exact expected bytes, identity, and mode `0400`
+are accepted. Hard-link or mode-hardening unavailability fails before
+advancement.
+
+Staging files are never authoritative and are not deleted. Their names bind the
+target name, content digest, and lock generation when one exists. A replay may
+ignore only bounded regular files with a strict staging name and current-user
+ownership. Mode `0600` identifies an interrupted pre-hardening stage and may
+contain partial bytes; mode `0400` must have the filename's complete content
+digest. Other modes, names, types, ownership, or unexplained entries fail
+closed.
 
 Normal cleanup validates the exact path against the durable control record,
 checkout scope, run ID, owner marker, and captured identities. Quarantine and
@@ -205,8 +263,9 @@ the path or its authorization.
 Add a dedicated command:
 
 ```text
-reconcile-absent-pre-resource \
-  --accepted-runner-sha256 <sha256> \
+<canonical-node> <run-root>/infra-reconciler.mjs reconcile-absent-pre-resource \
+  --accepted-node-sha256 <sha256> \
+  --accepted-reconciler-sha256 <sha256> \
   --accepted-state-sha256 <sha256> \
   --accepted-results-json-sha256 <sha256> \
   --accepted-results-tsv-sha256 <sha256> \
@@ -219,16 +278,31 @@ All options are required and must occur exactly once. Hashes are lowercase
 64-character hexadecimal values. The command is the only entrypoint allowed to
 run when the normal runtime-integrity sidecar is absent.
 
-The reconciler remains a single source file with no mutable local imports. Its
-canonical path is exactly `<run-root>/infra-runner.ts`, reached without
-symlinks. Top-level execution for this command may parse arguments and declare
+The accepted executable is a reviewed, self-contained `infra-reconciler.mjs`, not
+the TypeScript source executed through `pnpm`, `tsx`, or another loader. Its
+canonical path is exactly `<run-root>/infra-reconciler.mjs`, reached without
+symlinks. It imports only `node:*` built-ins and performs no package, local-file,
+configuration, dynamic module, or child-process resolution. It does not contain
+the normal infrastructure command dispatcher. The implementation may remain
+authored and tested in TypeScript with shared pure helpers, but the operator
+reviews and accepts the exact bundled `.mjs` bytes that Node executes.
+
+Launch uses the absolute canonical Node path already recorded by the accepted
+legacy state. `process.execPath`, Node version, the state tool record, and
+`accepted-node-sha256` must all agree. The operator independently verifies both
+Node and reconciler hashes before launch and invokes them with a clean environment.
+The command rejects `NODE_OPTIONS`, `NODE_PATH`, preload/loader flags, package
+runner invocation, symlinked executables, and any environment key outside a
+small fixed locale-only allowlist.
+
+Top-level execution may parse arguments, import built-ins, and declare
 functions but performs no filesystem or process mutation until it has opened,
-stably read, and matched that exact file to `accepted-runner-sha256`. It captures
-the source identity and bytes and revalidates them immediately before every
-durable mutation. The acceptance procedure also verifies the hash externally
-before launch. This guards against mistakes and concurrent source replacement;
-it is not a claim that a program can establish trust in adversarial code that
-is already executing as the user.
+stably read, and matched the exact executable file and Node binary to their
+accepted hashes. It captures both identities and bytes and revalidates them
+immediately before every durable mutation. This authenticates the mutable
+executable closure used by reconciliation. It is not a claim that a program can
+establish trust in adversarial code or a compromised kernel already executing
+as the user.
 
 The other accepted hashes are operator authorization, not values discovered
 and silently trusted by the command. The prior audit must be a stable regular
@@ -258,7 +332,7 @@ durable control record.
 Before publishing an intent record, reconciliation must prove all of the
 following:
 
-- runner, state, results JSON, results TSV, and legacy lease are stable
+- reconciler, state, results JSON, results TSV, and legacy lease are stable
   mode-`0600` regular files at their exact canonical paths; the prior audit is a
   stable regular file owned by the current user and not group- or
   world-writable; every path is reached without symlinks, with identities
@@ -280,8 +354,7 @@ following:
   is recorded;
 - no ordinary cleanup journal or durable lease event already exists for this
   legacy run;
-- the recorded active registry PID is null and a best-effort diagnostic scan
-  finds no matching known run process in the current process table; and
+- the recorded active registry PID is null; and
 - the exact recorded tool-root path is absent in repeated stability probes.
 
 The absence probes use descriptor-bound, stable parent-directory inspection
@@ -292,8 +365,8 @@ aborts without deletion.
 
 The accepted state proves only that it records no resource attempt or owned
 resource. It cannot prove that no historical command ran before an interrupted
-state write, and a process-table scan cannot prove the absence of inherited
-file descriptors. The prior audit and accepted hashes are explicit
+state write or that no process retained an inherited file descriptor. The
+prior audit and accepted hashes are explicit
 operator-reviewed authority for proceeding with this one run. The attestation
 states those limits. The reconciliation implementation itself has no Docker,
 Kind, kubectl, Helm, registry, download, tool-root creation, quarantine,
@@ -304,9 +377,67 @@ Any mismatch preserves all protected files and the active lease. An existing
 ordinary cleanup transaction or any state beyond the exact pre-resource shape
 must be handled by normal authenticated cleanup or human investigation.
 
+### Protected Evidence Matrix
+
+| Evidence | Exact path | Owner and mode | Maximum bytes | Required content relation |
+|---|---|---|---:|---|
+| Node | canonical `state.tools.node.path` and `process.execPath` | current user; regular executable; no group/world write | 256 MiB | accepted digest, recorded tool digest, and required Node version agree |
+| Reconciler | `<run-root>/infra-reconciler.mjs` | current user; regular `0600` | 2 MiB | self-contained ESM, accepted digest, no mutable imports or child processes |
+| State | `<run-root>/state.json` | current user; regular `0600` | 1 MiB | strict legacy parser and accepted digest |
+| Results JSON | `<run-root>/results.json` | current user; regular `0600` | 1 MiB | exact projection of `state.results` |
+| Results TSV | `<run-root>/results.tsv` | current user; regular `0600` | 1 MiB | exact byte projection defined below |
+| Legacy lease | `<repo-root>/artifacts/testing/dedicated-infrastructure/active-run.json` | current user; regular `0600` | 64 KiB | strict six-field lease schema and exact state identity agreement |
+| Prior audit | accepted canonical descendant of `<run-root>` | current user; regular; no group/world write | 1 MiB | accepted digest; supporting evidence only |
+
+Every path component is opened relative to a stable authenticated parent with
+no-follow semantics. For each file, the reader opens once, captures BigInt
+`dev`, inode, UID, permission bits, size, mtime, and ctime with descriptor
+`fstat`, reads bounded bytes from that descriptor, repeats `fstat`, and then
+proves the canonical path still names the same device/inode through the stable
+parent. Any field change, short/long read, non-regular type, unsupported
+no-follow operation, or path replacement fails. The descriptor stores decimal
+device/inode strings, SHA-256 of exact bytes, and the complete bytes for later
+revalidation. Every authoritative phase repeats this algorithm and requires the
+same identity and digest.
+
+`results.json` bytes must equal
+`JSON.stringify(state.results, null, 2) + "\n"`. The TSV bytes use the fixed
+header and column order `lane`, `status`, `started_at`, `finished_at`,
+`exit_code`, `classification`, `resource`, `tool_versions`, `native_artifact`,
+`cleanup`, `retry`, `blocked_by`, `hosted_equivalent`. Each row follows
+`state.results` order; `tool_versions` uses `JSON.stringify`; null or undefined
+becomes empty; all tabs, carriage returns, and newlines in values collapse to a
+single space; columns are tab-separated; and every row ends with `\n`.
+
+### Exact Legacy State
+
+`LegacyReconciliationState` is the existing strict schema-version-1
+`validateState(..., { allowStaleFix: true })` parser frozen under regression
+tests, followed by the exact overlay below. The base parser rejects unknown or
+missing keys at every nested object, invalid enums, invalid timestamp order,
+noncanonical paths, duplicate records, projection inconsistencies, and invalid
+attempt/fix/retention relationships. Reconciliation does not add optional or
+permissive legacy fields.
+
+| Field group | Required pre-resource value |
+|---|---|
+| Identity | `schemaVersion: 1`; accepted run ID, run token, owner nonce, canonical repo/run roots, absolute recorded tool root and kubeconfig, ordered creation timestamp, `finalizedAt: null`, accepted policy digest |
+| Tools | exact sorted keys `curl`, `git`, `jq`, `node`, `os`, `pnpm`; each strict version/path/digest record; Node agrees with the accepted runtime |
+| Shared bootstrap | status `failed`; nonempty reason; terminal classification `bootstrap/environment`; exactly one failed `attempt0` |
+| Shared commands | nonempty and every executable/stage/argument tuple belongs to the frozen pre-resource allowlist of Git preflight, runtime/version probes, and `pnpm install --frozen-lockfile`; no resource executable or command is permitted |
+| Docker and Kubernetes bootstrap | status `pending`; null reason and terminal classification; empty attempts |
+| Baseline and ownership | every baseline member null; `ownedClusters: []`; `ownedImages: {}`; `activeRegistryPid: null`; `retained: []`; `fixes: []` |
+| Results | exactly six records in canonical lane order; each `blocked`, bootstrap/environment classified, zero attempts, null exit/native artifact/verified commit, cleanup `not-run`, retry `none`, zero post-fix runs, and blocked by the one shared-bootstrap failure |
+
+The legacy lease parser requires exactly `runId`, `ownerNonce`, `runRoot`,
+`toolRoot`, `statePath`, and `createdAt`, with every value equal to state and
+`statePath` equal to `<run-root>/state.json`. Accepted file hashes then bind the
+specific timestamps, reason strings, tool versions, resources, and hosted-lane
+labels that are intentionally not generalized by the overlay.
+
 ## Attestation and Journal
 
-Reconciliation writes authoritative mode-`0600` records under the exact
+Reconciliation writes authoritative mode-`0400` records under the exact
 durable run-control directory:
 
 ```text
@@ -314,7 +445,6 @@ cleanup-transaction/
   absent-tool-root-attestation.json
   00-intent.json
   01-absence-attested.json
-  02-state-finalized.json
   staging/
 
 lease-events/
@@ -325,14 +455,14 @@ After completion it may write a create-only copy of the attestation under the
 repository run root for convenient review. That copy is evidence only; replay
 and lease authority come from the durable records.
 
-The attestation is create-only and includes:
+The attestation uses the immutable publisher and includes:
 
 - schema version, transaction ID, run ID, owner nonce, and repository identity;
 - exact state, results, lease, and prior-audit paths, identities, and accepted
   hashes;
 - the expected absent tool-root path;
 - initial and pre-attestation absence observation timestamps;
-- the accepted runner hash and captured source identity;
+- the accepted Node and reconciler hashes and captured identities;
 - the prior audit's identity and digest;
 - the fixed conclusion `operator-reviewed-pre-resource-state-with-absent-tool-root`;
 - the fixed cause `unproven`; and
@@ -347,102 +477,97 @@ arena, payload, owner-marker, or unlink identity. Its allowed phases are:
 
 1. `intent`
 2. `absence-attested`
-3. `state-finalized`
-4. `legacy-lease-retired`
+3. `legacy-lease-retired`
 
-Each phase has its own create-exclusive file. The terminal lease event is also
+Each phase has its own immutable file. The terminal lease event is also
 the `legacy-lease-retired` phase; no second completion file is published. A
 record contains its ordinal, phase, transaction and run identities,
 predecessor filename and digest, the digest of the immutable intent payload,
 and the phase-specific evidence.
 
-The publisher writes complete bytes to a create-exclusive file under
-`staging/` whose name is bound to the active lock generation and target phase,
-then syncs it. It publishes those same bytes into the absent final name with a
-create-exclusive hard link and syncs the transaction directory. Staging files
-are never authority and are never deleted. A staging file left by a dead lock
-generation is accepted only as retained residue bound to that authenticated
-retired generation; replay creates a new stage under its own generation. If
-hard-link publication is unavailable, the command fails before advancing. If
-the final name already exists, the runner accepts only its stable exact
-expected content and identity. It never overwrites a phase file.
-
 `intent` commits the accepted arguments; all initial evidence paths,
 identities, and digests; the expected attestation body and digest; the fixed
-finalization timestamp; the exact final `RunState` body formed by changing only
-`finalizedAt`; its digest; and the expected legacy lease identity and digest.
+logical-finalization timestamp; the exact immutable legacy state, results, and
+lease identities and digests; and the expected legacy lease retirement event.
 Later reconciliation records hash-chain to it. The terminal lease event records
-both the `state-finalized` record digest and the preceding lease-event digest,
-or an explicit null lease predecessor when retiring the accepted legacy lease
-as the first durable event. Replays accept only the unique contiguous chain
-for the same transaction. Gaps, forks, extra records, malformed fields,
-wrong-action records, and out-of-order records fail closed.
+the `absence-attested` digest, uses a null lease predecessor, and is valid only
+as the empty ledger's genesis event. It has inactive active-run semantics and
+binds the accepted legacy lease path, identity, content digest, run identity,
+owner nonce, and logical-finalization timestamp. Replays accept only the unique
+contiguous chain for the same transaction. Gaps, forks, extra records,
+malformed fields, wrong-action records, and out-of-order records fail closed.
 
 The transaction performs these mutations in order:
 
 1. Create and durably publish `intent` after all entry checks.
-2. Publish and durably sync the attestation.
+2. Publish and durably sync the attestation with the immutable publisher.
 3. Revalidate all immutable evidence and absence, then advance to
    `absence-attested`.
-4. Persist the existing exact pre-resource final state using the normal state
-   publication protocol. Only `finalizedAt` changes; results, lane attempts,
-   cleanup statuses, and ownership inventories remain unchanged.
-5. Re-read and authenticate the exact intent-committed final state, capture its
-   stable post-publication identity, and advance to `state-finalized`.
-6. Revalidate source, the complete phase chain, attestation, immutable
-   evidence, exact legacy lease, final state, and root absence. Publish the
+4. Revalidate Node, reconciler, the complete phase chain, attestation, immutable
+   state/results evidence, exact legacy lease, and root absence. Publish the
    `legacy-lease-retired` event in the durable lease ledger. That event binds
    the accepted legacy lease path, identity, and digest to this completed
    transaction and supersedes it for the new controller without modifying it.
-7. Re-read the lease ledger and prove that the unique latest event retires this
+5. Re-read the lease ledger and prove that its unique genesis/latest event
+   retires this
    exact legacy acquisition.
 
 The legacy `active-run.json`, attestation, and completed phase chain remain as
 evidence. Reconciliation never deletes or overwrites the prior audit, state,
-results, lease, or transaction records.
+results, lease, or transaction records. In particular, the schema-version-1
+state retains `finalizedAt: null`; the terminal event is the new controller's
+authoritative logical finalization record.
 
 ## Replay and Concurrency
 
 ### Crash-Recoverable Lock
 
-All future controller commands and reconciliation use append-only lock
-generations under the durable checkout scope. Acquisition atomically creates a
-directory whose strictly validated basename encodes the generation, PID,
-platform-specific process birth identity, and random nonce. Its planned
-metadata includes the predecessor-retirement digest, run and transaction
-identities, and verified source digest. A metadata file is then published
-create-only inside the directory.
+All future controller commands and reconciliation use an append-only lock-event
+chain under the durable checkout scope. Each generation has exactly one claim
+and one terminal event:
 
-The directory name is the crash floor: even if death occurs before metadata is
-complete, replay can identify the exact process generation without trusting
-partial content. A live exact PID and birth identity always causes a second
-controller to fail. A malformed directory name, duplicate generation, or
-unexpected entry fails closed.
+```text
+<generation>-claim.json
+<generation>-released.json | <generation>-dead-retired.json
+```
 
-Normal command completion appends a create-exclusive `released` record bound to
-the active lock generation; it does not delete the lock. A crash leaves the
-generation without that release record and enters stale-lock recovery.
+Before publishing a claim, a contender starts a Node loopback TCP challenge
+server on `127.0.0.1` with an operating-system-assigned port. It constructs the
+complete claim bytes with the generation, predecessor-terminal digest, run and
+transaction identities, random nonce, PID, port, and verified Node and reconciler
+digests. The immutable publisher then races those complete synced bytes into
+the single create-exclusive claim name. A loser closes its server and does not
+enter the critical section. A crash before claim publication leaves only
+non-authoritative staging residue and an operating-system-released port.
 
-After a process death, the lock file remains. A new controller may retire it
-only after all of these checks:
+Lock claim publication is the one expected-content exception in the immutable
+publisher: on `EEXIST`, a contender may return `lost` only after the winning
+claim is a stable valid record for the same generation and predecessor. Any
+other target still requires the caller's exact expected bytes.
 
-- stable authentication of the lock directory, its name, checkout scope, and
-  predecessor chain; complete metadata must also authenticate the source and
-  transaction, while missing or partial metadata is preserved as crash residue;
-- a definitive platform probe that the exact PID/birth-identity pair is no
-  longer alive;
-- create-exclusive publication of the unique next-generation takeover claim;
-  and
-- append-only publication of a retirement record bound to the stale lock's
-  path, directory identity, recursively bounded inventory digest, and takeover
-  nonce.
+The winning server answers a random challenge with a digest bound to the claim
+nonce and challenge. A second controller treats the claim as live only after an
+exact response. It treats the owner as definitely dead only when loopback
+connection is refused and `process.kill(pid, 0)` reports `ESRCH`. A reused or
+otherwise live PID, timeout, unexpected response, permission error, network
+error, or any ambiguous result refuses retirement.
 
-An unavailable, permission-denied, malformed, or ambiguous liveness result
-refuses takeover. Lock records are never blindly deleted or overwritten. Two
-replayers racing for the same generation cannot both publish the
-create-exclusive takeover claim; the loser re-reads the chain and fails while
-the winner is live. The existing descriptor-bound retirement protocol performs
-all path operations relative to authenticated parent identities.
+Normal completion publishes a deterministic `released` record bound to the
+claim digest. When the owner is definitely dead, any contender may publish the
+single deterministic `dead-retired` record bound to that same digest. Those two
+terminal names are mutually exclusive by validation: observing both is a
+conflict. Retirement has no observer nonce or timestamp, so independent
+contenders compute identical bytes. They may race the exact no-clobber
+publication; the loser accepts the winner's exact record. They then race a
+normal claim for the next generation, of which only one can win.
+
+The chain starts at generation zero with a null predecessor. Each later claim
+must name the preceding terminal digest. Generations are contiguous and the
+only nonterminal generation may be the highest claim. Staging files are allowed
+only when bound to an authenticated claim attempt and never participate in the
+chain. Gaps, duplicate claims, both terminal kinds, a successor to an
+unterminated claim, malformed records, source mismatches, or extra authoritative
+files fail closed. No lock or retirement record is deleted or overwritten.
 
 ### Phase Matrix
 
@@ -451,19 +576,16 @@ already-published exact intent; it does not broaden authority based on current
 filesystem contents. The accepted state hash always names the reviewed initial
 state and remains the same across replay attempts.
 
-| Highest durable phase | Accepted state | Accepted legacy lease | Next action |
+| Highest durable phase | Accepted protected evidence | Lease ledger | Next action |
 |---|---|---|---|
-| none | exact accepted initial body, hash, and identity | exact accepted body, hash, and identity | publish `intent` |
-| `intent` | exact initial state only | exact accepted lease | publish or authenticate attestation |
-| `absence-attested` | exact initial state, or exact intent-committed final body after a crash between state publication and phase publication | exact accepted lease | publish final state if initial; otherwise capture final identity; then publish `state-finalized` |
-| `state-finalized` | exact final body and the identity recorded by that phase | exact accepted lease | publish the terminal durable lease event |
-| `legacy-lease-retired` | exact final body and recorded identity | exact accepted lease, or absent; any replacement conflicts | verify the complete reconciliation and lease chains and return success |
+| none | every accepted file has its original exact bytes, hash, and identity | empty | publish `intent` |
+| `intent` | unchanged exact evidence | empty | publish or authenticate attestation, then `absence-attested` |
+| `absence-attested` | unchanged exact evidence | empty | publish the genesis `legacy-lease-retired` event |
+| `legacy-lease-retired` | unchanged exact evidence | the terminal event is the unique genesis/latest event | verify both chains and return success |
 
-At `absence-attested`, any state content other than the exact accepted initial
-body or exact intent-committed final body is a conflict. If the final body is
-already present, replay captures and revalidates its stable identity before
-publishing `state-finalized`. At `state-finalized`, a different final-state
-identity is a replacement even when its content matches.
+Reconciliation never has a phase in which a protected file may have either of
+two bodies. Any changed state, result, audit, reconciler, Node binary, or legacy
+lease content or identity is a conflict at every row.
 
 The terminal lease event is create-exclusive and no legacy lease unlink occurs,
 so there is no post-unlink ambiguity. If process death occurs after terminal
@@ -475,10 +597,8 @@ If interruption occurs:
 - before `intent`, no mutation occurred;
 - after `intent`, replay verifies all accepted initial evidence and republishes
   or verifies the exact attestation;
-- after `absence-attested`, replay may finalize only the exact state committed
-  by `intent`;
-- after `state-finalized`, replay verifies that final state before touching the
-  lease ledger; and
+- after `absence-attested`, replay verifies unchanged protected evidence before
+  publishing the terminal lease event; and
 - after terminal lease-event publication, replay verifies that exact event and
   performs no further mutation.
 
@@ -488,8 +608,10 @@ replacement stops replay. No rollback deletes evidence or recreates the root.
 
 ## Type and Code Boundaries
 
-Keep the implementation inside the existing controller and split the new
-logic into narrow internal units:
+Keep authored implementation and tests beside the existing run-local
+controller. Pure TypeScript helpers may be shared at build time, but the
+reconciliation entrypoint is bundled into the self-contained accepted `.mjs`
+and has no mutable runtime imports. Split the logic into narrow internal units:
 
 - fixed state-home resolution, checkout-scope authentication, and durable
   control/tool-root allocation;
@@ -504,16 +626,16 @@ logic into narrow internal units:
 
 Define an exact `LegacyReconciliationState` parser for schema-version-1 state
 used only by `reconcile-absent-pre-resource`. It accepts the current reviewed
-shape and produces a final body by changing only `finalizedAt`. It is not a
-general legacy reader. Define schema-version-2 state for future runs with exact
-durable checkout-scope, control-record, and lease-acquisition references.
-Normal commands accept only schema version 2 after migration.
+shape without modifying it and produces only the typed logical-finalization
+payload for `intent`. It is not a general legacy reader. Define
+schema-version-2 state for future runs with exact durable checkout-scope,
+prepared-event, control-record, and lease-acquisition references. Normal
+commands accept only schema version 2 after migration.
 
 Every protected file has a typed evidence descriptor containing its exact path,
 expected mode policy, filesystem identity, content digest, and stable bytes.
-The intent payload discriminates initial state evidence from its deterministic
-final-state body. Results JSON and TSV descriptors additionally carry their
-validated relationship to `RunState.results`.
+Results JSON and TSV descriptors additionally carry their validated
+relationship to `RunState.results`.
 
 Use discriminated unions so each cleanup action has only its valid fields and
 phases. The normal removal action retains removal identities; the preserved
@@ -521,12 +643,13 @@ unauthenticated action retains preservation evidence; the reconciliation
 action cannot represent removal authority. Parsers reject unknown keys and
 invalid action/phase combinations.
 
-The append-only phase publisher is shared by normal cleanup and reconciliation.
-Normal cleanup keeps its removal phases; reconciliation uses only the four
-phases in this design. All actions use immutable create-exclusive files and
-hash links instead of replace-in-place `cleanup-journal.json`. No compatibility
-union for obsolete journal schemas is required, and the stale run has no
-existing journal to migrate.
+The immutable publisher is used for the new durable-control files and
+reconciliation only. This follow-up does not migrate the already-reviewed
+normal tool-root removal journal. Future schema-version-2 cleanup adapts that
+existing authenticated removal transaction only enough to read durable control
+paths and append its `finalized` lease event. The absent-root reconciliation
+remains a separate action with no removal dependency or authority. The stale
+run has no existing cleanup journal to migrate.
 
 ## Test Strategy
 
@@ -541,7 +664,10 @@ never the active production run.
   different full hashes;
 - produces the same root after a simulated reboot or changed `TMPDIR`;
 - creates private, non-symlink directories, a durable repository marker,
-  control record, owner marker, and acquired lease event;
+  prepared event, repository state, control record, owner marker, and acquired
+  lease event in the required order;
+- kills allocation before and after each publication, resumes exact prepared
+  state bytes, and proves no acquired event exists without state and control;
 - rejects pre-existing run roots, symlinks, wrong owners, permissive modes,
   identity swaps, checkout recreation with a different Git identity, hash-chain
   forks, and path escapes;
@@ -557,51 +683,53 @@ never the active production run.
 
 ### Lock and Journal Tests
 
-- proves a live exact PID and process-birth identity excludes a second
-  controller;
+- proves an exact loopback challenge response excludes a second controller;
 - kills the lock holder before and after every durable phase and proves an
-  exact dead-process takeover can continue;
-- kills lock acquisition before, during, and after metadata publication and
-  proves the validated directory name is sufficient for fail-closed recovery;
-- refuses stale takeover for PID reuse, permission errors, uncertain liveness,
-  wrong source, malformed records, missing predecessors, and identity swaps;
-- races multiple takeover attempts and proves only one next generation exists;
+  exact deterministic dead retirement can continue;
+- kills lock acquisition before and after staging, claim hard-link, terminal
+  hard-link, and parent sync boundaries;
+- refuses retirement for PID reuse, successful or ambiguous challenge results,
+  permission errors, wrong source, malformed records, missing predecessors, and
+  identity swaps;
+- races deterministic dead-retirement publication and the next claim, proving
+  one terminal and one winning next generation;
 - races phase publication with a conflicting final file and proves no existing
   record is overwritten;
-- validates create-exclusive hard-link publication, file sync, directory sync,
-  retained lock-scoped staging residue, and restart recovery at each boundary;
-- runs normal-removal, preserved-root, and reconciliation action/phase unions
-  through the shared append-only publisher.
+- validates the immutable publisher for every target directory, including
+  target-parent sync, retained staging residue, and restart recovery at each
+  boundary; and
+- rejects unexplained staging files and every lock/lease grammar gap, fork, or
+  invalid transition.
 
 ### Reconciliation Tests
 
 - starts red with the exact stale pre-resource fixture and absent tool root;
 - rejects every missing, duplicate, malformed, or mismatched accepted option;
-- rejects state, result, lease, audit, source, state-schema, and file-identity
-  changes;
-- rejects a noncanonical runner path, mutable helper import, or source closure
-  that differs from the single accepted file;
+- rejects Node, state, result, lease, audit, reconciler, state-schema, and
+  file-identity changes;
+- rejects `pnpm`/`tsx`/loader execution, a noncanonical reconciler or Node path,
+  mutable imports, `NODE_OPTIONS`, `NODE_PATH`, and an executable closure that
+  differs from the two accepted files;
 - rejects `results.json` that differs from `state.results` and any TSV that is
   not the exact deterministic projection;
 - rejects a prior audit outside the run root or reached through a symlink;
 - rejects each deviation from the exact pre-resource shape;
-- rejects a recorded registry PID and records the bounded process scan as
-  diagnostic evidence without claiming it proves descriptor absence;
+- rejects a recorded registry PID without launching an external process scan;
 - rejects any root that exists or reappears;
 - proves no filesystem deletion, tool-root creation, or resource-command
   dependency is reachable;
-- writes a complete create-only attestation with cause `unproven`;
-- fault-injects before and after every phase publication, state publication,
-  attestation publication, and terminal lease-event publication;
+- writes a complete immutable attestation with cause `unproven`;
+- fault-injects before and after every intent, attestation, absence-phase, and
+  terminal lease-event publication boundary;
 - restarts in a new process from every durable phase and reaches the same final
   bytes;
-- covers both exact state bodies in the post-publication/pre-phase crash window
-  and rejects every third body or post-phase identity replacement;
 - rejects malformed, replaced, forked, wrong-action, and out-of-order replay
   records;
-- confirms finalization changes only `finalizedAt`;
+- confirms every protected file, including `state.finalizedAt`, remains
+  unchanged;
 - leaves the accepted legacy lease unchanged while publishing exactly one
-  terminal retirement event; and
+  genesis terminal retirement event and rejects reconciliation after any v2
+  event; and
 - leaves the completed attestation and phase chain intact.
 
 Run focused tests repeatedly under Node 24, strict TypeScript with
@@ -614,11 +742,11 @@ spec-compliance and code-quality reviews.
 After implementation and review:
 
 1. Record fresh hashes and identities for the protected stale state, results,
-   lease, accepted runner, and final read-only audit. Verify the accepted runner
-   hash in a separate process before launch.
+   lease, accepted Node binary, executable reconciler, and final read-only audit.
+   Verify both executable hashes in a separate process before launch.
 2. Run the reconciliation command once with those exact accepted values.
-3. Inspect the completed attestation, phase chain, final state, unchanged legacy
-   lease, and terminal durable lease event.
+3. Inspect the completed attestation, phase chain, unchanged legacy state and
+   lease, logical-finalization timestamp, and terminal durable lease event.
 4. Confirm reconciliation invoked no Docker, Kubernetes, registry, download,
    tool-root creation, quarantine, erasure, or removal operation.
 5. Rebase the branch on current `main` and reassess the checked-in workflows,
@@ -655,7 +783,8 @@ state after every run. Retaining them is the mechanism that makes replay and
 retirement authority auditable without unsafe compare-then-unlink operations.
 Automatic compaction or garbage collection is deliberately deferred.
 
-Finally, self-hash verification is an integrity check against mistakes and
+Finally, executable hashing is an integrity check against mistakes and
 concurrent replacement, not a cryptographic trust anchor against malicious
-code already executing as the user. The operator must independently inspect
-and accept the runner hash before invoking reconciliation.
+code or a compromised kernel already executing as the user. The operator must
+independently inspect and accept the Node and self-contained reconciler hashes before
+invoking reconciliation.
