@@ -2230,6 +2230,102 @@ describe("pinned vercel boundary", () => {
     ])
   })
 
+  test("captures the deployment's terminal state before cleanup when readiness fails", async () => {
+    const coordinates = {
+      githubJob: "vercel-native",
+      githubRepositoryId: "123456",
+      githubRunAttempt: "2",
+      githubRunId: "987654",
+      kind: "source" as const,
+      logicalAttemptIndex: "0",
+    }
+    const attemptStartMs = 1_800_000_000_000
+    const inspectFailure = new Error("native Vercel deployment inspect failed with exit 1")
+    let marker = ""
+    let apiCall = 0
+    const failure = await runNativeDeployAttempt({
+      apiClient: {
+        request: async (_method, path) => {
+          apiCall += 1
+          if (apiCall === 1) {
+            return {
+              body: { id: "prj_Test456", accountId: "team_Test123", rootDirectory: null },
+              status: 200,
+            }
+          }
+          expect(path).toContain("/v13/deployments/dpl_Source123")
+          if (apiCall === 2) {
+            return {
+              body: {
+                id: "dpl_Source123",
+                url: "dawn-source-abc.vercel.app",
+                projectId: "prj_Test456",
+                ownerId: "team_Test123",
+                createdAt: attemptStartMs,
+                target: null,
+                meta: { dawnVercelRun: marker },
+              },
+              status: 200,
+            }
+          }
+          // The capture read runs after inspect fails, before the lane's
+          // cleanup can delete the deployment.
+          return {
+            body: {
+              id: "dpl_Source123",
+              readyState: "ERROR",
+              errorCode: "BUILD_FAILED",
+              errorMessage: "Command exited with 1",
+            },
+            status: 200,
+          }
+        },
+      },
+      attemptStartMs,
+      boundary: {
+        assertVersion: async () => {},
+        deploy: async (request) => {
+          marker = request.marker
+          return {
+            canonicalOrigin: "https://dawn-source-abc.vercel.app",
+            commandEvidence: {
+              command: "deploy" as const,
+              positionalPathAbsent: true as const,
+              prebuiltFlagCount: 0 as const,
+            },
+            deploymentId: "dpl_Source123",
+          }
+        },
+        inspect: async () => {
+          throw inspectFailure
+        },
+      },
+      coordinates,
+      fixtureRoot: "/unused/source",
+      localConfigPath: "/unused/source/vercel.json",
+      orgId: "team_Test123",
+      persistAttempt: async () => {},
+      persistDeploymentBinding: async () => {},
+      persistDeploymentReceipt: async () => {},
+      projectId: "prj_Test456",
+      readConfigEvidence: async () => ({ fluid: true, sha256: "a".repeat(64) }),
+    }).then(
+      () => {
+        throw new Error("expected the deploy attempt to fail")
+      },
+      (error: unknown) => error,
+    )
+
+    expect(failure).toBeInstanceOf(Error)
+    const error = failure as Error
+    expect(error.message).toContain("dpl_Source123 failed before readiness")
+    expect(error.message).toContain('"readyState":"ERROR"')
+    expect(error.message).toContain('"errorCode":"BUILD_FAILED"')
+    expect(error.message).toContain('"errorMessage":"Command exited with 1"')
+    expect(error.cause).toBe(inspectFailure)
+    expect(apiCall).toBe(3)
+  })
+
   test("uses only the fixed Vercel API origin and authorization header", async () => {
     const requests: NativeVercelApiRequest[] = []
     const client = createNativeVercelApiClient({
@@ -6901,6 +6997,60 @@ describe("native orchestration and evidence closure", () => {
       "prebuilt-black-box",
       "prebuilt-reconcile",
     ])
+  })
+
+  test("persists the real deploy failure as a diagnostic and preserves its cause", async () => {
+    const fixture = await makeUploadFixture("source")
+    const deployFailure = new Error(
+      "native Vercel deployment dpl_Source123 failed before readiness; state captured before cleanup: " +
+        '{"status":200,"readyState":"ERROR","errorCode":"BUILD_FAILED"}',
+      { cause: new Error("native Vercel deployment inspect failed with exit 1") },
+    )
+    const diagnostics: Record<string, string> = {}
+    const failure = await runNativeDeploymentKind({
+      deployAttempt: async () => {
+        throw deployFailure
+      },
+      expectedTarballs: fixture.expectedTarballs,
+      fixtureRoot: fixture.root,
+      inspectBuildLogs: async () => {
+        throw new Error("build logs must not be inspected for a failed deploy")
+      },
+      kind: "source",
+      orgId: "team_Test123",
+      parentEnv: {},
+      projectId: "prj_Test456",
+      protectedValues,
+      reconcile: async () => {
+        throw new Error("reconciliation must not run for a failed deploy")
+      },
+      runBlackBox: async () => {
+        throw new Error("black box must not run for a failed deploy")
+      },
+      runBuildChild: async () => {
+        throw new Error("local build must not run for a source deploy")
+      },
+      validateOutput: async () => {},
+      writeDiagnostic: async (name, contents) => {
+        diagnostics[name] = contents
+      },
+    }).then(
+      () => {
+        throw new Error("expected the deployment kind to fail")
+      },
+      (error: unknown) => error,
+    )
+
+    expect(failure).toBeInstanceOf(Error)
+    const error = failure as Error
+    expect(error.message).toBe("native Vercel source deploy attempt failed")
+    expect(error.cause).toBe(deployFailure)
+    expect(Object.keys(diagnostics)).toEqual(["source-deploy-failure.log"])
+    expect(diagnostics["source-deploy-failure.log"]).toBe(
+      "native Vercel deployment dpl_Source123 failed before readiness; " +
+        'state captured before cleanup: {"status":200,"readyState":"ERROR","errorCode":"BUILD_FAILED"}\n' +
+        "caused by: native Vercel deployment inspect failed with exit 1\n",
+    )
   })
 
   test.each(["empty", "mismatched", "cardinality"] as const)(
