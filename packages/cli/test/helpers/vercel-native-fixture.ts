@@ -2663,7 +2663,20 @@ export interface NativeDeployCommandEvidence {
   readonly prebuiltFlagCount: 0 | 1
 }
 
-const NATIVE_VERCEL_CHILD_TIMEOUT_MS = 120_000
+/**
+ * Budget for the Vercel CLI invocations whose duration is bounded by their own
+ * work: `--version`, `deploy --no-wait` (upload, then return), and the log reads.
+ */
+export const NATIVE_VERCEL_CHILD_TIMEOUT_MS = 120_000
+/**
+ * Budget for the readiness wait alone. `vercel inspect --wait` blocks until the
+ * deployment reaches a terminal state, so its duration is set by Vercel's build
+ * queue rather than by this fixture — the shorter budget above turns a slow queue
+ * into a lane failure. The lane waits twice (source, then prebuilt), and the lane
+ * test pins both waits inside the gated test's own timeout so a blown budget still
+ * reports through the lane's diagnostics rather than as a bare vitest timeout.
+ */
+export const NATIVE_VERCEL_READINESS_TIMEOUT_MS = 600_000
 const NATIVE_VERCEL_API_TIMEOUT_MS = 30_000
 
 function pathIsInsideOrEqual(parent: string, candidate: string): boolean {
@@ -2808,18 +2821,21 @@ export async function createNativePinnedVercelBoundary(
 
   const run = async (
     label: string,
-    request: Omit<NativeVercelChildRequest, "executable" | "timeoutMs">,
+    request: Omit<NativeVercelChildRequest, "executable" | "timeoutMs"> & {
+      readonly timeoutMs?: number
+    },
     validateSuccessStderr?: (stderr: string) => void,
   ): Promise<NativeLocalCommandResult> => {
+    const timeoutMs = request.timeoutMs ?? NATIVE_VERCEL_CHILD_TIMEOUT_MS
     let result: NativeLocalCommandResult
     try {
-      result = await options.runChild({
-        ...request,
-        executable: cliPath,
-        timeoutMs: NATIVE_VERCEL_CHILD_TIMEOUT_MS,
-      })
-    } catch {
-      throw new Error(`${label} child transport failed`)
+      result = await options.runChild({ ...request, executable: cliPath, timeoutMs })
+    } catch (cause) {
+      // The child runner's own message is the only thing separating a blown budget
+      // from a spawn failure or a killed process, and the lane writes its
+      // deploy-failure diagnostic from this chain. Every message the runner can
+      // produce is fixture-authored, so none of them can carry a secret.
+      throw new Error(`${label} child transport failed under its ${timeoutMs}ms budget`, { cause })
     }
     if (result.exitCode !== 0) throw protectedChildError(result, label, redactor)
     if (validateSuccessStderr) validateSuccessStderr(result.stderr)
@@ -2919,6 +2935,7 @@ export async function createNativePinnedVercelBoundary(
         ],
         cwd: options.jobRoot,
         env: credentialEnv(false),
+        timeoutMs: NATIVE_VERCEL_READINESS_TIMEOUT_MS,
       })
       return parseNativeVercelInspectReceipt(result.stdout, {
         canonicalOrigin: expectedOrigin,
