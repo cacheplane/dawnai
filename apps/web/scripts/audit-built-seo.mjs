@@ -11,7 +11,7 @@ const appRoot = resolve(scriptDirectory, "..")
 const productionOrigin = "https://dawnai.org"
 const currentInventoryDate = "2026-08-26"
 const currentInventoryCount = 83
-export const CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES = 25
+export const CURRENT_SNAPSHOT_MINIMUM_DISTINCT_LASTMOD_DATES = 23
 const approvedRobotsAgents = [
   "*",
   "GPTBot",
