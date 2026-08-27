@@ -3,8 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
-import { extractToolSchemasForRoute } from "../src/typegen/extract-tool-schema"
-import { extractToolTypesForRoute } from "../src/typegen/extract-tool-types"
+import { extractToolSchemasForRoute } from "../src/typegen/extract-tool-schema.js"
+import { extractToolTypesForRoute } from "../src/typegen/extract-tool-types.js"
 
 // End-to-end coverage that a single tool with a deeply nested input flows
 // consistently through BOTH real extractors: the JSON-Schema path (what the

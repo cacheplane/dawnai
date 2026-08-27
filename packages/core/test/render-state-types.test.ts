@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { renderStateTypes } from "../src/typegen/render-state-types"
+import { renderStateTypes } from "../src/typegen/render-state-types.js"
 
 describe("renderStateTypes", () => {
   test("renders empty interface when no routes have state", () => {

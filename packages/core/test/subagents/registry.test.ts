@@ -15,7 +15,10 @@ function route(id: string, routeDir: string): RouteDefinition {
     kind: "agent",
     entryFile: `${routeDir}/index.ts`,
     routeDir,
-    segments: id.split("/").filter(Boolean),
+    segments: id
+      .split("/")
+      .filter(Boolean)
+      .map((raw) => ({ kind: "static" as const, raw })),
   }
 }
 
