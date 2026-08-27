@@ -822,7 +822,7 @@ describe("static SEO pages", () => {
 
     const registrySource = readFileSync(resolve(seoDirectory, "registry.ts"), "utf8")
     expect(registrySource).not.toContain("as string")
-    expect(page.lastModified).toBe("2026-08-19T18:31:12.000Z")
+    expect(page.lastModified).toBe("2026-08-25T19:40:17.000Z")
     expect(Number.isNaN(Date.parse(page.lastModified))).toBe(false)
     expect(techArticleJsonLd(page).dateModified).toBe(page.lastModified)
   })
