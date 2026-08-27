@@ -163,6 +163,22 @@ describe("built SEO audit parsing", () => {
     ).toEqual(["TechArticle", "BreadcrumbList"])
   })
 
+  it("accepts whitespace before HTML closing-tag brackets", () => {
+    const html = pageHtml({ "@type": "TechArticle" })
+      .replace("</script>", "</script >")
+      .replace(
+        "<main>Visible route content</main>",
+        "<main>Visible route content</main><style>Hidden style text</style ><noscript>Hidden fallback text</noscript >",
+      )
+
+    const parsed = extractPageMetadata(html)
+
+    expect(parsed.jsonLdEntities).toEqual([{ "@type": "TechArticle" }])
+    expect(parsed.visibleText).toContain("Visible route content")
+    expect(parsed.visibleText).not.toContain("Hidden style text")
+    expect(parsed.visibleText).not.toContain("Hidden fallback text")
+  })
+
   it("fails closed on duplicate and malformed metadata", () => {
     const duplicateDescription = pageHtml({ "@type": "TechArticle" }).replace(
       '<meta name="description" content="Route description">',
