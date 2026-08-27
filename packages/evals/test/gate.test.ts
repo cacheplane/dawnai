@@ -45,12 +45,8 @@ describe("gate policies", () => {
     expect(gate.any(gate.mean(0.9), gate.everyCase(0.5))(report).passed).toBe(true)
   })
   it("resolveGate prefers gate, then threshold sugar, then informational", () => {
-    expect(
-      resolveGate({ gate: gate.mean(0.9) })(report).passed,
-    ).toBe(false)
-    expect(
-      resolveGate({ threshold: 0.7 })(report).passed,
-    ).toBe(true)
+    expect(resolveGate({ gate: gate.mean(0.9) })(report).passed).toBe(false)
+    expect(resolveGate({ threshold: 0.7 })(report).passed).toBe(true)
     expect(resolveGate({})(report).passed).toBe(true) // informational
   })
 })
