@@ -35,7 +35,18 @@
       "dependsOn": ["build", "^test"]
     },
     "@dawn-ai/cli#test": {
-      "dependsOn": ["build", "^test", "@dawn-ai/testing#build", "@dawn-ai/postgres-storage#build"],
+      "dependsOn": [
+        "build",
+        "^test",
+        "@dawn-ai/testing#build",
+        "@dawn-ai/postgres-storage#build",
+        "@dawn-ai/evals#build",
+        "@dawn-ai/memory-pgvector#build",
+        "@dawn-ai/devkit#build",
+        "@dawn-ai/vite-plugin#build",
+        "@dawn-ai/inspector#build",
+        "create-dawn-ai-app#build"
+      ],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/web/content/docs/**",
@@ -99,7 +110,10 @@
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/test/harness/**"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"]
+      "dependsOn": ["build"]
+    },
+    "@dawn-ai/cli#typecheck": {
+      "dependsOn": ["build", "@dawn-ai/testing#build", "@dawn-ai/postgres-storage#build"]
     }
   }
 }

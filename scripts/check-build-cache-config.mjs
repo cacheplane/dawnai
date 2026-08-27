@@ -88,8 +88,19 @@ if (!buildOutputs.includes(".dawn/build/**")) {
 // Tests import their workspace dependencies through `exports`, which resolve to
 // `dist/`. Without a build edge the test graph produces no `dist/` at all and
 // runs against whatever happens to be on disk.
+//
+// `typecheck` needs the same edge for the same reason, plus one of its own: a
+// package's typecheck compiles files that may import its OWN `dist/`
+// (packages/memory's benches do), and `tsc --noEmit` writes
+// `dist/tsconfig.tsbuildinfo` — the very file `build` writes. Without a self
+// edge those two tasks are unordered, so a clean-tree `turbo run typecheck`
+// passes or fails on scheduling luck and the two can write one incremental-state
+// file concurrently. `"build"` subsumes `"^build"`, since `build` already
+// declares `dependsOn: ["^build"]`.
 for (const [taskName, task] of Object.entries(turboConfig.tasks ?? {})) {
-  if (taskName !== "test" && !taskName.endsWith("#test")) {
+  const bareName = taskName.includes("#") ? taskName.slice(taskName.indexOf("#") + 1) : taskName
+
+  if (bareName !== "test" && bareName !== "typecheck") {
     continue
   }
 
