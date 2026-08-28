@@ -256,7 +256,7 @@ export function readStableAuthenticatedChildFile(
   maximumBytes: number,
 ): Promise<StableAuthenticatedChildFileRead>
 
-export function appendAuthenticatedChildFile(
+export function writeConvergentAuthenticatedChildFileSuffix(
   file: AuthenticatedChildFile<"update">,
   expectedCurrentSize: number,
   bytes: Uint8Array,
@@ -298,12 +298,26 @@ and identities are diagnostic values and grant no authority. Directory listing
 is sorted and capped at 4,096 entries without first allocating an unbounded
 array. A requested stable-read bound must be a positive safe integer no larger
 than 16 MiB, and the reader checks size before allocation and during chunked
-read. Exact-size append rejects a negative or unsafe current size, an input
-larger than 16 MiB, or a current-size-plus-input result larger than 16 MiB.
+read. A convergent suffix write rejects a negative or unsafe current size, an
+input larger than 16 MiB, or a current-size-plus-input result larger than 16
+MiB. It synchronously copies the input bytes before its first `await`, opens
+update authority with `O_RDWR | O_NOFOLLOW` and never `O_APPEND`, checks the
+exact initial size, writes at explicit bounded positions, and checks the exact
+resulting size and requested byte range.
+
+Every overlapping invocation against the same inode has a caller precondition:
+all supplied bytes derive from one immutable complete canonical byte sequence,
+so bytes at overlapping file offsets agree even when callers authenticated
+different current sizes. Divergence violates the precondition and has no
+conflict-detection or outcome guarantee. A failure may leave a longer canonical
+prefix. After an unknown outcome, a retry must stably reread and authenticate
+the current prefix, rederive the missing suffix from the complete canonical
+sequence, and issue a new call; it must never replay a stale call.
+
 Task 3 rejects canonical output larger than its narrower 2 MiB immutable-JSON
-limit before create or append. Read open accepts only exact mode `0400`; update
-open accepts only exact mode `0600` and performs stable reads through that
-update capability while replay validates a partial prefix.
+limit before create or suffix write. Read open accepts only exact mode `0400`;
+update open accepts only exact mode `0600` and performs stable reads through
+that update capability while replay validates a partial prefix.
 
 The operations enforce these transitions:
 
@@ -311,7 +325,8 @@ The operations enforce these transitions:
 - open an existing regular child for bounded read or mode-`0600` update with
   `O_NOFOLLOW`;
 - stably read bounded bytes and identity;
-- append only at an exact authenticated current size;
+- write a convergent canonical suffix only at an exact authenticated current
+  size;
 - sync file data or metadata, harden mode from `0600` to `0400`, and stat;
 - hard-link one mode-`0400` child to an absent sibling name under the same
   authenticated parent;
@@ -333,16 +348,19 @@ failed open or validation follows the same aggregation rule whether or not it
 poisons the parent.
 
 A failed child close leaves the capability open and retryable; a successful
-close is terminal. Hardening changes mode only. The publisher must sync the
-metadata, successfully close the update capability, and authentically reopen
-the child with `O_RDONLY | O_NOFOLLOW` before linking. An existing writable
-descriptor is never promoted into read authority. Hard-linking requires a read
-capability whose source is mode `0400`, still names the authenticated inode,
-and has link count exactly one. The target is an absent sibling under the same
-authenticated parent. After link, source and target must be the same inode,
-mode `0400`, with link count exactly two. Any prior or concurrent extra alias,
-source replacement, target replacement, or count ambiguity fails closed and
-is never rolled back by deletion.
+close is terminal. A successful convergent suffix write is not a durability
+claim. The publisher must still sync file data, harden, sync metadata,
+successfully close update authority, authentically reopen the child with
+`O_RDONLY | O_NOFOLLOW`, and verify before linking. Hardening changes mode only,
+and peer hardening during a convergent write is handled by publisher-level
+retry or adoption rather than by widening the write operation's authority. An
+existing writable descriptor is never promoted into read authority.
+Hard-linking requires a read capability whose source is mode `0400`, still
+names the authenticated inode, and has link count exactly one. The target is an
+absent sibling under the same authenticated parent. After link, source and
+target must be the same inode, mode `0400`, with link count exactly two. Any
+prior or concurrent extra alias, source replacement, target replacement, or
+count ambiguity fails closed and is never rolled back by deletion.
 
 Directory listing returns names only; every authoritative use of a listed
 entry reopens it with no-follow semantics. Stable reads reject growth,
@@ -427,13 +445,16 @@ target name, content digest, and lock generation when one exists. A replay may
 ignore only bounded regular files with a strict staging name and current-user
 ownership. Mode `0600` identifies an interrupted pre-hardening stage and may
 contain only an exact prefix of the canonical bytes. Replay rejects an
-oversized or mismatched prefix without mutation, appends only the missing
-suffix at the authenticated current size, stably verifies complete bytes, then
-unconditionally syncs data, hardens, syncs metadata, closes update authority,
-and reopens read-only. Mode `0400` must have the filename's complete content
-digest and is synced again before link because the prior process may have
-crashed before metadata durability. Other modes, names, types, ownership,
-unexplained entries, or link counts fail closed.
+oversized or mismatched prefix without mutation and writes only a rederived
+missing suffix at the authenticated current size. If that write has an unknown
+outcome, replay stably rereads and authenticates the prefix and rederives the
+suffix instead of replaying stale arguments. After complete-byte verification,
+the publisher unconditionally syncs data, hardens, syncs metadata, closes
+update authority, and reopens read-only. A peer that hardens the same canonical
+stage is handled by publisher retry or adoption. Mode `0400` must have the
+filename's complete content digest and is synced again before link because the
+prior process may have crashed before metadata durability. Other modes, names,
+types, ownership, unexplained entries, or link counts fail closed.
 
 After a successful link, the publisher syncs the authenticated direct parent
 before reread. An exact pre-existing final is accepted only with the expected

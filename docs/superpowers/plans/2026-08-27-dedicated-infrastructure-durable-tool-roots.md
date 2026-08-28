@@ -407,13 +407,19 @@ aggregates primary and cleanup failures; and every operation revalidates parent
 descriptor, original pathname, file descriptor, and child namespace identity.
 Cover traversal names, symlinks, wrong owner, wrong mode, identity swaps,
 concurrent growth, oversized reads, and Linux capability failure without a
-pathname fallback. Also cover concurrent parent close/open, parent
+pathname fallback. Cover convergent suffix writes at the same and overlapping
+offsets from one immutable canonical byte sequence, synchronous caller-input
+snapshotting, stale-size no-mutation rejection, partial-failure recovery by
+stable reread and suffix rederivation, real Linux child-process contention, and
+the absence of the superseded append API from runtime, source, and type
+surfaces. Also cover concurrent parent close/open, parent
 close/directory-operation, and child close/operation races; a poisoned parent
 that retains an unclosed failed-open descriptor; the 4,096-entry listing bound;
 primary plus all cleanup-error aggregation; atomic busy-parent rejection and
 successful parent-close retry after child close; exact mode `0600` update and
-mode `0400` read opens; and append overflow beyond the fixed 16 MiB result
-bound.
+mode `0400` read opens; and suffix-write overflow beyond the fixed 16 MiB result
+bound. Divergent overlapping byte sequences violate the caller precondition and
+do not receive conflict-detection or outcome guarantees.
 
 - [ ] **Step 2: Confirm red**
 
@@ -426,11 +432,21 @@ pnpm exec tsx --test "$LEGACY_RUN_ROOT/infra-durable-paths.test.ts" \
 
 Keep the child brand private and validate every value through a private
 `WeakMap`. Expose narrow production functions for create-exclusive mode-`0600`,
-bounded read open, mode-`0600` update open, stable bounded read, exact-size
-append, file sync, fixed `0600` to `0400` hardening, snapshot, sibling-only
-hard-link, strict directory listing, pinned-directory sync, and retryable child
-close. All path components are single non-traversing names and every file open
-uses `O_NOFOLLOW`.
+bounded read open, mode-`0600` update open, stable bounded read, convergent
+canonical suffix write, file sync, fixed `0600` to `0400` hardening, snapshot,
+sibling-only hard-link, strict directory listing, pinned-directory sync, and
+retryable child close. All path components are single non-traversing names and
+every file open uses `O_NOFOLLOW`.
+
+`writeConvergentAuthenticatedChildFileSuffix` synchronously copies its input
+before the first `await`, retains `O_RDWR | O_NOFOLLOW` without `O_APPEND`,
+checks the exact initial size, uses bounded explicit-position writes, and
+checks exact final size and the requested range. Overlapping calls on one inode
+must derive from one immutable complete canonical sequence and agree at every
+overlap, including when they observed different prefix lengths. Failure may
+leave a longer canonical prefix. Unknown-outcome recovery stably rereads and
+authenticates the prefix and rederives a new suffix; it never replays stale call
+arguments. Success is not durability.
 
 Use the exact exported type and function signatures in the design's
 Capability-Bound Child Operations section. Acquire a directory operation lease
@@ -485,13 +501,21 @@ retained `0400` complete staging, unexplained entries, and a target whose direct
 parent differs from the transaction directory. Reject wrong-owner staging,
 non-regular staging, and staging larger than the fixed 2 MiB immutable-JSON
 bound before parsing or replay. A `0600` partial must be an exact canonical-byte
-prefix; reject malformed or oversized prefixes before mutation and append only
-the missing suffix. Test unconditional resync of retained exact `0400` staging
+prefix; reject malformed or oversized prefixes before mutation and write only
+the freshly rederived missing suffix. Test unconditional resync of retained
+exact `0400` staging
 and direct-parent resync before accepting an exact pre-existing final. Cover
 writable-descriptor retirement, source link counts other than one, concurrent
 extra aliases, source/target replacement, collision-capability cleanup, and a
 winner collision after link but before parent sync. Reject canonical output
-larger than 2 MiB before creating or appending a staging file.
+larger than 2 MiB before creating or writing a staging file.
+
+Amend the Task 3 matrix to prove that different content digests use different
+staging inodes; concurrent publishers cross file sync, hardening, metadata
+sync, update close, read-only reopen, and link without treating a suffix-write
+success as durability; peer hardening is retried or adopted at publisher level;
+and static imports establish the immutable publisher as the sole production
+consumer of `writeConvergentAuthenticatedChildFileSuffix`.
 
 - [ ] **Step 2: Confirm red**
 
@@ -556,9 +580,11 @@ stably reread. Derive the strict staging name internally from the final target,
 content digest, and lock generation when present; callers cannot supply an
 arbitrary staging binding. Never rename, overwrite, or delete staging evidence.
 Every staging replay requires a bounded regular file owned by the current
-effective user; mode `0600` may be only an exact prefix and appends only the
-missing suffix at its authenticated size. After complete-byte sync, harden,
-sync metadata, close update authority, and reopen read-only before linking. A
+effective user; mode `0600` may be only an exact prefix and writes only a
+freshly rederived missing suffix at its authenticated size. After an unknown
+outcome, stably reread and authenticate the prefix and rederive the suffix
+instead of replaying stale arguments. After complete-byte sync, harden, sync
+metadata, close update authority, and reopen read-only before linking. A
 retained `0400` stage is synced again before linking. Mode `0400` must match the
 complete digest encoded in its filename and have link count one before a new
 link.
