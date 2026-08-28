@@ -7,8 +7,9 @@
 > (`- [ ]`) syntax for tracking.
 
 **Goal:** Make future dedicated-infrastructure tool roots and control evidence
-durable, then logically retire the exact stale pre-resource run through a
-standalone, no-delete reconciliation transaction.
+durable on Linux, implement a standalone no-delete reconciliation transaction,
+and preserve the exact stale Darwin pre-resource run until a separately
+reviewed native Darwin authority mechanism can retire it.
 
 **Architecture:** Add narrow ignored TypeScript units beside the existing
 run-local controller for durable paths, immutable publication, lease events,
@@ -22,6 +23,22 @@ state, projections, lease, and audit byte-for-byte unchanged.
 **Tech Stack:** Node.js 24 built-ins, TypeScript 7 with NodeNext ESM and
 `exactOptionalPropertyTypes`, `tsx --test`, esbuild, Biome, pnpm, Git, Docker,
 Kind, kubectl, and Helm.
+
+### Platform Amendment
+
+The Darwin capability probe performed during Task 2 established that Node.js
+24 cannot perform child operations through `/dev/fd/<fd>` and exposes no
+`openat`-family API. Therefore authoritative mutation in this plan is Linux-only
+through a proved `/proc/self/fd/<fd>` descriptor root. Darwin must fail before
+the first mutation; it may run pure and no-mutation tests only. A pathname
+fallback is forbidden because it would weaken the accepted authority model.
+
+Task 11 is retained as the future operational checklist but is deferred on the
+current Darwin host. Do not read, copy, hash, or mutate its protected stale
+evidence as part of this implementation. Moving those files to Linux would
+change the filesystem identities the transaction is meant to authenticate.
+Task 12 may proceed after Task 10, with authoritative integration and the fresh
+ladder executed on native or hosted Linux.
 
 ---
 
@@ -343,13 +360,15 @@ captured identities with every `DurablePaths` result.
 
 Node exposes no native `openat`/`unlinkat`. Implement `DirectoryCapability`
 with an open directory `FileHandle` and a descriptor-root pathname
-(`/dev/fd/<fd>` on Darwin, `/proc/self/fd/<fd>` on Linux). Prove the descriptor
-root resolves to the captured directory identity, perform child operations
-through that descriptor root with `O_NOFOLLOW`, and revalidate both the pinned
-handle and original pathname before and after each callback-free operation.
-Fail closed when the platform lacks a working descriptor root. Tests must move
-or replace the original pathname during traversal and prove operations remain
-bound to the captured directory or reject without mutation.
+(`/proc/self/fd/<fd>` on Linux). Prove the descriptor root resolves to the
+captured directory identity, perform child operations through that descriptor
+root with `O_NOFOLLOW`, and revalidate both the pinned handle and original
+pathname before and after each callback-free operation. Fail closed before the
+first mutation when the platform lacks a working descriptor root. Darwin tests
+must prove `/dev/fd/<fd>` is rejected as non-traversable and that no managed
+path was created. Linux tests must move or replace the original pathname during
+traversal and prove operations remain bound to the captured directory or reject
+without mutation.
 
 - [ ] **Step 4: Prove deterministic paths and strict failures**
 
@@ -846,7 +865,13 @@ tests, bundle, metafile, and verification logs. Set implementation files mode
 `0600`. Do not include protected evidence hashes yet; Task 11 records those
 immediately before launch.
 
-## Task 11: Reconcile the Protected Stale Run Once
+## Task 11: Reconcile the Protected Stale Run Once (Deferred on Darwin)
+
+**Status:** Deferred. Do not execute this task on the current Darwin host. The
+protected evidence must remain unopened and unchanged until a separate native
+Darwin descriptor-relative mutation design is approved and implemented. Do not
+copy the evidence to Linux because doing so changes the identities this
+transaction authenticates.
 
 **Files:**
 - Read unchanged: `state.json`, `results.json`, `results.tsv`, prior audit,
@@ -856,6 +881,10 @@ immediately before launch.
 - Create ignored: `reconciliation-acceptance.txt`
 
 - [ ] **Step 1: Independently capture exact pre-launch evidence**
+
+Platform prerequisite: a reviewed native Darwin `openat`-family authority
+implementation is available and included in the accepted executable closure.
+Without it, stop before reading any protected path.
 
 Use two separate Node processes to capture no-follow identities, modes, sizes,
 times, and SHA-256 values. Confirm they agree, the tool root is absent, the
@@ -890,7 +919,7 @@ phase-chain digests, logical-finalization timestamp, and nonmutation result to
 `reconciliation-acceptance.txt`. Never record credentials or environment
 values.
 
-## Task 12: Rebase, Run the Fresh Ladder, and Integrate the Branch
+## Task 12: Rebase, Run the Fresh Linux Ladder, and Integrate the Branch
 
 **Files:**
 - Reassess tracked workflows, compatibility policy, chart topology, and branch
@@ -922,18 +951,20 @@ pnpm build
 
 - [ ] **Step 3: Create a fresh v2 run and inspect allocation before bootstrap**
 
-Copy only the accepted ignored controller source/test/bundle set into a new
-private ignored repository run root. Invoke `bootstrap`; before its first child
-command hook, assert the tool root is under canonical user state, the prepared
-event/state/control/acquired chain is complete, no repo-local active lease was
-created, and changed `TMPDIR` cannot alter recorded paths. Publish the exact
-source manifest first and pass its independently recorded digest as
+On native or hosted Linux, copy only the accepted ignored controller
+source/test/bundle set into a new private ignored repository run root. Invoke
+`bootstrap`; before its first child command hook, assert the tool root is under
+canonical user state, the prepared event/state/control/acquired chain is
+complete, no repo-local active lease was created, and changed `TMPDIR` cannot
+alter recorded paths. Publish the exact source manifest first and pass its
+independently recorded digest as
 `bootstrap --accepted-source-manifest-sha256 <sha256>`; no source-seeding helper
-is part of the authenticated controller or product repository.
+is part of the authenticated controller or product repository. On Darwin, run
+only the unsupported-platform no-mutation assertion.
 
 - [ ] **Step 4: Run the full ladder sequentially**
 
-Execute in the canonical order:
+Execute on native or hosted Linux in the canonical order:
 
 1. `chart-apply-1.35`
 2. `focused-1.35`
@@ -974,7 +1005,8 @@ checks are green.
 - [ ] **Step 8: Verify the merged revision locally and in hosted production**
 
 Fetch `origin/main`, verify the merge commit contains the reviewed tracked
-changes, build and run the relevant local smoke checks from that revision, and
-confirm the hosted required checks and infrastructure lanes completed on the
-merged SHA. Treat hosted CI as the production verification for this local
-infrastructure feature; do not deploy or mutate a Dawn application runtime.
+changes, build and run the relevant pure and unsupported-platform local smoke
+checks from that revision, and confirm the hosted required checks and Linux
+infrastructure lanes completed on the merged SHA. Treat hosted CI as the
+production verification for this local infrastructure feature; do not deploy
+or mutate a Dawn application runtime.

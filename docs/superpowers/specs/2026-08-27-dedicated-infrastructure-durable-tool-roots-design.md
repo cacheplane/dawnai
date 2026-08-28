@@ -23,6 +23,31 @@ or deletes a tool root.
 This is hardening for the local evidence runner. It does not add a product API,
 CI command, or general-purpose abandoned-run garbage collector.
 
+### Platform Support Amendment
+
+Authoritative filesystem mutation in this v1 design is supported only on Linux
+when `/proc/self/fd/<fd>` is present and independently proved to be a traversable
+view of the captured directory descriptor. Node.js 24 exposes neither the
+`openat` family nor child operations on a directory `FileHandle`. On Darwin,
+`/dev/fd/<fd>` identifies the open directory but is not traversable for child
+operations, so the controller must fail before its first authoritative
+filesystem mutation. Darwin remains supported for pure resolution, parsing,
+identity, and no-mutation failure tests.
+
+There is no pathname-based Darwin fallback. Such a fallback would reintroduce a
+swap window between authentication and mutation and invalidate the descriptor-
+authority guarantees below. Native Darwin support requires a separately
+reviewed `openat`-family binding or helper whose executable and loading closure
+become part of the accepted authority boundary.
+
+The protected stale run was created on Darwin. Its accepted filesystem
+identities cannot be copied to Linux without changing the evidence being
+authenticated, so this design does not reconcile it on the current host. That
+one-time operation remains deferred and its protected evidence remains
+untouched until native Darwin descriptor-relative mutation is designed and
+reviewed. Linux implementation and acceptance must use synthetic fixtures and
+fresh Linux-native runs only.
+
 ## Problem
 
 The current runner creates a tool root with
@@ -168,6 +193,12 @@ the run directory must be a real directory, not a symbolic link, owned by the
 current effective user, and not group- or world-writable. Each identity is
 revalidated around descent. Unavailable no-follow semantics, an identity swap,
 or an ownership ambiguity fails closed.
+
+On Linux, every child operation is performed through a proved
+`/proc/self/fd/<fd>` descriptor root. On other platforms, including Darwin v1,
+the runner proves that no traversable descriptor root is available and returns
+an unsupported-platform failure before creating a managed directory or
+publishing an authority record.
 
 The checkout-scope, run directory, `control.json`, and `tool-root` are created
 through create-exclusive operations. A matching pre-existing checkout scope is
@@ -779,24 +810,29 @@ spec-compliance and code-quality reviews.
 
 After implementation and review:
 
-1. Record fresh hashes and identities for the protected stale state, results,
-   lease, accepted Node binary, executable reconciler, and final read-only audit.
-   Verify both executable hashes in a separate process before launch.
-2. Run the reconciliation command once with those exact accepted values.
-3. Inspect the completed attestation, phase chain, unchanged legacy state and
-   lease, logical-finalization timestamp, and terminal durable lease event.
-4. Confirm reconciliation invoked no Docker, Kubernetes, registry, download,
-   tool-root creation, quarantine, erasure, or removal operation.
-5. Rebase the branch on current `main` and reassess the checked-in workflows,
+1. On Darwin, prove unsupported-platform failure occurs before the first
+   authoritative mutation and confirm the protected stale evidence was neither
+   opened nor changed. Record the stale reconciliation as deferred, not passed.
+2. On native or hosted Linux, run the reconciliation transaction against exact
+   synthetic pre-resource evidence and inspect the completed attestation,
+   phase chain, logical-finalization timestamp, and terminal durable lease
+   event.
+3. Confirm Linux reconciliation invoked no Docker, Kubernetes, registry,
+   download, tool-root creation, quarantine, erasure, or removal operation.
+4. Rebase the branch on current `main` and reassess the checked-in workflows,
    compatibility pins, chart topology, and known merge conflicts.
-6. Start a fresh run, confirm its tool root and control index use the durable
-   state base, and execute the full dedicated infrastructure ladder
-   sequentially.
-7. Confirm normal finalization removes only the fresh run's exact durable tool
+5. On native or hosted Linux, start a fresh run, confirm its tool root and
+   control index use the durable state base, and execute the full dedicated
+   infrastructure ladder sequentially.
+6. Confirm normal finalization removes only the fresh run's exact durable tool
    root, appends its exact `finalized` lease event, and retains control and run
    evidence.
-8. Run the repository Definition of Done, open a pull request, merge only after
+7. Run the repository Definition of Done, open a pull request, merge only after
    required hosted Linux checks are green, and verify the merged revision.
+
+Reconciliation of the protected Darwin stale run is not an acceptance gate for
+the Linux v1 implementation. It remains a separate future operational action
+after native Darwin support has its own approved authority design.
 
 ## Drawbacks and Trade-offs
 
