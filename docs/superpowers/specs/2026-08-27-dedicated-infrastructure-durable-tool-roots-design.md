@@ -200,6 +200,158 @@ the runner proves that no traversable descriptor root is available and returns
 an unsupported-platform failure before creating a managed directory or
 publishing an authority record.
 
+### Capability-Bound Child Operations
+
+`AuthenticatedDirectory` is an opaque runtime authority, not a structural data
+record. Its exported diagnostic path, descriptor-root string, and identity are
+never accepted as authority inputs by another module. Every production child
+operation resolves the directory through private module state, keeps its pinned
+descriptor open, and revalidates the descriptor, original pathname, and child
+namespace around one callback-free operation.
+
+The path module exposes fixed-purpose child-file capabilities rather than a
+generic filesystem callback. A child capability is unforgeable in TypeScript
+and is also authenticated through private runtime state. The narrow operation
+surface is:
+
+```ts
+export type AuthenticatedChildFileAccess = "read" | "update"
+
+declare const authenticatedChildFileBrand: unique symbol
+
+export interface AuthenticatedChildFile<
+  Access extends AuthenticatedChildFileAccess,
+> {
+  readonly [authenticatedChildFileBrand]: Access
+}
+
+export interface AuthenticatedChildFileSnapshot {
+  readonly path: string
+  readonly identity: FileIdentity
+  readonly linkCount: string
+}
+
+export interface StableAuthenticatedChildFileRead
+  extends AuthenticatedChildFileSnapshot {
+  readonly bytes: Uint8Array
+}
+
+export function createExclusivePrivateFileChild(
+  parent: AuthenticatedDirectory,
+  name: string,
+): Promise<AuthenticatedChildFile<"update">>
+
+export function openPrivateFileChildForUpdate(
+  parent: AuthenticatedDirectory,
+  name: string,
+): Promise<AuthenticatedChildFile<"update">>
+
+export function openPrivateFileChildForRead(
+  parent: AuthenticatedDirectory,
+  name: string,
+): Promise<AuthenticatedChildFile<"read">>
+
+export function readStableAuthenticatedChildFile(
+  file: AuthenticatedChildFile<AuthenticatedChildFileAccess>,
+  maximumBytes: number,
+): Promise<StableAuthenticatedChildFileRead>
+
+export function appendAuthenticatedChildFile(
+  file: AuthenticatedChildFile<"update">,
+  expectedCurrentSize: number,
+  bytes: Uint8Array,
+): Promise<AuthenticatedChildFileSnapshot>
+
+export function syncAuthenticatedChildFile(
+  file: AuthenticatedChildFile<AuthenticatedChildFileAccess>,
+): Promise<void>
+
+export function hardenAuthenticatedChildFileReadOnly(
+  file: AuthenticatedChildFile<"update">,
+): Promise<AuthenticatedChildFileSnapshot>
+
+export function statAuthenticatedChildFile(
+  file: AuthenticatedChildFile<AuthenticatedChildFileAccess>,
+): Promise<AuthenticatedChildFileSnapshot>
+
+export function linkReadOnlyAuthenticatedChildFile(
+  source: AuthenticatedChildFile<"read">,
+  finalName: string,
+): Promise<AuthenticatedChildFileSnapshot>
+
+export function listAuthenticatedDirectoryChildren(
+  directory: AuthenticatedDirectory,
+): Promise<readonly string[]>
+
+export function syncAuthenticatedDirectory(
+  directory: AuthenticatedDirectory,
+): Promise<void>
+
+export function closeAuthenticatedChildFile(
+  file: AuthenticatedChildFile<AuthenticatedChildFileAccess>,
+): Promise<void>
+```
+
+The private brand prevents structural construction at compile time; every
+function also rejects values absent from its private `WeakMap`. Snapshot paths
+and identities are diagnostic values and grant no authority. Directory listing
+is sorted and capped at 4,096 entries without first allocating an unbounded
+array. A requested stable-read bound must be a positive safe integer no larger
+than 16 MiB, and the reader checks size before allocation and during chunked
+read. Exact-size append rejects a negative or unsafe current size, an input
+larger than 16 MiB, or a current-size-plus-input result larger than 16 MiB.
+Task 3 rejects canonical output larger than its narrower 2 MiB immutable-JSON
+limit before create or append. Read open accepts only exact mode `0400`; update
+open accepts only exact mode `0600` and performs stable reads through that
+update capability while replay validates a partial prefix.
+
+The operations enforce these transitions:
+
+- create a mode-`0600` regular child with `O_CREAT | O_EXCL | O_NOFOLLOW`;
+- open an existing regular child for bounded read or mode-`0600` update with
+  `O_NOFOLLOW`;
+- stably read bounded bytes and identity;
+- append only at an exact authenticated current size;
+- sync file data or metadata, harden mode from `0600` to `0400`, and stat;
+- hard-link one mode-`0400` child to an absent sibling name under the same
+  authenticated parent;
+- list strict child names and sync the pinned parent directory; and
+- close a child capability with retryable failure semantics.
+
+Every directory operation acquires a synchronous operation lease before its
+first `await`. Parent close checks for an operation lease, open child, or
+retained failed-open cleanup before setting its transient closing state. A busy
+close rejects atomically without changing state, child close remains permitted,
+and parent close can be retried after the reservation clears. A descriptor-close
+failure also clears the transient closing state and leaves the parent retryable.
+Each child serializes its operations and rejects a second operation while one
+is in flight. If post-open validation and descriptor close both fail, the
+parent retains the handle, becomes poisoned, throws one aggregate containing
+the primary plus every cleanup error, and rejects every future operation and
+close; process exit is the only v1 cleanup for that fail-closed state. Every
+failed open or validation follows the same aggregation rule whether or not it
+poisons the parent.
+
+A failed child close leaves the capability open and retryable; a successful
+close is terminal. Hardening changes mode only. The publisher must sync the
+metadata, successfully close the update capability, and authentically reopen
+the child with `O_RDONLY | O_NOFOLLOW` before linking. An existing writable
+descriptor is never promoted into read authority. Hard-linking requires a read
+capability whose source is mode `0400`, still names the authenticated inode,
+and has link count exactly one. The target is an absent sibling under the same
+authenticated parent. After link, source and target must be the same inode,
+mode `0400`, with link count exactly two. Any prior or concurrent extra alias,
+source replacement, target replacement, or count ambiguity fails closed and
+is never rolled back by deletion.
+
+Directory listing returns names only; every authoritative use of a listed
+entry reopens it with no-follow semantics. Stable reads reject growth,
+replacement, unexpected mode or owner, and identity changes.
+
+Publisher fault hooks run only between complete capability operations. No hook
+runs after authority validation but before a syscall inside one operation. This
+keeps fault injection from becoming a production pathname race seam.
+
 The checkout-scope, run directory, `control.json`, and `tool-root` are created
 through create-exclusive operations. A matching pre-existing checkout scope is
 reused only after exact `repository.json` authentication. Any pre-existing run
@@ -274,9 +426,26 @@ Staging files are never authoritative and are not deleted. Their names bind the
 target name, content digest, and lock generation when one exists. A replay may
 ignore only bounded regular files with a strict staging name and current-user
 ownership. Mode `0600` identifies an interrupted pre-hardening stage and may
-contain partial bytes; mode `0400` must have the filename's complete content
-digest. Other modes, names, types, ownership, or unexplained entries fail
-closed.
+contain only an exact prefix of the canonical bytes. Replay rejects an
+oversized or mismatched prefix without mutation, appends only the missing
+suffix at the authenticated current size, stably verifies complete bytes, then
+unconditionally syncs data, hardens, syncs metadata, closes update authority,
+and reopens read-only. Mode `0400` must have the filename's complete content
+digest and is synced again before link because the prior process may have
+crashed before metadata durability. Other modes, names, types, ownership,
+unexplained entries, or link counts fail closed.
+
+After a successful link, the publisher syncs the authenticated direct parent
+before reread. An exact pre-existing final is accepted only with the expected
+mode, bytes, staging alias, inode, and link count; its direct parent is synced
+again before acceptance because it may represent a crash after link but before
+directory sync. A different stable final transfers an open authenticated read
+capability to `ImmutableTargetCollision`. The catcher owns that capability and
+must close it in `finally`; until then the parent intentionally cannot close.
+Before either permitted semantic winner adoption, the catcher validates the
+winner, syncs the authenticated direct parent, and stably rereads the same open
+capability. This is mandatory even when validation succeeded before sync,
+because the winner may have crashed after link but before directory durability.
 
 Normal cleanup validates the exact path against the durable control record,
 checkout scope, run ID, owner marker, and captured identities. Quarantine and
@@ -674,8 +843,8 @@ controller. Pure TypeScript helpers may be shared at build time, but the
 reconciliation entrypoint is bundled into the self-contained accepted `.mjs`
 and has no mutable runtime imports. Split the logic into narrow internal units:
 
-- fixed state-home resolution, checkout-scope authentication, and durable
-  control/tool-root allocation;
+- fixed state-home resolution, checkout-scope authentication, durable
+  control/tool-root allocation, and opaque descriptor-bound child operations;
 - durable lease-event parsing and active-run resolution;
 - crash-recoverable lock acquisition and authenticated stale-lock retirement;
 - durable-root path and identity authentication;

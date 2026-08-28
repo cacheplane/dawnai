@@ -386,6 +386,90 @@ shasum -a 256 "$LEGACY_RUN_ROOT"/infra-durable-paths.ts \
   "$LEGACY_RUN_ROOT"/infra-durable-paths.test.ts > "$LEGACY_RUN_ROOT/task-02-source-hashes.txt"
 ```
 
+## Task 2A: Add Opaque Descriptor-Bound Child Operations
+
+**Files:**
+- Modify ignored: `infra-durable-paths.ts`
+- Modify ignored: `infra-durable-paths.test.ts`
+- Refresh ignored: `task-02-source-hashes.txt`
+
+Task 3 must not trust the structural diagnostic fields on
+`AuthenticatedDirectory` or import `__testing`. Add the smallest fixed-purpose
+production seam that resolves every directory and child-file capability through
+private runtime state.
+
+- [ ] **Step 1: Write failing capability and lifetime tests**
+
+Prove that structurally forged directory and child-file objects are rejected;
+parents cannot close with open children; failed child closes remain retryable;
+successful closes are terminal; every failed open and post-open validation
+aggregates primary and cleanup failures; and every operation revalidates parent
+descriptor, original pathname, file descriptor, and child namespace identity.
+Cover traversal names, symlinks, wrong owner, wrong mode, identity swaps,
+concurrent growth, oversized reads, and Linux capability failure without a
+pathname fallback. Also cover concurrent parent close/open, parent
+close/directory-operation, and child close/operation races; a poisoned parent
+that retains an unclosed failed-open descriptor; the 4,096-entry listing bound;
+primary plus all cleanup-error aggregation; atomic busy-parent rejection and
+successful parent-close retry after child close; exact mode `0600` update and
+mode `0400` read opens; and append overflow beyond the fixed 16 MiB result
+bound.
+
+- [ ] **Step 2: Confirm red**
+
+```bash
+pnpm exec tsx --test "$LEGACY_RUN_ROOT/infra-durable-paths.test.ts" \
+  --test-name-pattern='child-file capability|authenticated child'
+```
+
+- [ ] **Step 3: Implement fixed-purpose opaque child operations**
+
+Keep the child brand private and validate every value through a private
+`WeakMap`. Expose narrow production functions for create-exclusive mode-`0600`,
+bounded read open, mode-`0600` update open, stable bounded read, exact-size
+append, file sync, fixed `0600` to `0400` hardening, snapshot, sibling-only
+hard-link, strict directory listing, pinned-directory sync, and retryable child
+close. All path components are single non-traversing names and every file open
+uses `O_NOFOLLOW`.
+
+Use the exact exported type and function signatures in the design's
+Capability-Bound Child Operations section. Acquire a directory operation lease
+synchronously before the first `await`; serialize each child's operations; and
+block parent close for in-flight operations, children, or retained failed-open
+cleanup. A failed post-open cleanup poisons the parent and retains the handle.
+
+Writable or non-`0400` child capabilities cannot hard-link. Hardening does not
+promote update authority: callers must sync metadata, close the update
+capability, and reopen read-only. A hard link requires source link count one,
+targets only an absent sibling under the same authenticated parent, and proves
+same inode, mode `0400`, and link count two afterward. Test unexplained
+out-of-parent aliases, concurrent extra links, and source/target namespace
+replacement. Publisher hooks remain outside these callback-free operations.
+
+- [ ] **Step 4: Verify on Darwin and Linux**
+
+On Darwin, prove unsupported capability failure occurs before mutation. On a
+native or isolated Docker Linux test closure containing only allowed source and
+test files, execute the positive create, resume, harden, link, list, sync,
+identity-race, close-failure, and bound-growth matrix against
+`/proc/self/fd/<fd>`. Never mount or copy protected stale evidence into the
+Linux closure. Include writable-descriptor retirement, every concurrent
+operation/close race, link-count races, and poisoned failed-open cleanup.
+
+```bash
+pnpm exec tsc -p "$LEGACY_RUN_ROOT/infra-control.tsconfig.json" --noEmit
+pnpm exec tsx --test "$LEGACY_RUN_ROOT/infra-durable-paths.test.ts"
+```
+
+- [ ] **Step 5: Refresh Task 2 acceptance and reviews**
+
+Refresh `task-02-source-hashes.txt`, keep it mode `0600`, verify it from the
+repository root, and repeat Task 2 spec-compliance followed by code-quality
+review before restarting Task 3. Task 1 acceptance remains valid unless a Task
+1 source changes. Any partial Task 3 test or implementation evidence is invalid;
+restart Task 3 from its full red test step and run both Task 3 reviews against
+the finalized capability signatures.
+
 ## Task 3: Add the Immutable JSON Publisher
 
 **Files:**
@@ -400,7 +484,14 @@ wrong modes, hard links replaced by symlinks, retained `0600` partial staging,
 retained `0400` complete staging, unexplained entries, and a target whose direct
 parent differs from the transaction directory. Reject wrong-owner staging,
 non-regular staging, and staging larger than the fixed 2 MiB immutable-JSON
-bound before parsing or replay.
+bound before parsing or replay. A `0600` partial must be an exact canonical-byte
+prefix; reject malformed or oversized prefixes before mutation and append only
+the missing suffix. Test unconditional resync of retained exact `0400` staging
+and direct-parent resync before accepting an exact pre-existing final. Cover
+writable-descriptor retirement, source link counts other than one, concurrent
+extra aliases, source/target replacement, collision-capability cleanup, and a
+winner collision after link but before parent sync. Reject canonical output
+larger than 2 MiB before creating or appending a staging file.
 
 - [ ] **Step 2: Confirm red**
 
@@ -420,6 +511,36 @@ export interface ImmutablePublication {
   readonly bytes: Uint8Array
 }
 
+export interface ImmutablePublisherHooks {
+  readonly beforeCreate?: () => void | Promise<void>
+  readonly afterCreate?: () => void | Promise<void>
+  readonly beforeWrite?: () => void | Promise<void>
+  readonly afterWrite?: () => void | Promise<void>
+  readonly beforeDataSync?: () => void | Promise<void>
+  readonly afterDataSync?: () => void | Promise<void>
+  readonly beforeHarden?: () => void | Promise<void>
+  readonly afterHarden?: () => void | Promise<void>
+  readonly beforeMetadataSync?: () => void | Promise<void>
+  readonly afterMetadataSync?: () => void | Promise<void>
+  readonly beforeLink?: () => void | Promise<void>
+  readonly afterLink?: () => void | Promise<void>
+  readonly beforeParentSync?: () => void | Promise<void>
+  readonly afterParentSync?: () => void | Promise<void>
+  readonly beforeStableReread?: () => void | Promise<void>
+  readonly afterStableReread?: () => void | Promise<void>
+}
+
+declare const immutableTargetCollisionBrand: unique symbol
+
+export interface ImmutableTargetCollision extends Error {
+  readonly [immutableTargetCollisionBrand]: true
+  readonly target: AuthenticatedChildFile<"read">
+}
+
+export function isImmutableTargetCollision(
+  value: unknown,
+): value is ImmutableTargetCollision
+
 export async function publishImmutableJson(options: {
   readonly parent: AuthenticatedDirectory
   readonly finalName: string
@@ -435,14 +556,25 @@ stably reread. Derive the strict staging name internally from the final target,
 content digest, and lock generation when present; callers cannot supply an
 arbitrary staging binding. Never rename, overwrite, or delete staging evidence.
 Every staging replay requires a bounded regular file owned by the current
-effective user; mode `0600` may be partial, while mode `0400` must match the
-complete digest encoded in its filename.
+effective user; mode `0600` may be only an exact prefix and appends only the
+missing suffix at its authenticated size. After complete-byte sync, harden,
+sync metadata, close update authority, and reopen read-only before linking. A
+retained `0400` stage is synced again before linking. Mode `0400` must match the
+complete digest encoded in its filename and have link count one before a new
+link.
 An exact pre-existing final is accepted. A different stable final throws a
 typed `ImmutableTargetCollision` containing only its authenticated read
-capability. The publisher never decides semantic adoption: setup code may catch
-that collision and validate the winner's accepted evidence/path plan, while lock
-code may catch it and validate the winner's generation/predecessor before
-returning `lost`. Every other caller treats collision as fatal.
+capability. Before exact-final acceptance, sync its direct parent again and
+prove the expected staging alias, inode, mode, bytes, and link count. Ownership
+of a collision capability transfers to the catcher, which must close it in
+`finally`. Before semantic adoption, the catcher must validate the winner, sync
+the authenticated direct parent, and stably reread the same capability. The
+publisher never decides semantic adoption: setup code may catch that collision
+and validate the winner's accepted evidence/path plan, while lock code may catch
+it and validate the winner's generation/predecessor before returning `lost`.
+Every other caller treats collision as fatal. Hooks run only between complete
+capability operations at the exact named boundaries above. Collision creation
+and the type guard use private runtime state; structural lookalikes are rejected.
 
 - [ ] **Step 4: Run focused verification and stress exact adoption**
 
