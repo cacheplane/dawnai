@@ -4,7 +4,7 @@ import { dawnActivityRenderers } from "@dawn-ai/ag-ui/react"
 import { DemoSuggestions } from "./components/DemoSuggestions"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 
-// Notes (verified against installed @copilotkit/react-core@1.69.0 types):
+// Notes (verified against installed @copilotkit/react-core@1.68.3 types):
 // - Use the `CopilotKit` wrapper (not bare `CopilotKitProvider`) per CopilotKit's own v2
 //   guidance: it adds the error boundary, toasts, and threads provider around the context.
 //   Its props are a superset of CopilotKitProviderProps (so `runtimeUrl` applies).

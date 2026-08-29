@@ -1,14 +1,12 @@
 # CopilotKit V2 Examples Implementation Plan
 
-**Updated:** 2026-08-25 for the CopilotKit 1.69.0 stable release refresh.
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade Dawn's chat and research examples to selected stable CopilotKit `1.69.0`, use the supported V2 frontend and runtime APIs end to end, and prove the multi-route Dawn/AG-UI boundary without adding dependency overrides.
+**Goal:** Upgrade Dawn's chat and research examples to selected stable CopilotKit `1.68.3`, use the supported V2 frontend and runtime APIs end to end, and prove the multi-route Dawn/AG-UI boundary without adding dependency overrides.
 
 **Architecture:** Keep each browser connected to a same-origin CopilotKit runtime, and keep each runtime's `HttpAgent` connected to the existing encoded Dawn `/agui/{routeId}` endpoint. Replace the legacy single-route Next.js adapter with `createCopilotRuntimeHandler` from `@copilotkit/runtime/v2`, mount it under a required catch-all route, and set the real React providers to multi-route mode. Verify direct dependency ownership with a lean lockfile receipt, the server boundary with a model-free loopback AG-UI stream, and the actual pages with Playwright request observation.
 
-**Tech Stack:** TypeScript 7, Next.js 16 App Router, React 19, CopilotKit `1.69.0`, AG-UI `0.0.57`, Vitest 4, Playwright `1.62.1`, pnpm 10.
+**Tech Stack:** TypeScript 7, Next.js 16 App Router, React 19, CopilotKit `1.68.3`, AG-UI `0.0.57`, Vitest 4, Playwright `1.62.1`, pnpm 10.
 
 ---
 
@@ -35,11 +33,11 @@ CLI dependency and native-deployment CI lane.
 
 **Modify:**
 
-- `examples/chat/web/package.json` — CopilotKit `^1.69.0`, exact Playwright test
+- `examples/chat/web/package.json` — CopilotKit `^1.68.3`, exact Playwright test
   dependency, and `test:e2e` script; retain `@ag-ui/client` `0.0.57`.
 - `examples/research/web/package.json` — same dependency/script changes.
 - `packages/ag-ui/package.json` — align the development owner to
-  `@copilotkit/react-core@^1.69.0` while preserving the optional peer
+  `@copilotkit/react-core@^1.68.3` while preserving the optional peer
   `>=1.66.0`.
 - `examples/chat/web/app/page.tsx` — explicit multi-route provider setting and
   current-version comments.
@@ -98,10 +96,10 @@ CLI dependency and native-deployment CI lane.
   implementing the prerequisite. Task 0 temporarily preserves them by immutable
   stash OID; Task 6 restores them.
 - Do not add a CopilotKit, Hono, node-server, provider-utils, or AG-UI override.
-- Do not upgrade direct `@ag-ui/client` to `0.0.58`; CopilotKit `1.69.0` expects
+- Do not upgrade direct `@ag-ui/client` to `0.0.58`; CopilotKit `1.68.3` expects
   the type-facing `0.0.57` generation.
 - Preserve `packages/ag-ui`'s optional `@copilotkit/react-core` peer range
-  `>=1.66.0`; only its development owner moves to `^1.69.0`.
+  `>=1.66.0`; only its development owner moves to `^1.68.3`.
 - Keep publication workflows disabled throughout.
 
 ### Task 0: Preserve the in-flight security WIP
@@ -207,18 +205,18 @@ it("binds both private examples to stable CopilotKit V2 owners", () => {
   const workspace = readWorkspace()
   for (const importer of exampleImporters) {
     expect(importerDependency(workspace, importer, "dependencies", "@copilotkit/react-core")).toMatchObject({
-      specifier: "^1.69.0",
+      specifier: "^1.68.3",
     })
     expect(importerDependency(workspace, importer, "dependencies", "@copilotkit/runtime")).toMatchObject({
-      specifier: "^1.69.0",
+      specifier: "^1.68.3",
     })
     expect(importerDependency(workspace, importer, "dependencies", "@ag-ui/client")).toEqual({
       specifier: "0.0.57",
       version: "0.0.57",
     })
   }
-  expect(packageVersions(workspace, "@copilotkit/react-core")).toEqual(["1.69.0"])
-  expect(packageVersions(workspace, "@copilotkit/runtime")).toEqual(["1.69.0"])
+  expect(packageVersions(workspace, "@copilotkit/react-core")).toEqual(["1.68.3"])
+  expect(packageVersions(workspace, "@copilotkit/runtime")).toEqual(["1.68.3"])
 })
 
 it("keeps Dawn's HttpAgent type edge on AG-UI 0.0.57", () => {
@@ -278,7 +276,7 @@ it("confines any affected provider-utils 3.x to private CopilotKit Google Vertex
           path.importer as (typeof exampleImporters)[number],
         ) &&
         path.identities.some((identity) =>
-          identity.startsWith("@copilotkit/runtime@1.69.0"),
+          identity.startsWith("@copilotkit/runtime@1.68.3"),
         ) &&
         path.identities.some((identity) =>
           identity.startsWith("@ai-sdk/google-vertex@3."),
@@ -299,7 +297,7 @@ upstream eventually resolves the advisory within the compatible graph, an empty
 affected set is the desired result.
 
 Also treat `packages/ag-ui` as a direct development owner: require its manifest
-and lock importer to resolve `@copilotkit/react-core@^1.69.0` and direct
+and lock importer to resolve `@copilotkit/react-core@^1.68.3` and direct
 `@ag-ui/client@0.0.57`, while requiring its optional React Core peer to remain
 `>=1.66.0`.
 
@@ -321,8 +319,8 @@ Apply these manifest changes:
 
 ```json
 "@ag-ui/client": "0.0.57",
-"@copilotkit/react-core": "^1.69.0",
-"@copilotkit/runtime": "^1.69.0"
+"@copilotkit/react-core": "^1.68.3",
+"@copilotkit/runtime": "^1.68.3"
 ```
 
 Remove this root override:
@@ -333,7 +331,7 @@ Remove this root override:
 
 Do not change `@ag-ui/client`, add replacement overrides, or touch the Vercel
 CLI dependency. In `packages/ag-ui`, update only the React Core development
-owner to `^1.69.0`; retain its optional peer `>=1.66.0`.
+owner to `^1.68.3`; retain its optional peer `>=1.66.0`.
 
 - [x] **Step 4: Regenerate the lock and explicitly refresh compatible Hono patches**
 
@@ -348,7 +346,7 @@ git diff --name-only -- ':(glob)**/package.json'
 ```
 
 Expected: all commands succeed. The example importers resolve CopilotKit
-`1.69.0`; their direct `@ag-ui/client` remains `0.0.57`; compatible Hono,
+`1.68.3`; their direct `@ag-ui/client` remains `0.0.57`; compatible Hono,
 node-server, and UUID patches are selected without an override; and the CLI
 manifest is byte-unchanged. The explicit update is necessary because a plain
 lockfile install retains the old compatible-but-vulnerable Hono/node-server
@@ -476,7 +474,7 @@ capturedRequests.length = 0
 const info = await route.GET(new Request("http://dawn.test/api/copilotkit/info"))
 expect(info.status).toBe(200)
 expect(await info.json()).toMatchObject({
-  version: "1.69.0",
+  version: "1.68.3",
   mode: "sse",
   agents: { default: { name: "default" } },
 })
@@ -792,7 +790,7 @@ Add the explicit property in both `page.tsx` files:
 >
 ```
 
-Update nearby comments to reference installed `1.69.0` types and the new
+Update nearby comments to reference installed `1.68.3` types and the new
 `api/copilotkit/[...path]/route.ts` path. Do not change hooks, renderers, or
 agent IDs.
 
@@ -927,7 +925,7 @@ Workbench's bounded `MemoryPanel`, thread hydration, and consolidated
 and thread-read routes the browser needs. Document that durable-memory review is part
 of the Workbench without widening the V2 transport migration itself.
 
-Describe `ToolCallCard` against the CopilotKit 1.69.0 V2 runtime/default-renderer
+Describe `ToolCallCard` against the CopilotKit 1.68.3 V2 runtime/default-renderer
 contract. The public wildcard `useRenderTool` overload types its render props as
 `any`, so do not claim its field names or status values are statically enforced;
 retain the defensive parsing around the current runtime fields.
@@ -938,9 +936,9 @@ At the start of the implementation sequence, add this migration as prerequisite
 Task 0. Replace current claims that freeze CopilotKit `1.66`, force
 `@hono/node-server` 2.x, or depend on the legacy single-route response. State:
 
-- selected stable CopilotKit owner: `1.69.0`;
+- selected stable CopilotKit owner: `1.68.3`;
 - direct/type-facing AG-UI: `0.0.57`;
-- `packages/ag-ui` development owner: `^1.69.0`, with optional peer
+- `packages/ag-ui` development owner: `^1.68.3`, with optional peer
   compatibility retained at `>=1.66.0`;
 - compatible node-server 1.x is accepted at `>=1.19.15`;
 - no CopilotKit/node-server override;
@@ -1127,7 +1125,7 @@ Rules:
   the new base.
 - untracked Mermaid/SOCKS work: restore every file, but update the Mermaid
   receipts' CopilotKit range/version assertions from `^1.66.0`/`1.66.4` to
-  `^1.69.0`/`1.69.0`; do not stage that broader WIP as part of the CopilotKit
+  `^1.68.3`/`1.68.3`; do not stage that broader WIP as part of the CopilotKit
   commits.
 
 - [ ] **Step 3: Verify the prerequisite still holds in the combined worktree**
@@ -1181,7 +1179,7 @@ Preserve every older stash, including the three security recovery stashes.
 
 After Task 6:
 
-- the branch contains the selected stable CopilotKit `1.69.0` dependency
+- the branch contains the selected stable CopilotKit `1.68.3` dependency
   upgrade, V2 runtime/page
   migration, deterministic tests, CI browser lane, and current docs as commits;
 - the pre-existing security WIP is restored for the broader remediation;

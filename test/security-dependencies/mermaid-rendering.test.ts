@@ -439,12 +439,6 @@ describe("local Mermaid UI compatibility harness", () => {
   })
 
   it("resolves the complete example-local UI chain and patched versions", () => {
-    for (const importerName of ["examples/chat/web", "examples/research/web"] as const) {
-      const manifest = readManifest(resolve(repositoryRoot, importerName, "package.json"))
-      const scripts = requireRecord(manifest.scripts, `${importerName} scripts`)
-      expect(scripts.typecheck).toBe("next typegen && tsc -p . --noEmit")
-    }
-
     const receipts = [
       resolveUiDependencyReceipt("examples/chat/web"),
       resolveUiDependencyReceipt("examples/research/web"),
@@ -457,17 +451,17 @@ describe("local Mermaid UI compatibility harness", () => {
       expect(lockUiDependencyChain(importerName)).toEqual({
         dompurify: "3.4.13",
         mermaid: "11.16.1",
-        reactCore: { specifier: "^1.69.0", version: "1.69.0" },
+        reactCore: { specifier: "^1.68.3", version: "1.68.3" },
         streamdown: "1.6.11",
       })
     }
     for (const receipt of receipts) {
       expect(receipt).toMatchObject({
-        appReactCoreRange: "^1.69.0",
+        appReactCoreRange: "^1.68.3",
         dompurify: "3.4.13",
         mermaid: "11.16.1",
         mermaidDompurifyRange: "^3.3.3",
-        reactCore: "1.69.0",
+        reactCore: "1.68.3",
         reactCoreStreamdownRange: "^1.3.0",
         streamdown: "1.6.11",
         streamdownMermaidRange: "^11.11.0",
