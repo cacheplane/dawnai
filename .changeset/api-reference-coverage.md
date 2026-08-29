@@ -13,4 +13,6 @@
 "@dawn-ai/vite-plugin": patch
 ---
 
-Publish complete API reference coverage and concise canonical package entrypoints.
+Documentation only: every public export of this package now has an API reference
+page on dawnai.org, and the package README leads with a concise entrypoint. No
+runtime behavior changed.

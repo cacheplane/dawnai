@@ -40,7 +40,7 @@ const baseCtx = (store: any) => ({
     store,
     namespace: "ws=a|route=/r",
     writes: "candidate" as const,
-    defined: { kind: "semantic", scope: ["route"], identity: ["subject", "predicate"] },
+    defined: { kind: "semantic" as const, scope: ["route"], identity: ["subject", "predicate"] },
     validate: (data: unknown) => ({ ok: true as const, value: data as Record<string, unknown> }),
     now: () => "2026-01-01T00:00:00.000Z",
   },

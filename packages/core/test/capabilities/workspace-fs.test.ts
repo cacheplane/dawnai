@@ -59,6 +59,7 @@ describe("createWorkspaceFs", () => {
       readFile: async () => "x",
       writeFile: async () => ({ bytesWritten: 1 }),
       listDir: async () => [],
+      realPath: async (path: string) => path,
     }
     const fs = createWorkspaceFs({
       workspaceRoot,

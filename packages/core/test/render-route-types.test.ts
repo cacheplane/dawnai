@@ -3,11 +3,11 @@ import { fileURLToPath } from "node:url"
 import ts from "typescript"
 import { describe, expect, test } from "vitest"
 
-import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types"
+import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types.js"
 import { renderScenarioTypes, SCENARIO_TYPES_FILE } from "../src/typegen/render-scenario-types.ts"
-import { type RouteStateFields, renderStateTypes } from "../src/typegen/render-state-types"
-import { renderToolTypes } from "../src/typegen/render-tool-types"
-import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types"
+import { type RouteStateFields, renderStateTypes } from "../src/typegen/render-state-types.js"
+import { renderToolTypes } from "../src/typegen/render-tool-types.js"
+import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types.js"
 
 const MANIFEST_SNAPSHOT_PATH = fileURLToPath(
   new URL("../../../test/fixtures/contracts/manifest.snap.json", import.meta.url),
@@ -101,8 +101,8 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           entryFile: "/tmp/example-app/hello/[tenant].tsx",
           routeDir: "/tmp/example-app/hello/[tenant]",
           segments: [
-            { kind: "static", value: "hello" },
-            { kind: "dynamic", name: "tenant" },
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
           ],
         },
       ],
@@ -110,7 +110,9 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
     const toolTypes: RouteToolTypes[] = [
       {
         pathname: "/hello/[tenant]",
-        tools: [{ name: "greet", inputType: "{ tenant: string }", outputType: "string" }],
+        tools: [
+          { name: "greet", description: "", inputType: "{ tenant: string }", outputType: "string" },
+        ],
       },
     ]
 
@@ -135,7 +137,7 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           kind: "workflow",
           entryFile: "/tmp/example-app/hello.tsx",
           routeDir: "/tmp/example-app/hello",
-          segments: [{ kind: "static", value: "hello" }],
+          segments: [{ kind: "static", raw: "hello" }],
         },
       ],
     }
@@ -146,7 +148,9 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
     const toolTypes: RouteToolTypes[] = [
       {
         pathname: "/hello",
-        tools: [{ name: "status", inputType: "void", outputType: '"ready" | "done"' }],
+        tools: [
+          { name: "status", description: "", inputType: "void", outputType: '"ready" | "done"' },
+        ],
       },
     ]
     const output = renderDawnTypes(manifest, toolTypes, stateTypes)
@@ -172,14 +176,14 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           kind: "workflow",
           entryFile: "/tmp/example-app/hello.tsx",
           routeDir: "/tmp/example-app/hello",
-          segments: [{ kind: "static", value: "hello" }],
+          segments: [{ kind: "static", raw: "hello" }],
         },
       ],
     }
     const output = renderDawnTypes(manifest, [
       {
         pathname: "/hello",
-        tools: [{ name: "greet", inputType: "void", outputType: "string" }],
+        tools: [{ name: "greet", description: "", inputType: "void", outputType: "string" }],
       },
     ])
     const expected = ["DawnRouteParams", "DawnRoutePath", "DawnRouteTools", "RouteTools"]
@@ -208,8 +212,8 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           entryFile: "/tmp/example-app/hello/[tenant].tsx",
           routeDir: "/tmp/example-app/hello/[tenant]",
           segments: [
-            { kind: "static", value: "hello" },
-            { kind: "dynamic", name: "tenant" },
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
           ],
         },
       ],
@@ -221,6 +225,7 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
         tools: [
           {
             name: "greet",
+            description: "",
             inputType: "{ readonly tenant: string; }",
             outputType: "{ greeting: string; }",
           },
@@ -288,8 +293,8 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           entryFile: "/tmp/example-app/hello/[tenant].tsx",
           routeDir: "/tmp/example-app/hello/[tenant]",
           segments: [
-            { kind: "static", value: "hello" },
-            { kind: "dynamic", name: "tenant" },
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
           ],
         },
       ],
@@ -325,8 +330,8 @@ describe("renderDawnTypes", { timeout: 30_000 }, () => {
           entryFile: "/tmp/example-app/hello/[tenant].tsx",
           routeDir: "/tmp/example-app/hello/[tenant]",
           segments: [
-            { kind: "static", value: "hello" },
-            { kind: "dynamic", name: "tenant" },
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
           ],
         },
       ],
@@ -351,8 +356,8 @@ describe("renderScenarioTypes", { timeout: 30_000 }, () => {
           entryFile: "/tmp/example-app/hello/[tenant].tsx",
           routeDir: "/tmp/example-app/hello/[tenant]",
           segments: [
-            { kind: "static", value: "hello" },
-            { kind: "dynamic", name: "tenant" },
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
           ],
         },
       ],
@@ -397,7 +402,7 @@ describe("renderScenarioTypes", { timeout: 30_000 }, () => {
           kind: "workflow",
           entryFile: "/tmp/example-app/without-tools.tsx",
           routeDir: "/tmp/example-app/without-tools",
-          segments: [{ kind: "static", value: "without-tools" }],
+          segments: [{ kind: "static", raw: "without-tools" }],
         },
         {
           id: "/ping",
@@ -405,7 +410,7 @@ describe("renderScenarioTypes", { timeout: 30_000 }, () => {
           kind: "workflow",
           entryFile: "/tmp/example-app/ping.tsx",
           routeDir: "/tmp/example-app/ping",
-          segments: [{ kind: "static", value: "ping" }],
+          segments: [{ kind: "static", raw: "ping" }],
         },
       ],
     }

@@ -354,6 +354,7 @@ describe("resolveGuardedSubagent", () => {
         message:
           "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
       })
+      if (result.ok) throw new Error("Expected a denied delegation result")
       expect(result.message).not.toContain(secret.message)
       expect(warn).not.toHaveBeenCalled()
       expect(resolve).not.toHaveBeenCalled()
@@ -491,7 +492,7 @@ describe("resolveGuardedSubagent", () => {
           action: "constrain",
           predicate: async () => {
             controller.abort()
-            return true
+            return true as const
           },
         }),
       ],
@@ -532,7 +533,7 @@ describe("resolveGuardedSubagent", () => {
           action: "constrain",
           predicate: async () => {
             order.push("policy")
-            return true
+            return true as const
           },
         }),
       ],

@@ -48,7 +48,7 @@ function compileScenarioDeclaration(options: {
         kind: "workflow",
         entryFile: join(options.routeDir, "index.ts"),
         routeDir: options.routeDir,
-        segments: [{ kind: "static", value: options.pathname.slice(1) }],
+        segments: [{ kind: "static", raw: options.pathname.slice(1) }],
       },
     ],
   }

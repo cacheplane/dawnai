@@ -59,7 +59,7 @@ describe("discoverRoutes", () => {
 
     const manifest = await discoverRoutes({ appRoot })
 
-    expect(manifest.routes[0].kind).toBe("graph")
+    expect(manifest.routes[0]?.kind).toBe("graph")
   })
 
   it("throws when index.ts exports both workflow and graph", async () => {
@@ -89,7 +89,7 @@ describe("discoverRoutes", () => {
 
     const manifest = await discoverRoutes({ appRoot })
 
-    expect(manifest.routes[0].pathname).toBe("/hello")
+    expect(manifest.routes[0]?.pathname).toBe("/hello")
   })
 
   it("preserves dynamic segments in pathnames", async () => {
@@ -99,8 +99,8 @@ describe("discoverRoutes", () => {
 
     const manifest = await discoverRoutes({ appRoot })
 
-    expect(manifest.routes[0].pathname).toBe("/hello/[tenant]")
-    expect(manifest.routes[0].segments).toEqual([
+    expect(manifest.routes[0]?.pathname).toBe("/hello/[tenant]")
+    expect(manifest.routes[0]?.segments).toEqual([
       { kind: "static", raw: "hello" },
       { kind: "dynamic", name: "tenant", raw: "[tenant]" },
     ])
