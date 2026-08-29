@@ -18,6 +18,8 @@ const NONTERMINAL_RUN_STATUSES = new Set([
   "requested",
   "waiting",
 ])
+const RELEASE_RUNS_JQ =
+  'if type != "object" then error("malformed workflow runs response") elif keys != ["total_count","workflow_runs"] then error("malformed workflow runs response") elif (.workflow_runs | type) != "array" then error("malformed workflow runs response") else {total_count,run_ids:[.workflow_runs[].id],nonterminal_runs:[.workflow_runs[] | select(.status != "completed") | {id,run_attempt,status,event,head_sha,head_branch}]} end'
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_GITHUB_PAGES = 100
 const MAX_GITHUB_RECORDS = 10_000
@@ -136,6 +138,76 @@ export function createOwnerPreflightAdapters({
       throw new TypeError("Owner preflight GitHub paginated response JSON is malformed")
     }
     return { status: "present", httpStatus: 200, value: normalize(pages) }
+  }
+
+  async function readReleaseRuns(repository) {
+    const rawRunIds = new Set()
+    const nonterminalRunIds = new Set()
+    const nonterminalRuns = []
+    let totalCount = null
+    let pageCount = 1
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const endpoint = `repos/${repository}/actions/workflows/${RELEASE_WORKFLOW_ID}/runs?per_page=100&page=${pageNumber}`
+      let result
+      try {
+        result = await executeExact("gh", releaseRunsApiArguments(endpoint), {
+          github: true,
+          acceptedExitCodes: [0, 1],
+        })
+      } catch {
+        return { status: "unavailable", httpStatus: null, value: null }
+      }
+      if (result.exitCode !== 0) {
+        return { status: "unavailable", httpStatus: null, value: null }
+      }
+      let value
+      try {
+        value = JSON.parse(result.stdout)
+      } catch {
+        throw new TypeError("Owner preflight release runs response JSON is malformed")
+      }
+      const normalized = normalizeReleaseRunsPage(value)
+      if (pageNumber === 1) {
+        totalCount = normalized.totalCount
+        pageCount = Math.max(1, Math.ceil(totalCount / 100))
+        if (pageCount > MAX_GITHUB_PAGES) {
+          throw new TypeError("Owner preflight release runs exceed the page bound")
+        }
+      } else if (normalized.totalCount !== totalCount) {
+        throw new TypeError("Owner preflight release runs total is inconsistent")
+      }
+      const expectedPageRecords =
+        totalCount === 0 ? 0 : pageNumber < pageCount ? 100 : totalCount - (pageCount - 1) * 100
+      if (normalized.runIds.length !== expectedPageRecords) {
+        throw new TypeError("Owner preflight release runs page is incomplete")
+      }
+
+      const pageRunIds = new Set()
+      for (const id of normalized.runIds) {
+        if (pageRunIds.has(id) || rawRunIds.has(id)) {
+          throw new TypeError("Owner preflight release runs contain a duplicate raw identity")
+        }
+        pageRunIds.add(id)
+        rawRunIds.add(id)
+      }
+      for (const run of normalized.nonterminalRuns) {
+        if (!pageRunIds.has(run.id) || nonterminalRunIds.has(run.id)) {
+          throw new TypeError("Owner preflight release runs contain an invalid active identity")
+        }
+        nonterminalRunIds.add(run.id)
+        nonterminalRuns.push(run)
+      }
+    }
+    if (rawRunIds.size !== totalCount) {
+      throw new TypeError("Owner preflight release runs response is incomplete")
+    }
+    return {
+      status: "present",
+      httpStatus: 200,
+      value: nonterminalRuns.sort(
+        (left, right) => left.id - right.id || left.runAttempt - right.runAttempt,
+      ),
+    }
   }
 
   async function normalizeGitHubRead(resultPromise, normalize) {
@@ -266,14 +338,13 @@ export function createOwnerPreflightAdapters({
           (value) => normalizeWorkflowContent(value, workflowPath),
         )
       },
-      async listReleaseRuns(repository, workflowPath, status) {
+      async listReleaseRuns(repository, workflowPath, ...extraArguments) {
+        if (extraArguments.length !== 0) {
+          throw new TypeError("Owner preflight release run arguments are invalid")
+        }
         assertRepository(repository)
         assertReleaseWorkflowPath(workflowPath)
-        assertRunStatus(status)
-        return readPaginatedGitHub(
-          `repos/${repository}/actions/workflows/${RELEASE_WORKFLOW_ID}/runs?status=${status}&per_page=100`,
-          (pages) => normalizeReleaseRuns(pages, status),
-        )
+        return readReleaseRuns(repository)
       },
     }),
   })
@@ -304,6 +375,21 @@ function paginatedApiArguments(endpoint) {
     "Accept: application/vnd.github+json",
     "--header",
     `X-GitHub-Api-Version: ${API_VERSION}`,
+    endpoint,
+  ]
+}
+
+function releaseRunsApiArguments(endpoint) {
+  return [
+    "api",
+    "--method",
+    "GET",
+    "--header",
+    "Accept: application/vnd.github+json",
+    "--header",
+    `X-GitHub-Api-Version: ${API_VERSION}`,
+    "--jq",
+    RELEASE_RUNS_JQ,
     endpoint,
   ]
 }
@@ -439,52 +525,42 @@ function wrapGitHubBase64(value) {
   return wrapped
 }
 
-function normalizeReleaseRuns(pages, requestedStatus) {
-  assertPageCount(pages, "release runs")
-  const runs = []
-  const identities = new Set()
-  let totalCount = null
-  for (const page of pages) {
-    if (!hasExactFields(page, ["total_count", "workflow_runs"])) {
-      throw new TypeError("Owner preflight release runs page is malformed")
-    }
-    if (
-      !Number.isSafeInteger(page.total_count) ||
-      page.total_count < 0 ||
-      page.total_count > MAX_GITHUB_RECORDS ||
-      !Array.isArray(page.workflow_runs) ||
-      page.workflow_runs.length > 100 ||
-      runs.length + page.workflow_runs.length > MAX_GITHUB_RECORDS
-    ) {
-      throw new TypeError("Owner preflight release runs page is malformed")
-    }
-    if (totalCount === null) totalCount = page.total_count
-    else if (page.total_count !== totalCount) {
-      throw new TypeError("Owner preflight release runs total is inconsistent")
-    }
-    for (const value of page.workflow_runs) {
-      const run = normalizeReleaseRun(value, requestedStatus)
-      if (identities.has(run.id)) {
-        throw new TypeError("Owner preflight release runs contain a duplicate identity")
-      }
-      identities.add(run.id)
-      runs.push(run)
-    }
+function normalizeReleaseRunsPage(value) {
+  if (!hasExactFields(value, ["total_count", "run_ids", "nonterminal_runs"])) {
+    throw new TypeError("Owner preflight release runs page is malformed")
   }
-  if (totalCount !== runs.length) {
-    throw new TypeError("Owner preflight release runs response is incomplete")
+  if (
+    !Number.isSafeInteger(value.total_count) ||
+    value.total_count < 0 ||
+    value.total_count > MAX_GITHUB_RECORDS ||
+    !Array.isArray(value.run_ids) ||
+    value.run_ids.length > 100 ||
+    !Array.isArray(value.nonterminal_runs) ||
+    value.nonterminal_runs.length > value.run_ids.length
+  ) {
+    throw new TypeError("Owner preflight release runs page is malformed")
   }
-  return runs.sort((left, right) => left.id - right.id || left.runAttempt - right.runAttempt)
+  const runIds = value.run_ids.map((id) => {
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new TypeError("Owner preflight release runs contain a malformed raw identity")
+    }
+    return id
+  })
+  return {
+    totalCount: value.total_count,
+    runIds,
+    nonterminalRuns: value.nonterminal_runs.map(normalizeReleaseRun),
+  }
 }
 
-function normalizeReleaseRun(value, requestedStatus) {
+function normalizeReleaseRun(value) {
   if (
-    !isObject(value) ||
+    !hasExactFields(value, ["id", "run_attempt", "status", "event", "head_sha", "head_branch"]) ||
     !Number.isSafeInteger(value.id) ||
     value.id < 1 ||
     !Number.isSafeInteger(value.run_attempt) ||
     value.run_attempt < 1 ||
-    value.status !== requestedStatus ||
+    !NONTERMINAL_RUN_STATUSES.has(value.status) ||
     !isBoundedString(value.event, MAX_GITHUB_EVENT_BYTES) ||
     !isSha(value.head_sha) ||
     !isBoundedString(value.head_branch, MAX_GITHUB_BRANCH_BYTES)
@@ -592,12 +668,6 @@ function assertReleaseWorkflowPath(value) {
 function assertSha(value, label) {
   if (!isSha(value)) {
     throw new TypeError(`Owner preflight ${label} is invalid`)
-  }
-}
-
-function assertRunStatus(value) {
-  if (typeof value !== "string" || !NONTERMINAL_RUN_STATUSES.has(value)) {
-    throw new TypeError("Owner preflight release run status is invalid")
   }
 }
 

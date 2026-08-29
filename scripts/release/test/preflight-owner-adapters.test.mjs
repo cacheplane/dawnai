@@ -13,6 +13,8 @@ const WORKFLOW_BYTES = Buffer.from(
   "utf8",
 )
 const MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
+const RELEASE_RUNS_JQ =
+  'if type != "object" then error("malformed workflow runs response") elif keys != ["total_count","workflow_runs"] then error("malformed workflow runs response") elif (.workflow_runs | type) != "array" then error("malformed workflow runs response") else {total_count,run_ids:[.workflow_runs[].id],nonterminal_runs:[.workflow_runs[] | select(.status != "completed") | {id,run_attempt,status,event,head_sha,head_branch}]} end'
 
 test("owner adapters execute only exact argv-based read commands", async () => {
   const calls = []
@@ -78,7 +80,7 @@ test("owner adapters execute only exact argv-based read commands", async () => {
       contentBase64: WORKFLOW_BYTES.toString("base64"),
     },
   })
-  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"), {
+  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH), {
     status: "present",
     httpStatus: 200,
     value: [
@@ -114,8 +116,8 @@ test("owner adapters execute only exact argv-based read commands", async () => {
       ["gh", apiArgs(`repos/cacheplane/dawnai/contents/.github/workflows/release.yml?ref=${SHA}`)],
       [
         "gh",
-        paginatedApiArgs(
-          "repos/cacheplane/dawnai/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?status=queued&per_page=100",
+        releaseRunsApiArgs(
+          "repos/cacheplane/dawnai/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=1",
         ),
       ],
     ],
@@ -172,15 +174,15 @@ test("owner adapters validate every ref-aware argument before executing a comman
     () => adapters.github.getAnnotatedTag(REPOSITORY, "abc"),
     () => adapters.github.getWorkflowContent(REPOSITORY, "release.yml", SHA),
     () => adapters.github.getWorkflowContent(REPOSITORY, WORKFLOW_PATH, `${SHA}?unsafe=1`),
-    () => adapters.github.listReleaseRuns(REPOSITORY, "release.yml", "queued"),
-    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "completed"),
-    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued&per_page=1"),
+    () => adapters.github.listReleaseRuns(REPOSITORY),
+    () => adapters.github.listReleaseRuns(REPOSITORY, "release.yml"),
+    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
   ]
   for (const invoke of invalidCalls) await assert.rejects(invoke, /invalid/iu)
   assert.deepEqual(calls, [])
 })
 
-test("owner adapters accept exactly the five nonterminal release run statuses", async () => {
+test("owner release-run adapter accepts exactly two arguments and performs one unfiltered read", async () => {
   const calls = []
   const adapters = createOwnerPreflightAdapters({
     cwd: "/workspace",
@@ -188,23 +190,31 @@ test("owner adapters accept exactly the five nonterminal release run statuses", 
     readFile: async () => "fixture",
     run: async (command, args, options) => {
       calls.push([command, args, options])
-      return { exitCode: 0, stdout: '[{"total_count":0,"workflow_runs":[]}]\n', stderr: "" }
+      return {
+        exitCode: 0,
+        stdout: '{"total_count":0,"run_ids":[],"nonterminal_runs":[]}\n',
+        stderr: "",
+      }
     },
   })
 
-  for (const status of ["in_progress", "pending", "queued", "requested", "waiting"]) {
-    assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, status), {
-      status: "present",
-      httpStatus: 200,
-      value: [],
-    })
-  }
+  assert.equal(adapters.github.listReleaseRuns.length, 2)
+  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH), {
+    status: "present",
+    httpStatus: 200,
+    value: [],
+  })
+  await assert.rejects(
+    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
+    /argument|invalid/iu,
+  )
   assert.deepEqual(
-    calls.map(([, args]) => args.at(-1)),
-    ["in_progress", "pending", "queued", "requested", "waiting"].map(
-      (status) =>
-        `repos/${REPOSITORY}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?status=${status}&per_page=100`,
-    ),
+    calls.map(([, args]) => args),
+    [
+      releaseRunsApiArgs(
+        `repos/${REPOSITORY}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=1`,
+      ),
+    ],
   )
 })
 
@@ -404,90 +414,259 @@ test("owner adapters reject truncated, ambiguous, or noncanonical workflow conte
   }
 })
 
-test("owner adapters normalize and sort exact release run identities", async () => {
-  const pages = [
-    runPage([releaseRun(30, "queued", { run_attempt: 2 })], 3),
-    runPage([releaseRun(3), releaseRun(20)], 3),
-  ]
-  const adapters = adaptersReturningPages(pages)
+test("owner adapters enumerate unfiltered pages and return only sorted active runs", async () => {
+  const firstPageRuns = Array.from({ length: 100 }, (_unused, index) =>
+    releaseRun(index + 1, "completed"),
+  )
+  for (const [id, status] of [
+    [80, "in_progress"],
+    [2, "pending"],
+    [50, "queued"],
+    [4, "requested"],
+    [99, "waiting"],
+  ]) {
+    firstPageRuns[id - 1] = releaseRun(id, status)
+  }
+  const calls = []
+  const adapters = adaptersReturningRunPages(
+    [
+      runPage(firstPageRuns, 102),
+      runPage([releaseRun(101, "completed"), releaseRun(102, "completed")], 102),
+    ],
+    calls,
+  )
 
-  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"), {
+  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH), {
     status: "present",
     httpStatus: 200,
-    value: [normalizedRun(3), normalizedRun(20), normalizedRun(30, { runAttempt: 2 })],
+    value: [
+      normalizedRun(2, { status: "pending" }),
+      normalizedRun(4, { status: "requested" }),
+      normalizedRun(50),
+      normalizedRun(80, { status: "in_progress" }),
+      normalizedRun(99, { status: "waiting" }),
+    ],
   })
+  assert.deepEqual(
+    calls.map(([, args]) => args),
+    [1, 2].map((page) =>
+      releaseRunsApiArgs(
+        `repos/${REPOSITORY}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=${page}`,
+      ),
+    ),
+  )
+  assert.equal(JSON.stringify(calls).includes("--paginate"), false)
+  assert.equal(JSON.stringify(calls).includes("--slurp"), false)
+  assert.equal(JSON.stringify(calls).includes("status="), false)
 })
 
-test("owner adapters accept the exact release-run pagination and record bounds", async () => {
+test("owner adapters accept exactly 100 unfiltered release-run pages and 10,000 raw IDs", async () => {
   const pages = Array.from({ length: 100 }, (_unused, pageIndex) =>
     runPage(
       Array.from({ length: 100 }, (_entry, recordIndex) =>
-        releaseRun(pageIndex * 100 + recordIndex + 1),
+        releaseRun(pageIndex * 100 + recordIndex + 1, "completed"),
       ),
       10_000,
     ),
   )
-  const stdout = JSON.stringify(pages)
-  assert.ok(Buffer.byteLength(stdout, "utf8") <= MAX_COMMAND_OUTPUT_BYTES)
-  const adapters = adaptersReturningRawPages(stdout)
-
-  const result = await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued")
-  assert.equal(result.value.length, 10_000)
-  assert.deepEqual(result.value[0], normalizedRun(1))
-  assert.deepEqual(result.value.at(-1), normalizedRun(10_000))
-})
-
-test("owner adapters reject release runs above either complete-read bound", async () => {
-  const excessivePages = Array.from({ length: 101 }, () => runPage([], 0))
-  await assert.rejects(
-    adaptersReturningPages(excessivePages).github.listReleaseRuns(
-      REPOSITORY,
-      WORKFLOW_PATH,
-      "queued",
+  assert.ok(
+    pages.every(
+      (page) =>
+        Buffer.byteLength(JSON.stringify(projectRunPage(page)), "utf8") <= MAX_COMMAND_OUTPUT_BYTES,
     ),
-    /release runs|page bound/iu,
+  )
+  const calls = []
+  const result = await adaptersReturningRunPages(pages, calls).github.listReleaseRuns(
+    REPOSITORY,
+    WORKFLOW_PATH,
   )
 
-  const excessiveRecords = [
-    runPage(
-      Array.from({ length: 10_001 }, (_unused, index) => releaseRun(index + 1)),
-      10_001,
-    ),
-  ]
-  const stdout = JSON.stringify(excessiveRecords)
-  assert.ok(Buffer.byteLength(stdout, "utf8") <= MAX_COMMAND_OUTPUT_BYTES)
-  await assert.rejects(
-    adaptersReturningRawPages(stdout).github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
-    /release runs|record bound/iu,
-  )
+  assert.deepEqual(result.value, [])
+  assert.equal(calls.length, 100)
+  assert.match(calls[0][1].at(-1), /page=1$/u)
+  assert.match(calls.at(-1)[1].at(-1), /page=100$/u)
 })
 
-test("owner adapters reject malformed, incomplete, mismatched, or duplicate run evidence", async (t) => {
-  const tooLong = "x".repeat(1_025)
-  const malformed = [
-    ["outer object", { workflow_runs: [] }],
-    ["array page", [[]]],
-    ["extra page field", [{ ...runPage([], 0), extra: true }]],
-    ["invalid total", [runPage([], -1)]],
-    ["inconsistent total", [runPage([], 0), runPage([], 1)]],
-    ["incomplete total", [runPage([], 1)]],
-    ["non-object record", [runPage([null], 1)]],
-    ["invalid ID", [runPage([releaseRun(0)], 1)]],
-    ["invalid attempt", [runPage([releaseRun(1, "queued", { run_attempt: 0 })], 1)]],
-    ["mismatched status", [runPage([releaseRun(1, "waiting")], 1)]],
-    ["malformed SHA", [runPage([releaseRun(1, "queued", { head_sha: "abc" })], 1)]],
-    ["empty event", [runPage([releaseRun(1, "queued", { event: "" })], 1)]],
-    ["oversized branch", [runPage([releaseRun(1, "queued", { head_branch: tooLong })], 1)]],
-    ["duplicate identity", [runPage([releaseRun(1), releaseRun(1)], 2)]],
-    [
-      "duplicate run ID across attempts",
-      [runPage([releaseRun(1), releaseRun(1, "queued", { run_attempt: 2 })], 2)],
-    ],
-  ]
-  for (const [name, pages] of malformed) {
+test("owner adapters reject totals above 10,000 before requesting a 101st page", async () => {
+  const calls = []
+  const adapters = adaptersReturningProjectedRunPages(
+    [{ total_count: 10_001, run_ids: [], nonterminal_runs: [] }],
+    calls,
+  )
+
+  await assert.rejects(
+    adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
+    /release runs|record|page bound/iu,
+  )
+  assert.equal(calls.length, 1)
+})
+
+test("owner adapters require stable totals and complete raw run-ID coverage", async (t) => {
+  const first = {
+    total_count: 101,
+    run_ids: Array.from({ length: 100 }, (_unused, index) => index + 1),
+    nonterminal_runs: [],
+  }
+  for (const [name, second] of [
+    ["unstable total", { total_count: 100, run_ids: [101], nonterminal_runs: [] }],
+    ["incomplete total", { total_count: 101, run_ids: [], nonterminal_runs: [] }],
+  ]) {
     await t.test(name, async () => {
       await assert.rejects(
-        adaptersReturningPages(pages).github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
+        adaptersReturningProjectedRunPages([first, second]).github.listReleaseRuns(
+          REPOSITORY,
+          WORKFLOW_PATH,
+        ),
+        /release runs|total|incomplete/iu,
+      )
+    })
+  }
+})
+
+test("owner adapters reject short non-final release-run pages despite a matching final count", async () => {
+  const pages = [
+    {
+      total_count: 150,
+      run_ids: Array.from({ length: 75 }, (_unused, index) => index + 1),
+      nonterminal_runs: [],
+    },
+    {
+      total_count: 150,
+      run_ids: Array.from({ length: 75 }, (_unused, index) => index + 76),
+      nonterminal_runs: [],
+    },
+  ]
+
+  await assert.rejects(
+    adaptersReturningProjectedRunPages(pages).github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
+    /release runs|page|incomplete/iu,
+  )
+})
+
+test("owner adapters reject duplicate raw IDs even when every duplicate run is completed", async () => {
+  const first = {
+    total_count: 101,
+    run_ids: Array.from({ length: 100 }, (_unused, index) => index + 1),
+    nonterminal_runs: [],
+  }
+  await assert.rejects(
+    adaptersReturningProjectedRunPages([
+      first,
+      { total_count: 101, run_ids: [1], nonterminal_runs: [] },
+    ]).github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
+    /release runs|duplicate/iu,
+  )
+})
+
+test("owner adapters treat jq raw-structure rejection as unavailable evidence", async () => {
+  const calls = []
+  const adapters = createOwnerPreflightAdapters({
+    cwd: "/workspace",
+    environment: { HOME: "/home/runner", PATH: "/tools" },
+    readFile: async () => "fixture",
+    run: async (command, args, options) => {
+      calls.push([command, args, options])
+      return { exitCode: 1, stdout: "", stderr: "jq: malformed workflow runs response" }
+    },
+  })
+
+  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH), {
+    status: "unavailable",
+    httpStatus: null,
+    value: null,
+  })
+  assert.deepEqual(
+    calls[0][1],
+    releaseRunsApiArgs(
+      `repos/${REPOSITORY}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=1`,
+    ),
+  )
+})
+
+test("owner adapters discard partial release-run evidence when a later page is unavailable", async () => {
+  const calls = []
+  const adapters = createOwnerPreflightAdapters({
+    cwd: "/workspace",
+    environment: { HOME: "/home/runner", PATH: "/tools" },
+    readFile: async () => "fixture",
+    run: async (command, args, options) => {
+      calls.push([command, args, options])
+      return args.at(-1).endsWith("page=1")
+        ? {
+            exitCode: 0,
+            stdout: `${JSON.stringify({
+              total_count: 101,
+              run_ids: Array.from({ length: 100 }, (_unused, index) => index + 1),
+              nonterminal_runs: [projectedRun(releaseRun(1))],
+            })}\n`,
+            stderr: "",
+          }
+        : { exitCode: 1, stdout: "", stderr: "network failure" }
+    },
+  })
+
+  assert.deepEqual(await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH), {
+    status: "unavailable",
+    httpStatus: null,
+    value: null,
+  })
+  assert.equal(calls.length, 2)
+})
+
+test("owner adapters reject malformed projected pages, statuses, and active subset identities", async (t) => {
+  const tooLong = "x".repeat(1_025)
+  const active = projectedRun(releaseRun(1))
+  const malformed = [
+    ["array page", []],
+    ["extra page field", { ...projectRunPage(runPage([], 0)), extra: true }],
+    ["invalid total", { total_count: -1, run_ids: [], nonterminal_runs: [] }],
+    [
+      "too many IDs",
+      {
+        total_count: 101,
+        run_ids: Array.from({ length: 101 }, (_, index) => index + 1),
+        nonterminal_runs: [],
+      },
+    ],
+    ["invalid raw ID", { total_count: 1, run_ids: [0], nonterminal_runs: [] }],
+    [
+      "unknown active status",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, status: "mystery" }] },
+    ],
+    [
+      "null active status",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, status: null }] },
+    ],
+    [
+      "array active status",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, status: [] }] },
+    ],
+    ["active ID absent from raw IDs", { total_count: 1, run_ids: [2], nonterminal_runs: [active] }],
+    [
+      "duplicate active identity",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [active, active] },
+    ],
+    [
+      "invalid attempt",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, run_attempt: 0 }] },
+    ],
+    [
+      "malformed SHA",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, head_sha: "abc" }] },
+    ],
+    ["empty event", { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, event: "" }] }],
+    [
+      "oversized branch",
+      { total_count: 1, run_ids: [1], nonterminal_runs: [{ ...active, head_branch: tooLong }] },
+    ],
+  ]
+  for (const [name, page] of malformed) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        adaptersReturningProjectedRunPages([page]).github.listReleaseRuns(
+          REPOSITORY,
+          WORKFLOW_PATH,
+        ),
         /release runs|GitHub/iu,
       )
     })
@@ -507,7 +686,7 @@ test("owner adapters normalize npm auth and GitHub auth/absence without leaking 
           stderr: "npm auth token=secret-token",
         }
       }
-      if (command === "gh" && args.includes("--paginate")) {
+      if (command === "gh" && (args.includes("--paginate") || args.at(-1).includes("/runs?"))) {
         return {
           exitCode: 1,
           stdout: '{"message":"credential secret-token"}\n',
@@ -535,7 +714,7 @@ test("owner adapters normalize npm auth and GitHub auth/absence without leaking 
     await adapters.github.listManagedCandidateRefs(REPOSITORY),
     await adapters.github.getAnnotatedTag(REPOSITORY, TAG_SHA),
     await adapters.github.getWorkflowContent(REPOSITORY, WORKFLOW_PATH, SHA),
-    await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
+    await adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
   ]
   for (const result of githubResults) {
     assert.equal(result.status, "unavailable")
@@ -558,7 +737,7 @@ test("owner adapters redact thrown command failures for ref-aware reads", async 
     () => adapters.github.listManagedCandidateRefs(REPOSITORY),
     () => adapters.github.getAnnotatedTag(REPOSITORY, TAG_SHA),
     () => adapters.github.getWorkflowContent(REPOSITORY, WORKFLOW_PATH, SHA),
-    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
+    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
   ]) {
     const result = await invoke()
     assert.deepEqual(result, { status: "unavailable", httpStatus: null, value: null })
@@ -585,7 +764,7 @@ test("owner adapters reject malformed successful tool output without leaking it"
     () => adapters.github.listManagedCandidateRefs(REPOSITORY),
     () => adapters.github.getAnnotatedTag(REPOSITORY, TAG_SHA),
     () => adapters.github.getWorkflowContent(REPOSITORY, WORKFLOW_PATH, SHA),
-    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH, "queued"),
+    () => adapters.github.listReleaseRuns(REPOSITORY, WORKFLOW_PATH),
   ]) {
     await assert.rejects(invoke, (error) => {
       assert.equal(String(error).includes("malformed-secret-output"), false)
@@ -645,19 +824,20 @@ function fixtureRunner(calls) {
     if (endpoint.includes("/runs?")) {
       return {
         exitCode: 0,
-        stdout: `${JSON.stringify([
-          runPage(
-            [
+        stdout: `${JSON.stringify({
+          total_count: 2,
+          run_ids: [40, 41],
+          nonterminal_runs: [
+            projectedRun(
               releaseRun(41, "queued", {
                 run_attempt: 2,
                 event: "workflow_dispatch",
                 head_branch: "v0.8.22",
                 head_sha: SHA,
               }),
-            ],
-            1,
-          ),
-        ])}\n`,
+            ),
+          ],
+        })}\n`,
         stderr: "",
       }
     }
@@ -741,6 +921,36 @@ function adaptersReturningRawPages(stdout) {
   })
 }
 
+function adaptersReturningRunPages(pages, calls = []) {
+  return createOwnerPreflightAdapters({
+    cwd: "/workspace",
+    environment: { HOME: "/home/runner", PATH: "/tools" },
+    readFile: async () => "fixture",
+    run: async (command, args, options) => {
+      calls.push([command, args, options])
+      const pageNumber = Number.parseInt(/(?:\?|&)page=([0-9]+)$/u.exec(args.at(-1))?.[1] ?? "", 10)
+      const page = pages[pageNumber - 1]
+      if (page === undefined) throw new Error("unexpected release-run page")
+      return { exitCode: 0, stdout: `${JSON.stringify(projectRunPage(page))}\n`, stderr: "" }
+    },
+  })
+}
+
+function adaptersReturningProjectedRunPages(pages, calls = []) {
+  return createOwnerPreflightAdapters({
+    cwd: "/workspace",
+    environment: { HOME: "/home/runner", PATH: "/tools" },
+    readFile: async () => "fixture",
+    run: async (command, args, options) => {
+      calls.push([command, args, options])
+      const pageNumber = Number.parseInt(/(?:\?|&)page=([0-9]+)$/u.exec(args.at(-1))?.[1] ?? "", 10)
+      const page = pages[pageNumber - 1]
+      if (page === undefined) throw new Error("unexpected release-run page")
+      return { exitCode: 0, stdout: `${JSON.stringify(page)}\n`, stderr: "" }
+    },
+  })
+}
+
 function managedRef(index, type = "tag") {
   return {
     ref: `refs/tags/v0.0.${String(index).padStart(5, "0")}`,
@@ -774,6 +984,29 @@ function normalizedRun(id, overrides = {}) {
 
 function runPage(workflowRuns, totalCount) {
   return { total_count: totalCount, workflow_runs: workflowRuns }
+}
+
+function projectRunPage(page) {
+  assert.deepEqual(Object.keys(page).sort(), ["total_count", "workflow_runs"])
+  assert.ok(Array.isArray(page.workflow_runs))
+  return {
+    total_count: page.total_count,
+    run_ids: page.workflow_runs.map(({ id }) => id),
+    nonterminal_runs: page.workflow_runs
+      .filter(({ status }) => status !== "completed")
+      .map(projectedRun),
+  }
+}
+
+function projectedRun(run) {
+  return {
+    id: run.id,
+    run_attempt: run.run_attempt,
+    status: run.status,
+    event: run.event,
+    head_sha: run.head_sha,
+    head_branch: run.head_branch,
+  }
 }
 
 function workflowContent(overrides = {}) {
@@ -830,6 +1063,21 @@ function paginatedApiArgs(endpoint) {
     "Accept: application/vnd.github+json",
     "--header",
     "X-GitHub-Api-Version: 2026-03-10",
+    endpoint,
+  ]
+}
+
+function releaseRunsApiArgs(endpoint) {
+  return [
+    "api",
+    "--method",
+    "GET",
+    "--header",
+    "Accept: application/vnd.github+json",
+    "--header",
+    "X-GitHub-Api-Version: 2026-03-10",
+    "--jq",
+    RELEASE_RUNS_JQ,
     endpoint,
   ]
 }

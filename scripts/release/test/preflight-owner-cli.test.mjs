@@ -31,7 +31,6 @@ const EXPECTED_OWNER_FILES = [
   POLICY_PATH,
 ]
 const WORKFLOW_PATHS = EXPECTED_OWNER_FILES.filter((filePath) => filePath.endsWith(".yml"))
-const NONTERMINAL_STATUSES = ["in_progress", "pending", "queued", "requested", "waiting"]
 const DISABLED_BYTES = await readFile(
   `${ROOT}/scripts/release/test/fixtures/release-workflow-disabled.yml`,
 )
@@ -64,6 +63,7 @@ test("capture writes one exclusive canonical v2 owner evidence file", async (t) 
   assert.deepEqual(evidence.github.managedCandidateRefs, [])
   assert.deepEqual(evidence.github.nonterminalReleaseRuns, [])
   assert.deepEqual(OWNER_PREFLIGHT_FILES, EXPECTED_OWNER_FILES)
+  assert.deepEqual(fixture.releaseRunCalls, [[REPOSITORY, RELEASE_WORKFLOW]])
 
   assert.equal(
     await runOwnerPreflightCli({
@@ -82,7 +82,7 @@ test("capture writes one exclusive canonical v2 owner evidence file", async (t) 
 
 test("capture structural and local-policy failures leave no output file", async (t) => {
   const structural = await workspaceFixture(t)
-  structural.github.getDefaultBranchRef = async () => ({
+  structural.github.listReleaseRuns = async () => ({
     status: "unavailable",
     httpStatus: null,
     value: null,
@@ -214,6 +214,7 @@ async function workspaceFixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), "dawn-owner-preflight-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const bytes = new Map()
+  const releaseRunCalls = []
   for (const [index, filePath] of EXPECTED_OWNER_FILES.entries()) {
     const target = path.join(root, filePath)
     await mkdir(path.dirname(target), { recursive: true })
@@ -280,9 +281,10 @@ async function workspaceFixture(t) {
     async getAnnotatedTag() {
       assert.fail("zero managed refs must not read an annotated tag")
     },
-    async listReleaseRuns(_repository, workflowPath, status) {
+    async listReleaseRuns(repository, workflowPath, ...extraArguments) {
+      assert.deepEqual(extraArguments, [])
+      releaseRunCalls.push([repository, workflowPath])
       assert.equal(workflowPath, RELEASE_WORKFLOW)
-      assert.ok(NONTERMINAL_STATUSES.includes(status))
       return present([])
     },
     async getEnvironment() {
@@ -319,7 +321,7 @@ async function workspaceFixture(t) {
     },
     github,
   }
-  return { root, bytes, github, adapters }
+  return { root, bytes, github, adapters, releaseRunCalls }
 }
 
 async function verifyCli(root, evidencePath, { phase, headSha }) {

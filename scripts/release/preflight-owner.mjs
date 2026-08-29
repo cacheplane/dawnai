@@ -30,12 +30,7 @@ const NONTERMINAL_RUN_STATUSES = Object.freeze([
   "requested",
   "waiting",
 ])
-const NONTERMINAL_RUN_SWEEPS = Object.freeze([
-  NONTERMINAL_RUN_STATUSES,
-  Object.freeze([...NONTERMINAL_RUN_STATUSES].reverse()),
-])
 const MAX_GITHUB_RECORDS = 10_000
-const MAX_NONTERMINAL_RUN_OBSERVATIONS = MAX_GITHUB_RECORDS * NONTERMINAL_RUN_SWEEPS.length
 const MAX_GITHUB_REF_BYTES = 1_024
 const MAX_GITHUB_EVENT_BYTES = 256
 const MAX_GITHUB_BRANCH_BYTES = 1_024
@@ -185,34 +180,9 @@ export async function captureOwnerEvidence({
     })
   }
 
-  const runsById = new Map()
-  let runObservations = 0
-  for (const statuses of NONTERMINAL_RUN_SWEEPS) {
-    for (const status of statuses) {
-      const runs = normalizeReleaseRunsResult(
-        await listReleaseRuns(repository, RELEASE_WORKFLOW, status),
-        status,
-      )
-      runObservations += runs.length
-      if (runObservations > MAX_NONTERMINAL_RUN_OBSERVATIONS) {
-        throw new TypeError("Owner release run observations exceed the capture bound")
-      }
-      for (const run of runs) {
-        const previous = runsById.get(run.id)
-        if (previous !== undefined) {
-          if (JSON.stringify(previous) !== JSON.stringify(run)) {
-            throw new TypeError("Owner release run evidence contains a conflicting identity")
-          }
-          continue
-        }
-        if (runsById.size >= MAX_GITHUB_RECORDS) {
-          throw new TypeError("Owner release run evidence exceeds the record bound")
-        }
-        runsById.set(run.id, run)
-      }
-    }
-  }
-  const nonterminalReleaseRuns = [...runsById.values()].sort(compareRuns)
+  const nonterminalReleaseRuns = normalizeReleaseRunsResult(
+    await listReleaseRuns(repository, RELEASE_WORKFLOW),
+  )
 
   const abandonmentMode = aggregateReleaseWorkflowAbandonment([
     defaultWorkflow.evidence.mode,
@@ -1086,15 +1056,14 @@ function normalizeWorkflowContentResult(result, abandonmentEnvironment, { absenc
   }
 }
 
-function normalizeReleaseRunsResult(result, requestedStatus) {
+function normalizeReleaseRunsResult(result) {
   const value = safeSnapshot(result, "Owner release runs adapter result")
   assertExactFields(value, ["status", "httpStatus", "value"], "Owner release runs adapter result")
   if (
     value.status !== "present" ||
     value.httpStatus !== 200 ||
     !Array.isArray(value.value) ||
-    value.value.length > MAX_GITHUB_RECORDS ||
-    value.value.some((entry) => entry?.status !== requestedStatus)
+    value.value.length > MAX_GITHUB_RECORDS
   ) {
     throw new TypeError("Owner release runs are unavailable or malformed")
   }
