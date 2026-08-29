@@ -110,7 +110,7 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/opt/homebrew/
 - Merge: current `origin/main`
 - Modify: `docs/superpowers/specs/2026-08-27-release-controller-main-reconciliation-design.md`
 
-- [ ] **Step 1: Prove the worktree and branch are safe**
+- [x] **Step 1: Prove the worktree and branch are safe**
 
 ```bash
 git status --short --branch
@@ -123,7 +123,7 @@ git rev-parse origin/main
 Expected: clean worktree except the approved plan/spec edits, branch
 `blove/release-controller-cli`, and a full 40-character remote-main SHA.
 
-- [ ] **Step 2: Reassess incoming files before merging**
+- [x] **Step 2: Reassess incoming files before merging**
 
 ```bash
 git log --oneline HEAD..origin/main
@@ -131,12 +131,13 @@ git diff --name-status HEAD...origin/main
 git merge-tree "$(git merge-base HEAD origin/main)" HEAD origin/main
 ```
 
-Expected for the final 2026-08-28 snapshot: Vercel-native
-diagnostics/readiness, package test-typecheck coverage, and the changeset-copy
-correction in `fdb57e6e`; no controller, workflow, dependency-owner,
-chart-version, or website-inventory change. Stop if that expectation changes.
+Observed sequentially on 2026-08-28: `fdb57e6e` completed a five-commit delta
+covering Vercel-native diagnostics/readiness, package test-typecheck coverage,
+and the changeset-copy correction; `e9aad193` then added one API-reference test
+correction. Neither delta changed controller source, release workflows,
+dependency owners, chart versions, or the website SEO inventory.
 
-- [ ] **Step 3: Re-prove containment after the fetch**
+- [x] **Step 3: Re-prove containment after the fetch**
 
 Require Release and Publish Chart `disabled_manually`, Published Artifact
 Verification active, no `v*` tag, no nonterminal Release run, Immutable Releases
@@ -146,7 +147,7 @@ If Release has become active again, stop and re-establish the same no-tag,
 no-run, no-publication proof before disabling it again through the GitHub CLI.
 Never close, force-push, or merge #512 during containment.
 
-- [ ] **Step 4: Commit this approved plan and spec correction**
+- [x] **Step 4: Commit this approved plan and spec correction**
 
 ```bash
 git add \
@@ -156,7 +157,7 @@ git diff --cached --check
 git commit -m "docs(release): plan main reconciliation"
 ```
 
-- [ ] **Step 5: Merge the pinned remote head**
+- [x] **Step 5: Merge the pinned remote head**
 
 ```bash
 git merge --no-edit origin/main
@@ -167,7 +168,7 @@ Vercel test fixes and branch website build configuration. Record the exact merge
 and remote-main SHAs in the design's dated evidence section if they differ from
 the current snapshot.
 
-- [ ] **Step 6: Verify the integrated baseline**
+- [x] **Step 6: Verify the integrated baseline**
 
 ```bash
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" pnpm install --frozen-lockfile
@@ -179,7 +180,7 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/opt/homebrew/
 Expected: install/build/typecheck/controller green. The known research scaffold
 parity failure remains the only accepted red test before Task 2.
 
-- [ ] **Step 7: Commit the exact integration receipt**
+- [x] **Step 7: Commit the exact integration receipt**
 
 After recording the actual merge and pinned remote-main SHAs with `apply_patch`,
 stage and commit that dated evidence so later clean-tree gates remain meaningful:

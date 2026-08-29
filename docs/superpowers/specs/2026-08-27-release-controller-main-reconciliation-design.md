@@ -48,10 +48,15 @@ activation.
   `e9aad1934aeedcb512648f254466704976cec659`; the continuation revalidated that
   exact one-file delta and containment, then merged it as
   `401a672e38a6b1826d2415a77a5f908794802162`.
-- A frozen install, full build, full typecheck, isolated release-controller
-  suite, and dependency-security suite pass after merging current `main`.
-- The devkit template suite has one failure: the branch's version-only edits in
-  three research example files no longer match the new research scaffold.
+- The final Task 1 head,
+  `f742d847b7814d7d46823a5b8d72171c5af4be60`, passed frozen install, full
+  build, full typecheck, the isolated release-controller suite with 1,124 tests,
+  and the affected API-reference web suite with 30 tests.
+- Earlier pre-Task 2 decision evidence at
+  `c94e6cf209db2f097d8aea448bd93f7a4436e036` passed the dependency-security
+  suite and found one devkit template-suite failure: version-only edits in three
+  research example files did not match the new research scaffold. Task 2 reruns
+  both suites against the reconciled graph.
 - Current `main` uses CopilotKit `^1.68.3`, direct AG-UI `0.0.57`, and `/v2`
   imports in both examples and the research scaffold.
 - Registry inspection on 2026-08-27 found CopilotKit `1.69.2` as the latest
