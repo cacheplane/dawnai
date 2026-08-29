@@ -749,7 +749,7 @@ git commit -m "ci(release): make abandonment workflow unreachable"
 
 **Files:** none expected; generated evidence stays ignored.
 
-- [ ] **Step 1: Prove exact tools and a clean source tree**
+- [x] **Step 1: Prove exact tools and a clean source tree**
 
 ```bash
 test "$(node --version)" = "v24.19.0"
@@ -759,7 +759,7 @@ git status --short
 pnpm install --frozen-lockfile
 ```
 
-- [ ] **Step 2: Run the full Definition of Done**
+- [x] **Step 2: Run the full Definition of Done**
 
 ```bash
 DAWN_REQUIRE_DOCKER=1 pnpm ci:validate
@@ -767,7 +767,7 @@ DAWN_REQUIRE_DOCKER=1 pnpm ci:validate
 
 Expected: every gate in root `ci:validate` passes with no required Docker skip.
 
-- [ ] **Step 3: Run the complete dependency-security lanes**
+- [x] **Step 3: Run the complete dependency-security lanes**
 
 ```bash
 install -d -m 0700 .dawn/release-cutover
@@ -782,7 +782,7 @@ pnpm exec playwright test --config test/security-dependencies/playwright.config.
 
 Expected: only the reviewed upstream boundaries remain; no browser skip.
 
-- [ ] **Step 4: Run fault and full fixed-group rehearsal**
+- [x] **Step 4: Run fault and full fixed-group rehearsal**
 
 ```bash
 pnpm test:release-fault-harness
@@ -796,7 +796,7 @@ Require 21 packages, 45 base assets, five smoke assets, immutable Release true,
 registry verification, injected failure after package 11, escrow-based resume,
 independent audit completion, and a clean third-run no-op.
 
-- [ ] **Step 5: Verify preservation boundaries and cleanliness**
+- [x] **Step 5: Verify preservation boundaries and cleanliness**
 
 ```bash
 git diff --check
