@@ -176,6 +176,23 @@ test("pre-enable and post-enable accept only the exact disabled empty cutover sn
 test("workflow-state verification enforces the exact four-workflow pre/post topology", async () => {
   const pre = captureFixture({ phase: "pre-enable", localMode: "disabled" })
   const preEvidence = await captureOwnerEvidence(pre.input)
+  const post = captureFixture({
+    phase: "post-enable",
+    localMode: "disabled",
+    immutableEnabled: true,
+  })
+  const postEvidence = await captureOwnerEvidence(post.input)
+  assert.deepEqual(
+    [
+      check(verify(preEvidence, pre.files), "workflow-states").summary,
+      check(verify(postEvidence, post.files), "workflow-states").summary,
+    ],
+    [
+      "Version PR and Published Artifact Verify are active; Release and Publish Chart are manually disabled before cutover.",
+      "All four controller workflows are active after cutover.",
+    ],
+  )
+
   const preCases = [
     ["version workflow disabled", 0, "disabled_manually"],
     ["release workflow active", 1, "active"],
@@ -188,12 +205,6 @@ test("workflow-state verification enforces the exact four-workflow pre/post topo
     assert.equal(check(verify(changed, pre.files), "workflow-states").status, "FAIL", name)
   }
 
-  const post = captureFixture({
-    phase: "post-enable",
-    localMode: "disabled",
-    immutableEnabled: true,
-  })
-  const postEvidence = await captureOwnerEvidence(post.input)
   for (const [index, workflow] of postEvidence.github.workflows.entries()) {
     const changed = structuredClone(postEvidence)
     changed.github.workflows[index].state = "disabled_manually"

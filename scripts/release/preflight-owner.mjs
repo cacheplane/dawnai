@@ -1224,7 +1224,13 @@ function verifyWorkflows(phase, workflows) {
       workflow.status === "present" && workflow.state === expectedStates.get(workflow.path),
   )
   return valid
-    ? result("workflow-states", "PASS", "Every controller workflow is active after cutover.")
+    ? result(
+        "workflow-states",
+        "PASS",
+        phase === "pre-enable"
+          ? "Version PR and Published Artifact Verify are active; Release and Publish Chart are manually disabled before cutover."
+          : "All four controller workflows are active after cutover.",
+      )
     : result(
         "workflow-states",
         "FAIL",
