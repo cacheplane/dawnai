@@ -1,0 +1,1288 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact release version
+        required: true
+        type: string
+      commitSha:
+        description: Exact 40-character candidate SHA
+        required: true
+        type: string
+      operation:
+        description: Reconcile this candidate
+        required: true
+        type: choice
+        default: reconcile
+        options:
+          - reconcile
+
+concurrency:
+  group: dawn-release-controller
+  queue: max
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      checks: read
+      contents: read
+    outputs:
+      candidate_sha: ${{ steps.observe.outputs.candidate_sha }}
+      candidate_version: ${{ steps.observe.outputs.candidate_version }}
+      disposition: ${{ steps.observe.outputs.disposition }}
+      next_transition: ${{ steps.observe.outputs.next_transition }}
+      observation_artifact_id: ${{ steps.observation.outputs.artifact-id }}
+      state: ${{ steps.observe.outputs.state }}
+    steps:
+      - name: Checkout controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Seal the production event
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ inputs.commitSha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA}}))' "$RUNNER_TEMP/release-event.json"
+          else
+            cp "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/release-event.json"
+          fi
+
+      - name: Observe one production transition
+        id: observe
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs observe \
+            --event "$RUNNER_TEMP/release-event.json" \
+            --report "$RUNNER_TEMP/production-observation.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Preserve production observation
+        id: observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: production-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/production-observation.json
+          if-no-files-found: error
+          overwrite: false
+
+      - name: Require a non-ambiguous route
+        env:
+          DISPOSITION: ${{ steps.observe.outputs.disposition }}
+        run: test "$DISPOSITION" != "blocked"
+
+  tag:
+    needs: detect
+    if: >-
+      needs.detect.outputs.candidate_version != '' &&
+      needs.detect.outputs.disposition == 'would-transition'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    outputs:
+      continue: ${{ steps.route.outputs.continue }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Write exact candidate identity
+        env:
+          VERSION: ${{ needs.detect.outputs.candidate_version }}
+          COMMIT_SHA: ${{ needs.detect.outputs.candidate_sha }}
+        run: |
+          node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:"CI",ciCheck:"validate",publisherWorkflow:".github/workflows/release.yml"}))' "$RUNNER_TEMP/candidate.json"
+
+      - name: Create or validate annotated candidate tag
+        if: ${{ needs.detect.outputs.next_transition == 'create-candidate-tag' }}
+        run: node scripts/release/cli.mjs tag --candidate "$RUNNER_TEMP/candidate.json"
+
+      - name: Continue at the exact tag or relay once
+        id: route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.detect.outputs.candidate_version }}
+          COMMIT_SHA: ${{ needs.detect.outputs.candidate_sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                "$GITHUB_REF" == "refs/tags/v${VERSION}" &&
+                "$GITHUB_SHA" == "$COMMIT_SHA" ]]; then
+            printf 'continue=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          WORKFLOW_PATH=".github/workflows/release.yml"
+          WORKFLOW_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$WORKFLOW_PATH")"
+          BODY="$(node -e 'process.stdout.write(JSON.stringify({ref:"v"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:"reconcile"}}))')"
+          STATUS="$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch.json" --write-out '%{http_code}' \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" \
+            --data "$BODY")"
+          test "$STATUS" = "200"
+          printf 'continue=false\n' >> "$GITHUB_OUTPUT"
+
+  prepare:
+    needs:
+      - detect
+      - tag
+    if: >-
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      needs.detect.outputs.next_transition == 'prepare-artifacts'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      handoff_artifact_id: ${{ steps.handoff.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.identity.outputs.manifest_sha256 }}
+      payload_artifact_id: ${{ steps.payload.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+
+      - name: Install exact workspace
+        run: '"$PNPM_HOME/pnpm" install --frozen-lockfile'
+
+      - name: Download production observation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.detect.outputs.observation_artifact_id }}
+          path: ${{ runner.temp }}/observation
+
+      - name: Derive trusted preparation handoff
+        run: |
+          node scripts/release/workflow-handoff.mjs \
+            --report "$RUNNER_TEMP/observation/production-observation.json" \
+            --root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/preparation-handoff.json"
+
+      - name: Prepare and verify immutable package payload
+        run: |
+          node scripts/release/cli.mjs prepare \
+            --handoff "$RUNNER_TEMP/preparation-handoff.json" \
+            --root "$GITHUB_WORKSPACE" \
+            --output-dir "$RUNNER_TEMP/release-payload" \
+            --candidate-output "$RUNNER_TEMP/candidate.json"
+
+      - name: Read sealed payload identity
+        id: identity
+        run: |
+          node -e 'const fs=require("node:fs"),c=require("node:crypto"),m=fs.readFileSync(process.argv[1]),j=JSON.parse(m),s=j.commitSha.slice(0,12);fs.appendFileSync(process.env.GITHUB_OUTPUT,"artifact_name="+j.artifact.name+"\nhandoff_name=release-record-v"+j.version+"-"+s+"\nmanifest_sha256="+c.createHash("sha256").update(m).digest("hex")+"\n")' "$RUNNER_TEMP/release-payload/manifest.json"
+
+      - name: Upload immutable payload
+        id: payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release-payload
+          if-no-files-found: error
+          overwrite: false
+
+      - name: Record immutable artifact identity
+        run: |
+          node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({artifactId:process.argv[2],artifactUrl:process.argv[3],artifactDigest:process.argv[4]}))' \
+            "$RUNNER_TEMP/artifact-upload-result.json" \
+            "${{ steps.payload.outputs.artifact-id }}" \
+            "${{ steps.payload.outputs.artifact-url }}" \
+            "${{ steps.payload.outputs.artifact-digest }}"
+          node scripts/release/cli.mjs record-artifact \
+            --candidate "$RUNNER_TEMP/candidate.json" \
+            --manifest "$RUNNER_TEMP/release-payload/manifest.json" \
+            --artifact-upload-result "$RUNNER_TEMP/artifact-upload-result.json" \
+            --output "$GITHUB_WORKSPACE/release-record.json"
+      - name: Upload exact release handoff
+        id: handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.identity.outputs.handoff_name }}
+          path: release-record.json
+          if-no-files-found: error
+          overwrite: false
+
+  hydrate:
+    needs:
+      - detect
+      - prepare
+      - tag
+    if: >-
+      always() &&
+      needs.detect.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence","dispatch-release-audit","complete-release-audit","publish-github-release"]'), needs.detect.outputs.next_transition) &&
+      (needs.detect.outputs.next_transition != 'prepare-artifacts' || needs.prepare.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.runtime.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.identity.outputs.manifest_sha256 }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Download newly prepared payload
+        if: ${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.payload_artifact_id }}
+          path: ${{ runner.temp }}/runtime/payload
+
+      - name: Download newly prepared release record
+        if: ${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.handoff_artifact_id }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Write newly prepared candidate identity
+        if: ${{ needs.detect.outputs.next_transition == 'prepare-artifacts' }}
+        env:
+          VERSION: ${{ needs.detect.outputs.candidate_version }}
+          COMMIT_SHA: ${{ needs.detect.outputs.candidate_sha }}
+        run: |
+          node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:"CI",ciCheck:"validate",publisherWorkflow:".github/workflows/release.yml"})+"\n")' "$RUNNER_TEMP/runtime/candidate.json"
+
+      - name: Download durable production observation
+        if: ${{ needs.detect.outputs.next_transition != 'prepare-artifacts' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.detect.outputs.observation_artifact_id }}
+          path: ${{ runner.temp }}/observation
+
+      - name: Recover exact durable transition inputs
+        if: ${{ needs.detect.outputs.next_transition != 'prepare-artifacts' }}
+        run: |
+          node scripts/release/workflow-recovery.mjs \
+            --report "$RUNNER_TEMP/observation/production-observation.json" \
+            --output-dir "$RUNNER_TEMP/runtime"
+
+      - name: Read recovered prepared artifact identity
+        id: recovered-artifact
+        if: ${{ needs.detect.outputs.next_transition == 'attest-artifacts' }}
+        run: |
+          node -e 'const fs=require("node:fs"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,"artifact_id="+r.actionsArtifact.id+"\nprepare_run_id="+r.actionsArtifact.prepareRunId+"\n")' "$RUNNER_TEMP/runtime/release-record.json"
+
+      - name: Download recovered un-attested payload by ID
+        if: ${{ needs.detect.outputs.next_transition == 'attest-artifacts' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ steps.recovered-artifact.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.recovered-artifact.outputs.prepare_run_id }}
+          path: ${{ runner.temp }}/runtime/payload
+
+      - name: Resolve recovered attested payload
+        if: >-
+          needs.detect.outputs.next_transition != 'prepare-artifacts' &&
+          needs.detect.outputs.next_transition != 'attest-artifacts'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/artifact-store.mjs resolve \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --output-dir "$RUNNER_TEMP/runtime/payload"
+
+      - name: Verify recovered runtime identity
+        id: identity
+        run: |
+          node scripts/release/cli.mjs attestation-input \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --artifact-dir "$RUNNER_TEMP/runtime/payload" \
+            --output "$RUNNER_TEMP/runtime-subjects.txt"
+          node -e 'const fs=require("node:fs"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,"manifest_sha256="+r.manifestSha256+"\n")' "$RUNNER_TEMP/runtime/release-record.json"
+
+      - name: Upload exact runtime inputs
+        id: runtime
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+          if-no-files-found: error
+          overwrite: false
+
+  attest:
+    needs:
+      - detect
+      - hydrate
+      - tag
+    if: >-
+      needs.hydrate.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate"]'), needs.detect.outputs.next_transition)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      attestation_artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Seal provenance subjects
+        run: |
+          node scripts/release/cli.mjs attestation-input \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --artifact-dir "$RUNNER_TEMP/runtime/payload" \
+            --output "$RUNNER_TEMP/attestation-input.txt"
+
+      - name: Attest exact release payload
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-checksums: ${{ runner.temp }}/attestation-input.txt
+
+      - name: Materialize canonical attestation evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 -- "$RUNNER_TEMP/attestation-evidence"
+          install -d -m 0700 -- "$RUNNER_TEMP/attestation-evidence/bundles"
+          node scripts/release/cli.mjs attestation-output \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --artifact-dir "$RUNNER_TEMP/runtime/payload" \
+            --bundle "${{ steps.attest.outputs.bundle-path }}" \
+            --attestation-set "$RUNNER_TEMP/attestation-evidence/attestation-set.json" \
+            --attestation-bundles-dir "$RUNNER_TEMP/attestation-evidence/bundles"
+
+      - name: Upload canonical attestation evidence
+        id: evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-attestation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/attestation-evidence
+          if-no-files-found: error
+          overwrite: false
+
+  escrow:
+    needs:
+      - attest
+      - detect
+      - hydrate
+      - tag
+    if: >-
+      needs.attest.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate"]'), needs.detect.outputs.next_transition)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Download attestation evidence by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.attest.outputs.attestation_artifact_id }}
+          path: ${{ runner.temp }}/attestation
+
+      - name: Escrow exact base assets in draft Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs escrow \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --artifact-dir "$RUNNER_TEMP/runtime/payload" \
+            --attestation-set "$RUNNER_TEMP/attestation/attestation-set.json" \
+            --attestation-bundles-dir "$RUNNER_TEMP/attestation/bundles"
+
+  publish-npm:
+    needs:
+      - detect
+      - escrow
+      - hydrate
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish"]'), needs.detect.outputs.next_transition) &&
+      (!contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate"]'), needs.detect.outputs.next_transition) || needs.escrow.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+      id-token: write
+    outputs:
+      npm_artifact_id: ${{ steps.npm.outputs.artifact-id }}
+    steps:
+      - name: Checkout sparse publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/release/adapter-normalize.mjs
+            scripts/release/adapters/github.mjs
+            scripts/release/adapters/http.mjs
+            scripts/release/adapters/npm.mjs
+            scripts/release/artifact-store.mjs
+            scripts/release/limits.mjs
+            scripts/release/manifest.mjs
+            scripts/release/npm-audit.mjs
+            scripts/release/npm-evidence.mjs
+            scripts/release/process-runner.mjs
+            scripts/release/publisher.mjs
+            scripts/release/release-record.mjs
+            scripts/release/semver.mjs
+            scripts/release/topology.mjs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Assert exact npm runtime
+        run: |
+          ACTUAL_NPM_VERSION="$(npm --version)"
+          [[ "$ACTUAL_NPM_VERSION" == "11.17.0" ]]
+
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Publish and verify npm serially
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          node scripts/release/publisher.mjs \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --artifact-dir "$RUNNER_TEMP/runtime/payload" \
+            --report "$RUNNER_TEMP/npm-evidence.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload exact npm evidence
+        id: npm
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-evidence.json
+          if-no-files-found: error
+          overwrite: false
+
+  reconcile-npm:
+    needs:
+      - detect
+      - hydrate
+      - publish-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence"]'), needs.detect.outputs.next_transition) &&
+      (needs.detect.outputs.next_transition == 'reconcile-npm-evidence' || needs.publish-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Download newly published npm evidence by ID
+        if: ${{ needs.detect.outputs.next_transition != 'reconcile-npm-evidence' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.publish-npm.outputs.npm_artifact_id }}
+          path: ${{ runner.temp }}/published-npm
+
+      - name: Select newly published npm evidence
+        if: ${{ needs.detect.outputs.next_transition != 'reconcile-npm-evidence' }}
+        run: cp -- "$RUNNER_TEMP/published-npm/npm-evidence.json" "$RUNNER_TEMP/runtime/npm-evidence.json"
+
+      - name: Reconcile verified npm evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs reconcile-npm \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --npm-evidence "$RUNNER_TEMP/runtime/npm-evidence.json"
+
+  smoke-metadata:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      (contains(fromJSON('["run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Verify exact public metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/published-artifact-verify.mjs \
+            --release-mode \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --result "$RUNNER_TEMP/metadata.json"
+      - name: Upload raw metadata result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: smoke-result-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/metadata.json
+          if-no-files-found: error
+          overwrite: false
+
+  smoke-published-harness:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      (contains(fromJSON('["run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Smoke the published harness
+        run: |
+          node scripts/release/smoke/published-harness.mjs \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --result "$RUNNER_TEMP/published-harness.json"
+      - name: Upload raw published-harness result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: smoke-result-published-harness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-harness.json
+          if-no-files-found: error
+          overwrite: false
+
+  smoke-runtime-targets:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      (contains(fromJSON('["run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Smoke published runtime targets
+        run: |
+          node scripts/release/smoke/runtime-targets.mjs \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --result "$RUNNER_TEMP/runtime-targets.json"
+      - name: Upload raw runtime-targets result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: smoke-result-runtime-targets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-targets.json
+          if-no-files-found: error
+          overwrite: false
+
+  smoke-scaffold:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      (contains(fromJSON('["run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Smoke exact public scaffold
+        run: |
+          node scripts/release/smoke/scaffold.mjs \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --result "$RUNNER_TEMP/scaffold.json"
+      - name: Upload raw scaffold result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: smoke-result-scaffold-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/scaffold.json
+          if-no-files-found: error
+          overwrite: false
+
+  smoke-storage:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-npm
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      (contains(fromJSON('["run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Smoke published storage backends
+        run: |
+          node scripts/release/smoke/storage.mjs \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --result "$RUNNER_TEMP/storage.json"
+      - name: Upload raw storage result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: smoke-result-storage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/storage.json
+          if-no-files-found: error
+          overwrite: false
+
+  reconcile-smokes:
+    needs:
+      - detect
+      - hydrate
+      - publish-npm
+      - reconcile-npm
+      - smoke-metadata
+      - smoke-published-harness
+      - smoke-runtime-targets
+      - smoke-scaffold
+      - smoke-storage
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence"]'), needs.detect.outputs.next_transition) &&
+      needs.smoke-metadata.result == 'success' &&
+      needs.smoke-published-harness.result == 'success' &&
+      needs.smoke-runtime-targets.result == 'success' &&
+      needs.smoke-scaffold.result == 'success' &&
+      needs.smoke-storage.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Download exact smoke results by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: >-
+            ${{ needs.smoke-metadata.outputs.artifact_id }},
+            ${{ needs.smoke-published-harness.outputs.artifact_id }},
+            ${{ needs.smoke-runtime-targets.outputs.artifact_id }},
+            ${{ needs.smoke-scaffold.outputs.artifact_id }},
+            ${{ needs.smoke-storage.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/smoke-results
+      - name: Download newly published npm evidence by ID
+        if: ${{ contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish"]'), needs.detect.outputs.next_transition) }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.publish-npm.outputs.npm_artifact_id }}
+          path: ${{ runner.temp }}/published-npm
+      - name: Select newly published npm evidence
+        if: ${{ contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish"]'), needs.detect.outputs.next_transition) }}
+        run: cp -- "$RUNNER_TEMP/published-npm/npm-evidence.json" "$RUNNER_TEMP/runtime/npm-evidence.json"
+      - name: Isolate the exact five smoke receipts
+        run: |
+          test -f "$RUNNER_TEMP/smoke-results/metadata.json"
+          test -f "$RUNNER_TEMP/smoke-results/published-harness.json"
+          test -f "$RUNNER_TEMP/smoke-results/runtime-targets.json"
+          test -f "$RUNNER_TEMP/smoke-results/scaffold.json"
+          test -f "$RUNNER_TEMP/smoke-results/storage.json"
+      - name: Reconcile exact smoke evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs reconcile-smokes \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --manifest "$RUNNER_TEMP/runtime/payload/manifest.json" \
+            --npm-evidence "$RUNNER_TEMP/runtime/npm-evidence.json" \
+            --smoke-results "$RUNNER_TEMP/smoke-results"
+
+  dispatch-audit:
+    needs:
+      - detect
+      - hydrate
+      - reconcile-smokes
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence","dispatch-release-audit"]'), needs.detect.outputs.next_transition) &&
+      (needs.detect.outputs.next_transition == 'dispatch-release-audit' || needs.reconcile-smokes.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      dispatch_artifact_id: ${{ steps.receipt.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Dispatch exact independent audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs dispatch-audit \
+            --version "${{ needs.detect.outputs.candidate_version }}" \
+            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
+            --manifest-sha256 "${{ needs.hydrate.outputs.manifest_sha256 }}" \
+            --output "$RUNNER_TEMP/audit-dispatch.json"
+      - name: Upload direct audit dispatch receipt
+        id: receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: audit-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit-dispatch.json
+          if-no-files-found: error
+          overwrite: false
+
+  record-audit-dispatch:
+    needs:
+      - detect
+      - dispatch-audit
+      - hydrate
+      - tag
+    if: >-
+      needs.dispatch-audit.result == 'success' &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence","dispatch-release-audit"]'), needs.detect.outputs.next_transition)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      dispatch_artifact_id: ${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Download audit dispatch receipt by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}
+          path: ${{ runner.temp }}/dispatch
+      - name: Record exact audit dispatch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs record-audit-dispatch \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --dispatch-result "$RUNNER_TEMP/dispatch/audit-dispatch.json"
+
+  correlate-audit:
+    needs:
+      - detect
+      - hydrate
+      - record-audit-dispatch
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence","dispatch-release-audit","complete-release-audit"]'), needs.detect.outputs.next_transition) &&
+      (needs.detect.outputs.next_transition == 'complete-release-audit' || needs.record-audit-dispatch.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      audit_artifact_id: ${{ steps.audit-result.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Download new audit dispatch receipt by ID
+        if: ${{ needs.detect.outputs.next_transition != 'complete-release-audit' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.record-audit-dispatch.outputs.dispatch_artifact_id }}
+          path: ${{ runner.temp }}/new-dispatch
+      - name: Select new audit dispatch receipt
+        if: ${{ needs.detect.outputs.next_transition != 'complete-release-audit' }}
+        run: cp -- "$RUNNER_TEMP/new-dispatch/audit-dispatch.json" "$RUNNER_TEMP/runtime/audit-dispatch.json"
+      - name: Wait for the exact audit run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs wait-audit \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --dispatch-result "$RUNNER_TEMP/runtime/audit-dispatch.json" \
+            --output "$RUNNER_TEMP/audit-result.json"
+      - name: Correlate and attach exact audit result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs correlate-audit \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --dispatch-result "$RUNNER_TEMP/runtime/audit-dispatch.json" \
+            --audit-result "$RUNNER_TEMP/audit-result.json"
+      - name: Upload exact correlated audit result
+        id: audit-result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: correlated-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit-result.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Require successful independent audit
+        run: node -e 'const r=require(process.argv[1]);if(r.conclusion!=="success")process.exit(1)' "$RUNNER_TEMP/audit-result.json"
+
+  publish-release:
+    needs:
+      - correlate-audit
+      - detect
+      - hydrate
+      - tag
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
+      needs.tag.outputs.continue == 'true' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == needs.detect.outputs.candidate_sha &&
+      inputs.version == needs.detect.outputs.candidate_version &&
+      inputs.commitSha == needs.detect.outputs.candidate_sha &&
+      inputs.operation == 'reconcile' &&
+      contains(fromJSON('["prepare-artifacts","attest-artifacts","escrow-candidate","publish-npm-packages","resume-npm-publish","reconcile-npm-evidence","run-release-smokes","reconcile-smoke-evidence","dispatch-release-audit","complete-release-audit","publish-github-release"]'), needs.detect.outputs.next_transition) &&
+      (needs.detect.outputs.next_transition == 'publish-github-release' || needs.correlate-audit.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.detect.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Download exact runtime inputs by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.hydrate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/runtime
+      - name: Download newly correlated audit by ID
+        if: ${{ needs.detect.outputs.next_transition != 'publish-github-release' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.correlate-audit.outputs.audit_artifact_id }}
+          path: ${{ runner.temp }}/new-audit
+      - name: Select newly correlated audit result
+        if: ${{ needs.detect.outputs.next_transition != 'publish-github-release' }}
+        run: cp -- "$RUNNER_TEMP/new-audit/audit-result.json" "$RUNNER_TEMP/runtime/audit-result.json"
+      - name: Publish one immutable consolidated Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/cli.mjs publish-release \
+            --candidate "$RUNNER_TEMP/runtime/candidate.json" \
+            --record "$RUNNER_TEMP/runtime/release-record.json" \
+            --audit-result "$RUNNER_TEMP/runtime/audit-result.json"

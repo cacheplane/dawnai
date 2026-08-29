@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "canonicalization": "dawn-release-workflow-execution-v1",
+  "variants": [
+    {
+      "id": "disabled-2026-08-28",
+      "mode": "disabled",
+      "canonicalSha256": "83670374ee707284002a8627675393d5fef3fef7866f307e85eab106529e5272"
+    },
+    {
+      "id": "protected-2026-08-28",
+      "mode": "protected",
+      "canonicalSha256": "00b0bb1a0ab822515c5f5d90fa209a81e4fd56486352c032fe05d152f21d1bef"
+    }
+  ]
+}
