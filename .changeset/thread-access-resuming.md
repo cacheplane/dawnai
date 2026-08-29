@@ -5,8 +5,8 @@
 ---
 
 Add `resuming` to `ThreadAccessRequest`: a required boolean that is `true` when
-the request carries a resume credential and will continue a parked turn. It is
-additive — an existing policy compiles and behaves exactly as before.
+the request carries a resume credential and will continue a parked turn. A
+policy that ignores it behaves the same for resumed and ordinary turns.
 
 A policy that wants resumes treated differently from ordinary turns — step-up
 auth, a second approver, extra logging — should check `req.resuming` rather than

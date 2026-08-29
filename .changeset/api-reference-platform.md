@@ -10,4 +10,6 @@
 "@dawn-ai/testing": patch
 ---
 
-Publish canonical package API references and concise npm entrypoints. The CLI documentation bundle now discovers every registered detailed API page.
+Documentation only: this package gains a canonical API reference on dawnai.org
+and a concise npm entrypoint. No runtime behavior changed. (`dawn docs` also
+now discovers every registered detailed API page.)

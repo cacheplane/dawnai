@@ -10,7 +10,5 @@ replace a todo or tool row outright. Cards render structured-but-unstyled when
 the stylesheet is not imported, and every rule that styles an element is
 scoped so the sheet cannot affect the rest of your app.
 
-The cards' previous inline styles are gone. Existing consumers who upgrade
-without importing the new stylesheet will see bare, unstyled cards — add
-`import "@dawn-ai/ag-ui/react/styles.css"` to keep the appearance they
-already had.
+The stylesheet is the only styling the cards carry, so importing it is the
+difference between the default look and bare markup.

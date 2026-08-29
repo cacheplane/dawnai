@@ -42,6 +42,4 @@ without booting a server, and `createAgentProtocolInjector` accepts a
 `threadAccess` policy.
 
 The run endpoints — `/runs/stream`, `/runs/wait`, `/resume` and `/agui` — plus
-`GET /threads/:thread_id/pending_interrupts` are gated on this policy too; see
-the entry covering them for the ordering consequences and the `ThreadOperation`
-addition.
+`GET /threads/:thread_id/pending_interrupts` are gated on this policy too.

@@ -2,4 +2,5 @@
 "@dawn-ai/cli": patch
 ---
 
-Invalidate and restore the CLI's bundled documentation correctly through the Turbo build cache.
+Fix a case where `dawn docs` could serve a stale bundled documentation set after
+an upgrade.
