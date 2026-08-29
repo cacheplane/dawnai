@@ -459,7 +459,7 @@ github.getDefaultBranchRef(repository, branch)
 github.listManagedCandidateRefs(repository)
 github.getAnnotatedTag(repository, tagObjectSha)
 github.getWorkflowContent(repository, workflowPath, commitSha)
-github.listReleaseRuns(repository, workflowPath, status)
+github.listReleaseRuns(repository, workflowPath)
 ```
 
 - [x] **Step 2: Run the adapter tests and observe RED**
@@ -480,18 +480,27 @@ GET /repos/{repo}/git/ref/heads/main
 GET /repos/{repo}/git/matching-refs/tags/v?per_page=100
 GET /repos/{repo}/git/tags/{tagObjectSha}
 GET /repos/{repo}/contents/.github/workflows/release.yml?ref={commitSha}
-GET /repos/{repo}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?status={status}&per_page=100
+GET /repos/{repo}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page={page}
 ```
 
-Query `in_progress`, `pending`, `queued`, `requested`, and `waiting`. Validate
-at most 100 pages and 10,000 records for the matching-ref read, and at most 100
-pages and 10,000 records for each run status (50,000 run records total before
-cross-status deduplication). Reject rather than truncate at either bound.
+The run read is one logical unfiltered enumeration, not a collection of
+status-filtered searches. Fetch pages manually so the first page can enforce a
+maximum of 100 pages and 10,000 raw records before any later page is requested.
+Use a fixed `gh api --jq` projection that rejects a malformed source envelope,
+retains every raw run ID (including completed runs), and emits full records only
+for values whose status is not `completed`. JavaScript then requires those
+records to use exactly `in_progress`, `pending`, `queued`, `requested`, or
+`waiting`, validates stable totals, exact cardinality, global raw-ID uniqueness,
+active-record linkage, and completeness, and returns only the sorted
+nonterminal records. Any unavailable or malformed page rejects the complete
+read; accumulated partial evidence is never returned.
+
 Validate identity uniqueness, exact file path, a maximum decoded workflow size
 of 2 MiB, canonical base64, tag-object type, and commit peel before returning
 normalized values. Keep the existing 2 MiB command-output bound and 15-second
-per-command timeout; a paginated response that cannot fit those bounds is
-`UNPROVABLE`, never partial evidence.
+per-command timeout. Manual per-page projection keeps the complete 10,000-run
+contract reachable inside those per-command bounds; any read that cannot fit
+them is `UNPROVABLE`, never partial evidence.
 
 - [x] **Step 4: Run the adapter suite GREEN**
 
@@ -509,7 +518,16 @@ git commit -m "feat(release): add ref-aware owner evidence reads"
 
 ### Task 5: Upgrade owner evidence to canonical schema version 2
 
+A post-commit adversarial review proved that sequential status-filtered reads
+cannot establish a coherent zero-run observation: a run can transition between
+already-read statuses and remain nonterminal while evading every filtered
+query. Complementary filtered sweeps failed for the same reason. The final
+boundary is the single unfiltered, manually bounded enumeration defined in
+Task 4; status transitions no longer change membership in the enumerated set.
+
 **Files:**
+- Modify: `scripts/release/preflight-owner-adapters.mjs`
+- Modify: `scripts/release/test/preflight-owner-adapters.test.mjs`
 - Modify: `scripts/release/preflight-owner.mjs`
 - Modify: `scripts/release/test/preflight-owner.test.mjs`
 - Modify: `scripts/release/test/preflight-owner-cli.test.mjs`
@@ -578,10 +596,10 @@ numeric ID then attempt; reject duplicates and extras.
 
 Capture must classify local bytes before remote calls, bind remote `main`, fetch
 and classify its workflow, enumerate and peel all managed tags, fetch each tag's
-workflow or exact absence, collect all five nonterminal statuses, recompute the
-aggregate, and only then read the environment when aggregate mode is protected.
-Unreadable, structurally invalid, or unknown-policy workflow evidence aborts
-without an output file.
+workflow or exact absence, perform one complete unfiltered workflow-run read,
+recompute the aggregate, and only then read the environment when aggregate mode
+is protected. Unreadable, structurally invalid, or unknown-policy workflow or
+run evidence aborts without an output file.
 
 - [ ] **Step 5: Implement strict verification checks**
 
@@ -611,12 +629,11 @@ node --test \
 
 - [ ] **Step 7: Commit**
 
-```bash
-git add scripts/release/preflight-owner.mjs \
-  scripts/release/test/preflight-owner.test.mjs \
-  scripts/release/test/preflight-owner-cli.test.mjs
-git commit -m "feat(release): verify ref-aware owner evidence v2"
-```
+The reviewed result is cumulative: the schema-v2 implementation, strict hash
+typing correction, rejected filtered-sweep stabilization attempt, and final
+unfiltered-run architecture correction are preserved as separate commits. The
+final correction changes all five files listed above and removes the superseded
+filtered-sweep implementation.
 
 ### Task 6: Switch the release workflow atomically to reconcile-only
 
