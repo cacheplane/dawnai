@@ -1037,7 +1037,11 @@ describe("published manifest address inventory", { timeout: 30_000 }, () => {
 })
 
 describe("package catalog", { timeout: 30_000 }, () => {
-  it("pins the exact twelve-package patch changeset", () => {
+  // `changeset version` deletes this changeset when the release is cut, and the
+  // Version PR runs this suite against the versioned tree — so on a release commit
+  // the file is legitimately gone and there is no pending bump list left to pin.
+  // Reading it unconditionally made the release, and only the release, red.
+  it.skipIf(!existsSync(CHANGESET_PATH))("pins the exact twelve-package patch changeset", () => {
     const source = readFileSync(CHANGESET_PATH, "utf8")
     const entries = [...source.matchAll(/^"([^"]+)": (\w+)$/gm)].map((match) => [
       match[1],
