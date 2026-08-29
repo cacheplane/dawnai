@@ -39,6 +39,10 @@ This evidence is a dated decision input, not a permanent release receipt. Every
 quantity and external state must be re-derived at the final reviewed head before
 activation.
 
+- On 2026-08-28, Task 1 re-fetched `origin/main` at
+  `fdb57e6ec0a23775da40eb3f9295ec52704210e3`, revalidated the expected
+  five-commit delta and live containment, and merged that exact head as
+  `66feaed668a3e5a05a3b2ab910660d499f692ab0`.
 - A frozen install, full build, full typecheck, isolated release-controller
   suite, and dependency-security suite pass after merging current `main`.
 - The devkit template suite has one failure: the branch's version-only edits in
