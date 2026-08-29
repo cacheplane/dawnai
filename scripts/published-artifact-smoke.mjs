@@ -84,7 +84,9 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
     })
 
     if (shouldRunAgUiProbe(selectedPackages)) {
-      await dependencies.runAgUiInstalledProbe(tempDir)
+      await dependencies.runAgUiInstalledProbe(tempDir, {
+        runCommand: dependencies.runCommand,
+      })
     }
 
     if (shouldRunTypeScriptToolingProbe(selectedPackages)) {
@@ -124,10 +126,16 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
     await dependencies.startPgvector(containerName)
     const databaseUrl = await dependencies.databaseUrlForPgvector(containerName)
     await dependencies.waitForPgvector(containerName)
-    await dependencies.runRuntimeSmoke(tempDir, {
-      databaseUrl,
-      openai: options.openai,
-    })
+    await dependencies.runRuntimeSmoke(
+      tempDir,
+      {
+        databaseUrl,
+        openai: options.openai,
+      },
+      {
+        runCommand: dependencies.runCommand,
+      },
+    )
   } finally {
     if (containerCleanupNeeded) {
       await dependencies.removeContainer(containerName)

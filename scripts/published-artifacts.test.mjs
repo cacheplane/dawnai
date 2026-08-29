@@ -2297,9 +2297,15 @@ describe("published TypeScript tooling smoke", () => {
 
     await runPublishedArtifactSmoke(harness.options, harness.dependencies)
 
-    assert.equal(
-      harness.events.some(({ type }) => type === "ag-ui-probe"),
-      true,
+    assert.deepEqual(
+      harness.events.filter(({ type }) => type === "ag-ui-probe"),
+      [
+        {
+          root: harness.tempDir,
+          runCommandForwarded: true,
+          type: "ag-ui-probe",
+        },
+      ],
     )
     assert.equal(
       harness.events.some(({ type }) => type === "tooling-install"),
@@ -2339,6 +2345,33 @@ describe("published TypeScript tooling smoke", () => {
       harness.events.some(({ type }) => type === "docker"),
       false,
     )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("forwards the injected command runner to the pgvector runtime smoke", async () => {
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: [
+        { name: "@dawn-ai/memory-pgvector", version: packageVersion },
+        { name: "@dawn-ai/langchain", version: packageVersion },
+      ],
+    })
+    harness.options.pgvector = true
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.deepEqual(
+      harness.events.filter(({ type }) => type === "runtime-smoke"),
+      [
+        {
+          databaseUrl: "postgres://unused",
+          openai: false,
+          root: harness.tempDir,
+          runCommandForwarded: true,
+          type: "runtime-smoke",
+        },
+      ],
+    )
+    assert.equal(harness.events.at(-2).type, "docker")
     assert.equal(harness.events.at(-1).type, "cleanup")
   })
 
@@ -3063,16 +3096,26 @@ async function createPublishedSmokeHarness({
       await rm(path, { force: true, recursive: true })
       cleaned = true
     },
-    async runAgUiInstalledProbe(root) {
-      events.push({ root, type: "ag-ui-probe" })
+    async runAgUiInstalledProbe(root, overrides) {
+      events.push({
+        root,
+        runCommandForwarded: overrides?.runCommand === runCommandForHarness,
+        type: "ag-ui-probe",
+      })
     },
     async runInstallSmoke(root, packages, { runCommand: command }) {
       events.push({ packages, root, type: "selected-install" })
       await command("npm", selectedPackageInstallArgs(packages), { cwd: root })
     },
     runCommand: runCommandForHarness,
-    async runRuntimeSmoke() {
-      events.push({ type: "docker" })
+    async runRuntimeSmoke(root, options, overrides) {
+      events.push({
+        databaseUrl: options?.databaseUrl,
+        openai: options?.openai,
+        root,
+        runCommandForwarded: overrides?.runCommand === runCommandForHarness,
+        type: "runtime-smoke",
+      })
     },
     async runDockerSandboxInstalledProbe(root, options) {
       events.push({
