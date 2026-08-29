@@ -12,8 +12,9 @@ baseline is `origin/main` at
 `6488d32a23907112daa593ae3f31b0144df6ed02`, merged into the feature branch by
 `c7fc700c`. Before implementation began, `main` advanced to
 `46aa9c3c013dfd71e37edd1f9b86bdc468de2088`, then advanced again during plan
-review to `fdb57e6ec0a23775da40eb3f9295ec52704210e3`. Execution must merge and
-reassess the newly fetched exact head before relying on any earlier evidence.
+review to `fdb57e6ec0a23775da40eb3f9295ec52704210e3`, then once more during Task 1
+review to `e9aad1934aeedcb512648f254466704976cec659`. Task 1 merged and
+reassessed the newly fetched exact head before relying on any earlier evidence.
 
 The integration changes the dependency-remediation work materially:
 
@@ -42,7 +43,11 @@ activation.
 - On 2026-08-28, Task 1 re-fetched `origin/main` at
   `fdb57e6ec0a23775da40eb3f9295ec52704210e3`, revalidated the expected
   five-commit delta and live containment, and merged that exact head as
-  `66feaed668a3e5a05a3b2ab910660d499f692ab0`.
+  `66feaed668a3e5a05a3b2ab910660d499f692ab0`. During review, `main` advanced by
+  one API-reference test commit to
+  `e9aad1934aeedcb512648f254466704976cec659`; the continuation revalidated that
+  exact one-file delta and containment, then merged it as
+  `401a672e38a6b1826d2415a77a5f908794802162`.
 - A frozen install, full build, full typecheck, isolated release-controller
   suite, and dependency-security suite pass after merging current `main`.
 - The devkit template suite has one failure: the branch's version-only edits in
