@@ -448,7 +448,7 @@ git commit -m "feat(release): classify abandonment workflow reachability"
 - Modify: `scripts/release/preflight-owner-adapters.mjs`
 - Modify: `scripts/release/test/preflight-owner-adapters.test.mjs`
 
-- [ ] **Step 1: Write adapter contract tests**
+- [x] **Step 1: Write adapter contract tests**
 
 Add tests for exact argv-based reads, complete pagination, response bounds,
 duplicate refs/runs, malformed tag peeling, malformed content, authentication
@@ -462,13 +462,13 @@ github.getWorkflowContent(repository, workflowPath, commitSha)
 github.listReleaseRuns(repository, workflowPath, status)
 ```
 
-- [ ] **Step 2: Run the adapter tests and observe RED**
+- [x] **Step 2: Run the adapter tests and observe RED**
 
 ```bash
 node --test scripts/release/test/preflight-owner-adapters.test.mjs
 ```
 
-- [ ] **Step 3: Implement the exact read surfaces**
+- [x] **Step 3: Implement the exact read surfaces**
 
 Use bounded `gh api --paginate --slurp` where pagination applies and only these
 REST resources. Encode the workflow ID as the single path segment
@@ -493,13 +493,13 @@ normalized values. Keep the existing 2 MiB command-output bound and 15-second
 per-command timeout; a paginated response that cannot fit those bounds is
 `UNPROVABLE`, never partial evidence.
 
-- [ ] **Step 4: Run the adapter suite GREEN**
+- [x] **Step 4: Run the adapter suite GREEN**
 
 ```bash
 node --test scripts/release/test/preflight-owner-adapters.test.mjs
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/release/preflight-owner-adapters.mjs \
