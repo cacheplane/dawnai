@@ -645,7 +645,7 @@ filtered-sweep implementation.
 - Modify: `scripts/release/test/fixtures/workflow-safe-executables.json`
 - Modify: four live-contract documents listed in the file map.
 
-- [ ] **Step 1: Write the reconcile-only workflow assertions**
+- [x] **Step 1: Write the reconcile-only workflow assertions**
 
 Require inputs exactly `commitSha`, `operation`, `version`; options exactly
 `["reconcile"]`; no `reason`; no `abandon` job/environment; no abandon-only tag
@@ -655,7 +655,7 @@ classify actual `release.yml` as disabled and require its bytes to equal
 from the expected final job list. Preserve the immutable protected fixture and
 its policy entry for historical managed refs.
 
-- [ ] **Step 2: Run the focused contract tests and observe RED**
+- [x] **Step 2: Run the focused contract tests and observe RED**
 
 ```bash
 node --test \
@@ -663,7 +663,7 @@ node --test \
   scripts/release/test/workflow-contracts.test.mjs
 ```
 
-- [ ] **Step 3: Apply the minimal workflow change**
+- [x] **Step 3: Apply the minimal workflow change**
 
 With `apply_patch`:
 
@@ -684,7 +684,7 @@ cmp --silent \
   scripts/release/test/fixtures/release-workflow-disabled.yml
 ```
 
-- [ ] **Step 4: Manually transcribe the two exact fixtures**
+- [x] **Step 4: Manually transcribe the two exact fixtures**
 
 Keep fixture schema versions unchanged. In `workflow-entrypoints.json`, remove
 `reason`, the validation step, and the abandon job; set operation options to one.
@@ -695,7 +695,7 @@ body exactly. Expected Release inventory: 18 jobs and 120 executable entries.
 Do not change `release-script-hashes.json`; retained `cli.mjs` bytes remain
 reachable through reconciliation.
 
-- [ ] **Step 5: Update the live operating contract**
+- [x] **Step 5: Update the live operating contract**
 
 - Runbook: owner evidence v2, exact four-workflow topology, post-merge
   pre-enable capture, and stop/preserve/escalate instead of runnable abandonment.
@@ -704,7 +704,7 @@ reachable through reconciliation.
 - Original controller design/PR2 plan: partial-supersession banners linking the
   two approved 2026-08-25/27 specs; do not rewrite history.
 
-- [ ] **Step 6: Run workflow, dormant-runtime, and docs regression gates**
+- [x] **Step 6: Run workflow, dormant-runtime, and docs regression gates**
 
 ```bash
 node --test scripts/release/test/workflow-contracts.test.mjs
@@ -730,7 +730,7 @@ rg -n 'abandonment-context|cli\.mjs abandon|inputs\.reason|release-abandonment' 
   scripts/release/test/fixtures/workflow-safe-executables.json
 ```
 
-- [ ] **Step 7: Commit the atomic switch**
+- [x] **Step 7: Commit the atomic switch**
 
 ```bash
 git add .github/workflows/release.yml \
