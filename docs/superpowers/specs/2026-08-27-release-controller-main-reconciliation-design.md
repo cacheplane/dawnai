@@ -2,14 +2,18 @@
 
 **Date:** 2026-08-27
 
-**Status:** Focused specification review approved; awaiting user approval
+**Status:** Approved on 2026-08-28
 
 ## Summary
 
 Reconcile the release-controller branch with `main` before completing the
-controller cutover and the first production release. The integrated baseline is
-`origin/main` at `6488d32a23907112daa593ae3f31b0144df6ed02`, merged into the
-feature branch by `c7fc700c`.
+controller cutover and the first production release. The initially integrated
+baseline is `origin/main` at
+`6488d32a23907112daa593ae3f31b0144df6ed02`, merged into the feature branch by
+`c7fc700c`. Before implementation began, `main` advanced to
+`46aa9c3c013dfd71e37edd1f9b86bdc468de2088`, then advanced again during plan
+review to `fdb57e6ec0a23775da40eb3f9295ec52704210e3`. Execution must merge and
+reassess the newly fetched exact head before relying on any earlier evidence.
 
 The integration changes the dependency-remediation work materially:
 
@@ -54,11 +58,21 @@ activation.
   21 publishable packages. The derived next train is `0.8.22`, and the current
   release design expects 45 base assets before lane receipts. These values must
   be rechecked rather than hard-coded into controller behavior.
-- The Release and Publish Chart workflows are manually disabled. Published
-  Artifact Verification is active and read-only. The new Version Packages
-  workflow is absent from the deployed default branch until this pull request
-  merges. Immutable Releases are not yet enabled. There are no controller-owned
-  `v*` tags and no nonterminal Release runs.
+- During plan review on 2026-08-28, the legacy Release workflow changed from
+  `disabled_manually` to `active` at 17:37:59 Pacific. The next `main` push,
+  `fdb57e6e`, ran it once as Actions run `33224111709`; that successful legacy
+  Changesets run created the unmerged Version Packages pull request #512 at
+  `16831949500672aa93dc86d0d08531baeef7f5c5` and did not publish.
+- Publish Chart remains manually disabled. Published Artifact Verification is
+  active and read-only. The new standalone Version Packages workflow remains
+  absent from deployed `main`. Immutable Releases remain disabled, with no
+  controller-owned `v*` tags, no nonterminal Release runs, and no package or
+  GitHub release after `0.8.21`.
+- The approved safety baseline was restored during the same review session by
+  disabling the legacy Release workflow through the GitHub CLI and re-reading
+  both mutators as `disabled_manually`. Preserve pull request #512 unmerged; its
+  current head is prepared input, not release authority, and must be regenerated
+  or revalidated against the exact ownership-switch SHA.
 - The repository has no independent second GitHub identity available for the
   abandonment environment. The separately approved disabled-abandonment design
   remains the prerequisite for activation.
@@ -154,7 +168,7 @@ encode the absence of an advisory that upstream still installs.
 
 ### Vercel boundary
 
-Keep the exact root `vercel@58.9.0` development dependency and the real
+Keep the exact `vercel@58.9.0` development dependency in `packages/cli` and the real
 `vercel-native` CI job. Keep the provider deployment harness, receipt checks,
 and production CLI verification unchanged except where final-main reconciliation
 requires new expected bytes or metadata.
@@ -194,16 +208,21 @@ workflows.
 
 Before merge:
 
-- Release and Publish Chart remain `disabled_manually`;
+- restore Release to `disabled_manually` through the GitHub CLI, verify that
+  state, and then keep Release and Publish Chart `disabled_manually`;
 - Published Artifact Verification remains active because it is read-only and
   cannot publish a package, chart, or Release; and
-- Version Packages is absent because its workflow file is not yet on deployed
-  `main`.
+- the standalone Version Packages workflow is absent because its workflow file
+  is not yet on deployed `main`. The legacy-created Version Packages pull
+  request #512 may remain open, but must remain unmerged and confers no
+  authority.
 
 After the ownership-switch pull request merges, the new Version Packages
 workflow becomes active and its push-triggered run may create or update the
-Version Packages pull request. That is acceptable: the workflow prepares the
-version commit but does not publish. The pull request must remain unmerged.
+Version Packages pull request, including the existing #512. That is acceptable:
+the workflow prepares the version commit but does not publish. The pull request
+must remain unmerged until its base, head, contents, idempotence, and full checks
+are revalidated after the ownership switch.
 
 At the exact reviewed remote `main` SHA:
 
