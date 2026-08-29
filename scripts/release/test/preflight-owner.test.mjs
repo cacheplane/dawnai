@@ -28,6 +28,7 @@ const RELEASE_WORKFLOW = ".github/workflows/release.yml"
 const CONTROLLER_SCHEMA = "scripts/release/controller-schema.json"
 const POLICY_PATH = "scripts/release/abandonment-workflow-policy.json"
 const NONTERMINAL_STATUSES = ["in_progress", "pending", "queued", "requested", "waiting"]
+const STABILIZING_NONTERMINAL_STATUSES = NONTERMINAL_STATUSES.toReversed()
 const EXPECTED_OWNER_FILES = [
   ".github/workflows/version-pr.yml",
   RELEASE_WORKFLOW,
@@ -58,12 +59,9 @@ test("disabled capture binds v2 evidence in authority-safe order without reading
       ["default-branch-ref", REPOSITORY, "main"],
       ["workflow-content", REPOSITORY, RELEASE_WORKFLOW, HEAD_SHA],
       ["managed-candidate-refs", REPOSITORY],
-      ...NONTERMINAL_STATUSES.map((status) => [
-        "release-runs",
-        REPOSITORY,
-        RELEASE_WORKFLOW,
-        status,
-      ]),
+      ...[NONTERMINAL_STATUSES, STABILIZING_NONTERMINAL_STATUSES].flatMap((statuses) =>
+        statuses.map((status) => ["release-runs", REPOSITORY, RELEASE_WORKFLOW, status]),
+      ),
       ["immutable-releases", REPOSITORY],
     ],
   )
@@ -458,6 +456,56 @@ test("release runs preserve statuses, sort deterministically, and reject any rep
   assert.equal(
     check(verify(evidence, sortedFixture.files), "nonterminal-release-runs").status,
     "FAIL",
+  )
+})
+
+test("capture cannot miss a queued run that advances to in_progress during the required sweep", async () => {
+  const fixture = captureFixture()
+  let currentStatus = "queued"
+  fixture.githubTarget.listReleaseRuns = async (repository, path, status) => {
+    fixture.calls.push(["github", "release-runs", repository, path, status])
+    if (status === "queued" && currentStatus === "queued") currentStatus = "in_progress"
+    return present(status === currentStatus ? [releaseRun(30, 1, currentStatus)] : [])
+  }
+
+  const evidence = await captureOwnerEvidence(fixture.input)
+  const report = verify(evidence, fixture.files)
+  assert.equal(check(report, "nonterminal-release-runs").status, "FAIL")
+  assert.equal(report.status, "FAIL")
+
+  const runStatuses = fixture.calls
+    .filter((call) => call[1] === "release-runs")
+    .map((call) => call[4])
+  assert.deepEqual(runStatuses, [NONTERMINAL_STATUSES, STABILIZING_NONTERMINAL_STATUSES].flat())
+  assert.deepEqual(evidence.github.nonterminalReleaseRuns, [releaseRun(30, 1, "in_progress")])
+})
+
+test("stabilizing release-run reads dedupe exact repeat observations", async () => {
+  const fixture = captureFixture({ runs: [releaseRun(30, 1, "queued")] })
+  const evidence = await captureOwnerEvidence(fixture.input)
+
+  assert.deepEqual(
+    fixture.calls.filter((call) => call[1] === "release-runs").map((call) => call[4]),
+    [NONTERMINAL_STATUSES, STABILIZING_NONTERMINAL_STATUSES].flat(),
+  )
+  assert.deepEqual(evidence.github.nonterminalReleaseRuns, [releaseRun(30, 1, "queued")])
+})
+
+test("stabilizing release-run reads abort on changed observations of one run id", async () => {
+  const fixture = captureFixture()
+  let transitioned = false
+  fixture.githubTarget.listReleaseRuns = async (repository, path, status) => {
+    fixture.calls.push(["github", "release-runs", repository, path, status])
+    if (status === "queued" && !transitioned) {
+      transitioned = true
+      return present([releaseRun(30, 1, "queued")])
+    }
+    return present(status === "in_progress" && transitioned ? [releaseRun(30, 1, status)] : [])
+  }
+
+  await assert.rejects(
+    () => captureOwnerEvidence(fixture.input),
+    /duplicate|conflict|identity|stabili/u,
   )
 })
 
