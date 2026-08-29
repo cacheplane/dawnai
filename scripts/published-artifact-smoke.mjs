@@ -106,7 +106,9 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
 
     if (selectedPackages.some(({ name }) => name === "@dawn-ai/sandbox")) {
       await dependencies.assertDockerAvailable()
-      await dependencies.runDockerSandboxInstalledProbe(tempDir)
+      await dependencies.runDockerSandboxInstalledProbe(tempDir, {
+        runCommand: dependencies.runCommand,
+      })
     }
 
     if (!options.pgvector) {

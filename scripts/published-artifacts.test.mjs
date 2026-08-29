@@ -1494,7 +1494,9 @@ describe("final release published smoke topology", () => {
     const reconcile = workflow.jobs?.["reconcile-smokes"]
     assert.ok(Array.isArray(reconcile?.steps))
     const download = reconcile.steps.find(
-      (step) => step.uses === "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      (step) =>
+        step.uses === "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" &&
+        step.with?.["merge-multiple"] === true,
     )
     assert.ok(download)
     for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
@@ -2353,6 +2355,7 @@ describe("published TypeScript tooling smoke", () => {
     )
     assert.deepEqual(harness.events[4], {
       root: harness.tempDir,
+      runCommandForwarded: true,
       type: "docker-sandbox-probe",
     })
   })
@@ -3071,8 +3074,12 @@ async function createPublishedSmokeHarness({
     async runRuntimeSmoke() {
       events.push({ type: "docker" })
     },
-    async runDockerSandboxInstalledProbe(root) {
-      events.push({ root, type: "docker-sandbox-probe" })
+    async runDockerSandboxInstalledProbe(root, options) {
+      events.push({
+        root,
+        runCommandForwarded: options?.runCommand === runCommandForHarness,
+        type: "docker-sandbox-probe",
+      })
     },
     async runTypeScriptToolingProbe({ expectedTypeScriptVersion, root, runCommand: command }) {
       events.push({ expectedTypeScriptVersion, root, type: "tooling-probe" })

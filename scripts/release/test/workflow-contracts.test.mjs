@@ -1704,7 +1704,7 @@ test("root scripts retain the controller surfaces without legacy publication com
   assert.equal(packageJson.scripts["release:preflight"], "node scripts/release/preflight.mjs")
   assert.equal(
     packageJson.scripts["test:release-controller"],
-    "node --test scripts/release/test/*.test.mjs",
+    "node --test scripts/published-artifacts.test.mjs scripts/release/test/*.test.mjs",
   )
   for (const command of LEGACY_PACKAGE_COMMANDS)
     assert.equal(packageJson.scripts[command], undefined)

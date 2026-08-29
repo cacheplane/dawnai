@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import {
   access,
   chmod,
@@ -568,6 +568,39 @@ test("the production publisher deadline cancels registry reads and poll delays",
   assert.equal(pollSignal.aborted, true)
 })
 
+test("publisher descendant PID readiness rejects incomplete files", () => {
+  assert.equal(
+    readPublisherDescendantPid("unused", () => ""),
+    null,
+  )
+  for (const invalid of ["0", "-1", "01", "1\n", "not-a-pid", "9007199254740992"]) {
+    assert.equal(
+      readPublisherDescendantPid("unused", () => invalid),
+      null,
+    )
+  }
+  assert.equal(
+    readPublisherDescendantPid("unused", () => "12345"),
+    12345,
+  )
+
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" })
+  assert.equal(
+    readPublisherDescendantPid("unused", () => {
+      throw missing
+    }),
+    null,
+  )
+  const denied = Object.assign(new Error("denied"), { code: "EACCES" })
+  assert.throws(
+    () =>
+      readPublisherDescendantPid("unused", () => {
+        throw denied
+      }),
+    (error) => error === denied,
+  )
+})
+
 test("the production publisher deadline preserves OIDC and terminates the npm subprocess tree", {
   skip: process.platform === "win32",
   timeout: 10_000,
@@ -618,6 +651,7 @@ setInterval(() => {}, 1000)
     RELEASE_RUNNER_SECRET: "must-not-leak",
   }
   let deadlineTimer
+  let descendantPid
 
   await assert.rejects(
     runPublisherCli(cli.argv, {
@@ -628,7 +662,9 @@ setInterval(() => {}, 1000)
       overallTimeoutMs: 5_000,
       scheduleTimeout(callback) {
         deadlineTimer = setInterval(() => {
-          if (!existsSync(descendantPath)) return
+          const readyPid = readPublisherDescendantPid(descendantPath)
+          if (readyPid === null) return
+          descendantPid = readyPid
           clearInterval(deadlineTimer)
           queueMicrotask(callback)
         }, 5)
@@ -652,7 +688,7 @@ setInterval(() => {}, 1000)
     workflowRef: environment.GITHUB_WORKFLOW_REF,
     runnerEnvironment: environment.RUNNER_ENVIRONMENT,
   })
-  const descendantPid = Number(await readFile(descendantPath, "utf8"))
+  assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0)
   await waitForProcessExit(descendantPid)
 })
 
@@ -1194,6 +1230,18 @@ async function waitForProcessExit(pid) {
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
   assert.fail(`publisher descendant process ${pid} survived deadline termination`)
+}
+
+function readPublisherDescendantPid(target, read = readFileSync) {
+  try {
+    const source = read(target, "utf8")
+    if (!/^[1-9]\d*$/u.test(source)) return null
+    const pid = Number(source)
+    return Number.isSafeInteger(pid) ? pid : null
+  } catch (error) {
+    if (error?.code === "ENOENT") return null
+    throw error
+  }
 }
 
 function npmAttestationName(name) {
