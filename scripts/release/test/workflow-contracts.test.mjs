@@ -692,7 +692,21 @@ test("the independent workflow relays default-branch audits and verifies exact t
   assert.equal(checkout.with?.ref, workflowExpression("github.ref"))
   assert.equal(checkout.with?.["fetch-depth"], 0)
   assert.equal(checkout.with?.["persist-credentials"], false)
+  const draftPnpm = onlyStepUsing(draft, ACTIONS.pnpm)
+  assert.deepEqual(draftPnpm.with, { version: "10.33.0" })
+  const draftNode = onlyStepUsing(draft, ACTIONS.node)
+  const draftNpm = onlyRunStepMatching(draft, /^test "\$\(npm --version\)" = "11\.17\.0"$/u)
+  const draftInstall = onlyRunStepMatching(
+    draft,
+    /^"\$PNPM_HOME\/pnpm" install --filter \. --frozen-lockfile --ignore-scripts$/u,
+  )
   const execute = onlyRunStepMatching(draft, /node scripts\/release\/independent-audit\.mjs\b/u)
+  assert.deepEqual(
+    [checkout, draftPnpm, draftNode, draftNpm, draftInstall, execute].map((step) =>
+      draft.steps.indexOf(step),
+    ),
+    [0, 1, 2, 3, 4, 5],
+  )
   assertCommandFlags(execute.run, "node scripts/release/independent-audit.mjs", [
     "--version",
     "--commit-sha",
@@ -717,9 +731,29 @@ test("the independent workflow relays default-branch audits and verifies exact t
   const publishedCheckout = onlyStepUsing(published, ACTIONS.checkout)
   assert.equal(publishedCheckout.with?.ref, workflowExpression("github.ref"))
   assert.equal(publishedCheckout.with?.["fetch-depth"], 0)
+  assert.equal(publishedCheckout.with?.["persist-credentials"], false)
+  const publishedPnpm = onlyStepUsing(published, ACTIONS.pnpm)
+  assert.deepEqual(publishedPnpm.with, { version: "10.33.0" })
+  const publishedNode = onlyStepUsing(published, ACTIONS.node)
+  const publishedNpm = onlyRunStepMatching(published, /^test "\$\(npm --version\)" = "11\.17\.0"$/u)
+  const publishedInstall = onlyRunStepMatching(
+    published,
+    /^"\$PNPM_HOME\/pnpm" install --filter \. --frozen-lockfile --ignore-scripts$/u,
+  )
   const publishedExecute = onlyRunStepMatching(
     published,
     /node scripts\/release\/post-publication-audit\.mjs\b/u,
+  )
+  assert.deepEqual(
+    [
+      publishedCheckout,
+      publishedPnpm,
+      publishedNode,
+      publishedNpm,
+      publishedInstall,
+      publishedExecute,
+    ].map((step) => published.steps.indexOf(step)),
+    [0, 1, 2, 3, 4, 5],
   )
   assertCommandFlags(publishedExecute.run, "node scripts/release/post-publication-audit.mjs", [
     "--version",

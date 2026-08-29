@@ -1378,6 +1378,14 @@
         "classification": "safe",
         "job": "verify-draft",
         "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-draft",
+        "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
         "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
@@ -1385,7 +1393,7 @@
       {
         "classification": "safe",
         "job": "verify-draft",
-        "stepIndex": 2,
+        "stepIndex": 3,
         "step": "Assert exact npm runtime",
         "kind": "run",
         "value": "test \"$(npm --version)\" = \"11.17.0\""
@@ -1393,7 +1401,15 @@
       {
         "classification": "safe",
         "job": "verify-draft",
-        "stepIndex": 3,
+        "stepIndex": 4,
+        "step": "Install audit runtime dependency",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-draft",
+        "stepIndex": 5,
         "step": "Independently audit the exact draft release",
         "kind": "run",
         "value": "node scripts/release/independent-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
@@ -1401,7 +1417,7 @@
       {
         "classification": "safe",
         "job": "verify-draft",
-        "stepIndex": 4,
+        "stepIndex": 6,
         "step": "Upload exact audit result",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
@@ -1418,6 +1434,14 @@
         "classification": "safe",
         "job": "verify-published",
         "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-published",
+        "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
         "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
@@ -1425,7 +1449,7 @@
       {
         "classification": "safe",
         "job": "verify-published",
-        "stepIndex": 2,
+        "stepIndex": 3,
         "step": "Assert exact npm runtime",
         "kind": "run",
         "value": "test \"$(npm --version)\" = \"11.17.0\""
@@ -1433,7 +1457,15 @@
       {
         "classification": "safe",
         "job": "verify-published",
-        "stepIndex": 3,
+        "stepIndex": 4,
+        "step": "Install audit runtime dependency",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-published",
+        "stepIndex": 5,
         "step": "Audit the published immutable release",
         "kind": "run",
         "value": "node scripts/release/post-publication-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
@@ -1441,7 +1473,7 @@
       {
         "classification": "safe",
         "job": "verify-published",
-        "stepIndex": 4,
+        "stepIndex": 6,
         "step": "Upload exact post-publication audit result",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
