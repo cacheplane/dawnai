@@ -332,7 +332,7 @@ generated scripts can reconstruct an abandonment command. Do not add another
 recognizer or a shell parser. The sound boundary is a finite versioned set of
 exact reviewed complete-workflow execution descriptors.
 
-- [ ] **Step 1: Write the immutable fixtures and classifier tests**
+- [x] **Step 1: Write the immutable fixtures and classifier tests**
 
 Copy the current protected `release.yml` bytes to the protected fixture. Create
 the disabled fixture by applying exactly Task 6's approved removal set to that
@@ -365,7 +365,7 @@ separate evidence status. Aggregation accepts only `absent`, `disabled`, and
 disabled only when at least one reviewed disabled workflow is reachable and
 none is protected, and rejects empty, all-absent, invalid, or unavailable input.
 
-- [ ] **Step 2: Run the new tests and observe RED**
+- [x] **Step 2: Run the new tests and observe RED**
 
 ```bash
 node --test scripts/release/test/abandonment-reachability.test.mjs
@@ -373,7 +373,7 @@ node --test scripts/release/test/abandonment-reachability.test.mjs
 
 Expected: FAIL because the production module and policy do not exist.
 
-- [ ] **Step 3: Implement strict topology plus complete-workflow policy matching**
+- [x] **Step 3: Implement strict topology plus complete-workflow policy matching**
 
 Parse at most 2 MiB of strict UTF-8 YAML with unique-key enforcement and aliases,
 anchors, tags, warnings, and multiple documents rejected. Snapshot parsed data
@@ -418,7 +418,7 @@ modes, and no digest shared across modes. Tests recompute both policy digests
 from the immutable fixtures. No shell scanner or shell-parser dependency is
 permitted.
 
-- [ ] **Step 4: Run RED-to-GREEN and regression tests**
+- [x] **Step 4: Run RED-to-GREEN and regression tests**
 
 ```bash
 node --test scripts/release/test/abandonment-reachability.test.mjs
@@ -428,7 +428,7 @@ pnpm exec biome check \
   scripts/release/test/abandonment-reachability.test.mjs
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add \

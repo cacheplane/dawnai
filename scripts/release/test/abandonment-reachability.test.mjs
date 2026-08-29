@@ -14,6 +14,7 @@ import {
   loadAbandonmentWorkflowPolicy,
   parseAbandonmentWorkflowPolicy,
   parseCanonicalReleaseWorkflow,
+  parseReleaseWorkflow,
   validateAbandonmentWorkflowPolicy,
 } from "../abandonment-workflow-policy.mjs"
 
@@ -548,6 +549,11 @@ test("malformed and ambiguous workflow bytes fail closed", () => {
       name,
     )
   }
+})
+
+test("workflow parsing rejects complex mapping keys before JSON conversion", () => {
+  const bytes = Buffer.from("? [release, policy]\n: ignored\nname: Release\n")
+  assert.throws(() => parseReleaseWorkflow(bytes), /workflow/u)
 })
 
 test("policy validation rejects malformed, unordered, duplicate, cross-mode, and unknown entries", () => {

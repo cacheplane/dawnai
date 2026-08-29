@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 
-import { isAlias, parseDocument, visit } from "yaml"
+import { isAlias, isPair, isScalar, parseDocument, visit } from "yaml"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
 
@@ -159,7 +159,13 @@ function parseWorkflow(value) {
 
   let forbiddenNode = false
   visit(document, (_key, node) => {
-    if (isAlias(node) || node?.anchor !== undefined || node?.tag !== undefined) {
+    if (
+      isAlias(node) ||
+      node?.anchor !== undefined ||
+      node?.tag !== undefined ||
+      (isPair(node) &&
+        (!isScalar(node.key) || typeof node.key.value !== "string" || node.key.tag !== undefined))
+    ) {
       forbiddenNode = true
     }
   })
