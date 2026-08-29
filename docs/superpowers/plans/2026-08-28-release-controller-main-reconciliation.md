@@ -639,6 +639,7 @@ filtered-sweep implementation.
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
+- Modify: `scripts/release/test/abandonment-reachability.test.mjs`
 - Modify: `scripts/release/test/workflow-contracts.test.mjs`
 - Modify: `scripts/release/test/fixtures/workflow-entrypoints.json`
 - Modify: `scripts/release/test/fixtures/workflow-safe-executables.json`
