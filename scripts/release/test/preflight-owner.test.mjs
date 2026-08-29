@@ -495,6 +495,73 @@ test("normalization rejects nested extras, duplicate identities, and mode/enviro
   assert.throws(() => canonicalOwnerEvidenceBytes(protectedWithoutEnvironment))
 })
 
+test("owner evidence hashes require primitive strings and reject duplicate array identities", async (t) => {
+  const fixture = captureFixture({
+    candidates: [
+      candidate("refs/tags/v0.2.0", TAG_OBJECT_SHA_2, PEELED_SHA_2, DISABLED_BYTES),
+      candidate("refs/tags/v0.1.0", TAG_OBJECT_SHA_1, PEELED_SHA_1, DISABLED_BYTES),
+    ],
+    runs: [releaseRun(3, 1, "in_progress")],
+  })
+  const evidence = await captureOwnerEvidence(fixture.input)
+  const mutations = [
+    ["file SHA-256", (value) => (value.files[0].sha256 = [value.files[0].sha256])],
+    [
+      "candidate object SHA",
+      (value) =>
+        (value.github.managedCandidateRefs[0].object.sha = [
+          value.github.managedCandidateRefs[0].object.sha,
+        ]),
+    ],
+    [
+      "nested peeled SHA",
+      (value) =>
+        (value.github.managedCandidateRefs[0].peeledCommitSha = [
+          [value.github.managedCandidateRefs[0].peeledCommitSha],
+        ]),
+    ],
+    [
+      "candidate workflow SHA-256",
+      (value) =>
+        (value.github.managedCandidateRefs[0].workflow.sha256 = [
+          value.github.managedCandidateRefs[0].workflow.sha256,
+        ]),
+    ],
+    [
+      "nested run head SHA",
+      (value) =>
+        (value.github.nonterminalReleaseRuns[0].headSha = [
+          [value.github.nonterminalReleaseRuns[0].headSha],
+        ]),
+    ],
+  ]
+  for (const [name, mutate] of mutations) {
+    await t.test(name, () => {
+      const changed = structuredClone(evidence)
+      mutate(changed)
+      assert.throws(() => parseOwnerEvidence(canonicalOwnerEvidenceBytes(changed)))
+    })
+  }
+
+  await t.test("duplicate tag object SHA arrays", () => {
+    const duplicateArrays = structuredClone(evidence)
+    duplicateArrays.github.managedCandidateRefs[0].object.sha = [TAG_OBJECT_SHA_1]
+    duplicateArrays.github.managedCandidateRefs[1].object.sha = [TAG_OBJECT_SHA_1]
+    assert.throws(() => parseOwnerEvidence(canonicalOwnerEvidenceBytes(duplicateArrays)))
+  })
+
+  await t.test("capture adapter blob SHA array", async () => {
+    const capture = captureFixture()
+    capture.githubTarget.getWorkflowContent = async () =>
+      present({
+        path: RELEASE_WORKFLOW,
+        sha: [BLOB_SHA],
+        contentBase64: DISABLED_BYTES.toString("base64"),
+      })
+    await assert.rejects(() => captureOwnerEvidence(capture.input))
+  })
+})
+
 test("new verification checks fail or become unprovable on relevant mutations", async () => {
   const baseFixture = captureFixture()
   const base = await captureOwnerEvidence(baseFixture.input)

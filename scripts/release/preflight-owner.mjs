@@ -104,7 +104,7 @@ export async function captureOwnerEvidence({
   })
 
   const headSha = await readHead()
-  if (typeof headSha !== "string" || !SHA_PATTERN.test(headSha)) {
+  if (!isSha(headSha)) {
     throw new TypeError("Owner preflight HEAD is invalid")
   }
   const ghVersion = bindMethod(github, "version", "owner preflight GitHub adapter")
@@ -277,7 +277,7 @@ export function parseOwnerEvidence(value) {
 export function verifyOwnerEvidence({ evidence, currentHeadSha, currentFiles, now = Date.now }) {
   const normalized = normalizeOwnerEvidence(evidence)
   if (typeof now !== "function") throw new TypeError("Owner evidence verifier clock is invalid")
-  if (typeof currentHeadSha !== "string" || !SHA_PATTERN.test(currentHeadSha)) {
+  if (!isSha(currentHeadSha)) {
     throw new TypeError("Current owner preflight HEAD is invalid")
   }
   if (!(currentFiles instanceof Map))
@@ -395,8 +395,7 @@ function normalizeOwnerEvidence(value) {
     !REPOSITORY_PATTERN.test(evidence.repository) ||
     !["string", "object"].includes(typeof evidence.defaultBranch) ||
     (evidence.defaultBranch !== null && evidence.defaultBranch !== "main") ||
-    typeof evidence.headSha !== "string" ||
-    !SHA_PATTERN.test(evidence.headSha) ||
+    !isSha(evidence.headSha) ||
     !isCanonicalTimestamp(evidence.capturedAt) ||
     !isCanonicalTimestamp(evidence.expiresAt)
   ) {
@@ -448,7 +447,7 @@ function normalizeFileEvidence(value) {
   }
   return value.map((entry, index) => {
     assertExactFields(entry, ["path", "sha256"], "Owner evidence file")
-    if (entry.path !== OWNER_PREFLIGHT_FILES[index] || !SHA256_PATTERN.test(entry.sha256)) {
+    if (entry.path !== OWNER_PREFLIGHT_FILES[index] || !isSha256(entry.sha256)) {
       throw new TypeError("Owner evidence file identity is invalid")
     }
     return { path: entry.path, sha256: entry.sha256 }
@@ -675,7 +674,7 @@ function normalizeWorkflowEvidence(value) {
 
 function normalizeRemoteDefaultBranch(value) {
   assertExactFields(value, ["ref", "commitSha", "workflow"], "Owner remote default branch")
-  if (value.ref !== "refs/heads/main" || !SHA_PATTERN.test(value.commitSha)) {
+  if (value.ref !== "refs/heads/main" || !isSha(value.commitSha)) {
     throw new TypeError("Owner remote default branch identity is invalid")
   }
   return {
@@ -701,8 +700,8 @@ function normalizeManagedCandidateEvidence(value) {
     if (
       !isManagedTagRef(entry.ref) ||
       entry.object.type !== "tag" ||
-      !SHA_PATTERN.test(entry.object.sha) ||
-      !SHA_PATTERN.test(entry.peeledCommitSha) ||
+      !isSha(entry.object.sha) ||
+      !isSha(entry.peeledCommitSha) ||
       entry.object.sha === entry.peeledCommitSha ||
       refs.has(entry.ref) ||
       objects.has(entry.object.sha)
@@ -738,7 +737,7 @@ function normalizeReachabilityWorkflowEvidence(value, { absenceAllowed }) {
   }
   if (
     value.status !== "present" ||
-    !SHA256_PATTERN.test(value.sha256) ||
+    !isSha256(value.sha256) ||
     !["disabled", "protected"].includes(value.mode)
   ) {
     throw new TypeError("Present owner workflow reachability evidence is invalid")
@@ -769,7 +768,7 @@ function normalizeReleaseRunEvidence(value) {
       entry.runAttempt < 1 ||
       !NONTERMINAL_RUN_STATUSES.includes(entry.status) ||
       !isBoundedString(entry.event, MAX_GITHUB_EVENT_BYTES) ||
-      !SHA_PATTERN.test(entry.headSha) ||
+      !isSha(entry.headSha) ||
       !isBoundedString(entry.headBranch, MAX_GITHUB_BRANCH_BYTES) ||
       ids.has(entry.id)
     ) {
@@ -957,7 +956,7 @@ function normalizeDefaultBranchResult(result, headSha) {
   if (
     value.value.ref !== "refs/heads/main" ||
     value.value.object.type !== "commit" ||
-    !SHA_PATTERN.test(value.value.object.sha) ||
+    !isSha(value.value.object.sha) ||
     value.value.object.sha !== headSha
   ) {
     throw new TypeError("Owner remote default branch does not match local HEAD")
@@ -988,7 +987,7 @@ function normalizeManagedCandidateRefsResult(result) {
     if (
       !isManagedTagRef(entry.ref) ||
       entry.object.type !== "tag" ||
-      !SHA_PATTERN.test(entry.object.sha) ||
+      !isSha(entry.object.sha) ||
       refs.has(entry.ref) ||
       objects.has(entry.object.sha)
     ) {
@@ -1012,7 +1011,7 @@ function normalizeAnnotatedTagResult(result, tagObjectSha) {
   if (
     value.value.sha !== tagObjectSha ||
     value.value.object.type !== "commit" ||
-    !SHA_PATTERN.test(value.value.object.sha) ||
+    !isSha(value.value.object.sha) ||
     value.value.object.sha === tagObjectSha
   ) {
     throw new TypeError("Owner annotated tag peel is inconsistent")
@@ -1044,7 +1043,7 @@ function normalizeWorkflowContentResult(result, abandonmentEnvironment, { absenc
   assertExactFields(value.value, ["path", "sha", "contentBase64"], "Owner workflow content")
   if (
     value.value.path !== RELEASE_WORKFLOW ||
-    !SHA_PATTERN.test(value.value.sha) ||
+    !isSha(value.value.sha) ||
     typeof value.value.contentBase64 !== "string" ||
     value.value.contentBase64.length === 0
   ) {
@@ -1533,6 +1532,14 @@ function isCanonicalTimestamp(value) {
   if (typeof value !== "string") return false
   const milliseconds = Date.parse(value)
   return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value
+}
+
+function isSha(value) {
+  return typeof value === "string" && SHA_PATTERN.test(value)
+}
+
+function isSha256(value) {
+  return typeof value === "string" && SHA256_PATTERN.test(value)
 }
 
 function isBoundedString(value, maximumBytes) {
