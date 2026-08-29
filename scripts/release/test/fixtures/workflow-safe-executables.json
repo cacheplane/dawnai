@@ -1189,64 +1189,6 @@
         "value": "helm install dawn-app charts/dawn-app \\\n  --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl rollout status deploy/dawn-app --timeout=120s\nkubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
       }
     ],
-    "dependency-security-receipt.yml": [
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 0,
-        "step": "Validate receipt correlation inputs",
-        "kind": "run",
-        "value": "set -euo pipefail\nsha_pattern='^[0-9a-f]{40}$'\nfor value in \"$EXPECTED_MAIN_SHA\" \"$EXPECTED_REVIEWED_BASE_SHA\" \"$EXPECTED_REVIEWED_HEAD_SHA\" \"$EXPECTED_MERGE_SHA\"; do\n  if [[ ! \"$value\" =~ $sha_pattern ]]; then\n    echo \"invalid receipt correlation SHA\" >&2\n    exit 2\n  fi\ndone\nif [[ ! \"$EXPECTED_PR_NUMBER\" =~ ^[1-9][0-9]{0,14}$ ]]; then\n  echo \"invalid pull request number\" >&2\n  exit 2\nfi\nif [[ ! \"$RECEIPT_SHA256\" =~ ^[0-9a-f]{64}$ ]]; then\n  echo \"invalid receipt SHA-256\" >&2\n  exit 2\nfi\n"
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 1,
-        "step": "Checkout exact observation",
-        "kind": "step-uses",
-        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 2,
-        "step": "Setup Node.js",
-        "kind": "step-uses",
-        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 3,
-        "step": "Require unchanged default branch head",
-        "kind": "run",
-        "value": "set -euo pipefail\nif [[ \"$GITHUB_SHA\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"workflow dispatch SHA does not match expectedMainSha\" >&2\n  exit 2\nfi\nlive_main_sha=\"$(gh api repos/cacheplane/dawnai/git/ref/heads/main --jq '.object.sha')\"\nif [[ \"$live_main_sha\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"default branch moved after the reviewed observation\" >&2\n  exit 2\nfi\n"
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 4,
-        "step": "Prepare sealed receipt directory",
-        "kind": "run",
-        "value": "install -d -m 0700 -- \"$RECEIPT_OUTPUT_ROOT\""
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 5,
-        "step": "Seal canonical receipt",
-        "kind": "run",
-        "value": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
-      },
-      {
-        "classification": "safe",
-        "job": "upload",
-        "stepIndex": 6,
-        "step": "Upload sealed receipt",
-        "kind": "step-uses",
-        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-      }
-    ],
     "claude-review.yml": [
       {
         "classification": "safe",
@@ -1307,6 +1249,64 @@
         "value": "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3"
       }
     ],
+    "dependency-security-receipt.yml": [
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 0,
+        "step": "Validate receipt correlation inputs",
+        "kind": "run",
+        "value": "set -euo pipefail\nsha_pattern='^[0-9a-f]{40}$'\nfor value in \"$EXPECTED_MAIN_SHA\" \"$EXPECTED_REVIEWED_BASE_SHA\" \"$EXPECTED_REVIEWED_HEAD_SHA\" \"$EXPECTED_MERGE_SHA\"; do\n  if [[ ! \"$value\" =~ $sha_pattern ]]; then\n    echo \"invalid receipt correlation SHA\" >&2\n    exit 2\n  fi\ndone\nif [[ ! \"$EXPECTED_PR_NUMBER\" =~ ^[1-9][0-9]{0,14}$ ]]; then\n  echo \"invalid pull request number\" >&2\n  exit 2\nfi\nif [[ ! \"$RECEIPT_SHA256\" =~ ^[0-9a-f]{64}$ ]]; then\n  echo \"invalid receipt SHA-256\" >&2\n  exit 2\nfi\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 1,
+        "step": "Checkout exact observation",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 3,
+        "step": "Require unchanged default branch head",
+        "kind": "run",
+        "value": "set -euo pipefail\nif [[ \"$GITHUB_SHA\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"workflow dispatch SHA does not match expectedMainSha\" >&2\n  exit 2\nfi\nlive_main_sha=\"$(gh api repos/cacheplane/dawnai/git/ref/heads/main --jq '.object.sha')\"\nif [[ \"$live_main_sha\" != \"$EXPECTED_MAIN_SHA\" ]]; then\n  echo \"default branch moved after the reviewed observation\" >&2\n  exit 2\nfi\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 4,
+        "step": "Prepare sealed receipt directory",
+        "kind": "run",
+        "value": "install -d -m 0700 -- \"$RECEIPT_OUTPUT_ROOT\""
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 5,
+        "step": "Seal canonical receipt",
+        "kind": "run",
+        "value": "node scripts/security/dependency-evidence.mjs seal-receipt \\\n  --expected-main-sha \"$EXPECTED_MAIN_SHA\" \\\n  --expected-pr-number \"$EXPECTED_PR_NUMBER\" \\\n  --expected-reviewed-base-sha \"$EXPECTED_REVIEWED_BASE_SHA\" \\\n  --expected-reviewed-head-sha \"$EXPECTED_REVIEWED_HEAD_SHA\" \\\n  --expected-merge-sha \"$EXPECTED_MERGE_SHA\" \\\n  --receipt-gzip-base64 \"$RECEIPT_GZIP_BASE64\" \\\n  --receipt-sha256 \"$RECEIPT_SHA256\" \\\n  --output-root \"$RECEIPT_OUTPUT_ROOT\" \\\n  --output-directory \"$RECEIPT_OUTPUT_DIRECTORY\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "upload",
+        "stepIndex": 6,
+        "step": "Upload sealed receipt",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      }
+    ],
     "publish-chart.yml": [
       {
         "classification": "safe",
@@ -1344,23 +1344,47 @@
     "published-artifact-verify.yml": [
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "coordinate",
         "stepIndex": 0,
-        "step": "Checkout",
+        "step": "Checkout trusted default-branch coordinator",
         "kind": "step-uses",
         "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "coordinate",
         "stepIndex": 1,
-        "step": "Setup pnpm",
+        "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "coordinate",
+        "stepIndex": 2,
+        "step": "Route exact independent audit",
+        "kind": "run",
+        "value": "node scripts/release/independent-audit-coordinator.mjs \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-draft",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-draft",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "verify-draft",
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
@@ -1368,57 +1392,55 @@
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "verify-draft",
         "stepIndex": 3,
-        "step": "Install",
+        "step": "Assert exact npm runtime",
         "kind": "run",
-        "value": "pnpm install --frozen-lockfile"
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "verify-draft",
         "stepIndex": 4,
-        "step": "Registry and tarball verification",
+        "step": "Install audit runtime dependency",
         "kind": "run",
-        "value": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\""
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "verify-draft",
         "stepIndex": 5,
-        "step": "Published install/runtime smoke",
+        "step": "Independently audit the exact draft release",
         "kind": "run",
-        "value": "args=(--version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\")\nif [ \"$DAWN_RUN_PGVECTOR\" = \"true\" ] && [ \"$DAWN_PACKAGE_SET\" != \"typescript-tooling\" ] && [ \"$DAWN_PACKAGE_SET\" != \"docker-sandbox\" ]; then\n  args+=(--pgvector)\nfi\npnpm published:smoke -- \"${args[@]}\"\n"
+        "value": "node scripts/release/independent-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
       },
       {
         "classification": "safe",
-        "job": "verify",
+        "job": "verify-draft",
         "stepIndex": 6,
-        "step": "Published install/runtime smoke with OpenAI",
-        "kind": "run",
-        "value": "if [ \"$DAWN_PACKAGE_SET\" = \"typescript-tooling\" ] || [ \"$DAWN_PACKAGE_SET\" = \"docker-sandbox\" ]; then\n  echo \"$DAWN_PACKAGE_SET does not support the OpenAI runtime smoke\" >&2\n  exit 1\nfi\n\nif [ \"$DAWN_RUN_PGVECTOR\" != \"true\" ]; then\n  echo \"runOpenAI=true requires runPgvector=true\" >&2\n  exit 1\nfi\n\nif [ -z \"${OPENAI_API_KEY}\" ]; then\n  echo \"OPENAI_API_KEY secret is required when runOpenAI=true\" >&2\n  exit 1\nfi\n\nargs=(--version \"$DAWN_PUBLISHED_VERSION\" --package-set \"$DAWN_PACKAGE_SET\" --pgvector --openai)\npnpm published:smoke -- \"${args[@]}\"\n"
-      }
-    ],
-    "release-shadow.yml": [
+        "step": "Upload exact audit result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 0,
-        "step": "Checkout",
+        "step": "Checkout exact annotated tag",
         "kind": "step-uses",
         "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 1,
         "step": "Setup pnpm",
         "kind": "step-uses",
-        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
@@ -1426,57 +1448,145 @@
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 3,
-        "step": "Install root release tooling",
+        "step": "Assert exact npm runtime",
         "kind": "run",
-        "value": "pnpm install --filter . --frozen-lockfile --ignore-scripts"
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 4,
-        "step": "Validate release inventory",
+        "step": "Install audit runtime dependency",
         "kind": "run",
-        "value": "pnpm check:release-inventory"
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 5,
-        "step": "Reconcile release state in shadow mode",
+        "step": "Audit the published immutable release",
         "kind": "run",
-        "value": "if [[ -n \"$VERSION\" && -z \"$COMMIT_SHA\" ]] || [[ -z \"$VERSION\" && -n \"$COMMIT_SHA\" ]]; then\n  echo \"version and commitSha must be supplied together\" >&2\n  exit 2\nfi\nargs=(--repository cacheplane/dawnai --format markdown)\nif [[ -n \"$VERSION\" ]]; then\n  args+=(--version \"$VERSION\" --commit-sha \"$COMMIT_SHA\")\nfi\npnpm release:shadow \"${args[@]}\" >> \"$GITHUB_STEP_SUMMARY\"\n"
+        "value": "node scripts/release/post-publication-audit.mjs \\\n  --version \"${{ inputs.version }}\" \\\n  --commit-sha \"${{ inputs.commitSha }}\" \\\n  --manifest-sha256 \"${{ inputs.manifestSha256 }}\" \\\n  --result \"$RUNNER_TEMP/audit-result.json\"\n"
       },
       {
         "classification": "safe",
-        "job": "shadow",
+        "job": "verify-published",
         "stepIndex": 6,
-        "step": "Collect release preflight evidence",
-        "kind": "run",
-        "value": "args=(--repository cacheplane/dawnai --workflow .github/workflows/release.yml --format markdown)\nif [[ -n \"$VERSION\" ]]; then\n  args+=(--version \"$VERSION\")\nfi\npnpm release:preflight \"${args[@]}\" >> \"$GITHUB_STEP_SUMMARY\"\n"
+        "step": "Upload exact post-publication audit result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       }
     ],
     "release.yml": [
       {
         "classification": "safe",
-        "job": "release",
+        "job": "detect",
         "stepIndex": 0,
-        "step": "Checkout",
+        "step": "Checkout controller",
         "kind": "step-uses",
         "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       },
       {
         "classification": "safe",
-        "job": "release",
+        "job": "detect",
         "stepIndex": 1,
-        "step": "Setup pnpm",
+        "step": "Setup Node.js",
         "kind": "step-uses",
-        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "safe",
-        "job": "release",
+        "job": "detect",
+        "stepIndex": 2,
+        "step": "Seal the production event",
+        "kind": "run",
+        "value": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" ]]; then\n  node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA}}))' \"$RUNNER_TEMP/release-event.json\"\nelse\n  cp \"$GITHUB_EVENT_PATH\" \"$RUNNER_TEMP/release-event.json\"\nfi\n"
+      },
+      {
+        "classification": "safe",
+        "job": "detect",
+        "stepIndex": 3,
+        "step": "Observe one production transition",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs observe \\\n  --event \"$RUNNER_TEMP/release-event.json\" \\\n  --report \"$RUNNER_TEMP/production-observation.json\" \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "detect",
+        "stepIndex": 4,
+        "step": "Preserve production observation",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "detect",
+        "stepIndex": 5,
+        "step": "Require a non-ambiguous route",
+        "kind": "run",
+        "value": "test \"$DISPOSITION\" != \"blocked\""
+      },
+      {
+        "classification": "safe",
+        "job": "tag",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "tag",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "tag",
+        "stepIndex": 2,
+        "step": "Write exact candidate identity",
+        "kind": "run",
+        "value": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:\"CI\",ciCheck:\"validate\",publisherWorkflow:\".github/workflows/release.yml\"}))' \"$RUNNER_TEMP/candidate.json\"\n"
+      },
+      {
+        "classification": "publication",
+        "job": "tag",
+        "stepIndex": 3,
+        "step": "Create or validate annotated candidate tag",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs tag --candidate \"$RUNNER_TEMP/candidate.json\""
+      },
+      {
+        "classification": "safe",
+        "job": "tag",
+        "stepIndex": 4,
+        "step": "Continue at the exact tag or relay once",
+        "kind": "run",
+        "value": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
@@ -1484,99 +1594,851 @@
       },
       {
         "classification": "safe",
-        "job": "release",
+        "job": "prepare",
         "stepIndex": 3,
-        "step": "Install",
+        "step": "Install exact workspace",
         "kind": "run",
-        "value": "pnpm install --frozen-lockfile"
+        "value": "\"$PNPM_HOME/pnpm\" install --frozen-lockfile"
       },
       {
         "classification": "safe",
-        "job": "release",
+        "job": "prepare",
         "stepIndex": 4,
-        "step": "Validate Release Candidate",
-        "kind": "run",
-        "value": "pnpm ci:validate"
+        "step": "Download production observation",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
       },
       {
         "classification": "safe",
-        "job": "release",
+        "job": "prepare",
         "stepIndex": 5,
-        "step": "Setup Node.js for publishing",
+        "step": "Derive trusted preparation handoff",
+        "kind": "run",
+        "value": "node scripts/release/workflow-handoff.mjs \\\n  --report \"$RUNNER_TEMP/observation/production-observation.json\" \\\n  --root \"$GITHUB_WORKSPACE\" \\\n  --output \"$RUNNER_TEMP/preparation-handoff.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 6,
+        "step": "Prepare and verify immutable package payload",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs prepare \\\n  --handoff \"$RUNNER_TEMP/preparation-handoff.json\" \\\n  --root \"$GITHUB_WORKSPACE\" \\\n  --output-dir \"$RUNNER_TEMP/release-payload\" \\\n  --candidate-output \"$RUNNER_TEMP/candidate.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 7,
+        "step": "Read sealed payload identity",
+        "kind": "run",
+        "value": "node -e 'const fs=require(\"node:fs\"),c=require(\"node:crypto\"),m=fs.readFileSync(process.argv[1]),j=JSON.parse(m),s=j.commitSha.slice(0,12);fs.appendFileSync(process.env.GITHUB_OUTPUT,\"artifact_name=\"+j.artifact.name+\"\\nhandoff_name=release-record-v\"+j.version+\"-\"+s+\"\\nmanifest_sha256=\"+c.createHash(\"sha256\").update(m).digest(\"hex\")+\"\\n\")' \"$RUNNER_TEMP/release-payload/manifest.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 8,
+        "step": "Upload immutable payload",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 9,
+        "step": "Record immutable artifact identity",
+        "kind": "run",
+        "value": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1],JSON.stringify({artifactId:process.argv[2],artifactUrl:process.argv[3],artifactDigest:process.argv[4]}))' \\\n  \"$RUNNER_TEMP/artifact-upload-result.json\" \\\n  \"${{ steps.payload.outputs.artifact-id }}\" \\\n  \"${{ steps.payload.outputs.artifact-url }}\" \\\n  \"${{ steps.payload.outputs.artifact-digest }}\"\nnode scripts/release/cli.mjs record-artifact \\\n  --candidate \"$RUNNER_TEMP/candidate.json\" \\\n  --manifest \"$RUNNER_TEMP/release-payload/manifest.json\" \\\n  --artifact-upload-result \"$RUNNER_TEMP/artifact-upload-result.json\" \\\n  --output \"$GITHUB_WORKSPACE/release-record.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "prepare",
+        "stepIndex": 10,
+        "step": "Upload exact release handoff",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 2,
+        "step": "Download newly prepared payload",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 3,
+        "step": "Download newly prepared release record",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 4,
+        "step": "Write newly prepared candidate identity",
+        "kind": "run",
+        "value": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1],JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:\"CI\",ciCheck:\"validate\",publisherWorkflow:\".github/workflows/release.yml\"})+\"\\n\")' \"$RUNNER_TEMP/runtime/candidate.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 5,
+        "step": "Download durable production observation",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 6,
+        "step": "Recover exact durable transition inputs",
+        "kind": "run",
+        "value": "node scripts/release/workflow-recovery.mjs \\\n  --report \"$RUNNER_TEMP/observation/production-observation.json\" \\\n  --output-dir \"$RUNNER_TEMP/runtime\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 7,
+        "step": "Read recovered prepared artifact identity",
+        "kind": "run",
+        "value": "node -e 'const fs=require(\"node:fs\"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,\"artifact_id=\"+r.actionsArtifact.id+\"\\nprepare_run_id=\"+r.actionsArtifact.prepareRunId+\"\\n\")' \"$RUNNER_TEMP/runtime/release-record.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 8,
+        "step": "Download recovered un-attested payload by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 9,
+        "step": "Resolve recovered attested payload",
+        "kind": "run",
+        "value": "node scripts/release/artifact-store.mjs resolve \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --output-dir \"$RUNNER_TEMP/runtime/payload\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 10,
+        "step": "Verify recovered runtime identity",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs attestation-input \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --output \"$RUNNER_TEMP/runtime-subjects.txt\"\nnode -e 'const fs=require(\"node:fs\"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.appendFileSync(process.env.GITHUB_OUTPUT,\"manifest_sha256=\"+r.manifestSha256+\"\\n\")' \"$RUNNER_TEMP/runtime/release-record.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "hydrate",
+        "stepIndex": 11,
+        "step": "Upload exact runtime inputs",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 3,
+        "step": "Seal provenance subjects",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs attestation-input \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --output \"$RUNNER_TEMP/attestation-input.txt\"\n"
+      },
+      {
+        "classification": "publication",
+        "job": "attest",
+        "stepIndex": 4,
+        "step": "Attest exact release payload",
+        "kind": "step-uses",
+        "value": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 5,
+        "step": "Materialize canonical attestation evidence",
+        "kind": "run",
+        "value": "install -d -m 0700 -- \"$RUNNER_TEMP/attestation-evidence\"\ninstall -d -m 0700 -- \"$RUNNER_TEMP/attestation-evidence/bundles\"\nnode scripts/release/cli.mjs attestation-output \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --bundle \"${{ steps.attest.outputs.bundle-path }}\" \\\n  --attestation-set \"$RUNNER_TEMP/attestation-evidence/attestation-set.json\" \\\n  --attestation-bundles-dir \"$RUNNER_TEMP/attestation-evidence/bundles\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "attest",
+        "stepIndex": 6,
+        "step": "Upload canonical attestation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "escrow",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "escrow",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "escrow",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "escrow",
+        "stepIndex": 3,
+        "step": "Download attestation evidence by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "publication",
+        "job": "escrow",
+        "stepIndex": 4,
+        "step": "Escrow exact base assets in draft Release",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs escrow \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --attestation-set \"$RUNNER_TEMP/attestation/attestation-set.json\" \\\n  --attestation-bundles-dir \"$RUNNER_TEMP/attestation/bundles\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-npm",
+        "stepIndex": 0,
+        "step": "Checkout sparse publisher",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-npm",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-npm",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "ACTUAL_NPM_VERSION=\"$(npm --version)\"\n[[ \"$ACTUAL_NPM_VERSION\" == \"11.17.0\" ]]\n"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-npm",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "publication",
+        "job": "publish-npm",
+        "stepIndex": 4,
+        "step": "Publish and verify npm serially",
+        "kind": "run",
+        "value": "node scripts/release/publisher.mjs \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --artifact-dir \"$RUNNER_TEMP/runtime/payload\" \\\n  --report \"$RUNNER_TEMP/npm-evidence.json\" \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-npm",
+        "stepIndex": 5,
+        "step": "Upload exact npm evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-npm",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-npm",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-npm",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-npm",
+        "stepIndex": 3,
+        "step": "Download newly published npm evidence by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-npm",
+        "stepIndex": 4,
+        "step": "Select newly published npm evidence",
+        "kind": "run",
+        "value": "cp -- \"$RUNNER_TEMP/published-npm/npm-evidence.json\" \"$RUNNER_TEMP/runtime/npm-evidence.json\""
+      },
+      {
+        "classification": "publication",
+        "job": "reconcile-npm",
+        "stepIndex": 5,
+        "step": "Reconcile verified npm evidence",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs reconcile-npm \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --npm-evidence \"$RUNNER_TEMP/runtime/npm-evidence.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 4,
+        "step": "Verify exact public metadata",
+        "kind": "run",
+        "value": "node scripts/published-artifact-verify.mjs \\\n  --release-mode \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --result \"$RUNNER_TEMP/metadata.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-metadata",
+        "stepIndex": 5,
+        "step": "Upload raw metadata result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 4,
+        "step": "Smoke the published harness",
+        "kind": "run",
+        "value": "node scripts/release/smoke/published-harness.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/published-harness.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-published-harness",
+        "stepIndex": 5,
+        "step": "Upload raw published-harness result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 4,
+        "step": "Smoke published runtime targets",
+        "kind": "run",
+        "value": "node scripts/release/smoke/runtime-targets.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/runtime-targets.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-runtime-targets",
+        "stepIndex": 5,
+        "step": "Upload raw runtime-targets result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 4,
+        "step": "Smoke exact public scaffold",
+        "kind": "run",
+        "value": "node scripts/release/smoke/scaffold.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/scaffold.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-scaffold",
+        "stepIndex": 5,
+        "step": "Upload raw scaffold result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 2,
+        "step": "Assert exact npm runtime",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\""
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 3,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 4,
+        "step": "Smoke published storage backends",
+        "kind": "run",
+        "value": "node scripts/release/smoke/storage.mjs \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --result \"$RUNNER_TEMP/storage.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "smoke-storage",
+        "stepIndex": 5,
+        "step": "Upload raw storage result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 3,
+        "step": "Download exact smoke results by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 4,
+        "step": "Download newly published npm evidence by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 5,
+        "step": "Select newly published npm evidence",
+        "kind": "run",
+        "value": "cp -- \"$RUNNER_TEMP/published-npm/npm-evidence.json\" \"$RUNNER_TEMP/runtime/npm-evidence.json\""
+      },
+      {
+        "classification": "safe",
+        "job": "reconcile-smokes",
+        "stepIndex": 6,
+        "step": "Isolate the exact five smoke receipts",
+        "kind": "run",
+        "value": "test -f \"$RUNNER_TEMP/smoke-results/metadata.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/published-harness.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/runtime-targets.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/scaffold.json\"\ntest -f \"$RUNNER_TEMP/smoke-results/storage.json\"\n"
+      },
+      {
+        "classification": "publication",
+        "job": "reconcile-smokes",
+        "stepIndex": 7,
+        "step": "Reconcile exact smoke evidence",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs reconcile-smokes \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --manifest \"$RUNNER_TEMP/runtime/payload/manifest.json\" \\\n  --npm-evidence \"$RUNNER_TEMP/runtime/npm-evidence.json\" \\\n  --smoke-results \"$RUNNER_TEMP/smoke-results\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "dispatch-audit",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "dispatch-audit",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
         "kind": "step-uses",
         "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
       },
       {
         "classification": "publication",
-        "job": "release",
+        "job": "dispatch-audit",
+        "stepIndex": 2,
+        "step": "Dispatch exact independent audit",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs dispatch-audit \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --manifest-sha256 \"${{ needs.hydrate.outputs.manifest_sha256 }}\" \\\n  --output \"$RUNNER_TEMP/audit-dispatch.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "dispatch-audit",
+        "stepIndex": 3,
+        "step": "Upload direct audit dispatch receipt",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "record-audit-dispatch",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "record-audit-dispatch",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "record-audit-dispatch",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "record-audit-dispatch",
+        "stepIndex": 3,
+        "step": "Download audit dispatch receipt by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "publication",
+        "job": "record-audit-dispatch",
+        "stepIndex": 4,
+        "step": "Record exact audit dispatch",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs record-audit-dispatch \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/dispatch/audit-dispatch.json\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 3,
+        "step": "Download new audit dispatch receipt by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 4,
+        "step": "Select new audit dispatch receipt",
+        "kind": "run",
+        "value": "cp -- \"$RUNNER_TEMP/new-dispatch/audit-dispatch.json\" \"$RUNNER_TEMP/runtime/audit-dispatch.json\""
+      },
+      {
+        "classification": "safe",
+        "job": "correlate-audit",
+        "stepIndex": 5,
+        "step": "Wait for the exact audit run",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs wait-audit \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/runtime/audit-dispatch.json\" \\\n  --output \"$RUNNER_TEMP/audit-result.json\"\n"
+      },
+      {
+        "classification": "publication",
+        "job": "correlate-audit",
         "stepIndex": 6,
-        "step": "Create Release Pull Request or Publish",
-        "kind": "step-uses",
-        "value": "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d"
+        "step": "Correlate and attach exact audit result",
+        "kind": "run",
+        "value": "node scripts/release/cli.mjs correlate-audit \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --dispatch-result \"$RUNNER_TEMP/runtime/audit-dispatch.json\" \\\n  --audit-result \"$RUNNER_TEMP/audit-result.json\"\n"
       },
       {
-        "classification": "publication",
-        "job": "release",
+        "classification": "safe",
+        "job": "correlate-audit",
         "stepIndex": 7,
-        "step": "Attest release tarballs",
+        "step": "Upload exact correlated audit result",
         "kind": "step-uses",
-        "value": "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373"
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       },
       {
-        "classification": "publication",
-        "job": "release",
+        "classification": "safe",
+        "job": "correlate-audit",
         "stepIndex": 8,
-        "step": "Upload signed release assets",
+        "step": "Require successful independent audit",
         "kind": "run",
-        "value": "node scripts/upload-release-assets.mjs"
+        "value": "node -e 'const r=require(process.argv[1]);if(r.conclusion!==\"success\")process.exit(1)' \"$RUNNER_TEMP/audit-result.json\""
+      },
+      {
+        "classification": "safe",
+        "job": "publish-release",
+        "stepIndex": 0,
+        "step": "Checkout exact candidate",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-release",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-release",
+        "stepIndex": 2,
+        "step": "Download exact runtime inputs by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-release",
+        "stepIndex": 3,
+        "step": "Download newly correlated audit by ID",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+      },
+      {
+        "classification": "safe",
+        "job": "publish-release",
+        "stepIndex": 4,
+        "step": "Select newly correlated audit result",
+        "kind": "run",
+        "value": "cp -- \"$RUNNER_TEMP/new-audit/audit-result.json\" \"$RUNNER_TEMP/runtime/audit-result.json\""
       },
       {
         "classification": "publication",
-        "job": "release",
-        "stepIndex": 9,
-        "step": "Backfill tags/releases for bootstrapped packages",
+        "job": "publish-release",
+        "stepIndex": 5,
+        "step": "Publish one immutable consolidated Release",
         "kind": "run",
-        "value": "node scripts/backfill-release-tags.mjs"
-      },
-      {
-        "classification": "safe",
-        "job": "release",
-        "stepIndex": 10,
-        "step": "Read published version",
-        "kind": "run",
-        "value": "DAWN_PUBLISHED_VERSION=\"$(node -p \"require('./packages/core/package.json').version\")\"\nprintf 'DAWN_PUBLISHED_VERSION=%s\\n' \"$DAWN_PUBLISHED_VERSION\" >> \"$GITHUB_ENV\"\n"
-      },
-      {
-        "classification": "safe",
-        "job": "release",
-        "stepIndex": 11,
-        "step": "Verify published TypeScript tooling",
-        "kind": "run",
-        "value": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000"
-      },
-      {
-        "classification": "safe",
-        "job": "release",
-        "stepIndex": 12,
-        "step": "Smoke published TypeScript tooling",
-        "kind": "run",
-        "value": "pnpm published:smoke -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set typescript-tooling"
-      },
-      {
-        "classification": "safe",
-        "job": "release",
-        "stepIndex": 13,
-        "step": "Verify published Docker sandbox",
-        "kind": "run",
-        "value": "pnpm published:verify -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000"
-      },
-      {
-        "classification": "safe",
-        "job": "release",
-        "stepIndex": 14,
-        "step": "Smoke published Docker sandbox PID recovery",
-        "kind": "run",
-        "value": "pnpm published:smoke -- --version \"$DAWN_PUBLISHED_VERSION\" --package-set docker-sandbox"
+        "value": "node scripts/release/cli.mjs publish-release \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --audit-result \"$RUNNER_TEMP/runtime/audit-result.json\"\n"
       }
     ],
     "scorecard.yml": [
@@ -1603,6 +2465,48 @@
         "step": "Upload SARIF",
         "kind": "step-uses",
         "value": "github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3"
+      }
+    ],
+    "version-pr.yml": [
+      {
+        "classification": "safe",
+        "job": "version",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "version",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "version",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "version",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "version",
+        "stepIndex": 4,
+        "step": "Open or update Version Packages pull request",
+        "kind": "step-uses",
+        "value": "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d"
       }
     ]
   }

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import test from "node:test"
-
+import { canonicalReleaseBody } from "../metadata.mjs"
 import { planRelease } from "../planner.mjs"
 import { classifyObservedRelease, findReleaseConflicts, ReleaseState } from "../state.mjs"
+import { smokeDescriptor } from "./support/marker-observation.mjs"
 
 const VERSION = "0.8.20"
 const NEWER_VERSION = "0.8.21"
@@ -32,7 +34,7 @@ const PACKAGE_IDENTITIES = [
     filename: `dawn-ai-core-${VERSION}.tgz`,
     tarballSha256: "1".repeat(64),
     attestationFilename: `dawn-ai-core-${VERSION}.tgz.intoto.jsonl`,
-    attestationSha256: "d".repeat(64),
+    attestationSha256: MANIFEST_ATTESTATION_SHA256,
     integrity: "sha512-core",
   },
   {
@@ -41,9 +43,22 @@ const PACKAGE_IDENTITIES = [
     filename: `dawn-ai-sdk-${VERSION}.tgz`,
     tarballSha256: "2".repeat(64),
     attestationFilename: `dawn-ai-sdk-${VERSION}.tgz.intoto.jsonl`,
-    attestationSha256: "e".repeat(64),
+    attestationSha256: MANIFEST_ATTESTATION_SHA256,
     integrity: "sha512-sdk",
   },
+  ...Array.from({ length: 19 }, (_unused, index) => {
+    const ordinal = String(index + 1).padStart(2, "0")
+    const filename = `dawn-ai-test-extra-${ordinal}-${VERSION}.tgz`
+    return {
+      name: `@dawn-ai/test-extra-${ordinal}`,
+      version: VERSION,
+      filename,
+      tarballSha256: (index + 3).toString(16).padStart(64, "0"),
+      attestationFilename: `${filename}.intoto.jsonl`,
+      attestationSha256: MANIFEST_ATTESTATION_SHA256,
+      integrity: "sha512-ZXh0cmE=",
+    }
+  }),
 ]
 
 test("ReleaseState is the frozen canonical state model", () => {
@@ -59,8 +74,9 @@ test("ReleaseState is the frozen canonical state model", () => {
     NPM_COMPLETE: "NPM_COMPLETE",
     RELEASE_DRAFT_COMPLETE: "RELEASE_DRAFT_COMPLETE",
     SMOKES_COMPLETE: "SMOKES_COMPLETE",
-    RELEASE_PUBLISHED: "RELEASE_PUBLISHED",
     AUDIT_DISPATCHED: "AUDIT_DISPATCHED",
+    AUDIT_RETRYABLE: "AUDIT_RETRYABLE",
+    AUDIT_VERIFIED: "AUDIT_VERIFIED",
     AUDIT_COMPLETE: "AUDIT_COMPLETE",
     ABANDONED_PREPUBLICATION: "ABANDONED_PREPUBLICATION",
   })
@@ -130,7 +146,7 @@ const stateCases = [
     observation: observationFor("NPM_COMPLETE"),
     state: "NPM_COMPLETE",
     disposition: "would-transition",
-    transition: "reconcile-release-draft",
+    transition: "reconcile-npm-evidence",
   },
   {
     name: "complete GitHub Release draft metadata",
@@ -144,13 +160,6 @@ const stateCases = [
     observation: observationFor("SMOKES_COMPLETE"),
     state: "SMOKES_COMPLETE",
     disposition: "would-transition",
-    transition: "publish-github-release",
-  },
-  {
-    name: "published GitHub Release",
-    observation: observationFor("RELEASE_PUBLISHED"),
-    state: "RELEASE_PUBLISHED",
-    disposition: "would-transition",
     transition: "dispatch-release-audit",
   },
   {
@@ -159,6 +168,20 @@ const stateCases = [
     state: "AUDIT_DISPATCHED",
     disposition: "would-transition",
     transition: "complete-release-audit",
+  },
+  {
+    name: "independent audit retryable",
+    observation: observationFor("AUDIT_RETRYABLE"),
+    state: "AUDIT_RETRYABLE",
+    disposition: "would-transition",
+    transition: "dispatch-release-audit",
+  },
+  {
+    name: "independent audit verified",
+    observation: observationFor("AUDIT_VERIFIED"),
+    state: "AUDIT_VERIFIED",
+    disposition: "would-transition",
+    transition: "publish-github-release",
   },
   {
     name: "independent audit complete",
@@ -192,7 +215,7 @@ for (const row of stateCases) {
     assert.deepEqual(JSON.parse(JSON.stringify(first)), first)
     assert.deepEqual(Object.keys(first).sort(), OUTPUT_KEYS)
     assert.equal(first.state, row.state)
-    assert.equal(first.disposition, row.disposition)
+    assert.equal(first.disposition, row.disposition, JSON.stringify(first))
     assert.equal(first.nextTransition, row.transition)
     assert.deepEqual(first.conflicts, [])
     assert.ok(Array.isArray(first.reasons))
@@ -335,6 +358,8 @@ for (const [status, overrides, conflict] of invalidCiCases) {
       workflow: CI_WORKFLOW,
       check: CI_CHECK,
       commitSha: COMMIT_SHA,
+      workflowRunId: status === "missing" ? null : 10,
+      runAttempt: status === "missing" ? null : 1,
       ...overrides,
     }
 
@@ -370,9 +395,9 @@ test("every named required smoke lane needs one exact-version success", () => {
   assert.doesNotThrow(() => {
     plan = planRelease({ candidate: candidate(), observation })
   })
-  assert.equal(plan.state, "SMOKES_COMPLETE")
+  assert.equal(plan.state, "RELEASE_DRAFT_COMPLETE")
   assert.equal(plan.disposition, "would-transition")
-  assert.equal(plan.nextTransition, "publish-github-release")
+  assert.equal(plan.nextTransition, "reconcile-smoke-evidence")
 })
 
 test("fully correlated required smoke results authorize SMOKES_COMPLETE", () => {
@@ -385,9 +410,9 @@ test("fully correlated required smoke results authorize SMOKES_COMPLETE", () => 
   assert.doesNotThrow(() => {
     plan = planRelease({ candidate: candidate(), observation })
   })
-  assert.equal(plan.state, "SMOKES_COMPLETE")
+  assert.equal(plan.state, "RELEASE_DRAFT_COMPLETE")
   assert.equal(plan.disposition, "would-transition")
-  assert.equal(plan.nextTransition, "publish-github-release")
+  assert.equal(plan.nextTransition, "reconcile-smoke-evidence")
 })
 
 const staleSmokeIdentityCases = [
@@ -681,6 +706,14 @@ test("abandonment is manual and permitted only from tagged through escrowed", ()
 
     assert.equal(plan.state, state)
     assert.equal(plan.nextTransition, "record-prepublication-abandonment")
+    assert.deepEqual(plan.proposedMutations, [
+      {
+        type: "record-prepublication-abandonment",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        tag: `v${VERSION}`,
+      },
+    ])
   }
 
   const untagged = baseObservation()
@@ -701,7 +734,7 @@ test("recorded abandonment stays terminal after a newer release becomes public",
   observation.otherCandidates.push({
     version: NEWER_VERSION,
     commitSha: OTHER_SHA,
-    state: "RELEASE_PUBLISHED",
+    state: "AUDIT_COMPLETE",
   })
 
   const plan = planRelease({ candidate: candidate(), observation })
@@ -764,7 +797,7 @@ const semanticSchemaCases = [
   ["absent artifact null digest", (o) => (o.artifacts.manifestSha256 = MANIFEST_SHA256)],
   ["absent escrow has no assets", (o) => o.escrow.assets.push(releaseAsset(PACKAGE_IDENTITIES[0]))],
   ["exact e404 package absence", (o) => (o.registry.packages[0].version = VERSION)],
-  ["absent Release has no metadata", (o) => (o.release.metadataReconciled = true)],
+  ["absent Release has no metadata", (o) => (o.release.immutable = false)],
   ["required smoke lane type", (o) => (o.requiredSmokeLanes[0] = 1)],
   ["audit none null identity", (o) => (o.audit.workflowRunId = 300)],
   ["audit conclusion correlation", (o) => (o.audit.conclusion = "failure"), "AUDIT_COMPLETE"],
@@ -872,7 +905,9 @@ const malformedImmutableIdentityCases = [
     "integrity",
   ].flatMap((field) => [
     [`missing inventory package ${field}`, (o) => delete o.inventory.packages[0][field]],
-    [`null inventory package ${field}`, (o) => (o.inventory.packages[0][field] = null)],
+    ...(field === "attestationSha256"
+      ? []
+      : [[`null inventory package ${field}`, (o) => (o.inventory.packages[0][field] = null)]]),
     [`wrong-type inventory package ${field}`, (o) => (o.inventory.packages[0][field] = 1)],
   ]),
 ]
@@ -906,6 +941,19 @@ for (const [variant, createObservation] of activeManagedAssetVariants) {
     })
   }
 }
+
+test("a prepared nullable attestation digest blocks any later escrow signal without becoming malformed", () => {
+  const observation = observationFor("CANDIDATE_ESCROWED")
+  observation.release = releaseRecord("absent")
+  observation.inventory.packages[0].attestationSha256 = null
+
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+
+  assert.equal(plan.state, "ARTIFACTS_PREPARED")
+  assert.equal(plan.disposition, "blocked")
+  assert.ok(plan.conflicts.includes("inventory-attestation-digests-missing"))
+  assert.ok(!plan.conflicts.includes("observation-schema-invalid"))
+})
 
 for (const [name, mutate] of [
   [
@@ -992,8 +1040,9 @@ const tagPrerequisiteStates = [
   "NPM_COMPLETE",
   "RELEASE_DRAFT_COMPLETE",
   "SMOKES_COMPLETE",
-  "RELEASE_PUBLISHED",
   "AUDIT_DISPATCHED",
+  "AUDIT_RETRYABLE",
+  "AUDIT_VERIFIED",
   "AUDIT_COMPLETE",
 ]
 
@@ -1035,7 +1084,7 @@ test("NPM_COMPLETE reconciles the existing draft instead of creating a Release",
   })
 
   assert.equal(plan.state, "NPM_COMPLETE")
-  assert.equal(plan.nextTransition, "reconcile-release-draft")
+  assert.equal(plan.nextTransition, "reconcile-npm-evidence")
 })
 
 test("npm provenance uses the trusted publisher workflow rather than CI", () => {
@@ -1121,8 +1170,7 @@ for (const { name, mutate, conflict } of invalidCompletePackageCases) {
 }
 
 test("a fully correlated audit success is terminal", () => {
-  const observation = observationFor("RELEASE_PUBLISHED")
-  observation.audit = auditRecord("success")
+  const observation = observationFor("AUDIT_COMPLETE")
 
   let plan
   assert.doesNotThrow(() => {
@@ -1133,8 +1181,7 @@ test("a fully correlated audit success is terminal", () => {
 })
 
 test("a stale audit success cannot complete another candidate", () => {
-  const observation = observationFor("RELEASE_PUBLISHED")
-  observation.audit = auditRecord("success")
+  const observation = observationFor("AUDIT_COMPLETE")
   observation.audit.commitSha = OTHER_SHA
 
   assertDesiredSchemaBlocked(observation, "release-audit-commit-mismatch")
@@ -1164,8 +1211,7 @@ for (const { name, mutate, conflict } of [
   },
 ]) {
   test(`a stale or malformed audit ${name} cannot complete another candidate`, () => {
-    const observation = observationFor("RELEASE_PUBLISHED")
-    observation.audit = auditRecord("success")
+    const observation = observationFor("AUDIT_COMPLETE")
     mutate(observation.audit)
 
     assertDesiredSchemaBlocked(observation, conflict)
@@ -1328,13 +1374,13 @@ for (const target of ["escrow", "release"]) {
 }
 
 for (const status of ["failed", "expired"]) {
-  test(`a correlated ${status} audit attempt is retryable from the published Release`, () => {
-    const observation = observationFor("RELEASE_PUBLISHED")
+  test(`a correlated ${status} audit attempt is retryable from the draft Release`, () => {
+    const observation = observationFor("AUDIT_RETRYABLE")
     observation.audit = auditRecord(status)
 
     const plan = planRelease({ candidate: candidate(), observation })
 
-    assert.equal(plan.state, "RELEASE_PUBLISHED")
+    assert.equal(plan.state, "AUDIT_RETRYABLE")
     assert.equal(plan.disposition, "would-transition")
     assert.equal(plan.nextTransition, "dispatch-release-audit")
     assert.deepEqual(plan.conflicts, [])
@@ -1350,7 +1396,7 @@ for (const status of ["failed", "expired"]) {
 }
 
 test("a failed audit attempt with mismatched identity remains blocked", () => {
-  const observation = observationFor("RELEASE_PUBLISHED")
+  const observation = observationFor("AUDIT_RETRYABLE")
   observation.audit = auditRecord("failed")
   observation.audit.commitSha = OTHER_SHA
 
@@ -1358,7 +1404,7 @@ test("a failed audit attempt with mismatched identity remains blocked", () => {
 })
 
 test("an exactly identified ambiguous audit attempt blocks instead of becoming absence", () => {
-  const observation = observationFor("RELEASE_PUBLISHED")
+  const observation = observationFor("AUDIT_DISPATCHED")
   observation.audit = auditRecord("ambiguous")
 
   assertDesiredSchemaBlocked(observation, "release-audit-ambiguous")
@@ -1598,6 +1644,8 @@ function baseObservation() {
       workflow: CI_WORKFLOW,
       check: CI_CHECK,
       commitSha: COMMIT_SHA,
+      workflowRunId: 10,
+      runAttempt: 1,
     },
     otherCandidates: [],
     tag: {
@@ -1662,6 +1710,7 @@ function baseObservation() {
     abandonment: {
       requested: false,
       recorded: false,
+      predecessor: null,
     },
   }
 }
@@ -1710,7 +1759,7 @@ function observationFor(state) {
   observation.escrow.status = "present"
   observation.escrow.manifestSha256 = MANIFEST_SHA256
   observation.escrow.assets = immutableAssets().map((asset) => ({ ...asset, status: "matching" }))
-  observation.release = releaseRecord("draft")
+  observation.release = releaseRecord("draft", { phase: "ESCROWED" })
   if (state === "CANDIDATE_ESCROWED") {
     return observation
   }
@@ -1722,17 +1771,14 @@ function observationFor(state) {
     return observation
   }
 
-  observation.registry.packages[1] = presentRegistryPackage(PACKAGE_IDENTITIES[1])
+  for (let index = 1; index < PACKAGE_IDENTITIES.length; index += 1) {
+    observation.registry.packages[index] = presentRegistryPackage(PACKAGE_IDENTITIES[index])
+  }
   if (state === "NPM_COMPLETE") {
     return observation
   }
 
-  observation.release = releaseRecord(
-    ["RELEASE_PUBLISHED", "AUDIT_DISPATCHED", "AUDIT_COMPLETE"].includes(state)
-      ? "published"
-      : "draft",
-    { metadataReconciled: true },
-  )
+  observation.release = releaseRecord("draft", { phase: "NPM_COMPLETE" })
   if (state === "RELEASE_DRAFT_COMPLETE") {
     return observation
   }
@@ -1743,20 +1789,37 @@ function observationFor(state) {
     smoke.runAttempt = 1
   }
   if (state === "SMOKES_COMPLETE") {
+    observation.release = releaseRecord("draft", { phase: "SMOKES_COMPLETE" })
     return observation
   }
-  if (state === "RELEASE_PUBLISHED") {
+  if (state === "AUDIT_DISPATCHED") {
+    observation.release = releaseRecord("draft", { phase: "AUDIT_DISPATCHED" })
+    observation.audit = auditRecord("dispatched")
     return observation
   }
-
-  observation.audit = auditRecord(state === "AUDIT_DISPATCHED" ? "dispatched" : "success")
-  if (state === "AUDIT_DISPATCHED" || state === "AUDIT_COMPLETE") {
+  if (state === "AUDIT_RETRYABLE") {
+    observation.release = releaseRecord("draft", { phase: "AUDIT_RETRYABLE" })
+    observation.audit = auditRecord("failed")
+    return observation
+  }
+  if (state === "AUDIT_VERIFIED") {
+    observation.release = releaseRecord("draft", { phase: "AUDIT_VERIFIED" })
+    observation.audit = auditRecord("success")
+    return observation
+  }
+  if (state === "AUDIT_COMPLETE") {
+    observation.release = releaseRecord("published", { phase: "AUDIT_VERIFIED" })
+    observation.audit = auditRecord("success")
     return observation
   }
 
   if (state === "ABANDONED_PREPUBLICATION") {
     const abandoned = observationFor("CANDIDATE_TAGGED")
-    abandoned.abandonment = { requested: true, recorded: true }
+    abandoned.abandonment = {
+      requested: true,
+      recorded: true,
+      predecessor: "CANDIDATE_TAGGED",
+    }
     return abandoned
   }
   throw new Error(`Unknown test state ${state}`)
@@ -1804,17 +1867,157 @@ function presentRegistryPackage(pkg) {
   }
 }
 
-function releaseRecord(status, { metadataReconciled = false } = {}) {
+function releaseRecord(status, { phase = "ESCROWED" } = {}) {
+  const marker = status === "absent" ? null : releaseMarker(phase)
   return {
     status,
     tag: status === "absent" ? null : `v${VERSION}`,
     commitSha: status === "absent" ? null : COMMIT_SHA,
-    metadataReconciled: status === "absent" ? false : metadataReconciled,
+    immutable: status === "absent" ? null : status === "published",
+    bodySha256:
+      marker === null
+        ? null
+        : createHash("sha256")
+            .update(canonicalReleaseBody({ marker, manifest: null }))
+            .digest("hex"),
+    marker,
     assets:
       status === "absent"
         ? []
-        : immutableAssets().map((asset) => ({ ...asset, status: "matching" })),
+        : [
+            ...immutableAssets().map((asset) => ({ ...asset, status: "matching" })),
+            ...releaseEvidenceAssets(marker),
+          ],
   }
+}
+
+function releaseMarker(phase) {
+  const auditDigest = "8".repeat(64)
+  const audit = ["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(phase)
+    ? {
+        workflow: ".github/workflows/published-artifact-verify.yml",
+        workflowRunId: 300,
+        runUrl: "https://api.github.com/repos/cacheplane/dawnai/actions/runs/300",
+        htmlUrl: "https://github.com/cacheplane/dawnai/actions/runs/300",
+        runAttempt: phase === "AUDIT_DISPATCHED" ? null : 1,
+        attemptAssetName: phase === "AUDIT_DISPATCHED" ? null : "audit-attempt-300-1.json",
+        attemptSha256: phase === "AUDIT_DISPATCHED" ? null : auditDigest,
+        canonicalSha256: phase === "AUDIT_VERIFIED" ? auditDigest : null,
+        conclusion:
+          phase === "AUDIT_VERIFIED" ? "success" : phase === "AUDIT_RETRYABLE" ? "failure" : null,
+      }
+    : null
+  return {
+    schemaVersion: 1,
+    epoch: "fixed-group-v1",
+    revision:
+      phase === "ATTACHING"
+        ? 1
+        : phase === "ESCROWED"
+          ? 2
+          : phase === "NPM_COMPLETE"
+            ? 3
+            : phase === "SMOKES_COMPLETE"
+              ? 4
+              : 5,
+    phase,
+    version: VERSION,
+    commitSha: COMMIT_SHA,
+    tag: `v${VERSION}`,
+    manifestSha256: MANIFEST_SHA256,
+    releaseRecordSha256: RELEASE_RECORD_SHA256,
+    baseAssetSetSha256: phase === "ATTACHING" ? null : baseAssetSetSha256(),
+    attestationSet:
+      phase === "ATTACHING"
+        ? null
+        : {
+            repository: "cacheplane/dawnai",
+            workflow: ".github/workflows/release.yml",
+            sourceRef: `refs/tags/v${VERSION}`,
+            commitSha: COMMIT_SHA,
+            workflowRunId: 200,
+            runAttempt: 1,
+            subjects: [
+              {
+                subjectName: "manifest.json",
+                subjectSha256: MANIFEST_SHA256,
+                bundleName: MANIFEST_ATTESTATION_NAME,
+                bundleSha256: MANIFEST_ATTESTATION_SHA256,
+              },
+              ...PACKAGE_IDENTITIES.map((pkg) => ({
+                subjectName: pkg.filename,
+                subjectSha256: pkg.tarballSha256,
+                bundleName: pkg.attestationFilename,
+                bundleSha256: pkg.attestationSha256,
+              })),
+            ],
+          },
+    npmEvidenceSha256: [
+      "NPM_COMPLETE",
+      "SMOKES_COMPLETE",
+      "AUDIT_DISPATCHED",
+      "AUDIT_RETRYABLE",
+      "AUDIT_VERIFIED",
+    ].includes(phase)
+      ? "6".repeat(64)
+      : null,
+    smoke: ["SMOKES_COMPLETE", "AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+      phase,
+    )
+      ? smokeDescriptor({ aggregateSha256: "7".repeat(64) })
+      : null,
+    audit,
+    abandonmentSha256: null,
+  }
+}
+
+function releaseEvidenceAssets(marker) {
+  const smokeAssets =
+    marker?.smoke === null || marker?.smoke === undefined
+      ? []
+      : marker.smoke.receiptAssets.map((asset) => ({
+          name: asset.releaseAssetName,
+          sha256: asset.receiptSha256,
+          status: "matching",
+        }))
+  if (marker?.phase === "AUDIT_RETRYABLE") {
+    return [
+      ...smokeAssets,
+      {
+        name: marker.audit.attemptAssetName,
+        sha256: marker.audit.attemptSha256,
+        status: "matching",
+      },
+    ]
+  }
+  if (marker?.phase === "AUDIT_VERIFIED") {
+    return [
+      ...smokeAssets,
+      {
+        name: marker.audit.attemptAssetName,
+        sha256: marker.audit.attemptSha256,
+        status: "matching",
+      },
+      { name: "audit-result.json", sha256: marker.audit.canonicalSha256, status: "matching" },
+    ]
+  }
+  return smokeAssets
+}
+
+function baseAssetSetSha256() {
+  const entries = [
+    { name: "release-record.json", sha256: RELEASE_RECORD_SHA256 },
+    { name: "manifest.json", sha256: MANIFEST_SHA256 },
+    ...PACKAGE_IDENTITIES.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+    { name: MANIFEST_ATTESTATION_NAME, sha256: MANIFEST_ATTESTATION_SHA256 },
+    ...PACKAGE_IDENTITIES.map((pkg) => ({
+      name: pkg.attestationFilename,
+      sha256: pkg.attestationSha256,
+    })),
+  ]
+  return createHash("sha256")
+    .update(`${JSON.stringify(entries)}\n`)
+    .digest("hex")
 }
 
 function artifactFile(pkg, status) {

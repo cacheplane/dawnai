@@ -36,6 +36,7 @@ export function createGitHubReader({
   owner,
   repo,
   token,
+  apiOrigin = API_ORIGIN,
   fetchImpl = fetch,
   timeoutMs,
   maxResponseBytes,
@@ -55,7 +56,11 @@ export function createGitHubReader({
   assertBoundedInteger(maxPages, 1, MAX_GITHUB_PAGES, "GitHub maximum pages")
   assertBoundedInteger(maxRecords, 1, MAX_GITHUB_RECORDS, "GitHub maximum records")
   if (typeof now !== "function") throw new TypeError("Invalid GitHub clock")
-  const base = `${API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+  const normalizedApiOrigin = normalizeApiOrigin(apiOrigin)
+  if (token !== undefined && normalizedApiOrigin !== API_ORIGIN) {
+    throw new TypeError("GitHub token requires the trusted GitHub API origin")
+  }
+  const base = `${normalizedApiOrigin}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   const http = createHttpGet({
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -63,6 +68,7 @@ export function createGitHubReader({
   })
   const context = {
     base,
+    apiOrigin: normalizedApiOrigin,
     http,
     token: token ?? null,
     timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
@@ -89,6 +95,13 @@ export function createGitHubReader({
         operation: "ref",
       })
     },
+    getGitTag({ tagSha }) {
+      assertCommitSha(tagSha)
+      return readObject(context, {
+        url: `${base}/git/tags/${tagSha}`,
+        operation: "git-tag",
+      })
+    },
     listTagRefs() {
       return readPaginated(context, {
         initialUrl: `${base}/git/matching-refs/tags/?per_page=100`,
@@ -97,10 +110,25 @@ export function createGitHubReader({
         compare: compareStringFieldThenCanonical("ref"),
       })
     },
+    listReleases() {
+      return readPaginated(context, {
+        initialUrl: `${base}/releases?per_page=100`,
+        operation: "releases",
+        extract: arrayBody,
+        compare: compareIdThenName,
+      })
+    },
     getReleaseByTag({ tag }) {
       assertTag(tag)
       return readObject(context, {
         url: `${base}/releases/tags/${encodeURIComponent(tag)}`,
+        operation: "release",
+      })
+    },
+    getRelease({ releaseId }) {
+      const id = normalizeId(releaseId)
+      return readObject(context, {
+        url: `${base}/releases/${id}`,
         operation: "release",
       })
     },
@@ -113,11 +141,13 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
-    downloadReleaseAsset({ assetId }) {
+    downloadReleaseAsset({ assetId, maximumBytes } = {}) {
       const id = normalizeId(assetId)
+      const limit = normalizeReadLimit(maximumBytes, context.maxResponseBytes)
       return readBinary(context, {
         url: `${base}/releases/assets/${id}`,
         operation: "release-asset-download",
+        ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
     listActionsArtifacts({ name } = {}) {
@@ -135,11 +165,54 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
+    async listActionsRunArtifacts({ runId }) {
+      const id = normalizeId(runId)
+      const result = await readPaginated(context, {
+        initialUrl: `${base}/actions/runs/${id}/artifacts?per_page=100`,
+        operation: "actions-run-artifacts",
+        extract: objectArray("artifacts"),
+        compare: compareIdThenName,
+      })
+      return rejectDuplicateNumericIds(result, "DUPLICATE_ARTIFACT_ID")
+    },
+    async listActionsRunJobs({ runId }) {
+      const id = normalizeId(runId)
+      const result = await readPaginated(context, {
+        initialUrl: `${base}/actions/runs/${id}/jobs?filter=all&per_page=100`,
+        operation: "actions-run-jobs",
+        extract: objectArray("jobs"),
+        compare: compareRunAttemptThenId,
+      })
+      return normalizeAllAttemptJobs(result)
+    },
     getActionsRun({ runId }) {
       const id = normalizeId(runId)
       return readObject(context, {
         url: `${base}/actions/runs/${id}`,
         operation: "actions-run",
+      })
+    },
+    getActionsRunAttempt({ runId, attempt }) {
+      const id = normalizeId(runId)
+      const attemptNumber = normalizeId(attempt)
+      return readObject(context, {
+        url: `${base}/actions/runs/${id}/attempts/${attemptNumber}`,
+        operation: "actions-run-attempt",
+      })
+    },
+    getWorkflowRunApprovals({ runId }) {
+      const id = normalizeId(runId)
+      return readObject(context, {
+        url: `${base}/actions/runs/${id}/approvals`,
+        operation: "workflow-run-approvals",
+        validate: (value) => Array.isArray(value) && value.length <= context.maxRecords,
+      })
+    },
+    getActionsArtifact({ artifactId }) {
+      const id = normalizeId(artifactId)
+      return readObject(context, {
+        url: `${base}/actions/artifacts/${id}`,
+        operation: "actions-artifact",
       })
     },
     listWorkflowRuns({ workflow, commitSha }) {
@@ -153,11 +226,13 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
-    downloadActionsArtifact({ artifactId }) {
+    downloadActionsArtifact({ artifactId, maximumBytes } = {}) {
       const id = normalizeId(artifactId)
+      const limit = normalizeReadLimit(maximumBytes, context.maxResponseBytes)
       return readBinary(context, {
         url: `${base}/actions/artifacts/${id}/zip`,
         operation: "actions-artifact-download",
+        ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
     getAttestations({ subjectDigest }) {
@@ -242,6 +317,7 @@ async function readPaginated(
   const records = []
   const budget = createOperationBudget(context)
   let url = initialUrl
+  const seenUrls = new Set([new URL(initialUrl).href])
   for (let page = 0; page < context.maxPages; page += 1) {
     if (budget.deadline <= budget.now()) {
       return failure("AMBIGUOUS", operation, null, "TIMEOUT")
@@ -296,10 +372,19 @@ async function readPaginated(
     if (page + 1 >= context.maxPages) {
       return failure("ERROR", operation, result.httpStatus, "PAGE_LIMIT_EXCEEDED")
     }
-    const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl, cursorPagination)
+    const nextUrl = normalizeNextUrl(
+      result.nextUrl,
+      initialUrl,
+      cursorPagination,
+      context.apiOrigin,
+    )
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
+    if (seenUrls.has(nextUrl)) {
+      return failure("ERROR", operation, result.httpStatus, "PAGINATION_LOOP")
+    }
+    seenUrls.add(nextUrl)
     url = nextUrl
   }
   return failure("ERROR", operation, null, "PAGE_LIMIT_EXCEEDED")
@@ -327,8 +412,8 @@ async function readJson(context, { url, operation, requestBudget = {} }) {
   }
 }
 
-async function readBinary(context, { url, operation }) {
-  const budget = createOperationBudget(context)
+async function readBinary(context, { url, operation, maximumBytes }) {
+  const budget = createOperationBudget(context, maximumBytes)
   const firstRequest = remainingRequestBudget(budget)
   if (firstRequest === null) {
     return failure("AMBIGUOUS", operation, null, "TIMEOUT")
@@ -372,12 +457,20 @@ async function readBinary(context, { url, operation }) {
     : classification
 }
 
-function createOperationBudget(context) {
+function createOperationBudget(context, maximumBytes = context.maxResponseBytes) {
   return {
     deadline: context.now() + context.timeoutMs,
-    remainingBytes: context.maxResponseBytes,
+    remainingBytes: maximumBytes,
     now: context.now,
   }
+}
+
+function normalizeReadLimit(value, maximum) {
+  if (value === undefined) return null
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new TypeError("GitHub download byte limit is invalid")
+  }
+  return value
 }
 
 function remainingRequestBudget(budget) {
@@ -450,11 +543,11 @@ function requestHeaders(token, accept) {
   }
 }
 
-function normalizeNextUrl(value, initialValue, cursorPagination) {
+function normalizeNextUrl(value, initialValue, cursorPagination, apiOrigin) {
   try {
     const url = new URL(value)
     const initial = new URL(initialValue)
-    return url.origin === API_ORIGIN &&
+    return url.origin === apiOrigin &&
       url.username === "" &&
       url.password === "" &&
       url.hash === "" &&
@@ -464,6 +557,30 @@ function normalizeNextUrl(value, initialValue, cursorPagination) {
       : null
   } catch {
     return null
+  }
+}
+
+function normalizeApiOrigin(value) {
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_GITHUB_REF_BYTES) {
+    throw new TypeError("Invalid GitHub API origin")
+  }
+  try {
+    const url = new URL(value)
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname)
+    if (
+      !["https:", ...(loopback ? ["http:"] : [])].includes(url.protocol) ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw new TypeError("Invalid GitHub API origin")
+    }
+    return url.origin
+  } catch (error) {
+    if (error instanceof TypeError && error.message === "Invalid GitHub API origin") throw error
+    throw new TypeError("Invalid GitHub API origin", { cause: error })
   }
 }
 
@@ -649,6 +766,90 @@ function compareIdThenName(left, right) {
   }
   const nameComparison = compareStrings(String(left.name ?? ""), String(right.name ?? ""))
   return nameComparison === 0 ? compareCanonicalJson(left, right) : nameComparison
+}
+
+function compareRunAttemptThenId(left, right) {
+  const leftAttempt = Number.isSafeInteger(left.run_attempt)
+    ? left.run_attempt
+    : Number.MAX_SAFE_INTEGER
+  const rightAttempt = Number.isSafeInteger(right.run_attempt)
+    ? right.run_attempt
+    : Number.MAX_SAFE_INTEGER
+  if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt
+  return compareIdThenName(left, right)
+}
+
+function rejectDuplicateNumericIds(result, code) {
+  if (result.status !== "PRESENT") return result
+  const ids = new Set()
+  for (const record of result.value) {
+    if (!Number.isSafeInteger(record.id) || record.id < 1) {
+      return failure("ERROR", result.operation, result.httpStatus, "MALFORMED_SCHEMA")
+    }
+    if (ids.has(record.id)) {
+      return failure("ERROR", result.operation, result.httpStatus, code)
+    }
+    ids.add(record.id)
+  }
+  return result
+}
+
+function normalizeAllAttemptJobs(result) {
+  if (result.status !== "PRESENT") return result
+  if (result.value.length === 0) {
+    return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
+  }
+  const identities = new Set()
+  const attempts = new Set()
+  const jobs = []
+  let maximumAttempt = 0
+  for (const record of result.value) {
+    if (
+      !Number.isSafeInteger(record.id) ||
+      record.id < 1 ||
+      !Number.isSafeInteger(record.run_attempt) ||
+      record.run_attempt < 1 ||
+      typeof record.name !== "string" ||
+      record.name.length === 0 ||
+      typeof record.status !== "string" ||
+      record.status.length === 0 ||
+      !(record.conclusion === null || typeof record.conclusion === "string") ||
+      !isNullableTimestamp(record.started_at) ||
+      !isNullableTimestamp(record.completed_at)
+    ) {
+      return failure("ERROR", result.operation, result.httpStatus, "MALFORMED_ATTEMPT_IDENTITY")
+    }
+    const identity = `${record.run_attempt}:${record.id}`
+    if (identities.has(identity)) {
+      return failure("ERROR", result.operation, result.httpStatus, "DUPLICATE_ATTEMPT_JOB")
+    }
+    identities.add(identity)
+    attempts.add(record.run_attempt)
+    maximumAttempt = Math.max(maximumAttempt, record.run_attempt)
+    jobs.push({
+      id: record.id,
+      runAttempt: record.run_attempt,
+      name: record.name,
+      status: record.status,
+      conclusion: record.conclusion,
+      startedAt: record.started_at,
+      completedAt: record.completed_at,
+    })
+  }
+  if (attempts.size !== maximumAttempt) {
+    return failure("ERROR", result.operation, result.httpStatus, "ATTEMPT_COVERAGE_INCOMPLETE")
+  }
+  jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
+  return { ...publicResult(result), value: jobs }
+}
+
+function isNullableTimestamp(value) {
+  return (
+    value === null ||
+    (typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value) &&
+      Number.isFinite(Date.parse(value)))
+  )
 }
 
 function compareAttestations(left, right) {

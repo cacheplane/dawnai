@@ -1,24 +1,26 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { classifyRegistryResponse, createNpmReader } from "../adapters/npm.mjs"
 
 const NAME = "@dawn-ai/sdk"
 const VERSION = "0.8.21"
-const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
-const OTHER_COMMIT_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 const REGISTRY = "https://registry.npmjs.org"
 const INTEGRITY = `sha512-${"A".repeat(86)}==`
 
-test("createNpmReader exposes only the named read operation and uses encoded GET requests", async () => {
+test("createNpmReader exposes only bounded metadata and tarball reads without interpreting trust evidence", async () => {
   const { fetchImpl, calls } = recordingFetch([
     jsonResponse(versionDocument()),
     jsonResponse({ name: NAME, "dist-tags": { next: "0.9.0-beta.1", latest: VERSION } }),
-    jsonResponse(attestationDocument()),
   ])
   const npm = createNpmReader({ fetchImpl })
 
-  assert.deepEqual(Object.keys(npm), ["observePackageMetadata", "observePackageVersion"])
+  assert.deepEqual(Object.keys(npm), [
+    "observePackageMetadata",
+    "observePackageVersion",
+    "downloadRegistryTarball",
+  ])
   const result = await npm.observePackageVersion({ name: NAME, version: VERSION })
 
   assert.deepEqual(
@@ -41,12 +43,6 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
         redirect: "manual",
         accept: "application/vnd.npm.install-v1+json",
       },
-      {
-        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
-        method: "GET",
-        redirect: "manual",
-        accept: "application/json",
-      },
     ],
   )
   assert.deepEqual(result, {
@@ -60,24 +56,103 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
       tarballUrl: `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`,
       shasum: "a".repeat(40),
       integrity: INTEGRITY,
-      signatures: [
-        { keyid: "SHA256:key-a", sig: "signature-a" },
-        { keyid: "SHA256:key-b", sig: "signature-b" },
-      ],
       distTags: { latest: VERSION, next: "0.9.0-beta.1" },
       latest: VERSION,
-      provenance: {
-        status: "PRESENT",
-        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
-        predicateTypes: ["https://slsa.dev/provenance/v1"],
-        workflow: ".github/workflows/release.yml",
-        commitSha: COMMIT_SHA,
-        repository: "https://github.com/cacheplane/dawnai",
-        ref: "refs/heads/main",
-      },
     },
   })
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
+})
+
+test("downloads an exact same-origin registry tarball with bounded canonical bytes and digests", async () => {
+  const bytes = Buffer.from("exact registry tarball bytes")
+  const tarballUrl = `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
+  const { fetchImpl, calls } = recordingFetch([
+    new Response(bytes, { headers: { "content-type": "application/octet-stream" } }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).downloadRegistryTarball({ tarballUrl })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      url,
+      method: init.method,
+      redirect: init.redirect,
+      accept: init.headers.Accept,
+    })),
+    [
+      {
+        url: tarballUrl,
+        method: "GET",
+        redirect: "manual",
+        accept: "application/octet-stream",
+      },
+    ],
+  )
+  assert.deepEqual(result, {
+    status: "PRESENT",
+    operation: "package-tarball",
+    httpStatus: 200,
+    code: null,
+    tarball: {
+      url: tarballUrl,
+      size: bytes.length,
+      sha1: createHash("sha1").update(bytes).digest("hex"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sha512: createHash("sha512").update(bytes).digest("hex"),
+      contentBase64: bytes.toString("base64"),
+    },
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
+})
+
+test("registry tarball auth, redirect, oversized, malformed, and cross-origin results are never absence", async () => {
+  const tarballUrl = `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
+  const responses = [
+    new Response("denied", {
+      status: 401,
+      headers: { "content-type": "application/octet-stream" },
+    }),
+    new Response(null, {
+      status: 302,
+      headers: {
+        "content-type": "application/octet-stream",
+        location: "https://cdn.example.test/package.tgz",
+      },
+    }),
+    new Response(Buffer.alloc(6), {
+      headers: { "content-length": "6", "content-type": "application/octet-stream" },
+    }),
+    responseLike({
+      status: 200,
+      ok: true,
+      body: "bytes",
+      headers: { "content-type": "text/plain" },
+    }),
+  ]
+  for (let index = 0; index < responses.length; index += 1) {
+    const npm = createNpmReader({
+      fetchImpl: async () => responses[index],
+      ...(index === 2 ? { maxResponseBytes: 5 } : {}),
+    })
+    const result = await npm.downloadRegistryTarball({ tarballUrl })
+    assert.notEqual(result.status, "ABSENT")
+    assert.equal(result.operation, "package-tarball")
+  }
+
+  let fetches = 0
+  const npm = createNpmReader({
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error("must not fetch")
+    },
+  })
+  await assert.rejects(
+    npm.downloadRegistryTarball({
+      tarballUrl: `https://registry.example.test/sdk-${VERSION}.tgz`,
+    }),
+    /registry tarball URL|same-origin|unsafe/iu,
+  )
+  assert.equal(fetches, 0)
 })
 
 test("observePackageMetadata reads only bounded public dist-tags independently", async () => {
@@ -373,7 +448,7 @@ test("npm requires an explicit exact trust grant for non-default registry origin
   )
 })
 
-test("npm refuses malformed or cross-origin tarball and provenance URLs", async () => {
+test("npm refuses malformed or cross-origin tarball URLs", async () => {
   for (const mutate of [
     (document) => {
       document.dist.tarball = "https://evil.example/sdk.tgz"
@@ -383,18 +458,6 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
     },
     (document) => {
       document.dist.tarball = "https://user:secret@registry.npmjs.org/sdk.tgz"
-    },
-    (document) => {
-      document.dist.attestations.url = "https://evil.example/provenance"
-    },
-    (document) => {
-      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/admin/users`
-    },
-    (document) => {
-      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21?admin=true`
-    },
-    (document) => {
-      document.dist.attestations.url = `https://user:secret@registry.npmjs.org/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`
     },
   ]) {
     const document = versionDocument()
@@ -411,16 +474,13 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
   }
 })
 
-test("npm binds custom-registry provenance to the exact origin endpoint", async () => {
+test("npm binds custom-registry metadata and tarballs to the exact trusted origin", async () => {
   const customRegistry = "https://registry.example.test/npm/"
   const document = versionDocument()
   document.dist.tarball = `https://registry.example.test/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
-  document.dist.attestations.url =
-    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21"
   const recording = recordingFetch([
     jsonResponse(document),
     jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    jsonResponse(attestationDocument()),
   ])
 
   const result = await createNpmReader({
@@ -430,34 +490,7 @@ test("npm binds custom-registry provenance to the exact origin endpoint", async 
   }).observePackageVersion({ name: NAME, version: VERSION })
 
   assert.equal(result.status, "PRESENT")
-  assert.equal(
-    recording.calls[2].url,
-    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21",
-  )
-})
-
-test("npm rejects provenance redirects without following them", async () => {
-  const recording = recordingFetch([
-    jsonResponse(versionDocument()),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    new Response(null, {
-      status: 302,
-      headers: { location: `${REGISTRY}/-/npm/v1/admin/users` },
-    }),
-  ])
-
-  const result = await createNpmReader({ fetchImpl: recording.fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
-
-  assert.deepEqual(result, {
-    status: "ERROR",
-    operation: "provenance",
-    httpStatus: 302,
-    code: "REDIRECT",
-  })
-  assert.equal(recording.calls.length, 3)
+  assert.equal(recording.calls.length, 2)
 })
 
 test("npm requires a canonical padded base64 encoding of exactly 64 integrity bytes", async () => {
@@ -552,75 +585,6 @@ test("npm rejects malformed injected status and does not trust response ok", asy
   )
 })
 
-test("npm reports absent provenance explicitly without inventing workflow identity", async () => {
-  const document = versionDocument()
-  delete document.dist.attestations
-  const { fetchImpl } = recordingFetch([
-    jsonResponse(document),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-  ])
-
-  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
-
-  assert.deepEqual(result.package.provenance, {
-    status: "ABSENT",
-    url: null,
-    predicateTypes: [],
-    workflow: null,
-    commitSha: null,
-    repository: null,
-    ref: null,
-  })
-})
-
-test("npm never synthesizes provenance identity across separate SLSA statements", async () => {
-  const evidence = attestationDocument([
-    provenanceStatement({ commitSha: null }),
-    provenanceStatement({ workflow: null }),
-  ])
-
-  const result = await observeWithEvidence(evidence)
-
-  assert.deepEqual(result, {
-    status: "ERROR",
-    operation: "provenance",
-    httpStatus: 200,
-    code: "MALFORMED_PROVENANCE_IDENTITY",
-  })
-})
-
-test("npm rejects conflicting complete provenance statements independent of input order", async () => {
-  const statements = [provenanceStatement(), provenanceStatement({ commitSha: OTHER_COMMIT_SHA })]
-
-  const forward = await observeWithEvidence(attestationDocument(statements))
-  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
-
-  assert.deepEqual(forward, {
-    status: "AMBIGUOUS",
-    operation: "provenance",
-    httpStatus: 200,
-    code: "PROVENANCE_IDENTITY_CONFLICT",
-  })
-  assert.deepEqual(reversed, forward)
-})
-
-test("npm agreeing provenance statements normalize independently of evidence order", async () => {
-  const statements = [provenanceStatement(), structuredClone(provenanceStatement())]
-
-  const forward = await observeWithEvidence(attestationDocument(statements))
-  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
-
-  assert.equal(forward.status, "PRESENT")
-  assert.deepEqual(reversed, forward)
-  assert.equal(forward.package.provenance.workflow, ".github/workflows/release.yml")
-  assert.equal(forward.package.provenance.commitSha, COMMIT_SHA)
-  assert.equal(forward.package.provenance.repository, "https://github.com/cacheplane/dawnai")
-  assert.equal(forward.package.provenance.ref, "refs/heads/main")
-})
-
 function versionDocument() {
   return {
     name: NAME,
@@ -638,71 +602,6 @@ function versionDocument() {
       },
     },
   }
-}
-
-function provenanceStatement({
-  workflow = ".github/workflows/release.yml",
-  commitSha = COMMIT_SHA,
-  repository = "https://github.com/cacheplane/dawnai",
-  ref = "refs/heads/main",
-} = {}) {
-  return {
-    predicateType: "https://slsa.dev/provenance/v1",
-    subject: [
-      {
-        name: `pkg:npm/%40dawn-ai/sdk@${VERSION}`,
-        digest: { sha512: "0".repeat(128) },
-      },
-    ],
-    predicate: {
-      buildDefinition: {
-        externalParameters: {
-          workflow:
-            workflow === null
-              ? undefined
-              : {
-                  path: workflow,
-                  repository,
-                  ref,
-                },
-        },
-        resolvedDependencies:
-          commitSha === null
-            ? []
-            : [
-                {
-                  uri: `git+${repository}@${ref}`,
-                  digest: { gitCommit: commitSha },
-                },
-              ],
-      },
-    },
-  }
-}
-
-function attestationDocument(statements = [provenanceStatement()]) {
-  return {
-    attestations: statements.map((statement) => ({
-      predicateType: statement.predicateType,
-      bundle: {
-        dsseEnvelope: {
-          payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-        },
-      },
-    })),
-  }
-}
-
-async function observeWithEvidence(evidence) {
-  const { fetchImpl } = recordingFetch([
-    jsonResponse(versionDocument()),
-    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
-    jsonResponse(evidence),
-  ])
-  return createNpmReader({ fetchImpl }).observePackageVersion({
-    name: NAME,
-    version: VERSION,
-  })
 }
 
 function recordingFetch(responses) {

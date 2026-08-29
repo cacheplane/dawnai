@@ -1,10 +1,37 @@
 import { createHash } from "node:crypto"
 import { posix, win32 } from "node:path"
-
+import {
+  assertPayloadByteLength,
+  assertPreparedTarballPayload,
+  RELEASE_PAYLOAD_LIMITS,
+} from "./limits.mjs"
 import { isExactSemver } from "./semver.mjs"
 import { orderReleasePackages } from "./topology.mjs"
 
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 1
+export const CANONICAL_RELEASE_PACKAGE_ORDER = Object.freeze([
+  "@dawn-ai/ag-ui",
+  "@dawn-ai/config-biome",
+  "@dawn-ai/config-typescript",
+  "@dawn-ai/devkit",
+  "@dawn-ai/sdk",
+  "@dawn-ai/langgraph",
+  "@dawn-ai/permissions",
+  "@dawn-ai/postgres-storage",
+  "@dawn-ai/sqlite-storage",
+  "@dawn-ai/memory",
+  "@dawn-ai/memory-pgvector",
+  "@dawn-ai/workspace",
+  "@dawn-ai/core",
+  "@dawn-ai/inspector",
+  "@dawn-ai/langchain",
+  "@dawn-ai/cli",
+  "@dawn-ai/sandbox",
+  "@dawn-ai/testing",
+  "@dawn-ai/evals",
+  "@dawn-ai/vite-plugin",
+  "create-dawn-ai-app",
+])
 
 const ROOT_FIELDS = [
   "schemaVersion",
@@ -30,6 +57,7 @@ const PACKAGE_FIELDS = [
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 
 export function parseReleaseManifest(raw, context) {
+  assertManifestInputSize(raw, "release manifest")
   let source
   if (typeof raw === "string") {
     source = raw
@@ -55,31 +83,8 @@ export function parseReleaseManifest(raw, context) {
 }
 
 export function validateReleaseManifest(value, context) {
-  let manifest
-  try {
-    manifest = structuredClone(value)
-  } catch (error) {
-    throw new TypeError(`Release manifest snapshot failed: ${formatCause(error)}`, { cause: error })
-  }
-
-  assertObject(manifest, "release manifest")
-  assertExactFields(manifest, ROOT_FIELDS, "release manifest")
-
-  if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
-    throw new Error(`schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`)
-  }
-  if (!isExactSemver(manifest.version)) {
-    throw new Error("version must be an exact SemVer")
-  }
-  if (typeof manifest.commitSha !== "string" || !/^[0-9a-f]{40}$/u.test(manifest.commitSha)) {
-    throw new Error("commitSha must be a 40-character lowercase hexadecimal SHA")
-  }
-
-  validateCi(manifest.ci)
-  validateArtifact(manifest.artifact, {
-    commitSha: manifest.commitSha,
-    version: manifest.version,
-  })
+  const manifest = snapshotManifest(value)
+  validateManifestShape(manifest)
 
   const contextPackages = context?.packages
   const gateOrder = context?.gateOrder
@@ -104,12 +109,93 @@ export function validateReleaseManifest(value, context) {
   return deepFreeze(manifest)
 }
 
+export function parseSealedReleaseManifest(raw, context) {
+  assertManifestInputSize(raw, "sealed release manifest")
+  let source
+  if (typeof raw === "string") {
+    source = raw
+  } else if (raw instanceof Uint8Array) {
+    try {
+      source = UTF8_DECODER.decode(raw)
+    } catch (error) {
+      throw new TypeError("Invalid sealed release manifest JSON: bytes must be valid UTF-8", {
+        cause: error,
+      })
+    }
+  } else {
+    throw new TypeError("Invalid sealed release manifest JSON: expected UTF-8 JSON bytes")
+  }
+  let value
+  try {
+    value = JSON.parse(source)
+  } catch (error) {
+    throw new TypeError(`Invalid sealed release manifest JSON: ${formatCause(error)}`, {
+      cause: error,
+    })
+  }
+  return validateSealedReleaseManifest(value, context)
+}
+
+export function validateSealedReleaseManifest(value, { candidate } = {}) {
+  const manifest = snapshotManifest(value)
+  validateManifestShape(manifest)
+  if (
+    candidate === null ||
+    Array.isArray(candidate) ||
+    typeof candidate !== "object" ||
+    manifest.version !== candidate.version ||
+    manifest.commitSha !== candidate.commitSha
+  ) {
+    throw new Error("Sealed release manifest candidate identity does not match")
+  }
+  const inventoryNames = [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareNames)
+  validatePackageOrder(manifest.packageOrder, inventoryNames)
+  validatePackages(manifest.packages, {
+    inventoryNames,
+    packageOrder: manifest.packageOrder,
+    version: manifest.version,
+  })
+  if (!arraysEqual(manifest.packageOrder, CANONICAL_RELEASE_PACKAGE_ORDER)) {
+    throw new Error("packageOrder must match the sealed fixed-group-v1 dependency order")
+  }
+  return deepFreeze(manifest)
+}
+
 export function canonicalManifestBytes(manifest) {
-  return Buffer.from(`${JSON.stringify(canonicalize(manifest), null, 2)}\n`, "utf8")
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(manifest), null, 2)}\n`, "utf8")
+  assertPayloadByteLength(bytes.length, RELEASE_PAYLOAD_LIMITS.manifestBytes, "Release manifest")
+  return bytes
 }
 
 export function manifestSha256(manifest) {
   return createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex")
+}
+
+function snapshotManifest(value) {
+  try {
+    return structuredClone(value)
+  } catch (error) {
+    throw new TypeError(`Release manifest snapshot failed: ${formatCause(error)}`, { cause: error })
+  }
+}
+
+function validateManifestShape(manifest) {
+  assertObject(manifest, "release manifest")
+  assertExactFields(manifest, ROOT_FIELDS, "release manifest")
+  if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
+    throw new Error(`schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`)
+  }
+  if (!isExactSemver(manifest.version)) {
+    throw new Error("version must be an exact SemVer")
+  }
+  if (typeof manifest.commitSha !== "string" || !/^[0-9a-f]{40}$/u.test(manifest.commitSha)) {
+    throw new Error("commitSha must be a 40-character lowercase hexadecimal SHA")
+  }
+  validateCi(manifest.ci)
+  validateArtifact(manifest.artifact, {
+    commitSha: manifest.commitSha,
+    version: manifest.version,
+  })
 }
 
 function validateCi(value) {
@@ -175,6 +261,7 @@ function validatePackages(packages, { inventoryNames, packageOrder, version }) {
   for (const entry of packages) {
     validatePackage(entry, version)
   }
+  assertPreparedTarballPayload(packages)
 }
 
 function validatePackage(entry, version) {
@@ -318,4 +405,16 @@ function compareNames(left, right) {
 
 function formatCause(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function assertManifestInputSize(raw, label) {
+  if (typeof raw === "string") {
+    assertPayloadByteLength(
+      Buffer.byteLength(raw, "utf8"),
+      RELEASE_PAYLOAD_LIMITS.manifestBytes,
+      label,
+    )
+  } else if (raw instanceof Uint8Array) {
+    assertPayloadByteLength(raw.byteLength, RELEASE_PAYLOAD_LIMITS.manifestBytes, label)
+  }
 }

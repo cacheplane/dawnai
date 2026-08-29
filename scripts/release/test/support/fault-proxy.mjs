@@ -2,10 +2,11 @@ import { createServer, request as httpRequest } from "node:http"
 import { Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 
+import { RELEASE_PAYLOAD_LIMITS } from "../../limits.mjs"
 import { startupRollbackError, validateLifecycleHooks } from "./startup-lifecycle.mjs"
 
 const LOOPBACK = "127.0.0.1"
-const MAX_FORWARD_BYTES = 4 * 1024 * 1024
+const MAX_FORWARD_BYTES = RELEASE_PAYLOAD_LIMITS.tarballBytes
 const FORWARD_TIMEOUT_MS = 5_000
 const STARTUP_TIMEOUT_MS = 2_000
 const SHUTDOWN_TIMEOUT_MS = 2_000

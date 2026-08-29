@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+import { canonicalReleaseBody, parseSmokeReleaseAssetName } from "./metadata.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const PLANNER_FIELDS = Object.freeze(["candidate", "observation", "mode"])
@@ -25,8 +27,9 @@ const RELEASE_STATES = new Set([
   "NPM_COMPLETE",
   "RELEASE_DRAFT_COMPLETE",
   "SMOKES_COMPLETE",
-  "RELEASE_PUBLISHED",
   "AUDIT_DISPATCHED",
+  "AUDIT_RETRYABLE",
+  "AUDIT_VERIFIED",
   "AUDIT_COMPLETE",
   "ABANDONED_PREPUBLICATION",
 ])
@@ -99,7 +102,14 @@ export function findObservationSchemaConflicts(observation) {
       "attestationSha256",
       "integrity",
     ]) &&
-    hasExactFields(observation.ci, ["status", "workflow", "check", "commitSha"]) &&
+    hasExactFields(observation.ci, [
+      "status",
+      "workflow",
+      "check",
+      "commitSha",
+      "workflowRunId",
+      "runAttempt",
+    ]) &&
     recordsHaveExactFields(observation.otherCandidates, ["version", "commitSha", "state"]) &&
     hasExactFields(observation.tag, ["status", "commitSha"]) &&
     hasExactFields(observation.artifacts, [
@@ -147,11 +157,13 @@ export function findObservationSchemaConflicts(observation) {
       "status",
       "tag",
       "commitSha",
-      "metadataReconciled",
+      "immutable",
+      "bodySha256",
+      "marker",
       "assets",
     ]) &&
     recordsHaveExactFields(observation.release?.assets, ["name", "status", "sha256"]) &&
-    hasExactFields(observation.abandonment, ["requested", "recorded"])
+    hasExactFields(observation.abandonment, ["requested", "recorded", "predecessor"])
   if (!structurallyValid) conflicts.add("observation-schema-invalid")
   for (const pkg of Array.isArray(observation.registry?.packages)
     ? observation.registry.packages
@@ -172,10 +184,20 @@ export function findObservationSchemaConflicts(observation) {
   for (const smoke of smokes) {
     if (!isRecord(smoke)) continue
     if (!hasExactFields(smoke, SMOKE_FIELDS)) conflicts.add("observation-schema-invalid")
-    if (!Object.hasOwn(smoke, "workflowRunId") || !isPositiveInteger(smoke.workflowRunId)) {
+    if (
+      !Object.hasOwn(smoke, "workflowRunId") ||
+      (smoke.status === "pending"
+        ? smoke.workflowRunId !== null && !isPositiveInteger(smoke.workflowRunId)
+        : !isPositiveInteger(smoke.workflowRunId))
+    ) {
       conflicts.add("required-smoke-workflow-run-id-invalid")
     }
-    if (!Object.hasOwn(smoke, "runAttempt") || !isPositiveInteger(smoke.runAttempt)) {
+    if (
+      !Object.hasOwn(smoke, "runAttempt") ||
+      (smoke.status === "pending"
+        ? smoke.runAttempt !== null && !isPositiveInteger(smoke.runAttempt)
+        : !isPositiveInteger(smoke.runAttempt))
+    ) {
       conflicts.add("required-smoke-run-attempt-invalid")
     }
   }
@@ -197,6 +219,18 @@ export function findObservationSchemaConflicts(observation) {
 }
 
 function addStatusDependentConflicts(observation, conflicts) {
+  if (
+    artifactPreparationSignalObserved(observation) &&
+    !observation.inventory.packages.every(packageTarballDigestsComplete)
+  ) {
+    conflicts.add("inventory-artifact-digests-missing")
+  }
+  if (
+    attestationSignalObserved(observation) &&
+    !observation.inventory.packages.every(packageAttestationDigestComplete)
+  ) {
+    conflicts.add("inventory-attestation-digests-missing")
+  }
   if (
     ["prepared", "attested"].includes(observation.artifacts.status) &&
     !isSha256(observation.artifacts.manifestSha256)
@@ -228,29 +262,80 @@ function addStatusDependentConflicts(observation, conflicts) {
   if (observation.release.status === "absent" && observation.release.assets.length > 0) {
     conflicts.add("github-assets-without-release")
   }
+  if (observation.release.status === "draft" && observation.release.immutable !== false) {
+    conflicts.add("github-release-draft-immutable-invalid")
+  }
+  if (observation.release.status === "published") {
+    if (observation.release.immutable !== true) conflicts.add("github-release-not-immutable")
+    if (observation.release.marker?.phase !== "AUDIT_VERIFIED") {
+      conflicts.add("github-release-published-without-audit")
+    }
+  }
   if (["draft", "published"].includes(observation.release.status)) {
-    const expectedAssets = [
-      observation.artifacts.releaseRecordAsset,
-      observation.artifacts.manifestAsset,
-      observation.artifacts.manifestAttestationAsset,
-      ...observation.inventory.packages.map((pkg) => ({
-        name: pkg.filename,
-        sha256: pkg.tarballSha256,
-      })),
-      ...observation.inventory.packages.map((pkg) => ({
-        name: pkg.attestationFilename,
-        sha256: pkg.attestationSha256,
-      })),
-    ]
+    const releaseMarker = observation.release.marker
+    const abandoned = releaseMarker?.phase === "ABANDONED_PREPUBLICATION"
+    const attestedAbandonment = abandoned && releaseMarker.attestationSet !== null
+    const abandonmentBaseAssets = abandonmentBaseAssetsFromMarker(releaseMarker)
+    if (attestedAbandonment && abandonmentBaseAssets.length !== 45) {
+      conflicts.add("abandonment-verifiable-base-invalid")
+    }
+    const expectedAssets = abandoned
+      ? attestedAbandonment
+        ? abandonmentBaseAssets
+        : []
+      : [
+          observation.artifacts.releaseRecordAsset,
+          observation.artifacts.manifestAsset,
+          observation.artifacts.manifestAttestationAsset,
+          ...observation.inventory.packages.map((pkg) => ({
+            name: pkg.filename,
+            sha256: pkg.tarballSha256,
+          })),
+          ...observation.inventory.packages.map((pkg) => ({
+            name: pkg.attestationFilename,
+            sha256: pkg.attestationSha256,
+          })),
+        ]
     const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset]))
     const seen = new Set()
     for (const asset of observation.release.assets) {
       if (seen.has(asset.name)) conflicts.add("github-asset-duplicate")
       seen.add(asset.name)
       const expected = expectedByName.get(asset.name)
-      if (expected === undefined) conflicts.add("github-managed-asset-unexpected")
-      else if (asset.sha256 !== expected.sha256) conflicts.add("github-asset-bytes-mismatch")
+      if (expected === undefined) {
+        if (!releaseEvidenceAssetIsAllowed(asset, observation.release.marker)) {
+          conflicts.add("github-managed-asset-unexpected")
+        }
+      } else if (asset.sha256 !== expected.sha256) conflicts.add("github-asset-bytes-mismatch")
       if (asset.status === "ambiguous") conflicts.add("github-asset-ambiguous")
+    }
+    if (abandoned) {
+      const abandonmentAssets = observation.release.assets.filter(
+        (asset) => asset.name === "abandonment.json",
+      )
+      if (
+        abandonmentAssets.length !== 1 ||
+        abandonmentAssets[0].sha256 !== observation.release.marker.abandonmentSha256
+      ) {
+        conflicts.add("abandonment-terminal-evidence-incomplete")
+      }
+      const retainedBase = observation.release.assets.filter((asset) =>
+        expectedByName.has(asset.name),
+      )
+      if (
+        attestedAbandonment
+          ? abandonmentBaseAssets.length !== 45 ||
+            retainedBase.length !== 45 ||
+            abandonmentBaseAssets.some(
+              (expected) =>
+                !retainedBase.some(
+                  (asset) => asset.name === expected.name && asset.sha256 === expected.sha256,
+                ),
+            )
+          : observation.release.assets.some((asset) => asset.name !== "abandonment.json")
+      ) {
+        conflicts.add("abandonment-verifiable-base-incomplete")
+      }
     }
   }
   const manifestAttestations = observation.artifacts.attestations.filter(
@@ -267,6 +352,40 @@ function addStatusDependentConflicts(observation, conflicts) {
   ) {
     conflicts.add("competing-version-build-metadata")
   }
+}
+
+export function abandonmentBaseAssetsFromMarker(marker) {
+  if (
+    marker?.phase !== "ABANDONED_PREPUBLICATION" ||
+    !isRecord(marker.attestationSet) ||
+    !Array.isArray(marker.attestationSet.subjects)
+  ) {
+    return []
+  }
+  const subjects = marker.attestationSet.subjects
+  const assets = [
+    { name: "release-record.json", sha256: marker.releaseRecordSha256 },
+    { name: "manifest.json", sha256: marker.manifestSha256 },
+    ...subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  if (
+    assets.length !== 45 ||
+    new Set(assets.map((asset) => asset.name)).size !== 45 ||
+    assets.some((asset) => !isAssetName(asset.name) || !isSha256(asset.sha256)) ||
+    createHash("sha256")
+      .update(`${JSON.stringify(assets)}\n`)
+      .digest("hex") !== marker.baseAssetSetSha256
+  ) {
+    return []
+  }
+  return assets
 }
 
 export function observationStructureIsValid(observation) {
@@ -308,8 +427,20 @@ function semanticallyValid(observation) {
     validateSmokes(observation.requiredSmokeLanes, observation.smokes) &&
     validateAudit(observation.audit) &&
     validateCanonicalObservationSets(observation) &&
-    typeof observation.abandonment?.requested === "boolean" &&
-    typeof observation.abandonment?.recorded === "boolean"
+    validateAbandonment(observation.abandonment)
+  )
+}
+
+function validateAbandonment(abandonment) {
+  if (typeof abandonment?.requested !== "boolean" || typeof abandonment?.recorded !== "boolean") {
+    return false
+  }
+  if (!abandonment.recorded) return abandonment.predecessor === null
+  return (
+    abandonment.requested &&
+    ["CANDIDATE_TAGGED", "ARTIFACTS_PREPARED", "CANDIDATE_ESCROWED"].includes(
+      abandonment.predecessor,
+    )
   )
 }
 
@@ -353,8 +484,98 @@ function validateCanonicalObservationSets(observation) {
     hasExactUniqueSet(attestationSubjects, expectedAttestationSubjects) &&
     artifactIdentitiesMatch &&
     attestationIdentitiesMatch &&
-    modeledAssetsAreUnique
+    modeledAssetsAreUnique &&
+    markerMatchesObservation(observation)
   )
+}
+
+function markerMatchesObservation(observation) {
+  const marker = observation.release.marker
+  if (marker === null) return true
+  if (marker.phase === "ABANDONED_PREPUBLICATION" && marker.attestationSet === null) {
+    if (marker.baseAssetSetSha256 !== null) return false
+    if (observation.abandonment.predecessor === "CANDIDATE_TAGGED") {
+      return (
+        marker.manifestSha256 === null &&
+        marker.releaseRecordSha256 === null &&
+        observation.artifacts.status === "absent"
+      )
+    }
+    if (observation.abandonment.predecessor !== "ARTIFACTS_PREPARED") return false
+    if (!isSha256(marker.manifestSha256) || !isSha256(marker.releaseRecordSha256)) return false
+    return (
+      (observation.artifacts.status === "prepared" &&
+        marker.manifestSha256 === observation.artifacts.manifestSha256 &&
+        marker.releaseRecordSha256 === observation.artifacts.releaseRecordAsset.sha256) ||
+      (observation.artifacts.status === "absent" &&
+        observation.artifacts.manifestSha256 === null &&
+        observation.artifacts.releaseRecordAsset.sha256 === null)
+    )
+  }
+  if (marker.phase === "ATTACHING") {
+    return (
+      marker.manifestSha256 === observation.artifacts.manifestSha256 &&
+      marker.releaseRecordSha256 === observation.artifacts.releaseRecordAsset.sha256 &&
+      marker.baseAssetSetSha256 === null &&
+      marker.attestationSet === null
+    )
+  }
+  const subjects = marker.attestationSet?.subjects
+  const expectedSubjects = [
+    {
+      subjectName: "manifest.json",
+      subjectSha256: observation.artifacts.manifestSha256,
+      bundleName: observation.artifacts.manifestAttestationAsset.name,
+      bundleSha256: observation.artifacts.manifestAttestationAsset.sha256,
+    },
+    ...observation.inventory.packages.map((pkg) => ({
+      subjectName: pkg.filename,
+      subjectSha256: pkg.tarballSha256,
+      bundleName: pkg.attestationFilename,
+      bundleSha256: pkg.attestationSha256,
+    })),
+  ]
+  const expectedByName = new Map(expectedSubjects.map((subject) => [subject.subjectName, subject]))
+  if (
+    marker.manifestSha256 !== observation.artifacts.manifestSha256 ||
+    marker.releaseRecordSha256 !== observation.artifacts.releaseRecordAsset.sha256 ||
+    !Array.isArray(subjects) ||
+    subjects.length !== expectedSubjects.length ||
+    new Set(subjects.map((subject) => subject.subjectName)).size !== subjects.length ||
+    !subjects.every((subject) => {
+      const expected = expectedByName.get(subject.subjectName)
+      return (
+        expected !== undefined &&
+        ["subjectName", "subjectSha256", "bundleName", "bundleSha256"].every(
+          (field) => subject[field] === expected[field],
+        )
+      )
+    })
+  ) {
+    return false
+  }
+  const digestEntries = [
+    {
+      name: observation.artifacts.releaseRecordAsset.name,
+      sha256: observation.artifacts.releaseRecordAsset.sha256,
+    },
+    {
+      name: observation.artifacts.manifestAsset.name,
+      sha256: observation.artifacts.manifestAsset.sha256,
+    },
+    ...subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...subjects.map((subject) => ({
+      name: subject.bundleName,
+      sha256: subject.bundleSha256,
+    })),
+  ]
+  const baseDigest = createHash("sha256")
+    .update(`${JSON.stringify(digestEntries)}\n`)
+    .digest("hex")
+  return marker.baseAssetSetSha256 === baseDigest
 }
 
 function hasExactUniqueSet(actual, expected) {
@@ -377,14 +598,17 @@ function validateInventory(inventory) {
   const filenames = new Set()
   const attestationNames = new Set()
   return inventory.packages.every((pkg) => {
+    const artifactIdentityComplete = packageArtifactDigestsComplete(pkg)
+    const preparedIdentityComplete =
+      packageTarballDigestsComplete(pkg) && pkg.attestationSha256 === null
+    const artifactIdentityAbsent =
+      pkg.tarballSha256 === null && pkg.attestationSha256 === null && pkg.integrity === null
     const valid =
       isPackageName(pkg.name) &&
       isReleaseSemver(pkg.version) &&
       isAssetName(pkg.filename) &&
-      isSha256(pkg.tarballSha256) &&
       isAssetName(pkg.attestationFilename) &&
-      isSha256(pkg.attestationSha256) &&
-      isIntegrity(pkg.integrity) &&
+      (artifactIdentityComplete || preparedIdentityComplete || artifactIdentityAbsent) &&
       !names.has(pkg.name) &&
       !filenames.has(pkg.filename) &&
       !attestationNames.has(pkg.attestationFilename)
@@ -398,12 +622,21 @@ function validateInventory(inventory) {
 function validateCi(ci) {
   if (!["missing", "failed", "success", "ambiguous"].includes(ci?.status)) return false
   if (["failed", "success"].includes(ci.status)) {
-    return isNonEmptyString(ci.workflow) && isNonEmptyString(ci.check) && isSha(ci.commitSha)
+    return (
+      isNonEmptyString(ci.workflow) &&
+      isNonEmptyString(ci.check) &&
+      isSha(ci.commitSha) &&
+      isPositiveInteger(ci.workflowRunId) &&
+      isPositiveInteger(ci.runAttempt)
+    )
   }
   return (
     (ci.workflow === null || isNonEmptyString(ci.workflow)) &&
     (ci.check === null || isNonEmptyString(ci.check)) &&
-    (ci.commitSha === null || isSha(ci.commitSha))
+    (ci.commitSha === null || isSha(ci.commitSha)) &&
+    (ci.workflowRunId === null || isPositiveInteger(ci.workflowRunId)) &&
+    (ci.runAttempt === null || isPositiveInteger(ci.runAttempt)) &&
+    (ci.workflowRunId === null) === (ci.runAttempt === null)
   )
 }
 
@@ -490,11 +723,57 @@ function validateAttestation(attestation) {
   if (
     !isAssetName(attestation.name) ||
     !isAssetName(attestation.subjectName) ||
-    !isSha256(attestation.subjectSha256)
+    !(attestation.subjectSha256 === null || isSha256(attestation.subjectSha256))
   ) {
     return false
   }
-  return attestation.status === "valid" ? isSha256(attestation.sha256) : attestation.sha256 === null
+  return attestation.status === "valid"
+    ? isSha256(attestation.sha256) && isSha256(attestation.subjectSha256)
+    : attestation.sha256 === null
+}
+
+function packageArtifactDigestsComplete(pkg) {
+  return packageTarballDigestsComplete(pkg) && packageAttestationDigestComplete(pkg)
+}
+
+function packageTarballDigestsComplete(pkg) {
+  return isSha256(pkg?.tarballSha256) && isIntegrity(pkg.integrity)
+}
+
+function packageAttestationDigestComplete(pkg) {
+  return isSha256(pkg?.attestationSha256)
+}
+
+function artifactPreparationSignalObserved(observation) {
+  return (
+    observation.artifacts.status !== "absent" ||
+    observation.escrow.status !== "absent" ||
+    releaseRequiresArtifactDigests(observation.release) ||
+    observation.registry.publishJobStarted ||
+    observation.registry.mutationStarted ||
+    observation.registry.packages.some((pkg) => pkg.status !== "e404")
+  )
+}
+
+function attestationSignalObserved(observation) {
+  return (
+    observation.artifacts.status === "attested" ||
+    observation.escrow.status !== "absent" ||
+    releaseRequiresArtifactDigests(observation.release) ||
+    observation.registry.publishJobStarted ||
+    observation.registry.mutationStarted ||
+    observation.registry.packages.some((pkg) => pkg.status !== "e404")
+  )
+}
+
+function releaseRequiresArtifactDigests(release) {
+  return (
+    release.status !== "absent" &&
+    !(
+      release.status === "draft" &&
+      ["ATTACHING", "ABANDONED_PREPUBLICATION"].includes(release.marker?.phase)
+    )
+  )
 }
 
 function validateEscrow(escrow) {
@@ -557,17 +836,65 @@ function validateProvenance(provenance) {
 
 function validateRelease(release) {
   if (!["absent", "draft", "published", "ambiguous"].includes(release?.status)) return false
-  if (typeof release.metadataReconciled !== "boolean" || !Array.isArray(release.assets))
-    return false
+  if (!Array.isArray(release.assets)) return false
   if (!release.assets.every(validateManagedAsset)) return false
   if (["draft", "published"].includes(release.status)) {
-    return isNonEmptyString(release.tag) && isSha(release.commitSha) && release.assets.length > 0
+    return (
+      isNonEmptyString(release.tag) &&
+      isSha(release.commitSha) &&
+      typeof release.immutable === "boolean" &&
+      isSha256(release.bodySha256) &&
+      validateObservedMarker(release.marker)
+    )
   }
   return (
     release.tag === null &&
     release.commitSha === null &&
-    release.metadataReconciled === false &&
+    release.immutable === null &&
+    release.bodySha256 === null &&
+    release.marker === null &&
     release.assets.length === 0
+  )
+}
+
+function validateObservedMarker(marker) {
+  try {
+    canonicalReleaseBody({ marker, manifest: null })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function releaseEvidenceAssetIsAllowed(asset, marker) {
+  if (marker?.phase === "ABANDONED_PREPUBLICATION") {
+    return asset.name === "abandonment.json" && asset.sha256 === marker.abandonmentSha256
+  }
+  const smokeReceipt = marker?.smoke?.receiptAssets?.find(
+    ({ releaseAssetName }) => releaseAssetName === asset.name,
+  )
+  if (smokeReceipt !== undefined) {
+    return asset.sha256 === smokeReceipt.receiptSha256
+  }
+  if (
+    marker?.phase === "NPM_COMPLETE" &&
+    marker.smoke === null &&
+    parseSmokeReleaseAssetName(asset.name) !== null
+  ) {
+    return true
+  }
+  if (!["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(marker?.phase)) {
+    return false
+  }
+  if (/^audit-attempt-[1-9][0-9]*-[1-9][0-9]*\.json$/u.test(asset.name)) {
+    return (
+      asset.name !== marker.audit?.attemptAssetName || asset.sha256 === marker.audit.attemptSha256
+    )
+  }
+  return (
+    marker.phase === "AUDIT_VERIFIED" &&
+    asset.name === "audit-result.json" &&
+    asset.sha256 === marker.audit?.canonicalSha256
   )
 }
 
@@ -590,8 +917,12 @@ function validateSmokes(lanes, smokes) {
       isReleaseSemver(smoke.version) &&
       isSha(smoke.commitSha) &&
       (smoke.manifestSha256 === null || isSha256(smoke.manifestSha256)) &&
-      isPositiveInteger(smoke.workflowRunId) &&
-      isPositiveInteger(smoke.runAttempt),
+      (smoke.status === "pending"
+        ? smoke.workflowRunId === null || isPositiveInteger(smoke.workflowRunId)
+        : isPositiveInteger(smoke.workflowRunId)) &&
+      (smoke.status === "pending"
+        ? smoke.runAttempt === null || isPositiveInteger(smoke.runAttempt)
+        : isPositiveInteger(smoke.runAttempt)),
   )
 }
 

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
+
+import { parse } from "yaml"
 
 import {
   assertCleanDependencySpecs,
@@ -18,9 +21,12 @@ import {
   normalizeCliArgs,
   npmView,
   packageSets,
+  publicNpmEnvironment,
+  readBoundedRegularFile,
   resolvePackageSet,
   resolveRequestedVersion,
   run,
+  validateExactPublishedPackageEvidence,
   validatePackageMetadata,
   validatePublishedWaitOptions,
   waitForPublishedVersions,
@@ -38,6 +44,8 @@ import {
   parsePublishedArtifactVerifyArgs,
   runPublishedArtifactVerify,
 } from "./published-artifact-verify.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "./release/manifest.mjs"
+import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "./release/smoke-result.mjs"
 
 const {
   agUiEsmProbeSource,
@@ -60,6 +68,7 @@ const {
 } = publishedSmoke
 
 const tempRoots = []
+const workflowExpression = (value) => `\${{ ${value} }}`
 const typescriptPackagePath = fileURLToPath(import.meta.resolve("typescript/package.json"))
 const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"))
 const typescriptCompilerPath = resolvePackageBinPath(
@@ -162,7 +171,11 @@ describe("waitForPublishedVersions", () => {
   it("rejects oversized delays, attempts, timeouts, and total budgets", () => {
     for (const [options, expected] of [
       [
-        { attempts: 1, delayMs: 2 ** 31, requestTimeoutMs: NPM_VIEW_TIMEOUT_MS },
+        {
+          attempts: 1,
+          delayMs: 2 ** 31,
+          requestTimeoutMs: NPM_VIEW_TIMEOUT_MS,
+        },
         new RegExp(`delayMs.*at most ${MAX_WAIT_DELAY_MS}`),
       ],
       [
@@ -314,7 +327,9 @@ describe("waitForPublishedVersions", () => {
         delayMs: 250,
         async npmViewImpl(packageName) {
           calls.push(packageName)
-          return { versions: packageName === "@dawn-ai/vite-plugin" ? [] : ["0.9.0"] }
+          return {
+            versions: packageName === "@dawn-ai/vite-plugin" ? [] : ["0.9.0"],
+          }
         },
         async delay(ms) {
           delays.push(ms)
@@ -351,7 +366,9 @@ describe("waitForPublishedVersions", () => {
         delayMs: 5,
         async npmViewImpl() {
           calls += 1
-          throw Object.assign(new Error(`registry E500 on call ${calls}`), { code: "E500" })
+          throw Object.assign(new Error(`registry E500 on call ${calls}`), {
+            code: "E500",
+          })
         },
         async delay(ms) {
           delays.push(ms)
@@ -436,7 +453,9 @@ describe("waitForPublishedVersions", () => {
       Object.assign(new Error("access forbidden"), { statusCode: 403 }),
       Object.assign(new Error("invalid npm config"), { code: "ECONFIG" }),
       Object.assign(new Error("npm usage error"), { code: "EUSAGE" }),
-      Object.assign(new Error("malformed registry JSON"), { code: "EINVALIDJSON" }),
+      Object.assign(new Error("malformed registry JSON"), {
+        code: "EINVALIDJSON",
+      }),
       new Error("unknown programmer error"),
     ]) {
       let calls = 0
@@ -506,7 +525,12 @@ describe("waitForPublishedVersions", () => {
         /delayMs.*non-negative integer/i,
       ],
       [
-        { packages: ["core"], version: "0.9.0", attempts: 1, delayMs: Number.POSITIVE_INFINITY },
+        {
+          packages: ["core"],
+          version: "0.9.0",
+          attempts: 1,
+          delayMs: Number.POSITIVE_INFINITY,
+        },
         /delayMs.*non-negative integer/i,
       ],
       [
@@ -533,7 +557,12 @@ describe("waitForPublishedVersions", () => {
 
     for (const [options, expected] of invalidCases) {
       await assert.rejects(
-        waitForPublishedVersions({ ...options, npmViewImpl, delay, ...options }),
+        waitForPublishedVersions({
+          ...options,
+          npmViewImpl,
+          delay,
+          ...options,
+        }),
         expected,
       )
     }
@@ -569,15 +598,21 @@ describe("npmView", () => {
     for (const [sourceError, expected] of [
       [new SyntaxError("Unexpected token"), { code: "EINVALIDJSON", retryable: false }],
       [
-        Object.assign(new Error("npm failed"), { stderr: "npm error code E503" }),
+        Object.assign(new Error("npm failed"), {
+          stderr: "npm error code E503",
+        }),
         { code: "E503", retryable: true, statusCode: 503 },
       ],
       [
-        Object.assign(new Error("npm failed"), { stderr: "npm error code E401" }),
+        Object.assign(new Error("npm failed"), {
+          stderr: "npm error code E401",
+        }),
         { code: "E401", retryable: false, statusCode: 401 },
       ],
       [
-        Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }),
+        Object.assign(new Error("getaddrinfo EAI_AGAIN"), {
+          code: "EAI_AGAIN",
+        }),
         { code: "EAI_AGAIN", retryable: true },
       ],
     ]) {
@@ -811,111 +846,695 @@ describe("published artifact verification CLI", () => {
 
     assert.equal(waited, false)
   })
-})
 
-describe("published artifact workflow", () => {
-  it("offers TypeScript tooling without enabling pgvector or OpenAI runtime work", () => {
-    const workflow = readFileSync(
-      join(
-        dirname(fileURLToPath(import.meta.url)),
-        "..",
-        ".github",
-        "workflows",
-        "published-artifact-verify.yml",
+  it("parses an exact release-mode invocation without changing manual defaults", () => {
+    const digest = "b".repeat(64)
+    assert.deepEqual(
+      parsePublishedArtifactVerifyArgs([
+        "--release-mode",
+        "--version=0.8.22",
+        `--commit-sha=${"a".repeat(40)}`,
+        "--manifest",
+        "/tmp/manifest.json",
+        "--manifest-sha256",
+        digest,
+        "--result=/tmp/metadata-result.json",
+      ]),
+      {
+        releaseMode: true,
+        version: "0.8.22",
+        commitSha: "a".repeat(40),
+        manifest: "/tmp/manifest.json",
+        manifestSha256: digest,
+        result: "/tmp/metadata-result.json",
+      },
+    )
+    assert.deepEqual(parsePublishedArtifactVerifyArgs([]), {
+      packageSet: "memory-pgvector-core",
+      version: "latest",
+    })
+  })
+
+  it("rejects incomplete, dist-tag, and mixed release-mode invocations", () => {
+    const required = [
+      "--release-mode",
+      "--version=0.8.22",
+      `--commit-sha=${"a".repeat(40)}`,
+      "--manifest=/tmp/manifest.json",
+      `--manifest-sha256=${"b".repeat(64)}`,
+      "--result=/tmp/result.json",
+    ]
+    assert.throws(
+      () => parsePublishedArtifactVerifyArgs(required.filter((arg) => !arg.startsWith("--result"))),
+      /--result.*required/i,
+    )
+    assert.throws(
+      () =>
+        parsePublishedArtifactVerifyArgs(
+          required.map((arg) => (arg === "--version=0.8.22" ? "--version=latest" : arg)),
+        ),
+      /exact version/i,
+    )
+    assert.throws(
+      () => parsePublishedArtifactVerifyArgs([...required, "--package-set=public"]),
+      /--package-set.*release mode/i,
+    )
+    assert.throws(
+      () => parsePublishedArtifactVerifyArgs([...required, "--wait-attempts=2"]),
+      /wait.*release mode/i,
+    )
+  })
+
+  it("verifies every sealed-manifest package and writes a correlated success receipt", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    const calls = []
+    const writes = []
+    const result = await runPublishedArtifactVerify(
+      {
+        releaseMode: true,
+        version: manifest.version,
+        commitSha: manifest.commitSha,
+        manifest: "/inputs/manifest.json",
+        manifestSha256: digest,
+        result: "/outputs/result.json",
+      },
+      {
+        env: releaseSmokeEnvironment("301", "4"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
+        now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+        async readFile(path) {
+          assert.equal(path, "/inputs/manifest.json")
+          return manifestBytes
+        },
+        async verifyReleasePackage(entry, context) {
+          calls.push({ entry, context })
+        },
+        async writeFile(path, bytes) {
+          writes.push({ path, bytes })
+        },
+        async mkdir() {},
+      },
+    )
+
+    assert.deepEqual(result.failures, [])
+    assert.deepEqual(result.packageNames, CANONICAL_RELEASE_PACKAGE_ORDER)
+    assert.deepEqual(
+      calls.map(({ entry }) => entry.name),
+      CANONICAL_RELEASE_PACKAGE_ORDER,
+    )
+    assert.equal(
+      calls.every(({ context }) => context.candidate.commitSha === manifest.commitSha),
+      true,
+    )
+    assert.equal(writes.length, 1)
+    assert.equal(writes[0].path, "/outputs/result.json")
+    const receipt = parseSmokeResult(writes[0].bytes)
+    assert.equal(receipt.lane, "metadata")
+    assert.equal(receipt.workflowRunId, 301)
+    assert.equal(receipt.runAttempt, 4)
+    assert.equal(receipt.conclusion, "success")
+    assert.equal(receipt.checks.length, CANONICAL_RELEASE_PACKAGE_ORDER.length + 2)
+    assert.equal(receipt.checks[0].name, "containment")
+  })
+
+  it("records release-mode containment refusal before reading the manifest or spawning", async () => {
+    const manifest = publishedReleaseManifest()
+    const digest = createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex")
+    let read = false
+    let spawned = false
+    let receipt
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: manifest.version,
+          commitSha: manifest.commitSha,
+          manifest: "/inputs/manifest.json",
+          manifestSha256: digest,
+          result: "/outputs/result.json",
+        },
+        {
+          env: releaseSmokeEnvironment("304", "1"),
+          strictRunner: {
+            async probe() {
+              throw new Error("strict containment unavailable")
+            },
+            async runCommand() {
+              spawned = true
+              throw new Error("must not spawn")
+            },
+          },
+          now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+          async readFile() {
+            read = true
+            return canonicalManifestBytes(manifest)
+          },
+          async writeFile(_path, bytes) {
+            receipt = parseSmokeResult(bytes)
+          },
+          async mkdir() {},
+        },
       ),
+      /strict containment unavailable/iu,
+    )
+    assert.equal(read, false)
+    assert.equal(spawned, false)
+    assert.deepEqual(
+      receipt.checks.map(({ name, conclusion }) => ({ name, conclusion })),
+      [{ name: "containment", conclusion: "failure" }],
+    )
+  })
+
+  it("keeps generic execution unreachable from release-mode metadata", async () => {
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: "0.8.22",
+          commitSha: "a".repeat(40),
+          manifest: "/inputs/manifest.json",
+          manifestSha256: "b".repeat(64),
+          result: "/outputs/result.json",
+        },
+        { async runCommand() {} },
+      ),
+      /strictRunner/iu,
+    )
+
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "published-artifact-verify.mjs"),
       "utf8",
     )
+    const start = source.indexOf("async function runReleaseModeVerify")
+    const end = source.indexOf("export function parsePublishedArtifactVerifyArgs", start)
+    assert.ok(start >= 0 && end > start)
+    const releaseModeSource = source.slice(start, end)
+    assert.match(releaseModeSource, /createStrictSmokeProcessRunner\(\)/u)
+    assert.doesNotMatch(releaseModeSource, /\bawait\s+run\s*\(/u)
+  })
 
-    assert.match(workflow, /- typescript-tooling/)
-    assert.match(workflow, /- docker-sandbox/)
-    assert.match(
-      workflow,
-      /if \[ "\$DAWN_RUN_PGVECTOR" = "true" \] && \[ "\$DAWN_PACKAGE_SET" != "typescript-tooling" \] && \[ "\$DAWN_PACKAGE_SET" != "docker-sandbox" \]/,
+  it("uses one strict official npm audit verifier for all 21 release packages and disposes it", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    const verified = []
+    const extracted = []
+    let disposed = 0
+    const strictRunner = fakeStrictRunner()
+    const npmReader = {
+      async observePackageVersion({ name, version }) {
+        const entry = manifest.packages.find((candidate) => candidate.name === name)
+        assert.equal(version, entry.version)
+        return exactPublishedObservation(entry)
+      },
+      async downloadRegistryTarball({ tarballUrl }) {
+        const entry = manifest.packages.find(
+          (candidate) => exactPublishedObservation(candidate).package.tarballUrl === tarballUrl,
+        )
+        return {
+          status: "PRESENT",
+          operation: "package-tarball",
+          httpStatus: 200,
+          code: null,
+          tarball: exactPublishedTarball(entry),
+        }
+      },
+    }
+    Object.defineProperty(npmReader, "verifyRegistrySignatures", {
+      get() {
+        throw new Error("removed npmReader method was read")
+      },
+    })
+
+    const result = await runPublishedArtifactVerify(
+      {
+        releaseMode: true,
+        version: manifest.version,
+        commitSha: manifest.commitSha,
+        manifest: "/inputs/manifest.json",
+        manifestSha256: digest,
+        result: "/outputs/result.json",
+      },
+      {
+        env: releaseSmokeEnvironment("305", "1"),
+        strictRunner,
+        async createNpmReader() {
+          return npmReader
+        },
+        async createNpmAuditVerifier({ runNpm, environment, signal }) {
+          assert.equal(runNpm, strictRunner.runCommand)
+          assert.equal(environment.GITHUB_RUN_ID, "305")
+          assert.equal(signal instanceof AbortSignal, true)
+          return {
+            async verifyPackage({ entry, candidate }) {
+              verified.push({ entry, candidate })
+              return officialAudit(entry)
+            },
+            async dispose() {
+              disposed += 1
+            },
+          }
+        },
+        async readFile() {
+          return manifestBytes
+        },
+        async verifyDownloadedPackageContents(entry, contentBase64, runCommand) {
+          assert.equal(runCommand, strictRunner.runCommand)
+          assert.equal(contentBase64, exactPublishedTarball(entry).contentBase64)
+          extracted.push(entry.name)
+        },
+        async writeFile() {},
+        async mkdir() {},
+        now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+      },
     )
-    assert.match(
-      workflow,
-      /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \] \|\| \[ "\$DAWN_PACKAGE_SET" = "docker-sandbox" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
+
+    assert.deepEqual(result.failures, [])
+    assert.deepEqual(
+      verified.map(({ entry }) => entry.name),
+      CANONICAL_RELEASE_PACKAGE_ORDER,
+    )
+    assert.equal(
+      verified.every(
+        ({ entry, candidate }) =>
+          candidate.version === entry.version &&
+          candidate.commitSha === manifest.commitSha &&
+          candidate.publisherWorkflow === ".github/workflows/release.yml",
+      ),
+      true,
+    )
+    assert.deepEqual(extracted, CANONICAL_RELEASE_PACKAGE_ORDER)
+    assert.equal(disposed, 1)
+  })
+
+  it("disposes official npm audit after package failure and records cleanup failure", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    const verified = []
+    let disposed = 0
+    let receipt
+
+    await assert.rejects(
+      runPublishedArtifactVerify(
+        {
+          releaseMode: true,
+          version: manifest.version,
+          commitSha: manifest.commitSha,
+          manifest: "/inputs/manifest.json",
+          manifestSha256: digest,
+          result: "/outputs/result.json",
+        },
+        {
+          env: releaseSmokeEnvironment("306", "1"),
+          strictRunner: fakeStrictRunner(),
+          createNpmReader() {
+            return exactReleaseNpmReader(manifest)
+          },
+          async createNpmAuditVerifier() {
+            return {
+              async verifyPackage({ entry }) {
+                verified.push(entry.name)
+                if (entry.name === "@dawn-ai/core") {
+                  throw new Error("official npm audit package failure")
+                }
+                return officialAudit(entry)
+              },
+              async dispose() {
+                disposed += 1
+                throw new Error("official npm audit cleanup failure")
+              },
+            }
+          },
+          async readFile() {
+            return manifestBytes
+          },
+          async verifyDownloadedPackageContents() {},
+          async writeFile(_path, bytes) {
+            receipt = parseSmokeResult(bytes)
+          },
+          async mkdir() {},
+          now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+        },
+      ),
+      /official npm audit cleanup failure/iu,
+    )
+
+    assert.deepEqual(verified, CANONICAL_RELEASE_PACKAGE_ORDER)
+    assert.equal(disposed, 1)
+    assert.equal(receipt.conclusion, "failure")
+    assert.deepEqual(
+      receipt.checks.filter(({ conclusion }) => conclusion === "failure").map(({ name }) => name),
+      ["package:@dawn-ai/core", "official-npm-audit-cleanup"],
+    )
+  })
+
+  it("writes a failed receipt and preserves package failures", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    let receipt
+    const result = await runPublishedArtifactVerify(
+      {
+        releaseMode: true,
+        version: manifest.version,
+        commitSha: manifest.commitSha,
+        manifest: "/inputs/manifest.json",
+        manifestSha256: digest,
+        result: "/outputs/result.json",
+      },
+      {
+        env: releaseSmokeEnvironment("302", "1"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
+        now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+        async readFile() {
+          return manifestBytes
+        },
+        async verifyReleasePackage(entry) {
+          if (entry.name === "@dawn-ai/core") throw new Error("provenance workflow mismatch")
+        },
+        async writeFile(_path, bytes) {
+          receipt = parseSmokeResult(bytes)
+        },
+        async mkdir() {},
+      },
+    )
+
+    assert.equal(result.failures.length, 1)
+    assert.equal(receipt.conclusion, "failure")
+    assert.deepEqual(
+      receipt.checks.filter(({ conclusion }) => conclusion === "failure"),
+      [
+        {
+          name: "package:@dawn-ai/core",
+          conclusion: "failure",
+          detail: "provenance workflow mismatch",
+        },
+      ],
+    )
+  })
+
+  it("bounds and redacts release-mode package errors before writing the failed receipt", async () => {
+    const manifest = publishedReleaseManifest()
+    const manifestBytes = canonicalManifestBytes(manifest)
+    const digest = createHash("sha256").update(manifestBytes).digest("hex")
+    let receipt
+    const result = await runPublishedArtifactVerify(
+      {
+        releaseMode: true,
+        version: manifest.version,
+        commitSha: manifest.commitSha,
+        manifest: "/inputs/manifest.json",
+        manifestSha256: digest,
+        result: "/outputs/result.json",
+      },
+      {
+        env: releaseSmokeEnvironment("303", "1"),
+        strictRunner: fakeStrictRunner(),
+        createNpmAuditVerifier: fakeNpmAuditVerifierFactory(),
+        now: sequenceClock("2026-08-25T12:00:00.000Z", "2026-08-25T12:00:01.000Z"),
+        async readFile() {
+          return manifestBytes
+        },
+        async verifyReleasePackage(entry) {
+          if (entry.name === "@dawn-ai/core") {
+            throw new Error(`npm_super_secret_token ${"💥".repeat(10_000)}`)
+          }
+        },
+        async writeFile(_path, bytes) {
+          receipt = parseSmokeResult(bytes)
+        },
+        async mkdir() {},
+      },
+    )
+
+    assert.equal(result.failures.length, 1)
+    assert.ok(receipt)
+    const failure = receipt.checks.find(({ conclusion }) => conclusion === "failure")
+    assert.equal(Buffer.byteLength(failure.detail, "utf8") <= 4_096, true)
+    assert.doesNotMatch(failure.detail, /super_secret/u)
+  })
+})
+
+describe("validateExactPublishedPackageEvidence", () => {
+  it("accepts exact registry bytes and official npm audit identity while ignoring packument claims", () => {
+    const entry = publishedReleaseManifest().packages[0]
+    const observation = exactPublishedObservation(entry)
+    observation.package.provenance = {
+      status: "PRESENT",
+      workflow: ".github/workflows/attacker.yml",
+      commitSha: "f".repeat(40),
+      repository: "https://github.com/attacker/fork",
+      ref: "refs/heads/main",
+    }
+    assert.doesNotThrow(() =>
+      validateExactPublishedPackageEvidence({
+        entry,
+        candidate: {
+          version: entry.version,
+          commitSha: "a".repeat(40),
+          publisherWorkflow: ".github/workflows/release.yml",
+        },
+        observation,
+        tarball: exactPublishedTarball(entry),
+        audit: officialAudit(entry),
+      }),
+    )
+  })
+
+  it("fails closed on digest, latest, official signature, workflow, or commit drift", () => {
+    const entry = publishedReleaseManifest().packages[0]
+    const baseline = {
+      entry,
+      candidate: {
+        version: entry.version,
+        commitSha: "a".repeat(40),
+        publisherWorkflow: ".github/workflows/release.yml",
+      },
+      observation: exactPublishedObservation(entry),
+      tarball: exactPublishedTarball(entry),
+      audit: officialAudit(entry),
+    }
+    const cases = [
+      [
+        {
+          ...baseline,
+          tarball: { ...baseline.tarball, sha256: "f".repeat(64) },
+        },
+        /sha256/,
+      ],
+      [
+        {
+          ...baseline,
+          observation: {
+            ...baseline.observation,
+            package: { ...baseline.observation.package, latest: "0.8.21" },
+          },
+        },
+        /latest/,
+      ],
+      [
+        {
+          ...baseline,
+          audit: { status: "pending" },
+        },
+        /audit|signature/,
+      ],
+      [
+        {
+          ...baseline,
+          audit: {
+            ...baseline.audit,
+            provenance: { ...baseline.audit.provenance, workflow: ".github/workflows/other.yml" },
+          },
+        },
+        /workflow/,
+      ],
+      [
+        {
+          ...baseline,
+          audit: {
+            ...baseline.audit,
+            provenance: { ...baseline.audit.provenance, commitSha: "c".repeat(40) },
+          },
+        },
+        /commit/,
+      ],
+    ]
+    for (const [input, expected] of cases) {
+      assert.throws(() => validateExactPublishedPackageEvidence(input), expected)
+    }
+  })
+})
+
+describe("final published-artifact workflow", () => {
+  it("accepts only the three release identities and isolates draft from published exact-tag audits", () => {
+    const { source, workflow } = readParsedWorkflow("published-artifact-verify.yml")
+    const inputs = workflow.on?.workflow_dispatch?.inputs
+    assert.deepEqual(Object.keys(inputs ?? {}).sort(), ["commitSha", "manifestSha256", "version"])
+    for (const input of Object.values(inputs)) {
+      assert.equal(input.required, true)
+      assert.equal(input.type, "string")
+    }
+    const coordinator = workflow.jobs?.coordinate
+    assert.ok(Array.isArray(coordinator?.steps))
+    assert.match(coordinator.if, /github\.event\.repository\.default_branch/u)
+    assert.equal(
+      coordinator.steps.filter(
+        (step) =>
+          typeof step.run === "string" &&
+          step.run.includes("node scripts/release/independent-audit-coordinator.mjs"),
+      ).length,
+      1,
+    )
+
+    const draft = workflow.jobs?.["verify-draft"]
+    assert.ok(Array.isArray(draft?.steps))
+    assert.match(draft.if, /needs\.coordinate\.outputs\.mode == 'draft'/u)
+    assert.match(draft.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+    assert.match(draft.if, /github\.sha == inputs\.commitSha/u)
+    const checkout = draft.steps.find(
+      (step) => step.uses === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    )
+    assert.equal(checkout?.with?.ref, workflowExpression("github.ref"))
+    assert.equal(checkout?.with?.["fetch-depth"], 0)
+    const executor = draft.steps.filter(
+      (step) =>
+        typeof step.run === "string" &&
+        step.run.includes("node scripts/release/independent-audit.mjs"),
+    )
+    assert.equal(executor.length, 1)
+    assert.deepEqual(workflowCommandFlags(executor[0].run, "independent-audit.mjs"), [
+      "--version",
+      "--commit-sha",
+      "--manifest-sha256",
+      "--result",
+    ])
+    const uploads = draft.steps.filter(
+      (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    )
+    assert.equal(uploads.length, 1)
+    assert.equal(uploads[0].if, workflowExpression("always()"))
+    assert.equal(
+      uploads[0].with?.name,
+      `audit-result-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
+    )
+
+    const published = workflow.jobs?.["verify-published"]
+    assert.ok(Array.isArray(published?.steps))
+    assert.match(published.if, /needs\.coordinate\.outputs\.mode == 'published'/u)
+    assert.match(published.if, /github\.ref == format\('refs\/tags\/v\{0\}', inputs\.version\)/u)
+    assert.match(published.if, /github\.sha == inputs\.commitSha/u)
+    const publishedExecutor = published.steps.filter(
+      (step) =>
+        typeof step.run === "string" &&
+        step.run.includes("node scripts/release/post-publication-audit.mjs"),
+    )
+    assert.equal(publishedExecutor.length, 1)
+    assert.deepEqual(workflowCommandFlags(publishedExecutor[0].run, "post-publication-audit.mjs"), [
+      "--version",
+      "--commit-sha",
+      "--manifest-sha256",
+      "--result",
+    ])
+    const publishedUploads = published.steps.filter(
+      (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    )
+    assert.equal(publishedUploads.length, 1)
+    assert.equal(publishedUploads[0].if, workflowExpression("always()"))
+    assert.doesNotMatch(
+      source,
+      /packageSet|runPgvector|runOpenAI|published:verify|published:smoke/u,
     )
   })
 })
 
-describe("release workflow published TypeScript tooling verification", () => {
-  const releaseWorkflowPath = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    ".github",
-    "workflows",
-    "release.yml",
+describe("final release published smoke topology", () => {
+  it("runs the fixed five raw-receipt lanes and reconciles their exact artifact IDs", () => {
+    const { source, workflow } = readParsedWorkflow("release.yml")
+    assert.deepEqual(REQUIRED_RELEASE_SMOKE_LANES, [
+      "metadata",
+      "published-harness",
+      "runtime-targets",
+      "scaffold",
+      "storage",
+    ])
+    const smokeJobs = REQUIRED_RELEASE_SMOKE_LANES.map((lane) => [
+      lane,
+      workflow.jobs?.[`smoke-${lane}`],
+    ])
+    for (const [lane, job] of smokeJobs) {
+      assert.ok(Array.isArray(job?.steps), `missing smoke-${lane}`)
+      assert.equal(job["runs-on"], "ubuntu-24.04")
+      assert.equal(Object.values(job.permissions ?? {}).includes("write"), false)
+      const command = job.steps.find(
+        (step) =>
+          typeof step.run === "string" &&
+          (lane === "metadata"
+            ? step.run.includes("node scripts/published-artifact-verify.mjs") &&
+              step.run.includes("--release-mode")
+            : step.run.includes(`node scripts/release/smoke/${lane}.mjs`)),
+      )
+      assert.ok(command, `smoke-${lane} must invoke its production entrypoint`)
+      assert.match(command.run, /(?:^|\s)--result(?:\s|$)/u)
+      const upload = job.steps.find(
+        (step) => step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      )
+      assert.equal(upload?.if, workflowExpression("always()"))
+      assert.equal(
+        upload?.with?.name,
+        `smoke-result-${lane}-${workflowExpression("github.run_id")}-${workflowExpression("github.run_attempt")}`,
+      )
+    }
+
+    const reconcile = workflow.jobs?.["reconcile-smokes"]
+    assert.ok(Array.isArray(reconcile?.steps))
+    const download = reconcile.steps.find(
+      (step) =>
+        step.uses === "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" &&
+        step.with?.["merge-multiple"] === true,
+    )
+    assert.ok(download)
+    for (const lane of REQUIRED_RELEASE_SMOKE_LANES) {
+      assert.match(
+        String(download.with?.["artifact-ids"] ?? ""),
+        new RegExp(`needs\\.smoke-${lane}\\.outputs\\.artifact_id`, "u"),
+      )
+    }
+    assert.doesNotMatch(
+      source,
+      /Backfill tags|Read published version|package-set typescript-tooling|package-set docker-sandbox|steps\.changesets\.outputs\.published/u,
+    )
+  })
+})
+
+function readParsedWorkflow(file) {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", file),
+    "utf8",
   )
+  const workflow = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+  assert.ok(workflow !== null && typeof workflow === "object" && !Array.isArray(workflow))
+  assert.ok(workflow.jobs !== null && typeof workflow.jobs === "object")
+  return { source, workflow }
+}
 
-  it("extracts the fixed-group version after backfill under the published condition", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const backfillIndex = workflow.indexOf(
-      "- name: Backfill tags/releases for bootstrapped packages",
-    )
-    const versionIndex = workflow.indexOf("- name: Read published version")
-
-    assert.ok(backfillIndex >= 0, "release workflow must retain backfill")
-    assert.ok(versionIndex > backfillIndex, "version extraction must follow backfill")
-    assert.match(
-      workflow,
-      /- name: Read published version\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: \|\n\s+DAWN_PUBLISHED_VERSION="\$\(node -p "require\('\.\/packages\/core\/package\.json'\)\.version"\)"\n\s+printf 'DAWN_PUBLISHED_VERSION=%s\\n' "\$DAWN_PUBLISHED_VERSION" >> "\$GITHUB_ENV"/,
-    )
-  })
-
-  it("verifies and then smokes the exact TypeScript tooling release", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const verifyIndex = workflow.indexOf("- name: Verify published TypeScript tooling")
-    const smokeIndex = workflow.indexOf("- name: Smoke published TypeScript tooling")
-
-    assert.ok(verifyIndex >= 0, "release workflow must verify published tooling")
-    assert.ok(smokeIndex > verifyIndex, "published smoke must follow metadata verification")
-    assert.match(
-      workflow,
-      /- name: Verify published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000/,
-    )
-    assert.match(
-      workflow,
-      /- name: Smoke published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling/,
-    )
-  })
-
-  it("verifies and then runs the Docker recovery smoke against the published sandbox", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const verifyIndex = workflow.indexOf("- name: Verify published Docker sandbox")
-    const smokeIndex = workflow.indexOf("- name: Smoke published Docker sandbox PID recovery")
-
-    assert.ok(verifyIndex >= 0, "release workflow must verify the published sandbox")
-    assert.ok(smokeIndex > verifyIndex, "Docker recovery smoke must follow metadata verification")
-    assert.match(
-      workflow,
-      /published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000/,
-    )
-    assert.match(
-      workflow,
-      /published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox/,
-    )
-  })
-
-  it("keeps each registry delay below one minute and the total wait bounded", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-    const match = workflow.match(/--wait-attempts (\d+) --wait-delay-ms (\d+)/)
-
-    assert.ok(match, "release verification must declare bounded wait settings")
-    const attempts = Number(match[1])
-    const delayMs = Number(match[2])
-    assert.ok(delayMs < 60_000)
-    assert.ok((attempts - 1) * delayMs < 30 * 60_000)
-  })
-
-  it("documents the manual rerun path when Changesets reports no publication", () => {
-    const workflow = readFileSync(releaseWorkflowPath, "utf8")
-
-    assert.doesNotMatch(workflow, /Runs last so it can never affect the actual publish/)
-    assert.match(workflow, /published=false.*skip.*post-publish/is)
-    assert.match(workflow, /Published Artifact Verification.*exact version.*typescript-tooling/is)
-  })
-})
+function workflowCommandFlags(run, executable) {
+  const lines = run.split(/\r?\n/u)
+  const start = lines.findIndex((entry) => entry.includes(executable))
+  assert.notEqual(start, -1)
+  const command = []
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index]
+    command.push(line.replace(/\\\s*$/u, ""))
+    if (!/\\\s*$/u.test(line)) break
+  }
+  return [...command.join(" ").matchAll(/(?:^|\s)(--[a-z][a-z0-9-]*)\b/gu)].map(([, flag]) => flag)
+}
 
 describe("expectedFilesForPackage", () => {
   it("returns AG-UI entrypoint expectations", () => {
@@ -1314,7 +1933,9 @@ describe("TypeScript tooling installed probe", () => {
   })
 
   it("rejects malformed or unsafe TypeScript bin declarations", async () => {
-    const missingEntryRoot = await createTypeScriptToolingRunnerFixture({ bin: {} })
+    const missingEntryRoot = await createTypeScriptToolingRunnerFixture({
+      bin: {},
+    })
     await assert.rejects(
       resolveTypeScriptBin({
         root: missingEntryRoot,
@@ -1329,17 +1950,27 @@ describe("TypeScript tooling installed probe", () => {
     const absoluteRoot = await createTypeScriptToolingRunnerFixture()
     const absoluteTarget = join(absoluteRoot, "absolute-tsc.mjs")
     await writeFile(absoluteTarget, "", "utf8")
-    await writeTypeScriptManifest(absoluteRoot, { bin: { tsc: absoluteTarget } })
+    await writeTypeScriptManifest(absoluteRoot, {
+      bin: { tsc: absoluteTarget },
+    })
     await assert.rejects(
-      resolveTypeScriptBin({ root: absoluteRoot, expectedTypeScriptVersion: "7.0.2" }),
+      resolveTypeScriptBin({
+        root: absoluteRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
       /absolute.*TypeScript.*bin|TypeScript.*bin.*absolute/i,
     )
 
     const traversalRoot = await createTypeScriptToolingRunnerFixture()
     await writeFile(join(traversalRoot, "node_modules", "outside-tsc.mjs"), "", "utf8")
-    await writeTypeScriptManifest(traversalRoot, { bin: { tsc: "../outside-tsc.mjs" } })
+    await writeTypeScriptManifest(traversalRoot, {
+      bin: { tsc: "../outside-tsc.mjs" },
+    })
     await assert.rejects(
-      resolveTypeScriptBin({ root: traversalRoot, expectedTypeScriptVersion: "7.0.2" }),
+      resolveTypeScriptBin({
+        root: traversalRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
       /outside.*TypeScript.*package|contain/i,
     )
   })
@@ -1355,7 +1986,10 @@ describe("TypeScript tooling installed probe", () => {
     )
     await rm(missingTarget)
     await assert.rejects(
-      resolveTypeScriptBin({ root: missingRoot, expectedTypeScriptVersion: "7.0.2" }),
+      resolveTypeScriptBin({
+        root: missingRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
       new RegExp(`${escapeRegExp(missingTarget)}.*(?:missing|unreadable)`, "is"),
     )
 
@@ -1370,7 +2004,10 @@ describe("TypeScript tooling installed probe", () => {
     await rm(directoryTarget)
     await mkdir(directoryTarget)
     await assert.rejects(
-      resolveTypeScriptBin({ root: directoryRoot, expectedTypeScriptVersion: "7.0.2" }),
+      resolveTypeScriptBin({
+        root: directoryRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
       new RegExp(`${escapeRegExp(directoryTarget)}.*regular file`, "is"),
     )
   })
@@ -1435,7 +2072,9 @@ describe("TypeScript tooling installed probe", () => {
       /expectedTypeScriptVersion must be a non-empty string/,
     )
 
-    const root = await createTypeScriptToolingRunnerFixture({ version: "7.0.1" })
+    const root = await createTypeScriptToolingRunnerFixture({
+      version: "7.0.1",
+    })
     await assert.rejects(
       runTypeScriptToolingProbe({
         root,
@@ -1553,7 +2192,9 @@ describe("published TypeScript tooling smoke", () => {
   })
 
   it("installs selected packages, installs root tooling, checks Core identity, then probes offline", async () => {
-    const harness = await createPublishedSmokeHarness({ selectedPackages: toolingPackages })
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: toolingPackages,
+    })
 
     await runPublishedArtifactSmoke(harness.options, harness.dependencies)
 
@@ -1656,9 +2297,15 @@ describe("published TypeScript tooling smoke", () => {
 
     await runPublishedArtifactSmoke(harness.options, harness.dependencies)
 
-    assert.equal(
-      harness.events.some(({ type }) => type === "ag-ui-probe"),
-      true,
+    assert.deepEqual(
+      harness.events.filter(({ type }) => type === "ag-ui-probe"),
+      [
+        {
+          root: harness.tempDir,
+          runCommandForwarded: true,
+          type: "ag-ui-probe",
+        },
+      ],
     )
     assert.equal(
       harness.events.some(({ type }) => type === "tooling-install"),
@@ -1701,6 +2348,33 @@ describe("published TypeScript tooling smoke", () => {
     assert.equal(harness.events.at(-1).type, "cleanup")
   })
 
+  it("forwards the injected command runner to the pgvector runtime smoke", async () => {
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: [
+        { name: "@dawn-ai/memory-pgvector", version: packageVersion },
+        { name: "@dawn-ai/langchain", version: packageVersion },
+      ],
+    })
+    harness.options.pgvector = true
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.deepEqual(
+      harness.events.filter(({ type }) => type === "runtime-smoke"),
+      [
+        {
+          databaseUrl: "postgres://unused",
+          openai: false,
+          root: harness.tempDir,
+          runCommandForwarded: true,
+          type: "runtime-smoke",
+        },
+      ],
+    )
+    assert.equal(harness.events.at(-2).type, "docker")
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
   it("runs Docker PID recovery against an installed sandbox artifact before cleanup", async () => {
     const harness = await createPublishedSmokeHarness({
       selectedPackages: [{ name: "@dawn-ai/sandbox", version: packageVersion }],
@@ -1714,6 +2388,7 @@ describe("published TypeScript tooling smoke", () => {
     )
     assert.deepEqual(harness.events[4], {
       root: harness.tempDir,
+      runCommandForwarded: true,
       type: "docker-sandbox-probe",
     })
   })
@@ -1722,7 +2397,10 @@ describe("published TypeScript tooling smoke", () => {
     const root = await createCoreResolutionFixture({ nestedViteCore: true })
 
     await assert.rejects(
-      assertInstalledCoreResolution({ consumerRoot: root, expectedCoreVersion: packageVersion }),
+      assertInstalledCoreResolution({
+        consumerRoot: root,
+        expectedCoreVersion: packageVersion,
+      }),
       /Vite resolves @dawn-ai\/core to .* expected root artifact/s,
     )
   })
@@ -1731,7 +2409,10 @@ describe("published TypeScript tooling smoke", () => {
     const root = await createCoreResolutionFixture({ coreVersion: "0.8.9" })
 
     await assert.rejects(
-      assertInstalledCoreResolution({ consumerRoot: root, expectedCoreVersion: packageVersion }),
+      assertInstalledCoreResolution({
+        consumerRoot: root,
+        expectedCoreVersion: packageVersion,
+      }),
       /resolved @dawn-ai\/core version 0\.8\.9, expected version 0\.9\.0/,
     )
   })
@@ -1740,7 +2421,10 @@ describe("published TypeScript tooling smoke", () => {
 describe("resolveRequestedVersion", () => {
   it("resolves latest through dist-tags", () => {
     assert.equal(
-      resolveRequestedVersion({ requested: "latest", tags: { latest: "1.2.3" } }),
+      resolveRequestedVersion({
+        requested: "latest",
+        tags: { latest: "1.2.3" },
+      }),
       "1.2.3",
     )
   })
@@ -1757,7 +2441,10 @@ describe("resolveRequestedVersion", () => {
 
   it("passes explicit versions through", () => {
     assert.equal(
-      resolveRequestedVersion({ requested: "0.8.11", tags: { latest: "0.8.12" } }),
+      resolveRequestedVersion({
+        requested: "0.8.11",
+        tags: { latest: "0.8.12" },
+      }),
       "0.8.11",
     )
   })
@@ -1778,7 +2465,10 @@ describe("assertCleanDependencySpecs", () => {
     assert.throws(
       () =>
         assertCleanDependencySpecs("@dawn-ai/demo", {
-          dependencies: { "@dawn-ai/core": "workspace:*", local: "file:../local" },
+          dependencies: {
+            "@dawn-ai/core": "workspace:*",
+            local: "file:../local",
+          },
         }),
       /workspace:\*|file:/,
     )
@@ -1791,7 +2481,10 @@ describe("validatePackageMetadata", () => {
       name: "@dawn-ai/demo",
       version: "1.0.0",
       license: "MIT",
-      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
       homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/demo#readme",
       bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
       engines: { node: ">=22.13.0" },
@@ -1810,7 +2503,10 @@ describe("validatePackageMetadata", () => {
         name: "@dawn-ai/other",
         version: "1.0.1",
         license: "MIT",
-        repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+        repository: {
+          type: "git",
+          url: "git+https://github.com/cacheplane/dawnai.git",
+        },
         homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/demo#readme",
         bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
         engines: { node: ">=22.13.0" },
@@ -1832,7 +2528,10 @@ describe("validatePackageMetadata", () => {
       name: "@dawn-ai/config-biome",
       version: "1.0.0",
       license: "MIT",
-      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
       homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/config-biome#readme",
       bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
       engines: { node: ">=22.13.0" },
@@ -1855,12 +2554,17 @@ describe("validatePackageMetadata", () => {
       name: "@dawn-ai/inspector",
       version: "1.0.0",
       license: "MIT",
-      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
       homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
       bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
       engines: { node: ">=22.13.0" },
       publishConfig: { access: "public" },
-      dawnInspector: { server: ".next/standalone/packages/inspector/server.js" },
+      dawnInspector: {
+        server: ".next/standalone/packages/inspector/server.js",
+      },
     })
 
     assert.deepEqual(failures, [])
@@ -1871,7 +2575,10 @@ describe("validatePackageMetadata", () => {
       name: "@dawn-ai/nothing",
       version: "1.0.0",
       license: "MIT",
-      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
       homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/nothing#readme",
       bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
       engines: { node: ">=22.13.0" },
@@ -1888,7 +2595,10 @@ describe("validatePackageMetadata", () => {
       name: "@dawn-ai/inspector",
       version: "1.0.0",
       license: "MIT",
-      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
       homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
       bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
       engines: { node: ">=22.13.0" },
@@ -1996,6 +2706,134 @@ describe("run", () => {
     assert.ok(Date.now() - startedAt < 1_000, "timed-out child must be terminated promptly")
   })
 
+  it("terminates the full descendant tree and returns within the timeout bound", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-run-descendants-"))
+    tempRoots.push(root)
+    const pidPath = join(root, "grandchild.pid")
+    const grandchildLifetimeMs = 3_000
+    const source = `
+      const { spawn } = require("node:child_process")
+      const { writeFileSync } = require("node:fs")
+      const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, ${grandchildLifetimeMs})"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      })
+      writeFileSync(process.argv[1], String(grandchild.pid))
+      setInterval(() => {}, 1_000)
+    `
+    const startedAt = Date.now()
+    let grandchildPid
+
+    try {
+      await assert.rejects(
+        run(process.execPath, ["-e", source, pidPath], {
+          stdio: "pipe",
+          timeoutMs: 200,
+        }),
+        { code: "ETIMEDOUT" },
+      )
+      const elapsedMs = Date.now() - startedAt
+      grandchildPid = Number.parseInt(await readFile(pidPath, "utf8"), 10)
+      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      assert.ok(elapsedMs < 1_500, `descendant cleanup took ${elapsedMs}ms`)
+      assert.equal(
+        await waitForProcessExit(grandchildPid, 750),
+        true,
+        `grandchild ${grandchildPid} survived timeout cleanup`,
+      )
+    } finally {
+      if (grandchildPid !== undefined && processExists(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL")
+      }
+    }
+  })
+
+  it("terminates the full descendant tree when an AbortSignal cancels the command", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-run-abort-descendants-"))
+    tempRoots.push(root)
+    const pidPath = join(root, "grandchild.pid")
+    const source = `
+      const { spawn } = require("node:child_process")
+      const { writeFileSync } = require("node:fs")
+      const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      })
+      writeFileSync(process.argv[1], String(grandchild.pid))
+      setInterval(() => {}, 1_000)
+    `
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    let grandchildPid
+
+    try {
+      const command = run(process.execPath, ["-e", source, pidPath], {
+        signal: controller.signal,
+        stdio: "pipe",
+        timeoutMs: 5_000,
+      })
+      grandchildPid = Number.parseInt(await waitForFile(pidPath, 750), 10)
+      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      controller.abort()
+      await assert.rejects(command, { code: "ABORT_ERR", name: "AbortError" })
+      assert.ok(Date.now() - startedAt < 1_500, "aborted child tree must terminate promptly")
+      assert.equal(
+        await waitForProcessExit(grandchildPid, 750),
+        true,
+        `grandchild ${grandchildPid} survived abort cleanup`,
+      )
+    } finally {
+      if (grandchildPid !== undefined && processExists(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL")
+      }
+    }
+  })
+
+  it("accepts only explicitly allowlisted nonzero exit codes", async () => {
+    assert.equal(
+      await run(
+        process.execPath,
+        ["-e", "process.stdout.write('structured evidence'); process.exitCode = 1"],
+        { stdio: "pipe", acceptedExitCodes: [0, 1] },
+      ),
+      "structured evidence",
+    )
+    await assert.rejects(
+      run(
+        process.execPath,
+        ["-e", "process.stdout.write('structured evidence'); process.exitCode = 1"],
+        { stdio: "pipe" },
+      ),
+      { exitCode: 1 },
+    )
+    for (const acceptedExitCodes of [[], [0, 0], [-1], [256], ["1"]]) {
+      await assert.rejects(
+        run(process.execPath, ["--version"], { acceptedExitCodes }),
+        /acceptedExitCodes/iu,
+      )
+    }
+
+    const sparseExitCodes = [0, 1]
+    sparseExitCodes.length = 3
+    await assert.rejects(
+      run(process.execPath, ["--version"], { acceptedExitCodes: sparseExitCodes }),
+      /acceptedExitCodes/iu,
+    )
+
+    let accessorInvoked = false
+    const accessorExitCodes = [0]
+    Object.defineProperty(accessorExitCodes, "0", {
+      enumerable: true,
+      get() {
+        accessorInvoked = true
+        throw new Error("acceptedExitCodes accessor must not run")
+      },
+    })
+    await assert.rejects(
+      run(process.execPath, ["--version"], { acceptedExitCodes: accessorExitCodes }),
+      /acceptedExitCodes/iu,
+    )
+    assert.equal(accessorInvoked, false)
+  })
+
   it("removes OPENAI_API_KEY from child process environments by default", async () => {
     const previousOpenAiApiKey = process.env.OPENAI_API_KEY
     process.env.OPENAI_API_KEY = "sk-test-secret"
@@ -2015,6 +2853,96 @@ describe("run", () => {
         process.env.OPENAI_API_KEY = previousOpenAiApiKey
       }
     }
+  })
+
+  it("terminates a child whose captured output exceeds the byte bound", async () => {
+    await assert.rejects(
+      run(process.execPath, ["-e", "process.stdout.write('x'.repeat(4096))"], {
+        stdio: "pipe",
+        maxOutputBytes: 64,
+      }),
+      (error) => {
+        assert.equal(error.code, "EOUTPUTLIMIT")
+        assert.equal(error.maxOutputBytes, 64)
+        return true
+      },
+    )
+  })
+})
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === "ESRCH") return false
+    throw error
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return true
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
+  }
+  return !processExists(pid)
+}
+
+async function waitForFile(path, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, "utf8")
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
+  }
+  return readFile(path, "utf8")
+}
+
+describe("public npm file and environment boundaries", () => {
+  it("constructs an isolated public-registry environment without inherited credentials", () => {
+    const environment = publicNpmEnvironment({
+      home: "/tmp/isolated-public-npm",
+      env: {
+        PATH: "/bin",
+        HOME: "/Users/example",
+        NODE_AUTH_TOKEN: "npm-secret",
+        NPM_TOKEN: "npm-secret",
+        GITHUB_TOKEN: "github-secret",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-secret",
+        AWS_SECRET_ACCESS_KEY: "cloud-secret",
+      },
+    })
+    assert.deepEqual(environment, {
+      PATH: "/bin",
+      HOME: "/tmp/isolated-public-npm",
+      USERPROFILE: "/tmp/isolated-public-npm",
+      npm_config_registry: "https://registry.npmjs.org",
+      npm_config_userconfig: "/tmp/isolated-public-npm/.npmrc",
+      npm_config_globalconfig: "/tmp/isolated-public-npm/global.npmrc",
+      npm_config_cache: "/tmp/isolated-public-npm/.npm-cache",
+      npm_config_always_auth: "false",
+    })
+    assert.doesNotMatch(JSON.stringify(environment), /secret|TOKEN|ACTIONS_ID/iu)
+  })
+
+  it("reads only bounded positive regular files and rejects symlinks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-bounded-file-test-"))
+    tempRoots.push(root)
+    const regular = join(root, "manifest.json")
+    const empty = join(root, "empty.json")
+    const link = join(root, "manifest-link.json")
+    await writeFile(regular, "{}\n")
+    await writeFile(empty, "")
+    await symlink(regular, link)
+
+    assert.equal((await readBoundedRegularFile(regular, 16, "Manifest")).toString("utf8"), "{}\n")
+    await assert.rejects(readBoundedRegularFile(empty, 16, "Manifest"), /positive regular file/i)
+    await assert.rejects(readBoundedRegularFile(regular, 2, "Manifest"), /within 2 bytes/i)
+    await assert.rejects(readBoundedRegularFile(link, 16, "Manifest"), /ELOOP|symbolic link/i)
   })
 })
 
@@ -2129,7 +3057,12 @@ async function createPublishedSmokeHarness({
   tempRoots.push(testRoot)
 
   const runCommandForHarness = async (command, args, options = {}) => {
-    events.push({ args: [...args], command, cwd: options.cwd, type: "command" })
+    events.push({
+      args: [...args],
+      command,
+      cwd: options.cwd,
+      type: "command",
+    })
     return { stderr: "", stdout: "" }
   }
   const dependencies = {
@@ -2163,27 +3096,45 @@ async function createPublishedSmokeHarness({
       await rm(path, { force: true, recursive: true })
       cleaned = true
     },
-    async runAgUiInstalledProbe(root) {
-      events.push({ root, type: "ag-ui-probe" })
+    async runAgUiInstalledProbe(root, overrides) {
+      events.push({
+        root,
+        runCommandForwarded: overrides?.runCommand === runCommandForHarness,
+        type: "ag-ui-probe",
+      })
     },
     async runInstallSmoke(root, packages, { runCommand: command }) {
       events.push({ packages, root, type: "selected-install" })
       await command("npm", selectedPackageInstallArgs(packages), { cwd: root })
     },
     runCommand: runCommandForHarness,
-    async runRuntimeSmoke() {
-      events.push({ type: "docker" })
+    async runRuntimeSmoke(root, options, overrides) {
+      events.push({
+        databaseUrl: options?.databaseUrl,
+        openai: options?.openai,
+        root,
+        runCommandForwarded: overrides?.runCommand === runCommandForHarness,
+        type: "runtime-smoke",
+      })
     },
-    async runDockerSandboxInstalledProbe(root) {
-      events.push({ root, type: "docker-sandbox-probe" })
+    async runDockerSandboxInstalledProbe(root, options) {
+      events.push({
+        root,
+        runCommandForwarded: options?.runCommand === runCommandForHarness,
+        type: "docker-sandbox-probe",
+      })
     },
     async runTypeScriptToolingProbe({ expectedTypeScriptVersion, root, runCommand: command }) {
       events.push({ expectedTypeScriptVersion, root, type: "tooling-probe" })
       if (probeFailure) {
         throw probeFailure
       }
-      await command(process.execPath, ["typescript-tooling-probe.mjs"], { cwd: root })
-      await command(process.execPath, ["typescript-tsc.mjs", "--noEmit"], { cwd: root })
+      await command(process.execPath, ["typescript-tooling-probe.mjs"], {
+        cwd: root,
+      })
+      await command(process.execPath, ["typescript-tsc.mjs", "--noEmit"], {
+        cwd: root,
+      })
     },
     async selectedPackageVersions(options) {
       events.push({ options, type: "select" })
@@ -2397,4 +3348,154 @@ async function compileAgUiTypeProbe(root) {
     [typescriptCompilerPath, "--project", "tsconfig.ag-ui.json"],
     { cwd: root },
   )
+}
+
+function publishedReleaseManifest() {
+  const version = "0.8.22"
+  const commitSha = "a".repeat(40)
+  return {
+    schemaVersion: 1,
+    version,
+    commitSha,
+    ci: { workflow: "CI", runId: 100, runAttempt: 1 },
+    artifact: {
+      name: `release-v${version}-${commitSha.slice(0, 12)}`,
+      prepareRunId: 200,
+      prepareRunAttempt: 1,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+      const bytes = Buffer.from(`published-${name}`)
+      const sha512 = createHash("sha512").update(bytes).digest("hex")
+      return {
+        name,
+        version,
+        filename: `${publishedTarballStem(name)}-${version}.tgz`,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sha512,
+        npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+        access: "public",
+      }
+    }),
+  }
+}
+
+function publishedTarballStem(name) {
+  return name.startsWith("@") ? name.slice(1).replace("/", "-") : name
+}
+
+function exactPublishedObservation(entry) {
+  const sha1 = createHash("sha1")
+    .update(Buffer.from(`published-${entry.name}`))
+    .digest("hex")
+  return {
+    status: "PRESENT",
+    operation: "package-version",
+    httpStatus: 200,
+    code: null,
+    package: {
+      name: entry.name,
+      version: entry.version,
+      tarballUrl: `https://registry.npmjs.org/${entry.filename}`,
+      shasum: sha1,
+      integrity: entry.npmIntegrity,
+      signatures: [{ keyid: "SHA256:key", sig: "signature" }],
+      distTags: { latest: entry.version },
+      latest: entry.version,
+      provenance: {
+        status: "PRESENT",
+        url: "https://registry.npmjs.org/-/npm/v1/attestations/example",
+        predicateTypes: ["https://slsa.dev/provenance/v1"],
+        workflow: ".github/workflows/release.yml",
+        commitSha: "a".repeat(40),
+        repository: "https://github.com/cacheplane/dawnai",
+        ref: `refs/tags/v${entry.version}`,
+      },
+    },
+  }
+}
+
+function exactPublishedTarball(entry) {
+  const sha1 = createHash("sha1")
+    .update(Buffer.from(`published-${entry.name}`))
+    .digest("hex")
+  return {
+    url: `https://registry.npmjs.org/${entry.filename}`,
+    size: entry.size,
+    sha1,
+    sha256: entry.sha256,
+    sha512: entry.sha512,
+    contentBase64: Buffer.from(`published-${entry.name}`).toString("base64"),
+  }
+}
+
+function officialAudit(entry) {
+  return {
+    status: "verified",
+    signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+    provenance: {
+      predicateType: "https://slsa.dev/provenance/v1",
+      workflow: ".github/workflows/release.yml",
+      commitSha: "a".repeat(40),
+      repository: "https://github.com/cacheplane/dawnai",
+      ref: `refs/tags/v${entry.version}`,
+    },
+  }
+}
+
+function exactReleaseNpmReader(manifest) {
+  return {
+    async observePackageVersion({ name, version }) {
+      const entry = manifest.packages.find((candidate) => candidate.name === name)
+      assert.ok(entry, `unexpected release package ${name}`)
+      assert.equal(version, entry.version)
+      return exactPublishedObservation(entry)
+    },
+    async downloadRegistryTarball({ tarballUrl }) {
+      const entry = manifest.packages.find(
+        (candidate) => exactPublishedObservation(candidate).package.tarballUrl === tarballUrl,
+      )
+      assert.ok(entry, `unexpected release tarball ${tarballUrl}`)
+      return {
+        status: "PRESENT",
+        operation: "package-tarball",
+        httpStatus: 200,
+        code: null,
+        tarball: exactPublishedTarball(entry),
+      }
+    },
+  }
+}
+
+function fakeNpmAuditVerifierFactory() {
+  return async () => ({
+    async verifyPackage({ entry }) {
+      return officialAudit(entry)
+    },
+    async dispose() {},
+  })
+}
+
+function fakeStrictRunner(runCommand = async () => ({ stdout: "", stderr: "" })) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseSmokeEnvironment(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
+  }
+}
+
+function sequenceClock(...timestamps) {
+  let index = 0
+  return () => new Date(timestamps[Math.min(index++, timestamps.length - 1)])
 }

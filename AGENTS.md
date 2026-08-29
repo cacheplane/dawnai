@@ -131,10 +131,10 @@ Run `pnpm ci:validate` locally to approximate this lane (it exists as a
 script in the root `package.json`). It runs the same lint → build-cache →
 build → typecheck → source-test → release-inventory → release-controller-test →
 docs-check → pack-check → TypeScript-tooling-pack → harness sequence, plus
-extra local-only release-script unit tests
-(`test:release-publish`, `test:upload-release-assets`,
-`test:backfill-release-tags`, `test:sync-chart-appversion`) that aren't separate
-CI steps.
+the local-only `test:sync-chart-appversion` release-script unit test, which is
+not a separate CI step. The former publish, upload, and backfill unit-test
+commands were removed with their legacy release owners; their replacement
+coverage is part of `test:release-controller`.
 
 **Gated lanes** — these run as separate CI jobs behind env flags or dedicated
 infrastructure, not part of `validate`, and aren't required for most PRs:
@@ -144,6 +144,12 @@ Testcontainers `postgres:16`), `sandbox-k8s` (`DAWN_TEST_K8S=1`, kind + Calico),
 `sandbox-k8s-e2e` / `sandbox-docker-e2e` (`DAWN_TEST_SMOKE_E2E=1`, full-arc
 deployed-app smoke), `chart-validate` (Helm lint + kubeconform), and
 `chart-apply-smoke` (kind install smoke).
+
+Release-bearing changes must also leave the separate `copilotkit-examples-e2e`
+and real `vercel-native` production-boundary jobs green. The CopilotKit examples
+exercise the v2 integration surface, and the Vercel job creates, verifies, and
+removes real preview resources through the pinned Vercel CLI; neither lane is a
+substitute for the other or optional release cleanup.
 
 ## Conventions
 
@@ -187,18 +193,16 @@ deployed-app smoke), `chart-validate` (Helm lint + kubeconform), and
   `scripts/check-docs.mjs` for the exact patterns.
 - **Always run commands from the repo root.** Turbo and workspace-package
   resolution assume it.
-- **Four release scripts are content-pinned.** `scripts/backfill-release-tags.mjs`,
-  `scripts/release-publish.mjs`, `scripts/sync-chart-appversion.mjs`, and
-  `scripts/upload-release-assets.mjs`
-  run during a release, so their SHA256 is recorded in
-  `scripts/release/test/fixtures/release-script-hashes.json`. Editing one fails
-  `pnpm test:release-controller` until the hash is updated in the same commit;
-  the failure prints the expected and actual hash and the recompute command.
-  The suite also re-derives which scripts `release.yml` reaches — through `run:`
-  steps and through action `with:` inputs — so a fifth script cannot join the
-  release path unpinned. This is deliberately limited to the release path;
-  CI-only scripts are not pinned. See `CONTRIBUTORS.md`'s "Release Integrity
-  Coverage" for what the release controller does and does not cover.
+- **Every final-workflow-reachable release script is content-pinned.** The
+  audited SHA256 and exact command line for each repository script reachable
+  from the final release-owner workflows are recorded in
+  `scripts/release/test/fixtures/release-script-hashes.json`. Editing a reachable
+  script, adding an unpinned entrypoint, or retaining a stale pin fails
+  `pnpm test:release-controller` until the reviewed fixture is regenerated in
+  the same commit. Reachability is re-derived from workflow `run:` steps,
+  package-script expansion, and action `with:` inputs. This is deliberately
+  limited to release ownership; ordinary CI-only scripts are not pinned. See
+  `CONTRIBUTORS.md`'s "Release Integrity Coverage" for the boundary.
 
 ## Where things live
 

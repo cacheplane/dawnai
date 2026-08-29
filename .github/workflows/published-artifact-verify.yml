@@ -4,93 +4,174 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: npm version or dist-tag to verify
+        description: Exact release version
         required: true
-        default: latest
-      packageSet:
-        description: Package set to verify
+        type: string
+      commitSha:
+        description: Exact 40-character release commit SHA
         required: true
-        default: memory-pgvector-core
-        type: choice
-        options:
-          - memory-pgvector-core
-          - typescript-tooling
-          - docker-sandbox
-          - public
-      runPgvector:
-        description: Run Docker pgvector smoke
+        type: string
+      manifestSha256:
+        description: Exact sealed manifest SHA-256
         required: true
-        default: true
-        type: boolean
-      runOpenAI:
-        description: Run real OpenAI embedding smoke
-        required: true
-        default: false
-        type: boolean
+        type: string
+  schedule:
+    - cron: "43 8 * * *"
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      DAWN_PACKAGE_SET: ${{ inputs.packageSet }}
-      DAWN_PUBLISHED_VERSION: ${{ inputs.version }}
-      DAWN_RUN_PGVECTOR: ${{ inputs.runPgvector }}
-
+  coordinate:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+          github.ref == format('refs/tags/v{0}', inputs.version)))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout trusted default-branch coordinator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Route exact independent audit
+        id: route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT_SHA: ${{ inputs.commitSha }}
+          INPUT_MANIFEST_SHA256: ${{ inputs.manifestSha256 }}
+        run: |
+          node scripts/release/independent-audit-coordinator.mjs \
+            --github-output "$GITHUB_OUTPUT"
+
+  verify-draft:
+    name: verify
+    needs: coordinate
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      needs.coordinate.outputs.mode == 'draft' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == inputs.commitSha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: read
+      checks: read
+      contents: read
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
           version: 10.33.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24.17.0
-          cache: pnpm
+          node-version: 24.19.0
 
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
 
-      - name: Registry and tarball verification
-        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET"
+      - name: Install audit runtime dependency
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
 
-      - name: Published install/runtime smoke
-        if: ${{ !inputs.runOpenAI }}
-        shell: bash
-        run: |
-          args=(--version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET")
-          if [ "$DAWN_RUN_PGVECTOR" = "true" ] && [ "$DAWN_PACKAGE_SET" != "typescript-tooling" ] && [ "$DAWN_PACKAGE_SET" != "docker-sandbox" ]; then
-            args+=(--pgvector)
-          fi
-          pnpm published:smoke -- "${args[@]}"
-
-      - name: Published install/runtime smoke with OpenAI
-        if: ${{ inputs.runOpenAI }}
+      - name: Independently audit the exact draft release
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        shell: bash
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if [ "$DAWN_PACKAGE_SET" = "typescript-tooling" ] || [ "$DAWN_PACKAGE_SET" = "docker-sandbox" ]; then
-            echo "$DAWN_PACKAGE_SET does not support the OpenAI runtime smoke" >&2
-            exit 1
-          fi
+          node scripts/release/independent-audit.mjs \
+            --version "${{ inputs.version }}" \
+            --commit-sha "${{ inputs.commitSha }}" \
+            --manifest-sha256 "${{ inputs.manifestSha256 }}" \
+            --result "$RUNNER_TEMP/audit-result.json"
 
-          if [ "$DAWN_RUN_PGVECTOR" != "true" ]; then
-            echo "runOpenAI=true requires runPgvector=true" >&2
-            exit 1
-          fi
+      - name: Upload exact audit result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: audit-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit-result.json
+          if-no-files-found: error
+          overwrite: false
 
-          if [ -z "${OPENAI_API_KEY}" ]; then
-            echo "OPENAI_API_KEY secret is required when runOpenAI=true" >&2
-            exit 1
-          fi
+  verify-published:
+    needs: coordinate
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      needs.coordinate.outputs.mode == 'published' &&
+      github.ref == format('refs/tags/v{0}', inputs.version) &&
+      github.sha == inputs.commitSha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: read
+      checks: read
+      contents: read
+    steps:
+      - name: Checkout exact annotated tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
-          args=(--version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET" --pgvector --openai)
-          pnpm published:smoke -- "${args[@]}"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Assert exact npm runtime
+        run: test "$(npm --version)" = "11.17.0"
+
+      - name: Install audit runtime dependency
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+
+      - name: Audit the published immutable release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release/post-publication-audit.mjs \
+            --version "${{ inputs.version }}" \
+            --commit-sha "${{ inputs.commitSha }}" \
+            --manifest-sha256 "${{ inputs.manifestSha256 }}" \
+            --result "$RUNNER_TEMP/audit-result.json"
+
+      - name: Upload exact post-publication audit result
+        id: result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: audit-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit-result.json
+          if-no-files-found: error
+          overwrite: false

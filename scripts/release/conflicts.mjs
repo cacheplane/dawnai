@@ -29,7 +29,7 @@ export function findPolicyConflicts(candidate, observation, evidence, state, pro
   addAbandonmentConflicts(conflicts, observation, evidence, state)
   if (state === "AUDIT_COMPLETE" && evidence.npm.latestNewer) {
     conflicts.delete("npm-package-latest-version-mismatch")
-    conflicts.delete("release-metadata-reconciled-before-npm-complete")
+    conflicts.delete("release-npm-marker-before-npm-complete")
   }
   return [...conflicts].sort()
 }
@@ -117,22 +117,40 @@ function addProgressionConflicts(conflicts, observation, evidence) {
     conflicts.add("candidate-tag-prerequisite-missing")
   }
   if (escrowPresent && !evidence.artifact.attested) conflicts.add("escrow-before-attestation")
-  if (escrowPresent && !evidence.assets.escrowComplete) conflicts.add("escrow-draft-incomplete")
+  if (
+    escrowPresent &&
+    !evidence.assets.escrowComplete &&
+    !(evidence.assets.escrowResumable && !evidence.npm.started)
+  ) {
+    conflicts.add("escrow-draft-incomplete")
+  }
   if (evidence.npm.started && !evidence.artifact.attested) {
     conflicts.add("npm-before-artifacts-attested")
   }
   if (evidence.npm.started && !evidence.assets.escrowComplete) conflicts.add("npm-before-escrow")
-  if (observation.release?.metadataReconciled === true && !evidence.npm.complete) {
-    conflicts.add("release-metadata-reconciled-before-npm-complete")
+  if (evidence.assets.npmReconciled && !evidence.npm.complete) {
+    conflicts.add("release-npm-marker-before-npm-complete")
   }
-  if (evidence.smokes.anyPassed && !evidence.assets.metadataComplete) {
+  if (evidence.smokes.anyPassed && !evidence.assets.npmReconciled) {
     conflicts.add("smoke-before-release-draft")
   }
-  if (observation.release?.status === "published" && !evidence.smokes.complete) {
-    conflicts.add("github-release-published-before-smokes")
+  if (evidence.assets.smokesReconciled && !evidence.smokes.complete) {
+    conflicts.add("release-smoke-marker-before-smokes-complete")
   }
-  if (evidence.audit.active && observation.release?.status !== "published") {
-    conflicts.add("audit-before-release-published")
+  if (observation.release?.status === "published" && !evidence.assets.publishedExact) {
+    conflicts.add("github-release-published-before-audit")
+  }
+  if (
+    evidence.audit.active &&
+    !(
+      (observation.release?.status === "draft" &&
+        ["AUDIT_DISPATCHED", "AUDIT_RETRYABLE", "AUDIT_VERIFIED"].includes(
+          evidence.assets.markerPhase,
+        )) ||
+      evidence.assets.publishedExact
+    )
+  ) {
+    conflicts.add("audit-without-correlated-draft-marker")
   }
 }
 

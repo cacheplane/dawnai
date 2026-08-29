@@ -1,11 +1,17 @@
 import { spawn } from "node:child_process"
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
+import { mkdtemp, open, readdir, readFile, realpath, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import { NPM_AUDIT_VERIFIER } from "../release/npm-audit.mjs"
+
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+export const PUBLISHED_RELEASE_WORKFLOW = ".github/workflows/release.yml"
+export const PUBLISHED_RELEASE_REPOSITORY = "https://github.com/cacheplane/dawnai"
 
 export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
@@ -84,6 +90,70 @@ export function resolvePackageSet(name, publicPackages = []) {
 
 export function normalizeCliArgs(args) {
   return args[0] === "--" ? args.slice(1) : args
+}
+
+export function publicNpmEnvironment({ home, extra = {}, env = process.env } = {}) {
+  if (typeof home !== "string" || home.length === 0) {
+    throw new TypeError("Public npm environment requires an isolated home directory")
+  }
+  const allowed = [
+    "PATH",
+    "SystemRoot",
+    "ComSpec",
+    "PATHEXT",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+  ]
+  const output = {}
+  for (const name of allowed) {
+    if (typeof env[name] === "string") output[name] = env[name]
+  }
+  return {
+    ...output,
+    ...extra,
+    HOME: home,
+    USERPROFILE: home,
+    npm_config_registry: "https://registry.npmjs.org",
+    npm_config_userconfig: join(home, ".npmrc"),
+    npm_config_globalconfig: join(home, "global.npmrc"),
+    npm_config_cache: join(home, ".npm-cache"),
+    npm_config_always_auth: "false",
+  }
+}
+
+export async function readBoundedRegularFile(path, maximumBytes, label = "File") {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new TypeError("maximumBytes must be a positive safe integer")
+  }
+  const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.size <= 0n || before.size > BigInt(maximumBytes)) {
+      throw new Error(`${label} must be a positive regular file within ${maximumBytes} bytes`)
+    }
+    const expectedSize = Number(before.size)
+    const bytes = Buffer.allocUnsafe(expectedSize)
+    let offset = 0
+    while (offset < expectedSize) {
+      const result = await handle.read(bytes, offset, expectedSize - offset, offset)
+      if (result.bytesRead === 0) throw new Error(`${label} changed while it was read`)
+      offset += result.bytesRead
+    }
+    const overflow = Buffer.allocUnsafe(1)
+    if ((await handle.read(overflow, 0, 1, expectedSize)).bytesRead !== 0) {
+      throw new Error(`${label} changed while it was read`)
+    }
+    const after = await handle.stat({ bigint: true })
+    for (const field of ["dev", "ino", "size", "mtimeNs", "ctimeNs"]) {
+      if (before[field] !== after[field]) throw new Error(`${label} changed while it was read`)
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
 }
 
 export function expectedFilesForPackage(packageName) {
@@ -189,6 +259,117 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
   return failures
 }
 
+export function validateExactPublishedPackageEvidence({
+  entry,
+  observation,
+  tarball,
+  audit,
+  candidate,
+}) {
+  if (
+    observation?.status !== "PRESENT" ||
+    observation.operation !== "package-version" ||
+    observation.package === null ||
+    typeof observation.package !== "object"
+  ) {
+    throw new Error(`${entry?.name ?? "package"} exact registry metadata is not present`)
+  }
+  const published = observation.package
+  if (published.name !== entry.name || published.version !== entry.version) {
+    throw new Error(`${entry.name} registry package identity does not match the manifest`)
+  }
+  if (published.integrity !== entry.npmIntegrity) {
+    throw new Error(`${entry.name}@${entry.version} npm integrity does not match the manifest`)
+  }
+  if (published.latest !== entry.version || published.distTags?.latest !== entry.version) {
+    throw new Error(`${entry.name}@${entry.version} latest dist-tag does not match`)
+  }
+  if (tarball?.url !== published.tarballUrl) {
+    throw new Error(`${entry.name}@${entry.version} registry tarball URL does not match metadata`)
+  }
+  const tarballBytes = decodeCanonicalBase64(tarball?.contentBase64, entry.name)
+  const computed = {
+    size: tarballBytes.length,
+    sha1: createHash("sha1").update(tarballBytes).digest("hex"),
+    sha256: createHash("sha256").update(tarballBytes).digest("hex"),
+    sha512: createHash("sha512").update(tarballBytes).digest("hex"),
+  }
+  for (const field of ["size", "sha256", "sha512"]) {
+    if (tarball?.[field] !== entry[field] || computed[field] !== entry[field]) {
+      throw new Error(`${entry.name}@${entry.version} tarball ${field} does not match the manifest`)
+    }
+  }
+  if (tarball.sha1 !== computed.sha1 || published.shasum !== computed.sha1) {
+    throw new Error(`${entry.name}@${entry.version} tarball sha1 does not match registry metadata`)
+  }
+  if (
+    candidate === null ||
+    Array.isArray(candidate) ||
+    typeof candidate !== "object" ||
+    Object.keys(candidate).sort().join(",") !== "commitSha,publisherWorkflow,version" ||
+    candidate.version !== entry.version ||
+    candidate.publisherWorkflow !== PUBLISHED_RELEASE_WORKFLOW ||
+    typeof candidate.commitSha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(candidate.commitSha)
+  ) {
+    throw new Error(`${entry.name}@${entry.version} exact release candidate is invalid`)
+  }
+  if (
+    audit === null ||
+    Array.isArray(audit) ||
+    typeof audit !== "object" ||
+    Object.keys(audit).sort().join(",") !== "provenance,signature,status" ||
+    audit.status !== "verified" ||
+    audit.signature === null ||
+    typeof audit.signature !== "object" ||
+    Object.keys(audit.signature).sort().join(",") !== "status,verifier" ||
+    audit.signature.status !== "valid" ||
+    audit.signature.verifier !== NPM_AUDIT_VERIFIER
+  ) {
+    throw new Error(`${entry.name}@${entry.version} official npm audit signature is not valid`)
+  }
+  const provenance = audit.provenance
+  if (
+    provenance === null ||
+    Array.isArray(provenance) ||
+    typeof provenance !== "object" ||
+    Object.keys(provenance).sort().join(",") !==
+      "commitSha,predicateType,ref,repository,workflow" ||
+    provenance.predicateType !== "https://slsa.dev/provenance/v1"
+  ) {
+    throw new Error(`${entry.name}@${entry.version} official npm provenance is not valid`)
+  }
+  if (provenance.workflow !== candidate.publisherWorkflow) {
+    throw new Error(
+      `${entry.name}@${entry.version} official npm provenance workflow does not match`,
+    )
+  }
+  if (provenance.commitSha !== candidate.commitSha) {
+    throw new Error(`${entry.name}@${entry.version} official npm provenance commit does not match`)
+  }
+  if (provenance.repository !== PUBLISHED_RELEASE_REPOSITORY) {
+    throw new Error(
+      `${entry.name}@${entry.version} official npm provenance repository does not match`,
+    )
+  }
+  if (provenance.ref !== `refs/tags/v${entry.version}`) {
+    throw new Error(
+      `${entry.name}@${entry.version} official npm provenance ref does not match the release tag`,
+    )
+  }
+}
+
+function decodeCanonicalBase64(value, packageName) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${packageName} registry tarball bytes are missing`)
+  }
+  const bytes = Buffer.from(value, "base64")
+  if (bytes.toString("base64") !== value) {
+    throw new Error(`${packageName} registry tarball bytes are not canonical base64`)
+  }
+  return bytes
+}
+
 export async function assertInstalledCoreResolution({ consumerRoot, expectedCoreVersion }) {
   const rootRequire = createRequire(pathToFileURL(join(consumerRoot, "package.json")))
   const vitePackageJsonPath = join(
@@ -244,7 +425,10 @@ export function readField(value, path) {
 }
 
 export async function npmJson(args, options = {}) {
-  const output = await run("npm", [...args, "--json"], { ...options, stdio: "pipe" })
+  const output = await run("npm", [...args, "--json"], {
+    ...options,
+    stdio: "pipe",
+  })
   return JSON.parse(output || "null")
 }
 
@@ -254,8 +438,12 @@ export async function npmView(
 ) {
   try {
     const [versions, tags] = await Promise.all([
-      npmJsonImpl(["view", packageName, "versions"], { timeoutMs: requestTimeoutMs }),
-      npmJsonImpl(["view", packageName, "dist-tags"], { timeoutMs: requestTimeoutMs }),
+      npmJsonImpl(["view", packageName, "versions"], {
+        timeoutMs: requestTimeoutMs,
+      }),
+      npmJsonImpl(["view", packageName, "dist-tags"], {
+        timeoutMs: requestTimeoutMs,
+      }),
     ])
 
     if (!Array.isArray(versions) || versions.some((version) => typeof version !== "string")) {
@@ -382,7 +570,10 @@ export async function waitForPublishedVersions({
             packageName,
           )
           assertNpmViewResult(packageName, view)
-          return { packageName, visible: view?.versions?.includes(version) === true }
+          return {
+            packageName,
+            visible: view?.versions?.includes(version) === true,
+          }
         } catch (error) {
           return { error, packageName, visible: false }
         }
@@ -526,6 +717,36 @@ export async function removeDir(path) {
   await rm(path, { recursive: true, force: true })
 }
 
+function acceptedExitCodeSet(exitCodes) {
+  if (!Array.isArray(exitCodes) || exitCodes.length === 0 || exitCodes.length > 16) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+
+  const values = []
+  for (let index = 0; index < exitCodes.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(exitCodes, String(index))
+    if (
+      descriptor === undefined ||
+      !Object.hasOwn(descriptor, "value") ||
+      !Number.isSafeInteger(descriptor.value) ||
+      descriptor.value < 0 ||
+      descriptor.value > 255
+    ) {
+      throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+    }
+    values.push(descriptor.value)
+  }
+
+  if (Reflect.ownKeys(exitCodes).length !== exitCodes.length + 1) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+  const accepted = new Set(values)
+  if (accepted.size !== values.length) {
+    throw new TypeError("acceptedExitCodes must contain unique exit codes from 0 through 255")
+  }
+  return accepted
+}
+
 export async function run(command, args, options = {}) {
   if (
     options.timeoutMs !== undefined &&
@@ -533,12 +754,29 @@ export async function run(command, args, options = {}) {
   ) {
     throw new TypeError("timeoutMs must be a positive safe integer")
   }
+  if (
+    options.maxOutputBytes !== undefined &&
+    (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes <= 0)
+  ) {
+    throw new TypeError("maxOutputBytes must be a positive safe integer")
+  }
+  if (options.maxOutputBytes !== undefined && options.stdio !== "pipe") {
+    throw new TypeError("maxOutputBytes requires stdio pipe")
+  }
+  if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) {
+    throw new TypeError("signal must be an AbortSignal")
+  }
+  const accepted = acceptedExitCodeSet(options.acceptedExitCodes ?? [0])
+  if (options.signal?.aborted) {
+    throw commandAbortError(command, args, "")
+  }
 
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
+      detached: process.platform !== "win32",
       env: childProcessEnv(
-        { ...process.env, ...options.env },
+        options.replaceEnv ? (options.env ?? {}) : { ...process.env, ...options.env },
         { includeOpenAi: options.includeOpenAi },
       ),
       shell: process.platform === "win32",
@@ -547,59 +785,112 @@ export async function run(command, args, options = {}) {
 
     let stdout = ""
     let stderr = ""
-    let timedOut = false
+    let outputBytes = 0
     let settled = false
+    let terminationReason = null
+    let terminationReady = false
+    let pendingTerminationError
     let forceKillTimer
-    const timeoutTimer =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true
-            child.kill("SIGTERM")
-            forceKillTimer = setTimeout(() => {
-              if (child.exitCode === null && child.signalCode === null) {
-                child.kill("SIGKILL")
-              }
-            }, 250)
-            forceKillTimer.unref()
-          }, options.timeoutMs)
-
-    const rejectOnce = (error) => {
-      if (!settled) {
-        settled = true
-        reject(error)
-      }
-    }
+    let hardKillTimer
+    let timeoutTimer
+    let abortListener
 
     const cleanupTimers = () => {
       clearTimeout(timeoutTimer)
       clearTimeout(forceKillTimer)
+      clearTimeout(hardKillTimer)
+      if (abortListener !== undefined) {
+        options.signal?.removeEventListener("abort", abortListener)
+      }
     }
 
+    const rejectOnce = (error) => {
+      if (!settled) {
+        settled = true
+        cleanupTimers()
+        reject(error)
+      }
+    }
+
+    const terminationError = (cause) => {
+      if (terminationReason === "timeout") {
+        return commandTimeoutError(command, args, options.timeoutMs, stderr, cause)
+      }
+      if (terminationReason === "abort") {
+        return commandAbortError(command, args, stderr, cause)
+      }
+      const error = new Error(
+        `${command} ${args.join(" ")} exceeded its ${options.maxOutputBytes}-byte output limit`,
+        cause === undefined ? undefined : { cause },
+      )
+      error.code = "EOUTPUTLIMIT"
+      error.maxOutputBytes = options.maxOutputBytes
+      return error
+    }
+
+    const finishTermination = (error) => {
+      pendingTerminationError = error
+      if (terminationReady) rejectOnce(error)
+    }
+
+    const beginTermination = (reason) => {
+      if (terminationReason !== null) return
+      terminationReason = reason
+      clearTimeout(timeoutTimer)
+      void signalProcessTree(child, "SIGTERM")
+      forceKillTimer = setTimeout(() => {
+        void signalProcessTree(child, "SIGKILL").then(() => {
+          terminationReady = true
+          if (pendingTerminationError !== undefined) {
+            rejectOnce(pendingTerminationError)
+            return
+          }
+          hardKillTimer = setTimeout(() => {
+            child.stdout?.destroy()
+            child.stderr?.destroy()
+            rejectOnce(terminationError())
+          }, 250)
+        })
+      }, 250)
+    }
+
+    timeoutTimer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            beginTermination("timeout")
+          }, options.timeoutMs)
+
+    const collectOutput = (target, chunk) => {
+      if (terminationReason !== null) return target
+      outputBytes += chunk.length
+      if (options.maxOutputBytes !== undefined && outputBytes > options.maxOutputBytes) {
+        beginTermination("output")
+        return target
+      }
+      return target + chunk
+    }
     child.stdout?.on("data", (chunk) => {
-      stdout += chunk
+      stdout = collectOutput(stdout, chunk)
     })
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk
+      stderr = collectOutput(stderr, chunk)
     })
     child.on("error", (error) => {
-      cleanupTimers()
-      if (timedOut) {
-        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr, error))
-      } else {
-        rejectOnce(error)
-      }
+      if (terminationReason !== null) finishTermination(terminationError(error))
+      else rejectOnce(error)
     })
     child.on("close", (code) => {
-      cleanupTimers()
-      if (timedOut) {
-        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr))
+      clearTimeout(timeoutTimer)
+      if (terminationReason !== null) {
+        finishTermination(terminationError())
         return
       }
 
-      if (code === 0) {
+      if (accepted.has(code)) {
         if (!settled) {
           settled = true
+          cleanupTimers()
           resolvePromise(stdout)
         }
         return
@@ -613,6 +904,55 @@ export async function run(command, args, options = {}) {
       error.stderr = stderr
       rejectOnce(error)
     })
+    if (options.signal !== undefined) {
+      abortListener = () => beginTermination("abort")
+      options.signal.addEventListener("abort", abortListener, { once: true })
+      if (options.signal.aborted) abortListener()
+    }
+  })
+}
+
+function signalProcessTree(child, signal) {
+  if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+    child.kill(signal)
+    return Promise.resolve()
+  }
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal)
+    } catch (error) {
+      if (error?.code !== "ESRCH") child.kill(signal)
+    }
+    return Promise.resolve()
+  }
+
+  return new Promise((resolvePromise) => {
+    const args = ["/pid", String(child.pid), "/T"]
+    if (signal === "SIGKILL") args.push("/F")
+    const killer = spawn("taskkill", args, {
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    })
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      killer.kill()
+      child.kill(signal)
+      resolvePromise()
+    }, 250)
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise()
+    }
+    killer.once("error", () => {
+      child.kill(signal)
+      finish()
+    })
+    killer.once("close", finish)
   })
 }
 
@@ -624,6 +964,16 @@ function commandTimeoutError(command, args, timeoutMs, stderr, cause) {
   error.command = command
   error.stderr = stderr
   error.timeoutMs = timeoutMs
+  return error
+}
+
+function commandAbortError(command, args, stderr, cause) {
+  const error = new Error(`${command} ${args.join(" ")} was aborted`, {
+    ...(cause !== undefined ? { cause } : {}),
+  })
+  error.name = "AbortError"
+  error.code = "ABORT_ERR"
+  error.stderr = stderr
   return error
 }
 

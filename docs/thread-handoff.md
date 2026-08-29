@@ -1,15 +1,19 @@
 # Thread Handoff
 
-> Historical note: this handoff records the route-authoring milestone. For current user-facing behavior, prefer the website docs in `apps/web/content/docs` and the root `README.md`.
+> Historical note: much of this handoff records the route-authoring milestone;
+> the release-operations section is the current controller handoff. For current
+> user-facing behavior, prefer the website docs in `apps/web/content/docs` and
+> the root `README.md`.
 
-This document is the operational handoff for the Dawn work completed through the route-authoring milestone now on `main`.
+This document is the operational handoff for the Dawn framework and its
+release-integrity controller now on `main`.
 
 It is intended to let a new thread re-orient quickly without rereading the full superpowers history.
 
 ## Current State
 
 - Branch baseline: `main`
-- Latest merged milestone: Dawn route authoring
+- Latest operational milestone: the release-integrity controller cutover
 - Current repo intent: Dawn is a TypeScript meta-framework for app structure, route discovery, route validation, type generation, local route execution, local scenario testing, and a local development runtime
 - Current repo boundary: Dawn does not own deployment runtime, hosted execution, or LangSmith trace semantics
 
@@ -31,6 +35,74 @@ Expected result:
 - `node scripts/publish-smoke.mjs` passes
 
 If either fails before new work starts, stop and resolve that baseline issue first.
+
+For release work, also run `pnpm test:release-controller` and follow the
+[release-integrity cutover runbook](./superpowers/runbooks/2026-08-09-release-integrity-cutover.md).
+
+## Release Operations
+
+Release ownership is intentionally split by capability:
+
+- `.github/workflows/version-pr.yml` owns Changesets' Version Packages pull
+  request only. It uses `RELEASE_GITHUB_TOKEN` and cannot publish.
+- `.github/workflows/release.yml` is the sole npm publishing owner. A `main`,
+  schedule, or manual coordinator validates the candidate, creates or validates
+  the annotated tag, dispatches at `vX.Y.Z`, and exits. Preparation and every
+  mutation continue only when both the workflow ref and SHA are the exact tag and
+  candidate commit.
+- `.github/workflows/published-artifact-verify.yml` independently audits the
+  complete draft using exactly version, commit SHA, and manifest digest. It has
+  no Release writer.
+
+The version workflow advances the fixed package group and synchronizes Helm
+`appVersion`; when an app version advances, each chart's own patch version also
+advances exactly once. An already-synchronized rerun is a strict no-op.
+
+Before npm publication, preparation creates one 21-tarball payload and a
+canonical manifest. GitHub attests those 22 subjects. The draft consolidated
+Release then escrows exactly 45 base assets: `release-record.json`, the manifest,
+21 tarballs, and 22 attestation bundles. Repository Immutable Releases must be
+enabled before the release workflow is activated.
+
+Publication is serial and resumable. A matching package already accepted by npm
+is verified and skipped; the first exact E404 is published next. Different public
+bytes, a moved `latest` after partial publication, an incorrect tag, or any
+escrow/provenance drift is a hard conflict. The controller never repacks after
+public mutation and never unpublishes or repairs a conflicting version.
+
+The consolidated Release stays draft through the five required exact-version
+smoke lanes:
+
+- `metadata`
+- `published-harness`
+- `runtime-targets`
+- `scaffold`
+- `storage`
+
+The independent audit attaches a unique receipt for every attempt. Failed
+attempts remain visible and move the draft to `AUDIT_RETRYABLE`; only one
+byte-correlated successful attempt can create canonical `audit-result.json` and
+advance the marker to `AUDIT_VERIFIED`. Final publication changes only the draft
+flag, then re-reads the same Release as immutable with unchanged body, assets,
+and annotated-tag target.
+
+Manual recovery always uses the exact version, SHA, and tag. The live workflow
+exposes reconciliation only: workflow abandonment is unreachable, and there is
+no `reason` input, abandonment job/environment, tag-routing branch, or workflow
+executable for it. The retained abandonment runtime and terminal-record readers
+are dormant or historical-evidence support only, not a rollback or operator
+recovery path. If an exact candidate is irrecoverable, stop, preserve its tag,
+Release, and evidence, and escalate for a separately reviewed design.
+
+After the first patch release, require one clean post-publication exact-tag audit
+and the next scheduled reconciliation to be a no-op. Record the actual release,
+smoke, chart, production deployment, and scheduled-run receipts in the runbook.
+
+The real `vercel-native` CI deployment lane and pinned Vercel CLI remain required.
+The exact release commit must also have a successful production Vercel
+deployment and clean public-site browser verification. The
+`copilotkit-examples-e2e` lane remains required and exercises the v2 CopilotKit
+imports used by the chat and research examples.
 
 ## What Exists Now
 
@@ -143,11 +215,15 @@ That command should remain part of any serious integration or release-oriented v
 
 ### Published Artifact Verification
 
-For manual post-publish hardening, run the `Published Artifact Verification`
-workflow from GitHub Actions. Start with `version=latest`,
-`packageSet=memory-pgvector-core`, `runPgvector=true`, and `runOpenAI=false`.
-Enable `runOpenAI=true` only when the repository `OPENAI_API_KEY` secret is
-configured for this smoke purpose.
+For a managed release, the `Published Artifact Verification` workflow is an
+exact-tag independent audit, not a `latest`-based optional check. Supply only the
+exact version, candidate commit SHA, and manifest SHA-256. During the release it
+runs while the consolidated Release is still draft; after publication it may
+emit Actions evidence but cannot mutate the immutable Release. Preserve the
+dispatch-returned run ID instead of guessing from a recent-runs list.
+
+For an ad-hoc local no-key check outside the managed release transition, the
+existing package-set commands remain useful:
 
 Local no-key check:
 
@@ -263,6 +339,9 @@ node scripts/publish-smoke.mjs
 
 3. Read the latest design/plan pair for the most recent milestone:
 
+- [`docs/superpowers/specs/2026-08-09-release-integrity-controller-design.md`](./superpowers/specs/2026-08-09-release-integrity-controller-design.md)
+- [`docs/superpowers/plans/2026-08-09-release-integrity-controller-pr2.md`](./superpowers/plans/2026-08-09-release-integrity-controller-pr2.md)
+- [`docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md`](./superpowers/runbooks/2026-08-09-release-integrity-cutover.md)
 - [`docs/superpowers/specs/2026-04-15-dawn-route-authoring-design.md`](./superpowers/specs/2026-04-15-dawn-route-authoring-design.md)
 - [`docs/superpowers/plans/2026-04-15-dawn-route-authoring.md`](./superpowers/plans/2026-04-15-dawn-route-authoring.md)
 

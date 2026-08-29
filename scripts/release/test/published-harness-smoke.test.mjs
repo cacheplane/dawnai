@@ -1,0 +1,592 @@
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import test from "node:test"
+
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import {
+  cleanupDockerSandboxResources,
+  publishedDockerProbeIdentity,
+  runPublishedHarnessSmoke,
+  validateNpmAuditSignatures,
+} from "../smoke/published-harness.mjs"
+import { parseSmokeResult } from "../smoke-result.mjs"
+import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
+
+const VERSION = "0.8.22"
+const COMMIT_SHA = "a".repeat(40)
+const manifest = releaseManifest(VERSION, COMMIT_SHA)
+const options = Object.freeze({
+  version: VERSION,
+  commitSha: COMMIT_SHA,
+  manifestSha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
+  manifest: "/inputs/manifest.json",
+  result: "/results/published-harness.json",
+})
+
+test("published Docker probe identities use one validated collision-resistant UUID", () => {
+  const first = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const second = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-b456-426614174001")
+  assert.deepEqual(first, {
+    threadId: "published-uuid-123e4567e89b42d3a456426614174000",
+    containerName: "dawn-sbx-published-uuid-123e4567e89b42d3a456426614174000",
+    volumeName: "dawn-sbx-vol-published-uuid-123e4567e89b42d3a456426614174000",
+  })
+  assert.notEqual(first.threadId, second.threadId)
+  assert.notEqual(first.containerName, second.containerName)
+  assert.notEqual(first.volumeName, second.volumeName)
+  for (const invalid of [
+    "123E4567-E89B-42D3-A456-426614174000",
+    "123e4567-e89b-12d3-a456-426614174000",
+    "not-a-uuid",
+  ]) {
+    assert.throws(() => publishedDockerProbeIdentity(() => invalid), /UUID/u)
+  }
+})
+
+test("published Docker cleanup accepts only exact missing errors and verifies absence by inspect", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const calls = []
+  await cleanupDockerSandboxResources(identity, {
+    async runCommand(_command, args, options = {}) {
+      calls.push(args)
+      const kind = args[0] === "volume" ? "volume" : "container"
+      const name = kind === "volume" ? identity.volumeName : identity.containerName
+      const error = missingDockerResourceError(kind, name, args.includes("inspect"))
+      if (options.acceptedExitCodes?.includes(1)) return { stdout: "", stderr: error.stderr }
+      throw error
+    },
+  })
+  assert.deepEqual(calls, [
+    ["rm", "-f", identity.containerName],
+    ["inspect", identity.containerName],
+    ["volume", "rm", "--force", identity.volumeName],
+    ["volume", "inspect", identity.volumeName],
+  ])
+})
+
+test("published Docker cleanup propagates a non-missing removal failure", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args, options = {}) {
+        const kind = args[0] === "volume" ? "volume" : "container"
+        const name = kind === "volume" ? identity.volumeName : identity.containerName
+        if (kind === "container" && args[0] === "rm") {
+          if (options.acceptedExitCodes?.includes(1)) {
+            return { stdout: "", stderr: "permission denied" }
+          }
+          throw dockerCommandError("permission denied")
+        }
+        if (args.includes("inspect")) throw missingDockerResourceError(kind, name, true)
+        return { stdout: "", stderr: "" }
+      },
+    }),
+    /permission denied/u,
+  )
+})
+
+test("published Docker cleanup attempts both owned resources and aggregates both failures", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  const calls = []
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args) {
+        calls.push(args)
+        throw dockerCommandError(`permission denied for ${args.at(-1)}`)
+      },
+    }),
+    (error) =>
+      error instanceof AggregateError &&
+      error.errors.length === 2 &&
+      error.errors.every((entry) => /permission denied/u.test(entry.message)),
+  )
+  assert.deepEqual(calls, [
+    ["rm", "-f", identity.containerName],
+    ["volume", "rm", "--force", identity.volumeName],
+  ])
+})
+
+test("published Docker cleanup fails when exact inspect still finds a resource", async () => {
+  const identity = publishedDockerProbeIdentity(() => "123e4567-e89b-42d3-a456-426614174000")
+  await assert.rejects(
+    cleanupDockerSandboxResources(identity, {
+      async runCommand(_command, args) {
+        if (args[0] === "inspect") return { stdout: "[]", stderr: "" }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          throw missingDockerResourceError("volume", identity.volumeName, true)
+        }
+        return { stdout: "", stderr: "" }
+      },
+    }),
+    /remain/u,
+  )
+})
+
+test("installs the exact public fixed group, verifies npm signatures, and runs clean harness lanes", async () => {
+  const commands = []
+  const lanes = []
+  let cleaned = false
+  let receipt
+  await runPublishedHarnessSmoke(options, {
+    env: releaseEnv("801", "1"),
+    now: clock(),
+    async makeTempDir() {
+      return "/tmp/published-harness"
+    },
+    async readManifest() {
+      return manifest
+    },
+    async removeDir() {
+      cleaned = true
+    },
+    strictRunner: fakeStrictRunner(async (command, args, runOptions) => {
+      commands.push({
+        command,
+        args,
+        cwd: runOptions.cwd,
+        acceptedExitCodes: runOptions.acceptedExitCodes,
+      })
+      if (args[0] === "audit") return { stdout: auditOutput(manifest), stderr: "" }
+      if (command === "docker" && args.includes("inspect")) {
+        const kind = args[0] === "volume" ? "volume" : "container"
+        throw missingDockerResourceError(kind, args.at(-1), true)
+      }
+      return { stdout: "", stderr: "" }
+    }),
+    async runHarnessAssertion(_root, lane, version) {
+      lanes.push({ lane, version })
+    },
+    async runAgUiProbe() {
+      lanes.push({ lane: "ag-ui", version: options.version })
+    },
+    async runTypeScriptProbe() {
+      lanes.push({ lane: "typescript-tooling", version: options.version })
+    },
+    async runDockerProbe() {
+      lanes.push({ lane: "docker-pid-recovery", version: options.version })
+    },
+    async writeFile(_path, bytes) {
+      receipt = parseSmokeResult(bytes)
+    },
+    async mkdir() {},
+  })
+
+  const install = commands.find(({ command, args }) => command === "npm" && args[0] === "install")
+  assert.deepEqual(
+    install.args.filter((argument) => argument.includes("@0.8.22")).sort(),
+    CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => `${name}@0.8.22`).sort(),
+  )
+  assert.equal(install.args.includes("--ignore-scripts"), true)
+  assert.equal(
+    commands.some(
+      ({ command, args }) =>
+        command === "npm" && args.join(" ") === "audit signatures --json --include-attestations",
+    ),
+    true,
+  )
+  const audit = commands.find(({ command, args }) => command === "npm" && args[0] === "audit")
+  assert.deepEqual(audit.acceptedExitCodes, [0, 1])
+  assert.equal(
+    commands.some(
+      ({ command, args }) =>
+        command === "npm" && /verdaccio|workspace:|file:|publish/u.test(args.join(" ")),
+    ),
+    false,
+  )
+  assert.deepEqual(lanes, [
+    { lane: "ag-ui", version: "0.8.22" },
+    { lane: "typescript-tooling", version: "0.8.22" },
+    { lane: "docker-pid-recovery", version: "0.8.22" },
+    { lane: "framework", version: "0.8.22" },
+    { lane: "runtime", version: "0.8.22" },
+    { lane: "smoke", version: "0.8.22" },
+  ])
+  assert.equal(cleaned, true)
+  assert.equal(receipt.conclusion, "success")
+  assert.equal(receipt.lane, "published-harness")
+  assert.equal(receipt.checks[0].name, "containment")
+})
+
+test("fails closed on malformed, missing, duplicate, or wrong-version npm audit evidence", () => {
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures("{}", {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /malformed|missing|unknown/i,
+  )
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(
+        JSON.stringify({
+          invalid: [],
+          missing: [{ name: "@dawn-ai/sdk", version: options.version }],
+          verified: [],
+        }),
+        {
+          version: options.version,
+          requiredPackages: ["@dawn-ai/sdk"],
+          candidate: candidate(),
+          manifest,
+        },
+      ),
+    /missing.*signature/i,
+  )
+  const duplicate = JSON.parse(auditOutput(manifest, ["@dawn-ai/sdk"]))
+  duplicate.verified.push(duplicate.verified[0])
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(JSON.stringify(duplicate), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /duplicate/i,
+  )
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(auditOutput(manifest, ["@dawn-ai/sdk"], { version: "0.8.21" }), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /exact.*0\.8\.22/i,
+  )
+})
+
+test("accepts the exact npm 11 production shape and rejects verified-entry shape drift", () => {
+  const production = auditOutput(manifest, ["@dawn-ai/sdk"])
+  assert.deepEqual(
+    validateNpmAuditSignatures(production, {
+      version: options.version,
+      requiredPackages: ["@dawn-ai/sdk"],
+      candidate: candidate(),
+      manifest,
+    }),
+    ["@dawn-ai/sdk"],
+  )
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(production, {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+      }),
+    /candidate|manifest/i,
+  )
+  const trailingSlash = JSON.parse(production)
+  trailingSlash.verified[0].registry = "https://registry.npmjs.org/"
+  assert.deepEqual(
+    validateNpmAuditSignatures(JSON.stringify(trailingSlash), {
+      version: options.version,
+      requiredPackages: ["@dawn-ai/sdk"],
+      candidate: candidate(),
+      manifest,
+    }),
+    ["@dawn-ai/sdk"],
+  )
+  const registryPath = structuredClone(trailingSlash)
+  registryPath.verified[0].registry = "https://registry.npmjs.org/private"
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(JSON.stringify(registryPath), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /registry|provenance/i,
+  )
+
+  const unexpected = JSON.parse(production)
+  unexpected.verified[0].summary = "caller-provided verification summary"
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(JSON.stringify(unexpected), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /verified entry.*(?:malformed|missing|unknown)/i,
+  )
+
+  const missingLocation = JSON.parse(production)
+  delete missingLocation.verified[0].location
+  assert.throws(
+    () =>
+      validateNpmAuditSignatures(JSON.stringify(missingLocation), {
+        version: options.version,
+        requiredPackages: ["@dawn-ai/sdk"],
+        candidate: candidate(),
+        manifest,
+      }),
+    /verified entry.*(?:malformed|missing|unknown)/i,
+  )
+})
+
+test("binds npm-verified provenance to the exact repository, workflow, ref, commit, and subject", () => {
+  const cases = [
+    [
+      {
+        attestations: {
+          publish: {
+            predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+          },
+        },
+      },
+      /attestation|provenance/i,
+    ],
+    [{ repository: "https://github.com/fork/dawnai" }, /repository/i],
+    [{ workflow: ".github/workflows/other.yml" }, /workflow/i],
+    [{ ref: "refs/heads/main" }, /ref/i],
+    [{ commitSha: "c".repeat(40) }, /commit/i],
+    [{ subjectName: "pkg:npm/%40dawn-ai/sdk@0.8.21" }, /subject/i],
+    [{ subjectSha512: "d".repeat(128) }, /subject|integrity/i],
+  ]
+  for (const [drift, expected] of cases) {
+    assert.throws(
+      () =>
+        validateNpmAuditSignatures(auditOutput(manifest, ["@dawn-ai/sdk"], drift), {
+          version: options.version,
+          requiredPackages: ["@dawn-ai/sdk"],
+          candidate: candidate(),
+          manifest,
+        }),
+      expected,
+    )
+  }
+})
+
+test("writes a receipt and outer-cleans Docker identities when the installed probe fails", async () => {
+  const events = []
+  let receipt
+  await assert.rejects(
+    runPublishedHarnessSmoke(options, {
+      env: releaseEnv("802", "2"),
+      now: clock(),
+      randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
+      async makeTempDir() {
+        return "/tmp/published-harness-failure"
+      },
+      async readManifest() {
+        return manifest
+      },
+      async removeDir() {
+        events.push("cleanup")
+      },
+      strictRunner: fakeStrictRunner(async (command, args) => {
+        if (command === "docker") events.push(`cleanup-command:${args.join(" ")}`)
+        if (command === "docker" && args.includes("inspect")) {
+          const kind = args[0] === "volume" ? "volume" : "container"
+          throw missingDockerResourceError(kind, args.at(-1), true)
+        }
+        return {
+          stdout: args[0] === "audit" ? auditOutput(manifest) : "",
+          stderr: "",
+        }
+      }),
+      async runHarnessAssertion() {},
+      async runAgUiProbe() {},
+      async runTypeScriptProbe() {},
+      async runDockerProbe(_root, identity) {
+        events.push(`probe:${identity?.containerName}:${identity?.volumeName}`)
+        throw new Error("Docker installed probe failed")
+      },
+      async writeFile(_path, bytes) {
+        events.push("receipt")
+        receipt = parseSmokeResult(bytes)
+      },
+      async mkdir() {},
+    }),
+    /Docker installed probe failed/,
+  )
+
+  assert.match(
+    events[0],
+    /^probe:dawn-sbx-published-uuid-[0-9a-f]{32}:dawn-sbx-vol-published-uuid-/u,
+  )
+  assert.match(events[1], /^cleanup-command:rm -f dawn-sbx-published-uuid-/u)
+  assert.match(events[2], /^cleanup-command:inspect dawn-sbx-published-uuid-/u)
+  assert.match(events[3], /^cleanup-command:volume rm --force dawn-sbx-vol-published-uuid-/u)
+  assert.match(events[4], /^cleanup-command:volume inspect dawn-sbx-vol-published-uuid-/u)
+  assert.deepEqual(events.slice(5), ["cleanup", "receipt"])
+  assert.equal(receipt.conclusion, "failure")
+})
+
+function auditOutput(release, packages = CANONICAL_RELEASE_PACKAGE_ORDER, drift = {}) {
+  const version = drift.version ?? release.version
+  return JSON.stringify({
+    invalid: [],
+    missing: [],
+    verified: packages.map((name) => {
+      const entry = release.packages.find((item) => item.name === name)
+      const repository = drift.repository ?? "https://github.com/cacheplane/dawnai"
+      const workflow = drift.workflow ?? ".github/workflows/release.yml"
+      const ref = drift.ref ?? `refs/tags/v${release.version}`
+      const commitSha = drift.commitSha ?? release.commitSha
+      const subjectName = drift.subjectName ?? npmSubjectName(name, version)
+      const subjectSha512 = drift.subjectSha512 ?? entry.sha512
+      const statement = {
+        _type: "https://in-toto.io/Statement/v1",
+        subject: [{ name: subjectName, digest: { sha512: subjectSha512 } }],
+        predicateType: "https://slsa.dev/provenance/v1",
+        predicate: {
+          buildDefinition: {
+            buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+            externalParameters: { workflow: { ref, repository, path: workflow } },
+            internalParameters: { github: { event_name: "push" } },
+            resolvedDependencies: [
+              {
+                uri: `git+${repository}@${ref}`,
+                digest: { gitCommit: commitSha },
+              },
+            ],
+          },
+          runDetails: {
+            builder: { id: "https://github.com/actions/runner/github-hosted" },
+            metadata: {
+              invocationId: "https://github.com/cacheplane/dawnai/actions/runs/801/attempts/1",
+            },
+          },
+        },
+      }
+      return {
+        name,
+        version,
+        location: `node_modules/${name}`,
+        // npm 11.17.0 serializes the exact public registry without a trailing slash.
+        registry: "https://registry.npmjs.org",
+        attestations: drift.attestations ?? {
+          url: `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(name)}@${version}`,
+          provenance: { predicateType: "https://slsa.dev/provenance/v1" },
+        },
+        attestationBundles: [
+          {
+            predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+            bundle: {
+              mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
+              verificationMaterial: {
+                publicKey: { hint: "SHA256:test" },
+                tlogEntries: [{}],
+                timestampVerificationData: { rfc3161Timestamps: [] },
+              },
+              dsseEnvelope: {
+                payload: Buffer.from("{}", "utf8").toString("base64"),
+                payloadType: "application/vnd.in-toto+json",
+                signatures: [{ sig: "verified-by-npm", keyid: "SHA256:test" }],
+              },
+            },
+            signedAccessSignatureUrl: "",
+          },
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+              verificationMaterial: {
+                certificate: { rawBytes: EXACT_NPM_PROVENANCE_CERTIFICATE },
+                tlogEntries: [{}],
+                timestampVerificationData: { rfc3161Timestamps: [] },
+              },
+              dsseEnvelope: {
+                payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
+                payloadType: "application/vnd.in-toto+json",
+                signatures: [{ sig: "verified-by-npm", keyid: "" }],
+              },
+            },
+            signedAccessSignatureUrl: "",
+          },
+        ],
+      }
+    }),
+  })
+}
+
+function candidate() {
+  return {
+    version: options.version,
+    commitSha: options.commitSha,
+    publisherWorkflow: ".github/workflows/release.yml",
+  }
+}
+
+function releaseManifest(version, commitSha) {
+  return {
+    schemaVersion: 1,
+    version,
+    commitSha,
+    ci: { workflow: "CI", runId: 100, runAttempt: 1 },
+    artifact: {
+      name: `release-v${version}-${commitSha.slice(0, 12)}`,
+      prepareRunId: 200,
+      prepareRunAttempt: 1,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+      const bytes = Buffer.from(`published-${name}`)
+      const sha512 = createHash("sha512").update(bytes).digest("hex")
+      return {
+        name,
+        version,
+        filename: `${name.startsWith("@") ? name.slice(1).replace("/", "-") : name}-${version}.tgz`,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sha512,
+        npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+        access: "public",
+      }
+    }),
+  }
+}
+
+function npmSubjectName(name, version) {
+  if (!name.startsWith("@")) return `pkg:npm/${name}@${version}`
+  const [scope, packageName] = name.split("/")
+  return `pkg:npm/${encodeURIComponent(scope)}/${packageName}@${version}`
+}
+
+function clock() {
+  const values = [new Date("2026-08-25T12:00:00.000Z"), new Date("2026-08-25T12:00:01.000Z")]
+  return () => values.shift() ?? new Date("2026-08-25T12:00:01.000Z")
+}
+
+function fakeStrictRunner(runCommand) {
+  return {
+    async probe() {
+      return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
+    },
+    runCommand,
+  }
+}
+
+function releaseEnv(runId, attempt) {
+  return {
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+    ImageOS: "ubuntu24",
+    ImageVersion: "test",
+  }
+}
+
+function dockerCommandError(stderr) {
+  return Object.assign(new Error(stderr), { exitCode: 1, stderr })
+}
+
+function missingDockerResourceError(kind, name, inspect) {
+  if (kind === "volume") {
+    return dockerCommandError(
+      inspect
+        ? `Error: No such volume: ${name}`
+        : `Error response from daemon: get ${name}: no such volume`,
+    )
+  }
+  return dockerCommandError(
+    inspect
+      ? `Error: No such object: ${name}`
+      : `Error response from daemon: No such container: ${name}`,
+  )
+}
