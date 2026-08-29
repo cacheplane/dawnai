@@ -119,10 +119,32 @@ of the local checkout. A workflow file may classify as:
 3. **Protected:** the existing exact abandonment job, environment, gates, and
    executables are all present.
 
-Classification is structural YAML parsing with duplicate-key and alias
-rejection. Substring or regular-expression matching is not sufficient. Any
-partial topology, unexpected abandonment executable, or malformed workflow is
-invalid and fails closed. Different refs may legitimately be disabled or
+Classification recognizes a finite set of reviewed workflow variants rather
+than attempting to interpret arbitrary shell programs. It first parses YAML
+structurally with duplicate keys, aliases, anchors, tags, warnings, and multiple
+documents rejected, snapshots the result to JSON-safe primitives, and verifies
+the exact disabled or protected topology. It then recursively sorts mapping
+keys while preserving array order and exact scalar values, hashes the complete
+parsed workflow with the domain
+`dawn.release-workflow.execution.v1\0`, and requires exactly one matching entry
+in the versioned production policy
+`scripts/release/abandonment-workflow-policy.json`.
+
+The policy contains immutable reviewed `disabled` and `protected` variant
+digests. Exact source fixtures bind each digest to readable workflow bytes. The
+complete-workflow digest covers triggers, permissions, defaults, jobs, steps,
+actions, inputs, environments, shells, containers, services, conditions, and
+byte-exact decoded `run` strings. Any execution-affecting mutation, partial
+topology, unknown digest, policy ambiguity, or malformed workflow is invalid
+and fails closed. YAML comments, mapping order, and equivalent scalar spelling
+may differ because they do not change the parsed execution descriptor.
+
+This proves that a workflow matches an exact reviewed protected or disabled
+execution descriptor; it does not claim to solve shell reachability or prove
+the transitive behavior of repository scripts. The disabled reviewed variant
+contains no abandonment dispatch surface or reviewed executable entrypoint.
+Existing release-script reachability and content-pin contracts bind transitive
+release code separately. Different refs may legitimately be disabled or
 protected, but the aggregate mode is protected whenever any reachable ref is
 protected.
 
@@ -150,6 +172,9 @@ records canonical, sorted proof of ref-aware reachability:
   mode is disabled, otherwise it is the existing exact environment evidence
   object.
 
+The versioned abandonment workflow policy is itself an owner-preflight file, so
+the evidence binds the exact reviewed variant set used for classification.
+
 The remote default-branch SHA must equal the evidence HEAD, and its fetched
 workflow bytes must equal the locally hashed workflow bytes. Ref enumeration,
 workflow retrieval, or run-state retrieval that is incomplete or unreadable is
@@ -160,9 +185,10 @@ Capture aborts without writing evidence when structural classification fails.
 For this initial cutover, strict pre-enable and post-enable verification require
 the aggregate disabled mode, an empty `managedCandidateRefs` array, and no
 nonterminal Release run. Disabled capture makes no GitHub environment request.
-Protected classification remains implemented and tested with synthetic exact
-workflow bytes for a later reviewed activation; it retains the existing
-required-reviewer and prevent-self-review checks.
+Protected classification remains implemented and tested with its immutable
+exact workflow fixture for a later reviewed activation; it retains the existing
+required-reviewer and prevent-self-review checks. The reconcile-only live
+workflow must match the immutable disabled fixture and policy digest exactly.
 
 After protected tags ever exist, their historical workflow graphs remain
 dispatchable. The aggregate mode therefore stays protected—and the environment
@@ -251,6 +277,11 @@ Required coverage:
 - protected mode retains the current exact reviewer requirements;
 - disabled, protected, unavailable, and mixed evidence cannot be confused;
 - any partial abandonment workflow surface fails closed;
+- the production policy has exact schema, unique ordered variant identities,
+  unique digests, and one readable immutable source fixture per digest;
+- the complete canonical workflow descriptor, not a shell token scanner,
+  rejects any added or changed run body, action, reusable workflow, environment,
+  shell/default, container/service, permission, gate, or trigger;
 - malformed YAML, duplicate keys, aliases, and placeholder workflow bytes cannot
   pass structural classification;
 - existing runtime abandonment authority and tombstone tests remain green;

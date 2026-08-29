@@ -4,7 +4,7 @@
 
 **Goal:** Reconcile the release-controller branch with current `main`, make terminal abandonment unreachable without weakening normal releases, verify the complete fixed-group train, publish it once, and prove the exact production artifacts and website deployment.
 
-**Architecture:** Preserve `main`'s CopilotKit V2 application code and reviewed dependency graph, then isolate abandonment reachability behind one strict structural classifier and schema-v2 owner evidence. The release workflow becomes reconcile-only while dormant abandonment parsers and authority code remain unchanged. External activation and publication happen only after exact-head local/CI/review evidence, with every state transition driven and observed through authenticated CLIs.
+**Architecture:** Preserve `main`'s CopilotKit V2 application code and reviewed dependency graph, then isolate abandonment reachability behind exact reviewed canonical workflow variants and schema-v2 owner evidence. The release workflow becomes reconcile-only while dormant abandonment parsers and authority code remain unchanged. External activation and publication happen only after exact-head local/CI/review evidence, with every state transition driven and observed through authenticated CLIs.
 
 **Tech Stack:** Node.js 24.19.0, pnpm 10.33.0, npm 11.17.0, Node test runner, Vitest, Playwright, YAML 2.9, GitHub Actions/CLI, npm CLI, Helm, Vercel CLI 58.9.0.
 
@@ -49,9 +49,15 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/opt/homebrew/
 ### Create
 
 - `scripts/release/abandonment-reachability.mjs` — strict structural
-  classification and aggregate reachability.
-- `scripts/release/test/abandonment-reachability.test.mjs` — disabled,
-  protected, invalid, and aggregate classifier coverage.
+  topology, canonical workflow fingerprinting, and aggregate reachability.
+- `scripts/release/abandonment-workflow-policy.json` — versioned immutable
+  allowlist of reviewed protected and disabled execution descriptors.
+- `scripts/release/test/abandonment-reachability.test.mjs` — policy, disabled,
+  protected, invalid, mutation, and aggregate classifier coverage.
+- `scripts/release/test/fixtures/release-workflow-protected.yml` — immutable
+  exact source for the reviewed protected policy variant.
+- `scripts/release/test/fixtures/release-workflow-disabled.yml` — immutable
+  exact source for the final reconcile-only policy variant.
 
 ### Reconcile to current `main`
 
@@ -198,7 +204,7 @@ test -z "$(git status --porcelain)"
 
 **Files:** the fourteen paths in “Reconcile to current `main`” above.
 
-- [ ] **Step 1: Capture the existing parity failure**
+- [x] **Step 1: Capture the existing parity failure**
 
 ```bash
 pnpm --filter @dawn-ai/devkit exec vitest --run \
@@ -208,14 +214,14 @@ pnpm --filter @dawn-ai/devkit exec vitest --run \
 
 Expected: FAIL listing only `AppShell.tsx`, `ToolCallCard.tsx`, and `page.tsx`.
 
-- [ ] **Step 2: Change the dependency receipts first**
+- [x] **Step 2: Change the dependency receipts first**
 
 With `apply_patch`, restore every branch-only range/version assertion in the four
 security test files to `^1.68.3`/`1.68.3`, and remove the assertion requiring
 `next typegen` from `mermaid-rendering.test.ts`. Preserve the no-override,
 AG-UI-generation, and private provider-utils confinement checks.
 
-- [ ] **Step 3: Prove the changed receipts are red against the old graph**
+- [x] **Step 3: Prove the changed receipts are red against the old graph**
 
 ```bash
 pnpm exec vitest --run \
@@ -227,7 +233,7 @@ pnpm exec vitest --run \
 
 Expected: FAIL because manifests/lock/runtime still report `1.69.0`.
 
-- [ ] **Step 4: Apply the minimal manifest, comment, and historical-doc changes**
+- [x] **Step 4: Apply the minimal manifest, comment, and historical-doc changes**
 
 With `apply_patch`:
 
@@ -241,7 +247,7 @@ With `apply_patch`:
 
 Do not alter executable V2 code or the research scaffold.
 
-- [ ] **Step 5: Regenerate only the CopilotKit lock closure**
+- [x] **Step 5: Regenerate only the CopilotKit lock closure**
 
 Use pnpm 10.33.0. Force each direct owner to `1.68.3`, then restore the manifest
 ranges to `^1.68.3` if pnpm rewrites them:
@@ -278,7 +284,7 @@ git diff --exit-code origin/main -- \
   pnpm-lock.yaml
 ```
 
-- [ ] **Step 6: Run the focused green gates**
+- [x] **Step 6: Run the focused green gates**
 
 ```bash
 pnpm exec vitest --run --config test/security-dependencies/vitest.config.ts
@@ -295,7 +301,7 @@ node --test scripts/release/test/workflow-contracts.test.mjs
 Expected: all green; research example/scaffold parity restored; V2 imports and
 the real Vercel job still present.
 
-- [ ] **Step 7: Commit the narrow reconciliation**
+- [x] **Step 7: Commit the narrow reconciliation**
 
 ```bash
 git add \
@@ -308,18 +314,39 @@ git diff --cached --check
 git commit -m "chore(examples): align CopilotKit graph with main"
 ```
 
-### Task 3: Add strict structural abandonment classification
+### Task 3: Recognize exact reviewed abandonment workflow variants
 
 **Files:**
 - Create: `scripts/release/abandonment-reachability.mjs`
+- Create: `scripts/release/abandonment-workflow-policy.json`
 - Create: `scripts/release/test/abandonment-reachability.test.mjs`
+- Create: `scripts/release/test/fixtures/release-workflow-protected.yml`
+- Create: `scripts/release/test/fixtures/release-workflow-disabled.yml`
 
-- [ ] **Step 1: Write the classifier tests**
+An adversarial implementation review on 2026-08-28 rejected three successive
+shell-token recognizers: quoting, escaping, variables, nested shells, and
+generated scripts can reconstruct an abandonment command. Do not add another
+recognizer or a shell parser. The sound boundary is a finite versioned set of
+exact reviewed complete-workflow execution descriptors.
 
-Cover exact reconcile-only bytes, a synthetic exact protected surface, every
-partial/mixed surface, malformed YAML, duplicate keys, aliases, placeholder
-YAML, an abandonment executable outside the protected job, and aggregate mode.
-The intended public surface is:
+- [ ] **Step 1: Write the immutable fixtures and classifier tests**
+
+Copy the current protected `release.yml` bytes to the protected fixture. Create
+the disabled fixture by applying exactly Task 6's approved removal set to that
+copy; Task 6 must later make live `release.yml` byte-identical to this fixture.
+Tests must prove that the fixture delta contains only those abandonment-surface
+removals.
+
+Cover both fixtures, exact topology, every partial/mixed surface, malformed
+YAML, duplicate keys, aliases, anchors, tags, multiple documents, placeholder
+YAML, policy schema/order/uniqueness failures, whole-workflow mutation, and
+aggregate mode. Include adversarial mutations using quoting, escaping,
+variables, `bash -c`/`bash -lc`, `eval`, `source`, generated scripts, heredocs,
+base64, Node/Python spawning, `BASH_ENV`, actions, reusable workflows, defaults,
+containers, services, permissions, gates, and triggers. Every mutation must be
+rejected because it is not a reviewed complete execution descriptor.
+
+The intended public surface remains exactly:
 
 ```js
 export function classifyReleaseWorkflowAbandonment(bytes, {
@@ -330,9 +357,10 @@ export function aggregateReleaseWorkflowAbandonment(modes)
 ```
 
 Classification returns only `disabled` or `protected`; remote absence is a
-separate evidence status. Aggregation accepts `absent`, `disabled`, and
-`protected`, returns protected if any reachable ref is protected, and rejects
-invalid/unavailable input.
+separate evidence status. Aggregation accepts only `absent`, `disabled`, and
+`protected`, returns protected if any reachable ref is protected, returns
+disabled only when at least one reviewed disabled workflow is reachable and
+none is protected, and rejects empty, all-absent, invalid, or unavailable input.
 
 - [ ] **Step 2: Run the new tests and observe RED**
 
@@ -340,12 +368,13 @@ invalid/unavailable input.
 node --test scripts/release/test/abandonment-reachability.test.mjs
 ```
 
-Expected: FAIL because the module/exports do not exist.
+Expected: FAIL because the production module and policy do not exist.
 
-- [ ] **Step 3: Implement the smallest fail-closed classifier**
+- [ ] **Step 3: Implement strict topology plus complete-workflow policy matching**
 
-Parse with YAML's unique-key enforcement and aliases disabled. Snapshot parsed
-data before inspecting it. Require these exact projections:
+Parse at most 2 MiB of strict UTF-8 YAML with unique-key enforcement and aliases,
+anchors, tags, warnings, and multiple documents rejected. Snapshot parsed data
+before inspection. Require these exact topology projections:
 
 ```js
 const disabledInputs = ["version", "commitSha", "operation"]
@@ -354,24 +383,58 @@ const protectedInputs = ["version", "commitSha", "operation", "reason"]
 const protectedOperationOptions = ["reconcile", "abandon"]
 ```
 
-Disabled mode has no `reason`, no `abandon` job, no abandon-only tag branch, and
-no `abandonment-context`/`cli.mjs abandon` executable anywhere. Protected mode
-requires the existing environment, exact identity/state gate, protected
-permissions, intent validation, tag branch, and both CLI executable descriptors.
-Anything between those exact surfaces throws.
+Disabled mode has no `reason`, no `abandon` job, and no abandon-only tag branch.
+Protected mode requires the existing environment, exact identity/state gate,
+protected permissions, intent validation, tag branch, and both exact CLI step
+descriptors. Anything between those topology surfaces throws.
+
+After topology classification, canonicalize the complete parsed workflow by
+recursively sorting mapping keys while preserving array order and exact scalar
+values. Hash these domain-separated bytes:
+
+```text
+dawn.release-workflow.execution.v1\0<canonical-json>
+```
+
+Require one and only one matching policy entry whose mode equals the structural
+mode. The policy schema is exactly:
+
+```json
+{
+  "schemaVersion": 1,
+  "canonicalization": "dawn-release-workflow-execution-v1",
+  "variants": [
+    { "id": "disabled-2026-08-28", "mode": "disabled", "canonicalSha256": "<64 hex>" },
+    { "id": "protected-2026-08-28", "mode": "protected", "canonicalSha256": "<64 hex>" }
+  ]
+}
+```
+
+Require exact fields, lexical variant-ID order, unique IDs and digests, supported
+modes, and no digest shared across modes. Tests recompute both policy digests
+from the immutable fixtures. No shell scanner or shell-parser dependency is
+permitted.
 
 - [ ] **Step 4: Run RED-to-GREEN and regression tests**
 
 ```bash
 node --test scripts/release/test/abandonment-reachability.test.mjs
 node --test scripts/release/test/workflow-contracts.test.mjs
+pnpm exec biome check \
+  scripts/release/abandonment-reachability.mjs \
+  scripts/release/test/abandonment-reachability.test.mjs
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/release/abandonment-reachability.mjs \
-  scripts/release/test/abandonment-reachability.test.mjs
+git add \
+  scripts/release/abandonment-reachability.mjs \
+  scripts/release/abandonment-workflow-policy.json \
+  scripts/release/test/abandonment-reachability.test.mjs \
+  scripts/release/test/fixtures/release-workflow-protected.yml \
+  scripts/release/test/fixtures/release-workflow-disabled.yml
+git diff --cached --check
 git commit -m "feat(release): classify abandonment workflow reachability"
 ```
 
@@ -446,11 +509,14 @@ git commit -m "feat(release): add ref-aware owner evidence reads"
 - Modify: `scripts/release/preflight-owner.mjs`
 - Modify: `scripts/release/test/preflight-owner.test.mjs`
 - Modify: `scripts/release/test/preflight-owner-cli.test.mjs`
+- Bind: `scripts/release/abandonment-workflow-policy.json`
 
 - [ ] **Step 1: Write schema-v2 capture and verification tests**
 
 Add coverage for:
 
+- the reviewed abandonment workflow policy is included in
+  `OWNER_PREFLIGHT_FILES` and its exact bytes are evidence-bound;
 - disabled capture stores `abandonmentEnvironment: null` and never calls the
   environment adapter;
 - protected capture preserves the current exact reviewer protection;
@@ -510,7 +576,8 @@ Capture must classify local bytes before remote calls, bind remote `main`, fetch
 and classify its workflow, enumerate and peel all managed tags, fetch each tag's
 workflow or exact absence, collect all five nonterminal statuses, recompute the
 aggregate, and only then read the environment when aggregate mode is protected.
-Unreadable or structurally invalid evidence aborts without an output file.
+Unreadable, structurally invalid, or unknown-policy workflow evidence aborts
+without an output file.
 
 - [ ] **Step 5: Implement strict verification checks**
 
@@ -561,8 +628,10 @@ git commit -m "feat(release): verify ref-aware owner evidence v2"
 Require inputs exactly `commitSha`, `operation`, `version`; options exactly
 `["reconcile"]`; no `reason`; no `abandon` job/environment; no abandon-only tag
 branch; and no abandonment executable. Require the production classifier to
-classify actual `release.yml` as disabled. Remove `abandon` from the expected
-final job list.
+classify actual `release.yml` as disabled and require its bytes to equal
+`scripts/release/test/fixtures/release-workflow-disabled.yml`. Remove `abandon`
+from the expected final job list. Preserve the immutable protected fixture and
+its policy entry for historical managed refs.
 
 - [ ] **Step 2: Run the focused contract tests and observe RED**
 
@@ -583,6 +652,15 @@ With `apply_patch`:
 
 Do not change reconcile gates, the global queue, tag writer, npm publication,
 smoke fan-out, independent audit, or Release publication.
+
+After the edit, require byte-for-byte equality with the reviewed disabled
+fixture before updating either workflow audit fixture:
+
+```bash
+cmp --silent \
+  .github/workflows/release.yml \
+  scripts/release/test/fixtures/release-workflow-disabled.yml
+```
 
 - [ ] **Step 4: Manually transcribe the two exact fixtures**
 

@@ -207,10 +207,20 @@ Neither side of the merged configuration is dropped.
 ### Disabled abandonment
 
 The release workflow exposes reconcile only and contains no dispatchable
-abandonment job or abandonment executable. The dormant CLI implementation and
-historical evidence parsers remain for a separately reviewed future
-reactivation. Strict owner evidence is ref-aware as specified in
+abandonment job or reviewed abandonment executable entrypoint. The dormant CLI
+implementation and historical evidence parsers remain for a separately
+reviewed future reactivation. Strict owner evidence is ref-aware as specified in
 [Temporarily Disable Release Abandonment](./2026-08-25-temporarily-disable-release-abandonment-design.md).
+
+An implementation review on 2026-08-28 proved that token or substring scanning
+cannot soundly classify arbitrary shell reconstruction. The selected boundary
+therefore recognizes only exact reviewed workflow execution variants. After
+strict YAML parsing and exact disabled/protected topology checks, the classifier
+canonicalizes the complete parsed workflow, hashes domain-separated canonical
+JSON, and requires a unique match in the versioned production policy. Immutable
+protected and reconcile-only source fixtures make both accepted digests
+reviewable. Any execution-affecting mutation or unknown variant fails closed;
+no shell parser dependency or growing command-pattern workaround is introduced.
 
 The initial cutover continues to require no controller-owned `v*` tag and no
 nonterminal Release run. No `release-abandonment` environment is created.
@@ -322,6 +332,9 @@ non-abandonable failure mode remains governed by the disabled-abandonment design
   present.
 - The disabled-abandonment spec and runbook describe the actual pre-merge and
   post-merge workflow states.
+- The release workflow matches the immutable reviewed reconcile-only fixture
+  and production policy digest; the preserved protected fixture remains
+  classifiable for historical managed tags.
 - Strict owner evidence tests enforce the exact four-workflow activation
   topology and ref-aware disabled state.
 - Complete local, CI, gated-lane, rehearsal, and fresh Copilot review evidence
