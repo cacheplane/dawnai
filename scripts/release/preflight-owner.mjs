@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto"
 
+import {
+  aggregateReleaseWorkflowAbandonment,
+  classifyReleaseWorkflowAbandonment,
+} from "./abandonment-reachability.mjs"
+import {
+  loadAbandonmentWorkflowPolicy,
+  parseAbandonmentWorkflowPolicy,
+} from "./abandonment-workflow-policy.mjs"
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
@@ -14,6 +22,19 @@ const MAX_VALIDITY_MS = 15 * 60_000
 const RELEASE_WORKFLOW = ".github/workflows/release.yml"
 const PUBLISH_CHART_WORKFLOW = ".github/workflows/publish-chart.yml"
 const CONTROLLER_SCHEMA = "scripts/release/controller-schema.json"
+const ABANDONMENT_POLICY = "scripts/release/abandonment-workflow-policy.json"
+const NONTERMINAL_RUN_STATUSES = Object.freeze([
+  "in_progress",
+  "pending",
+  "queued",
+  "requested",
+  "waiting",
+])
+const MAX_GITHUB_RECORDS = 10_000
+const MAX_GITHUB_REF_BYTES = 1_024
+const MAX_GITHUB_EVENT_BYTES = 256
+const MAX_GITHUB_BRANCH_BYTES = 1_024
+const EXPECTED_ABANDONMENT_POLICY = loadAbandonmentWorkflowPolicy()
 
 export const OWNER_PREFLIGHT_FILES = Object.freeze([
   ".github/workflows/version-pr.yml",
@@ -21,6 +42,7 @@ export const OWNER_PREFLIGHT_FILES = Object.freeze([
   ".github/workflows/published-artifact-verify.yml",
   PUBLISH_CHART_WORKFLOW,
   CONTROLLER_SCHEMA,
+  ABANDONMENT_POLICY,
 ])
 
 const EVIDENCE_FIELDS = Object.freeze([
@@ -55,15 +77,6 @@ export async function captureOwnerEvidence({
   const readHead = bindMethod(git, "headSha", "owner preflight Git reader")
   const npmVersion = bindMethod(npm, "version", "owner preflight npm adapter")
   const trustList = bindMethod(npm, "trustList", "owner preflight npm adapter")
-  const ghVersion = bindMethod(github, "version", "owner preflight GitHub adapter")
-  const getRepository = bindMethod(github, "getRepository", "owner preflight GitHub adapter")
-  const getWorkflow = bindMethod(github, "getWorkflow", "owner preflight GitHub adapter")
-  const getEnvironment = bindMethod(github, "getEnvironment", "owner preflight GitHub adapter")
-  const getImmutableReleases = bindMethod(
-    github,
-    "getImmutableReleases",
-    "owner preflight GitHub adapter",
-  )
   if (typeof now !== "function") throw new TypeError("Owner preflight clock is invalid")
   const capturedAtMs = now()
   if (!Number.isSafeInteger(capturedAtMs) || capturedAtMs < 0) {
@@ -81,11 +94,44 @@ export async function captureOwnerEvidence({
   if (schema.abandonmentEnvironment.length === 0) {
     throw new TypeError("Controller abandonment environment is invalid")
   }
+  const localPolicy = parseAbandonmentWorkflowPolicy(localBytes.get(ABANDONMENT_POLICY))
+  if (JSON.stringify(localPolicy) !== JSON.stringify(EXPECTED_ABANDONMENT_POLICY)) {
+    throw new TypeError("Owner abandonment workflow policy does not match production policy")
+  }
+  const localReleaseBytes = localBytes.get(RELEASE_WORKFLOW)
+  const localAbandonmentMode = classifyReleaseWorkflowAbandonment(localReleaseBytes, {
+    abandonmentEnvironment: schema.abandonmentEnvironment,
+  })
 
   const headSha = await readHead()
   if (typeof headSha !== "string" || !SHA_PATTERN.test(headSha)) {
     throw new TypeError("Owner preflight HEAD is invalid")
   }
+  const ghVersion = bindMethod(github, "version", "owner preflight GitHub adapter")
+  const getRepository = bindMethod(github, "getRepository", "owner preflight GitHub adapter")
+  const getWorkflow = bindMethod(github, "getWorkflow", "owner preflight GitHub adapter")
+  const getImmutableReleases = bindMethod(
+    github,
+    "getImmutableReleases",
+    "owner preflight GitHub adapter",
+  )
+  const getDefaultBranchRef = bindMethod(
+    github,
+    "getDefaultBranchRef",
+    "owner preflight GitHub adapter",
+  )
+  const listManagedCandidateRefs = bindMethod(
+    github,
+    "listManagedCandidateRefs",
+    "owner preflight GitHub adapter",
+  )
+  const getAnnotatedTag = bindMethod(github, "getAnnotatedTag", "owner preflight GitHub adapter")
+  const getWorkflowContent = bindMethod(
+    github,
+    "getWorkflowContent",
+    "owner preflight GitHub adapter",
+  )
+  const listReleaseRuns = bindMethod(github, "listReleaseRuns", "owner preflight GitHub adapter")
   const toolVersions = {
     npm: normalizeToolVersion(await npmVersion(), "npm"),
     gh: normalizeToolVersion(await ghVersion(), "gh"),
@@ -96,10 +142,75 @@ export async function captureOwnerEvidence({
   for (const filePath of OWNER_PREFLIGHT_FILES.filter((path) => path.endsWith(".yml"))) {
     workflows.push(normalizeWorkflowResult(await getWorkflow(filePath), filePath))
   }
-  const environment = normalizeEnvironmentResult(
-    await getEnvironment(schema.abandonmentEnvironment),
-    schema.abandonmentEnvironment,
+  const remoteDefaultBranch = normalizeDefaultBranchResult(
+    await getDefaultBranchRef(repository, "main"),
+    headSha,
   )
+  const defaultWorkflow = normalizeWorkflowContentResult(
+    await getWorkflowContent(repository, RELEASE_WORKFLOW, remoteDefaultBranch.commitSha),
+    schema.abandonmentEnvironment,
+    { absenceAllowed: false },
+  )
+  if (!defaultWorkflow.bytes.equals(localReleaseBytes)) {
+    throw new TypeError("Remote default-branch workflow bytes do not match the local workflow")
+  }
+  if (defaultWorkflow.evidence.mode !== localAbandonmentMode) {
+    throw new TypeError("Remote default-branch workflow mode conflicts with the local workflow")
+  }
+
+  const managedRefs = normalizeManagedCandidateRefsResult(
+    await listManagedCandidateRefs(repository),
+  )
+  const managedCandidateRefs = []
+  for (const candidateRef of managedRefs) {
+    const peeledCommitSha = normalizeAnnotatedTagResult(
+      await getAnnotatedTag(repository, candidateRef.object.sha),
+      candidateRef.object.sha,
+    )
+    const workflow = normalizeWorkflowContentResult(
+      await getWorkflowContent(repository, RELEASE_WORKFLOW, peeledCommitSha),
+      schema.abandonmentEnvironment,
+      { absenceAllowed: true },
+    )
+    managedCandidateRefs.push({
+      ref: candidateRef.ref,
+      object: candidateRef.object,
+      peeledCommitSha,
+      workflow: workflow.evidence,
+    })
+  }
+
+  const nonterminalReleaseRuns = []
+  const runIds = new Set()
+  for (const status of NONTERMINAL_RUN_STATUSES) {
+    const runs = normalizeReleaseRunsResult(
+      await listReleaseRuns(repository, RELEASE_WORKFLOW, status),
+      status,
+    )
+    for (const run of runs) {
+      if (runIds.has(run.id)) {
+        throw new TypeError("Owner release run evidence contains a duplicate identity")
+      }
+      runIds.add(run.id)
+      nonterminalReleaseRuns.push(run)
+    }
+  }
+  nonterminalReleaseRuns.sort(compareRuns)
+
+  const abandonmentMode = aggregateReleaseWorkflowAbandonment([
+    defaultWorkflow.evidence.mode,
+    ...managedCandidateRefs.map(({ workflow }) =>
+      workflow.status === "absent" ? "absent" : workflow.mode,
+    ),
+  ])
+  let abandonmentEnvironment = null
+  if (abandonmentMode === "protected") {
+    const getEnvironment = bindMethod(github, "getEnvironment", "owner preflight GitHub adapter")
+    abandonmentEnvironment = normalizeEnvironmentResult(
+      await getEnvironment(schema.abandonmentEnvironment),
+      schema.abandonmentEnvironment,
+    )
+  }
   const immutableReleases = normalizeImmutableResult(
     await getImmutableReleases(repository),
     repository,
@@ -111,7 +222,7 @@ export async function captureOwnerEvidence({
   }
   const capturedAt = new Date(capturedAtMs).toISOString()
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     phase,
     repository,
     defaultBranch: repositoryResult.defaultBranch,
@@ -124,7 +235,15 @@ export async function captureOwnerEvidence({
     github: {
       repository: repositoryResult,
       workflows,
-      abandonmentEnvironment: environment,
+      abandonmentMode,
+      remoteDefaultBranch: {
+        ref: remoteDefaultBranch.ref,
+        commitSha: remoteDefaultBranch.commitSha,
+        workflow: defaultWorkflow.evidence,
+      },
+      managedCandidateRefs,
+      nonterminalReleaseRuns,
+      abandonmentEnvironment,
       immutableReleases,
     },
   }
@@ -199,9 +318,14 @@ export function verifyOwnerEvidence({ evidence, currentHeadSha, currentFiles, no
   checks.push(verifyTools(normalized.tools))
   checks.push(verifyRepository(normalized))
   checks.push(verifyWorkflows(normalized.phase, normalized.github.workflows))
+  checks.push(verifyRemoteDefaultBranch(normalized, currentHeadSha, currentFiles))
+  checks.push(verifyAbandonmentReachability(normalized, currentFiles, schema))
+  checks.push(verifyManagedCandidateRefs(normalized.github.managedCandidateRefs))
+  checks.push(verifyNonterminalReleaseRuns(normalized.github.nonterminalReleaseRuns))
   checks.push(verifyImmutable(normalized.phase, normalized.github.immutableReleases))
   checks.push(
     verifyAbandonmentEnvironment(
+      normalized.github.abandonmentMode,
       normalized.github.abandonmentEnvironment,
       schema?.abandonmentEnvironment ?? null,
     ),
@@ -265,7 +389,7 @@ function normalizeOwnerEvidence(value) {
   const evidence = safeSnapshot(value, "Owner evidence")
   assertExactFields(evidence, EVIDENCE_FIELDS, "Owner evidence")
   if (
-    evidence.schemaVersion !== 1 ||
+    evidence.schemaVersion !== 2 ||
     !["pre-enable", "post-enable"].includes(evidence.phase) ||
     typeof evidence.repository !== "string" ||
     !REPOSITORY_PATTERN.test(evidence.repository) ||
@@ -286,12 +410,17 @@ function normalizeOwnerEvidence(value) {
   const tools = normalizeTools(evidence.tools)
   const files = normalizeFileEvidence(evidence.files)
   const packages = normalizePackageEvidence(evidence.packages)
-  const github = normalizeGitHubEvidence(evidence.github, evidence.repository)
+  const github = normalizeGitHubEvidence(evidence.github, {
+    repository: evidence.repository,
+    defaultBranch: evidence.defaultBranch,
+    headSha: evidence.headSha,
+    files,
+  })
   if (evidence.defaultBranch !== github.repository.defaultBranch) {
     throw new TypeError("Owner evidence default branch conflicts with repository evidence")
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     phase: evidence.phase,
     repository: evidence.repository,
     defaultBranch: evidence.defaultBranch,
@@ -407,16 +536,65 @@ function normalizePublisher(value) {
   }
 }
 
-function normalizeGitHubEvidence(value, repository) {
+function normalizeGitHubEvidence(value, { repository, defaultBranch, headSha, files }) {
   assertExactFields(
     value,
-    ["repository", "workflows", "abandonmentEnvironment", "immutableReleases"],
+    [
+      "repository",
+      "workflows",
+      "abandonmentMode",
+      "remoteDefaultBranch",
+      "managedCandidateRefs",
+      "nonterminalReleaseRuns",
+      "abandonmentEnvironment",
+      "immutableReleases",
+    ],
     "Owner GitHub evidence",
   )
+  if (!["disabled", "protected"].includes(value.abandonmentMode)) {
+    throw new TypeError("Owner abandonment mode is invalid")
+  }
+  const repositoryEvidence = normalizeRepositoryEvidence(value.repository, repository)
+  const remoteDefaultBranch = normalizeRemoteDefaultBranch(value.remoteDefaultBranch)
+  const managedCandidateRefs = normalizeManagedCandidateEvidence(value.managedCandidateRefs)
+  const nonterminalReleaseRuns = normalizeReleaseRunEvidence(value.nonterminalReleaseRuns)
+  const releaseFile = files.find(({ path }) => path === RELEASE_WORKFLOW)
+  if (
+    remoteDefaultBranch.ref !== "refs/heads/main" ||
+    remoteDefaultBranch.commitSha !== headSha ||
+    remoteDefaultBranch.workflow.sha256 !== releaseFile?.sha256 ||
+    (defaultBranch !== null && defaultBranch !== "main") ||
+    (repositoryEvidence.status === "present" && defaultBranch !== "main")
+  ) {
+    throw new TypeError("Owner remote default branch conflicts with local evidence")
+  }
+  const aggregateMode = aggregateReleaseWorkflowAbandonment([
+    remoteDefaultBranch.workflow.mode,
+    ...managedCandidateRefs.map(({ workflow }) =>
+      workflow.status === "absent" ? "absent" : workflow.mode,
+    ),
+  ])
+  if (aggregateMode !== value.abandonmentMode) {
+    throw new TypeError("Owner abandonment mode conflicts with workflow evidence")
+  }
+  const abandonmentEnvironment =
+    value.abandonmentEnvironment === null
+      ? null
+      : normalizeEnvironmentEvidence(value.abandonmentEnvironment)
+  if (
+    (value.abandonmentMode === "disabled" && abandonmentEnvironment !== null) ||
+    (value.abandonmentMode === "protected" && abandonmentEnvironment === null)
+  ) {
+    throw new TypeError("Owner abandonment environment conflicts with workflow mode")
+  }
   return {
-    repository: normalizeRepositoryEvidence(value.repository, repository),
+    repository: repositoryEvidence,
     workflows: normalizeWorkflowEvidence(value.workflows),
-    abandonmentEnvironment: normalizeEnvironmentEvidence(value.abandonmentEnvironment),
+    abandonmentMode: value.abandonmentMode,
+    remoteDefaultBranch,
+    managedCandidateRefs,
+    nonterminalReleaseRuns,
+    abandonmentEnvironment,
     immutableReleases: normalizeImmutableEvidence(value.immutableReleases, repository),
   }
 }
@@ -493,6 +671,121 @@ function normalizeWorkflowEvidence(value) {
     }
     return { ...entry }
   })
+}
+
+function normalizeRemoteDefaultBranch(value) {
+  assertExactFields(value, ["ref", "commitSha", "workflow"], "Owner remote default branch")
+  if (value.ref !== "refs/heads/main" || !SHA_PATTERN.test(value.commitSha)) {
+    throw new TypeError("Owner remote default branch identity is invalid")
+  }
+  return {
+    ref: value.ref,
+    commitSha: value.commitSha,
+    workflow: normalizeReachabilityWorkflowEvidence(value.workflow, { absenceAllowed: false }),
+  }
+}
+
+function normalizeManagedCandidateEvidence(value) {
+  if (!Array.isArray(value) || value.length > MAX_GITHUB_RECORDS) {
+    throw new TypeError("Owner managed candidate evidence is invalid")
+  }
+  const refs = new Set()
+  const objects = new Set()
+  const normalized = value.map((entry) => {
+    assertExactFields(
+      entry,
+      ["ref", "object", "peeledCommitSha", "workflow"],
+      "Owner managed candidate",
+    )
+    assertExactFields(entry.object, ["type", "sha"], "Owner managed candidate object")
+    if (
+      !isManagedTagRef(entry.ref) ||
+      entry.object.type !== "tag" ||
+      !SHA_PATTERN.test(entry.object.sha) ||
+      !SHA_PATTERN.test(entry.peeledCommitSha) ||
+      entry.object.sha === entry.peeledCommitSha ||
+      refs.has(entry.ref) ||
+      objects.has(entry.object.sha)
+    ) {
+      throw new TypeError("Owner managed candidate identity is invalid")
+    }
+    refs.add(entry.ref)
+    objects.add(entry.object.sha)
+    return {
+      ref: entry.ref,
+      object: { type: "tag", sha: entry.object.sha },
+      peeledCommitSha: entry.peeledCommitSha,
+      workflow: normalizeReachabilityWorkflowEvidence(entry.workflow, { absenceAllowed: true }),
+    }
+  })
+  return normalized.sort((left, right) => compareText(left.ref, right.ref))
+}
+
+function normalizeReachabilityWorkflowEvidence(value, { absenceAllowed }) {
+  assertExactFields(
+    value,
+    ["status", "path", "sha256", "mode"],
+    "Owner workflow reachability evidence",
+  )
+  if (value.path !== RELEASE_WORKFLOW) {
+    throw new TypeError("Owner workflow reachability path is invalid")
+  }
+  if (value.status === "absent" && absenceAllowed) {
+    if (value.sha256 !== null || value.mode !== null) {
+      throw new TypeError("Absent owner workflow reachability evidence is invalid")
+    }
+    return { status: "absent", path: RELEASE_WORKFLOW, sha256: null, mode: null }
+  }
+  if (
+    value.status !== "present" ||
+    !SHA256_PATTERN.test(value.sha256) ||
+    !["disabled", "protected"].includes(value.mode)
+  ) {
+    throw new TypeError("Present owner workflow reachability evidence is invalid")
+  }
+  return {
+    status: "present",
+    path: RELEASE_WORKFLOW,
+    sha256: value.sha256,
+    mode: value.mode,
+  }
+}
+
+function normalizeReleaseRunEvidence(value) {
+  if (!Array.isArray(value) || value.length > MAX_GITHUB_RECORDS) {
+    throw new TypeError("Owner nonterminal release run evidence is invalid")
+  }
+  const ids = new Set()
+  const normalized = value.map((entry) => {
+    assertExactFields(
+      entry,
+      ["id", "runAttempt", "status", "event", "headSha", "headBranch"],
+      "Owner nonterminal release run",
+    )
+    if (
+      !Number.isSafeInteger(entry.id) ||
+      entry.id < 1 ||
+      !Number.isSafeInteger(entry.runAttempt) ||
+      entry.runAttempt < 1 ||
+      !NONTERMINAL_RUN_STATUSES.includes(entry.status) ||
+      !isBoundedString(entry.event, MAX_GITHUB_EVENT_BYTES) ||
+      !SHA_PATTERN.test(entry.headSha) ||
+      !isBoundedString(entry.headBranch, MAX_GITHUB_BRANCH_BYTES) ||
+      ids.has(entry.id)
+    ) {
+      throw new TypeError("Owner nonterminal release run identity is invalid")
+    }
+    ids.add(entry.id)
+    return {
+      id: entry.id,
+      runAttempt: entry.runAttempt,
+      status: entry.status,
+      event: entry.event,
+      headSha: entry.headSha,
+      headBranch: entry.headBranch,
+    }
+  })
+  return normalized.sort(compareRuns)
 }
 
 function normalizeEnvironmentEvidence(value) {
@@ -653,6 +946,145 @@ function normalizeWorkflowResult(result, path) {
   ).find((entry) => entry.path === path)
 }
 
+function normalizeDefaultBranchResult(result, headSha) {
+  const value = safeSnapshot(result, "Owner default branch adapter result")
+  assertExactFields(value, ["status", "httpStatus", "value"], "Owner default branch adapter result")
+  if (value.status !== "present" || value.httpStatus !== 200) {
+    throw new TypeError("Owner default branch ref is unavailable")
+  }
+  assertExactFields(value.value, ["ref", "object"], "Owner default branch ref")
+  assertExactFields(value.value.object, ["type", "sha"], "Owner default branch object")
+  if (
+    value.value.ref !== "refs/heads/main" ||
+    value.value.object.type !== "commit" ||
+    !SHA_PATTERN.test(value.value.object.sha) ||
+    value.value.object.sha !== headSha
+  ) {
+    throw new TypeError("Owner remote default branch does not match local HEAD")
+  }
+  return { ref: value.value.ref, commitSha: value.value.object.sha }
+}
+
+function normalizeManagedCandidateRefsResult(result) {
+  const value = safeSnapshot(result, "Owner managed candidate refs adapter result")
+  assertExactFields(
+    value,
+    ["status", "httpStatus", "value"],
+    "Owner managed candidate refs adapter result",
+  )
+  if (
+    value.status !== "present" ||
+    value.httpStatus !== 200 ||
+    !Array.isArray(value.value) ||
+    value.value.length > MAX_GITHUB_RECORDS
+  ) {
+    throw new TypeError("Owner managed candidate refs are unavailable or malformed")
+  }
+  const refs = new Set()
+  const objects = new Set()
+  const normalized = value.value.map((entry) => {
+    assertExactFields(entry, ["ref", "object"], "Owner managed candidate ref")
+    assertExactFields(entry.object, ["type", "sha"], "Owner managed candidate ref object")
+    if (
+      !isManagedTagRef(entry.ref) ||
+      entry.object.type !== "tag" ||
+      !SHA_PATTERN.test(entry.object.sha) ||
+      refs.has(entry.ref) ||
+      objects.has(entry.object.sha)
+    ) {
+      throw new TypeError("Owner managed candidate refs contain a duplicate or invalid identity")
+    }
+    refs.add(entry.ref)
+    objects.add(entry.object.sha)
+    return { ref: entry.ref, object: { type: "tag", sha: entry.object.sha } }
+  })
+  return normalized.sort((left, right) => compareText(left.ref, right.ref))
+}
+
+function normalizeAnnotatedTagResult(result, tagObjectSha) {
+  const value = safeSnapshot(result, "Owner annotated tag adapter result")
+  assertExactFields(value, ["status", "httpStatus", "value"], "Owner annotated tag adapter result")
+  if (value.status !== "present" || value.httpStatus !== 200) {
+    throw new TypeError("Owner annotated tag is unavailable")
+  }
+  assertExactFields(value.value, ["sha", "object"], "Owner annotated tag")
+  assertExactFields(value.value.object, ["type", "sha"], "Owner annotated tag peel")
+  if (
+    value.value.sha !== tagObjectSha ||
+    value.value.object.type !== "commit" ||
+    !SHA_PATTERN.test(value.value.object.sha) ||
+    value.value.object.sha === tagObjectSha
+  ) {
+    throw new TypeError("Owner annotated tag peel is inconsistent")
+  }
+  return value.value.object.sha
+}
+
+function normalizeWorkflowContentResult(result, abandonmentEnvironment, { absenceAllowed }) {
+  const value = safeSnapshot(result, "Owner workflow content adapter result")
+  assertExactFields(
+    value,
+    ["status", "httpStatus", "value"],
+    "Owner workflow content adapter result",
+  )
+  if (
+    absenceAllowed &&
+    value.status === "absent" &&
+    value.httpStatus === 404 &&
+    value.value === null
+  ) {
+    return {
+      evidence: { status: "absent", path: RELEASE_WORKFLOW, sha256: null, mode: null },
+      bytes: null,
+    }
+  }
+  if (value.status !== "present" || value.httpStatus !== 200) {
+    throw new TypeError("Owner workflow content is unavailable")
+  }
+  assertExactFields(value.value, ["path", "sha", "contentBase64"], "Owner workflow content")
+  if (
+    value.value.path !== RELEASE_WORKFLOW ||
+    !SHA_PATTERN.test(value.value.sha) ||
+    typeof value.value.contentBase64 !== "string" ||
+    value.value.contentBase64.length === 0
+  ) {
+    throw new TypeError("Owner workflow content is malformed")
+  }
+  const bytes = Buffer.from(value.value.contentBase64, "base64")
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > MAX_FILE_BYTES ||
+    bytes.toString("base64") !== value.value.contentBase64
+  ) {
+    throw new TypeError("Owner workflow content bytes are malformed")
+  }
+  const mode = classifyReleaseWorkflowAbandonment(bytes, { abandonmentEnvironment })
+  return {
+    evidence: {
+      status: "present",
+      path: RELEASE_WORKFLOW,
+      sha256: sha256(bytes),
+      mode,
+    },
+    bytes,
+  }
+}
+
+function normalizeReleaseRunsResult(result, requestedStatus) {
+  const value = safeSnapshot(result, "Owner release runs adapter result")
+  assertExactFields(value, ["status", "httpStatus", "value"], "Owner release runs adapter result")
+  if (
+    value.status !== "present" ||
+    value.httpStatus !== 200 ||
+    !Array.isArray(value.value) ||
+    value.value.length > MAX_GITHUB_RECORDS ||
+    value.value.some((entry) => entry?.status !== requestedStatus)
+  ) {
+    throw new TypeError("Owner release runs are unavailable or malformed")
+  }
+  return normalizeReleaseRunEvidence(value.value)
+}
+
 function normalizeEnvironmentResult(result, name) {
   const value = safeSnapshot(result, "Owner environment adapter result")
   const operation = `GET /repos/{owner}/{repo}/environments/${name}`
@@ -794,18 +1226,115 @@ function verifyWorkflows(phase, workflows) {
   if (workflows.some((workflow) => workflow.status === "unavailable")) {
     return result("workflow-states", "UNPROVABLE", "A remote workflow state is unavailable.")
   }
-  const byPath = new Map(workflows.map((workflow) => [workflow.path, workflow]))
-  if (phase === "pre-enable") {
-    const valid = [RELEASE_WORKFLOW, PUBLISH_CHART_WORKFLOW].every(
-      (path) => byPath.get(path)?.state === "disabled_manually",
-    )
-    return valid
-      ? result("workflow-states", "PASS", "Legacy mutating workflows remain manually disabled.")
-      : result("workflow-states", "FAIL", "A legacy mutating workflow is not manually disabled.")
-  }
-  return workflows.every((workflow) => workflow.status === "present" && workflow.state === "active")
+  const expectedStates = new Map(
+    OWNER_PREFLIGHT_FILES.filter((path) => path.endsWith(".yml")).map((path) => [
+      path,
+      phase === "pre-enable" && [RELEASE_WORKFLOW, PUBLISH_CHART_WORKFLOW].includes(path)
+        ? "disabled_manually"
+        : "active",
+    ]),
+  )
+  const valid = workflows.every(
+    (workflow) =>
+      workflow.status === "present" && workflow.state === expectedStates.get(workflow.path),
+  )
+  return valid
     ? result("workflow-states", "PASS", "Every controller workflow is active after cutover.")
-    : result("workflow-states", "FAIL", "Every controller workflow must be active after cutover.")
+    : result(
+        "workflow-states",
+        "FAIL",
+        phase === "pre-enable"
+          ? "The exact pre-enable workflow topology is not preserved."
+          : "Every controller workflow must be active after cutover.",
+      )
+}
+
+function verifyRemoteDefaultBranch(evidence, currentHeadSha, currentFiles) {
+  const remote = evidence.github.remoteDefaultBranch
+  let currentWorkflowDigest = null
+  try {
+    currentWorkflowDigest = sha256(
+      normalizeBytes(currentFiles.get(RELEASE_WORKFLOW), RELEASE_WORKFLOW),
+    )
+  } catch {}
+  const valid =
+    remote.ref === "refs/heads/main" &&
+    remote.commitSha === evidence.headSha &&
+    remote.commitSha === currentHeadSha &&
+    remote.workflow.status === "present" &&
+    remote.workflow.path === RELEASE_WORKFLOW &&
+    remote.workflow.sha256 === currentWorkflowDigest
+  return valid
+    ? result(
+        "remote-default-branch",
+        "PASS",
+        "Remote main, local HEAD, and the exact release workflow are bound together.",
+      )
+    : result(
+        "remote-default-branch",
+        "FAIL",
+        "Remote main does not match the current HEAD and release workflow.",
+      )
+}
+
+function verifyAbandonmentReachability(evidence, currentFiles, schema) {
+  let localMode = null
+  let policyMatches = false
+  try {
+    const policy = parseAbandonmentWorkflowPolicy(
+      normalizeBytes(currentFiles.get(ABANDONMENT_POLICY), ABANDONMENT_POLICY),
+    )
+    policyMatches = JSON.stringify(policy) === JSON.stringify(EXPECTED_ABANDONMENT_POLICY)
+    if (schema !== null) {
+      localMode = classifyReleaseWorkflowAbandonment(
+        normalizeBytes(currentFiles.get(RELEASE_WORKFLOW), RELEASE_WORKFLOW),
+        { abandonmentEnvironment: schema.abandonmentEnvironment },
+      )
+    }
+  } catch {}
+  const aggregateMode = aggregateReleaseWorkflowAbandonment([
+    evidence.github.remoteDefaultBranch.workflow.mode,
+    ...evidence.github.managedCandidateRefs.map(({ workflow }) =>
+      workflow.status === "absent" ? "absent" : workflow.mode,
+    ),
+  ])
+  const valid =
+    policyMatches &&
+    localMode === "disabled" &&
+    evidence.github.abandonmentMode === "disabled" &&
+    aggregateMode === "disabled" &&
+    evidence.github.abandonmentEnvironment === null
+  return valid
+    ? result(
+        "abandonment-reachability",
+        "PASS",
+        "Abandonment is disabled across local and remote release workflows.",
+      )
+    : result(
+        "abandonment-reachability",
+        "FAIL",
+        "Abandonment must be disabled across every reachable release workflow.",
+      )
+}
+
+function verifyManagedCandidateRefs(refs) {
+  return refs.length === 0
+    ? result("managed-candidate-refs", "PASS", "No managed candidate refs exist.")
+    : result(
+        "managed-candidate-refs",
+        "FAIL",
+        "Managed candidate refs must be empty for the initial cutover.",
+      )
+}
+
+function verifyNonterminalReleaseRuns(runs) {
+  return runs.length === 0
+    ? result("nonterminal-release-runs", "PASS", "No nonterminal release runs exist.")
+    : result(
+        "nonterminal-release-runs",
+        "FAIL",
+        "Nonterminal release runs must be empty for the initial cutover.",
+      )
 }
 
 function verifyImmutable(phase, immutable) {
@@ -824,7 +1353,20 @@ function verifyImmutable(phase, immutable) {
   )
 }
 
-function verifyAbandonmentEnvironment(environment, expectedName) {
+function verifyAbandonmentEnvironment(mode, environment, expectedName) {
+  if (mode === "disabled") {
+    return environment === null
+      ? result(
+          "abandonment-environment",
+          "PASS",
+          "Disabled abandonment requires no environment authority.",
+        )
+      : result(
+          "abandonment-environment",
+          "FAIL",
+          "Disabled abandonment must not include environment evidence.",
+        )
+  }
   if (environment.status !== "present") {
     return result(
       "abandonment-environment",
@@ -993,6 +1535,35 @@ function isCanonicalTimestamp(value) {
   return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value
 }
 
+function isBoundedString(value, maximumBytes) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= maximumBytes &&
+    ![...value].some((character) => [0, 10, 13].includes(character.codePointAt(0)))
+  )
+}
+
+function isManagedTagRef(value) {
+  if (
+    !isBoundedString(value, MAX_GITHUB_REF_BYTES) ||
+    !value.startsWith("refs/tags/v") ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    value.includes("//") ||
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0)
+      return codePoint <= 32 || codePoint === 127
+    })
+  ) {
+    return false
+  }
+  if ([...value].some((character) => "~^:?*[\\".includes(character))) return false
+  return value.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"))
+}
+
 function result(id, status, summary) {
   if (!REPORT_STATUSES.has(status)) throw new TypeError("Owner preflight result is invalid")
   return { id, status, summary }
@@ -1036,6 +1607,10 @@ function isRecord(value) {
 
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1
+}
+
+function compareRuns(left, right) {
+  return left.id - right.id || left.runAttempt - right.runAttempt
 }
 
 function deepFreeze(value) {
