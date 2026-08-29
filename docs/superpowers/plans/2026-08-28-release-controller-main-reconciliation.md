@@ -533,7 +533,7 @@ Task 4; status transitions no longer change membership in the enumerated set.
 - Modify: `scripts/release/test/preflight-owner-cli.test.mjs`
 - Bind: `scripts/release/abandonment-workflow-policy.json`
 
-- [ ] **Step 1: Write schema-v2 capture and verification tests**
+- [x] **Step 1: Write schema-v2 capture and verification tests**
 
 Add coverage for:
 
@@ -551,7 +551,7 @@ Add coverage for:
 - disabled/protected/unavailable/inconsistent evidence cannot be confused; and
 - structural failure aborts capture before the CLI creates its exclusive output.
 
-- [ ] **Step 2: Run the owner suites and observe RED**
+- [x] **Step 2: Run the owner suites and observe RED**
 
 ```bash
 node --test \
@@ -561,7 +561,7 @@ node --test \
   scripts/release/test/preflight-owner-cli.test.mjs
 ```
 
-- [ ] **Step 3: Implement the canonical v2 shape**
+- [x] **Step 3: Implement the canonical v2 shape**
 
 Keep existing top-level fields and report schema. Extend `github` exactly as:
 
@@ -592,7 +592,7 @@ Keep existing top-level fields and report schema. Extend `github` exactly as:
 Keep fixed file/package/workflow ordering; sort refs lexically and runs by
 numeric ID then attempt; reject duplicates and extras.
 
-- [ ] **Step 4: Implement capture in authority-safe order**
+- [x] **Step 4: Implement capture in authority-safe order**
 
 Capture must classify local bytes before remote calls, bind remote `main`, fetch
 and classify its workflow, enumerate and peel all managed tags, fetch each tag's
@@ -601,7 +601,7 @@ recompute the aggregate, and only then read the environment when aggregate mode
 is protected. Unreadable, structurally invalid, or unknown-policy workflow or
 run evidence aborts without an output file.
 
-- [ ] **Step 5: Implement strict verification checks**
+- [x] **Step 5: Implement strict verification checks**
 
 Add `remote-default-branch`, `abandonment-reachability`,
 `managed-candidate-refs`, and `nonterminal-release-runs` checks. Initial pre/post
@@ -617,7 +617,7 @@ Workflow topology is exact:
 | `published-artifact-verify.yml` | `active` | `active` |
 | `publish-chart.yml` | `disabled_manually` | `active` |
 
-- [ ] **Step 6: Run the owner suites GREEN**
+- [x] **Step 6: Run the owner suites GREEN**
 
 ```bash
 node --test \
@@ -627,7 +627,7 @@ node --test \
   scripts/release/test/preflight-owner-cli.test.mjs
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 The reviewed result is cumulative: the schema-v2 implementation, strict hash
 typing correction, rejected filtered-sweep stabilization attempt, and final
