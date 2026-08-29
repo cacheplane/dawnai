@@ -123,6 +123,7 @@ describe("planning capability — state mutation end-to-end", () => {
       const result = await applyCapabilities(registry, routeDir, {
         routeManifest: { appRoot: routeDir, routes: [] },
         descriptor: undefined,
+        appRoot: routeDir,
         markerFs: nodeMarkerFs,
       })
       const writeTodos = result.contributions[0]?.contribution.tools?.[0]

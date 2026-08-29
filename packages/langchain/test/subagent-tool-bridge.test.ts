@@ -4,6 +4,7 @@ import {
   Annotation,
   Command,
   END,
+  type Interrupt,
   interrupt,
   isGraphInterrupt,
   MemorySaver,
@@ -49,7 +50,7 @@ describe("convertSubagentTaskToLangChain", () => {
     const resolver = vi.fn<SubagentResolver>(async () => allowedChild(child))
     const tool = convertSubagentTaskToLangChain(taskPlaceholder, resolver)
     const signal = new AbortController().signal
-    const callbacks = []
+    const callbacks: RunnableConfig["callbacks"] = []
     const tags = ["live-parent"]
     const parentStack = [{ callId: "outer", name: "planner", routeId: "/planner" }]
     const config = {
@@ -264,7 +265,7 @@ describe("convertSubagentTaskToLangChain", () => {
         result: await tool.func({ subagent: "researcher", input: "Cancel" }, undefined, {
           ...config,
           toolCall: { id: "task-cancel" },
-        }),
+        } as RunnableConfig),
       }))
       .addEdge(START, "dispatch")
       .addEdge("dispatch", END)
@@ -315,7 +316,9 @@ describe("convertSubagentTaskToLangChain", () => {
       .addEdge("tools", END)
       .compile({ checkpointer: saver })
     const config = { configurable: { thread_id: "root-thread" } }
-    const first = await root.invoke(
+    // `__interrupt__` is real on an interrupted invoke's return value, but the
+    // graph's static state type does not carry it.
+    const first = (await root.invoke(
       {
         messages: [
           new AIMessage({
@@ -332,7 +335,7 @@ describe("convertSubagentTaskToLangChain", () => {
         ],
       },
       config,
-    )
+    )) as { __interrupt__?: Interrupt[] }
     const interruptId = first.__interrupt__?.[0]?.id
     expect(interruptId).toEqual(expect.any(String))
 
@@ -384,7 +387,7 @@ describe("convertSubagentTaskToLangChain", () => {
       .compile({ checkpointer: saver })
     const config = { configurable: { thread_id: "parallel-root" } }
 
-    const first = await root.invoke({}, config)
+    const first = (await root.invoke({}, config)) as { __interrupt__?: Interrupt[] }
     const interruptIds = first.__interrupt__?.map(({ id }) => id) ?? []
     expect(interruptIds).toHaveLength(2)
     expect(new Set(interruptIds).size).toBe(2)

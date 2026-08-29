@@ -14,7 +14,7 @@ function childRoute(): RouteDefinition {
     kind: "agent",
     pathname: "/chat/subagents/helper",
     routeDir: `${parentRouteDir}/subagents/helper`,
-    segments: ["chat", "subagents", "helper"],
+    segments: ["chat", "subagents", "helper"].map((raw) => ({ kind: "static" as const, raw })),
   }
 }
 

@@ -361,7 +361,7 @@ describe("wrapToolWithApproval", () => {
       name: "deployProd",
       description: "deploys",
       filePath: "/app/src/app/ops/tools/deployProd.ts",
-      run: async (input: unknown) => `deployed:${JSON.stringify(input)}`,
+      run: async (input: unknown, _context: unknown) => `deployed:${JSON.stringify(input)}`,
     }
     const wrapped = wrapToolWithApproval(tool, permissions)
     expect(wrapped.name).toBe("deployProd")
@@ -381,7 +381,7 @@ describe("wrapToolWithApproval", () => {
     const wrapped = wrapToolWithApproval(
       {
         name: "deployProd",
-        run: async () => {
+        run: async (_input: unknown, _context: unknown) => {
           ran = true
           return "deployed"
         },
@@ -400,7 +400,10 @@ describe("wrapToolWithApproval", () => {
       mode: "non-interactive",
     })
     await permissions.load()
-    const wrapped = wrapToolWithApproval({ name: "x", run: async () => "ran" }, permissions)
+    const wrapped = wrapToolWithApproval(
+      { name: "x", run: async (_input: unknown, _context: unknown) => "ran" },
+      permissions,
+    )
     expect(String(await wrapped.run({}, { signal }))).toMatch(/fail-closed/)
   })
 
@@ -412,7 +415,7 @@ describe("wrapToolWithApproval", () => {
     })
     await permissions.load()
     const wrapped = wrapToolWithApproval(
-      { name: "deployProd", run: async () => "ran" },
+      { name: "deployProd", run: async (_input: unknown, _context: unknown) => "ran" },
       permissions,
     )
     const result = String(await wrapped.run({}, { signal }))
@@ -436,7 +439,7 @@ describe("wrapToolWithConstraint", () => {
   it("allows (runs the real tool) when the predicate returns true", async () => {
     const tool = {
       name: "deployProd",
-      run: async (i: unknown) => `ran:${JSON.stringify(i)}`,
+      run: async (i: unknown, _context: unknown) => `ran:${JSON.stringify(i)}`,
     }
     const wrapped = wrapToolWithConstraint(tool, () => true, undefined, "/ops#agent")
     expect(await wrapped.run({ env: "staging" }, runCtx)).toBe('ran:{"env":"staging"}')
@@ -446,7 +449,7 @@ describe("wrapToolWithConstraint", () => {
     let ran = false
     const tool = {
       name: "deployProd",
-      run: async () => {
+      run: async (_input: unknown, _context: unknown) => {
         ran = true
         return "ran"
       },
@@ -466,10 +469,10 @@ describe("wrapToolWithConstraint", () => {
     let seen: {
       toolName?: string
       routeId?: string
-      threadId?: string
+      threadId?: string | undefined
       params?: unknown
     } = {}
-    const tool = { name: "deployProd", run: async () => "ran" }
+    const tool = { name: "deployProd", run: async (_input: unknown, _context: unknown) => "ran" }
     const wrapped = wrapToolWithConstraint(
       tool,
       (_args, ctx) => {
@@ -497,7 +500,7 @@ describe("wrapToolWithConstraint", () => {
     let ran = false
     const tool = {
       name: "deployProd",
-      run: async () => {
+      run: async (_input: unknown, _context: unknown) => {
         ran = true
         return "ran"
       },
@@ -516,7 +519,7 @@ describe("wrapToolWithConstraint", () => {
   })
 
   it("awaits an async predicate", async () => {
-    const tool = { name: "deployProd", run: async () => "ran" }
+    const tool = { name: "deployProd", run: async (_input: unknown, _context: unknown) => "ran" }
     const wrapped = wrapToolWithConstraint(
       tool,
       async () => await Promise.resolve("async denied"),
@@ -533,7 +536,10 @@ describe("wrapToolWithConstraint", () => {
       mode: "interactive",
     })
     await permissions.load()
-    const tool = { name: "deployProd", run: async () => "deployed" }
+    const tool = {
+      name: "deployProd",
+      run: async (_input: unknown, _context: unknown) => "deployed",
+    }
     const wrapped = wrapToolWithConstraint(
       tool,
       () => ({ approve: true }),
@@ -553,7 +559,7 @@ describe("wrapToolWithConstraint", () => {
     let ran = false
     const tool = {
       name: "deployProd",
-      run: async () => {
+      run: async (_input: unknown, _context: unknown) => {
         ran = true
         return "deployed"
       },
@@ -574,7 +580,7 @@ describe("wrapToolWithConstraint", () => {
       let ran = false
       const tool = {
         name: "deployProd",
-        run: async () => {
+        run: async (_input: unknown, _context: unknown) => {
           ran = true
           return "ran"
         },

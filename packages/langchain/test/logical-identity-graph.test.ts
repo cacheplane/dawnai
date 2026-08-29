@@ -56,11 +56,15 @@ interface RawEvent {
   readonly data: any
 }
 
-async function collectRawEvents(graph: {
-  streamEvents: (input: unknown, options: Record<string, unknown>) => AsyncIterable<unknown>
-}): Promise<RawEvent[]> {
+async function collectRawEvents(graph: object): Promise<RawEvent[]> {
+  // createReactAgent's streamEvents signature is generic over its input, which
+  // makes it contravariantly incompatible with any concrete parameter type;
+  // the adapter under test makes this same structural cast internally.
+  const streamable = graph as {
+    streamEvents: (input: unknown, options: Record<string, unknown>) => AsyncIterable<unknown>
+  }
   const events: RawEvent[] = []
-  for await (const event of graph.streamEvents(
+  for await (const event of streamable.streamEvents(
     { messages: [{ role: "user", content: "go" }] },
     { version: "v2", configurable: { thread_id: "spike-thread" } },
   )) {

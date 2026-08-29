@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
-import { extractToolTypesForRoute } from "../src/typegen/extract-tool-types"
+import { extractToolTypesForRoute } from "../src/typegen/extract-tool-types.js"
 
 let tempDir: string
 

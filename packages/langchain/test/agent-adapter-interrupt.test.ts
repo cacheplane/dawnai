@@ -376,7 +376,6 @@ describe("streamAgent — interrupt propagation", () => {
         name: "task",
         description: "Delegate.",
         schema: z.object({ subagent: z.string(), input: z.string() }),
-        run: () => "placeholder",
       },
       async () => ({
         ok: true,
@@ -450,7 +449,7 @@ describe("streamAgent — interrupt propagation", () => {
     })) {
       resumed.push(chunk)
     }
-    const output = resumed.findLast(({ type }) => type === "done")?.data as {
+    const output = resumed.filter(({ type }) => type === "done").at(-1)?.data as {
       messages?: Array<{ content?: unknown }>
     }
     expect(output.messages?.at(-1)?.content).toBe("approved:once")

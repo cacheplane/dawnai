@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { resolveStateFields } from "../src/state/resolve-state-fields"
+import { resolveStateFields } from "../src/state/resolve-state-fields.js"
 
 describe("resolveStateFields", () => {
   test("infers append reducer for array defaults", () => {

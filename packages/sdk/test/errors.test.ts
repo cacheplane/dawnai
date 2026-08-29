@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest"
 
-import { DAWN_ERRORS, type DawnErrorCode, describeError, errorDocsUrl } from "../src/errors.js"
+import {
+  DAWN_ERRORS,
+  type DawnErrorCode,
+  type DawnErrorDescriptor,
+  describeError,
+  errorDocsUrl,
+} from "../src/errors.js"
 
 const CODE_RE = /^DAWN_E\d{4}$/
 const DOCS_PATH_RE = /^\/docs\/[a-z0-9-]+(#[a-z0-9-]+)?$/
 
 describe("DAWN_ERRORS registry", () => {
-  const entries = Object.entries(DAWN_ERRORS)
+  const entries: Array<[string, DawnErrorDescriptor]> = Object.entries(DAWN_ERRORS)
 
   it("has at least the wired families", () => {
     expect(entries.length).toBeGreaterThanOrEqual(10)
@@ -82,7 +88,9 @@ describe("errorDocsUrl", () => {
   })
 
   it("returns undefined for a code without a docsPath", () => {
-    const codeWithoutDocs = Object.values(DAWN_ERRORS).find((d) => d.docsPath === undefined)
+    const codeWithoutDocs = Object.values(DAWN_ERRORS).find(
+      (d: DawnErrorDescriptor) => d.docsPath === undefined,
+    )
     expect(codeWithoutDocs).toBeDefined()
     if (codeWithoutDocs) {
       expect(errorDocsUrl(codeWithoutDocs.code as DawnErrorCode)).toBeUndefined()

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 
-import { renderToolTypes } from "../src/typegen/render-tool-types"
-import type { RouteToolTypes } from "../src/types"
+import { renderToolTypes } from "../src/typegen/render-tool-types.js"
+import type { RouteToolTypes } from "../src/types.js"
 
 describe("renderToolTypes", () => {
   test("empty routeTools renders empty interface", () => {
@@ -21,6 +21,7 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "greet",
+            description: "",
             inputType: "{ readonly tenant: string; }",
             outputType: "{ greeting: string; }",
           },
@@ -48,11 +49,13 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "getUser",
+            description: "",
             inputType: "{ id: string }",
             outputType: "{ name: string }",
           },
           {
             name: "listUsers",
+            description: "",
             inputType: "void",
             outputType: "{ users: string[] }",
           },
@@ -81,6 +84,7 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "ping",
+            description: "",
             inputType: "void",
             outputType: "{ pong: boolean }",
           },
@@ -112,6 +116,7 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "doThing",
+            description: "",
             inputType: "{ x: number }",
             outputType: "{ result: number }",
           },
@@ -137,7 +142,7 @@ describe("renderToolTypes", () => {
       { pathname: "/without-tools", tools: [] },
       {
         pathname: "/ping",
-        tools: [{ name: "ping", inputType: "void", outputType: "string" }],
+        tools: [{ name: "ping", description: "", inputType: "void", outputType: "string" }],
       },
     ])
 
@@ -152,6 +157,7 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "toolA",
+            description: "",
             inputType: "string",
             outputType: "number",
           },
@@ -162,6 +168,7 @@ describe("renderToolTypes", () => {
         tools: [
           {
             name: "toolB",
+            description: "",
             inputType: "void",
             outputType: "boolean",
           },
