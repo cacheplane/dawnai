@@ -1,5 +1,12 @@
 # Release Integrity Controller PR 2 Implementation Plan
 
+> **Partial supersession:** The runnable abandonment workflow tasks and original
+> owner-evidence activation order in this historical plan are superseded by the
+> approved [Temporarily Disable Release Abandonment](../specs/2026-08-25-temporarily-disable-release-abandonment-design.md)
+> and [Release Controller Reconciliation After Main Integration](../specs/2026-08-27-release-controller-main-reconciliation-design.md)
+> designs. Retained runtime and historical evidence work is not a live workflow
+> entrypoint.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Switch Dawn to the phased release-integrity controller, publish one immutable 21-package artifact set with narrow npm authority, reconcile one consolidated draft Release, run exact published-package smokes, independently audit that complete draft, and publish it only after audit success.

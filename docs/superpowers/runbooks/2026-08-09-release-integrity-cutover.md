@@ -1,11 +1,11 @@
 # Release-Integrity Controller Cutover Runbook
 
 Use this runbook to activate the release-integrity controller, complete its first
-patch release, recover an interrupted release, or record a terminal
-prepublication abandonment. It is intentionally fail-closed: a mismatch is a
-reason to stop and investigate, not permission to repair public state in place.
+patch release, or recover an interrupted release. It is intentionally
+fail-closed: a mismatch is a reason to stop and investigate, not permission to
+repair public state in place.
 
-The controller has three owners:
+The controller has four workflow owners:
 
 - `.github/workflows/version-pr.yml` owns Changesets versioning and the Version
   Packages pull request only. It cannot publish packages, create tags or
@@ -16,6 +16,14 @@ The controller has three owners:
 - `.github/workflows/published-artifact-verify.yml` independently audits the
   complete draft Release. It cannot mutate that Release; the release workflow
   correlates and attaches the result.
+- `.github/workflows/publish-chart.yml` owns Helm chart publication after the
+  fixed-group app version advances. It has no npm or Release authority.
+
+The live release workflow exposes reconciliation only. Workflow abandonment is
+unreachable: it has no manual input, job, environment, tag-routing branch, or
+executable entrypoint. Historical tombstone readers and the runtime abandonment
+implementation remain dormant for compatibility with existing release evidence;
+they are not an operator recovery path.
 
 The legacy per-package Release, backfill, upload, and combined Changesets publish
 paths must be absent before activation.
@@ -43,6 +51,9 @@ paths must be absent before activation.
   `immutable: true`, with unchanged body, assets, and annotated-tag target.
 - A published immutable Release is never repaired. Conflicting public bytes or
   metadata are terminal operator incidents.
+- An irrecoverable prepublication candidate is preserved exactly as observed.
+  Stop, preserve all tags/Releases/evidence, and escalate for a separately
+  reviewed recovery design; do not attempt abandonment from the live workflow.
 
 ## Required toolchain
 
@@ -91,7 +102,6 @@ Confirm all of the following:
   final publication re-reads the resulting immutable Release;
 - the repository default Actions token is read-only, with job-local permissions
   granting each release effect;
-- the `release-abandonment` environment exists and requires owner approval;
 - repository rules allow the release job to create the annotated `v*` candidate
   tag and manage one consolidated draft Release;
 - required exact-SHA CI is workflow `CI`, check `validate`;
@@ -99,6 +109,8 @@ Confirm all of the following:
   `disabled_manually` until the atomic switch is on `main` and Immutable Releases
   is enabled;
 - the new `version-pr.yml` becomes active after the switch;
+- no `release-abandonment` environment is required or created while the live
+  workflow is reconcile-only;
 - the Vercel `vercel-preview` environment and its `DAWN_VERCEL_*` secrets remain
   configured, and the pinned Vercel CLI dependency remains installed; and
 - `copilotkit-examples-e2e` continues to exercise the v2 example imports.
@@ -122,8 +134,12 @@ The rehearsal must stop after package 11, resume the same artifact set, prove
 downloaded registry bytes equal the manifest, complete the audit, and finish
 with a clean third-run no-op.
 
-Create a private, ignored evidence directory and collect fresh authenticated
-owner evidence:
+After every pull-request gate is green, merge the ownership switch while Release
+and Publish Chart remain `disabled_manually`. Do not merge a Version Packages
+pull request. Synchronize the local checkout to the exact new remote `main` SHA,
+require the local release workflow bytes to equal the remote default-branch
+bytes, and only then collect fresh authenticated owner evidence in a private,
+ignored directory:
 
 ```bash
 install -d -m 0700 .dawn/release-cutover
@@ -141,16 +157,36 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
   --strict
 ```
 
-Evidence is valid for at most 15 minutes and is bound to the exact HEAD,
-workflow bytes, controller schema, package inventory, trusted-publisher tuples,
-environment protection, workflow states, and Immutable Releases observation.
-The capture is write-once; use a new filename for every recapture. Recapture
-immediately before merge after all PR checks are green.
+Owner evidence is schema version 2; schema version 1 evidence is rejected rather
+than upgraded. Evidence is valid for at most 15 minutes and is bound to the exact
+HEAD, local and remote default-branch workflow bytes, the reviewed workflow
+policy, controller schema, package inventory, trusted-publisher tuples, complete
+managed `v*` ref inventory, nonterminal Release runs, exact workflow states, and
+Immutable Releases observation. The capture is write-once; use a new filename
+for every recapture.
+
+For this initial cutover, both strict phases require
+`github.abandonmentMode: "disabled"`,
+`github.managedCandidateRefs: []`,
+`github.nonterminalReleaseRuns: []`, and
+`github.abandonmentEnvironment: null`. The remote default branch must be
+`refs/heads/main` at the evidence HEAD, its release workflow must classify as
+disabled, and its bytes must equal the local workflow. An unreadable ref,
+workflow, or run query is unprovable and stops the cutover.
+
+The exact pre-enable topology is:
+
+| Workflow | Required state |
+| --- | --- |
+| `version-pr.yml` | `active` |
+| `release.yml` | `disabled_manually` |
+| `published-artifact-verify.yml` | `active` |
+| `publish-chart.yml` | `disabled_manually` |
 
 Require GitHub's `validate`, `edge-workerd`, `vercel-native`,
 `copilotkit-examples-e2e`, sandbox Docker/Kubernetes e2e, pgvector, Postgres
-storage, chart validation/apply, and security jobs to be green. Merge the atomic
-ownership switch before merging any Version Packages pull request.
+storage, chart validation/apply, and security jobs to be green. The post-merge
+strict pre-enable receipt must pass before enabling either mutating workflow.
 
 ## Activation order
 
@@ -162,8 +198,8 @@ At the exact switch SHA on `main`:
 3. Re-read `GET /repos/cacheplane/dawnai/immutable-releases` with API version
    `2026-03-10` and require `enabled: true`.
 4. While that setting is enabled, activate `release.yml` and
-   `publish-chart.yml`; confirm both report `active` and confirm
-   `version-pr.yml` is active.
+   `publish-chart.yml`; require all four controller workflows to report
+   `active`.
 5. Capture new `post-enable` owner evidence and verify it strictly against the
    unchanged switch SHA.
 6. Run one `release.yml` reconciliation from `main` with the current fixed-group
@@ -172,9 +208,10 @@ At the exact switch SHA on `main`:
    draft Release, package version, or chart.
 
 Use the same capture commands as above with `--phase post-enable`, a new evidence
-filename, and the exact switch SHA. If `main` moves, evidence expires, a workflow
-state differs, or a candidate draft exists before Immutable Releases was enabled,
-stop the cutover.
+filename, and the exact switch SHA. The ref and nonterminal-run inventories must
+remain empty, and the aggregate abandonment mode must remain disabled. If `main`
+moves, evidence expires, a workflow state differs, or a candidate draft exists
+before Immutable Releases was enabled, stop the cutover.
 
 ## First live patch release
 
@@ -362,39 +399,21 @@ Typical recovery actions are:
 | Audit failure | Dispatch a new exact-tag audit and attach a new attempt receipt. |
 | Published immutable Release | Observe only; no repair or mutation is allowed. |
 
-## Protected terminal abandonment
+## Irrecoverable prepublication candidate
 
-Abandonment is not a general failure escape hatch. It is allowed only before any
-npm registry mutation and only from a valid tagged/prepared/escrowed predecessor.
-It is manual, terminal, evidence-preserving, and guarded by the protected
-`release-abandonment` environment.
+The live workflow does not provide terminal abandonment. If reconciliation
+cannot safely resume an exact prepublication candidate, stop without mutation:
 
-Before approval, require:
+1. Preserve the annotated tag, draft Release, Actions artifacts, run identities,
+   logs, and every canonical receipt exactly as observed.
+2. Do not delete or reuse the candidate version, synthesize a tombstone, create
+   an environment, or invoke the dormant CLI abandonment commands directly.
+3. Escalate with the preserved evidence for a separately reviewed recovery or
+   reactivation design.
 
-- an irrecoverable deterministic defect;
-- the exact annotated candidate tag and predecessor state;
-- no package in the full 21-package inventory at the candidate version;
-- two time-ordered exact-E404 observations while the authorizing run holds the
-  shared non-cancelling release lock;
-- fresh approval-history evidence for the exact environment and run actor; and
-- the permanent reason text.
-
-Dispatch with the exact candidate identity and a specific reason:
-
-```bash
-gh workflow run release.yml \
-  --repo cacheplane/dawnai \
-  --ref "v${VERSION}" \
-  -f version="${VERSION}" \
-  -f commitSha="${CANDIDATE_SHA}" \
-  -f operation=abandon \
-  -f reason="${ABANDONMENT_REASON}"
-```
-
-The approved transition records canonical `abandonment.json`, advances the
-marker to `ABANDONED_PREPUBLICATION`, and preserves the tag, draft Release, and
-any valid base evidence. Never delete or reuse the abandoned version. If any
-candidate package is present on npm, abandonment is forbidden.
+Restoring protected abandonment requires its own reviewed workflow change,
+independent reviewer configuration, and ref-aware owner evidence. It is not part
+of this cutover.
 
 ## Scheduled no-op proof
 
@@ -410,7 +429,8 @@ next scheduled reconciliation/audit. It must:
 - leave `latest`, the published Release, and the production deployment unchanged.
 
 An incomplete older tagged candidate is not a no-op: it wins arbitration and
-must be recovered or validly abandoned before newer work proceeds.
+must be recovered before newer work proceeds. If recovery is irrecoverable,
+stop, preserve the candidate, and escalate; the live workflow cannot abandon it.
 
 ## Live receipt
 

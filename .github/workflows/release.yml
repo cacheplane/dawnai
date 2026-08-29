@@ -17,17 +17,12 @@ on:
         required: true
         type: string
       operation:
-        description: Reconcile or permanently abandon this candidate
+        description: Reconcile this candidate
         required: true
         type: choice
         default: reconcile
         options:
           - reconcile
-          - abandon
-      reason:
-        description: Required only for protected abandonment
-        required: false
-        type: string
 
 concurrency:
   group: dawn-release-controller
@@ -125,20 +120,6 @@ jobs:
         with:
           node-version: 24.19.0
 
-      - name: Validate manual intent
-        env:
-          OPERATION: ${{ inputs.operation }}
-          REASON: ${{ inputs.reason }}
-        run: |
-          if [[ "$OPERATION" == "reconcile" && -n "$REASON" ]]; then
-            echo "reason is forbidden for reconcile" >&2
-            exit 2
-          fi
-          if [[ "$OPERATION" == "abandon" && -z "$REASON" ]]; then
-            echo "reason is required for abandon" >&2
-            exit 2
-          fi
-
       - name: Write exact candidate identity
         env:
           VERSION: ${{ needs.detect.outputs.candidate_version }}
@@ -156,17 +137,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.detect.outputs.candidate_version }}
           COMMIT_SHA: ${{ needs.detect.outputs.candidate_sha }}
-          OPERATION: ${{ inputs.operation }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
                 "$GITHUB_REF" == "refs/tags/v${VERSION}" &&
                 "$GITHUB_SHA" == "$COMMIT_SHA" ]]; then
             printf 'continue=true\n' >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-          if [[ "$OPERATION" == "abandon" ]]; then
-            echo "abandonment must be dispatched at refs/tags/v${VERSION}" >&2
-            exit 2
           fi
 
           WORKFLOW_PATH=".github/workflows/release.yml"
@@ -1310,54 +1286,3 @@ jobs:
             --candidate "$RUNNER_TEMP/runtime/candidate.json" \
             --record "$RUNNER_TEMP/runtime/release-record.json" \
             --audit-result "$RUNNER_TEMP/runtime/audit-result.json"
-
-  abandon:
-    needs:
-      - detect
-      - tag
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      needs.tag.outputs.continue == 'true' &&
-      github.ref == format('refs/tags/v{0}', inputs.version) &&
-      github.sha == needs.detect.outputs.candidate_sha &&
-      inputs.version == needs.detect.outputs.candidate_version &&
-      inputs.commitSha == needs.detect.outputs.candidate_sha &&
-      inputs.operation == 'abandon' &&
-      contains(fromJSON('["CANDIDATE_TAGGED","ARTIFACTS_PREPARED","ARTIFACTS_ATTESTED","CANDIDATE_ESCROWED"]'), needs.detect.outputs.state)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    environment: release-abandonment
-    permissions:
-      actions: read
-      attestations: read
-      checks: read
-      contents: write
-    steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.detect.outputs.candidate_sha }}
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.19.0
-      - name: Derive fresh protected abandonment context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          node scripts/release/cli.mjs abandonment-context \
-            --version "${{ needs.detect.outputs.candidate_version }}" \
-            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
-            --output "$RUNNER_TEMP/artifact-context.json"
-      - name: Permanently abandon pre-publication candidate
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          REASON: ${{ inputs.reason }}
-        run: |
-          node scripts/release/cli.mjs abandon \
-            --version "${{ needs.detect.outputs.candidate_version }}" \
-            --commit-sha "${{ needs.detect.outputs.candidate_sha }}" \
-            --reason "$REASON" \
-            --artifact-context "$RUNNER_TEMP/artifact-context.json"

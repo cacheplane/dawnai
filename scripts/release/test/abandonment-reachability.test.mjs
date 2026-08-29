@@ -35,9 +35,9 @@ test("the classifier exports exactly the approved public API", () => {
   ])
 })
 
-test("the live workflow is the immutable protected fixture and both reviewed modes classify", () => {
-  assert.deepEqual(LIVE_BYTES, PROTECTED_BYTES)
-  assert.equal(classifyReleaseWorkflowAbandonment(LIVE_BYTES, OPTIONS), "protected")
+test("the live workflow is the immutable disabled fixture and both reviewed modes classify", () => {
+  assert.deepEqual(LIVE_BYTES, DISABLED_BYTES)
+  assert.equal(classifyReleaseWorkflowAbandonment(LIVE_BYTES, OPTIONS), "disabled")
   assert.equal(classifyReleaseWorkflowAbandonment(PROTECTED_BYTES, OPTIONS), "protected")
   assert.equal(classifyReleaseWorkflowAbandonment(DISABLED_BYTES, OPTIONS), "disabled")
   assert.equal(

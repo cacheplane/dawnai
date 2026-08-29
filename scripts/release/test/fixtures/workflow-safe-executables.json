@@ -1516,14 +1516,6 @@
         "classification": "safe",
         "job": "tag",
         "stepIndex": 2,
-        "step": "Validate manual intent",
-        "kind": "run",
-        "value": "if [[ \"$OPERATION\" == \"reconcile\" && -n \"$REASON\" ]]; then\n  echo \"reason is forbidden for reconcile\" >&2\n  exit 2\nfi\nif [[ \"$OPERATION\" == \"abandon\" && -z \"$REASON\" ]]; then\n  echo \"reason is required for abandon\" >&2\n  exit 2\nfi\n"
-      },
-      {
-        "classification": "safe",
-        "job": "tag",
-        "stepIndex": 3,
         "step": "Write exact candidate identity",
         "kind": "run",
         "value": "node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,ciWorkflow:\"CI\",ciCheck:\"validate\",publisherWorkflow:\".github/workflows/release.yml\"}))' \"$RUNNER_TEMP/candidate.json\"\n"
@@ -1531,7 +1523,7 @@
       {
         "classification": "publication",
         "job": "tag",
-        "stepIndex": 4,
+        "stepIndex": 3,
         "step": "Create or validate annotated candidate tag",
         "kind": "run",
         "value": "node scripts/release/cli.mjs tag --candidate \"$RUNNER_TEMP/candidate.json\""
@@ -1539,10 +1531,10 @@
       {
         "classification": "safe",
         "job": "tag",
-        "stepIndex": 5,
+        "stepIndex": 4,
         "step": "Continue at the exact tag or relay once",
         "kind": "run",
-        "value": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\nif [[ \"$OPERATION\" == \"abandon\" ]]; then\n  echo \"abandonment must be dispatched at refs/tags/v${VERSION}\" >&2\n  exit 2\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
+        "value": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
       },
       {
         "classification": "safe",
@@ -2415,38 +2407,6 @@
         "step": "Publish one immutable consolidated Release",
         "kind": "run",
         "value": "node scripts/release/cli.mjs publish-release \\\n  --candidate \"$RUNNER_TEMP/runtime/candidate.json\" \\\n  --record \"$RUNNER_TEMP/runtime/release-record.json\" \\\n  --audit-result \"$RUNNER_TEMP/runtime/audit-result.json\"\n"
-      },
-      {
-        "classification": "safe",
-        "job": "abandon",
-        "stepIndex": 0,
-        "step": "Checkout exact candidate",
-        "kind": "step-uses",
-        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-      },
-      {
-        "classification": "safe",
-        "job": "abandon",
-        "stepIndex": 1,
-        "step": "Setup Node.js",
-        "kind": "step-uses",
-        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
-      },
-      {
-        "classification": "safe",
-        "job": "abandon",
-        "stepIndex": 2,
-        "step": "Derive fresh protected abandonment context",
-        "kind": "run",
-        "value": "node scripts/release/cli.mjs abandonment-context \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --output \"$RUNNER_TEMP/artifact-context.json\"\n"
-      },
-      {
-        "classification": "publication",
-        "job": "abandon",
-        "stepIndex": 3,
-        "step": "Permanently abandon pre-publication candidate",
-        "kind": "run",
-        "value": "node scripts/release/cli.mjs abandon \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --reason \"$REASON\" \\\n  --artifact-context \"$RUNNER_TEMP/artifact-context.json\"\n"
       }
     ],
     "scorecard.yml": [

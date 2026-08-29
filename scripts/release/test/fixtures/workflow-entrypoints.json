@@ -2062,15 +2062,10 @@
               },
               "operation": {
                 "default": "reconcile",
-                "description": "Reconcile or permanently abandon this candidate",
-                "options": ["reconcile", "abandon"],
+                "description": "Reconcile this candidate",
+                "options": ["reconcile"],
                 "required": true,
                 "type": "choice"
-              },
-              "reason": {
-                "description": "Required only for protected abandonment",
-                "required": false,
-                "type": "string"
               },
               "version": {
                 "description": "Exact release version",
@@ -2085,68 +2080,6 @@
         }
       },
       "jobs": [
-        {
-          "classification": "safe",
-          "id": "abandon",
-          "descriptor": {
-            "environment": "release-abandonment",
-            "if": "github.event_name == 'workflow_dispatch' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'abandon' && contains(fromJSON('[\"CANDIDATE_TAGGED\",\"ARTIFACTS_PREPARED\",\"ARTIFACTS_ATTESTED\",\"CANDIDATE_ESCROWED\"]'), needs.detect.outputs.state)",
-            "needs": ["detect", "tag"],
-            "permissions": {
-              "actions": "read",
-              "attestations": "read",
-              "checks": "read",
-              "contents": "write"
-            },
-            "runs-on": "ubuntu-24.04",
-            "timeout-minutes": 20
-          },
-          "steps": [
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Checkout exact candidate",
-                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-                "with": {
-                  "fetch-depth": 0,
-                  "persist-credentials": false,
-                  "ref": "${{ needs.detect.outputs.candidate_sha }}"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Setup Node.js",
-                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                "with": {
-                  "node-version": "24.19.0"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "env": {
-                  "GITHUB_TOKEN": "${{ github.token }}"
-                },
-                "name": "Derive fresh protected abandonment context",
-                "run": "node scripts/release/cli.mjs abandonment-context \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --output \"$RUNNER_TEMP/artifact-context.json\"\n"
-              }
-            },
-            {
-              "classification": "publication",
-              "descriptor": {
-                "env": {
-                  "GITHUB_TOKEN": "${{ github.token }}",
-                  "REASON": "${{ inputs.reason }}"
-                },
-                "name": "Permanently abandon pre-publication candidate",
-                "run": "node scripts/release/cli.mjs abandon \\\n  --version \"${{ needs.detect.outputs.candidate_version }}\" \\\n  --commit-sha \"${{ needs.detect.outputs.candidate_sha }}\" \\\n  --reason \"$REASON\" \\\n  --artifact-context \"$RUNNER_TEMP/artifact-context.json\"\n"
-              }
-            }
-          ]
-        },
         {
           "classification": "safe",
           "id": "attest",
@@ -3737,17 +3670,6 @@
               "classification": "safe",
               "descriptor": {
                 "env": {
-                  "OPERATION": "${{ inputs.operation }}",
-                  "REASON": "${{ inputs.reason }}"
-                },
-                "name": "Validate manual intent",
-                "run": "if [[ \"$OPERATION\" == \"reconcile\" && -n \"$REASON\" ]]; then\n  echo \"reason is forbidden for reconcile\" >&2\n  exit 2\nfi\nif [[ \"$OPERATION\" == \"abandon\" && -z \"$REASON\" ]]; then\n  echo \"reason is required for abandon\" >&2\n  exit 2\nfi\n"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "env": {
                   "COMMIT_SHA": "${{ needs.detect.outputs.candidate_sha }}",
                   "VERSION": "${{ needs.detect.outputs.candidate_version }}"
                 },
@@ -3769,12 +3691,11 @@
                 "env": {
                   "COMMIT_SHA": "${{ needs.detect.outputs.candidate_sha }}",
                   "GITHUB_TOKEN": "${{ github.token }}",
-                  "OPERATION": "${{ inputs.operation }}",
                   "VERSION": "${{ needs.detect.outputs.candidate_version }}"
                 },
                 "id": "route",
                 "name": "Continue at the exact tag or relay once",
-                "run": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\nif [[ \"$OPERATION\" == \"abandon\" ]]; then\n  echo \"abandonment must be dispatched at refs/tags/v${VERSION}\" >&2\n  exit 2\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
+                "run": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" &&\n      \"$GITHUB_REF\" == \"refs/tags/v${VERSION}\" &&\n      \"$GITHUB_SHA\" == \"$COMMIT_SHA\" ]]; then\n  printf 'continue=true\\n' >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\n\nWORKFLOW_PATH=\".github/workflows/release.yml\"\nWORKFLOW_ID=\"$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \"$WORKFLOW_PATH\")\"\nBODY=\"$(node -e 'process.stdout.write(JSON.stringify({ref:\"v\"+process.env.VERSION,inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA,operation:\"reconcile\"}}))')\"\nSTATUS=\"$(curl --silent --show-error --output \"$RUNNER_TEMP/dispatch.json\" --write-out '%{http_code}' \\\n  --request POST \\\n  --header 'Accept: application/vnd.github+json' \\\n  --header \"Authorization: Bearer $GITHUB_TOKEN\" \\\n  --header 'X-GitHub-Api-Version: 2026-03-10' \\\n  \"https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches\" \\\n  --data \"$BODY\")\"\ntest \"$STATUS\" = \"200\"\nprintf 'continue=false\\n' >> \"$GITHUB_OUTPUT\"\n"
               }
             }
           ]

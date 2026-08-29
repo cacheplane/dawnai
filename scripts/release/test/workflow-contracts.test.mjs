@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url"
 
 import { parse } from "yaml"
 
+import { classifyReleaseWorkflowAbandonment } from "../abandonment-reachability.mjs"
 import { ARTIFACT_STORE_SPARSE_FILES } from "../artifact-store.mjs"
 import { readBoundedFixture } from "../fixture-io.mjs"
 import { PUBLISHER_SPARSE_FILES } from "../publisher.mjs"
@@ -89,7 +90,7 @@ const NORMAL_EXACT_TAG_JOBS = Object.freeze([
   "correlate-audit",
   "publish-release",
 ])
-const FINAL_RELEASE_JOB_IDS = Object.freeze(["detect", "tag", ...NORMAL_EXACT_TAG_JOBS, "abandon"])
+const FINAL_RELEASE_JOB_IDS = Object.freeze(["detect", "tag", ...NORMAL_EXACT_TAG_JOBS])
 
 test("final release ownership is switched atomically and legacy owners are absent", async () => {
   const sources = await readWorkflowSourcesFromRoot(ROOT)
@@ -173,21 +174,20 @@ test("release.yml has exact triggers and one repository-global non-cancelling qu
   assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
     "commitSha",
     "operation",
-    "reason",
     "version",
   ])
   assertDispatchIdentityInput(workflow.on.workflow_dispatch.inputs.version)
   assertDispatchIdentityInput(workflow.on.workflow_dispatch.inputs.commitSha)
   assert.deepEqual(dispatchInputContract(workflow.on.workflow_dispatch.inputs.operation), {
     default: "reconcile",
-    options: ["reconcile", "abandon"],
+    options: ["reconcile"],
     required: true,
     type: "choice",
   })
-  assert.deepEqual(dispatchInputContract(workflow.on.workflow_dispatch.inputs.reason), {
-    required: false,
-    type: "string",
-  })
+  assert.equal(
+    workflow.on.workflow_dispatch.inputs.operation.description,
+    "Reconcile this candidate",
+  )
 
   assert.equal(typeof workflow.concurrency?.group, "string")
   assert.match(workflow.concurrency.group, /release/iu)
@@ -195,6 +195,7 @@ test("release.yml has exact triggers and one repository-global non-cancelling qu
   assert.equal(workflow.concurrency.queue, "max")
   assert.equal(workflow.concurrency["cancel-in-progress"], false)
   assert.deepEqual(Object.keys(workflow.jobs).sort(), [...FINAL_RELEASE_JOB_IDS].sort())
+  assert.equal(Object.keys(workflow.jobs).length, 18)
 })
 
 test("final release workflows pin every action and the exact Node, pnpm, and npm toolchain", async () => {
@@ -286,7 +287,9 @@ test("tag is the sole coordinator relay and exact-tag identity requires both ref
   assert.match(relay.run, /workflow_dispatch|dispatches/iu)
   assert.match(relay.run, /operation[\s"'=:]+reconcile/iu)
   assert.deepEqual(relay.env?.GITHUB_TOKEN, workflowExpression("github.token"))
+  assert.equal(relay.env?.OPERATION, undefined)
   assert.doesNotMatch(relay.run, /list.*runs|runs\/\?|poll|wait|sleep/iu)
+  assert.doesNotMatch(relay.run, /abandon/iu)
   assert.doesNotMatch(source, /target_commitish|git\s+tag\s+(?!-a|-s)|createGithubReleases/iu)
 
   for (const id of NORMAL_EXACT_TAG_JOBS) {
@@ -294,9 +297,6 @@ test("tag is the sole coordinator relay and exact-tag identity requires both ref
       operation: "reconcile",
     })
   }
-  assertExactTagAndOperationGate(requiredJob(workflow, "abandon"), {
-    operation: "abandon",
-  })
 })
 
 test("prepare, attestation, and ATTACHING-to-45-base escrow have one ordered authority path", async () => {
@@ -620,64 +620,34 @@ test("audit dispatch, receipt recording, correlation, and immutable publication 
   assert.doesNotMatch(source, /gh\s+release\s+edit|target_commitish|"draft"\s*:\s*false/iu)
 })
 
-test("protected abandonment derives context at the exact tag and accepts no caller evidence", async () => {
-  const { workflow } = await readRequiredWorkflow("release.yml")
+test("release.yml makes workflow abandonment unreachable", async () => {
+  const { source, workflow } = await readRequiredWorkflow("release.yml")
   const schema = JSON.parse(await readBoundedFixture(CONTROLLER_SCHEMA_PATH, { root: ROOT }))
-  const abandon = requiredJob(workflow, "abandon")
-  assert.deepEqual(normalizeNeeds(abandon.needs), ["detect", "tag"])
-  assert.equal(abandon.environment, schema.abandonmentEnvironment)
   assert.equal(schema.abandonmentEnvironment, "release-abandonment")
-  assert.equal(abandon.permissions?.contents, "write")
-  assert.equal(abandon.permissions?.actions, "read")
-  assert.equal(abandon.permissions?.checks, "read")
-  assert.notEqual(abandon.permissions?.actions, "write")
-  assert.match(abandon.if, /github\.event_name == 'workflow_dispatch'/u)
-  assert.match(abandon.if, /inputs\.operation == 'abandon'/u)
-  for (const state of [
-    "CANDIDATE_TAGGED",
-    "ARTIFACTS_PREPARED",
-    "ARTIFACTS_ATTESTED",
-    "CANDIDATE_ESCROWED",
-  ]) {
-    assert.match(abandon.if, new RegExp(state, "u"))
-  }
-  assert.doesNotMatch(abandon.if, /record-prepublication-abandonment/u)
-
-  const context = onlyRunStepMatching(
-    abandon,
-    /node scripts\/release\/cli\.mjs abandonment-context\b/u,
+  const liveBytes = await readFile(path.join(WORKFLOWS, "release.yml"))
+  const disabledBytes = await readFile(
+    path.join(ROOT, "scripts/release/test/fixtures/release-workflow-disabled.yml"),
   )
-  assertCommandFlags(context.run, "node scripts/release/cli.mjs abandonment-context", [
-    "--version",
-    "--commit-sha",
-    "--output",
-  ])
-  const mutation = onlyRunStepMatching(abandon, /node scripts\/release\/cli\.mjs abandon\b/u)
-  assertCommandFlags(mutation.run, "node scripts/release/cli.mjs abandon", [
-    "--version",
-    "--commit-sha",
-    "--reason",
-    "--artifact-context",
-  ])
-  assert.ok(abandon.steps.indexOf(context) < abandon.steps.indexOf(mutation))
-  assert.match(mutation.run, /--artifact-context\s+[^\s]+/u)
-  assert.doesNotMatch(
-    `${context.run}\n${mutation.run}`,
-    /inputs\.(?:artifact|context|approval|observation|deployment)|--(?:approval|observation|deployment)/iu,
+  assert.deepEqual(liveBytes, disabledBytes)
+  assert.equal(
+    classifyReleaseWorkflowAbandonment(liveBytes, {
+      abandonmentEnvironment: schema.abandonmentEnvironment,
+    }),
+    "disabled",
   )
-
-  const validation = findRunStep(
-    workflow,
-    /operation.*abandon[\s\S]*reason|reason[\s\S]*operation.*abandon/iu,
+  assert.equal(workflow.jobs.abandon, undefined)
+  assert.equal(
+    Object.values(workflow.jobs).some((job) => job.environment === schema.abandonmentEnvironment),
+    false,
   )
-  assert.match(
-    validation.run,
-    /reconcile[\s\S]*(?:-n|!=)[\s\S]*REASON|REASON[\s\S]*(?:-n|!=)[\s\S]*reconcile/iu,
+  assert.equal(
+    workflowExecutables(workflow).some(({ value }) =>
+      /node scripts\/release\/cli\.mjs (?:abandonment-context|abandon)\b/u.test(value),
+    ),
+    false,
   )
-  assert.match(
-    validation.run,
-    /abandon[\s\S]*(?:-z|==)[\s\S]*REASON|REASON[\s\S]*(?:-z|==)[\s\S]*abandon/iu,
-  )
+  assert.doesNotMatch(source, /inputs\.reason|Validate manual intent|release-abandonment/u)
+  assert.doesNotMatch(source, /abandonment must be dispatched|inputs\.operation == 'abandon'/u)
 })
 
 test("the independent workflow relays default-branch audits and verifies exact tags in isolated modes", async () => {
@@ -1791,14 +1761,6 @@ function onlyStepUsing(job, uses) {
 function onlyRunStepMatching(job, pattern) {
   const matches = job.steps.filter((step) => typeof step.run === "string" && pattern.test(step.run))
   assert.equal(matches.length, 1, `job must have exactly one run step matching ${pattern}`)
-  return matches[0]
-}
-
-function findRunStep(workflow, pattern) {
-  const matches = Object.values(workflow.jobs).flatMap((job) =>
-    (job.steps ?? []).filter((step) => typeof step.run === "string" && pattern.test(step.run)),
-  )
-  assert.equal(matches.length, 1, `workflow must have exactly one run step matching ${pattern}`)
   return matches[0]
 }
 

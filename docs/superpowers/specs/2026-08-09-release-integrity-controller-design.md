@@ -4,6 +4,13 @@ Status: approved design, ready for implementation planning
 
 Date: 2026-08-09
 
+> **Partial supersession:** The live abandonment workflow surface and owner
+> evidence/cutover sequence in this historical design are superseded by the
+> approved [Temporarily Disable Release Abandonment](./2026-08-25-temporarily-disable-release-abandonment-design.md)
+> and [Release Controller Reconciliation After Main Integration](./2026-08-27-release-controller-main-reconciliation-design.md)
+> designs. The underlying runtime and historical evidence contracts remain as
+> originally designed unless those later documents say otherwise.
+
 ## Summary
 
 Dawn will replace its coupled Changesets publish workflow with a Dawn-owned,

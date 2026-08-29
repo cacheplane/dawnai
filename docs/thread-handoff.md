@@ -86,10 +86,13 @@ advance the marker to `AUDIT_VERIFIED`. Final publication changes only the draft
 flag, then re-reads the same Release as immutable with unchanged body, assets,
 and annotated-tag target.
 
-Manual recovery always uses the exact version, SHA, and tag. Protected terminal
-abandonment is available only before any npm mutation, requires approval through
-the `release-abandonment` environment and two fresh full-inventory absence
-observations, and preserves a permanent tombstone. It is not a rollback path.
+Manual recovery always uses the exact version, SHA, and tag. The live workflow
+exposes reconciliation only: workflow abandonment is unreachable, and there is
+no `reason` input, abandonment job/environment, tag-routing branch, or workflow
+executable for it. The retained abandonment runtime and terminal-record readers
+are dormant or historical-evidence support only, not a rollback or operator
+recovery path. If an exact candidate is irrecoverable, stop, preserve its tag,
+Release, and evidence, and escalate for a separately reviewed design.
 
 After the first patch release, require one clean post-publication exact-tag audit
 and the next scheduled reconciliation to be a no-op. Record the actual release,
