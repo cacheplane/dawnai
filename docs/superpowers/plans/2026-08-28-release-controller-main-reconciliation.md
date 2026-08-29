@@ -50,6 +50,8 @@ PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/opt/homebrew/
 
 - `scripts/release/abandonment-reachability.mjs` — strict structural
   topology, canonical workflow fingerprinting, and aggregate reachability.
+- `scripts/release/abandonment-workflow-policy.mjs` — strict policy loading,
+  canonicalization, and validation helpers used by the classifier and tests.
 - `scripts/release/abandonment-workflow-policy.json` — versioned immutable
   allowlist of reviewed protected and disabled execution descriptors.
 - `scripts/release/test/abandonment-reachability.test.mjs` — policy, disabled,
@@ -318,6 +320,7 @@ git commit -m "chore(examples): align CopilotKit graph with main"
 
 **Files:**
 - Create: `scripts/release/abandonment-reachability.mjs`
+- Create: `scripts/release/abandonment-workflow-policy.mjs`
 - Create: `scripts/release/abandonment-workflow-policy.json`
 - Create: `scripts/release/test/abandonment-reachability.test.mjs`
 - Create: `scripts/release/test/fixtures/release-workflow-protected.yml`
@@ -430,6 +433,7 @@ pnpm exec biome check \
 ```bash
 git add \
   scripts/release/abandonment-reachability.mjs \
+  scripts/release/abandonment-workflow-policy.mjs \
   scripts/release/abandonment-workflow-policy.json \
   scripts/release/test/abandonment-reachability.test.mjs \
   scripts/release/test/fixtures/release-workflow-protected.yml \
