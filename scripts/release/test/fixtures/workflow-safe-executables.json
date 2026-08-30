@@ -1492,6 +1492,14 @@
         "classification": "safe",
         "job": "detect",
         "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+      },
+      {
+        "classification": "safe",
+        "job": "detect",
+        "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
         "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
@@ -1499,7 +1507,15 @@
       {
         "classification": "safe",
         "job": "detect",
-        "stepIndex": 2,
+        "stepIndex": 3,
+        "step": "Install observer runtime dependency",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+      },
+      {
+        "classification": "safe",
+        "job": "detect",
+        "stepIndex": 4,
         "step": "Seal the production event",
         "kind": "run",
         "value": "if [[ \"$GITHUB_EVENT_NAME\" == \"workflow_dispatch\" ]]; then\n  node -e 'require(\"node:fs\").writeFileSync(process.argv[1], JSON.stringify({inputs:{version:process.env.VERSION,commitSha:process.env.COMMIT_SHA}}))' \"$RUNNER_TEMP/release-event.json\"\nelse\n  cp \"$GITHUB_EVENT_PATH\" \"$RUNNER_TEMP/release-event.json\"\nfi\n"
@@ -1507,7 +1523,7 @@
       {
         "classification": "safe",
         "job": "detect",
-        "stepIndex": 3,
+        "stepIndex": 5,
         "step": "Observe one production transition",
         "kind": "run",
         "value": "node scripts/release/cli.mjs observe \\\n  --event \"$RUNNER_TEMP/release-event.json\" \\\n  --report \"$RUNNER_TEMP/production-observation.json\" \\\n  --github-output \"$GITHUB_OUTPUT\"\n"
@@ -1515,7 +1531,7 @@
       {
         "classification": "safe",
         "job": "detect",
-        "stepIndex": 4,
+        "stepIndex": 6,
         "step": "Preserve production observation",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
@@ -1523,7 +1539,7 @@
       {
         "classification": "safe",
         "job": "detect",
-        "stepIndex": 5,
+        "stepIndex": 7,
         "step": "Require a non-ambiguous route",
         "kind": "run",
         "value": "test \"$DISPOSITION\" != \"blocked\""

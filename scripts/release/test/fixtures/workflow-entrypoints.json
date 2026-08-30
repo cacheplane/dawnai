@@ -2358,11 +2358,28 @@
             {
               "classification": "safe",
               "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
                 "name": "Setup Node.js",
                 "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 "with": {
                   "node-version": "24.19.0"
                 }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install observer runtime dependency",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
               }
             },
             {
