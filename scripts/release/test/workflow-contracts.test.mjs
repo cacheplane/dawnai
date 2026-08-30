@@ -233,7 +233,19 @@ test("detect invokes the sole production observer and exports only validated con
   assert.deepEqual(normalizeNeeds(detect.needs), [])
   assertNoWriteOrOidc(detect)
   assert.equal(detect.permissions?.checks, "read")
+  const checkout = onlyStepUsing(detect, ACTIONS.checkout)
+  const pnpm = onlyStepUsing(detect, ACTIONS.pnpm)
+  const node = onlyStepUsing(detect, ACTIONS.node)
+  const install = onlyRunStepMatching(
+    detect,
+    /^"\$PNPM_HOME\/pnpm" install --filter \. --frozen-lockfile --ignore-scripts$/u,
+  )
   const observe = onlyRunStepMatching(detect, /node scripts\/release\/cli\.mjs observe\b/u)
+  assert.deepEqual(pnpm.with, { version: "10.33.0" })
+  assert.ok(detect.steps.indexOf(checkout) < detect.steps.indexOf(pnpm))
+  assert.ok(detect.steps.indexOf(pnpm) < detect.steps.indexOf(node))
+  assert.ok(detect.steps.indexOf(node) < detect.steps.indexOf(install))
+  assert.ok(detect.steps.indexOf(install) < detect.steps.indexOf(observe))
   assert.equal(observe.id, "observe")
   assert.equal(observe["continue-on-error"], undefined)
   assertCommandFlags(observe.run, "node scripts/release/cli.mjs observe", [
@@ -263,7 +275,6 @@ test("detect invokes the sole production observer and exports only validated con
   assert.equal(countMatches(source, /scripts\/release\/cli\.mjs observe\b/gu), 1)
   assert.doesNotMatch(source, /release:shadow|shadow-reconcile|release-shadow/iu)
 
-  const checkout = onlyStepUsing(detect, ACTIONS.checkout)
   assert.equal(checkout.with?.ref, workflowExpression("github.event.repository.default_branch"))
   assert.equal(checkout.with?.["fetch-depth"], 0)
   assert.equal(checkout.with?.["persist-credentials"], false)
