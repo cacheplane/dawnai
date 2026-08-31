@@ -15,6 +15,7 @@ import {
   executeCommand,
   helm,
   kubectl,
+  parsePosixProcessTable,
 } from "../../scripts/kubernetes-compat/command.ts"
 
 const CONTROLLED_COMMAND_OPTIONS = {
@@ -225,6 +226,23 @@ describe("context-owned commands", () => {
   ])("rejects caller-owned context or kubeconfig arguments %#", (...args) => {
     expect(() => kubectl.command("kind-dawn", ["get", ...args])).toThrow(/wrapper-owned/i)
     expect(() => helm.command("kind-dawn", ["status", ...args])).toThrow(/wrapper-owned/i)
+  })
+})
+
+describe("POSIX process table parsing", () => {
+  test("ignores kernel threads in process group zero", () => {
+    const processes = parsePosixProcessTable(
+      ["2 0 0 Tue Aug 11 00:00:00 2026", "6121 6100 6121 Tue Aug 11 01:00:00 2026"].join("\n"),
+    )
+
+    expect(processes).toEqual([
+      {
+        pid: 6121,
+        ppid: 6100,
+        pgid: 6121,
+        startedAt: "Tue Aug 11 01:00:00 2026",
+      },
+    ])
   })
 })
 

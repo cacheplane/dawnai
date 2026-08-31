@@ -399,6 +399,54 @@ function processGroupExists(pid: number): boolean {
   }
 }
 
+export function parsePosixProcessTable(stdout: string): readonly ProcessTableEntry[] {
+  const entries = stdout
+    .split(/\r?\n/u)
+    .filter((line) => line.trim().length > 0)
+    .map((line): ProcessTableEntry | undefined => {
+      const tokens = line.trim().split(/\s+/u)
+      if (tokens.length !== 8) {
+        throw new Error("Process table contained an invalid row")
+      }
+      const [pidText, ppidText, pgidText, ...startedAtParts] = tokens
+      if (
+        pidText === undefined ||
+        ppidText === undefined ||
+        pgidText === undefined ||
+        !/^\d+$/u.test(pidText) ||
+        !/^\d+$/u.test(ppidText) ||
+        !/^\d+$/u.test(pgidText)
+      ) {
+        throw new Error("Process table contained an invalid process identifier")
+      }
+      const pid = Number(pidText)
+      const ppid = Number(ppidText)
+      const pgid = Number(pgidText)
+      const startedAt = startedAtParts.join(" ")
+      if (
+        !Number.isSafeInteger(pid) ||
+        pid <= 0 ||
+        pid > MAX_PROCESS_ID ||
+        !Number.isSafeInteger(ppid) ||
+        ppid < 0 ||
+        ppid > MAX_PROCESS_ID ||
+        !Number.isSafeInteger(pgid) ||
+        pgid < 0 ||
+        pgid > MAX_PROCESS_ID
+      ) {
+        throw new Error("Process table contained invalid process metadata")
+      }
+      // Linux kernel threads may appear in the host process table with PGID 0.
+      if (pgid === 0) return undefined
+      if (!PROCESS_START_TOKEN_PATTERN.test(startedAt)) {
+        throw new Error("Process table contained invalid process metadata")
+      }
+      return Object.freeze({ pid, ppid, pgid, startedAt })
+    })
+    .filter((entry): entry is ProcessTableEntry => entry !== undefined)
+  return Object.freeze(entries)
+}
+
 function listPosixProcesses(): Promise<readonly ProcessTableEntry[]> {
   return new Promise((resolveProcesses, rejectProcesses) => {
     execFile(
@@ -416,46 +464,7 @@ function listPosixProcesses(): Promise<readonly ProcessTableEntry[]> {
           return
         }
         try {
-          const entries = stdout
-            .split(/\r?\n/u)
-            .filter((line) => line.trim().length > 0)
-            .map((line): ProcessTableEntry => {
-              const tokens = line.trim().split(/\s+/u)
-              if (tokens.length !== 8) {
-                throw new Error("Process table contained an invalid row")
-              }
-              const [pidText, ppidText, pgidText, ...startedAtParts] = tokens
-              if (
-                pidText === undefined ||
-                ppidText === undefined ||
-                pgidText === undefined ||
-                !/^\d+$/u.test(pidText) ||
-                !/^\d+$/u.test(ppidText) ||
-                !/^\d+$/u.test(pgidText)
-              ) {
-                throw new Error("Process table contained an invalid process identifier")
-              }
-              const pid = Number(pidText)
-              const ppid = Number(ppidText)
-              const pgid = Number(pgidText)
-              const startedAt = startedAtParts.join(" ")
-              if (
-                !Number.isSafeInteger(pid) ||
-                pid <= 0 ||
-                pid > MAX_PROCESS_ID ||
-                !Number.isSafeInteger(ppid) ||
-                ppid < 0 ||
-                ppid > MAX_PROCESS_ID ||
-                !Number.isSafeInteger(pgid) ||
-                pgid <= 0 ||
-                pgid > MAX_PROCESS_ID ||
-                !PROCESS_START_TOKEN_PATTERN.test(startedAt)
-              ) {
-                throw new Error("Process table contained invalid process metadata")
-              }
-              return Object.freeze({ pid, ppid, pgid, startedAt })
-            })
-          resolveProcesses(Object.freeze(entries))
+          resolveProcesses(parsePosixProcessTable(stdout))
         } catch (cause) {
           rejectProcesses(cause)
         }
