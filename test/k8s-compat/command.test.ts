@@ -711,6 +711,65 @@ describe("shell-free command executor", () => {
     expect(child.kill).not.toHaveBeenCalled()
   })
 
+  test("terminates a same-group descendant after normal reparenting on wrapper exit", async () => {
+    const child = new ControlledChild()
+    child.pid = 5_997
+    const descendantPid = 5_998
+    let wrapperExited = false
+    let processGroupAlive = true
+    const listProcesses = vi.fn(async () => {
+      if (!processGroupAlive) return []
+      return wrapperExited
+        ? [
+            {
+              pid: descendantPid,
+              ppid: 1,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:20:01 2026",
+            },
+          ]
+        : [
+            {
+              pid: child.pid as number,
+              ppid: process.pid,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:20:00 2026",
+            },
+            {
+              pid: descendantPid,
+              ppid: child.pid as number,
+              pgid: child.pid as number,
+              startedAt: "Tue Aug 11 01:20:01 2026",
+            },
+          ]
+    })
+    const killProcessGroup = vi.fn(() => {
+      processGroupAlive = false
+    })
+    const executor = createCommandExecutor(() => child as never, {
+      platform: "linux",
+      listProcesses,
+      killProcessGroup,
+      killProcess: vi.fn(),
+      processGroupExists: () => processGroupAlive,
+    })
+    const execution = executor(
+      { file: "controlled", args: [] },
+      { ...CONTROLLED_COMMAND_OPTIONS, terminateProcessTree: true },
+    )
+    child.emit("spawn")
+    await vi.waitFor(() => expect(listProcesses).toHaveBeenCalled())
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    wrapperExited = true
+    child.exitCode = 0
+    child.emit("close", 0, null)
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 0 })
+    expect(killProcessGroup).toHaveBeenCalledWith(5_997, "SIGKILL")
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
   test("does not adopt a reused root PID or signal its unrelated group after wrapper exit", async () => {
     const child = new ControlledChild()
     child.pid = 6_001

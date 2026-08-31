@@ -523,6 +523,23 @@ function matchesProcessIdentity(
   )
 }
 
+function matchesRetainedProcessIdentity(
+  tracker: ProcessTreeTracker,
+  pid: number,
+  processEntry: ProcessTableEntry,
+  identity: ProcessIdentity,
+): boolean {
+  if (matchesProcessIdentity(processEntry, identity)) return true
+  // Same-group descendants can be reparented as wrappers exit; roots and detached children cannot.
+  return (
+    pid !== tracker.rootPid &&
+    tracker.originalProcessGroup !== undefined &&
+    identity.pgid === tracker.originalProcessGroup &&
+    processEntry.pgid === identity.pgid &&
+    processEntry.startedAt === identity.startedAt
+  )
+}
+
 function rejectProcessIdentity(tracker: ProcessTreeTracker, pid: number): void {
   tracker.untrustedPids.add(pid)
   tracker.identityProofFailed = true
@@ -542,7 +559,7 @@ function updateTrackedProcesses(
       }
       continue
     }
-    if (current !== undefined && matchesProcessIdentity(current, identity)) {
+    if (current !== undefined && matchesRetainedProcessIdentity(tracker, pid, current, identity)) {
       retained.set(pid, identity)
     } else if (current !== undefined) {
       rejectProcessIdentity(tracker, pid)
