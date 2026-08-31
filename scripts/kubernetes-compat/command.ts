@@ -498,6 +498,7 @@ interface ProcessTreeTracker {
   rootExited: boolean
   identityProofFailed: boolean
   scanFailed: boolean
+  unconfirmedReason: string | undefined
   lastActivityScanStartedAt: number
   scanRequested: boolean
   active: boolean
@@ -657,6 +658,7 @@ function createProcessTreeTracker(
     rootExited: false,
     identityProofFailed: false,
     scanFailed: false,
+    unconfirmedReason: undefined,
     lastActivityScanStartedAt: 0,
     scanRequested: false,
     active: true,
@@ -712,6 +714,7 @@ async function terminatePosixProcessTree(
   const pid = child.pid
   if (pid === undefined || !isSafeProcessId(pid)) {
     killDirectChild(child, signal)
+    if (tracker !== undefined) tracker.unconfirmedReason = "root process identifier was invalid"
     return false
   }
 
@@ -779,6 +782,19 @@ async function terminatePosixProcessTree(
       await dependencies.delay(PROCESS_TREE_VERIFY_INTERVAL_MS)
     }
   }
+  if (tracker !== undefined) {
+    tracker.unconfirmedReason = tracker.scanFailed
+      ? "process table scan failed"
+      : dispatchFailures.length > 0
+        ? "termination dispatch failed"
+        : tracker.identityProofFailed
+          ? "process identity proof failed"
+          : tracker.rootIdentity === undefined && rootHasExited()
+            ? "root process identity was not observed"
+            : tracker.identities.size > 0
+              ? "tracked descendants remained alive"
+              : "process group remained alive"
+  }
   return false
 }
 
@@ -837,8 +853,15 @@ async function confirmProcessTreeTermination(
   try {
     return await terminateProcessTree(child, "SIGKILL", dependencies, tracker, directChildExited)
   } catch {
+    if (tracker !== undefined) tracker.unconfirmedReason = "termination verification threw"
     return false
   }
+}
+
+function unconfirmedProcessTreeMessage(tracker: ProcessTreeTracker | undefined): string {
+  return `process-tree termination failed: process tree termination could not be confirmed${
+    tracker?.unconfirmedReason === undefined ? "" : `: ${tracker.unconfirmedReason}`
+  }`
 }
 
 export type CommandExecutor = (
@@ -1017,7 +1040,7 @@ export function createCommandExecutor(
                 {
                   message: `${failure.message}; ${
                     options.terminateProcessTree
-                      ? "process-tree termination failed: process tree termination could not be confirmed"
+                      ? unconfirmedProcessTreeMessage(processTreeTracker)
                       : "child termination failed"
                   }`,
                   outcome: failure.outcome,
@@ -1176,7 +1199,7 @@ export function createCommandExecutor(
             settle(
               createError(
                 {
-                  message: `${terminalOutcome.message}; process-tree termination failed: process tree termination could not be confirmed`,
+                  message: `${terminalOutcome.message}; ${unconfirmedProcessTreeMessage(processTreeTracker)}`,
                   outcome: terminalOutcome.outcome,
                 },
                 stderr,
