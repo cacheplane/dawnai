@@ -458,6 +458,33 @@ test("real escrow transition resumes draft creation and selected 45-asset crash 
   const snapshot = remote.snapshot()
   assert.equal(snapshot.assets.length, 45)
   assert.equal(parseReleaseMarker(snapshot.release.body).phase, "ESCROWED")
+  assert.equal(snapshot.release.name, `Dawn v${fixture.candidate.version}`)
+  assert.notEqual(snapshot.release.tag_name, `v${fixture.candidate.version}`)
+  assert.deepEqual(
+    snapshot.releaseMutations
+      .filter(({ operation }) => operation === "create" || operation === "update")
+      .map(({ phase, tagName, draft, immutable }) => ({ phase, tagName, draft, immutable })),
+    [
+      {
+        phase: "ATTACHING",
+        tagName: snapshot.release.tag_name,
+        draft: true,
+        immutable: false,
+      },
+      {
+        phase: "ESCROWED",
+        tagName: snapshot.release.tag_name,
+        draft: true,
+        immutable: false,
+      },
+    ],
+  )
+  const [listed, read] = await Promise.all([
+    remote.releaseGitHub.reader.listReleases({}),
+    remote.releaseGitHub.reader.getRelease({ releaseId: snapshot.release.id }),
+  ])
+  assert.deepEqual(listed.value, [snapshot.release])
+  assert.deepEqual(read.value, snapshot.release)
   assert.deepEqual(gate.snapshot().remaining, [])
 })
 
@@ -540,6 +567,38 @@ test("real reconciliation, audit retry, publication, and immutable replay surviv
   assert.deepEqual(snapshot.dispatchedRunIds, [501, 502, 503, 504, 505, 506])
   assert.equal(snapshot.release.draft, false)
   assert.equal(snapshot.release.immutable, true)
+  assert.equal(snapshot.release.tag_name, `v${fixture.candidate.version}`)
+  const publication = snapshot.releaseMutations.at(-1)
+  assert.deepEqual(publication, {
+    operation: "publish",
+    phase: "AUDIT_VERIFIED",
+    tagName: `v${fixture.candidate.version}`,
+    draft: false,
+    immutable: true,
+    patch: { tag_name: `v${fixture.candidate.version}`, draft: false },
+  })
+  const mutableMutations = snapshot.releaseMutations.slice(0, -1)
+  const temporaryTagNames = new Set(mutableMutations.map(({ tagName }) => tagName))
+  assert.equal(temporaryTagNames.size, 1)
+  assert.notEqual([...temporaryTagNames][0], `v${fixture.candidate.version}`)
+  assert.equal(
+    mutableMutations.every(({ draft, immutable }) => draft === true && immutable === false),
+    true,
+  )
+  assert.deepEqual(
+    mutableMutations
+      .map(({ phase }) => phase)
+      .filter((phase, index, phases) => phases.indexOf(phase) === index),
+    [
+      "ATTACHING",
+      "ESCROWED",
+      "NPM_COMPLETE",
+      "SMOKES_COMPLETE",
+      "AUDIT_DISPATCHED",
+      "AUDIT_RETRYABLE",
+      "AUDIT_VERIFIED",
+    ],
+  )
   const baseNames = new Set(base.assets.map(({ name }) => name))
   assert.equal(snapshot.assets.filter(({ name }) => baseNames.has(name)).length, 45)
   assert.equal(

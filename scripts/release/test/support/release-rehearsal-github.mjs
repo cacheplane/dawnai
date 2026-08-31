@@ -13,6 +13,7 @@ const REPOSITORY = "cacheplane/dawnai"
 const AUDIT_WORKFLOW = ".github/workflows/published-artifact-verify.yml"
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+const TEMPORARY_DRAFT_TAG = "draft-release-7-4f9a2c6e"
 
 export function createRehearsalArtifactUploadResult({ candidate, artifact }) {
   const identity = validateCandidate(candidate)
@@ -64,6 +65,8 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
     nextRunId: 501,
     retryAudit: false,
     release: null,
+    publicationTag: null,
+    releaseMutations: [],
     assets: new Map(),
     nextAssetId: 1,
     prepared: null,
@@ -272,9 +275,10 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       validateReleaseIdentity({ tag, targetSha }, identity)
       return gate.around("draft-create", async () => {
         if (state.release === null) {
+          state.publicationTag = tag
           state.release = {
             id: 7,
-            tag_name: tag,
+            tag_name: TEMPORARY_DRAFT_TAG,
             name: title,
             body,
             draft: true,
@@ -282,11 +286,15 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
             target_commitish: "main",
             prerelease: false,
           }
+          recordReleaseMutation(state, "create")
           return {
             releaseId: 7,
             status: "created",
             bodySha256: releaseBodySha256(body),
           }
+        }
+        if (state.publicationTag !== tag) {
+          throw new Error("Release rehearsal requested publication tag changed")
         }
         return {
           releaseId: state.release.id,
@@ -305,6 +313,7 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
     }) {
       validateReleaseIdentity({ tag, targetSha }, identity)
       requireReleaseId(state, releaseId)
+      assertTemporaryDraftTag(state, state.release.tag_name)
       if (!state.release.draft || releaseBodySha256(state.release.body) !== expectedBodySha256) {
         throw new Error("Release rehearsal draft compare-and-swap failed")
       }
@@ -312,9 +321,12 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       const next = parseReleaseMarker(body)
       const transition = markerTransition(previous.phase, next.phase)
       const update = async () => {
+        const temporaryTag = state.release.tag_name
         state.release.name = title
         state.release.body = body
+        assertTemporaryDraftTag(state, temporaryTag)
         state.retryAudit = next.phase === "AUDIT_RETRYABLE"
+        recordReleaseMutation(state, "update")
         return {
           releaseId,
           status: "updated",
@@ -326,10 +338,12 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
     async uploadAssetIfAbsentAndEqual({ releaseId, tag, targetSha, name, bytes, sha256 }) {
       validateReleaseIdentity({ tag, targetSha }, identity)
       requireReleaseId(state, releaseId)
+      assertTemporaryDraftTag(state, state.release.tag_name)
       const content = Buffer.from(bytes)
       if (digest(content) !== sha256) throw new Error("Release rehearsal asset digest is invalid")
       const transition = assetTransition({ name, content, baseOrdinal })
       const upload = async () => {
+        const temporaryTag = state.release.tag_name
         const existing = state.assets.get(name)
         if (existing !== undefined) {
           if (digest(existing.bytes) !== sha256) {
@@ -340,6 +354,8 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
         const asset = { id: state.nextAssetId, bytes: Buffer.from(content) }
         state.nextAssetId += 1
         state.assets.set(name, asset)
+        assertTemporaryDraftTag(state, temporaryTag)
+        recordReleaseMutation(state, "upload")
         return { assetId: asset.id, status: "uploaded", sha256 }
       }
       return transition === null ? upload() : gate.around(transition, upload)
@@ -354,8 +370,9 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
         throw new Error("Release rehearsal publication asset set is incomplete")
       }
       return gate.around("release-publication", async () => {
-        state.release.draft = false
-        state.release.immutable = true
+        const patch = { tag_name: tag, draft: false }
+        applyPublicationPatch(state, patch)
+        recordReleaseMutation(state, "publish", patch)
         return { releaseId, status: "published", immutable: true }
       })
     },
@@ -367,7 +384,7 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
       if (
         tag !== `v${identity.version}` ||
         state.release === null ||
-        state.release.tag_name !== tag ||
+        !isMutableReleaseForTag(state.release, tag) ||
         state.assets.size !== 45
       ) {
         throw new Error("Release rehearsal escrow is incomplete")
@@ -532,6 +549,7 @@ export function createRehearsalGitHub({ candidate, gate, baseAssetNames = [], ta
         dispatchedRunIds: [...state.dispatchedRunIds],
         retryAudit: state.retryAudit,
         release: state.release === null ? null : cloneRelease(state.release),
+        releaseMutations: state.releaseMutations.map((mutation) => structuredClone(mutation)),
         assets: [...state.assets].map(([name, asset]) => ({
           id: asset.id,
           name,
@@ -581,6 +599,58 @@ function validateReleaseIdentity({ tag, targetSha }, candidate) {
 function requireReleaseId(state, releaseId) {
   if (state.release === null || state.release.id !== releaseId) {
     throw new Error("Release rehearsal GitHub Release identity is invalid")
+  }
+}
+
+function assertTemporaryDraftTag(state, previousTag) {
+  if (
+    state.release === null ||
+    state.release.tag_name !== previousTag ||
+    state.release.tag_name !== TEMPORARY_DRAFT_TAG ||
+    state.release.tag_name === state.publicationTag ||
+    state.release.draft !== true ||
+    state.release.immutable !== false
+  ) {
+    throw new Error("Release rehearsal mutable draft identity changed")
+  }
+}
+
+function applyPublicationPatch(state, patch) {
+  if (
+    state.release === null ||
+    patch === null ||
+    typeof patch !== "object" ||
+    Array.isArray(patch) ||
+    Object.keys(patch).length !== 2 ||
+    patch.tag_name !== state.publicationTag ||
+    patch.draft !== false
+  ) {
+    throw new Error("Release rehearsal publication PATCH is invalid")
+  }
+  assertTemporaryDraftTag(state, state.release.tag_name)
+  state.release.tag_name = patch.tag_name
+  state.release.draft = false
+  state.release.immutable = true
+}
+
+function recordReleaseMutation(state, operation, patch) {
+  if (state.release === null) throw new Error("Release rehearsal mutation has no Release")
+  state.releaseMutations.push({
+    operation,
+    phase: parseReleaseMarker(state.release.body).phase,
+    tagName: state.release.tag_name,
+    draft: state.release.draft,
+    immutable: state.release.immutable,
+    ...(patch === undefined ? {} : { patch: structuredClone(patch) }),
+  })
+}
+
+function isMutableReleaseForTag(release, tag) {
+  if (release.draft !== true || release.immutable !== false) return false
+  try {
+    return parseReleaseMarker(release.body).tag === tag
+  } catch {
+    return false
   }
 }
 
