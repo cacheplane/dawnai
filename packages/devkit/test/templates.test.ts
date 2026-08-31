@@ -432,7 +432,9 @@ describe("research template parity with examples/research/server", () => {
         ),
       ])
 
-      expect(await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot)).toEqual({
+      expect(
+        await compareParityTrees(fixtureExampleRoot, fixtureTemplateRoot, SERVER_PARITY_SCOPE),
+      ).toEqual({
         contentDriftedPaths: ["workspace/source.ts"],
         missingTemplatePaths: [],
         normalizedPathCollisions: [],
