@@ -29,6 +29,9 @@ concurrency:
   queue: max
   cancel-in-progress: false
 
+env:
+  GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+
 permissions:
   contents: read
 

@@ -5,12 +5,12 @@
     {
       "id": "disabled-2026-08-28",
       "mode": "disabled",
-      "canonicalSha256": "5977a3ee83fa9469b4117baf33aee736193777f032742ad59daaa8077b7cde61"
+      "canonicalSha256": "4c4a666d03964c4d3e9f76eb2753b5e2728827d80eb7185c59501894deecc448"
     },
     {
       "id": "protected-2026-08-28",
       "mode": "protected",
-      "canonicalSha256": "1df78b4af9b824883bd70d0d41e2029aa3eafeae6b4d9c7e03536dc3628d1abf"
+      "canonicalSha256": "ffc8fc51bfd0e430967e33d93633b83da5bb229b051fa165426062bdc94249de"
     }
   ]
 }

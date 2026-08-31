@@ -15,6 +15,10 @@
 **Files:**
 - Modify: `scripts/release/test/workflow-contracts.test.mjs`
 - Modify: `.github/workflows/release.yml`
+- Modify: `scripts/release/test/fixtures/release-workflow-disabled.yml`
+- Modify: `scripts/release/test/fixtures/release-workflow-protected.yml`
+- Modify: `scripts/release/test/fixtures/workflow-entrypoints.json`
+- Modify: `scripts/release/abandonment-workflow-policy.json`
 
 - [ ] **Step 1: Write the failing workflow-contract assertion**
 
@@ -49,6 +53,10 @@ env:
 
 Do not modify the GitHub adapter, accept arbitrary repository-ID URLs, or add a fallback value.
 
+Apply the identical workflow change to both reviewed abandonment fixtures,
+refresh their exact canonical policy digests, and add the resulting top-level
+`env` descriptor to the audited workflow-entrypoint fixture.
+
 - [ ] **Step 4: Run the focused test and verify it passes**
 
 Run the Step 2 command again.
@@ -73,7 +81,12 @@ Expected: all pass.
 - [ ] **Step 6: Commit the implementation**
 
 ```bash
-git add .github/workflows/release.yml scripts/release/test/workflow-contracts.test.mjs
+git add .github/workflows/release.yml \
+  scripts/release/test/workflow-contracts.test.mjs \
+  scripts/release/test/fixtures/release-workflow-disabled.yml \
+  scripts/release/test/fixtures/release-workflow-protected.yml \
+  scripts/release/abandonment-workflow-policy.json \
+  scripts/release/test/fixtures/workflow-entrypoints.json
 git commit -m "fix(release): bind repository id explicitly"
 ```
 
@@ -213,4 +226,3 @@ Verify the production Vercel deployment remains tied to the approved candidate c
 - [ ] **Step 6: Record final evidence**
 
 Report the merged fix PR and SHA, exact release run ID, npm version/provenance results, smoke/audit conclusions, GitHub Release URL, Vercel deployment evidence, and production browser result.
-

@@ -167,6 +167,9 @@ test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async 
 
 test("release.yml has exact triggers and one repository-global non-cancelling queue", async () => {
   const { workflow } = await readRequiredWorkflow("release.yml")
+  assert.deepEqual(workflow.env, {
+    GITHUB_REPOSITORY_ID: workflowExpression("github.repository_id"),
+  })
   assert.deepEqual(Object.keys(workflow.on).sort(), ["push", "schedule", "workflow_dispatch"])
   assert.deepEqual(workflow.on.push, { branches: ["main"] })
   assert.ok(Array.isArray(workflow.on.schedule) && workflow.on.schedule.length === 1)

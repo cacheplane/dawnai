@@ -2077,6 +2077,9 @@
           "group": "dawn-release-controller",
           "queue": "max"
         },
+        "env": {
+          "GITHUB_REPOSITORY_ID": "${{ github.repository_id }}"
+        },
         "name": "Release",
         "on": {
           "push": {
