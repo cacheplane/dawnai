@@ -627,6 +627,11 @@ must be handled by normal authenticated cleanup or human investigation.
 | Legacy lease | `<repo-root>/artifacts/testing/dedicated-infrastructure/active-run.json` | current user; regular `0600` | 64 KiB | strict six-field lease schema and exact state identity agreement |
 | Prior audit | accepted canonical descendant of `<run-root>` | current user; regular; no group/world write | 1 MiB | accepted digest; supporting evidence only |
 
+Task 7's runtime source scan is conservative fail-fast validation, not a
+semantic trust boundary. Task 9's deterministic build, restricted metafile
+graph, source review, and operator-accepted bundle digest establish the
+executable-closure relation.
+
 Every path component is opened relative to a stable authenticated parent with
 no-follow semantics. For each file, the reader opens once, captures BigInt
 `dev`, inode, UID, permission bits, size, mtime, and ctime with descriptor

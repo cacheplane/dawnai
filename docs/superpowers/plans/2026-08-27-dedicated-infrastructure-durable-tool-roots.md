@@ -97,6 +97,7 @@ All implementation files below are ignored and live under
 | `infra-reconciler-entry.ts` | Standalone CLI entrypoint; imports only the reconciliation build-time graph and exposes no normal dispatcher. |
 | `build-infra-reconciler.mjs` | Pins the esbuild invocation, audits the build graph and emitted imports, and verifies deterministic output without joining the runtime closure. |
 | `infra-reconciler.mjs` | Deterministic reviewed esbuild output executed directly by accepted Node. |
+| `run-infra-reconciler-process-tests.mjs` | Canonical Linux acceptance runner; copies only the exact Task 9 source closure into a fixture-owned root-passwd-home container, runs network-disabled, and requires the pinned complete test count with zero skips. |
 | `infra-controller.test-support.ts` | Synthetic repositories, exact legacy/v2 fixture builders, fault hooks, process harnesses, and immutable tree snapshots. |
 | `infra-durable-*.test.ts` | Focused unit/process tests for the corresponding module. |
 | `infra-reconciliation.test.ts` | In-process reconciliation conformance and crash-replay tests. |
@@ -911,6 +912,7 @@ hook is observed.
 - Create ignored: `build-infra-reconciler.mjs`
 - Generate ignored: `infra-reconciler.mjs`
 - Create ignored: `infra-reconciler.process.test.ts`
+- Create ignored: `run-infra-reconciler-process-tests.mjs`
 
 - [ ] **Step 1: Write failing executable-closure process tests**
 
@@ -925,7 +927,7 @@ wrapper that broadens the executable closure.
 - [ ] **Step 2: Confirm red**
 
 ```bash
-pnpm exec tsx --test "$LEGACY_RUN_ROOT/infra-reconciler.process.test.ts"
+node "$LEGACY_RUN_ROOT/run-infra-reconciler-process-tests.mjs"
 ```
 
 - [ ] **Step 3: Implement the minimal entrypoint and deterministic bundle**
@@ -960,11 +962,17 @@ if(bad.length) throw new Error(`unexpected bundle inputs: ${bad.join(", ")}`)
 - [ ] **Step 5: Run process tests with clean environments**
 
 ```bash
-pnpm exec tsx --test "$LEGACY_RUN_ROOT/infra-reconciler.process.test.ts"
+node "$LEGACY_RUN_ROOT/run-infra-reconciler-process-tests.mjs"
 ```
 
 Expected: all acceptance paths run directly under Node and all rejected paths
-leave fixture trees unchanged.
+leave fixture trees unchanged. The canonical runner must use a network-disabled
+Linux container as root with a fixture-owned passwd home, set
+`DAWN_TASK9_REQUIRE_LINUX_ISOLATION=1`, parse the TAP summary, and require its
+pinned exact test count with zero failures, cancellations, or skips. An
+unisolated Linux developer run is non-acceptance and must explicitly set
+`DAWN_TASK9_ALLOW_UNISOLATED_DEVELOPER_SKIP=1`; omission of both isolation and
+that developer-only opt-out fails during test bootstrap.
 
 ## Task 10: Complete Isolated Verification and Two-Stage Review
 
@@ -985,7 +993,9 @@ pnpm exec biome check \
   "$LEGACY_RUN_ROOT"/infra-controller.test-support.ts \
   "$LEGACY_RUN_ROOT"/infra-runner.ts \
   "$LEGACY_RUN_ROOT"/infra-runner.test.ts
-pnpm exec tsx --test "$LEGACY_RUN_ROOT"/*.test.ts
+DAWN_TASK9_ALLOW_UNISOLATED_DEVELOPER_SKIP=1 \
+  pnpm exec tsx --test "$LEGACY_RUN_ROOT"/*.test.ts
+node "$LEGACY_RUN_ROOT/run-infra-reconciler-process-tests.mjs"
 ```
 
 - [ ] **Step 2: Run focused stress and protected-evidence nonmutation checks**
