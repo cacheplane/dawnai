@@ -1,5 +1,13 @@
 # @dawn-ai/sqlite-storage
 
+## 0.8.22
+
+### Patch Changes
+
+- bedad77: Documentation only: every public export of this package now has an API reference
+  page on dawnai.org, and the package README leads with a concise entrypoint. No
+  runtime behavior changed.
+
 ## 0.8.21
 
 ## 0.8.20

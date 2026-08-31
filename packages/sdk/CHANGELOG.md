@@ -1,5 +1,279 @@
 # @dawn-ai/sdk
 
+## 0.8.22
+
+### Patch Changes
+
+- a530e70: Documentation only: this package gains a canonical API reference on dawnai.org
+  and a concise npm entrypoint. No runtime behavior changed. (`dawn docs` also
+  now discovers every registered detailed API page.)
+- 3c68800: Raise `DAWN_E1005` at request time for gated features a runtime cannot serve,
+  instead of ignoring them silently. A runtime with no filesystem fallbacks — the
+  shape an edge deployment has — now reports a configured `sandbox` block, a
+  configured `toolOutput` block, and any route whose skills were recorded at build
+  time, naming each feature and its config key. Previously the build gate was the
+  only defense, so an entry composed by hand over `@dawn-ai/cli/fetch` never ran
+  it and those settings did nothing at all.
+
+  Node behavior is unchanged: the guard fires only when a runtime supplies no
+  filesystem fallbacks, and every Node path supplies them, so an app that
+  configures a sandbox, tool-output offloading or skills keeps working exactly as
+  before.
+
+  **Action may be required:** `dawn build` and `dawn check` now also reject
+  `toolOutput` for the `hono` target, so a build that passed before can now fail.
+  If your `dawn.config.ts` sets `toolOutput` and your `build.targets` includes
+  `"hono"`, that build stops with `DAWN_E1005` naming the key; remove
+  `toolOutput`, or drop `"hono"` from `build.targets` and deploy with the `node`
+  target, which serves offloading normally. An empty `toolOutput: {}` configures
+  nothing and is not rejected. Nothing is lost by removing it: offloading spills
+  oversized tool results to a file under `workspace/`, and the edge has no
+  filesystem, so it never ran there. It was the only gated feature whose config is
+  plain JSON, which is why it slipped through — the other gated keys are live
+  objects that get stripped at the build boundary, while these were inlined into
+  the bundle intact and then ignored at runtime. Node deployments are unaffected.
+  See the upgrade note at https://dawnai.org/docs/upgrading.
+
+  `dawn check` now also detects a stale `.dawn/build/modules.edge.mjs` when `hono`
+  is a configured target. An app building for `hono` alone emits no
+  `modules.mjs`, so the staleness pass previously did nothing for it and a
+  renamed or deleted route shipped in a stale bundle with no warning.
+
+  `DAWN_E1005`'s registry title broadens from "Feature unsupported by the build
+  target" to "Feature unsupported by the build target or runtime", since the code
+  now has a request-time producer.
+
+- f317dd7: Fail loudly when middleware is present but cannot be loaded, and load it
+  correctly on Windows.
+
+  The middleware probe wrapped every candidate import in a bare `catch {}`, so a
+  `src/middleware.ts` that threw while being imported — a missing environment
+  variable, an ESM/CJS interop break, a syntax error, an unresolved dependency —
+  was indistinguishable from an app with no middleware at all. The server started,
+  reported healthy, and served every gated Agent Protocol endpoint ungated, with
+  no log line anywhere.
+
+  **If your middleware file has been quietly broken, this release turns that into
+  a startup failure.** Dawn now decides existence before importing, and a
+  middleware file that exists but cannot be loaded exits with `DAWN_E3004`, naming
+  the file and the underlying cause. In `dawn dev` the watcher restarts the child
+  once you fix it; under `dawn start` or a built `server.mjs` the process exits
+  non-zero, so a deploy fails its health check instead of shifting traffic onto an
+  ungated server. Existence is probed with `lstat`, and only `ENOENT`/`ENOTDIR`
+  count as absent, so an unreadable middleware file is no longer read as "this app
+  has none". An app with no middleware file is unaffected.
+
+  Two related fixes ride along. The probe no longer falls through to a later
+  candidate when an earlier one fails, so a broken `src/middleware.ts` can no
+  longer silently bind a `middleware.ts` at the app root instead. And the dynamic
+  import now builds a `file://` URL rather than handing Node's ESM loader a raw
+  path: on Windows that path is a drive letter, which the loader rejects as an
+  unknown protocol, and the old `catch {}` swallowed it — middleware never ran on
+  Windows. It does now, so a Windows app with a middleware file that was inert
+  will start gating requests.
+
+  A middleware file that exports no middleware function is still ignored rather
+  than fatal, because the built manifest binds the same way, but it now warns on
+  stderr and names the file.
+
+- 3c68800: **`RouteConfig` is documented as reserved — Dawn reads none of its fields.**
+
+  `runtime`, `streaming` and `tags` are accepted on a route's exported `config`,
+  type-checked, normalized onto the route module and carried into the static build
+  manifest, and then nothing branches on any of them. The API docs described
+  effects none of them has: `runtime` did not pin a route to an execution
+  environment (the node/edge split comes from `build.targets` and is never decided
+  per route), `streaming` did not switch on token streaming (the endpoint the
+  caller hits decides that), and `tags` were not displayed by the Dev Server UI or
+  anywhere else.
+
+  The fields are kept rather than removed — deleting a published field breaks
+  every app that set one and buys nothing — but they now carry JSDoc saying they
+  are reserved and have no effect, and the API reference says the same. If they
+  gain behavior it will be additive.
+
+- d42774e: **Breaking:** scenario files must default export `scenarios("<route>")` from
+  `@dawn-ai/sdk/testing`. A plain default-exported array now throws
+  `RunScenarioLoadError` at load; wrap the array in `scenarios("/route")` to
+  migrate.
+
+  Add route-scoped fluent `dawn test` scenarios with generated application-tool
+  types, invocation-local in-process tool mocks, and declarative mock call
+  assertions.
+
+- 984c3ad: Thread endpoints can now be authorized with a `src/thread-access.ts` policy.
+
+  `defineThreadAccess` answers a different question from route middleware — may
+  this caller create, read, mutate or destroy this thread — and is keyed on the
+  thread object rather than on route identity, because a thread has no owning
+  route. Five endpoints that previously ran no middleware at all are gated by it:
+  `POST /threads`, `GET /threads/:thread_id`, `GET /threads/:thread_id/state`,
+  `POST /threads/:thread_id/cancel` and `DELETE /threads/:thread_id`. A read
+  denial answers the same 404 a genuine miss answers, so a policy cannot be used
+  to enumerate thread ids, and a `delete` is authorized even when the row is
+  missing so a 403 cannot confirm that a thread exists.
+
+  The policy loader is fail-closed, unlike the middleware probe: a
+  `thread-access.ts` that exists but cannot be imported or binds no usable policy
+  fails the boot with `DAWN_E3003` rather than degrading to "no gate". An app with
+  no policy file behaves exactly as before, and every boot logs which layer the
+  policy came from, or that there is none.
+
+  `dawn build` now fails with `DAWN_E1005` for the `langsmith` target while a
+  policy file exists, because that runtime cannot carry the hook. The `node`,
+  `hono` and `vercel` targets are unaffected: `node`'s emitted server probes the
+  policy at boot, and the bundled web targets carry it in their static manifest.
+
+  One behavior change applies with or without a policy: `POST /threads` drops the
+  reserved `dawn:access` key from client-supplied `metadata`. That key holds the
+  server-issued access stamp, so a client can never write one — including in an
+  app that adopts a policy later.
+
+  `POST /threads/:thread_id/cancel` now binds its cancel to the run the caller
+  observed, so a cancel can no longer land on a later run of the same thread; when
+  the observed run has already finished it answers the existing
+  `409 no_run_in_flight`.
+
+  `@dawn-ai/testing` gains `createThreadAccessHarness` for unit-testing a policy
+  without booting a server, and `createAgentProtocolInjector` accepts a
+  `threadAccess` policy.
+
+  The run endpoints — `/runs/stream`, `/runs/wait`, `/resume` and `/agui` — plus
+  `GET /threads/:thread_id/pending_interrupts` are gated on this policy too.
+
+- 496b54c: Add `resuming` to `ThreadAccessRequest`: a required boolean that is `true` when
+  the request carries a resume credential and will continue a parked turn. A
+  policy that ignores it behaves the same for resumed and ordinary turns.
+
+  A policy that wants resumes treated differently from ordinary turns — step-up
+  auth, a second approver, extra logging — should check `req.resuming` rather than
+  `req.operation`. Two endpoints resume, and only one of them says so in its
+  operation: `POST /threads/{thread_id}/resume` reports `run.resume`, but a
+  `POST /agui/{routeId}` carrying a `resume` array reports `run.agui`, exactly as
+  an ordinary AG-UI turn does. The request body is the only thing that separates
+  them, and a policy never sees it, so keying the rule on `operation` leaves every
+  AG-UI resume ungoverned.
+
+  `resuming` is `false` everywhere else and never absent, so no policy needs
+  `?? false`. An endpoint that gates more than once for one request — the gate
+  before its side effects, the mid-flight recheck, the implicit create's recheck —
+  reports the same value at every site.
+
+  `createThreadAccessHarness().check()` accepts an optional `resuming`, defaulting
+  to `false`.
+
+- 67030fa: Thread access now authorizes the run endpoints and the pending-interrupts read.
+
+  Two things to know about the shipped surface.
+
+  **`ThreadOperation` includes `"thread.pending_interrupts"`**, under
+  `action: "read"`. An exhaustive `switch` or mapped type over the union must
+  handle every member.
+
+  **Ten endpoints are gated on the thread-access axis**, including
+  `POST /threads/:id/runs/stream`, `/runs/wait`, `/resume`,
+  `POST /agui/:routeId` and `GET /threads/:id/pending_interrupts`. The hazard to
+  watch is a policy whose `fallback` returns a bare `{ allow: false }`, or denies
+  any operation it does not recognize: it denies these endpoints too, where route
+  middleware alone used to decide. Read your `fallback` before
+  upgrading. A `run.*` operation on a thread that exists arrives under
+  `action: "update"`; on a thread id with no row yet, `run.stream`, `run.wait` and
+  `run.agui` arrive under `action: "create"` — see the companion note on stamping
+  the implicit create, which lands in the same release. A policy that permits
+  `update` for the thread's owner therefore needs one more decision than it did
+  before: what its `create` handler should answer for a thread id the client
+  picked. `run.resume` never creates and is always an `update`.
+
+  These gates compose with route middleware as AND rather than replacing it;
+  middleware still answers "may this caller run this route" and keeps doing the
+  per-caller work it does today. An app with no policy file is unaffected.
+
+  `POST /threads/:id/resume` and `GET /threads/:id/pending_interrupts` gate
+  **before** middleware rather than after it, so on those two a caller who would
+  have received a middleware `401` now receives a thread-access deny — a `403` on
+  `/resume`, a `404` on `/pending_interrupts`. That is forced: both resolve the
+  route identity middleware would authorize against out of the thread's own
+  metadata, so gating after middleware would mean reading a thread the caller is
+  not yet authorized to read. On `/resume` it also stops a denied caller taking
+  the thread's resume claim, which was a denial of service against a parked turn
+  that needed no credential, and reading the `400`/`409` codes as an oracle on a
+  guessed `interruptId`/`resumeKey`. A `/pending_interrupts` deny returns the
+  handler's own `404 thread_not_found`, indistinguishable from a genuine miss.
+
+  `dawn build --target hono` and `--target vercel` bundle the policy into the
+  static module manifest and run it on those runtimes exactly as `dawn dev` does.
+  A build that saw a policy file stamps that fact into its entry point, and boot
+  fails when such an entry point is paired with a manifest carrying no
+  thread-access entry — a stale manifest would otherwise come up with every thread
+  endpoint open and nothing to say so. `--target langsmith` refuses with
+  `DAWN_E1005`, permanently: it materializes per-route graphs with no Dawn HTTP
+  layer to run a policy in.
+
+  `create-dawn-app` templates now carry a deny-by-default `src/thread-access.ts`
+  and the shared `src/auth.ts` it imports, both as `.example` files that a rename
+  activates. They ship inert because a deny-by-default policy denies every request
+  from a caller the app cannot yet authenticate.
+
+  `@dawn-ai/testing`'s `runThreadsStoreConformance` gains two cases, both
+  properties the access stamp depends on: a `createThread` on an id that already
+  exists never applies the caller's metadata, and `updateMetadata` leaves a
+  top-level key its patch does not name intact. Custom `ThreadsStore`
+  implementations should re-run the kit.
+
+- 730b136: Threads created implicitly by a run endpoint are now stamped with the caller who
+  created them.
+
+  `POST /threads/:id/runs/stream`, `/runs/wait` and `POST /agui/{routeId}` create
+  the thread when the id they were given names no row. That create wrote no
+  metadata, so the row carried no access stamp — and two things followed from
+  that.
+
+  **A policy's legacy branch means only "created before the policy existed"
+  again.** `thread.access === undefined` is the branch an app writes when it
+  adopts a policy on an existing store, usually admin-only or backfilled. Because
+  an unstamped row could be manufactured on demand — by naming any thread id at a
+  run endpoint — that branch had quietly widened to "predates the policy, **or**
+  was created by anyone a moment ago", which turns a permissive legacy branch
+  (the common shape mid-rollout) into an escalation path. The implicit create now
+  carries the stamp your `create` handler returns, so the branch means what it
+  says.
+
+  **The caller who created a thread can take a second turn on it.** Previously the
+  row it had just made read back with no owner, so a policy that authorizes
+  against `thread.access` denied its own author from turn two onward. This is the
+  flow `POST /agui/{routeId}` drives, since CopilotKit picks its `threadId` in the
+  browser and never calls `POST /threads`.
+
+  **`run.*` operations can now arrive under `action: "create"`.** When the row is
+  absent, `run.stream`, `run.wait` and `run.agui` are asked under `create` — then
+  again as the `update` recheck that follows every create, the same two-step
+  `thread.create` already used. The `operation` is unchanged throughout; only the
+  `action` differs. `run.resume` is untouched: it requires an already-parked
+  thread and creates nothing.
+
+  Read your `create` handler before upgrading. It now decides runs on thread ids
+  the client picked, not just `POST /threads`, and the stamp it returns is what
+  every later turn on those threads authorizes against. A policy that denied
+  `create` outright — or that relied on `update` seeing `thread: undefined` for a
+  first turn — changes behavior here. Ownership of a client-chosen id is first
+  come, first served: whoever names an unused id is stamped as its owner and can
+  hold it against the caller who meant to use it. Mint ids with `POST /threads`
+  if that matters; those are server-generated and nobody can call them first.
+
+  The `update` recheck is not optional and is not a stamp comparison. Two callers
+  can both find the row absent, and a store that upserts on collision hands the
+  loser the winner's row; Dawn re-authorizes the row that actually came back
+  before the run proceeds. Comparing the minted stamp with the returned one would
+  not catch it — a `permit()` with no stamp leaves both sides `undefined`.
+
+  An app with no policy file is unaffected: the implicit create still passes the
+  thread id and nothing else, with no extra gate call and no extra store read.
+
+  The scaffolded `src/thread-access.ts` gains the AG-UI flow as a consequence: its
+  `create` handler stamps an authenticated caller, so a browser-chosen `threadId`
+  is served and stays served. Its commentary, and the thread-access docs, are
+  updated to match.
+
 ## 0.8.21
 
 ### Patch Changes
