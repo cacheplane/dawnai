@@ -17,22 +17,25 @@
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "09b5423224b2d76c6cba6de616a1fabae0f5d0efc126e68c3ed3f8de7c82f924"
+      "sha256": "1b1e17298068211d5e47ac6adfe74e996b1faee91a567385d694704e3ba2de54"
     },
     "scripts/release/cli.mjs": {
       "sha256": "7d78f62482a472a7380987353a5d895c84c9da97600643ff2aead40c7904b2c8"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
-      "sha256": "29803cd7d46310091d1f723f1ca7c821242127f6127c118dc95ed94db7a3efa7"
+      "sha256": "a72f438f776f9ca26914c2ec51dd75de8f3b6c7d85ae8b11f2cc51c651e10d53"
     },
     "scripts/release/independent-audit.mjs": {
-      "sha256": "df75a31d6aa7c01a58583fa41eb4041ba4b4322a273c4b739f8e4eb6ffcd3eff"
+      "sha256": "1d18e376e41e12b4d98cf63f79448d485a5cf3ca95abdedbc5045b3f29c6a818"
     },
     "scripts/release/limits.mjs": {
       "sha256": "6ace39d22cdf5dbedff3b14b444c00cd3102082f8ef733ee458d0e6b52f1982f"
     },
     "scripts/release/manifest.mjs": {
       "sha256": "1a931c3056826e489894f67474287b81d6518c9076abbc779ad387697b61b4a9"
+    },
+    "scripts/release/metadata.mjs": {
+      "sha256": "7eb0cfcbccc5ab01a222c3e8c69b645eb6bcc20f23d087a7bdf9f649100feb69"
     },
     "scripts/release/npm-audit.mjs": {
       "sha256": "308b723105b9549a2740456eaedf2f272c0885fdc5c530f9bfb3aa0e49314111"
@@ -55,6 +58,9 @@
     "scripts/release/semver.mjs": {
       "sha256": "fee872a1dddfa280cf0efe608525cad6d9f42d8d647a9ccf2ef9be1b7c41a06a"
     },
+    "scripts/release/smoke-result.mjs": {
+      "sha256": "d86a5cc1ccb9bafa45451ae4186b7d2a8573eba03cbf127efe0843712c9cd21e"
+    },
     "scripts/release/smoke/published-harness.mjs": {
       "sha256": "48cec31768f1df81f29876f3630c9d721a4af1b606740d3502c9c02b0473c041"
     },
@@ -66,6 +72,9 @@
     },
     "scripts/release/smoke/storage.mjs": {
       "sha256": "448dbbca39890ef849ed5658931b0e2a193693354ed87d6c109f0f7e0d6270a7"
+    },
+    "scripts/release/terminal-records.mjs": {
+      "sha256": "17151da8acf77431decd76ea3b78af41243b7e5a92cb572427c8aa8196af61d1"
     },
     "scripts/release/topology.mjs": {
       "sha256": "537ba6f93eeb3411d40371b04ed4d0db380089861a8560a143b50c9c5b2f917e"

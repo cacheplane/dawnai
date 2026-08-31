@@ -560,12 +560,15 @@ jobs:
             scripts/release/artifact-store.mjs
             scripts/release/limits.mjs
             scripts/release/manifest.mjs
+            scripts/release/metadata.mjs
             scripts/release/npm-audit.mjs
             scripts/release/npm-evidence.mjs
             scripts/release/process-runner.mjs
             scripts/release/publisher.mjs
             scripts/release/release-record.mjs
             scripts/release/semver.mjs
+            scripts/release/smoke-result.mjs
+            scripts/release/terminal-records.mjs
             scripts/release/topology.mjs
 
       - name: Setup Node.js
