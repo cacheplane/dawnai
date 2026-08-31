@@ -8,10 +8,9 @@
  * function is the only way to test them without a live agent.
  *
  * The message shapes are declared structurally rather than imported from
- * `@ag-ui/core`. Two copies of that package are installed — the app depends on
- * `@ag-ui/client@0.0.57`, `@copilotkit/react-core` on its own — and the union
- * below is a supertype of the real one, so `agent.messages` assigns to it
- * whichever copy the hook's types come from. Verified against
+ * `@ag-ui/core`. That keeps this pure transcript module decoupled from the
+ * transport package while the union below remains a supertype of the real
+ * message shape. Verified against
  * `MessageSchema` in `@ag-ui/core`: the seven roles are user, assistant, tool,
  * activity, reasoning, system and developer.
  */

@@ -278,7 +278,7 @@ describe.each(routeCases)(
 
       expect(info.status).toBe(200)
       expect(await info.json()).toMatchObject({
-        version: "1.68.3",
+        version: "1.70.0",
         mode: "sse",
         agents: { default: { name: "default" } },
       })
