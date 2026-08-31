@@ -50,12 +50,14 @@ test("the production preparation runner enforces a per-command deadline", async 
 })
 
 test("the production preparation runner enforces one overall deadline", async () => {
+  let currentTimeMs = 0
   const run = createReleasePreparationRunner({
     commandTimeoutMs: 1_000,
-    overallTimeoutMs: 80,
+    overallTimeoutMs: 2_000,
+    now: () => currentTimeMs,
   })
   await run(process.execPath, ["-e", ""], { cwd: process.cwd() })
-  await new Promise((resolve) => setTimeout(resolve, 60))
+  currentTimeMs = 2_001
 
   await assert.rejects(
     run(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"], { cwd: process.cwd() }),
