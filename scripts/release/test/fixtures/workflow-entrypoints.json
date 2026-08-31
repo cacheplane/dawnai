@@ -7,11 +7,7 @@
         "name": "Auto Approve",
         "on": {
           "pull_request": {
-            "types": [
-              "opened",
-              "reopened",
-              "ready_for_review"
-            ]
+            "types": ["opened", "reopened", "ready_for_review"]
           }
         },
         "permissions": {
@@ -54,9 +50,7 @@
         "on": {
           "pull_request": null,
           "push": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           }
         },
         "permissions": {
@@ -1491,12 +1485,7 @@
         "name": "Claude Review",
         "on": {
           "pull_request": {
-            "types": [
-              "opened",
-              "synchronize",
-              "reopened",
-              "ready_for_review"
-            ]
+            "types": ["opened", "synchronize", "reopened", "ready_for_review"]
           }
         },
         "permissions": {
@@ -1576,14 +1565,10 @@
         "name": "CodeQL",
         "on": {
           "pull_request": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           },
           "push": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           },
           "schedule": [
             {
@@ -1958,10 +1943,7 @@
           "descriptor": {
             "if": "always()",
             "name": "kubernetes-compat",
-            "needs": [
-              "scope",
-              "compat"
-            ],
+            "needs": ["scope", "compat"],
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 5
           },
@@ -2053,13 +2035,8 @@
         "name": "Publish Chart",
         "on": {
           "push": {
-            "branches": [
-              "main"
-            ],
-            "paths": [
-              "charts/dawn-sandbox-infra/**",
-              "charts/dawn-app/**"
-            ]
+            "branches": ["main"],
+            "paths": ["charts/dawn-sandbox-infra/**", "charts/dawn-app/**"]
           }
         },
         "permissions": {
@@ -2075,10 +2052,7 @@
             "runs-on": "ubuntu-latest",
             "strategy": {
               "matrix": {
-                "chart": [
-                  "dawn-sandbox-infra",
-                  "dawn-app"
-                ]
+                "chart": ["dawn-sandbox-infra", "dawn-app"]
               }
             },
             "timeout-minutes": 10
@@ -2400,9 +2374,7 @@
         "name": "Release",
         "on": {
           "push": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           },
           "schedule": [
             {
@@ -2419,9 +2391,7 @@
               "operation": {
                 "default": "reconcile",
                 "description": "Reconcile this candidate",
-                "options": [
-                  "reconcile"
-                ],
+                "options": ["reconcile"],
                 "required": true,
                 "type": "choice"
               },
@@ -2443,11 +2413,7 @@
           "id": "attest",
           "descriptor": {
             "if": "needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
-            "needs": [
-              "detect",
-              "hydrate",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "tag"],
             "outputs": {
               "attestation_artifact_id": "${{ steps.evidence.outputs.artifact-id }}"
             },
@@ -2542,12 +2508,7 @@
           "id": "correlate-audit",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'complete-release-audit' || needs.record-audit-dispatch.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "record-audit-dispatch",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "record-audit-dispatch", "tag"],
             "outputs": {
               "audit_artifact_id": "${{ steps.audit-result.outputs.artifact-id }}"
             },
@@ -2768,12 +2729,7 @@
           "id": "dispatch-audit",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'dispatch-release-audit' || needs.reconcile-smokes.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-smokes",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-smokes", "tag"],
             "outputs": {
               "dispatch_artifact_id": "${{ steps.receipt.outputs.artifact-id }}"
             },
@@ -2837,12 +2793,7 @@
           "id": "escrow",
           "descriptor": {
             "if": "needs.attest.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition)",
-            "needs": [
-              "attest",
-              "detect",
-              "hydrate",
-              "tag"
-            ],
+            "needs": ["attest", "detect", "hydrate", "tag"],
             "permissions": {
               "actions": "read",
               "attestations": "read",
@@ -2912,11 +2863,7 @@
           "id": "hydrate",
           "descriptor": {
             "if": "always() && needs.detect.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition != 'prepare-artifacts' || needs.prepare.result == 'success')",
-            "needs": [
-              "detect",
-              "prepare",
-              "tag"
-            ],
+            "needs": ["detect", "prepare", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.runtime.outputs.artifact-id }}",
               "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}"
@@ -3070,10 +3017,7 @@
           "id": "prepare",
           "descriptor": {
             "if": "needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && needs.detect.outputs.next_transition == 'prepare-artifacts'",
-            "needs": [
-              "detect",
-              "tag"
-            ],
+            "needs": ["detect", "tag"],
             "outputs": {
               "handoff_artifact_id": "${{ steps.handoff.outputs.artifact-id }}",
               "manifest_sha256": "${{ steps.identity.outputs.manifest_sha256 }}",
@@ -3202,12 +3146,7 @@
           "id": "publish-npm",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\"]'), needs.detect.outputs.next_transition) && (!contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\"]'), needs.detect.outputs.next_transition) || needs.escrow.result == 'success')",
-            "needs": [
-              "detect",
-              "escrow",
-              "hydrate",
-              "tag"
-            ],
+            "needs": ["detect", "escrow", "hydrate", "tag"],
             "outputs": {
               "npm_artifact_id": "${{ steps.npm.outputs.artifact-id }}"
             },
@@ -3295,12 +3234,7 @@
           "id": "publish-release",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\",\"complete-release-audit\",\"publish-github-release\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'publish-github-release' || needs.correlate-audit.result == 'success')",
-            "needs": [
-              "correlate-audit",
-              "detect",
-              "hydrate",
-              "tag"
-            ],
+            "needs": ["correlate-audit", "detect", "hydrate", "tag"],
             "permissions": {
               "actions": "read",
               "contents": "write"
@@ -3378,12 +3312,7 @@
           "id": "reconcile-npm",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\"]'), needs.detect.outputs.next_transition) && (needs.detect.outputs.next_transition == 'reconcile-npm-evidence' || needs.publish-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "publish-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "publish-npm", "tag"],
             "permissions": {
               "actions": "read",
               "contents": "write"
@@ -3569,12 +3498,7 @@
           "id": "record-audit-dispatch",
           "descriptor": {
             "if": "needs.dispatch-audit.result == 'success' && needs.hydrate.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\",\"dispatch-release-audit\"]'), needs.detect.outputs.next_transition)",
-            "needs": [
-              "detect",
-              "dispatch-audit",
-              "hydrate",
-              "tag"
-            ],
+            "needs": ["detect", "dispatch-audit", "hydrate", "tag"],
             "outputs": {
               "dispatch_artifact_id": "${{ needs.dispatch-audit.outputs.dispatch_artifact_id }}"
             },
@@ -3646,12 +3570,7 @@
           "id": "smoke-metadata",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3735,12 +3654,7 @@
           "id": "smoke-published-harness",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3821,12 +3735,7 @@
           "id": "smoke-runtime-targets",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3907,12 +3816,7 @@
           "id": "smoke-scaffold",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -3993,12 +3897,7 @@
           "id": "smoke-storage",
           "descriptor": {
             "if": "always() && needs.hydrate.result == 'success' && needs.tag.result == 'success' && needs.tag.outputs.continue == 'true' && github.ref == format('refs/tags/v{0}', inputs.version) && github.sha == needs.detect.outputs.candidate_sha && inputs.version == needs.detect.outputs.candidate_version && inputs.commitSha == needs.detect.outputs.candidate_sha && inputs.operation == 'reconcile' && contains(fromJSON('[\"prepare-artifacts\",\"attest-artifacts\",\"escrow-candidate\",\"publish-npm-packages\",\"resume-npm-publish\",\"reconcile-npm-evidence\",\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) && (contains(fromJSON('[\"run-release-smokes\",\"reconcile-smoke-evidence\"]'), needs.detect.outputs.next_transition) || needs.reconcile-npm.result == 'success')",
-            "needs": [
-              "detect",
-              "hydrate",
-              "reconcile-npm",
-              "tag"
-            ],
+            "needs": ["detect", "hydrate", "reconcile-npm", "tag"],
             "outputs": {
               "artifact_id": "${{ steps.result.outputs.artifact-id }}"
             },
@@ -4155,9 +4054,7 @@
         "on": {
           "branch_protection_rule": null,
           "push": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           },
           "schedule": [
             {
@@ -4227,9 +4124,7 @@
         "name": "Version Packages",
         "on": {
           "push": {
-            "branches": [
-              "main"
-            ]
+            "branches": ["main"]
           }
         },
         "permissions": {

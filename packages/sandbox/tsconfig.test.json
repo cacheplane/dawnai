@@ -7,11 +7,6 @@
     "rootDir": ".",
     "tsBuildInfoFile": "dist/tsconfig.test.tsbuildinfo"
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "test/**/*.ts",
-    "test/**/*.tsx"
-  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"],
   "references": [{ "path": "../workspace" }]
 }

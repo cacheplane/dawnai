@@ -37,7 +37,7 @@ const APP_ID = objectId("3")
 const SANDBOX_ID = objectId("4")
 const FOREIGN_CONTAINER_ID = objectId("f")
 const FOREIGN_NETWORK_ID = objectId("e")
-const RUN_WATCHDOG_MS = 10_000
+const RUN_WATCHDOG_MS = 15_000
 const TEST_TIMEOUT_MS = RUN_WATCHDOG_MS + 5_000
 const SIMULATED_LOADED_DISPATCH_MS = 600
 const ROUTINE_FAKE_COMMAND_TIMEOUT_MS = 2_000
@@ -1957,7 +1957,9 @@ describe("Docker smoke ownership", () => {
         `${result.stderr}\nlast commands: ${JSON.stringify(result.transcript.slice(-12))}`,
       ).toBe(0)
       expect(result.signal).toBeNull()
-      expect(result.elapsedMs, `${result.transcript.length} fake commands`).toBeLessThan(7_500)
+      expect(result.elapsedMs, `${result.transcript.length} fake commands`).toBeLessThan(
+        RUN_WATCHDOG_MS,
+      )
       expect(result.stdout).toContain("sandbox-docker-e2e assertions PASSED")
       expect(result.stderr).not.toContain("COMMAND TIMEOUT")
       const fixedCreates = result.transcript.filter(

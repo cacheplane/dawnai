@@ -661,7 +661,8 @@ Managed Kubernetes services require separate validation.`,
     const { chart, deploymentGuide } = await loadDocumentation()
     const standaloneValuesMarker = "For a fresh release, prepare `dawn-sandbox-infra-values.yaml`"
     const standaloneValuesSource = chart.slice(chart.indexOf(standaloneValuesMarker))
-    const standaloneValues = /```yaml[^\n]*\n([\s\S]*?)```/.exec(standaloneValuesSource)?.[1].trim()
+    const standaloneValuesMatch = /```yaml[^\n]*\n([\s\S]*?)```/.exec(standaloneValuesSource)
+    const standaloneValues = standaloneValuesMatch?.[1]?.trim()
     const initialValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
 ${canonicalAppSubjectValues}
 \`\`\``

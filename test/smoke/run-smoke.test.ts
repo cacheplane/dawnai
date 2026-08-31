@@ -385,9 +385,11 @@ async function readSmokeOutput(result: HarnessLaneResult): Promise<unknown> {
     artifactPath.endsWith("/canonical-output.json"),
   )
 
-  expect(outputArtifactPath).toBeDefined()
+  if (outputArtifactPath === undefined) {
+    throw new Error("Smoke result did not include canonical-output.json")
+  }
 
-  return JSON.parse(await readFile(outputArtifactPath!, "utf8"))
+  return JSON.parse(await readFile(outputArtifactPath, "utf8"))
 }
 
 async function writeJsonArtifact(path: string, value: unknown): Promise<void> {
