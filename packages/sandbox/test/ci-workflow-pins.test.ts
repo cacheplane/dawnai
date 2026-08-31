@@ -183,6 +183,24 @@ describe("Kubernetes CI dependency pins", () => {
       expect(pull.run).not.toContain("node:22-slim")
     }
   })
+
+  test("describes sandbox Pods before full-arc e2e teardown", () => {
+    const workflow = requireRecord(parse(ciWorkflow), "CI workflow")
+    const jobs = requireRecord(workflow.jobs, "CI workflow jobs")
+    const steps = requireSteps(
+      requireRecord(jobs["sandbox-k8s-e2e"], "jobs.sandbox-k8s-e2e"),
+      "jobs.sandbox-k8s-e2e",
+    )
+    const diagnostics = requireNamedStep(steps, "Diagnostics + cleanup")
+    const run = String(diagnostics.run)
+    const describeIndex = run.indexOf(
+      "-n dawn-sandboxes describe pods -l app.kubernetes.io/managed-by=dawn",
+    )
+    const teardownIndex = run.indexOf('echo "----- teardown -----"')
+
+    expect(describeIndex).toBeGreaterThan(-1)
+    expect(teardownIndex).toBeGreaterThan(describeIndex)
+  })
 })
 
 describe("native Vercel job", () => {

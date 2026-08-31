@@ -879,6 +879,7 @@ jobs:
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true
           echo "----- sandboxes -----"
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-sandboxes describe pods -l app.kubernetes.io/managed-by=dawn || true
           echo "----- teardown -----"
           helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-app -n dawn-app || true
           helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-sandbox-infra -n dawn-app || true
