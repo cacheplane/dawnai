@@ -240,6 +240,113 @@ test("observePackageMetadata never classifies package-level 404 as exact-version
   })
 })
 
+test("confirms npm's string-body exact-version 404 against the structured packument", async () => {
+  const previousVersion = "0.8.20"
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse(`version not found: ${VERSION}`, 404),
+    jsonResponse({
+      name: NAME,
+      "dist-tags": { latest: previousVersion },
+      versions: {
+        [previousVersion]: { name: NAME, version: previousVersion },
+      },
+    }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({ url, accept: init.headers.Accept })),
+    [
+      { url: `${REGISTRY}/%40dawn-ai%2Fsdk/0.8.21`, accept: "application/json" },
+      {
+        url: `${REGISTRY}/%40dawn-ai%2Fsdk`,
+        accept: "application/vnd.npm.install-v1+json",
+      },
+    ],
+  )
+  assert.deepEqual(result, {
+    status: "ABSENT",
+    operation: "package-version",
+    httpStatus: 404,
+    code: "E404",
+  })
+})
+
+test("keeps exact-version 404 ambiguous when package metadata is also unavailable", async () => {
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse(`version not found: ${VERSION}`, 404),
+    jsonResponse({ code: "E404" }, 404),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
+
+  assert.equal(calls.length, 2)
+  assert.deepEqual(result, {
+    status: "AMBIGUOUS",
+    operation: "package-version",
+    httpStatus: 404,
+    code: "E404",
+  })
+})
+
+test("rejects a malformed packument used to confirm exact-version absence", async () => {
+  const previousVersion = "0.8.20"
+  const { fetchImpl } = recordingFetch([
+    jsonResponse(`version not found: ${VERSION}`, 404),
+    jsonResponse({
+      name: NAME,
+      "dist-tags": { latest: previousVersion },
+      versions: {
+        [previousVersion]: { name: "@dawn-ai/wrong", version: previousVersion },
+      },
+    }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
+
+  assert.deepEqual(result, {
+    status: "ERROR",
+    operation: "package-version",
+    httpStatus: 200,
+    code: "MALFORMED_SCHEMA",
+  })
+})
+
+test("blocks when the exact-version 404 conflicts with the package version map", async () => {
+  const { fetchImpl } = recordingFetch([
+    jsonResponse(`version not found: ${VERSION}`, 404),
+    jsonResponse({
+      name: NAME,
+      "dist-tags": { latest: VERSION },
+      versions: {
+        [VERSION]: { name: NAME, version: VERSION },
+      },
+    }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
+
+  assert.deepEqual(result, {
+    status: "AMBIGUOUS",
+    operation: "package-version",
+    httpStatus: 404,
+    code: "REGISTRY_VERSION_CONFLICT",
+  })
+})
+
 test("classifyRegistryResponse treats only exact-version E404 as absence", () => {
   const rows = [
     {
@@ -570,19 +677,26 @@ test("npm rejects malformed injected status and does not trust response ok", asy
     assert.equal(result.code, "MALFORMED_RESPONSE")
   }
 
-  const concealed = createNpmReader({
-    fetchImpl: async () =>
-      responseLike({
-        status: 404,
-        ok: true,
-        body: JSON.stringify({ code: "E404" }),
-        headers: { "content-type": "application/json" },
-      }),
-  })
+  const previousVersion = "0.8.20"
+  const concealedResponses = recordingFetch([
+    responseLike({
+      status: 404,
+      ok: true,
+      body: JSON.stringify({ code: "E404" }),
+      headers: { "content-type": "application/json" },
+    }),
+    jsonResponse({
+      name: NAME,
+      "dist-tags": { latest: previousVersion },
+      versions: { [previousVersion]: { name: NAME, version: previousVersion } },
+    }),
+  ])
+  const concealed = createNpmReader({ fetchImpl: concealedResponses.fetchImpl })
   assert.equal(
     (await concealed.observePackageVersion({ name: NAME, version: VERSION })).status,
     "ABSENT",
   )
+  assert.equal(concealedResponses.calls.length, 2)
 })
 
 function versionDocument() {

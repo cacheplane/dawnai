@@ -585,15 +585,14 @@ test("registry harness packs without publishing and exposes one bounded real pub
       return fetch(new URL(`${target.pathname}${target.search}`, harness.proxy.url), options)
     },
   })
+  await harness.publishPreparedTarball({ tarballPath: packed[0].tarballPath })
   harness.proxy.setMode("exact-version-e404")
   assert.equal(
-    (await reader.observePackageVersion({ name: packed[0].name, version: packed[0].version }))
-      .status,
+    (await reader.observePackageVersion({ name: packed[0].name, version: "999.0.0" })).status,
     "ABSENT",
   )
 
   harness.proxy.reset()
-  await harness.publishPreparedTarball({ tarballPath: packed[0].tarballPath })
   const present = await reader.observePackageVersion({
     name: packed[0].name,
     version: packed[0].version,
