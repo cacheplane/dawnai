@@ -343,12 +343,13 @@ function parseJsonCandidate(value: string): JsonObject | undefined {
   }
 }
 
+const STRUCTURED_RESPONSE_BODY_MARKER = '] "Response Body" body='
+
 function structuredKlogStatus(line: string): JsonObject | undefined {
-  const marker = '] "Response Body" body='
-  const index = line.indexOf(marker)
+  const index = line.indexOf(STRUCTURED_RESPONSE_BODY_MARKER)
   if (index === -1) return undefined
 
-  const encodedBody = line.slice(index + marker.length)
+  const encodedBody = line.slice(index + STRUCTURED_RESPONSE_BODY_MARKER.length)
   let decodedBody: unknown
   try {
     decodedBody = JSON.parse(encodedBody)
@@ -357,6 +358,35 @@ function structuredKlogStatus(line: string): JsonObject | undefined {
   }
   if (typeof decodedBody !== "string") return undefined
   return parseJsonCandidate(decodedBody)
+}
+
+function multilineStructuredKlogStatus(
+  lines: readonly string[],
+  startIndex: number,
+): { readonly endIndex: number; readonly status?: JsonObject } | undefined {
+  const line = lines[startIndex]
+  if (line === undefined) return undefined
+  const markerIndex = line.indexOf(STRUCTURED_RESPONSE_BODY_MARKER)
+  if (
+    markerIndex === -1 ||
+    line.slice(markerIndex + STRUCTURED_RESPONSE_BODY_MARKER.length).trim() !== "<"
+  ) {
+    return undefined
+  }
+
+  for (let endIndex = startIndex + 1; endIndex < lines.length; endIndex += 1) {
+    if (lines[endIndex]?.trim() !== ">") continue
+    const body = lines
+      .slice(startIndex + 1, endIndex)
+      .join("\n")
+      .trim()
+    const status = parseJsonCandidate(body)
+    return {
+      endIndex,
+      ...(status !== undefined ? { status } : {}),
+    }
+  }
+  return undefined
 }
 
 function legacyKlogStatus(line: string): JsonObject | undefined {
@@ -373,9 +403,16 @@ function outputJson(result: CommandResult, name: string): unknown {
     if (candidate !== undefined) candidates.push(candidate)
   }
 
-  for (const line of result.stderr.toString("utf8").split("\n")) {
+  const stderrLines = result.stderr.toString("utf8").split(/\r?\n/)
+  for (let index = 0; index < stderrLines.length; index += 1) {
+    const line = stderrLines[index] as string
     const candidate = structuredKlogStatus(line) ?? legacyKlogStatus(line)
     if (candidate !== undefined) candidates.push(candidate)
+    const multiline = multilineStructuredKlogStatus(stderrLines, index)
+    if (multiline !== undefined) {
+      if (multiline.status !== undefined) candidates.push(multiline.status)
+      index = multiline.endIndex
+    }
   }
   const status = candidates.at(-1)
   if (status !== undefined) return status
@@ -482,6 +519,7 @@ async function cleanupByRunLabel(input: {
       "--ignore-not-found=true",
       "--wait=true",
     ]),
+    { timeoutMs: KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS },
   )
 }
 
@@ -501,6 +539,7 @@ async function cleanupByName(input: {
       "--ignore-not-found=true",
       "--wait=true",
     ]),
+    { timeoutMs: KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS },
   )
 }
 
@@ -1345,6 +1384,8 @@ function exactListItems(
   input: {
     readonly apiVersion: string
     readonly kind: string
+    readonly itemApiVersion: string
+    readonly itemKind: string
     readonly name: string
   },
 ): readonly JsonObject[] {
@@ -1353,25 +1394,48 @@ function exactListItems(
     throw new Error(`${input.name} must be a ${input.apiVersion} ${input.kind}`)
   }
   if (!Array.isArray(list.items)) throw new Error(`${input.name}.items must be an array`)
-  return list.items.map((item, index) => expectObject(item, `${input.name}.items[${index}]`))
+  return list.items.map((item, index) => {
+    const object = expectObject(item, `${input.name}.items[${index}]`)
+    if (!hasExpectedOptionalTypeMeta(object, input.itemApiVersion, input.itemKind)) {
+      throw new Error(
+        `${input.name}.items[${index}] must omit type metadata or match ${input.itemApiVersion} ${input.itemKind}`,
+      )
+    }
+    return object
+  })
+}
+
+function hasExpectedOptionalTypeMeta(value: JsonObject, apiVersion: string, kind: string): boolean {
+  const omitsTypeMeta = value.apiVersion === undefined && value.kind === undefined
+  const matchesTypeMeta = value.apiVersion === apiVersion && value.kind === kind
+  return omitsTypeMeta || matchesTypeMeta
+}
+
+function namespacedCollectionApiPath(input: {
+  readonly apiPrefix: string
+  readonly namespace: string
+  readonly resource: string
+  readonly labelSelector?: string
+}): string {
+  const path = `${input.apiPrefix}/namespaces/${encodeURIComponent(input.namespace)}/${input.resource}`
+  return input.labelSelector === undefined
+    ? path
+    : `${path}?labelSelector=${encodeURIComponent(input.labelSelector)}`
 }
 
 async function readApplicationDeployment(state: ResolvedProbeState): Promise<JsonObject> {
-  const result = await state.execute(
-    kubectl.command(state.context, [
-      "get",
-      "deployments",
-      "--namespace",
-      state.managementNamespace,
-      "--selector",
-      `app.kubernetes.io/instance=${state.appRelease}`,
-      "--output",
-      "json",
-    ]),
-  )
+  const path = namespacedCollectionApiPath({
+    apiPrefix: "/apis/apps/v1",
+    namespace: state.managementNamespace,
+    resource: "deployments",
+    labelSelector: `app.kubernetes.io/instance=${state.appRelease}`,
+  })
+  const result = await state.execute(kubectl.command(state.context, ["get", "--raw", path]))
   const deployments = exactListItems(commandJson(result, "Application Deployment list"), {
     apiVersion: "apps/v1",
     kind: "DeploymentList",
+    itemApiVersion: "apps/v1",
+    itemKind: "Deployment",
     name: "Application Deployment list",
   })
   if (deployments.length !== 1) {
@@ -1381,8 +1445,7 @@ async function readApplicationDeployment(state: ResolvedProbeState): Promise<Jso
   const metadata = objectMetadata(deployment, "Application Deployment")
   const labels = expectObject(metadata.labels, "Application Deployment.metadata.labels")
   if (
-    deployment.apiVersion !== "apps/v1" ||
-    deployment.kind !== "Deployment" ||
+    !hasExpectedOptionalTypeMeta(deployment, "apps/v1", "Deployment") ||
     metadata.namespace !== state.managementNamespace ||
     labels["app.kubernetes.io/instance"] !== state.appRelease
   ) {
@@ -1616,8 +1679,7 @@ function jobMatchesIdentity(
   }
   const metadata = job.metadata as JsonObject
   return (
-    job.apiVersion === identity.apiVersion &&
-    job.kind === identity.kind &&
+    hasExpectedOptionalTypeMeta(job, identity.apiVersion, identity.kind) &&
     metadata.name === identity.name &&
     metadata.namespace === identity.namespace &&
     metadata.uid === identity.uid &&
@@ -1640,8 +1702,7 @@ function reaperJobIdentity(
     `Scheduled Reaper Job list.items[${index}].metadata.uid`,
   )
   if (
-    job.apiVersion !== "batch/v1" ||
-    job.kind !== "Job" ||
+    !hasExpectedOptionalTypeMeta(job, "batch/v1", "Job") ||
     metadata.namespace !== state.namespace ||
     name.length > 63 ||
     !DNS_NAME_PATTERN.test(name)
@@ -1708,20 +1769,19 @@ function assertActiveReferencesMatchOwnedJobs(
 }
 
 async function readScheduledReaperJobs(state: ResolvedProbeState): Promise<readonly JsonObject[]> {
-  const result = await state.execute(
-    kubectl.command(state.context, [
-      "get",
-      "jobs",
-      "--namespace",
-      state.namespace,
-      "--output",
-      "json",
-    ]),
-    { timeoutMs: KUBECTL_JSON_READ_OUTER_TIMEOUT_MS },
-  )
+  const path = namespacedCollectionApiPath({
+    apiPrefix: "/apis/batch/v1",
+    namespace: state.namespace,
+    resource: "jobs",
+  })
+  const result = await state.execute(kubectl.command(state.context, ["get", "--raw", path]), {
+    timeoutMs: KUBECTL_JSON_READ_OUTER_TIMEOUT_MS,
+  })
   return exactListItems(commandJson(result, "Scheduled Reaper Job list"), {
     apiVersion: "batch/v1",
     kind: "JobList",
+    itemApiVersion: "batch/v1",
+    itemKind: "Job",
     name: "Scheduled Reaper Job list",
   })
 }
@@ -1858,11 +1918,13 @@ function assertReaperPvcOutcomes(
   const claims = exactListItems(value, {
     apiVersion: "v1",
     kind: "PersistentVolumeClaimList",
+    itemApiVersion: "v1",
+    itemKind: "PersistentVolumeClaim",
     name: "Reaper PVC list",
   })
   const byName = new Map<string, JsonObject>()
   for (const claim of claims) {
-    if (claim.apiVersion !== "v1" || claim.kind !== "PersistentVolumeClaim") {
+    if (!hasExpectedOptionalTypeMeta(claim, "v1", "PersistentVolumeClaim")) {
       throw new Error("Reaper PVC list contained a non-PersistentVolumeClaim object")
     }
     const metadata = objectMetadata(claim, "Reaper PVC")
@@ -2031,17 +2093,14 @@ export async function runReaperLifecycleProbe(
       { timeoutMs: KUBECTL_DELETE_WAIT_OUTER_TIMEOUT_MS },
     )
 
+    const claimsPath = namespacedCollectionApiPath({
+      apiPrefix: "/api/v1",
+      namespace: state.namespace,
+      resource: "persistentvolumeclaims",
+      labelSelector: `${RUN_LABEL}=${state.runId},${COMPONENT_LABEL}=${REAPER_COMPONENT}`,
+    })
     const observedClaims = await state.execute(
-      kubectl.command(state.context, [
-        "get",
-        "persistentvolumeclaims",
-        "--namespace",
-        state.namespace,
-        "--selector",
-        `${RUN_LABEL}=${state.runId},${COMPONENT_LABEL}=${REAPER_COMPONENT}`,
-        "--output",
-        "json",
-      ]),
+      kubectl.command(state.context, ["get", "--raw", claimsPath]),
     )
     assertReaperPvcOutcomes(commandJson(observedClaims, "Reaper PVC list"), {
       state,
@@ -2058,21 +2117,18 @@ async function readApplicationService(state: ResolvedProbeState): Promise<{
   readonly name: string
   readonly port: number
 }> {
-  const result = await state.execute(
-    kubectl.command(state.context, [
-      "get",
-      "services",
-      "--namespace",
-      state.managementNamespace,
-      "--selector",
-      `app.kubernetes.io/instance=${state.appRelease}`,
-      "--output",
-      "json",
-    ]),
-  )
+  const path = namespacedCollectionApiPath({
+    apiPrefix: "/api/v1",
+    namespace: state.managementNamespace,
+    resource: "services",
+    labelSelector: `app.kubernetes.io/instance=${state.appRelease}`,
+  })
+  const result = await state.execute(kubectl.command(state.context, ["get", "--raw", path]))
   const services = exactListItems(commandJson(result, "Application Service list"), {
     apiVersion: "v1",
     kind: "ServiceList",
+    itemApiVersion: "v1",
+    itemKind: "Service",
     name: "Application Service list",
   })
   if (services.length !== 1) {
@@ -2082,8 +2138,7 @@ async function readApplicationService(state: ResolvedProbeState): Promise<{
   const metadata = objectMetadata(service, "Application Service")
   const labels = expectObject(metadata.labels, "Application Service.metadata.labels")
   if (
-    service.apiVersion !== "v1" ||
-    service.kind !== "Service" ||
+    !hasExpectedOptionalTypeMeta(service, "v1", "Service") ||
     metadata.namespace !== state.managementNamespace ||
     labels["app.kubernetes.io/instance"] !== state.appRelease
   ) {

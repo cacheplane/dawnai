@@ -63,6 +63,24 @@ describe("Kubernetes conformance command construction", () => {
     expect(buildRestrictedSecurityProbeCommand()).toContain("DAWN_PROC_CAP_EFF=")
     expect(buildRestrictedSecurityProbeCommand()).toContain("DAWN_SERVICEACCOUNT_TOKEN=")
   })
+
+  test("executes the generated DNS probe as valid JavaScript", async () => {
+    const command = buildDnsProbeCommand(parseEgressControlUrl("http://localhost/probe"))
+
+    const result = await execFileAsync("/bin/sh", ["-c", command])
+
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toBe("DAWN_DNS_RESULT=resolved\n")
+  })
+
+  test("executes the generated egress probe with the blocked exit contract", async () => {
+    const command = buildEgressProbeCommand(parseEgressControlUrl("http://127.0.0.1:1/probe"))
+
+    await expect(execFileAsync("/bin/sh", ["-c", command])).rejects.toMatchObject({
+      code: 7,
+      stdout: "DAWN_EGRESS_RESULT=blocked\n",
+    })
+  })
 })
 
 describe("Kubernetes conformance evidence parsing", () => {

@@ -206,6 +206,15 @@ function structuredResponseLog(value: unknown): string {
   return `I0810 21:35:57.561354   55712 round_trippers.go:577] "Response Body" body=${JSON.stringify(JSON.stringify(value))}\n`
 }
 
+function multilineStructuredResponseLog(value: unknown): string {
+  return [
+    'I0831 12:17:31.751377   95943 create.go:114] "Response Body" body=<',
+    `\t${JSON.stringify(value)}`,
+    " >",
+    "",
+  ].join("\n")
+}
+
 function helmStatus(release: string, revision: number): JsonObject {
   return {
     name: release,
@@ -294,8 +303,32 @@ function scheduledReaperJob(input: {
   }
 }
 
+function withoutTypeMeta(value: JsonObject): JsonObject {
+  const item = structuredClone(value)
+  delete item.apiVersion
+  delete item.kind
+  return item
+}
+
+function withoutExpectedTypeMeta(
+  value: JsonObject,
+  expectedApiVersion: string,
+  expectedKind: string,
+): JsonObject {
+  const item = structuredClone(value)
+  if (item.apiVersion === expectedApiVersion && item.kind === expectedKind) {
+    delete item.apiVersion
+    delete item.kind
+  }
+  return item
+}
+
 function jobList(items: readonly JsonObject[]): JsonObject {
-  return { apiVersion: "batch/v1", kind: "JobList", items }
+  return {
+    apiVersion: "batch/v1",
+    kind: "JobList",
+    items: items.map((item) => withoutExpectedTypeMeta(item, "batch/v1", "Job")),
+  }
 }
 
 function activeJobReference(job: JsonObject): JsonObject {
@@ -319,8 +352,6 @@ function deploymentList(
     kind: "DeploymentList",
     items: [
       {
-        apiVersion: "apps/v1",
-        kind: "Deployment",
         metadata: {
           name: `${names.appRelease}-dawn-app`,
           namespace: names.managementNamespace,
@@ -339,8 +370,6 @@ function serviceList(): JsonObject {
     kind: "ServiceList",
     items: [
       {
-        apiVersion: "v1",
-        kind: "Service",
         metadata: {
           name: `${names.appRelease}-dawn-app`,
           namespace: names.managementNamespace,
@@ -369,6 +398,28 @@ interface ReaperRunnerOptions {
   readonly activeWaitError?: Error
   readonly cleanupError?: Error
   readonly restoreError?: Error
+}
+
+const scheduledJobsApiPath = `/apis/batch/v1/namespaces/${encodeURIComponent(names.sandboxNamespace)}/jobs`
+const reaperPvcSelector = `dawn.sh/compat-run=${runId},dawn.sh/compat-component=reaper-lifecycle`
+const reaperPvcsApiPath = `/api/v1/namespaces/${encodeURIComponent(names.sandboxNamespace)}/persistentvolumeclaims?labelSelector=${encodeURIComponent(reaperPvcSelector)}`
+const applicationSelector = `app.kubernetes.io/instance=${names.appRelease}`
+const deploymentsApiPath = `/apis/apps/v1/namespaces/${encodeURIComponent(names.managementNamespace)}/deployments?labelSelector=${encodeURIComponent(applicationSelector)}`
+const servicesApiPath = `/api/v1/namespaces/${encodeURIComponent(names.managementNamespace)}/services?labelSelector=${encodeURIComponent(applicationSelector)}`
+
+function isScheduledJobsRead(command: { readonly args: readonly string[] }): boolean {
+  return (
+    command.args.includes("get") &&
+    (command.args.includes("jobs") || command.args.includes(scheduledJobsApiPath))
+  )
+}
+
+function isCollectionRead(
+  command: { readonly args: readonly string[] },
+  legacyResource: string,
+  apiPath: string,
+): boolean {
+  return command.args.includes(legacyResource) || command.args.includes(apiPath)
 }
 
 function createReaperRunner(options: ReaperRunnerOptions = {}): {
@@ -457,7 +508,7 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
       return manifest
     }
     if (command.args.includes("cronjob/dawn-reaper")) return currentCronJob()
-    if (command.args.includes("get") && command.args.includes("jobs")) {
+    if (isScheduledJobsRead(command)) {
       let jobs: readonly JsonObject[]
       if (options.jobSnapshots === undefined) {
         jobs = defaultScheduledJobs()
@@ -494,7 +545,7 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
         status: { conditions: [{ type: "Complete", status: "True" }] },
       }
     }
-    if (command.args.includes("persistentvolumeclaims")) {
+    if (isCollectionRead(command, "persistentvolumeclaims", reaperPvcsApiPath)) {
       const claims = submitted.filter((manifest) => manifest.kind === "PersistentVolumeClaim")
       const referencePod = submitted.find((manifest) => manifest.kind === "Pod")
       if (claims.length !== 3 || referencePod === undefined) {
@@ -532,9 +583,9 @@ function createReaperRunner(options: ReaperRunnerOptions = {}): {
         apiVersion: "v1",
         kind: "PersistentVolumeClaimList",
         items: [
-          ...(options.retainStale === true ? [structuredClone(stale)] : []),
-          observedFresh,
-          observedReferenced,
+          ...(options.retainStale === true ? [withoutTypeMeta(stale)] : []),
+          withoutTypeMeta(observedFresh),
+          withoutTypeMeta(observedReferenced),
         ],
       }
     }
@@ -667,9 +718,8 @@ describe("positive and negative pod fixtures", () => {
         `dawn.sh/compat-run=${runId},dawn.sh/compat-component=${String(metadata(service).name)}`,
       ]),
     )
-    const cleanupCommands = execute.mock.calls
-      .map(([command]) => command)
-      .filter((command) => command.args.includes("delete"))
+    const cleanupCalls = execute.mock.calls.filter(([command]) => command.args.includes("delete"))
+    const cleanupCommands = cleanupCalls.map(([command]) => command)
     expect(
       cleanupCommands.some((command) => command.args.includes(`pod/${String(clientName)}`)),
     ).toBe(true)
@@ -678,6 +728,7 @@ describe("positive and negative pod fixtures", () => {
       expect(cleanupCommand.args).not.toContain("--output")
       expect(cleanupCommand.args).not.toContain("-o")
     }
+    for (const [, options] of cleanupCalls) expect(options?.timeoutMs).toBe(60_000)
     const callsAfterCleanup = execute.mock.calls.length
     await lease.cleanup()
     expect(execute).toHaveBeenCalledTimes(callsAfterCleanup)
@@ -1051,7 +1102,7 @@ describe("same-candidate chart operations", () => {
       if (command.file === "helm" && command.args.includes("status")) {
         return helmStatus(names.appRelease, revision)
       }
-      if (command.args.includes("deployments")) {
+      if (isCollectionRead(command, "deployments", deploymentsApiPath)) {
         return deploymentList(desired, available, [
           { name: "app", image: policy.images.placeholderApp },
         ])
@@ -1127,22 +1178,11 @@ describe("same-candidate chart operations", () => {
       ])
     }
     const deploymentChecks = execute.mock.calls.filter(([command]) =>
-      command.args.includes("deployments"),
+      isCollectionRead(command, "deployments", deploymentsApiPath),
     )
     expect(deploymentChecks).toHaveLength(2)
     for (const [command] of deploymentChecks) {
-      expect(command.args).toEqual([
-        "--context",
-        context,
-        "get",
-        "deployments",
-        "--namespace",
-        names.managementNamespace,
-        "--selector",
-        `app.kubernetes.io/instance=${names.appRelease}`,
-        "--output",
-        "json",
-      ])
+      expect(command.args).toEqual(["--context", context, "get", "--raw", deploymentsApiPath])
     }
   })
 
@@ -1156,7 +1196,7 @@ describe("same-candidate chart operations", () => {
       const execute = fakeRunner((command) =>
         command.file === "helm" && command.args.includes("status")
           ? helmStatus(names.appRelease, revision)
-          : command.args.includes("deployments")
+          : isCollectionRead(command, "deployments", deploymentsApiPath)
             ? deploymentList(replicas, replicas, [{ name: "app", image: wrongImage }])
             : {},
       )
@@ -1200,7 +1240,7 @@ describe("same-candidate chart operations", () => {
     const execute = fakeRunner((command) =>
       command.file === "helm" && command.args.includes("status")
         ? helmStatus(names.appRelease, 1)
-        : command.args.includes("deployments")
+        : isCollectionRead(command, "deployments", deploymentsApiPath)
           ? deploymentList(1, 1, liveContainers)
           : {},
     )
@@ -1215,7 +1255,7 @@ describe("same-candidate chart operations", () => {
     const execute = fakeRunner((command) =>
       command.file === "helm" && command.args.includes("status")
         ? helmStatus(names.appRelease, 1)
-        : command.args.includes("deployments")
+        : isCollectionRead(command, "deployments", deploymentsApiPath)
           ? deploymentList(2, 2, [{ name: "app", image: policy.images.placeholderApp }])
           : {},
     )
@@ -1236,7 +1276,7 @@ describe("same-candidate chart operations", () => {
       const execute = fakeRunner((command) =>
         command.file === "helm" && command.args.includes("status")
           ? helmStatus(names.appRelease, observedRevision)
-          : command.args.includes("deployments")
+          : isCollectionRead(command, "deployments", deploymentsApiPath)
             ? deploymentList(desiredReplicas, availableReplicas, [
                 { name: "app", image: policy.images.placeholderApp },
               ])
@@ -1345,23 +1385,17 @@ describe("reaper and application Service probes", () => {
     )
 
     expect(runner.delay.mock.calls.length).toBeGreaterThan(2)
-    const jobLists = runner.execute.mock.calls.filter(
-      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-    )
+    const jobLists = runner.execute.mock.calls.filter(([command]) => isScheduledJobsRead(command))
     expect(jobLists.length).toBeGreaterThan(3)
     for (const [command, options] of jobLists) {
-      expect(command.args).toEqual([
-        "--context",
-        context,
-        "get",
-        "jobs",
-        "--namespace",
-        names.sandboxNamespace,
-        "--output",
-        "json",
-      ])
+      expect(command.args).toEqual(["--context", context, "get", "--raw", scheduledJobsApiPath])
       expect(options?.timeoutMs).toBe(30_000)
     }
+    const pvcLists = runner.execute.mock.calls.filter(([command]) =>
+      isCollectionRead(command, "persistentvolumeclaims", reaperPvcsApiPath),
+    )
+    expect(pvcLists).toHaveLength(1)
+    expect(pvcLists[0]?.[0].args).toEqual(["--context", context, "get", "--raw", reaperPvcsApiPath])
     const lateWaitIndex = runner.execute.mock.calls.findIndex(([command]) =>
       command.args.includes("job/dawn-reaper-late"),
     )
@@ -1419,6 +1453,13 @@ describe("reaper and application Service probes", () => {
       },
     ],
     [
+      "partial type metadata",
+      (job: JsonObject) => {
+        delete job.kind
+        return job
+      },
+    ],
+    [
       "controller owner reference",
       (job: JsonObject) => {
         const ownerReferences = metadata(job).ownerReferences as JsonObject[]
@@ -1444,7 +1485,11 @@ describe("reaper and application Service probes", () => {
 
       await expect(
         runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
-      ).rejects.toThrow(/active CronJob reference.*exactly match.*owned Job/i)
+      ).rejects.toThrow(
+        _case === "apiVersion" || _case === "kind" || _case === "partial type metadata"
+          ? /Scheduled Reaper Job list.*match batch\/v1 Job/i
+          : /active CronJob reference.*exactly match.*owned Job/i,
+      )
 
       expect(submitted).toHaveLength(0)
     },
@@ -1473,9 +1518,7 @@ describe("reaper and application Service probes", () => {
 
     expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
     expect(now()).toBe(35_000)
-    const listCalls = execute.mock.calls.filter(
-      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-    )
+    const listCalls = execute.mock.calls.filter(([command]) => isScheduledJobsRead(command))
     expect(listCalls.length).toBeGreaterThan(2)
     for (const unrelatedName of ["unrelated-different-owner", "unrelated-no-owner"]) {
       expect(
@@ -1499,9 +1542,7 @@ describe("reaper and application Service probes", () => {
 
     expect(submitted.some((manifest) => manifest.kind === "PersistentVolumeClaim")).toBe(true)
     expect(now()).toBe(35_000)
-    const listCalls = execute.mock.calls.filter(
-      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-    )
+    const listCalls = execute.mock.calls.filter(([command]) => isScheduledJobsRead(command))
     expect(listCalls.length).toBeGreaterThan(2)
     expect(
       execute.mock.calls.some(([command]) => command.args.includes("job/dawn-reaper-completed")),
@@ -1543,9 +1584,7 @@ describe("reaper and application Service probes", () => {
       runReaperLifecycleProbe({ context, runId, policy, execute }, { delay, now }),
     ).rejects.toThrow(/scheduled Reaper Job settlement budget/i)
 
-    const listCalls = execute.mock.calls.filter(
-      ([command]) => command.args.includes("get") && command.args.includes("jobs"),
-    )
+    const listCalls = execute.mock.calls.filter(([command]) => isScheduledJobsRead(command))
     expect(listCalls.length).toBeGreaterThan(10)
     expect(listCalls.length).toBeLessThanOrEqual(100)
     expect(now()).toBeGreaterThanOrEqual(35_000)
@@ -1920,7 +1959,7 @@ describe("reaper and application Service probes", () => {
     const policy = await loadCompatibilityPolicy()
     let submittedPod: JsonObject | undefined
     const execute = fakeRunner((command, options) => {
-      if (command.args.includes("services")) return serviceList()
+      if (isCollectionRead(command, "services", servicesApiPath)) return serviceList()
       if (options.stdin !== undefined) {
         submittedPod = stdinObject(options)
         return submittedPod
@@ -1954,20 +1993,9 @@ describe("reaper and application Service probes", () => {
       ]),
     )
     const serviceCheck = execute.mock.calls.find(([command]) =>
-      command.args.includes("services"),
+      isCollectionRead(command, "services", servicesApiPath),
     )?.[0]
-    expect(serviceCheck?.args).toEqual([
-      "--context",
-      context,
-      "get",
-      "services",
-      "--namespace",
-      names.managementNamespace,
-      "--selector",
-      `app.kubernetes.io/instance=${names.appRelease}`,
-      "--output",
-      "json",
-    ])
+    expect(serviceCheck?.args).toEqual(["--context", context, "get", "--raw", servicesApiPath])
     expect(
       execute.mock.calls.some(
         ([command]) =>
@@ -2004,7 +2032,7 @@ describe("reaper and application Service probes", () => {
     const policy = await loadCompatibilityPolicy()
     let submittedPod: JsonObject | undefined
     const execute = fakeRunner((command, options) => {
-      if (command.args.includes("services")) return serviceList()
+      if (isCollectionRead(command, "services", servicesApiPath)) return serviceList()
       if (options.stdin !== undefined) {
         submittedPod = stdinObject(options)
         return submittedPod
@@ -2355,6 +2383,20 @@ describe("probe command routing, evidence, and cleanup", () => {
     const [command, options] = execute.mock.calls[0] ?? []
     expect(command?.args).toContain("--v=8")
     expect(options?.sensitiveOutput).toBe(true)
+  })
+
+  test("extracts the kubectl v1.35 multiline Status response body", async () => {
+    const status = forbidden(
+      `secrets is forbidden: User "system:serviceaccount:${names.sandboxNamespace}:dawn-orchestrator" cannot list resource "secrets" in API group "" in the namespace "${names.sandboxNamespace}"`,
+      { kind: "secrets" },
+    )
+    const execute = fakeRunner(() => ({
+      exitCode: 1,
+      body: "",
+      stderr: multilineStructuredResponseLog(status),
+    }))
+
+    await runSecretReadDeniedProbe({ context, kubeconfig, runId, execute })
   })
 
   test("routes v1.35 structured response bodies through quota, Pod Security, and RBAC validators", async () => {

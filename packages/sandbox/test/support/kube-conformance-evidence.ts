@@ -91,11 +91,11 @@ export function buildNodeEvalCommand(source: string): string {
 export function buildDnsProbeCommand(url: string): string {
   const hostname = new URL(url).hostname
   const source = [
-    'const { promises: dns } = require("node:dns")',
+    'const { promises: dns } = require("node:dns");',
     `dns.lookup(${JSON.stringify(hostname)})`,
     '  .then(() => console.log("DAWN_DNS_RESULT=resolved"))',
     "  .catch((error) => { console.error(error); process.exitCode = 1 })",
-  ].join("; ")
+  ].join("\n")
   return buildNodeEvalCommand(source)
 }
 
@@ -104,7 +104,7 @@ export function buildEgressProbeCommand(url: string): string {
     `fetch(${JSON.stringify(url)}, { signal: AbortSignal.timeout(5000) })`,
     '  .then(() => { console.log("DAWN_EGRESS_RESULT=reached"); process.exit(0) })',
     '  .catch(() => { console.log("DAWN_EGRESS_RESULT=blocked"); process.exit(7) })',
-  ].join("; ")
+  ].join("\n")
   return buildNodeEvalCommand(source)
 }
 
