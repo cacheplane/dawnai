@@ -42,7 +42,7 @@ test("draft creation proves an annotated tag and re-reads the exact created draf
     releases: [],
     release: {
       id: 7,
-      tag_name: TAG,
+      tag_name: "untagged-opaque",
       target_commitish: "main",
       prerelease: false,
       name: `Dawn v${VERSION}`,
@@ -83,6 +83,160 @@ test("draft creation proves an annotated tag and re-reads the exact created draf
     generate_release_notes: false,
   })
   assert.equal(Object.hasOwn(JSON.parse(calls[0].init.body), "target_commitish"), false)
+})
+
+test("draft creation discovers one exact mutable draft despite an opaque temporary tag", async () => {
+  const fixture = verifiedPublicationFixture()
+  const release = { ...draftRelease(fixture.body), tag_name: "untagged-opaque" }
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({ releases: [release], release }),
+    fetchImpl: assert.fail,
+  })
+
+  assert.deepEqual(
+    await writer.createDraftRelease({
+      tag: TAG,
+      targetSha: SHA,
+      title: `Dawn v${VERSION}`,
+      body: fixture.body,
+    }),
+    {
+      releaseId: 7,
+      status: "existing",
+      bodySha256: releaseBodySha256(fixture.body),
+    },
+  )
+})
+
+test("draft creation reconciles one exact opaque-tag race and rejects ambiguous duplicates", async () => {
+  const fixture = verifiedPublicationFixture()
+  const release = { ...draftRelease(fixture.body), tag_name: "untagged-opaque" }
+  let lists = 0
+  const raced = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      releases() {
+        lists += 1
+        return lists === 1 ? [] : [release]
+      },
+      release,
+    }),
+    fetchImpl: async () => jsonResponse({}, 422),
+  })
+
+  assert.deepEqual(
+    await raced.createDraftRelease({
+      tag: TAG,
+      targetSha: SHA,
+      title: `Dawn v${VERSION}`,
+      body: fixture.body,
+    }),
+    {
+      releaseId: 7,
+      status: "existing",
+      bodySha256: releaseBodySha256(fixture.body),
+    },
+  )
+  assert.equal(lists, 2)
+
+  let mutations = 0
+  const duplicate = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      releases: [release, { ...release, id: 8, tag_name: "untagged-other" }],
+      release,
+    }),
+    fetchImpl: async () => {
+      mutations += 1
+      return jsonResponse({}, 201)
+    },
+  })
+  await assert.rejects(
+    duplicate.createDraftRelease({
+      tag: TAG,
+      targetSha: SHA,
+      title: `Dawn v${VERSION}`,
+      body: fixture.body,
+    }),
+    /duplicate|ambiguous/iu,
+  )
+  assert.equal(mutations, 0)
+})
+
+test("draft updates and asset uploads preserve tag verification around opaque-tag mutations", async () => {
+  let updateTagReads = 0
+  let body = "old body"
+  const updateWriter = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release: () => ({ ...draftRelease(body), tag_name: "untagged-opaque" }),
+      tagTargetSha() {
+        updateTagReads += 1
+        return SHA
+      },
+    }),
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body).body
+      return jsonResponse({ id: 7 }, 200)
+    },
+  })
+  assert.deepEqual(
+    await updateWriter.updateDraftReleaseIfCurrent({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      expectedBodySha256: releaseBodySha256("old body"),
+      title: `Dawn v${VERSION}`,
+      body: "new body",
+    }),
+    {
+      releaseId: 7,
+      status: "updated",
+      bodySha256: releaseBodySha256("new body"),
+    },
+  )
+  assert.equal(updateTagReads, 2)
+
+  const bytes = Buffer.from("exact asset")
+  const digest = sha256(bytes)
+  const assets = []
+  const downloads = new Map()
+  let uploadTagReads = 0
+  const uploadWriter = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release: { ...draftRelease("body"), tag_name: "untagged-opaque" },
+      assets,
+      downloads,
+      tagTargetSha() {
+        uploadTagReads += 1
+        return SHA
+      },
+    }),
+    fetchImpl: async () => {
+      assets.push({ id: 90, name: "manifest.json" })
+      downloads.set(90, bytes)
+      return jsonResponse({ id: 90 }, 201)
+    },
+  })
+  assert.deepEqual(
+    await uploadWriter.uploadAssetIfAbsentAndEqual({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      name: "manifest.json",
+      bytes,
+      sha256: digest,
+    }),
+    { assetId: 90, status: "uploaded", sha256: digest },
+  )
+  assert.equal(uploadTagReads, 2)
 })
 
 test("writer rejects lightweight tags and stale body CAS without mutation", async () => {
@@ -537,7 +691,7 @@ test("writer bounds response time, content type, redirects, and output bytes", a
   await assert.rejects(dispatch(oversized), /byte limit/iu)
 })
 
-test("publication changes only draft state and requires immutable unchanged re-read", async () => {
+test("publication binds the exact tag and requires an exact immutable unchanged re-read", async () => {
   const fixture = verifiedPublicationFixture()
   const calls = []
   let releaseReads = 0
@@ -546,7 +700,7 @@ test("publication changes only draft state and requires immutable unchanged re-r
       releaseReads += 1
       return {
         id: 7,
-        tag_name: TAG,
+        tag_name: releaseReads === 1 ? "untagged-opaque" : TAG,
         target_commitish: "main",
         prerelease: false,
         name: `Dawn v${VERSION}`,
@@ -578,7 +732,113 @@ test("publication changes only draft state and requires immutable unchanged re-r
   assert.deepEqual(result, { releaseId: 7, status: "published", immutable: true })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].url, `${API_BASE}/releases/7`)
-  assert.deepEqual(JSON.parse(calls[0].init.body), { draft: false })
+  assert.deepEqual(JSON.parse(calls[0].init.body), { tag_name: TAG, draft: false })
+})
+
+test("publication PATCH includes the exact requested tag for an already tagged draft", async () => {
+  const fixture = verifiedPublicationFixture()
+  const calls = []
+  let releaseReads = 0
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release() {
+        releaseReads += 1
+        return {
+          ...draftRelease(fixture.body),
+          draft: releaseReads === 1,
+          immutable: releaseReads > 1,
+        }
+      },
+      assets: fixture.assets.map((asset, index) => ({ id: index + 1, name: asset.name })),
+      downloads: new Map(fixture.assets.map((asset, index) => [index + 1, asset.bytes])),
+    }),
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), init })
+      return jsonResponse({ id: 7, draft: false }, 200)
+    },
+  })
+
+  await writer.publishReleaseIfCurrent({
+    releaseId: 7,
+    tag: TAG,
+    targetSha: SHA,
+    expectedBodySha256: releaseBodySha256(fixture.body),
+    assets: fixture.assets.map(({ name, digest }) => ({ name, sha256: digest })),
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(JSON.parse(calls[0].init.body), { tag_name: TAG, draft: false })
+})
+
+test("publication rejects an immutable re-read that retains the opaque temporary tag", async () => {
+  const fixture = verifiedPublicationFixture()
+  let releaseReads = 0
+  const writer = createGitHubWriter({
+    owner: OWNER,
+    repo: REPO,
+    reader: exactReader({
+      release() {
+        releaseReads += 1
+        return {
+          ...draftRelease(fixture.body),
+          tag_name: "untagged-opaque",
+          draft: releaseReads === 1,
+          immutable: releaseReads > 1,
+        }
+      },
+      assets: fixture.assets.map((asset, index) => ({ id: index + 1, name: asset.name })),
+      downloads: new Map(fixture.assets.map((asset, index) => [index + 1, asset.bytes])),
+    }),
+    fetchImpl: async () => jsonResponse({ id: 7, draft: false }, 200),
+  })
+
+  await assert.rejects(
+    writer.publishReleaseIfCurrent({
+      releaseId: 7,
+      tag: TAG,
+      targetSha: SHA,
+      expectedBodySha256: releaseBodySha256(fixture.body),
+      assets: fixture.assets.map(({ name, digest }) => ({ name, sha256: digest })),
+    }),
+    /identity|metadata|tag/iu,
+  )
+  assert.equal(releaseReads, 2)
+})
+
+test("an existing published Release must expose the exact tag and be immutable", async () => {
+  const fixture = verifiedPublicationFixture()
+  let mutations = 0
+  for (const release of [
+    { ...draftRelease(fixture.body), tag_name: "untagged-opaque", draft: false, immutable: true },
+    { ...draftRelease(fixture.body), draft: false, immutable: false },
+  ]) {
+    const writer = createGitHubWriter({
+      owner: OWNER,
+      repo: REPO,
+      reader: exactReader({
+        release,
+        assets: fixture.assets.map((asset, index) => ({ id: index + 1, name: asset.name })),
+        downloads: new Map(fixture.assets.map((asset, index) => [index + 1, asset.bytes])),
+      }),
+      fetchImpl: async () => {
+        mutations += 1
+        return jsonResponse({}, 200)
+      },
+    })
+    await assert.rejects(
+      writer.publishReleaseIfCurrent({
+        releaseId: 7,
+        tag: TAG,
+        targetSha: SHA,
+        expectedBodySha256: releaseBodySha256(fixture.body),
+        assets: fixture.assets.map(({ name, digest }) => ({ name, sha256: digest })),
+      }),
+      /identity|metadata|immutable/iu,
+    )
+  }
+  assert.equal(mutations, 0)
 })
 
 test("publication rejects a marker whose immutable base digest does not match its assets", async () => {

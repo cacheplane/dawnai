@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import { normalizeAdapterEnvelope, snapshotJson } from "../adapter-normalize.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import {
+  isManagedReleaseForTag,
   parseReleaseMarker,
   parseSmokeReleaseAssetName,
   preflightPublicationAssetMetadata,
@@ -127,10 +128,17 @@ export function createGitHubWriter({
       validateText(args.title, 512, "Release title")
       validateText(args.body, 1024 * 1024, "Release body")
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
-      const existing = await findReleaseByTag(context, args.tag)
+      const existing = await findReleaseByTag(context, args)
       if (existing !== null) {
         const release = await readRelease(context, existing.id)
-        assertDraftIdentity(release, args, { title: args.title, body: args.body })
+        assertDraftIdentity(
+          release,
+          { ...args, releaseId: existing.id },
+          {
+            title: args.title,
+            body: args.body,
+          },
+        )
         await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({
           releaseId: release.id,
@@ -160,13 +168,13 @@ export function createGitHubWriter({
         releaseId = positiveId(response.body?.id, "created Release ID")
         status = "created"
       } else {
-        const raced = await findReleaseByTag(context, args.tag)
+        const raced = await findReleaseByTag(context, args)
         if (raced === null) throw new Error("GitHub draft creation race could not be reconciled")
         releaseId = raced.id
         status = "existing"
       }
       const release = await readRelease(context, releaseId)
-      assertDraftIdentity(release, args, { title: args.title, body: args.body })
+      assertDraftIdentity(release, { ...args, releaseId }, { title: args.title, body: args.body })
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
       return Object.freeze({
         releaseId,
@@ -269,7 +277,8 @@ export function createGitHubWriter({
       const expectedAssets = normalizeExpectedAssets(args.assets)
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
       const current = await readRelease(context, releaseId)
-      assertReleaseIdentity(current, args)
+      if (current.draft === true) assertDraftIdentity(current, args)
+      else assertPublishedIdentity(current, args)
       if (releaseBodySha256(current.body) !== args.expectedBodySha256) {
         throw new Error("Release publication body compare-and-swap is stale")
       }
@@ -277,30 +286,20 @@ export function createGitHubWriter({
       validatePublicationMarker(marker, args, expectedAssets)
       await assertExactPublicationAssets(context, releaseId, expectedAssets, marker)
       if (current.draft === false) {
-        if (current.immutable !== true)
-          throw new Error("Published managed Release is not immutable")
         await verifyAnnotatedTag(context, args.tag, args.targetSha)
         return Object.freeze({ releaseId, status: "existing", immutable: true })
-      }
-      if (current.draft !== true || current.immutable !== false) {
-        throw new Error("Release publication requires one mutable draft")
       }
       const response = await requestJson(context, {
         url: `${context.base}/releases/${releaseId}`,
         method: "PATCH",
         apiVersion: RELEASE_API_VERSION,
-        body: { draft: false },
+        body: { tag_name: args.tag, draft: false },
       })
       if (response.httpStatus !== 200)
         throw new Error("Release publication did not return HTTP 200")
       const published = await readRelease(context, releaseId)
-      assertReleaseIdentity(published, args)
-      if (
-        published.draft !== false ||
-        published.immutable !== true ||
-        published.body !== current.body ||
-        published.name !== current.name
-      ) {
+      assertPublishedIdentity(published, args)
+      if (published.body !== current.body || published.name !== current.name) {
         throw new Error("Published Release immutable re-read changed metadata")
       }
       await assertExactPublicationAssets(context, releaseId, expectedAssets, marker)
@@ -370,10 +369,15 @@ async function verifyAnnotatedTag(context, tag, targetSha) {
   }
 }
 
-async function findReleaseByTag(context, tag) {
+async function findReleaseByTag(context, { tag, title, body }) {
   const releases = await readValue(context, "listReleases", {}, "releases")
   if (!Array.isArray(releases)) throw new Error("GitHub Release list is malformed")
-  const matches = releases.filter((release) => isRecord(release) && release.tag_name === tag)
+  const matches = releases.filter(
+    (release) =>
+      isRecord(release) &&
+      (release.tag_name === tag ||
+        (release.name === title && release.body === body && isManagedReleaseForTag(release, tag))),
+  )
   if (matches.length > 1) throw new Error("Duplicate matching GitHub Releases are ambiguous")
   if (matches.length === 0) return null
   return { id: positiveId(matches[0].id, "Release ID") }
@@ -421,7 +425,7 @@ async function readValue(context, method, args, operation) {
 }
 
 function assertDraftIdentity(release, args, expected = {}) {
-  assertReleaseIdentity(release, args)
+  assertCommonReleaseMetadata(release, args)
   if (release.draft !== true || release.immutable !== false) {
     throw new Error("GitHub Release is not the expected mutable draft")
   }
@@ -433,11 +437,17 @@ function assertDraftIdentity(release, args, expected = {}) {
   }
 }
 
-function assertReleaseIdentity(release, args) {
+function assertPublishedIdentity(release, args) {
+  assertCommonReleaseMetadata(release, args)
+  if (release.tag_name !== args.tag || release.draft !== false || release.immutable !== true) {
+    throw new Error("GitHub published Release identity or metadata is malformed")
+  }
+}
+
+function assertCommonReleaseMetadata(release, args) {
   if (
-    positiveId(release.id, "Release ID") !==
-      positiveId(args.releaseId ?? release.id, "Release ID") ||
-    release.tag_name !== args.tag ||
+    positiveId(release.id, "Release ID") !== positiveId(args.releaseId, "Release ID") ||
+    typeof release.tag_name !== "string" ||
     release.target_commitish !== "main" ||
     release.prerelease !== false ||
     typeof release.name !== "string" ||
