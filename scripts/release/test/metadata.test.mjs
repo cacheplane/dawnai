@@ -7,6 +7,7 @@ import {
   canonicalBaseAssetSet,
   canonicalReleaseBody,
   escrowCandidate,
+  isManagedReleaseForTag,
   parseAttestationSet,
   parsePublicationState,
   parseReleaseMarker,
@@ -86,6 +87,49 @@ test("release bodies contain one canonical exact marker and reject phase-invalid
         manifest: fixture.manifest,
       }),
     /attestation|repository|identity/iu,
+  )
+})
+
+test("managed Release identity accepts exact tags or canonical mutable-draft markers only", () => {
+  const fixture = releaseFixture()
+  const body = canonicalReleaseBody({
+    marker: attachingMarker(fixture),
+    manifest: fixture.manifest,
+  })
+
+  assert.equal(isManagedReleaseForTag({ tag_name: `v${VERSION}` }, `v${VERSION}`), true)
+  assert.equal(
+    isManagedReleaseForTag(
+      { tag_name: "untagged-opaque", draft: true, immutable: false, body },
+      `v${VERSION}`,
+    ),
+    true,
+  )
+  assert.equal(
+    isManagedReleaseForTag(
+      { tag_name: "untagged-opaque", draft: false, immutable: true, body },
+      `v${VERSION}`,
+    ),
+    false,
+  )
+  assert.equal(
+    isManagedReleaseForTag(
+      { tag_name: "untagged-opaque", draft: true, immutable: false, body: "malformed" },
+      `v${VERSION}`,
+    ),
+    false,
+  )
+  assert.equal(
+    isManagedReleaseForTag(
+      Object.defineProperty({}, "tag_name", {
+        enumerable: true,
+        get() {
+          throw new Error("must not execute accessors")
+        },
+      }),
+      `v${VERSION}`,
+    ),
+    false,
   )
 })
 
@@ -452,6 +496,89 @@ test("escrow creates one resumable 45-asset draft and advances its marker only a
   })
   assert.equal(repeated.status, "unchanged")
   assert.equal(remote.uploadCount, 45)
+})
+
+test("escrow resumes the exact attaching draft whose opaque tag is bound by its canonical marker", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  remote.release = {
+    id: 7,
+    tag_name: "untagged-opaque",
+    target_commitish: "main",
+    prerelease: false,
+    name: `Dawn v${VERSION}`,
+    body: canonicalReleaseBody({ marker: attachingMarker(fixture), manifest: fixture.manifest }),
+    draft: true,
+    immutable: false,
+  }
+
+  const result = await escrowCandidate({
+    candidate: CANDIDATE,
+    record: fixture.record,
+    artifact: fixture.artifact,
+    attestationSet: fixture.attestationSet,
+    bundles: fixture.bundles,
+    publicationState: publicationState(fixture),
+    attestations: verifiedAttestations(fixture),
+    github: remote.github,
+  })
+
+  assert.deepEqual(result, {
+    releaseId: 7,
+    phase: "ESCROWED",
+    status: "escrowed",
+    assetCount: 45,
+    bodySha256: releaseBodySha256(remote.release.body),
+  })
+  assert.equal(remote.createCount, 0)
+  assert.equal(remote.release.tag_name, "untagged-opaque")
+})
+
+test("escrow rejects duplicate marker-bearing drafts before mutation", async () => {
+  const fixture = releaseFixture()
+  const remote = inMemoryGitHub()
+  const body = canonicalReleaseBody({
+    marker: attachingMarker(fixture),
+    manifest: fixture.manifest,
+  })
+  remote.listedReleases = [
+    {
+      id: 7,
+      tag_name: "untagged-opaque-a",
+      target_commitish: "main",
+      prerelease: false,
+      name: `Dawn v${VERSION}`,
+      body,
+      draft: true,
+      immutable: false,
+    },
+    {
+      id: 8,
+      tag_name: "untagged-opaque-b",
+      target_commitish: "main",
+      prerelease: false,
+      name: `Dawn v${VERSION}`,
+      body,
+      draft: true,
+      immutable: false,
+    },
+  ]
+
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: fixture.attestationSet,
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations: verifiedAttestations(fixture),
+      github: remote.github,
+    }),
+    /Duplicate managed Releases are ambiguous/u,
+  )
+
+  assert.equal(remote.createCount + remote.uploadCount + remote.updateCount, 0)
 })
 
 test("escrow adopts one different valid concurrent Release bundle and binds its signed replay run", async () => {
@@ -1708,9 +1835,11 @@ function zip(files) {
 function inMemoryGitHub() {
   const remote = {
     release: null,
+    listedReleases: null,
     assets: new Map(),
     nextAssetId: 1,
     uploadCount: 0,
+    createCount: 0,
     updateCount: 0,
     publishCount: 0,
     failAfterUploads: null,
@@ -1746,7 +1875,7 @@ function inMemoryGitHub() {
     async listReleases() {
       return present(
         "releases",
-        remote.release === null ? [] : [{ id: 7, tag_name: `v${VERSION}` }],
+        remote.listedReleases ?? (remote.release === null ? [] : [{ ...remote.release }]),
       )
     },
     async getRelease() {
@@ -1811,6 +1940,7 @@ function inMemoryGitHub() {
   })
   const writer = Object.freeze({
     async createDraftRelease({ tag, title, body }) {
+      remote.createCount += 1
       if (remote.release === null) {
         remote.release = {
           id: 7,
