@@ -20,7 +20,7 @@
       "sha256": "09b5423224b2d76c6cba6de616a1fabae0f5d0efc126e68c3ed3f8de7c82f924"
     },
     "scripts/release/cli.mjs": {
-      "sha256": "027c3e84b07ccc2f40011a536dd8661e04b3b5df7fc78477b463f333411b73fa"
+      "sha256": "0b4ef4fa1c7eb24120c11ac77571c0700ca9d379096148a2295a6a1c73927d08"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
       "sha256": "29803cd7d46310091d1f723f1ca7c821242127f6127c118dc95ed94db7a3efa7"

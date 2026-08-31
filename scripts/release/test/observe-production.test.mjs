@@ -629,6 +629,68 @@ test("production publication history ignores the branch coordinator and schedule
   assert.equal(observation.registry.mutationStarted, false)
 })
 
+test("production publication history permits only the current exact-tag detect before publish materializes", async () => {
+  const currentRun = {
+    id: 40,
+    name: "Release",
+    path: ".github/workflows/release.yml",
+    head_sha: COMMIT_SHA,
+    head_branch: `v${VERSION}`,
+    status: "in_progress",
+    conclusion: null,
+    run_attempt: 1,
+  }
+  const github = githubReader({
+    async listWorkflowRuns({ workflow }) {
+      return present("workflow-runs", workflow === "ci.yml" ? ciRuns() : [currentRun])
+    },
+    async listActionsRunJobs({ runId }) {
+      assert.equal(runId, currentRun.id)
+      return present("actions-run-jobs", [
+        {
+          id: 401,
+          runAttempt: 1,
+          name: "detect",
+          status: "in_progress",
+          conclusion: null,
+          startedAt: "2026-08-31T15:44:39.000Z",
+          completedAt: null,
+        },
+      ])
+    },
+  })
+
+  const blocked = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: gitReader(),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.ok(blocked.diagnostics.some((entry) => entry.code === "PUBLISHER_JOB_HISTORY_INVALID"))
+
+  const current = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: gitReader(),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+    currentPublisherRun: {
+      runId: currentRun.id,
+      runAttempt: currentRun.run_attempt,
+      ref: `refs/tags/v${VERSION}`,
+      sha: COMMIT_SHA,
+    },
+  })
+  assert.deepEqual(current.diagnostics, [])
+  assert.equal(current.observation.registry.publishJobStarted, false)
+  assert.equal(current.observation.registry.mutationStarted, false)
+})
+
 test("production observation binds a prepared artifact to its exact run and release record", async () => {
   const prepared = preparedArtifactFixture()
   const github = githubReader({
@@ -2762,6 +2824,75 @@ test("observe CLI resolves the immutable candidate, runs the dry one-transition 
         "",
       ].join("\n"),
     )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("observe CLI identifies its exact current tag attempt before downstream jobs materialize", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dawn-observe-current-run-"))
+  try {
+    const eventPath = path.join(directory, "event.json")
+    const reportPath = path.join(directory, "report.json")
+    const outputPath = path.join(directory, "github-output")
+    await Promise.all([
+      writeFile(
+        eventPath,
+        `${JSON.stringify({ inputs: { version: VERSION, commitSha: COMMIT_SHA } })}\n`,
+      ),
+      writeFile(outputPath, ""),
+    ])
+    const dependencies = cliCandidateDependencies(directory)
+    const base = githubReader()
+    dependencies.githubReader = {
+      ...base,
+      async listWorkflowRuns(input) {
+        if (input.workflow === "ci.yml") return base.listWorkflowRuns(input)
+        return present("workflow-runs", [
+          {
+            id: 40,
+            name: "Release",
+            path: ".github/workflows/release.yml",
+            head_sha: COMMIT_SHA,
+            head_branch: `v${VERSION}`,
+            status: "in_progress",
+            conclusion: null,
+            run_attempt: 1,
+          },
+        ])
+      },
+      async listActionsRunJobs(input) {
+        if (Number(input.runId) === 40) {
+          return present("actions-run-jobs", [
+            {
+              id: 401,
+              runAttempt: 1,
+              name: "detect",
+              status: "in_progress",
+              conclusion: null,
+              startedAt: "2026-08-31T15:44:39.000Z",
+              completedAt: null,
+            },
+          ])
+        }
+        return base.listActionsRunJobs(input)
+      },
+    }
+    dependencies.environment = {
+      GITHUB_REF: `refs/tags/v${VERSION}`,
+      GITHUB_SHA: COMMIT_SHA,
+      GITHUB_RUN_ID: "40",
+      GITHUB_RUN_ATTEMPT: "1",
+    }
+
+    const result = await runReleaseCli(
+      ["observe", "--event", eventPath, "--report", reportPath, "--github-output", outputPath],
+      dependencies,
+    )
+
+    assert.deepEqual(result.diagnostics, [])
+    assert.equal(result.before.plan.state, "CANDIDATE_TAGGED")
+    assert.equal(result.before.plan.nextTransition, "prepare-artifacts")
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

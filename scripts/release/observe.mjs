@@ -330,11 +330,13 @@ export async function observeProductionCandidate({
   npmAuditFactory,
   attestations,
   includeRecovery = false,
+  currentPublisherRun = null,
 }) {
   if (typeof includeRecovery !== "boolean") {
     throw new TypeError("Production recovery inclusion flag is invalid")
   }
   const identity = normalizeCandidate(candidate)
+  const currentRun = normalizeCurrentPublisherRun(currentPublisherRun, identity)
   const managedInventory = normalizeProductionInventory(inventory, identity)
   normalizeControllerMarker(marker)
   assertMethods(git, ["resolveTag"], "Git reader")
@@ -584,6 +586,7 @@ export async function observeProductionCandidate({
     candidate: identity,
     github,
     diagnostics,
+    currentPublisherRun: currentRun,
   })
   if (publicationHistory.ambiguous) {
     registryPackages = registryPackages.map((pkg) => ambiguousRegistryPackage(pkg.name))
@@ -4093,7 +4096,13 @@ function normalizeEnvelope(value, options, diagnostics) {
   return result
 }
 
-async function observeProductionPublicationHistory({ result, candidate, github, diagnostics }) {
+async function observeProductionPublicationHistory({
+  result,
+  candidate,
+  github,
+  diagnostics,
+  currentPublisherRun,
+}) {
   if (result.status !== "PRESENT" || !Array.isArray(result.value)) {
     return { started: false, ambiguous: true }
   }
@@ -4133,7 +4142,12 @@ async function observeProductionPublicationHistory({ result, candidate, github, 
     }
     runIds.add(value.id)
     if (value.head_branch === `v${candidate.version}`) {
-      runs.push({ id: value.id, runAttempt: value.run_attempt })
+      runs.push({
+        id: value.id,
+        runAttempt: value.run_attempt,
+        status: value.status,
+        conclusion: value.conclusion,
+      })
     }
   }
 
@@ -4145,7 +4159,14 @@ async function observeProductionPublicationHistory({ result, candidate, github, 
       payloadKey: "value",
       diagnostics,
     })
-    const jobs = normalizePublisherJobs(jobsResult, run.runAttempt)
+    const jobs = normalizePublisherJobs(jobsResult, run.runAttempt, {
+      allowCurrentAttemptWithoutPublisherJob:
+        currentPublisherRun !== null &&
+        run.id === currentPublisherRun.runId &&
+        run.runAttempt === currentPublisherRun.runAttempt &&
+        run.status === "in_progress" &&
+        run.conclusion === null,
+    })
     if (jobs === null) {
       addDiagnostic(
         diagnostics,
@@ -4161,7 +4182,11 @@ async function observeProductionPublicationHistory({ result, candidate, github, 
   return { started, ambiguous: false }
 }
 
-function normalizePublisherJobs(result, currentAttempt) {
+function normalizePublisherJobs(
+  result,
+  currentAttempt,
+  { allowCurrentAttemptWithoutPublisherJob = false } = {},
+) {
   if (
     result.status !== "PRESENT" ||
     !Array.isArray(result.value) ||
@@ -4230,9 +4255,29 @@ function normalizePublisherJobs(result, currentAttempt) {
     return null
   }
   for (let attempt = 1; attempt <= currentAttempt; attempt += 1) {
-    if (publisherJobsByAttempt.get(attempt) !== 1) return null
+    const publisherJobs = publisherJobsByAttempt.get(attempt) ?? 0
+    if (
+      publisherJobs !== 1 &&
+      !(allowCurrentAttemptWithoutPublisherJob && attempt === currentAttempt && publisherJobs === 0)
+    ) {
+      return null
+    }
   }
   return jobs
+}
+
+function normalizeCurrentPublisherRun(value, candidate) {
+  if (value === null || value === undefined) return null
+  if (
+    !hasExactKeys(value, ["runId", "runAttempt", "ref", "sha"]) ||
+    !isPositiveSafeInteger(value.runId) ||
+    !isPositiveSafeInteger(value.runAttempt) ||
+    value.ref !== `refs/tags/v${candidate.version}` ||
+    value.sha !== candidate.commitSha
+  ) {
+    throw new TypeError("Current publisher run identity is invalid")
+  }
+  return snapshotJson(value)
 }
 
 function publisherJobObservedStarted(job) {

@@ -366,6 +366,10 @@ async function runObserve(options, runtime) {
     }
   }
   const npmAuditFactory = await requireNpmAuditFactory(runtime)
+  const currentPublisherRun = currentPublisherRunFromEnvironment(
+    runtime.environment,
+    selection.candidate,
+  )
   const observer = {
     async observe() {
       if (resolutionFailure !== null || selection.candidate === null) {
@@ -385,6 +389,7 @@ async function runObserve(options, runtime) {
           npmAuditFactory,
           attestations,
           includeRecovery: true,
+          ...(currentPublisherRun === null ? {} : { currentPublisherRun }),
         })
         observationDiagnostics = normalizeObservationDiagnostics(result.diagnostics)
         observationRecovery = snapshotCliData(result.recovery, "production recovery evidence")
@@ -1799,6 +1804,28 @@ function projectEnvironment(environment, names) {
     result[name] = descriptor.value
   }
   return Object.freeze(result)
+}
+
+function currentPublisherRunFromEnvironment(environment, candidate) {
+  if (candidate === null) return null
+  const projected = projectEnvironment(environment, [
+    "GITHUB_REF",
+    "GITHUB_SHA",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+  ])
+  if (
+    projected.GITHUB_REF !== `refs/tags/v${candidate.version}` ||
+    projected.GITHUB_SHA !== candidate.commitSha
+  ) {
+    return null
+  }
+  return Object.freeze({
+    runId: environmentPositiveInteger(projected, "GITHUB_RUN_ID"),
+    runAttempt: environmentPositiveInteger(projected, "GITHUB_RUN_ATTEMPT"),
+    ref: projected.GITHUB_REF,
+    sha: projected.GITHUB_SHA,
+  })
 }
 
 function environmentPositiveInteger(environment, name) {
