@@ -1194,14 +1194,20 @@ describe("shell-free command executor", () => {
     expect(listProcesses.mock.calls.length).toBeLessThanOrEqual(30)
   })
 
-  test("reports a process-table scan failure without exposing process details", async () => {
+  test.each([
+    ["unknown error", new Error("sensitive process-table failure")],
+    [
+      "command timeout",
+      Object.assign(new Error("sensitive process-table timeout"), { killed: true }),
+    ],
+  ])("reports a %s process-table scan failure without exposing details", async (reason, cause) => {
     const child = new ControlledChild()
     child.pid = 6_121
     const controller = new AbortController()
     const executor = createCommandExecutor(() => child as never, {
       platform: "linux",
       listProcesses: async () => {
-        throw new Error("sensitive process-table failure")
+        throw cause
       },
       delay: async () => {},
     })
@@ -1220,8 +1226,8 @@ describe("shell-free command executor", () => {
     child.emit("close", null, "SIGKILL")
 
     const error = await rejectedError(execution)
-    expect(error.message).toMatch(/process table scan failed/i)
-    expect(error.message).not.toContain("sensitive process-table failure")
+    expect(error.message).toContain(`process table scan failed: ${reason}`)
+    expect(error.message).not.toContain(cause.message)
   })
 
   test("falls back safely when an opted-in child has no PID", async () => {

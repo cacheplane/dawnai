@@ -498,6 +498,7 @@ interface ProcessTreeTracker {
   rootExited: boolean
   identityProofFailed: boolean
   scanFailed: boolean
+  scanFailureReason: string | undefined
   unconfirmedReason: string | undefined
   lastActivityScanStartedAt: number
   scanRequested: boolean
@@ -544,6 +545,24 @@ function matchesRetainedProcessIdentity(
 function rejectProcessIdentity(tracker: ProcessTreeTracker, pid: number): void {
   tracker.untrustedPids.add(pid)
   tracker.identityProofFailed = true
+}
+
+function processTableFailureReason(cause: unknown): string {
+  if (cause instanceof Error) {
+    if (cause.message === "Process table contained an invalid row") return "invalid row"
+    if (cause.message === "Process table contained an invalid process identifier") {
+      return "invalid process identifier"
+    }
+    if (cause.message === "Process table contained invalid process metadata") {
+      return "invalid process metadata"
+    }
+  }
+  if (typeof cause === "object" && cause !== null) {
+    if ("killed" in cause && cause.killed === true) return "command timeout"
+    if ("code" in cause && cause.code === "ENOBUFS") return "output limit exceeded"
+    if ("code" in cause && cause.code === "ENOENT") return "process listing unavailable"
+  }
+  return "unknown error"
 }
 
 function updateTrackedProcesses(
@@ -630,8 +649,9 @@ function requestProcessTreeScan(
   const run = async (): Promise<void> => {
     try {
       updateTrackedProcesses(tracker, await dependencies.listProcesses())
-    } catch {
+    } catch (cause) {
       tracker.scanFailed = true
+      tracker.scanFailureReason ??= processTableFailureReason(cause)
     }
   }
   tracker.scan = run().finally(() => {
@@ -658,6 +678,7 @@ function createProcessTreeTracker(
     rootExited: false,
     identityProofFailed: false,
     scanFailed: false,
+    scanFailureReason: undefined,
     unconfirmedReason: undefined,
     lastActivityScanStartedAt: 0,
     scanRequested: false,
@@ -784,7 +805,7 @@ async function terminatePosixProcessTree(
   }
   if (tracker !== undefined) {
     tracker.unconfirmedReason = tracker.scanFailed
-      ? "process table scan failed"
+      ? `process table scan failed: ${tracker.scanFailureReason ?? "unknown error"}`
       : dispatchFailures.length > 0
         ? "termination dispatch failed"
         : tracker.identityProofFailed
