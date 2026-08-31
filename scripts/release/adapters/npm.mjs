@@ -161,6 +161,9 @@ async function observePackageVersion({ registry, http, name, version, signal }) 
     signal,
   })
   if (versionResult.status !== "PRESENT") {
+    if (versionResult.httpStatus === 404) {
+      return confirmPackageVersionAbsent({ registry, http, name, version, signal })
+    }
     return versionResult
   }
 
@@ -210,6 +213,33 @@ async function observePackageVersion({ registry, http, name, version, signal }) 
       latest: distTags.latest ?? null,
     },
   }
+}
+
+async function confirmPackageVersionAbsent({ registry, http, name, version, signal }) {
+  const metadataResult = await getJson({
+    http,
+    url: new URL(encodeURIComponent(name), registry),
+    operation: "package-metadata",
+    accept: "application/vnd.npm.install-v1+json",
+    signal,
+  })
+  if (metadataResult.status !== "PRESENT") {
+    return failure(
+      metadataResult.status,
+      "package-version",
+      metadataResult.httpStatus,
+      metadataResult.code,
+    )
+  }
+  const packument = normalizePackument(metadataResult.body, name)
+  const versions = normalizePackumentVersions(packument?.versions, name)
+  if (versions === null) {
+    return failure("ERROR", "package-version", metadataResult.httpStatus, "MALFORMED_SCHEMA")
+  }
+  if (versions.has(version)) {
+    return failure("AMBIGUOUS", "package-version", 404, "REGISTRY_VERSION_CONFLICT")
+  }
+  return failure("ABSENT", "package-version", 404, "E404")
 }
 
 async function getJson({ http, url, operation, accept, signal }) {
@@ -283,6 +313,23 @@ function normalizePackument(value, expectedName) {
   return name?.enumerable === true && "value" in name && name.value === expectedName
     ? snapshot
     : null
+}
+
+function normalizePackumentVersions(value, expectedName) {
+  if (!isObject(value)) return null
+  const versions = new Set()
+  for (const [version, document] of Object.entries(value)) {
+    if (
+      !isExactSemver(version) ||
+      !isObject(document) ||
+      document.name !== expectedName ||
+      document.version !== version
+    ) {
+      return null
+    }
+    versions.add(version)
+  }
+  return versions
 }
 
 function normalizeRegistryUrl(value) {

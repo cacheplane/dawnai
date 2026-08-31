@@ -552,7 +552,12 @@ test("the production npm reader distinguishes exact absence and every determinis
     name: PACKAGE_NAMES[0],
     version: VERSION,
   })
-  assert.equal(delayedMissing.status, "ABSENT")
+  assert.deepEqual(pickClassification(delayedMissing), {
+    status: "AMBIGUOUS",
+    operation: "package-version",
+    httpStatus: 404,
+    code: "REGISTRY_VERSION_CONFLICT",
+  })
   assert.equal(
     (
       await reader.observePackageVersion({
@@ -568,7 +573,7 @@ test("the production npm reader distinguishes exact absence and every determinis
   assertPlannerDisposition({
     exact: delayedMissing,
     latest: visibleLatest,
-    blocked: false,
+    blocked: true,
     candidateVersion: VERSION,
   })
 
