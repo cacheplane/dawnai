@@ -998,10 +998,14 @@ DAWN_TASK9_ALLOW_UNISOLATED_DEVELOPER_SKIP=1 \
 node "$LEGACY_RUN_ROOT/run-infra-reconciler-process-tests.mjs"
 ```
 
-- [ ] **Step 2: Run focused stress and protected-evidence nonmutation checks**
+- [ ] **Step 2: Run focused stress and synthetic nonmutation checks**
 
-Record fresh `stat` and SHA-256 snapshots of protected evidence before and after
-stress. The missing tool root must remain absent.
+Run this step only against the synthetic fixture roots created by the Task 10
+tests. Record fresh `stat` and SHA-256 snapshots of synthetic sentinel evidence
+before and after stress, and require the synthetic missing tool root to remain
+absent. Do not open, stat, hash, copy, mount, or otherwise access the protected
+stale-run evidence; Task 11 remains the only future task allowed to define that
+operation after a native Darwin design is approved.
 
 ```bash
 for i in $(seq 1 25); do

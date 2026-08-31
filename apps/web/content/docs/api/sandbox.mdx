@@ -39,6 +39,7 @@ The root uses Node APIs, Docker process execution, and the Kubernetes client. `/
 | `dockerSandbox` | Create the Docker provider. |
 | `KubeClient` | Describe the public Kubernetes client seam; helper request shapes remain implementation details. |
 | `KubePermission` | Describe one Kubernetes authorization check used by the public client seam. |
+| `KubeAuthorizationReviewError` | Preserve API-versus-transport failure classification from custom Kubernetes clients. |
 | `KubernetesSandboxOptions` | Configure the Kubernetes image, namespace, storage class, timeout, and client seam. |
 | `kubernetesSandbox` | Create the Kubernetes provider. |
 
@@ -60,6 +61,18 @@ export interface KubernetesSandboxOptions {
   readonly client?: KubeClient
 }
 ```
+
+```ts api-contract="@dawn-ai/sandbox#.:KubeAuthorizationReviewError"
+export declare class KubeAuthorizationReviewError extends Error {
+  readonly kind: "api" | "transport"
+  constructor(kind: "api" | "transport", message: string, options?: ErrorOptions)
+}
+```
+
+Custom `KubeClient.canI` implementations should throw this error when an
+authorization review cannot complete. Use `api` when the Kubernetes API answers
+but rejects or cannot process the review, and `transport` when the API cannot be
+reached.
 
 ```ts api-contract="@dawn-ai/sandbox#.:dockerSandbox"
 export declare function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider

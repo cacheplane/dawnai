@@ -1,6 +1,7 @@
 import { ApiException } from "@kubernetes/client-node"
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
+import { KubeAuthorizationReviewError as PublicKubeAuthorizationReviewError } from "../src/index.ts"
 import { createDefaultKubeClient } from "../src/kubernetes/default-kube-client.ts"
 import {
   KubeAuthorizationReviewError,
@@ -69,6 +70,13 @@ const cannotUseCoreNetworkPolicy: KubePermission = {
 void [publicPermission, cannotDeletePodExec, cannotListPods, cannotUseCoreNetworkPolicy]
 
 describe("Kubernetes permission contract", () => {
+  test("exports the authorization-review error contract for custom clients", () => {
+    const error = new PublicKubeAuthorizationReviewError("api", "review rejected")
+
+    expect(error).toBeInstanceOf(KubeAuthorizationReviewError)
+    expect(error).toMatchObject({ kind: "api", message: "review rejected" })
+  })
+
   test("contains only the provider's exact valid operations", () => {
     expect(REQUIRED_KUBE_PERMISSIONS).toEqual(expected)
   })

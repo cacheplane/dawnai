@@ -20,7 +20,7 @@ export const STATIC_LASTMOD: Readonly<Record<string, string>> = {
   "/docs/api/memory-pgvector": "2026-08-12T12:57:08.000Z",
   "/docs/api/permissions": "2026-08-18T19:54:03.000Z",
   "/docs/api/postgres-storage": "2026-08-12T12:57:08.000Z",
-  "/docs/api/sandbox": "2026-08-31T17:24:03.000Z",
+  "/docs/api/sandbox": "2026-08-31T17:50:09.000Z",
   "/docs/api/sdk": "2026-08-12T16:14:07.000Z",
   "/docs/api/sqlite-storage": "2026-08-18T19:54:22.000Z",
   "/docs/api/testing": "2026-08-12T16:14:07.000Z",

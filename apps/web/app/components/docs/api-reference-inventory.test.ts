@@ -2087,6 +2087,8 @@ describe("package API reference pages", { timeout: 30_000 }, () => {
       "DockerSandboxOptions",
       "dockerSandbox",
       "KubeClient",
+      "KubeAuthorizationReviewError",
+      "KubePermission",
       "KubernetesSandboxOptions",
       "kubernetesSandbox",
     ]) {

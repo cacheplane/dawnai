@@ -1015,6 +1015,7 @@ export const API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
   "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubeAuthorizationReviewError",
   "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
   "@dawn-ai/sandbox#.:dockerSandbox",
   "@dawn-ai/sandbox#.:kubernetesSandbox",

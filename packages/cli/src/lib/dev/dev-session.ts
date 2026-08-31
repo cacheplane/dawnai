@@ -152,34 +152,46 @@ class InternalDevSession {
     let currentReason = reason
 
     try {
-      do {
+      while (!this.closed) {
         this.pendingRestart = false
-        writeLine(this.io.stdout, `Restarting Dawn dev server (${currentReason})`)
-        await this.startOrRestart()
-        currentReason = this.pendingRestartReason ?? currentReason
         this.pendingRestartReason = undefined
-      } while (this.pendingRestart && !this.closed)
+        writeLine(this.io.stdout, `Restarting Dawn dev server (${currentReason})`)
 
-      if (!this.closed) {
+        try {
+          await this.startOrRestart()
+        } catch (error) {
+          if (isFatalDevSessionError(error)) {
+            await this.failFatal(error)
+            return
+          }
+
+          if (!this.hasBeenReady) {
+            await this.failFatal(new Error(`Fatal dev session error: ${formatErrorMessage(error)}`))
+            return
+          }
+
+          this.currentChild = null
+          writeLine(
+            this.io.stderr,
+            `Restart failed; watching for changes: ${formatErrorMessage(error)}`,
+          )
+
+          if (!this.pendingRestart) {
+            return
+          }
+
+          currentReason = this.pendingRestartReason ?? currentReason
+          continue
+        }
+
+        if (this.pendingRestart) {
+          currentReason = this.pendingRestartReason ?? currentReason
+          continue
+        }
+
         writeLine(this.io.stdout, `Dawn dev ready at ${this.url}`)
-      }
-    } catch (error) {
-      if (isFatalDevSessionError(error)) {
-        await this.failFatal(error)
         return
       }
-
-      if (this.hasBeenReady) {
-        this.currentChild = null
-        writeLine(
-          this.io.stderr,
-          `Restart failed; watching for changes: ${formatErrorMessage(error)}`,
-        )
-        return
-      }
-
-      await this.failFatal(new Error(`Fatal dev session error: ${formatErrorMessage(error)}`))
-      return
     } finally {
       this.restartInFlight = false
     }
