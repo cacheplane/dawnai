@@ -1010,7 +1010,7 @@
         "stepIndex": 11,
         "step": "Preload sandbox workload image into kind",
         "kind": "run",
-        "value": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\nkind load docker-image \"$SANDBOX_IMAGE\" --name \"$KIND_CLUSTER\"\n"
+        "value": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker exec \"${KIND_CLUSTER}-control-plane\" crictl pull \"$SANDBOX_IMAGE\"\ndocker exec \"${KIND_CLUSTER}-control-plane\" crictl inspecti \"$SANDBOX_IMAGE\" >/dev/null\n"
       },
       {
         "classification": "safe",
@@ -1074,7 +1074,7 @@
         "stepIndex": 19,
         "step": "Diagnostics + cleanup",
         "kind": "run",
-        "value": "echo \"----- app -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app get pods,svc -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-app -n dawn-app || true\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-sandbox-infra -n dawn-app || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
+        "value": "echo \"----- app -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app get pods,svc -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes describe pods -l app.kubernetes.io/managed-by=dawn || true\necho \"----- teardown -----\"\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-app -n dawn-app || true\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-sandbox-infra -n dawn-app || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
       },
       {
         "classification": "safe",
