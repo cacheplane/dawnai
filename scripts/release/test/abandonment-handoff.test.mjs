@@ -492,7 +492,7 @@ function githubReader(raw, calls) {
     },
     async getRelease({ releaseId }) {
       calls.github.push("getRelease")
-      const listed = raw.releases.find(({ tag_name: tagName }) => tagName === `v${VERSION}`)
+      const listed = raw.releases.find((release) => release.id === releaseId)
       assert.equal(releaseId, listed?.id)
       return present("release", raw.release)
     },
@@ -520,10 +520,10 @@ function rawReleaseFixture(observation) {
   const release = {
     id: 901,
     name: `Dawn v${VERSION}`,
-    tag_name: `v${VERSION}`,
+    tag_name: observation.release.status === "published" ? `v${VERSION}` : "untagged-opaque",
     target_commitish: "main",
-    draft: true,
-    immutable: false,
+    draft: observation.release.status !== "published",
+    immutable: observation.release.status === "published",
     prerelease: false,
     body: releaseBody(observation),
   }

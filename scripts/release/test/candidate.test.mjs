@@ -394,18 +394,84 @@ test("scheduled discovery admits an exact AUDIT_VERIFIED draft for production ob
     commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
   ])
   const release = auditVerifiedDraftRelease(21, "0.8.21", SHA_21)
+  release.tag_name = "untagged-opaque"
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [release],
+  })
 
   const result = await discoverScheduledCandidate({
     inventory: repository.inventory,
     git: repository.git,
-    github: githubFixture({
-      tags: [tagRef("0.8.21", SHA_21)],
-      releases: [release],
-    }),
+    github,
     marker: ACTIVE_MARKER,
   })
 
   assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+  assert.deepEqual(
+    github.calls.filter(([operation]) => operation === "listReleaseAssets"),
+    [["listReleaseAssets", release.id]],
+  )
+})
+
+test("scheduled discovery ignores malformed temporary drafts beside a marker-backed candidate", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const release = auditVerifiedDraftRelease(21, "0.8.21", SHA_21)
+  release.tag_name = "untagged-opaque"
+  const github = githubFixture({
+    tags: [tagRef("0.8.21", SHA_21)],
+    releases: [
+      {
+        id: 99,
+        tag_name: "untagged-unrelated",
+        draft: true,
+        immutable: false,
+        body: `${release.body}${release.body}`,
+        assets: [],
+      },
+      release,
+    ],
+  })
+
+  const result = await discoverScheduledCandidate({
+    inventory: repository.inventory,
+    git: repository.git,
+    github,
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+  assert.deepEqual(
+    github.calls.filter(([operation]) => operation === "listReleaseAssets"),
+    [["listReleaseAssets", release.id]],
+  )
+})
+
+test("scheduled discovery fails closed on duplicate marker-backed candidate drafts", async () => {
+  const repository = repositoryFixture([
+    commit(BASE_SHA, "0.8.20"),
+    commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
+  ])
+  const release = auditVerifiedDraftRelease(21, "0.8.21", SHA_21)
+  release.tag_name = "untagged-opaque"
+  const duplicate = auditVerifiedDraftRelease(22, "0.8.21", SHA_21)
+  duplicate.tag_name = "untagged-conflict"
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      inventory: repository.inventory,
+      git: repository.git,
+      github: githubFixture({
+        tags: [tagRef("0.8.21", SHA_21)],
+        releases: [release, duplicate],
+      }),
+      marker: ACTIVE_MARKER,
+    }),
+    /duplicated|duplicate|ambiguous/iu,
+  )
 })
 
 test("scheduled discovery rejects successful audit evidence on any inexact draft", async () => {

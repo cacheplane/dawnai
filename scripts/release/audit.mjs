@@ -5,6 +5,7 @@ import { extractActionsArtifactZip } from "./artifact-store.mjs"
 import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import {
   canonicalReleaseBody,
+  isManagedReleaseForTag,
   parseReleaseMarker,
   parseSmokeReleaseAssetName,
   preflightAuditDraftAssetMetadata,
@@ -723,11 +724,12 @@ async function verifyAnnotatedCandidateTag(reader, candidate) {
 async function requireDraftRelease(reader, candidate) {
   const releases = await readValue(reader.listReleases({}), "releases")
   if (!Array.isArray(releases)) throw new Error("Managed Release list is malformed")
-  const matches = releases.filter((release) => release?.tag_name === `v${candidate.version}`)
+  const matches = releases.filter((release) =>
+    isManagedReleaseForTag(release, `v${candidate.version}`),
+  )
   if (matches.length !== 1) throw new Error("Managed audit draft is missing or ambiguous")
   const release = await readManagedRelease(reader, positiveId(matches[0].id, "Release ID"))
   if (
-    release.tag_name !== `v${candidate.version}` ||
     release.name !== `Dawn v${candidate.version}` ||
     typeof release.body !== "string" ||
     release.draft !== true ||

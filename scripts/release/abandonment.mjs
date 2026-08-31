@@ -6,6 +6,7 @@ import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import {
   abandonmentReleaseMarker,
   canonicalReleaseBody,
+  isManagedReleaseForTag,
   parseReleaseMarker,
   releaseBodySha256,
 } from "./metadata.mjs"
@@ -672,7 +673,7 @@ async function reconcileReleaseList({ releases, context, candidate, reader }) {
     }
     if (ids.has(release.id)) throw new Error("GitHub Release identities are duplicate")
     ids.add(release.id)
-    if (release.tag_name === `v${candidate.version}`) matches.push(release)
+    if (isManagedReleaseForTag(release, `v${candidate.version}`)) matches.push(release)
     if (release.tag_name.startsWith("v") && isReleaseVersion(release.tag_name.slice(1))) {
       if (compareSemver(release.tag_name.slice(1), candidate.version) > 0) {
         throw new Error("A newer GitHub Release interleaved before abandonment")
@@ -707,7 +708,9 @@ async function reobserveReleaseBoundary(reader, candidate, expectedRelease) {
       throw new Error("GitHub Release identity is malformed or duplicate")
     }
     ids.add(release.id)
-    if (release.tag_name === `v${candidate.version}`) candidateMatches.push(release)
+    if (isManagedReleaseForTag(release, `v${candidate.version}`)) {
+      candidateMatches.push(release)
+    }
     if (release.tag_name.startsWith("v") && isReleaseVersion(release.tag_name.slice(1))) {
       if (compareSemver(release.tag_name.slice(1), candidate.version) > 0) {
         throw new Error("A newer GitHub Release interleaved before abandonment")
@@ -1131,7 +1134,7 @@ async function readManagedRelease(reader, releaseId) {
 
 function assertDraftRelease(release, candidate) {
   if (
-    release.tag_name !== `v${candidate.version}` ||
+    !isManagedReleaseForTag(release, `v${candidate.version}`) ||
     release.target_commitish !== "main" ||
     release.prerelease !== false ||
     typeof release.name !== "string" ||

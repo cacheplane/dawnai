@@ -82,6 +82,13 @@ test("independent dispatch uses the exact tag workflow and direct run receipt", 
 
 test("dispatch recording CASes only an exact mutable SMOKES_COMPLETE draft", async () => {
   const remote = auditRemote()
+  remote.listedReleases.push({
+    id: 8,
+    tag_name: "untagged-unrelated",
+    draft: true,
+    immutable: false,
+    body: `${remote.release.body}${remote.release.body}`,
+  })
   const before = remote.baseSnapshot()
   const recorded = await recordAuditDispatch({
     candidate: CANDIDATE,
@@ -116,6 +123,21 @@ test("dispatch recording CASes only an exact mutable SMOKES_COMPLETE draft", asy
     }),
     /dispatch|phase|conflict/iu,
   )
+})
+
+test("dispatch recording rejects duplicate marker-backed drafts before mutation", async () => {
+  const remote = auditRemote()
+  remote.listedReleases.push({ ...remote.release, id: 8 })
+
+  await assert.rejects(
+    recordAuditDispatch({
+      candidate: CANDIDATE,
+      dispatch: dispatch(501),
+      github: remote.releaseGitHub,
+    }),
+    /missing|ambiguous|duplicate/iu,
+  )
+  assert.equal(remote.updateCount, 0)
 })
 
 test("audit observation parses durable smoke receipts and recomputes their selected aggregate", async () => {
@@ -652,7 +674,7 @@ function auditRemote() {
   const remote = {
     release: {
       id: 7,
-      tag_name: `v${VERSION}`,
+      tag_name: "untagged-opaque",
       target_commitish: "main",
       prerelease: false,
       name: `Dawn v${VERSION}`,
@@ -665,6 +687,7 @@ function auditRemote() {
     updateCount: 0,
     uploadCount: 0,
     publishCount: 0,
+    listedReleases: [{ id: 7 }],
     throwAfterUploadName: null,
     throwAfterUpdate: false,
   }
@@ -691,7 +714,12 @@ function auditRemote() {
       })
     },
     async listReleases() {
-      return present("releases", [{ id: 7, tag_name: `v${VERSION}` }])
+      return present(
+        "releases",
+        remote.listedReleases.map((release) =>
+          release.id === remote.release.id ? { ...remote.release, ...release } : release,
+        ),
+      )
     },
     async getRelease() {
       return present("release", { ...remote.release })

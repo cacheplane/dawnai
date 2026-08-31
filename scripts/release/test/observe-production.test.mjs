@@ -1425,12 +1425,22 @@ test("production observation rejects a retained manifest sealed by a pull-reques
 
 test("production observation partitions and binds the exact draft Release base namespace", async () => {
   const escrow = attestedReleaseFixture()
+  escrow.release.tag_name = "untagged-opaque"
   const github = githubReader({
     async listActionsArtifacts() {
       return present("actions-artifacts", [])
     },
     async listReleases() {
-      return present("releases", [escrow.release])
+      return present("releases", [
+        {
+          id: 999,
+          tag_name: "untagged-unrelated",
+          draft: true,
+          immutable: false,
+          body: `${escrow.release.body}${escrow.release.body}`,
+        },
+        escrow.release,
+      ])
     },
     async getRelease({ releaseId }) {
       assert.equal(releaseId, escrow.release.id)
@@ -1478,6 +1488,38 @@ test("production observation partitions and binds the exact draft Release base n
   assert.equal(plan.state, "CANDIDATE_ESCROWED")
   assert.equal(plan.nextTransition, "publish-npm-packages")
   assert.deepEqual(plan.conflicts, [])
+})
+
+test("production observation fails closed on duplicate marker-backed draft Releases", async () => {
+  const escrow = attestedReleaseFixture()
+  escrow.release.tag_name = "untagged-opaque"
+  const duplicate = { ...escrow.release, id: escrow.release.id + 1 }
+  let exactReads = 0
+  const github = githubReader({
+    async listActionsArtifacts() {
+      return present("actions-artifacts", [])
+    },
+    async listReleases() {
+      return present("releases", [escrow.release, duplicate])
+    },
+    async getRelease() {
+      exactReads += 1
+      throw new Error("ambiguous drafts must fail before an exact Release read")
+    },
+  })
+
+  const { observation, diagnostics } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: gitReader(),
+    github,
+    npm: npmReader(),
+  })
+
+  assert.equal(exactReads, 0)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.ok(diagnostics.some((entry) => entry.code === "RELEASE_IDENTITY_AMBIGUOUS"))
 })
 
 test("production observation rejects a retained attestation winner without its exact Actions run", async () => {

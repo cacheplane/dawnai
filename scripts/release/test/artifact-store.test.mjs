@@ -18,7 +18,9 @@ import {
 } from "../artifact-store.mjs"
 import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import { canonicalReleaseBody } from "../metadata.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
+import { observationForMarker } from "./support/marker-observation.mjs"
 
 const VERSION = "0.8.22"
 const SHA = "a".repeat(40)
@@ -298,13 +300,18 @@ test("the documented four-argument resolver defaults to its built-in ZIP extract
 
 test("the sparse executable dependency allowlist covers its exact local import closure", () => {
   assert.deepEqual(ARTIFACT_STORE_SPARSE_FILES, [
+    "scripts/release/adapter-normalize.mjs",
     "scripts/release/adapters/github.mjs",
     "scripts/release/adapters/http.mjs",
     "scripts/release/artifact-store.mjs",
     "scripts/release/limits.mjs",
     "scripts/release/manifest.mjs",
+    "scripts/release/metadata.mjs",
+    "scripts/release/npm-evidence.mjs",
     "scripts/release/release-record.mjs",
     "scripts/release/semver.mjs",
+    "scripts/release/smoke-result.mjs",
+    "scripts/release/terminal-records.mjs",
     "scripts/release/topology.mjs",
   ])
 })
@@ -355,6 +362,10 @@ test("production escrow accepts GitHub's main target only after exact annotated-
     size: bytes.length,
   }))
   const byId = new Map(assets.map((asset) => [asset.id, contents.get(asset.name)]))
+  const draftBody = canonicalReleaseBody({
+    marker: observationForMarker({ phase: "ESCROWED" }).release.marker,
+    manifest: null,
+  })
   const calls = []
   const runtime = createArtifactStoreGitHubRuntime({
     metadataReader: {
@@ -364,10 +375,21 @@ test("production escrow accepts GitHub's main target only after exact annotated-
           value: [
             {
               id: 44,
-              tag_name: fixture.record.tag,
+              tag_name: "untagged-opaque",
               target_commitish: "main",
               draft: true,
+              immutable: false,
               prerelease: false,
+              body: draftBody,
+            },
+            {
+              id: 45,
+              tag_name: "untagged-unrelated",
+              target_commitish: "main",
+              draft: true,
+              immutable: false,
+              prerelease: false,
+              body: `${draftBody}${draftBody}`,
             },
           ],
         }
@@ -450,6 +472,7 @@ test("production escrow rejects noncanonical targets, lightweight tags, and wron
                 tag_name: fixture.record.tag,
                 target_commitish: variation.target,
                 draft: true,
+                immutable: false,
                 prerelease: false,
               },
             ],
@@ -498,6 +521,7 @@ test("production escrow downloads share one bounded byte budget", async () => {
               tag_name: fixture.record.tag,
               target_commitish: "main",
               draft: true,
+              immutable: false,
               prerelease: false,
             },
           ],
@@ -547,6 +571,7 @@ test("escrow rejects an oversized asset from metadata before downloading it", as
               tag_name: fixture.record.tag,
               target_commitish: "main",
               draft: true,
+              immutable: false,
               prerelease: false,
             },
           ],

@@ -14,7 +14,12 @@ import { createCliAttestationVerifier } from "./artifact-store.mjs"
 import { readBoundedFixture } from "./fixture-io.mjs"
 import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
-import { canonicalReleaseBody, MAX_AUDIT_ATTEMPTS, parseReleaseMarker } from "./metadata.mjs"
+import {
+  canonicalReleaseBody,
+  isManagedReleaseForTag,
+  MAX_AUDIT_ATTEMPTS,
+  parseReleaseMarker,
+} from "./metadata.mjs"
 import { createNpmAuditVerifier } from "./npm-audit.mjs"
 import {
   createProductionInventoryReader,
@@ -350,7 +355,7 @@ function parseDispatchRelease(value, candidate, manifestSha256) {
     !isRecord(release) ||
     !isPositiveInteger(release.id) ||
     release.name !== `Dawn v${candidate.version}` ||
-    release.tag_name !== `v${candidate.version}` ||
+    !isManagedReleaseForTag(release, `v${candidate.version}`) ||
     release.target_commitish !== "main" ||
     release.draft !== true ||
     release.immutable !== false ||
