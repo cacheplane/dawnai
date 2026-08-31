@@ -27,6 +27,7 @@ import { afterEach, expect, it } from "vitest"
 import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
 import { handleAgUiRequest } from "../src/lib/dev/agui-handler.js"
+import { createLiveTurnHub } from "../src/lib/dev/live-turn-hub.js"
 import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
 import { createRunRegistry } from "../src/lib/dev/run-registry.js"
 import { createRuntimeRequestListener } from "../src/lib/dev/runtime-server.js"
@@ -168,6 +169,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
       checkpointer:
         controlled.checkpointer ??
         ({ getTuple: async () => undefined } as unknown as BaseCheckpointSaver),
+      liveTurnHub: createLiveTurnHub(),
       middleware: undefined,
       registry: {
         appRoot,

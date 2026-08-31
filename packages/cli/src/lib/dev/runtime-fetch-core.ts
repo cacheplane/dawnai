@@ -22,6 +22,7 @@ import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { handleAgUiFetchRequest } from "./agui-handler.js"
+import { createLiveTurnHub, type LiveTurnHub, type LiveTurnProducer } from "./live-turn-hub.js"
 import {
   handleMemoryApproveRequest,
   handleMemoryListRequest,
@@ -276,6 +277,11 @@ export interface RuntimeFetchHandler {
 const CLOSE_DRAIN_DEADLINE_MS = 30_000
 const AP_SSE_HEARTBEAT_INTERVAL_MS = 15_000
 const AP_SSE_HEARTBEAT = new TextEncoder().encode(": ping\n\n")
+const AP_ATTACH_DIGEST_MAX_BYTES = 2 * 1024 * 1024
+const AP_ATTACH_MAX_VIEWERS = 16
+/** Base retry hint for the durable-path terminator; jittered ±500ms to break multi-tab lockstep. */
+const AP_ATTACH_RETRY_BASE_MS = 2000
+const AP_ATTACH_RETRY_JITTER_MS = 500
 
 export async function createRuntimeFetchHandler(
   options: StartRuntimeServerOptions & {
@@ -283,6 +289,10 @@ export async function createRuntimeFetchHandler(
     readonly drainDeadlineMs?: number
     /** Internal/test hook: override AP SSE heartbeat interval (default 15s). */
     readonly apSseHeartbeatIntervalMs?: number
+    /** Serialized-bytes cap for a live turn's shared digest (default 2 MiB). */
+    readonly apAttachDigestMaxBytes?: number
+    /** Per-thread cap on concurrent `GET /runs/stream` attachers (default 16). */
+    readonly apAttachMaxViewers?: number
   },
 ): Promise<RuntimeFetchHandler> {
   // The node filesystem fallbacks, when this runtime has any. `dawn dev` /
@@ -502,6 +512,14 @@ export async function createRuntimeFetchHandler(
   const runRegistry = createRunRegistry()
   const resumeClaims = createPendingResumeClaims()
 
+  // Handler-scoped, same lifetime rule as runRegistry: a live turn's digest
+  // and subscriber set are per-process state, so multiple handler instances in
+  // one process (the (Request) => Response core exists to allow that) stay
+  // isolated from each other.
+  const liveTurnHub = createLiveTurnHub({
+    digestMaxBytes: options.apAttachDigestMaxBytes ?? AP_ATTACH_DIGEST_MAX_BYTES,
+  })
+
   // Request-scoped store overrides. Keyed on the Request object rather than
   // carried in AsyncLocalStorage, which would require nodejs_compat on workerd
   // — the whole point of PR2a was that the bundle needs no such flag. Every
@@ -657,8 +675,10 @@ export async function createRuntimeFetchHandler(
   }
 
   const apSseHeartbeatIntervalMs = options.apSseHeartbeatIntervalMs ?? AP_SSE_HEARTBEAT_INTERVAL_MS
+  const apAttachMaxViewers = options.apAttachMaxViewers ?? AP_ATTACH_MAX_VIEWERS
   const routes = buildRouteTable({
     appRoot: options.appRoot,
+    apAttachMaxViewers,
     apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
@@ -666,6 +686,7 @@ export async function createRuntimeFetchHandler(
     getPermissionsStore,
     getRunRegistry,
     getThreadsStore,
+    liveTurnHub,
     middleware,
     registry,
     resumeClaims,
@@ -825,6 +846,11 @@ export async function createRuntimeFetchHandler(
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
+    // Fan a terminal frame to every hanging attach viewer before draining, so
+    // a shutdown does not leave them waiting on a heartbeat that will never
+    // resolve into a `done`.
+    liveTurnHub.closeAll()
+
     // Drain in-flight work — bounded: an SSE body nobody ever reads (or a
     // leaked in-flight slot) must not wedge shutdown forever.
     //
@@ -971,6 +997,7 @@ function isRowWeJustWrote(thread: Thread, stored: Record<string, unknown> | unde
  */
 export function buildRouteTable(ctx: {
   readonly appRoot: string
+  readonly apAttachMaxViewers: number
   readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly getCheckpointer: (request: Request) => BaseCheckpointSaver
@@ -985,6 +1012,7 @@ export function buildRouteTable(ctx: {
    */
   readonly getRunRegistry: (request: Request) => RunRegistry
   readonly getThreadsStore: (request: Request) => ThreadsStore
+  readonly liveTurnHub: LiveTurnHub
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   /**
@@ -1007,6 +1035,7 @@ export function buildRouteTable(ctx: {
 }): RouteMatcher[] {
   const {
     appRoot,
+    apAttachMaxViewers,
     apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
@@ -1014,6 +1043,7 @@ export function buildRouteTable(ctx: {
     getPermissionsStore,
     getRunRegistry,
     getThreadsStore,
+    liveTurnHub,
     middleware,
     registry,
     threadAccess,
@@ -1294,6 +1324,7 @@ export function buildRouteTable(ctx: {
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
+          liveTurnHub,
           middleware,
           permissionsStore: getPermissionsStore(request),
           registry,
@@ -1312,6 +1343,30 @@ export function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
+    // GET /threads/:thread_id/runs/stream — reattach to a running turn
+    // ------------------------------------------------------------------
+    // A distinct array element on the SAME pattern as the POST above:
+    // dispatch is method-first, so GET and POST stay independently routed.
+    {
+      handle: async (request, params) =>
+        handleApAttachRequest({
+          apAttachMaxViewers,
+          apSseHeartbeatIntervalMs,
+          checkpointer: getCheckpointer(request),
+          liveTurnHub,
+          middleware,
+          registry,
+          request,
+          threadAccess,
+          threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore: getThreadsStore(request),
+        }),
+      method: "GET",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
     // POST /agui/:routeId — AG-UI protocol endpoint (SSE)
     // ------------------------------------------------------------------
     {
@@ -1321,6 +1376,7 @@ export function buildRouteTable(ctx: {
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
+          liveTurnHub,
           middleware,
           permissionsStore: getPermissionsStore(request),
           registry,
@@ -1482,6 +1538,7 @@ export function buildRouteTable(ctx: {
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
+          liveTurnHub,
           middleware,
           permissionsStore: getPermissionsStore(request),
           registry,
@@ -1541,6 +1598,7 @@ async function handleApStreamRequest(options: {
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
+  readonly liveTurnHub: LiveTurnHub
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -1560,6 +1618,7 @@ async function handleApStreamRequest(options: {
     boot,
     checkpointer,
     getMemoryStore,
+    liveTurnHub,
     middleware,
     permissionsStore,
     registry,
@@ -1680,6 +1739,29 @@ async function handleApStreamRequest(options: {
   // settleParkedRoute for why a value sampled this early is safe there.
   const previousParkedRoute = readParkedRoute(thread)
 
+  // Live-turn anchor: one latest-tuple read, taken before the route stream
+  // begins executing so it races nothing the run itself writes. A failed read
+  // degrades attach to the durable path for this turn — it must never fail the
+  // run or leak the run slot, so the failure is only logged.
+  let liveTurn: LiveTurnProducer | undefined
+  try {
+    const anchorTuple = await checkpointer.getTuple({
+      configurable: { checkpoint_ns: "", thread_id: threadId },
+    })
+    liveTurn = liveTurnHub.open({
+      anchorCheckpointId: anchorTuple?.checkpoint?.id ?? null,
+      input,
+      resume: false,
+      runStartedAt: new Date().toISOString(),
+      threadId,
+    })
+  } catch (error) {
+    console.warn(
+      `Dawn: live-turn anchor read failed for ${threadId}; attach degrades to the durable path.`,
+      error,
+    )
+  }
+
   // Record which route last ran on this thread so the resume endpoint can
   // re-invoke it without requiring the client to repeat the route key.
   // The in-memory map is fast-path for the current server session; the thread
@@ -1701,6 +1783,10 @@ async function handleApStreamRequest(options: {
     // free this slot — without an explicit release the thread would 409 for the
     // remaining life of the process.
     run.release()
+    // The live-turn entry cannot leak open with the run slot already
+    // released: a viewer that raced this failure gets a terminal frame
+    // instead of a hanging heartbeat.
+    liveTurn?.close({ output: { error: String(error) }, type: "done" })
     throw error
   }
 
@@ -1731,6 +1817,10 @@ async function handleApStreamRequest(options: {
   // handler's own flag, so parked-status honesty depends on nothing outside
   // this request.
   let sawInterrupt = false
+  // The terminal `done` chunk the primary emitted, whichever path produced it
+  // — captured (never published to the live turn's digest; see below) so the
+  // `finally` can close the live turn with the SAME terminal, unconditionally.
+  let terminalChunk: StreamChunk | undefined
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -1764,6 +1854,12 @@ async function handleApStreamRequest(options: {
           })) {
             if (chunk.type === "interrupt") sawInterrupt = true
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
+            // The terminal is never published to the digest — it is delivered
+            // exactly once, via `close` in the `finally` below, so a live
+            // subscriber never sees it twice (once from the digest tail, once
+            // from close's own fan-out).
+            if (chunk.type === "done") terminalChunk = chunk
+            else liveTurn?.publish(chunk)
           }
           // Before the status write, and inside the same try, so a failure to
           // tighten the gate on a parked turn surfaces rather than leaving a
@@ -1789,7 +1885,7 @@ async function handleApStreamRequest(options: {
         } catch (error) {
           // A cancelled run is not a failure: clients must be able to tell the
           // two apart without inferring it from a truncated stream.
-          const terminalChunk: StreamChunk = run.cancelled
+          terminalChunk = run.cancelled
             ? { output: { cancelled: true }, type: "done" }
             : {
                 output: {
@@ -1816,6 +1912,13 @@ async function handleApStreamRequest(options: {
         }
       } finally {
         stopHeartbeat()
+        // Unconditional — never deferred behind `sourceCleanup` the way
+        // `run.release()` is below for a cancelled run: attachers must see the
+        // terminal frame exactly when the primary client does, since response
+        // lifetime (not run-slot lifetime) is what viewers share. The identity
+        // guard inside `close` means a zombie route can never write into a
+        // successor turn that has already replaced this entry.
+        liveTurn?.close(terminalChunk ?? { output: null, type: "done" })
         // The client's stream ends here regardless — safeClose below fires on
         // this same tick either way, so cancellation still looks instant to
         // the caller. What differs is when the run SLOT frees.
@@ -2462,6 +2565,253 @@ async function handleApPendingInterruptsRequest(options: {
 }
 
 // ---------------------------------------------------------------------------
+// Attach handler — GET mirror of POST /threads/:id/runs/stream, for a
+// disconnected client to rejoin a still-running (or already-settled) turn.
+// ---------------------------------------------------------------------------
+
+async function handleApAttachRequest(options: {
+  readonly apAttachMaxViewers: number
+  readonly apSseHeartbeatIntervalMs: number
+  readonly checkpointer: BaseCheckpointSaver
+  readonly liveTurnHub: LiveTurnHub
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
+  readonly request: Request
+  readonly threadAccess: ThreadAccessPolicy | undefined
+  readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
+}): Promise<Response> {
+  const {
+    apAttachMaxViewers,
+    apSseHeartbeatIntervalMs,
+    checkpointer,
+    liveTurnHub,
+    middleware,
+    registry,
+    request,
+    threadAccess,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
+
+  // Same resolution order as GET /pending_interrupts (see that handler's
+  // extensive comment for the full rationale, which applies verbatim here):
+  // thread lookup FIRST, with the same code POST /cancel and POST /resume use
+  // for an unknown thread → thread-access `read` gate, invoked with `thread:
+  // undefined` on a miss and using THIS handler's own `notFound` literal, so a
+  // denial is indistinguishable from a genuine miss → route identity, the parking
+  // route winning over the last-run chain → middleware with `method: "GET"`.
+  // This endpoint discloses everything the POST stream discloses — channel
+  // values, the live turn's input, and (durable path) parked interrupt
+  // payloads — so it must be gated exactly as strictly as pending_interrupts.
+  const notFound = () =>
+    Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
+      status: 404,
+    })
+  const thread = await threadsStore.getThread(threadId)
+
+  if (threadAccess) {
+    const gate = makeThreadGate(threadAccess, request)
+    const g = gate({
+      action: "read",
+      notFound,
+      operation: "thread.attach",
+      threadId,
+      ...(thread ? { thread } : {}),
+    })
+    const settled = isThenable(g) ? await g : g
+    if (!settled.ok) return settled.response
+  }
+  if (!thread) return notFound()
+
+  const parkedRoute = readParkedRoute(thread)
+  const persistedRoute = thread.metadata.route
+  const routeKey =
+    parkedRoute ??
+    threadRouteMap.get(threadId) ??
+    (typeof persistedRoute === "string" ? persistedRoute : undefined)
+  if (!routeKey) {
+    // Fail closed, same code as /pending_interrupts: with no route there is no
+    // identity to gate on, and route-scoped middleware would silently fall
+    // through on an endpoint that can serve everything the POST stream does.
+    return Response.json(
+      createRequestErrorBody(
+        `No route recorded for thread "${threadId}": it has never run, so its ` +
+          "attach stream cannot be gated by route middleware.",
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
+  }
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    // Same code and status as the branch above, and the server-derived key
+    // deliberately not echoed — see the sibling comment on
+    // GET /pending_interrupts for why.
+    return Response.json(
+      createRequestErrorBody(
+        `The route recorded for thread "${threadId}" is no longer registered.`,
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
+  }
+
+  const requestUrl = new URL(request.url)
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: headersToRecord(request.headers),
+    // The same new observable middleware input GET /pending_interrupts
+    // introduced: a method other than POST.
+    method: "GET",
+    params: {},
+    routeId: route.routeId,
+    url: `${requestUrl.pathname}${requestUrl.search}`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    return statusResponse(mwResult.status, mwResult.body)
+  }
+
+  // Attach never touches the run slot: no 409s from concurrency, any number of
+  // viewers up to the per-thread cap.
+  const attachment = liveTurnHub.attach(threadId, { maxViewers: apAttachMaxViewers })
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
+      try {
+        // Viewer cap exceeded: no snapshot work, immediate detach.
+        if (attachment?.overflowed() === "capacity") {
+          safeEnqueue(
+            controller,
+            encoder.encode(`event: detached\ndata: ${JSON.stringify({ reason: "capacity" })}\n\n`),
+          )
+          return
+        }
+
+        if (attachment) {
+          // Live path: a turn is streaming in this process right now.
+          // `interrupts` is deliberately always `[]` here — see spec §1: a
+          // live turn is by definition not parked, and echoing the LATEST
+          // tuple's pending writes during a resume would re-surface the
+          // already-answered interrupt.
+          //
+          // `values` is read at the anchor checkpoint — never the latest one
+          // — because old checkpoints are immutable (checkpoint-id-addressed
+          // `getTuple` exists in both the sqlite and postgres savers), so this
+          // read races nothing the turn itself is writing. Done before the
+          // subscriber drain loop starts, per spec §2 "Attach sequence (live
+          // path)" step 2.
+          const anchorValues =
+            attachment.anchorCheckpointId === null
+              ? null
+              : ((
+                  await checkpointer.getTuple({
+                    configurable: {
+                      checkpoint_id: attachment.anchorCheckpointId,
+                      checkpoint_ns: "",
+                      thread_id: threadId,
+                    },
+                  })
+                )?.checkpoint.channel_values ?? null)
+          const stateFrame: Record<string, unknown> = {
+            anchor: attachment.anchorCheckpointId,
+            input: attachment.input,
+            interrupts: [],
+            live: true,
+            resume: attachment.resume,
+            run_started_at: attachment.runStartedAt,
+            status: thread.status,
+            turn: attachment.turn,
+            values: anchorValues,
+          }
+          if (attachment.truncated) stateFrame.turn_truncated = true
+          safeEnqueue(
+            controller,
+            encoder.encode(`event: state\ndata: ${JSON.stringify(stateFrame)}\n\n`),
+          )
+
+          for (
+            let frame = await attachment.next();
+            frame !== null;
+            frame = await attachment.next()
+          ) {
+            safeEnqueue(controller, encoder.encode(toSseEvent(frame)))
+          }
+          if (attachment.overflowed() === "overflow") {
+            safeEnqueue(
+              controller,
+              encoder.encode(
+                `event: detached\ndata: ${JSON.stringify({ reason: "overflow" })}\n\n`,
+              ),
+            )
+          }
+          return
+        }
+
+        // Durable path: no live turn exists in this process. One
+        // `readPendingInterrupts` read plus one latest-tuple `getTuple` for
+        // `values` — mirroring GET /pending_interrupts and GET /state
+        // respectively.
+        const snapshot = await readPendingInterrupts(checkpointer, threadId)
+        const interrupts = (snapshot?.interrupts ?? []).map(
+          ({ interruptId, resumeKey, value }) => ({ interruptId, resumeKey, value }),
+        )
+        const tuple = await checkpointer.getTuple({
+          configurable: { checkpoint_ns: "", thread_id: threadId },
+        })
+        const values = tuple?.checkpoint.channel_values ?? null
+
+        const stateFrame = {
+          anchor: null,
+          input: null,
+          interrupts,
+          live: false,
+          resume: false,
+          run_started_at: null,
+          status: thread.status,
+          turn: null,
+          values,
+        }
+        safeEnqueue(
+          controller,
+          encoder.encode(`event: state\ndata: ${JSON.stringify(stateFrame)}\n\n`),
+        )
+        // Fetch clients get an unambiguous app-level terminator; a stock
+        // EventSource degrades to sane-cadence polling via the retry hint.
+        safeEnqueue(
+          controller,
+          encoder.encode(`event: done\ndata: ${JSON.stringify({ output: null })}\n\n`),
+        )
+        const jitter = Math.round((Math.random() * 2 - 1) * AP_ATTACH_RETRY_JITTER_MS)
+        safeEnqueue(controller, encoder.encode(`retry: ${AP_ATTACH_RETRY_BASE_MS + jitter}\n\n`))
+      } finally {
+        stopHeartbeat()
+        attachment?.detach()
+        safeClose(controller)
+      }
+    },
+    cancel() {
+      // Nothing to stop: an attach carries no run of its own to interrupt.
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "content-type": "text/event-stream",
+    },
+    status: 200,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Resume handler — state-based, reads __interrupt__ from SQLite checkpoint
 // ---------------------------------------------------------------------------
 
@@ -2471,6 +2821,7 @@ async function handleResumeRequest(options: {
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
+  readonly liveTurnHub: LiveTurnHub
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -2491,6 +2842,7 @@ async function handleResumeRequest(options: {
     boot,
     checkpointer,
     getMemoryStore,
+    liveTurnHub,
     middleware,
     permissionsStore,
     registry,
@@ -2651,10 +3003,34 @@ async function handleResumeRequest(options: {
       )
     }
 
+    // Live-turn anchor: the latest tuple at resume time IS the parked
+    // checkpoint — read before the route stream begins executing, same
+    // rationale as handleApStreamRequest. A failed read degrades attach to
+    // the durable path for this turn; it never fails the resume.
+    let liveTurn: LiveTurnProducer | undefined
+    try {
+      const anchorTuple = await checkpointer.getTuple({
+        configurable: { checkpoint_ns: "", thread_id: threadId },
+      })
+      liveTurn = liveTurnHub.open({
+        anchorCheckpointId: anchorTuple?.checkpoint?.id ?? null,
+        input: resumeResolution.resume,
+        resume: true,
+        runStartedAt: new Date().toISOString(),
+        threadId,
+      })
+    } catch (error) {
+      console.warn(
+        `Dawn: live-turn anchor read failed for ${threadId}; attach degrades to the durable path.`,
+        error,
+      )
+    }
+
     try {
       await threadsStore.updateStatus(threadId, "busy")
     } catch (error) {
       run.release()
+      liveTurn?.close({ output: { error: String(error) }, type: "done" })
       throw error
     }
 
@@ -2666,6 +3042,9 @@ async function handleResumeRequest(options: {
     // not the tool). Same reasoning as handleApStreamRequest: the adapter's
     // `done` follows the interrupt chunk, so a drained loop is not completion.
     let sawInterrupt = false
+    // The terminal `done` chunk the primary emitted — see
+    // handleApStreamRequest for why this is never published to the digest.
+    let terminalChunk: StreamChunk | undefined
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -2700,6 +3079,10 @@ async function handleResumeRequest(options: {
             })) {
               if (chunk.type === "interrupt") sawInterrupt = true
               safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
+              // See handleApStreamRequest: the terminal is never published to
+              // the digest — `close` in the `finally` delivers it exactly once.
+              if (chunk.type === "done") terminalChunk = chunk
+              else liveTurn?.publish(chunk)
             }
             // A resume that parks again re-arms the gate on the route that
             // parked; one that answers the last prompt retires it. Same
@@ -2724,7 +3107,7 @@ async function handleResumeRequest(options: {
           } catch (error) {
             // A cancelled run is not a failure: clients must be able to tell the
             // two apart without inferring it from a truncated stream.
-            const terminalChunk: StreamChunk = run.cancelled
+            terminalChunk = run.cancelled
               ? { output: { cancelled: true }, type: "done" }
               : {
                   output: {
@@ -2748,6 +3131,9 @@ async function handleResumeRequest(options: {
           }
         } finally {
           stopHeartbeat()
+          // Unconditional, same as handleApStreamRequest: attachers must see
+          // the terminal frame exactly when the primary client does.
+          liveTurn?.close(terminalChunk ?? { output: null, type: "done" })
           // The client's stream ends here regardless — response lifetime and run
           // lifetime are deliberately different; see handleApStreamRequest.
           const releaseExecutionClaims = () => {

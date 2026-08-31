@@ -7,6 +7,7 @@ import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { afterEach, describe, expect, it, test, vi } from "vitest"
 import { handleAgUiFetchRequest } from "../src/lib/dev/agui-handler.js"
+import { createLiveTurnHub } from "../src/lib/dev/live-turn-hub.js"
 import { headersToRecord } from "../src/lib/dev/middleware.js"
 import { toWebRequest } from "../src/lib/dev/node-web-adapter.js"
 import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
@@ -110,6 +111,7 @@ describe("AG-UI middleware reject", () => {
       checkpointer: {
         getTuple: async () => undefined,
       } as unknown as BaseCheckpointSaver,
+      liveTurnHub: createLiveTurnHub(),
       middleware: async () => ({
         action: "reject",
         body: { error: "not modified" },
