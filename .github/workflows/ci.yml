@@ -809,14 +809,14 @@ jobs:
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" wait --for=condition=Ready nodes --all --timeout=180s
 
       - name: Preload sandbox workload image into kind
-        # Load the digest-pinned policy image so sandbox Pods do not need an
-        # external pull during the packaged-app proof.
+        # Pull through the node's CRI so containerd records the canonical digest
+        # reference that the sandbox Pod uses during the packaged-app proof.
         run: |
           SANDBOX_IMAGE="$(
             pnpm exec tsx -e 'import { loadCompatibilityPolicy } from "./scripts/kubernetes-compat/policy.ts"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'
           )"
-          docker pull "$SANDBOX_IMAGE"
-          kind load docker-image "$SANDBOX_IMAGE" --name "$KIND_CLUSTER"
+          docker exec "${KIND_CLUSTER}-control-plane" crictl pull "$SANDBOX_IMAGE"
+          docker exec "${KIND_CLUSTER}-control-plane" crictl inspecti "$SANDBOX_IMAGE" >/dev/null
 
       - name: Build and load smoke app image (Verdaccio)
         # Start the local registry (bound 0.0.0.0 so the in-image npm install can

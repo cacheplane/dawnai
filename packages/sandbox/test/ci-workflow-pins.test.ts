@@ -184,6 +184,23 @@ describe("Kubernetes CI dependency pins", () => {
     }
   })
 
+  test("preloads the Kubernetes sandbox image through the node CRI", () => {
+    const workflow = requireRecord(parse(ciWorkflow), "CI workflow")
+    const jobs = requireRecord(workflow.jobs, "CI workflow jobs")
+    const steps = requireSteps(
+      requireRecord(jobs["sandbox-k8s-e2e"], "jobs.sandbox-k8s-e2e"),
+      "jobs.sandbox-k8s-e2e",
+    )
+    const preload = requireNamedStep(steps, "Preload sandbox workload image into kind")
+    const run = String(preload.run)
+
+    expect(run).toContain("policy.images.sandboxWorkload")
+    expect(run).toContain('crictl pull "$SANDBOX_IMAGE"')
+    expect(run).toContain('crictl inspecti "$SANDBOX_IMAGE"')
+    expect(run).not.toContain("kind load docker-image")
+    expect(run).not.toContain('docker pull "$SANDBOX_IMAGE"')
+  })
+
   test("describes sandbox Pods before full-arc e2e teardown", () => {
     const workflow = requireRecord(parse(ciWorkflow), "CI workflow")
     const jobs = requireRecord(workflow.jobs, "CI workflow jobs")
