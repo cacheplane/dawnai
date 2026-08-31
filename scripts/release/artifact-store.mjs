@@ -10,6 +10,7 @@ import { inflateRawSync } from "node:zlib"
 import { createGitHubReader } from "./adapters/github.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { canonicalManifestBytes, parseSealedReleaseManifest } from "./manifest.mjs"
+import { isManagedReleaseForTag } from "./metadata.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "./release-record.mjs"
 
 const METADATA_FIELDS = Object.freeze([
@@ -34,13 +35,18 @@ const execFileAsync = promisify(execFile)
 const VERIFIED_MATERIALIZATIONS = new WeakMap()
 
 export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
+  "scripts/release/adapter-normalize.mjs",
   "scripts/release/adapters/github.mjs",
   "scripts/release/adapters/http.mjs",
   "scripts/release/artifact-store.mjs",
   "scripts/release/limits.mjs",
   "scripts/release/manifest.mjs",
+  "scripts/release/metadata.mjs",
+  "scripts/release/npm-evidence.mjs",
   "scripts/release/release-record.mjs",
   "scripts/release/semver.mjs",
+  "scripts/release/smoke-result.mjs",
+  "scripts/release/terminal-records.mjs",
   "scripts/release/topology.mjs",
 ])
 
@@ -648,7 +654,9 @@ export function createArtifactStoreGitHubRuntime({
         }
         const releasesResult = await metadataReader.listReleases()
         if (releasesResult.status !== "PRESENT") return releasesResult
-        const matching = releasesResult.value.filter((release) => release?.tag_name === tag)
+        const matching = releasesResult.value.filter((release) =>
+          isManagedReleaseForTag(release, tag),
+        )
         if (matching.length !== 1) {
           return { status: "ERROR", httpStatus: 200, code: "RELEASE_IDENTITY_CONFLICT" }
         }
@@ -656,6 +664,7 @@ export function createArtifactStoreGitHubRuntime({
         if (
           release.target_commitish !== "main" ||
           release.draft !== true ||
+          release.immutable !== false ||
           release.prerelease !== false ||
           !Number.isSafeInteger(release.id)
         ) {

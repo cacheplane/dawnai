@@ -528,7 +528,7 @@ describe("memory panel container", () => {
  * - the proxy route itself. Which paths are legal is `proxy-allowlist.test.ts`,
  *   and what the Dawn server does with an approve is `@dawn-ai/memory`'s.
  * - the real `AgentSubscriber` contract. The fake agent's `subscribe` accepts
- *   an `onRunFinishedEvent` because `@ag-ui/client@0.0.57` defines one; that
+ *   an `onRunFinishedEvent` because `@ag-ui/client@0.0.59` defines one; that
  *   the installed client actually calls it is a typecheck-and-live-run fact,
  *   not something these tests observe.
  * - anything visual. Whether three clamped candidates plus the thread list fit

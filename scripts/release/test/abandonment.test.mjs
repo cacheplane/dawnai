@@ -894,7 +894,7 @@ function fakeGitHub({
     const body = canonicalReleaseBody({ marker: context.release.marker, manifest: null })
     state.release = {
       id: context.release.releaseId,
-      tag_name: `v${VERSION}`,
+      tag_name: "untagged-opaque",
       target_commitish: "main",
       prerelease: false,
       name: `Dawn v${VERSION}`,
@@ -958,10 +958,11 @@ function fakeGitHub({
   }
   const writer = {
     createDraftRelease: async ({ tag, title, body }) => {
+      assert.equal(tag, `v${VERSION}`)
       if (createStatus === "created") state.mutations.push("create")
       state.release = {
         id: 10,
-        tag_name: tag,
+        tag_name: "untagged-opaque",
         target_commitish: "main",
         prerelease: false,
         name: title,
@@ -969,7 +970,7 @@ function fakeGitHub({
         draft: true,
         immutable: false,
       }
-      state.releases.push({ id: 10, tag_name: tag })
+      state.releases.push({ id: 10, tag_name: state.release.tag_name })
       if (failAfter === "create") throw new Error("Simulated runner loss after create")
       return { releaseId: 10, status: createStatus, bodySha256: releaseBodySha256(body) }
     },

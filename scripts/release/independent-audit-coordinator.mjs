@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 import { normalizeAdapterEnvelope, snapshotJson } from "./adapter-normalize.mjs"
 import { createGitHubReader } from "./adapters/github.mjs"
 import { createGitHubWriter } from "./adapters/github-write.mjs"
-import { canonicalReleaseBody, parseReleaseMarker } from "./metadata.mjs"
+import { canonicalReleaseBody, isManagedReleaseForTag, parseReleaseMarker } from "./metadata.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
@@ -144,18 +144,7 @@ function parseManagedRelease(value, { defaultBranch, expected, allowDraft }) {
   ) {
     throw new Error("Managed Release identity is malformed")
   }
-  const version = release.tag_name.startsWith("v") ? release.tag_name.slice(1) : ""
-  if (!isReleaseVersion(version) || release.name !== `Dawn v${version}`) {
-    throw new Error("Managed Release version or title is malformed")
-  }
   const marker = parseReleaseMarker(release.body)
-  if (
-    marker.version !== version ||
-    marker.tag !== release.tag_name ||
-    release.body !== canonicalReleaseBody({ marker, manifest: null })
-  ) {
-    throw new Error("Managed Release marker identity is malformed")
-  }
   let mode
   if (release.draft === false && release.immutable === true && marker.phase === "AUDIT_VERIFIED") {
     mode = "published"
@@ -168,6 +157,18 @@ function parseManagedRelease(value, { defaultBranch, expected, allowDraft }) {
     mode = "draft"
   } else {
     throw new Error("Managed Release is not an auditable draft or published immutable release")
+  }
+  const version = mode === "draft" ? marker.version : release.tag_name.slice(1)
+  const tag = `v${version}`
+  if (
+    !isReleaseVersion(version) ||
+    release.name !== `Dawn v${version}` ||
+    marker.version !== version ||
+    marker.tag !== tag ||
+    (mode === "draft" ? !isManagedReleaseForTag(release, tag) : release.tag_name !== tag) ||
+    release.body !== canonicalReleaseBody({ marker, manifest: null })
+  ) {
+    throw new Error("Managed Release marker identity is malformed")
   }
   const identity = {
     version,
@@ -182,7 +183,7 @@ function parseManagedRelease(value, { defaultBranch, expected, allowDraft }) {
   ) {
     throw new Error("Managed Release does not match the exact audit inputs")
   }
-  return Object.freeze({ ...identity, tag: release.tag_name, mode })
+  return Object.freeze({ ...identity, tag, mode })
 }
 
 async function verifyAnnotatedTag(reader, release) {

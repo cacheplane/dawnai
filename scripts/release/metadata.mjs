@@ -190,6 +190,31 @@ export function parseReleaseMarker(value) {
   return marker
 }
 
+export function isManagedReleaseForTag(release, tag) {
+  try {
+    if (!isPlainDataObject(release) || typeof tag !== "string") return false
+    const tagName = Object.getOwnPropertyDescriptor(release, "tag_name")
+    if (!isEnumerableData(tagName) || typeof tagName.value !== "string") return false
+    if (tagName.value === tag) return true
+    const draft = Object.getOwnPropertyDescriptor(release, "draft")
+    const immutable = Object.getOwnPropertyDescriptor(release, "immutable")
+    const body = Object.getOwnPropertyDescriptor(release, "body")
+    if (
+      !isEnumerableData(draft) ||
+      draft.value !== true ||
+      !isEnumerableData(immutable) ||
+      immutable.value !== false ||
+      !isEnumerableData(body) ||
+      typeof body.value !== "string"
+    ) {
+      return false
+    }
+    return parseReleaseMarker(body.value).tag === tag
+  } catch {
+    return false
+  }
+}
+
 export function canonicalReleaseBody(input) {
   const source = snapshotJson(input)
   if (!isRecord(source) || !hasExactFields(source, ["marker", "manifest"], ["previousMarker"])) {
@@ -966,7 +991,7 @@ export async function escrowCandidate(input) {
     })
     release = await readManagedRelease(github.reader, positiveId(created.releaseId, "Release ID"))
   }
-  assertMutableCandidateRelease(release, candidate, title)
+  assertMutableCandidateRelease(release, title)
   let marker = parseReleaseMarker(release.body)
   assertEscrowMarkerMatches(marker, desiredMarker, { candidate, manifest })
   if (release.body !== canonicalReleaseBody({ marker, manifest })) {
@@ -2191,7 +2216,7 @@ function bindMethods(value, methods, label) {
 async function findManagedRelease(reader, tag) {
   const releases = await readGitHubValue(reader.listReleases({}), "releases")
   if (!Array.isArray(releases)) throw new Error("GitHub Release list is malformed")
-  const matches = releases.filter((release) => isRecord(release) && release.tag_name === tag)
+  const matches = releases.filter((release) => isManagedReleaseForTag(release, tag))
   if (matches.length > 1) throw new Error("Duplicate managed Releases are ambiguous")
   if (matches.length === 0) return null
   return readManagedRelease(reader, positiveId(matches[0].id, "Release ID"))
@@ -2230,7 +2255,7 @@ async function readManagedRelease(reader, releaseId) {
 async function requireDraftRelease(reader, candidate) {
   const release = await findManagedRelease(reader, `v${candidate.version}`)
   if (release === null) throw new Error("Managed draft Release is missing")
-  assertMutableCandidateRelease(release, candidate, `Dawn v${candidate.version}`)
+  assertMutableCandidateRelease(release, `Dawn v${candidate.version}`)
   return release
 }
 
@@ -2412,9 +2437,8 @@ function addPublicationBytes(current, size, maximum, label) {
   return total
 }
 
-function assertMutableCandidateRelease(release, candidate, title) {
+function assertMutableCandidateRelease(release, title) {
   if (
-    release.tag_name !== `v${candidate.version}` ||
     release.target_commitish !== "main" ||
     release.prerelease !== false ||
     release.name !== title ||

@@ -13,6 +13,7 @@ import {
 } from "./manifest.mjs"
 import {
   canonicalReleaseBody,
+  isManagedReleaseForTag,
   MAX_AUDIT_ATTEMPTS,
   MAX_PUBLICATION_ASSETS,
   MAX_SMOKE_ASSETS,
@@ -1669,7 +1670,9 @@ async function mapProductionRelease({
       escrow: { status: "ambiguous", manifestSha256: null, assets: [] },
     })
   }
-  const matches = result.value.filter((release) => release?.tag_name === `v${candidate.version}`)
+  const matches = result.value.filter((release) =>
+    isManagedReleaseForTag(release, `v${candidate.version}`),
+  )
   if (matches.length === 0) {
     return productionReleaseState({
       release: nonPresentRelease("absent"),
@@ -2411,7 +2414,8 @@ function normalizeReleaseIdentity(value, candidate) {
     !isRecord(value) ||
     !isPositiveId(value.id) ||
     !allowedTitles.has(value.name) ||
-    value.tag_name !== `v${candidate.version}` ||
+    (!(value.draft === true && value.immutable === false) &&
+      value.tag_name !== `v${candidate.version}`) ||
     value.target_commitish !== "main" ||
     typeof value.draft !== "boolean" ||
     typeof value.immutable !== "boolean" ||
@@ -3741,10 +3745,12 @@ async function mapRelease(result, inventory, candidate, github, diagnostics, obs
     return ambiguousRelease()
   }
   const tag = release.tag_name
+  const expectedTag = `v${candidate.version}`
   const commitSha = marker.commitSha
+  const mutableDraft = release.draft === true && release.immutable === false
   if (
-    tag !== `v${candidate.version}` ||
-    marker.tag !== tag ||
+    (mutableDraft ? !isManagedReleaseForTag(release, expectedTag) : tag !== expectedTag) ||
+    marker.tag !== expectedTag ||
     marker.version !== candidate.version ||
     commitSha !== candidate.commitSha
   ) {
@@ -3832,7 +3838,7 @@ async function mapRelease(result, inventory, candidate, github, diagnostics, obs
   })
   return {
     status: release.draft === true ? "draft" : "published",
-    tag,
+    tag: expectedTag,
     commitSha,
     immutable: release.immutable,
     bodySha256: sha256(Buffer.from(release.body, "utf8")),

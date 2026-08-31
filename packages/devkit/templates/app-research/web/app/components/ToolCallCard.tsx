@@ -1,7 +1,7 @@
 "use client"
 import { useRenderTool } from "@copilotkit/react-core/v2"
 
-// CopilotKit 1.68.3 V2 notes (verified against the installed
+// CopilotKit 1.70.0 V2 notes (verified against the installed
 // @copilotkit/react-core types under
 // node_modules/@copilotkit/react-core/dist; the bundled `.d.mts` filenames
 // carry content hashes that change between releases, so none is cited here):
@@ -13,7 +13,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2"
 // - Wildcard registration: pass `{ name: "*", render, agentId? }` — the "*"
 //   renderer is the fallback when no exact tool-name renderer is registered.
 // - The public wildcard overload currently types `render` props as `any`; it
-//   does not statically enforce field names or status values. The 1.68.3 V2
+//   does not statically enforce field names or status values. The 1.70.0 V2
 //   runtime/default renderer passes
 //   `{ name, toolCallId, parameters, status, result }`, where current status
 //   values are `"inProgress"`, `"executing"`, and `"complete"`, and `result`

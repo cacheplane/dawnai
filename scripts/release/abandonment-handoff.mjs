@@ -6,7 +6,7 @@ import {
   parseAbandonmentReleaseBody,
 } from "./abandonment.mjs"
 import { snapshotJson } from "./adapter-normalize.mjs"
-import { parseReleaseMarker, releaseBodySha256 } from "./metadata.mjs"
+import { isManagedReleaseForTag, parseReleaseMarker, releaseBodySha256 } from "./metadata.mjs"
 import {
   classifyProductionEvent as defaultClassifyProductionEvent,
   createProductionInventoryReader as defaultCreateProductionInventoryReader,
@@ -259,7 +259,7 @@ async function captureDurableAbandonmentContext({ candidate, github }) {
       throw new Error("Abandonment recovery GitHub Release identity is malformed or duplicate")
     }
     ids.add(String(release.id))
-    if (release.tag_name === `v${candidate.version}`) matches.push(release)
+    if (isManagedReleaseForTag(release, `v${candidate.version}`)) matches.push(release)
     if (
       release.tag_name.startsWith("v") &&
       isReleaseVersion(release.tag_name.slice(1)) &&
@@ -475,7 +475,7 @@ async function captureExactReleaseContext({
       throw new Error("Abandonment context GitHub Release identity is malformed or duplicate")
     }
     ids.add(String(release.id))
-    if (release.tag_name === `v${candidate.version}`) matches.push(release)
+    if (isManagedReleaseForTag(release, `v${candidate.version}`)) matches.push(release)
     if (release.tag_name.startsWith("v") && isReleaseVersion(release.tag_name.slice(1))) {
       if (compareSemver(release.tag_name.slice(1), candidate.version) > 0) {
         throw new Error("A newer GitHub Release interleaved before abandonment context capture")
@@ -548,7 +548,6 @@ function normalizeDraftRelease(value, candidate, { bodyRequired }) {
     !isRecord(release) ||
     !isPositiveInteger(release.id) ||
     release.name !== `Dawn v${candidate.version}` ||
-    release.tag_name !== `v${candidate.version}` ||
     release.target_commitish !== "main" ||
     release.draft !== true ||
     release.immutable !== false ||
@@ -563,7 +562,7 @@ function normalizeDraftRelease(value, candidate, { bodyRequired }) {
   return {
     id: release.id,
     name: release.name,
-    tag: release.tag_name,
+    tag: `v${candidate.version}`,
     targetCommitish: release.target_commitish,
     draft: release.draft,
     immutable: release.immutable,
@@ -580,7 +579,6 @@ function normalizeRecoveryDraftRelease(value, candidate, { bodyRequired }) {
       `Dawn v${candidate.version}`,
       `Dawn v${candidate.version} (abandoned before publication)`,
     ].includes(release.name) ||
-    release.tag_name !== `v${candidate.version}` ||
     release.target_commitish !== "main" ||
     release.draft !== true ||
     release.immutable !== false ||

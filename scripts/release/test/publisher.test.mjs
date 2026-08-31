@@ -24,6 +24,7 @@ import { pathToFileURL } from "node:url"
 
 import { ARTIFACT_STORE_SPARSE_FILES } from "../artifact-store.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import { canonicalReleaseBody } from "../metadata.mjs"
 import { canonicalNpmEvidenceBytes, parseNpmEvidence } from "../npm-evidence.mjs"
 import {
   PUBLISHER_OVERALL_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import {
 } from "../publisher.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
 import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
+import { observationForMarker } from "./support/marker-observation.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -925,6 +927,10 @@ async function sparseProductionFixture(t) {
     assetId += 1
   }
   assert.equal(escrowAssets.length, 45)
+  const releaseBody = canonicalReleaseBody({
+    marker: observationForMarker({ phase: "ESCROWED" }).release.marker,
+    manifest: null,
+  })
 
   const fixturePath = path.join(harnessRoot, "fixture.json")
   await writeFile(
@@ -932,7 +938,7 @@ async function sparseProductionFixture(t) {
     `${JSON.stringify({
       record,
       archiveBase64: archive.toString("base64"),
-      release: { id: 77, assets: escrowAssets },
+      release: { id: 77, body: releaseBody, assets: escrowAssets },
       npm: {
         packages: npmPackages,
       },
@@ -1113,10 +1119,12 @@ globalThis.fetch = async (input, init = {}) => {
       {
         id: fixture.release.id,
         name: \`Dawn \${fixture.record.tag}\`,
-        tag_name: fixture.record.tag,
+        tag_name: "untagged-opaque",
         target_commitish: "main",
         draft: true,
+        immutable: false,
         prerelease: false,
+        body: fixture.release.body,
       },
     ])
   }

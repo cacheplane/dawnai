@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { canonicalAbandonmentBytes, parseAbandonmentReleaseBody } from "./abandonment.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
-import { canonicalReleaseBody, parseReleaseMarker } from "./metadata.mjs"
+import { canonicalReleaseBody, isManagedReleaseForTag, parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
 import { releaseRecordSha256 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
@@ -392,11 +392,22 @@ async function inspectManagedReleases({
   marker,
   verifyTerminalAbandonment,
 }) {
-  const managed = records.filter((record) => managedVersionFromTag(record?.tag_name) !== null)
+  const managed = []
+  for (const release of records) {
+    const exactTag = managedVersionFromTag(release?.tag_name) === null ? null : release.tag_name
+    const markerTag =
+      exactTag === null
+        ? [...tagsByName.keys()].find((tag) => isManagedReleaseForTag(release, tag))
+        : null
+    const tag = exactTag ?? markerTag
+    if (managedVersionFromTag(tag) !== null && isManagedReleaseForTag(release, tag)) {
+      managed.push({ release, tag })
+    }
+  }
   const seenTags = new Set()
   const releases = []
-  for (const release of managed) {
-    const tag = release.tag_name
+  for (const managedRelease of managed) {
+    const { release, tag } = managedRelease
     if (seenTags.has(tag)) throw new Error(`Managed GitHub Release ${tag} is duplicated`)
     seenTags.add(tag)
     if (!isPositiveId(release.id) || typeof release.draft !== "boolean") {
@@ -526,7 +537,6 @@ function assertExactAuditVerifiedDraft({
   tagIdentity,
 }) {
   if (
-    release.tag_name !== tagIdentity.tag ||
     release.name !== `Dawn v${tagIdentity.version}` ||
     release.target_commitish !== "main" ||
     release.draft !== true ||

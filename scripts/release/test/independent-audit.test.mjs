@@ -923,7 +923,7 @@ function draftRelease(marker) {
   return {
     id: 91,
     name: `Dawn v${VERSION}`,
-    tag_name: `v${VERSION}`,
+    tag_name: "untagged-opaque",
     target_commitish: "main",
     draft: true,
     immutable: false,

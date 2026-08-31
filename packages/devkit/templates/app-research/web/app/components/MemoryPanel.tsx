@@ -298,7 +298,7 @@ function readApproveOutcome(body: unknown): string | null {
  * one because `remember()` lands during a run, so a memory proposed in the
  * answer you are reading should be reviewable without a reload.
  * `onRunFinishedEvent` is a distinct `AgentSubscriber` callback in the
- * installed `@ag-ui/client@0.0.57`, and a finished run is the first moment the
+ * installed `@ag-ui/client@0.0.59`, and a finished run is the first moment the
  * write is certainly in the store.
  */
 export function MemoryPanel() {

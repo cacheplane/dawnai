@@ -157,7 +157,7 @@ function managedRelease({ id, version, commitSha, draft = false }) {
   return {
     id,
     name: `Dawn v${version}`,
-    tag_name: `v${version}`,
+    tag_name: draft ? "untagged-opaque" : `v${version}`,
     target_commitish: "main",
     draft,
     immutable: !draft,
@@ -176,7 +176,9 @@ function githubBoundary({ releases, calls, refType = "tag", tagTargetSha }) {
       async getReleaseByTag({ tag }) {
         return present(
           "release",
-          releases.find((release) => release.tag_name === tag),
+          releases.find(
+            (release) => release.tag_name === tag || parseReleaseMarker(release.body).tag === tag,
+          ),
         )
       },
       async getRef({ ref }) {
@@ -184,9 +186,13 @@ function githubBoundary({ releases, calls, refType = "tag", tagTargetSha }) {
         return present("ref", { object: { type: refType, sha: TAG_SHA } })
       },
       async getGitTag() {
-        const release = releases.find((candidate) => candidate.tag_name === selectedTag)
+        const release = releases.find(
+          (candidate) =>
+            candidate.tag_name === selectedTag ||
+            parseReleaseMarker(candidate.body).tag === selectedTag,
+        )
         return present("git-tag", {
-          tag: release.tag_name,
+          tag: selectedTag,
           object: {
             type: "commit",
             sha: tagTargetSha ?? parseReleaseMarker(release.body).commitSha,
