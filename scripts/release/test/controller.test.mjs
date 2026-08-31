@@ -1687,7 +1687,10 @@ test("GitHub-mutating routes lazily construct the production boundary from the e
     ],
     {
       cwd: directory,
-      environment: Object.freeze({ GITHUB_TOKEN: "exact-test-token" }),
+      environment: Object.freeze({
+        GITHUB_REPOSITORY_ID: "1210070282",
+        GITHUB_TOKEN: "exact-test-token",
+      }),
       importModule,
     },
   )
@@ -1696,6 +1699,7 @@ test("GitHub-mutating routes lazily construct the production boundary from the e
   assert.deepEqual(readerCall, {
     owner: "cacheplane",
     repo: "dawnai",
+    repositoryId: "1210070282",
     token: "exact-test-token",
   })
   assert.deepEqual(writerCall, {

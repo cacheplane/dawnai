@@ -9,6 +9,7 @@ const REPO = "dawn"
 const TOKEN = "github_secret_token"
 const SHA = "0123456789abcdef0123456789abcdef01234567"
 const BASE = "https://api.github.com/repos/dawn-ai/dawn"
+const REPOSITORY_ID = "1210070282"
 const ALLOWED_METHODS = [
   "downloadActionsArtifact",
   "downloadReleaseAsset",
@@ -785,6 +786,46 @@ test("GitHub pagination preserves exact endpoint and fixed filters", async () =>
   }
 })
 
+test("GitHub pagination follows only the exact bound numeric-repository route", async () => {
+  const canonicalNext = `https://api.github.com/repositories/${REPOSITORY_ID}/releases?per_page=100&page=2`
+  const recording = recordingFetch([
+    jsonResponse([{ id: 2, name: "second" }], 200, linkHeader(canonicalNext)),
+    jsonResponse([{ id: 1, name: "first" }]),
+  ])
+
+  const result = await createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    repositoryId: REPOSITORY_ID,
+    fetchImpl: recording.fetchImpl,
+  }).listReleases()
+
+  assert.deepEqual(result.value, [
+    { id: 1, name: "first" },
+    { id: 2, name: "second" },
+  ])
+  assert.deepEqual(
+    recording.calls.map(({ url }) => url),
+    [`${BASE}/releases?per_page=100`, `${BASE}/releases?per_page=100&page=2`],
+  )
+
+  for (const repositoryId of [undefined, "999"]) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      ...(repositoryId === undefined ? {} : { repositoryId }),
+      fetchImpl: async () =>
+        jsonResponse([{ id: 2, name: "second" }], 200, linkHeader(canonicalNext)),
+    })
+    assert.deepEqual(await github.listReleases(), {
+      status: "ERROR",
+      operation: "releases",
+      httpStatus: 200,
+      code: "UNSAFE_PAGINATION_URL",
+    })
+  }
+})
+
 test("GitHub pagination enforces total page and record limits", async () => {
   const next = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
   const pageLimited = createGitHubReader({
@@ -1005,6 +1046,12 @@ test("GitHub validates repository identity and every dynamic argument before fet
       createGitHubReader({ owner: OWNER, repo: REPO, token: "bad\ntoken", fetchImpl: assert.fail }),
     /token/u,
   )
+  for (const repositoryId of [0, "0", "01", "not-an-id"]) {
+    assert.throws(
+      () => createGitHubReader({ owner: OWNER, repo: REPO, repositoryId, fetchImpl: assert.fail }),
+      /ID/u,
+    )
+  }
 
   const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl: assert.fail })
   assert.throws(() => github.getCommitCheckRuns({ commitSha: "main" }), /commit SHA/u)

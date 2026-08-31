@@ -8,7 +8,7 @@
       "sha256": "465beffc12678ec5bd6d6e5ef6dc4f4c9cc1d76e622b4ed27c35dd231f2e0dda"
     },
     "scripts/release/adapters/github.mjs": {
-      "sha256": "60bf49eb6f62d60ea9f9101d351e787c62084fab96329a763b95dd4b2bd163e3"
+      "sha256": "c91a81df9a2ca263f66855f398d6c0a4660396a54c4bc4ff080238c15e0fca5c"
     },
     "scripts/release/adapters/http.mjs": {
       "sha256": "86e03a6cd1536bd57983c27256694bb281d83dfc7efd09181a299b7f351f9510"
@@ -17,16 +17,16 @@
       "sha256": "35239dcccb293f19064692af1fc1d9aacc8441e00f3e6ff5db4c819b7bf8b955"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "9b3c7342c6eca611ff62a9df472f016539a4e860c9770938b1654b1374530a92"
+      "sha256": "09b5423224b2d76c6cba6de616a1fabae0f5d0efc126e68c3ed3f8de7c82f924"
     },
     "scripts/release/cli.mjs": {
-      "sha256": "72f9e356d4a166870133995d4e776fc3186a3ea95ef3bc79f0fa732c170a423c"
+      "sha256": "027c3e84b07ccc2f40011a536dd8661e04b3b5df7fc78477b463f333411b73fa"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
-      "sha256": "49c4b3e046b223eae9b864b3f2ad38cbc688bd5daffdde99263c05325b8b6dae"
+      "sha256": "29803cd7d46310091d1f723f1ca7c821242127f6127c118dc95ed94db7a3efa7"
     },
     "scripts/release/independent-audit.mjs": {
-      "sha256": "89681d8ab3ae07f52b81ceb9457886c2c1062ffd748b0770b71dbd610c2e6b02"
+      "sha256": "df75a31d6aa7c01a58583fa41eb4041ba4b4322a273c4b739f8e4eb6ffcd3eff"
     },
     "scripts/release/limits.mjs": {
       "sha256": "6ace39d22cdf5dbedff3b14b444c00cd3102082f8ef733ee458d0e6b52f1982f"

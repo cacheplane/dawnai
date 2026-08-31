@@ -656,6 +656,7 @@ export async function createIndependentAuditRuntime(input, overrides = {}) {
     throw new TypeError("Independent audit runtime identity is invalid")
   }
   const token = environmentString(environment, "GITHUB_TOKEN")
+  const repositoryId = environmentString(environment, "GITHUB_REPOSITORY_ID")
   if (token.length > 4_096 || /[\r\n]/u.test(token)) {
     throw new TypeError("Independent audit GitHub token is invalid")
   }
@@ -693,6 +694,7 @@ export async function createIndependentAuditRuntime(input, overrides = {}) {
   const github = dependencies.createGitHubReader({
     owner: "cacheplane",
     repo: "dawnai",
+    repositoryId,
     token,
     maxResponseBytes: RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
   })

@@ -46,6 +46,7 @@ function argv(overrides = {}) {
 function environment(overrides = {}) {
   return {
     GITHUB_REPOSITORY: "cacheplane/dawnai",
+    GITHUB_REPOSITORY_ID: "1210070282",
     GITHUB_EVENT_NAME: "workflow_dispatch",
     GITHUB_WORKFLOW_REF: `cacheplane/dawnai/.github/workflows/published-artifact-verify.yml@refs/tags/v${VERSION}`,
     GITHUB_REF: `refs/tags/v${VERSION}`,
@@ -233,6 +234,7 @@ test("constructs only bounded read-only production boundaries and never a writer
       {
         owner: "cacheplane",
         repo: "dawnai",
+        repositoryId: "1210070282",
         token,
         maxResponseBytes: RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
       },
