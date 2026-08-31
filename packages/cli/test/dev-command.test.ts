@@ -253,6 +253,7 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     await dev.waitForLog(/thread access policy bound from src\/thread-access\.ts/)
+    await dev.waitForReady()
     // Strictly the parent's STDOUT — `waitForLog` also matches stderr.
     expect(dev.stdout).toContain("Dawn: thread access policy bound from src/thread-access.ts")
   })
@@ -333,6 +334,61 @@ describe("dawn dev lifecycle", () => {
     expect(new URL(restartedUrl).port).toBe(String(port))
     expect(countOccurrences(dev.stdout, "Restarting Dawn dev server")).toBeGreaterThanOrEqual(1)
     expect(await updatedResponse.json()).toMatchObject({ version: "v2" })
+  })
+
+  test("serializes a watched edit that arrives during initial child startup", {
+    timeout: 30_000,
+  }, async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "v1" });\n`,
+    })
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
+    const bindGatePath = join(tmpdir(), `dawn-initial-bind-gate-${process.pid}-${Date.now()}.lock`)
+    const pidPath = join(tmpdir(), `dawn-initial-child-pid-${process.pid}-${Date.now()}.txt`)
+
+    await writeFile(bindGatePath, "", "utf8")
+    const dev = await startDevProcess({
+      cwd: appRoot,
+      env: {
+        DAWN_DEV_CHILD_BIND_GATE_PATH: bindGatePath,
+        DAWN_DEV_CHILD_PID_PATH: pidPath,
+      },
+    })
+    devProcesses.push(dev)
+
+    try {
+      await waitForPath(pidPath)
+      await writeFile(routePath, `export const graph = async () => ({ version: "v2" });\n`, "utf8")
+
+      // Give the recursive watcher time to enqueue the edit while the initial
+      // child is still blocked before bind. The bind gate keeps startup in the
+      // same state for the full interval, so this does not race server boot.
+      await delay(250)
+      await rm(bindGatePath, { force: true })
+
+      const url = await dev.waitForReady()
+      const response = await invokeRunsWait(url, {
+        assistantId: "/support/[tenant]#graph",
+        input: {},
+        mode: "graph",
+        routeId: "/support/[tenant]",
+        routePath: "src/app/support/[tenant]/index.ts",
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ version: "v2" })
+      await delay(500)
+      expect(dev.exited).toBe(false)
+      expect(dev.stdout).toContain("Restarting Dawn dev server")
+      expect(countOccurrences(dev.stdout, "Dawn: no thread access policy")).toBe(2)
+      expect(dev.stderr).not.toContain("Port ")
+      expect(dev.stderr).not.toContain("Fatal dev session error")
+    } finally {
+      await rm(bindGatePath, { force: true })
+      await rm(pidPath, { force: true })
+    }
   })
 
   test("coalesces bursty edits during restart into at most one follow-up restart", {
@@ -477,6 +533,62 @@ describe("dawn dev lifecycle", () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ version: "healthy" })
+  })
+
+  test("drains a fixing edit queued while a watched restart is failing", {
+    timeout: 30_000,
+  }, async () => {
+    const markerPath = join(tmpdir(), `dawn-failing-restart-${process.pid}-${Date.now()}.txt`)
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "healthy" });\n`,
+      "src/thread-access.ts": `export default { fallback: () => ({ decision: "allow" }) };\n`,
+    })
+    const policyPath = join(appRoot, "src/thread-access.ts")
+    const dev = await startDevProcess({ cwd: appRoot })
+    devProcesses.push(dev)
+
+    try {
+      const url = await dev.waitForReady()
+      const readyCount = dev.readyCount()
+      await writeFile(
+        policyPath,
+        `
+          import { writeFileSync } from "node:fs";
+
+          writeFileSync(${JSON.stringify(markerPath)}, "started", "utf8");
+          const deadline = Date.now() + 1000;
+          while (Date.now() < deadline) {}
+          throw new Error("intentional startup failure");
+
+          export default { fallback: () => ({ decision: "allow" }) };
+        `,
+        "utf8",
+      )
+
+      await waitForPath(markerPath)
+      await writeFile(
+        policyPath,
+        `export default { fallback: () => ({ decision: "allow" }) };\n`,
+        "utf8",
+      )
+
+      await dev.waitForLog(/Restart failed; watching for changes/)
+      await dev.waitForNextReady(readyCount, 10_000)
+      const response = await invokeRunsWait(url, {
+        assistantId: "/support/[tenant]#graph",
+        input: {},
+        mode: "graph",
+        routeId: "/support/[tenant]",
+        routePath: "src/app/support/[tenant]/index.ts",
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ version: "healthy" })
+    } finally {
+      await rm(markerPath, { force: true })
+    }
   })
 
   test("terminates the session when configured appDir falls outside the discovered app root", {

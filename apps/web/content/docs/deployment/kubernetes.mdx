@@ -15,22 +15,35 @@ docker build -t ghcr.io/you/my-dawn-app:2026-08-10 .
 docker push ghcr.io/you/my-dawn-app:2026-08-10
 ```
 
-If the app configures `kubernetesSandbox`, install the sandbox infrastructure first. The default same-namespace path expects the `dawn-sandboxes` namespace and `dawn-orchestrator` ServiceAccount created by that release:
+If the app configures `kubernetesSandbox`, keep the infrastructure Helm release, the Dawn app, and application credentials in the separate `dawn-app` management namespace while sandbox resources live in `dawn-sandboxes`. Before the first install, prepare the complete intended cross-namespace subject list:
+
+```yaml title="dawn-sandbox-infra-values.yaml"
+orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: dawn-app
+```
+
+Install the sandbox infrastructure first:
 
 ```bash
 helm upgrade --install dawn-sandbox-infra \
-  oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
+  oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --namespace dawn-app \
+  --create-namespace \
+  --values dawn-sandbox-infra-values.yaml
 ```
 
 The application chart does not replace the sandbox infrastructure chart. See [Kubernetes Sandbox](/docs/sandbox/kubernetes) for the provider and cluster-side security boundary.
 
 ## Install or upgrade the application
 
-For the default same-namespace sandbox path, install the app into `dawn-sandboxes`:
+After the infrastructure RoleBinding contains the app ServiceAccount, install the app in the `dawn-app` management namespace:
 
 ```bash
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --namespace dawn-sandboxes \
+  --namespace dawn-app \
   --set image.repository=ghcr.io/you/my-dawn-app \
   --set image.tag=2026-08-10
 ```
@@ -39,7 +52,7 @@ Use the same namespace and image values for upgrades:
 
 ```bash
 helm upgrade dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --namespace dawn-sandboxes \
+  --namespace dawn-app \
   --set image.repository=ghcr.io/you/my-dawn-app \
   --set image.tag=2026-08-10
 ```
@@ -58,7 +71,7 @@ Set ordinary environment entries through `env`/`envFrom`. For an existing Kubern
 
 ```bash
 helm upgrade dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --namespace dawn-sandboxes \
+  --namespace dawn-app \
   --reuse-values \
   --set secretName=my-dawn-secrets
 ```
@@ -73,48 +86,44 @@ The `dawn-app` chart mounts only an `emptyDir` at `/tmp`. It does not mount the 
 
 Use external durable stores where replacement must preserve state. Sandbox-provider workspaces have their own volume lifecycle and are not made durable by the app Pod's `/tmp` mount.
 
-## ServiceAccount modes
+## ServiceAccount ownership
 
 The chart defaults are:
 
-- `serviceAccount.create=false`;
-- `serviceAccount.name=dawn-orchestrator`;
+- `serviceAccount.create=true`;
+- `serviceAccount.name=""`, which resolves to the release-scoped chart fullname (`dawn-app` for the canonical release);
 - `sandboxNamespace=dawn-sandboxes`, which is informational only;
 - `automountServiceAccountToken=true` on the app Pod.
 
-For the same-namespace sandbox path, install `dawn-sandbox-infra` first and install the app into `dawn-sandboxes`. The existing `dawn-orchestrator` ServiceAccount is then selected by name.
+For an app that uses `kubernetesSandbox`, use the default application-owned ServiceAccount in the management namespace. Add that planned ServiceAccount as a cross-namespace subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
 
-For a separate application namespace, add the planned app ServiceAccount as a subject of the sandbox infrastructure chart's orchestrator Role **before** installing the application. A RoleBinding subject is a name reference, so it may refer to a future ServiceAccount. Recording that authorization first prevents a Ready-but-sandbox-broken window in which the app Pod is running but sandbox API calls are still forbidden.
-
-First export the release's effective values, including every existing RoleBinding subject:
+First capture the installed infrastructure chart version and export the release's effective values, including every existing RoleBinding subject:
 
 ```bash
+INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace dawn-app | awk '$1 == "VERSION:" { print $2 }')"
+test -n "$INFRA_CHART_VERSION" || { printf '%s\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }
 helm get values dawn-sandbox-infra --all --output yaml \
+  --namespace dawn-app \
   > dawn-sandbox-infra-rbac-values.yaml
 ```
 
-Edit `dawn-sandbox-infra-rbac-values.yaml` so `orchestrator.subjects` contains the **complete intended subject list**: preserve every existing entry and append the planned application ServiceAccount. For a release whose existing extra-subject list is empty, that section is:
+Edit `dawn-sandbox-infra-rbac-values.yaml` so `orchestrator.subjects` contains the **complete intended subject list**: preserve every existing entry and append the planned application ServiceAccount as a cross-namespace subject. For a release whose existing extra-subject list is empty, that section is:
 
 ```yaml title="dawn-sandbox-infra-rbac-values.yaml"
 orchestrator:
   subjects:
     - kind: ServiceAccount
       name: dawn-app
-      namespace: my-app
+      namespace: dawn-app
 ```
 
 Inspect the complete file, then apply it. Helm replaces arrays as values, so do not assign a guessed numeric subject index.
 
 ```bash
 helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --version "$INFRA_CHART_VERSION" \
+  --namespace dawn-app \
   --values dawn-sandbox-infra-rbac-values.yaml
-
-helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
-  --namespace my-app --create-namespace \
-  --set image.repository=ghcr.io/you/my-dawn-app \
-  --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app
 ```
 
 Keep the provider's configured namespace, the infrastructure chart namespace, and the informational `sandboxNamespace` value aligned. Changing `sandboxNamespace` alone does not change RBAC or where sandbox Pods are created.
@@ -126,8 +135,6 @@ helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --namespace my-app --create-namespace \
   --set image.repository=ghcr.io/you/my-dawn-app \
   --set image.tag=2026-08-10 \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=dawn-app \
   --set automountServiceAccountToken=false
 ```
 

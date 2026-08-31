@@ -206,8 +206,12 @@ jobs:
       - name: Build sandbox package
         run: pnpm --filter @dawn-ai/sandbox... build
 
-      - name: Pull sandbox image
-        run: docker pull node:22-slim
+      - name: Pull sandbox workload image
+        run: |
+          SANDBOX_IMAGE="$(
+            pnpm exec tsx -e 'import { loadCompatibilityPolicy } from "./scripts/kubernetes-compat/policy.ts"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'
+          )"
+          docker pull "$SANDBOX_IMAGE"
 
       - name: Real-Docker sandbox conformance + e2e
         run: DAWN_TEST_DOCKER=1 pnpm --filter @dawn-ai/sandbox test docker-sandbox.integration
@@ -642,7 +646,9 @@ jobs:
 
   sandbox-k8s:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+    env:
+      DAWN_TEST_K8S_CONTEXT: kind-dawn-k8s-canonical
 
     steps:
       - name: Checkout
@@ -664,11 +670,15 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build sandbox package
-        run: pnpm --filter @dawn-ai/sandbox... build
-
       - name: Setup Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Verify chart/provider permission parity
+        env:
+          DAWN_REQUIRE_HELM: "1"
+        run: pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac
 
       # helm/kind-action installs kind and kubectl with `curl -sSLo` and no
       # `--fail`, so a transient upstream 429/5xx writes the error page into
@@ -682,48 +692,42 @@ jobs:
       # a path the action does not read, the action downloads that tool as it
       # does today, and CI is degraded — not broken.
       - name: Prime kind tool cache
-        run: scripts/prime-kind-cache.sh v0.31.0 v1.35.0
+        run: scripts/prime-kind-cache.sh v0.32.0 v1.35.6
 
-      - name: Create kind cluster (no default CNI)
+      - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          version: v0.31.0
-          kubectl_version: v1.35.0
+          version: v0.32.0
+          kubectl_version: v1.35.6
+          node_image: kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95
           config: .github/kind/kind-calico.yaml
-          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
+          cluster_name: dawn-k8s-canonical
 
-      - name: Install Calico (enforces NetworkPolicy)
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
-          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
-          kubectl wait --for=condition=Ready nodes --all --timeout=180s
-
-      - name: Install sandbox-infra chart
-        run: |
-          helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait
-          kubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount
-
-      - name: Prepare chart NetworkPolicy control
-        run: sh test/k8s-smoke/setup-network-policy-control.sh
-
-      - name: Assert orchestrator RBAC (least privilege)
-        run: |
-          SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator
-          kubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes
-          kubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
-          # WebSocket exec (@kubernetes/client-node) authorizes as `get pods/exec`
-          kubectl auth can-i get pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
-          kubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes
-          kubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes
-          kubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no
-
-      - name: Real-cluster sandbox conformance + e2e
+      - name: Prepare verified Calico manifest
         env:
-          DAWN_TEST_K8S_EGRESS_CONTROL_URL: http://dawn-egress-control:8080/
-        run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
+        run: pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output "$CALICO_MANIFEST"
 
-      - name: Exercise PVC reaper
-        run: sh test/k8s-smoke/assert-reaper.sh
+      - name: Install verified Calico
+        env:
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
+        run: |
+          set -eu
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" apply --filename "$CALICO_MANIFEST"
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Run Kubernetes 1.35 compatibility harness
+        run: pnpm verify:k8s:compat -- --target 1.35 --context "$DAWN_TEST_K8S_CONTEXT"
+
+      - name: Upload Kubernetes compatibility artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kubernetes-compat-canonical
+          path: artifacts/testing/kubernetes-compat/**
+          if-no-files-found: warn
+          retention-days: 7
 
   sandbox-k8s-e2e:
     # Full-arc smoke: a deployed Dawn app (built the user-facing way via
@@ -738,6 +742,7 @@ jobs:
       # Marks this as the gated full-arc e2e lane (distinct from sandbox-k8s).
       DAWN_TEST_SMOKE_E2E: "1"
       KIND_CLUSTER: dawn-smoke
+      DAWN_TEST_K8S_CONTEXT: kind-dawn-smoke
 
     steps:
       - name: Checkout
@@ -766,34 +771,52 @@ jobs:
 
       - name: Setup Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Verify chart/provider permission parity
+        env:
+          DAWN_REQUIRE_HELM: "1"
+        run: pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac
 
       # See the sandbox-k8s lane: primes the tool cache so the action skips its
       # own no-`--fail` kind and kubectl downloads. Keep these versions and
       # the `version:`/`kubectl_version:` inputs below in lockstep.
       - name: Prime kind tool cache
-        run: scripts/prime-kind-cache.sh v0.31.0 v1.35.0
+        run: scripts/prime-kind-cache.sh v0.32.0 v1.35.6
 
-      - name: Create kind cluster (no default CNI)
+      - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          version: v0.31.0
-          kubectl_version: v1.35.0
+          version: v0.32.0
+          kubectl_version: v1.35.6
+          node_image: kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95
           config: .github/kind/kind-calico.yaml
           cluster_name: dawn-smoke
-          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 
-      - name: Install Calico (enforces NetworkPolicy)
+      - name: Prepare verified Calico manifest
+        env:
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
+        run: pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output "$CALICO_MANIFEST"
+
+      - name: Install verified Calico
+        env:
+          CALICO_MANIFEST: ${{ runner.temp }}/dawn-calico.yaml
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
-          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
-          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+          set -eu
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" apply --filename "$CALICO_MANIFEST"
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" wait --for=condition=Ready nodes --all --timeout=180s
 
       - name: Preload sandbox workload image into kind
-        # The kubernetesSandbox Pod runs node:22-slim; load it so the Pod starts
-        # without an external pull (imagePullPolicy IfNotPresent for a tag).
+        # Pull through the node's CRI so containerd records the canonical digest
+        # reference that the sandbox Pod uses during the packaged-app proof.
         run: |
-          docker pull node:22-slim
-          kind load docker-image node:22-slim --name "$KIND_CLUSTER"
+          SANDBOX_IMAGE="$(
+            pnpm exec tsx -e 'import { loadCompatibilityPolicy } from "./scripts/kubernetes-compat/policy.ts"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'
+          )"
+          docker exec "${KIND_CLUSTER}-control-plane" crictl pull "$SANDBOX_IMAGE"
+          docker exec "${KIND_CLUSTER}-control-plane" crictl inspecti "$SANDBOX_IMAGE" >/dev/null
 
       - name: Build and load smoke app image (Verdaccio)
         # Start the local registry (bound 0.0.0.0 so the in-image npm install can
@@ -823,22 +846,22 @@ jobs:
           kind load docker-image dawn-smoke-aimock:latest --name "$KIND_CLUSTER"
 
       - name: Create app namespace
-        run: kubectl create namespace dawn-app
+        run: kubectl --context "$DAWN_TEST_K8S_CONTEXT" create namespace dawn-app
 
       - name: Install sandbox-infra chart
         run: |
-          helm install dawn-sandbox-infra charts/dawn-sandbox-infra \
-            -n dawn-sandboxes --create-namespace \
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" install dawn-sandbox-infra charts/dawn-sandbox-infra \
+            -n dawn-app \
             -f test/k8s-smoke/values-sandbox-infra.yaml --wait
 
       - name: Deploy aimock
         run: |
-          kubectl apply -f test/k8s-smoke/aimock.k8s.yaml
-          kubectl -n dawn-app rollout status deploy/aimock --timeout=120s
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" apply -f test/k8s-smoke/aimock.k8s.yaml
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app rollout status deploy/aimock --timeout=120s
 
       - name: Install dawn-app chart
         run: |
-          helm install dawn-app charts/dawn-app \
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" install dawn-app charts/dawn-app \
             -n dawn-app \
             -f test/k8s-smoke/values-dawn-app.yaml --wait
 
@@ -849,18 +872,19 @@ jobs:
         if: always()
         run: |
           echo "----- app -----"
-          kubectl -n dawn-app get pods,svc -o wide || true
-          kubectl -n dawn-app logs deploy/dawn-app --tail=120 || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app get pods,svc -o wide || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app logs deploy/dawn-app --tail=120 || true
           echo "----- aimock -----"
-          kubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true
-          kubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true
           echo "----- sandboxes -----"
-          kubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" -n dawn-sandboxes describe pods -l app.kubernetes.io/managed-by=dawn || true
           echo "----- teardown -----"
-          helm uninstall dawn-app -n dawn-app || true
-          helm uninstall dawn-sandbox-infra -n dawn-sandboxes || true
-          kubectl delete namespace dawn-app --ignore-not-found --wait=false || true
-          kubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-app -n dawn-app || true
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" uninstall dawn-sandbox-infra -n dawn-app || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" delete namespace dawn-app --ignore-not-found --wait=false || true
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true
 
   sandbox-docker-e2e:
     # Full-arc smoke (docker-out-of-docker): a CONTAINERIZED Dawn app — built the
@@ -901,10 +925,14 @@ jobs:
         # dist/ (publishWorkspace packs dist as-is).
         run: pnpm build
 
-      - name: Preload sandbox workload image
-        # The dockerSandbox sibling runs node:22-slim on the host daemon; pull it
-        # up front so the spawn doesn't wait on (or get rate-limited by) a pull.
-        run: docker pull node:22-slim
+      - name: Pull sandbox workload image
+        # Pull the digest-pinned policy image up front so sibling startup does
+        # not wait on an external registry.
+        run: |
+          SANDBOX_IMAGE="$(
+            pnpm exec tsx -e 'import { loadCompatibilityPolicy } from "./scripts/kubernetes-compat/policy.ts"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'
+          )"
+          docker pull "$SANDBOX_IMAGE"
 
       - name: Build app + aimock images (Verdaccio)
         # Start the local registry (bound 0.0.0.0 so the in-image npm install can
@@ -948,6 +976,8 @@ jobs:
   chart-apply-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DAWN_TEST_K8S_CONTEXT: kind-dawn-chart-apply
 
     steps:
       - name: Checkout
@@ -955,19 +985,22 @@ jobs:
 
       - name: Setup Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
 
       # See the sandbox-k8s lane: primes the tool cache so the action skips its
       # own no-`--fail` kind and kubectl downloads. Keep these versions and
       # the `version:`/`kubectl_version:` inputs below in lockstep.
       - name: Prime kind tool cache
-        run: scripts/prime-kind-cache.sh v0.31.0 v1.35.0
+        run: scripts/prime-kind-cache.sh v0.32.0 v1.35.6
 
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          version: v0.31.0
-          kubectl_version: v1.35.0
-          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
+          version: v0.32.0
+          kubectl_version: v1.35.6
+          node_image: kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95
+          cluster_name: dawn-chart-apply
 
       - name: Install dawn-app (placeholder image) and verify it serves
         # nginx-unprivileged runs as non-root (UID 101, port 8080), so it satisfies
@@ -975,11 +1008,19 @@ jobs:
         # langgraph app image must also do. A root image (e.g. traefik/whoami) would
         # be rejected by the kubelet, so this doubles as a proof of the non-root default.
         run: |
-          helm install dawn-app charts/dawn-app \
-            --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \
+          set -eu
+          PLACEHOLDER_IMAGE="$(jq -er '.images.placeholderApp' .github/kubernetes-compatibility.json)"
+          REACHABILITY_IMAGE="$(jq -er '.images.reachabilityProbe' .github/kubernetes-compatibility.json)"
+          PLACEHOLDER_WITH_TAG="${PLACEHOLDER_IMAGE%@sha256:*}"
+          PLACEHOLDER_REPOSITORY="${PLACEHOLDER_WITH_TAG%:*}"
+          PLACEHOLDER_DIGEST="sha256:${PLACEHOLDER_IMAGE##*@sha256:}"
+          printf '%s\n' "$PLACEHOLDER_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          printf '%s\n' "$REACHABILITY_IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$'
+          helm --kube-context "$DAWN_TEST_K8S_CONTEXT" install dawn-app charts/dawn-app \
+            --set-string image.repository="$PLACEHOLDER_REPOSITORY" \
+            --set-string image.digest="$PLACEHOLDER_DIGEST" \
             --set containerPort=8080 --set healthPath=/ \
-            --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \
             --wait --timeout 3m
-          kubectl rollout status deploy/dawn-app --timeout=120s
-          kubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" rollout status deploy/dawn-app --timeout=120s
+          kubectl --context "$DAWN_TEST_K8S_CONTEXT" run curl --image="$REACHABILITY_IMAGE" --restart=Never --rm -i --quiet -- \
             curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo "app served OK"

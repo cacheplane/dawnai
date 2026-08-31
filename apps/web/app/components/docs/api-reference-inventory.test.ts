@@ -18,6 +18,7 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..")
 const CHECK_DOCS_PATH = join(REPO_ROOT, "scripts/check-docs.mjs")
+const DETAILED_API_REFERENCE_TIMEOUT_MS = 60_000
 const SEO_TITLES_BY_PATH = Object.fromEntries(
   Object.entries(STATIC_SEO_PAGES).map(([path, page]) => [path, page.title]),
 )
@@ -2087,6 +2088,8 @@ describe("package API reference pages", { timeout: 30_000 }, () => {
       "DockerSandboxOptions",
       "dockerSandbox",
       "KubeClient",
+      "KubeAuthorizationReviewError",
+      "KubePermission",
       "KubernetesSandboxOptions",
       "kubernetesSandbox",
     ]) {
@@ -2406,32 +2409,42 @@ ${packageExample("memory-pgvector").replace(
     }
   })
 
-  it("passes the source-derived inventory and behavior contracts for all sixteen owners", () => {
-    const result = spawnSync(
-      process.execPath,
-      [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
-      { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-    )
-    expect(result.status, result.stderr || result.stdout).toBe(0)
-    const analysis = JSON.parse(result.stdout) as {
-      readonly failures: readonly string[]
-      readonly ownerHrefs: readonly string[]
-      readonly artifactAddresses: readonly string[]
-      readonly behaviorIds: readonly string[]
-      readonly contractKeys: readonly string[]
-    }
-    expect(analysis.failures).toEqual([])
-    expect(analysis.ownerHrefs).toEqual(API_REFERENCE_PAGES.map(({ href }) => href))
-    expect(analysis.artifactAddresses).toEqual(
-      ARTIFACT_REGISTRY.filter(
-        (artifact) =>
-          artifact.kind === "generated" ||
-          (artifact.kind === "import" && artifact.coverage === "detailed"),
-      ).map(artifactAddressFor),
-    )
-    expect(analysis.behaviorIds).toEqual(API_BEHAVIOR_CONTRACTS.map(({ id }) => id))
-    expect(analysis.contractKeys).toEqual(API_REQUIRED_CONTRACT_KEYS)
-  }, 30_000)
+  it(
+    "passes the source-derived inventory and behavior contracts for all sixteen owners",
+    () => {
+      const result = spawnSync(
+        process.execPath,
+        [CHECK_DOCS_PATH, "--analyze-detailed-api-references"],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          maxBuffer: 16 * 1024 * 1024,
+          timeout: DETAILED_API_REFERENCE_TIMEOUT_MS,
+        },
+      )
+      expect(result.error, String(result.error)).toBeUndefined()
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      const analysis = JSON.parse(result.stdout) as {
+        readonly failures: readonly string[]
+        readonly ownerHrefs: readonly string[]
+        readonly artifactAddresses: readonly string[]
+        readonly behaviorIds: readonly string[]
+        readonly contractKeys: readonly string[]
+      }
+      expect(analysis.failures).toEqual([])
+      expect(analysis.ownerHrefs).toEqual(API_REFERENCE_PAGES.map(({ href }) => href))
+      expect(analysis.artifactAddresses).toEqual(
+        ARTIFACT_REGISTRY.filter(
+          (artifact) =>
+            artifact.kind === "generated" ||
+            (artifact.kind === "import" && artifact.coverage === "detailed"),
+        ).map(artifactAddressFor),
+      )
+      expect(analysis.behaviorIds).toEqual(API_BEHAVIOR_CONTRACTS.map(({ id }) => id))
+      expect(analysis.contractKeys).toEqual(API_REQUIRED_CONTRACT_KEYS)
+    },
+    DETAILED_API_REFERENCE_TIMEOUT_MS + 15_000,
+  )
 
   it("registers the package defaults, errors, and lifecycle behavior", () => {
     expect(API_BEHAVIOR_CONTRACTS.map(({ id }) => id)).toEqual([

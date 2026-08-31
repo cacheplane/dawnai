@@ -1,153 +1,344 @@
 import { randomUUID } from "node:crypto"
-import { KubeConfig, NetworkingV1Api } from "@kubernetes/client-node"
+import {
+  ApiException,
+  CoreV1Api,
+  KubeConfig,
+  NetworkingV1Api,
+  type V1NetworkPolicy,
+} from "@kubernetes/client-node"
 import { describe, expect, test } from "vitest"
 import { kubernetesSandbox } from "../src/index.ts"
 import { runProviderConformance } from "../src/testing/index.ts"
+import {
+  assertDnsEvidence,
+  assertEgressEvidence,
+  assertRestrictedSecurityEvidence,
+  buildDnsProbeCommand,
+  buildEgressProbeCommand,
+  buildRestrictedSecurityProbeCommand,
+  parseEgressControlUrl,
+} from "./support/kube-conformance-evidence.ts"
 
-// Real-cluster lane. Runs ONLY when DAWN_TEST_K8S=1 (the sandbox-k8s CI job sets
-// it against kind+Calico). Uses the ambient kubeconfig ($KUBECONFIG). Namespace
-// `dawn-sandboxes` must exist with a policy-capable CNI.
+// Real-cluster lane. The compatibility harness supplies a short-lived token
+// kubeconfig and all live inputs; ordinary package tests skip this entire suite.
 const enabled = process.env.DAWN_TEST_K8S === "1"
-const IMAGE = "node:22-slim"
-const NS = process.env.DAWN_TEST_K8S_NS ?? "dawn-sandboxes"
+
+function requiredLiveEnvironment(name: string): string {
+  const value = process.env[name]
+  if (enabled && (value === undefined || value.trim().length === 0)) {
+    throw new Error(`${name} is required when DAWN_TEST_K8S=1`)
+  }
+  return value ?? ""
+}
+
+const IMAGE = requiredLiveEnvironment("DAWN_TEST_K8S_IMAGE")
+const NS = requiredLiveEnvironment("DAWN_TEST_K8S_NS")
+const STORAGE_CLASS = requiredLiveEnvironment("DAWN_TEST_K8S_STORAGE_CLASS")
+const EGRESS_CONTROL_URL = enabled
+  ? parseEgressControlUrl(requiredLiveEnvironment("DAWN_TEST_K8S_EGRESS_CONTROL_URL"))
+  : ""
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
-const make = () => kubernetesSandbox({ image: IMAGE, namespace: NS, startupTimeoutMs: 120_000 })
+const make = () =>
+  kubernetesSandbox({
+    image: IMAGE,
+    namespace: NS,
+    storageClass: STORAGE_CLASS,
+    startupTimeoutMs: 120_000,
+  })
+
+function liveClients(): { readonly core: CoreV1Api; readonly networking: NetworkingV1Api } {
+  const kubeconfig = new KubeConfig()
+  kubeconfig.loadFromDefault()
+  return {
+    core: kubeconfig.makeApiClient(CoreV1Api),
+    networking: kubeconfig.makeApiClient(NetworkingV1Api),
+  }
+}
+
+async function waitForPodDeletion(core: CoreV1Api, name: string): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    try {
+      await core.readNamespacedPod({ name, namespace: NS })
+    } catch (error) {
+      if (error instanceof ApiException && error.code === 404) return
+      throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`Timed out waiting for Pod ${NS}/${name} to be deleted`)
+}
 
 describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000 }, () => {
   runProviderConformance({ name: "kubernetesSandbox", makeProvider: make, describe })
 
-  test("runs as non-root uid 1000", async () => {
-    const p = make()
-    const t = `id-${randomUUID().slice(0, 8)}`
+  test("production preflight validates the short-lived token permissions", async () => {
+    const provider = make()
+    if (provider.preflight === undefined) throw new Error("Kubernetes preflight is unavailable")
+    const result = await provider.preflight()
+
+    expect(result.ok, result.detail).toBe(true)
+    expect(result.detail).toBe(`Kubernetes reachable; required permissions granted in "${NS}".`)
+  })
+
+  test("runs with the restricted object and kernel security contract", async () => {
+    const provider = make()
+    const threadId = `restricted-${randomUUID().slice(0, 8)}`
     try {
-      const h = await p.acquire({
-        threadId: t,
+      const sandbox = await provider.acquire({
+        threadId,
         policy: { network: { mode: "deny" } },
         signal: ctx("/").signal,
       })
-      const r = await h.exec.runCommand({ command: "id -u" }, ctx(h.workspaceRoot))
-      expect(r.stdout.trim()).toBe("1000")
+      const { core } = liveClients()
+      const [pod, pvc] = await Promise.all([
+        core.readNamespacedPod({ name: `dawn-sbx-${threadId}`, namespace: NS }),
+        core.readNamespacedPersistentVolumeClaim({
+          name: `dawn-sbx-vol-${threadId}`,
+          namespace: NS,
+        }),
+      ])
+
+      expect(pod.spec?.automountServiceAccountToken).toBe(false)
+      expect(pod.spec?.securityContext).toMatchObject({
+        runAsNonRoot: true,
+        runAsUser: 1000,
+        runAsGroup: 1000,
+        fsGroup: 1000,
+        fsGroupChangePolicy: "OnRootMismatch",
+        seccompProfile: { type: "RuntimeDefault" },
+      })
+      expect(pod.spec?.containers[0]?.securityContext).toMatchObject({
+        allowPrivilegeEscalation: false,
+        readOnlyRootFilesystem: true,
+        capabilities: { drop: ["ALL"] },
+      })
+      expect(pvc.status?.phase).toBe("Bound")
+
+      const probe = await sandbox.exec.runCommand(
+        { command: buildRestrictedSecurityProbeCommand() },
+        ctx(sandbox.workspaceRoot),
+      )
+
+      expect(probe.exitCode, probe.stderr).toBe(0)
+      assertRestrictedSecurityEvidence(probe.stdout)
     } finally {
-      await p.destroy(t)
+      await provider.destroy(threadId)
     }
   })
 
-  test("read-only root blocks /etc writes; workspace + /tmp writable", async () => {
-    const p = make()
-    const t = `ro-${randomUUID().slice(0, 8)}`
+  test("network deny blocks egress while DNS remains available", async () => {
+    const provider = make()
+    const threadId = `network-${randomUUID().slice(0, 8)}`
     try {
-      const h = await p.acquire({
-        threadId: t,
+      const sandbox = await provider.acquire({
+        threadId,
         policy: { network: { mode: "deny" } },
         signal: ctx("/").signal,
       })
-      const etc = await h.exec.runCommand(
-        { command: "echo x > /etc/x 2>&1; echo $?" },
-        ctx(h.workspaceRoot),
+      const dns = await sandbox.exec.runCommand(
+        { command: buildDnsProbeCommand(EGRESS_CONTROL_URL) },
+        ctx(sandbox.workspaceRoot),
       )
-      expect(etc.stdout.trim().endsWith("0")).toBe(false)
-      const ws = await h.exec.runCommand(
-        { command: "echo x > /workspace/x && echo ok" },
-        ctx(h.workspaceRoot),
-      )
-      expect(ws.stdout).toContain("ok")
-    } finally {
-      await p.destroy(t)
-    }
-  })
+      expect(dns.exitCode, dns.stderr).toBe(0)
+      assertDnsEvidence(dns.stdout)
 
-  test("network deny blocks egress", async () => {
-    const p = make()
-    const t = `net-${randomUUID().slice(0, 8)}`
-    try {
-      const h = await p.acquire({
-        threadId: t,
-        policy: { network: { mode: "deny" } },
-        signal: ctx("/").signal,
-      })
-      const r = await h.exec.runCommand(
-        {
-          command: `node -e "fetch('https://registry.npmjs.org/',{signal:AbortSignal.timeout(5000)}).then(()=>{console.log('REACHED');process.exit(0)}).catch(()=>{console.log('BLOCKED');process.exit(7)})"`,
-        },
-        ctx(h.workspaceRoot),
+      const fetchResult = await sandbox.exec.runCommand(
+        { command: buildEgressProbeCommand(EGRESS_CONTROL_URL) },
+        ctx(sandbox.workspaceRoot),
       )
-      expect(r.exitCode).toBe(7)
-      expect(r.stdout).toContain("BLOCKED")
+      expect(fetchResult.exitCode).toBe(7)
+      assertEgressEvidence(fetchResult.stdout, "blocked")
     } finally {
-      await p.destroy(t)
+      await provider.destroy(threadId)
     }
   })
 
   test("chart backstop blocks allow-mode sandbox egress without a per-thread policy", async () => {
-    const controlUrl = process.env.DAWN_TEST_K8S_EGRESS_CONTROL_URL
-    if (!controlUrl) {
-      throw new Error("DAWN_TEST_K8S_EGRESS_CONTROL_URL is required for real-cluster tests")
-    }
-
-    const controlHostname = new URL(controlUrl).hostname
-    const p = make()
-    const t = `egress-${randomUUID().slice(0, 8)}`
+    const provider = make()
+    const threadId = `egress-${randomUUID().slice(0, 8)}`
     try {
-      const h = await p.acquire({
-        threadId: t,
+      const sandbox = await provider.acquire({
+        threadId,
         policy: { network: { mode: "allow" } },
         signal: ctx("/").signal,
       })
-
-      const kc = new KubeConfig()
-      kc.loadFromDefault()
-      const networking = kc.makeApiClient(NetworkingV1Api)
+      const { networking } = liveClients()
       const policies = await networking.listNamespacedNetworkPolicy({ namespace: NS })
       const perThreadPolicy = policies.items.find(
         (policy) =>
-          policy.metadata?.name === `dawn-sbx-net-${t}` ||
-          policy.metadata?.labels?.["dawn.sh/thread"] === t,
+          policy.metadata?.name === `dawn-sbx-net-${threadId}` ||
+          policy.metadata?.labels?.["dawn.sh/thread"] === threadId,
       )
       expect(perThreadPolicy).toBeUndefined()
 
-      const dns = await h.exec.runCommand(
-        {
-          command: `node -e 'require("node:dns").promises.lookup(${JSON.stringify(controlHostname)}).then(({ address }) => console.log(address)).catch((error) => { console.error(error); process.exit(1) })'`,
-        },
-        ctx(h.workspaceRoot),
+      const dns = await sandbox.exec.runCommand(
+        { command: buildDnsProbeCommand(EGRESS_CONTROL_URL) },
+        ctx(sandbox.workspaceRoot),
       )
-      expect(dns.exitCode).toBe(0)
-      expect(dns.stdout.trim()).not.toBe("")
+      expect(dns.exitCode, dns.stderr).toBe(0)
+      assertDnsEvidence(dns.stdout)
 
-      const fetchResult = await h.exec.runCommand(
-        {
-          command: `node -e 'fetch(${JSON.stringify(controlUrl)}, { signal: AbortSignal.timeout(5000) }).then((response) => { console.log("REACHED " + response.status); process.exit(0) }).catch(() => { console.log("BLOCKED"); process.exit(7) })'`,
-        },
-        ctx(h.workspaceRoot),
+      const fetchResult = await sandbox.exec.runCommand(
+        { command: buildEgressProbeCommand(EGRESS_CONTROL_URL) },
+        ctx(sandbox.workspaceRoot),
       )
-      expect(fetchResult.exitCode).not.toBe(0)
-      expect(fetchResult.stdout).toContain("BLOCKED")
+      expect(fetchResult.exitCode).toBe(7)
+      assertEgressEvidence(fetchResult.stdout, "blocked")
     } finally {
-      await p.destroy(t)
+      await provider.destroy(threadId)
     }
   })
 
-  test("workspace persists across release→reattach (PVC durability)", async () => {
-    const p = make()
-    const t = `pvc-${randomUUID().slice(0, 8)}`
+  test("workspace persists across release and reattach", async () => {
+    const provider = make()
+    const threadId = `persistence-${randomUUID().slice(0, 8)}`
     try {
-      const a = await p.acquire({
-        threadId: t,
+      const first = await provider.acquire({
+        threadId,
         policy: { network: { mode: "deny" } },
         signal: ctx("/").signal,
       })
-      await a.filesystem.writeFile(`${a.workspaceRoot}/keep`, "durable", ctx(a.workspaceRoot))
-      await p.release(t)
-      const b = await p.acquire({
-        threadId: t,
-        policy: { network: { mode: "deny" } },
-        signal: ctx("/").signal,
-      })
-      expect(await b.filesystem.readFile(`${b.workspaceRoot}/keep`, ctx(b.workspaceRoot))).toBe(
+      await first.filesystem.writeFile(
+        `${first.workspaceRoot}/keep`,
         "durable",
+        ctx(first.workspaceRoot),
       )
+      await provider.release(threadId)
+      const second = await provider.acquire({
+        threadId,
+        policy: { network: { mode: "deny" } },
+        signal: ctx("/").signal,
+      })
+      expect(
+        await second.filesystem.readFile(`${second.workspaceRoot}/keep`, ctx(second.workspaceRoot)),
+      ).toBe("durable")
     } finally {
-      await p.destroy(t)
+      await provider.destroy(threadId)
+    }
+  })
+
+  test("recreates an externally deleted keeper over the same PVC", async () => {
+    const provider = make()
+    const threadId = `recreate-${randomUUID().slice(0, 8)}`
+    const podName = `dawn-sbx-${threadId}`
+    const pvcName = `dawn-sbx-vol-${threadId}`
+    try {
+      const first = await provider.acquire({
+        threadId,
+        policy: { network: { mode: "deny" } },
+        signal: ctx("/").signal,
+      })
+      await first.filesystem.writeFile(
+        `${first.workspaceRoot}/keeper-data`,
+        "preserved",
+        ctx(first.workspaceRoot),
+      )
+      const { core } = liveClients()
+      const [initialPod, initialPvc] = await Promise.all([
+        core.readNamespacedPod({ name: podName, namespace: NS }),
+        core.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace: NS }),
+      ])
+      expect(initialPod.metadata?.uid).toBeTruthy()
+      expect(initialPvc.metadata?.uid).toBeTruthy()
+
+      await core.deleteNamespacedPod({ name: podName, namespace: NS, gracePeriodSeconds: 0 })
+      await waitForPodDeletion(core, podName)
+
+      const second = await provider.acquire({
+        threadId,
+        policy: { network: { mode: "deny" } },
+        signal: ctx("/").signal,
+      })
+      const [replacementPod, retainedPvc] = await Promise.all([
+        core.readNamespacedPod({ name: podName, namespace: NS }),
+        core.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace: NS }),
+      ])
+      expect(replacementPod.metadata?.uid).toBeTruthy()
+      expect(replacementPod.metadata?.uid).not.toBe(initialPod.metadata?.uid)
+      expect(retainedPvc.metadata?.uid).toBe(initialPvc.metadata?.uid)
+      expect(
+        await second.filesystem.readFile(
+          `${second.workspaceRoot}/keeper-data`,
+          ctx(second.workspaceRoot),
+        ),
+      ).toBe("preserved")
+    } finally {
+      await provider.destroy(threadId)
+    }
+  })
+
+  test("updates an existing owned NetworkPolicy on reacquire", async () => {
+    const provider = make()
+    const threadId = `policy-${randomUUID().slice(0, 8)}`
+    const policyName = `dawn-sbx-net-${threadId}`
+    try {
+      await provider.acquire({
+        threadId,
+        policy: { network: { mode: "deny" } },
+        signal: ctx("/").signal,
+      })
+      const { networking } = liveClients()
+      const existing = await networking.readNamespacedNetworkPolicy({
+        name: policyName,
+        namespace: NS,
+      })
+      expect(existing.metadata?.labels).toMatchObject({
+        "app.kubernetes.io/managed-by": "dawn",
+        "dawn.sh/thread": threadId,
+      })
+      expect(existing.metadata?.resourceVersion).toBeTruthy()
+      expect(existing.metadata?.uid).toBeTruthy()
+
+      const modified: V1NetworkPolicy = {
+        ...existing,
+        spec: {
+          podSelector: { matchLabels: { "dawn.sh/thread": threadId } },
+          policyTypes: ["Egress"],
+          egress: [],
+        },
+      }
+      await networking.replaceNamespacedNetworkPolicy({
+        name: policyName,
+        namespace: NS,
+        body: modified,
+      })
+
+      await provider.acquire({
+        threadId,
+        policy: { network: { mode: "deny" } },
+        signal: ctx("/").signal,
+      })
+      const updated = await networking.readNamespacedNetworkPolicy({
+        name: policyName,
+        namespace: NS,
+      })
+      expect(updated.metadata?.uid).toBe(existing.metadata?.uid)
+      expect(updated.metadata?.labels).toMatchObject({
+        "app.kubernetes.io/managed-by": "dawn",
+        "dawn.sh/thread": threadId,
+      })
+      expect(updated.spec).toEqual({
+        podSelector: { matchLabels: { "dawn.sh/thread": threadId } },
+        policyTypes: ["Egress"],
+        egress: [
+          {
+            to: [
+              {
+                namespaceSelector: {
+                  matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
+                },
+              },
+            ],
+            ports: [
+              { protocol: "UDP", port: 53 },
+              { protocol: "TCP", port: 53 },
+            ],
+          },
+        ],
+      })
+    } finally {
+      await provider.destroy(threadId)
     }
   })
 })

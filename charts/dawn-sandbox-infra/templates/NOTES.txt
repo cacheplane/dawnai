@@ -1,8 +1,14 @@
 dawn-sandbox-infra installed.
 
+Helm release namespace:
+  {{ .Release.Namespace }} (dawn-app management namespace; keep separate from the sandbox namespace)
+
 Namespace:
   {{ include "dawn-sandbox-infra.namespace" . }}
 {{- if .Values.namespace.create }} (created by this chart){{- else }} (must already exist — namespace.create=false){{- end }}
+
+By default, sandbox resources live in dawn-sandboxes while this Helm release
+and its Secret live in the separate dawn-app management namespace.
 
 Point your Dawn app's `dawn.config.ts` at this namespace so the
 kubernetesSandbox provider agrees with the chart:
@@ -11,21 +17,64 @@ kubernetesSandbox provider agrees with the chart:
     provider: kubernetesSandbox({ namespace: "{{ include "dawn-sandbox-infra.namespace" . }}" })
   }
 
-Orchestrator ServiceAccount:
-{{- if .Values.orchestrator.serviceAccount.create }}
-  {{ include "dawn-sandbox-infra.orchestratorSAName" . }} (created by this chart, namespace-scoped)
+Application ServiceAccount / namespace wiring:
 
-  Bind an in-cluster Dawn app to this ServiceAccount (e.g.
-  `serviceAccountName: {{ include "dawn-sandbox-infra.orchestratorSAName" . }}` on the app's Pod spec)
-  so it can create/get/delete pods + pods/exec + persistentvolumeclaims,
-  and create/get/list/update/delete networkpolicies in this namespace.
-{{- else }}
-  orchestrator.serviceAccount.create=false — binding to the existing
-  ServiceAccount/subjects supplied in values.
-{{- end }}
+Create or use the Dawn app ServiceAccount in a separate management namespace.
+Configure the app Pod to use that management-namespace ServiceAccount.
+Then bind that cross-namespace subject into this sandbox namespace's
+orchestrator RoleBinding through `orchestrator.subjects`:
+
+First export this release's effective values:
+
+  helm get values {{ .Release.Name }} --all --output yaml \
+    --namespace {{ .Release.Namespace }} \
+    > dawn-sandbox-infra-rbac-values.yaml
+
+Edit dawn-sandbox-infra-rbac-values.yaml so `orchestrator.subjects` contains
+the complete intended subject list: preserve every existing item and append
+the application ServiceAccount as a cross-namespace subject. Helm replaces
+arrays, so never write a guessed numeric subject index.
+
+  helm upgrade {{ .Release.Name }} oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --version {{ .Chart.Version }} \
+    --namespace {{ .Release.Namespace }} \
+    --values dawn-sandbox-infra-rbac-values.yaml
+
+The appended values entry is:
+
+  orchestrator:
+    subjects:
+      - kind: ServiceAccount
+        name: <app-service-account>
+        namespace: <management-namespace>
+
+That subject receives create/get/delete pods and persistentvolumeclaims,
+create/get pods/exec, and create/get/list/update/delete networkpolicies in this
+sandbox namespace. Keep the app Pod and all application credentials in the
+management namespace.
 
 Pod Security Standards on this namespace:
   enforce={{ .Values.podSecurityStandard.enforce }}  warn={{ .Values.podSecurityStandard.warn }}  audit={{ .Values.podSecurityStandard.audit }}
+
+The chart default is enforce=restricted. Baseline is needed only for workloads
+or settings that actually violate Restricted admission, such as
+security.runAsNonRoot: false. security.readOnlyRootFilesystem: false alone
+remains Restricted-compatible and does not require lowering the namespace to
+Baseline. There is no automatic downgrade.
+
+Operational prerequisites:
+  - Pod Security Admission for the labels above.
+  - Dynamic provisioning for ReadWriteOnce PVCs (a default StorageClass or an
+    explicit kubernetesSandbox storageClass).
+  - A policy-enforcing CNI for NetworkPolicy egress controls.
+
+Keep this namespace free of application credentials. Direct Secret API reads
+are denied, but the orchestrator's Pod-create permission can mount a known
+Secret into a Pod. Store the Dawn app, application credentials, and Helm release
+Secrets in the separate management namespace shown above.
+
+namespace.extraLabels may add operator labels, but Pod Security labels and the
+chart ownership labels are reserved and rejected during rendering.
 
 {{- if .Values.networkPolicy.defaultDenyEgress }}
 

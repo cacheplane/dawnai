@@ -25,19 +25,24 @@
 #   5. DELETE /threads/{id} → the Pod AND its PVC are gone within 60s.
 set -eu
 
+DAWN_TEST_K8S_CONTEXT="${DAWN_TEST_K8S_CONTEXT:?assert-k8s.sh requires DAWN_TEST_K8S_CONTEXT}"
 NS_APP=dawn-app
 NS_SBX=dawn-sandboxes
 LOCAL_PORT=8000
 BASE="http://127.0.0.1:${LOCAL_PORT}"
 ROUTE='/smoke#agent'
 
+kubectl_ctx() {
+  command kubectl --context "$DAWN_TEST_K8S_CONTEXT" "$@"
+}
+
 fail() {
   echo "ASSERT FAILED: $*" >&2
   echo "----- diagnostics -----" >&2
-  kubectl get pods -A -o wide >&2 2>&1 || true
-  kubectl -n "$NS_SBX" get pods,pvc,networkpolicy -o wide >&2 2>&1 || true
-  kubectl -n "$NS_APP" describe deploy/dawn-app >&2 2>&1 || true
-  kubectl -n "$NS_APP" logs deploy/dawn-app --tail=120 >&2 2>&1 || true
+  kubectl_ctx get pods -A -o wide >&2 2>&1 || true
+  kubectl_ctx -n "$NS_SBX" get pods,pvc,networkpolicy -o wide >&2 2>&1 || true
+  kubectl_ctx -n "$NS_APP" describe deploy/dawn-app >&2 2>&1 || true
+  kubectl_ctx -n "$NS_APP" logs deploy/dawn-app --tail=120 >&2 2>&1 || true
   exit 1
 }
 
@@ -63,7 +68,7 @@ extract_tool_content() {
 }
 
 # --- port-forward to the app Service ----------------------------------------
-kubectl -n "$NS_APP" port-forward svc/dawn-app "${LOCAL_PORT}:8000" >/tmp/dawn-app-pf.log 2>&1 &
+kubectl_ctx -n "$NS_APP" port-forward svc/dawn-app "${LOCAL_PORT}:8000" >/tmp/dawn-app-pf.log 2>&1 &
 PF_PID=$!
 cleanup() { kill "$PF_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
@@ -111,7 +116,7 @@ case "$HOST_LINE" in
 esac
 
 # --- 4. sandbox Pod / NetworkPolicy assertions -------------------------------
-PODS_JSON=$(kubectl -n "$NS_SBX" get pods -o json)
+PODS_JSON=$(kubectl_ctx -n "$NS_SBX" get pods -o json)
 SBX_COUNT=$(printf '%s' "$PODS_JSON" | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-"))] | length')
 [ "$SBX_COUNT" = "1" ] || fail "expected exactly one dawn-sbx-* Pod in ${NS_SBX}, found ${SBX_COUNT}"
 
@@ -122,7 +127,7 @@ RUN_AS_USER=$(printf '%s' "$PODS_JSON" | jq -r --arg n "$SBX_NAME" '.items[] | s
 { [ -n "$RUN_AS_USER" ] && [ "$RUN_AS_USER" != "null" ] && [ "$RUN_AS_USER" != "0" ]; } \
   || fail "sandbox Pod ${SBX_NAME} runAsUser is root/empty (got '${RUN_AS_USER}')"
 
-NP_COUNT=$(kubectl -n "$NS_SBX" get networkpolicy -o json \
+NP_COUNT=$(kubectl_ctx -n "$NS_SBX" get networkpolicy -o json \
   | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-net-"))] | length')
 [ "$NP_COUNT" -ge 1 ] || fail "expected a per-thread dawn-sbx-net-* NetworkPolicy, found ${NP_COUNT}"
 
@@ -139,8 +144,8 @@ POD_LEFT=1
 PVC_LEFT=1
 i=0
 while [ "$i" -lt 60 ]; do
-  POD_LEFT=$(kubectl -n "$NS_SBX" get pods -o json | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-"))] | length')
-  PVC_LEFT=$(kubectl -n "$NS_SBX" get pvc -o json | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-vol-"))] | length')
+  POD_LEFT=$(kubectl_ctx -n "$NS_SBX" get pods -o json | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-"))] | length')
+  PVC_LEFT=$(kubectl_ctx -n "$NS_SBX" get pvc -o json | jq '[.items[] | select(.metadata.name | startswith("dawn-sbx-vol-"))] | length')
   if [ "$POD_LEFT" = "0" ] && [ "$PVC_LEFT" = "0" ]; then gone=1; break; fi
   i=$((i + 1))
   sleep 1

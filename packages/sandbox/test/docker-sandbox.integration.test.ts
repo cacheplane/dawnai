@@ -12,7 +12,8 @@ import { runProviderConformance } from "../src/testing/index.ts"
 // sets it; the default validate lane never does). Locally: DAWN_TEST_DOCKER=1
 // with a running Docker daemon.
 const enabled = process.env.DAWN_TEST_DOCKER === "1"
-const IMAGE = "node:22-slim"
+const IMAGE =
+  "docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436"
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
 const policyDeny = { network: { mode: "deny" } } as const
 const pollIntervalMs = 100
@@ -81,7 +82,7 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
     const threadId = `net-${randomUUID()}`
     try {
       const h = await p.acquire({ threadId, policy: policyDeny, signal: ctx("/").signal })
-      // node:22-slim has node; use node's fetch with a short timeout — no curl dependency.
+      // The workload image has Node; use fetch with a short timeout and no curl dependency.
       const r = await h.exec.runCommand(
         {
           command: `node -e "fetch('https://registry.npmjs.org/', {signal: AbortSignal.timeout(5000)}).then(()=>{console.log('REACHED');process.exit(0)}).catch(()=>{console.log('BLOCKED');process.exit(7)})"`,

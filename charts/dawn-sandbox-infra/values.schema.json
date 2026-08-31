@@ -16,13 +16,17 @@
     "namespace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["create", "name"],
+      "required": ["create", "name", "extraLabels"],
       "properties": {
         "create": { "type": "boolean" },
         "name": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
           "maxLength": 63
+        },
+        "extraLabels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     },

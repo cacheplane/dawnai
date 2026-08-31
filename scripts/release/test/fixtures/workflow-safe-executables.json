@@ -328,9 +328,9 @@
         "classification": "safe",
         "job": "sandbox-docker",
         "stepIndex": 5,
-        "step": "Pull sandbox image",
+        "step": "Pull sandbox workload image",
         "kind": "run",
-        "value": "docker pull node:22-slim"
+        "value": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\n"
       },
       {
         "classification": "safe",
@@ -856,14 +856,6 @@
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 4,
-        "step": "Build sandbox package",
-        "kind": "run",
-        "value": "pnpm --filter @dawn-ai/sandbox... build"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s",
-        "stepIndex": 5,
         "step": "Setup Helm",
         "kind": "step-uses",
         "value": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
@@ -871,16 +863,24 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s",
+        "stepIndex": 5,
+        "step": "Verify chart/provider permission parity",
+        "kind": "run",
+        "value": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s",
         "stepIndex": 6,
         "step": "Prime kind tool cache",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
+        "value": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 7,
-        "step": "Create kind cluster (no default CNI)",
+        "step": "Create kind cluster",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
       },
@@ -888,49 +888,33 @@
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 8,
-        "step": "Install Calico (enforces NetworkPolicy)",
+        "step": "Prepare verified Calico manifest",
         "kind": "run",
-        "value": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
+        "value": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 9,
-        "step": "Install sandbox-infra chart",
+        "step": "Install verified Calico",
         "kind": "run",
-        "value": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait\nkubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount\n"
+        "value": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 10,
-        "step": "Prepare chart NetworkPolicy control",
+        "step": "Run Kubernetes 1.35 compatibility harness",
         "kind": "run",
-        "value": "sh test/k8s-smoke/setup-network-policy-control.sh"
+        "value": "pnpm verify:k8s:compat -- --target 1.35 --context \"$DAWN_TEST_K8S_CONTEXT\""
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s",
         "stepIndex": 11,
-        "step": "Assert orchestrator RBAC (least privilege)",
-        "kind": "run",
-        "value": "SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator\nkubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\n# WebSocket exec (@kubernetes/client-node) authorizes as `get pods/exec`\nkubectl auth can-i get pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes\nkubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no\n"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s",
-        "stepIndex": 12,
-        "step": "Real-cluster sandbox conformance + e2e",
-        "kind": "run",
-        "value": "DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s",
-        "stepIndex": 13,
-        "step": "Exercise PVC reaper",
-        "kind": "run",
-        "value": "sh test/k8s-smoke/assert-reaper.sh"
+        "step": "Upload Kubernetes compatibility artifacts",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       },
       {
         "classification": "safe",
@@ -984,38 +968,54 @@
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 6,
-        "step": "Prime kind tool cache",
+        "step": "Verify chart/provider permission parity",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
+        "value": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 7,
-        "step": "Create kind cluster (no default CNI)",
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 8,
+        "step": "Create kind cluster",
         "kind": "step-uses",
         "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 8,
-        "step": "Install Calico (enforces NetworkPolicy)",
-        "kind": "run",
-        "value": "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml\nkubectl -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl wait --for=condition=Ready nodes --all --timeout=180s\n"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s-e2e",
         "stepIndex": 9,
-        "step": "Preload sandbox workload image into kind",
+        "step": "Prepare verified Calico manifest",
         "kind": "run",
-        "value": "docker pull node:22-slim\nkind load docker-image node:22-slim --name \"$KIND_CLUSTER\"\n"
+        "value": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 10,
+        "step": "Install verified Calico",
+        "kind": "run",
+        "value": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 11,
+        "step": "Preload sandbox workload image into kind",
+        "kind": "run",
+        "value": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker exec \"${KIND_CLUSTER}-control-plane\" crictl pull \"$SANDBOX_IMAGE\"\ndocker exec \"${KIND_CLUSTER}-control-plane\" crictl inspecti \"$SANDBOX_IMAGE\" >/dev/null\n"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 12,
         "step": "Build and load smoke app image (Verdaccio)",
         "kind": "run",
         "value": "set -eu\nURLFILE=\"$(mktemp)\"\npnpm exec tsx test/k8s-smoke/serve-registry.ts \"$URLFILE\" &\nREG_PID=$!\nfor _ in $(seq 1 180); do\n  [ -s \"$URLFILE\" ] && break\n  kill -0 \"$REG_PID\" 2>/dev/null || { echo \"serve-registry exited before publishing\"; exit 1; }\n  sleep 1\ndone\n[ -s \"$URLFILE\" ] || { echo \"registry URL never became ready\"; kill \"$REG_PID\" 2>/dev/null || true; exit 1; }\nREG_URL=\"$(cat \"$URLFILE\")\"\necho \"registry ready at $REG_URL\"\nsh test/k8s-smoke/build-image.sh k8s \"$REG_URL\"\nkill \"$REG_PID\" 2>/dev/null || true\nkind load docker-image dawn-smoke-app:k8s --name \"$KIND_CLUSTER\"\n"
@@ -1023,7 +1023,7 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 11,
+        "stepIndex": 13,
         "step": "Build and load aimock image",
         "kind": "run",
         "value": "docker build -t dawn-smoke-aimock:latest -f test/k8s-smoke/aimock/Dockerfile test/k8s-smoke\nkind load docker-image dawn-smoke-aimock:latest --name \"$KIND_CLUSTER\"\n"
@@ -1031,39 +1031,39 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 12,
+        "stepIndex": 14,
         "step": "Create app namespace",
         "kind": "run",
-        "value": "kubectl create namespace dawn-app"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s-e2e",
-        "stepIndex": 13,
-        "step": "Install sandbox-infra chart",
-        "kind": "run",
-        "value": "helm install dawn-sandbox-infra charts/dawn-sandbox-infra \\\n  -n dawn-sandboxes --create-namespace \\\n  -f test/k8s-smoke/values-sandbox-infra.yaml --wait\n"
-      },
-      {
-        "classification": "safe",
-        "job": "sandbox-k8s-e2e",
-        "stepIndex": 14,
-        "step": "Deploy aimock",
-        "kind": "run",
-        "value": "kubectl apply -f test/k8s-smoke/aimock.k8s.yaml\nkubectl -n dawn-app rollout status deploy/aimock --timeout=120s\n"
+        "value": "kubectl --context \"$DAWN_TEST_K8S_CONTEXT\" create namespace dawn-app"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 15,
-        "step": "Install dawn-app chart",
+        "step": "Install sandbox-infra chart",
         "kind": "run",
-        "value": "helm install dawn-app charts/dawn-app \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-dawn-app.yaml --wait\n"
+        "value": "helm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-sandbox-infra charts/dawn-sandbox-infra \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-sandbox-infra.yaml --wait\n"
       },
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
         "stepIndex": 16,
+        "step": "Deploy aimock",
+        "kind": "run",
+        "value": "kubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply -f test/k8s-smoke/aimock.k8s.yaml\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app rollout status deploy/aimock --timeout=120s\n"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 17,
+        "step": "Install dawn-app chart",
+        "kind": "run",
+        "value": "helm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-app charts/dawn-app \\\n  -n dawn-app \\\n  -f test/k8s-smoke/values-dawn-app.yaml --wait\n"
+      },
+      {
+        "classification": "safe",
+        "job": "sandbox-k8s-e2e",
+        "stepIndex": 18,
         "step": "Run full-arc assertions",
         "kind": "run",
         "value": "sh test/k8s-smoke/assert-k8s.sh"
@@ -1071,10 +1071,10 @@
       {
         "classification": "safe",
         "job": "sandbox-k8s-e2e",
-        "stepIndex": 17,
+        "stepIndex": 19,
         "step": "Diagnostics + cleanup",
         "kind": "run",
-        "value": "echo \"----- app -----\"\nkubectl -n dawn-app get pods,svc -o wide || true\nkubectl -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\necho \"----- teardown -----\"\nhelm uninstall dawn-app -n dawn-app || true\nhelm uninstall dawn-sandbox-infra -n dawn-sandboxes || true\nkubectl delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
+        "value": "echo \"----- app -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app get pods,svc -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs deploy/dawn-app --tail=120 || true\necho \"----- aimock -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true\necho \"----- sandboxes -----\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n dawn-sandboxes describe pods -l app.kubernetes.io/managed-by=dawn || true\necho \"----- teardown -----\"\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-app -n dawn-app || true\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" uninstall dawn-sandbox-infra -n dawn-app || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-app --ignore-not-found --wait=false || true\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" delete namespace dawn-sandboxes --ignore-not-found --wait=false || true\n"
       },
       {
         "classification": "safe",
@@ -1120,9 +1120,9 @@
         "classification": "safe",
         "job": "sandbox-docker-e2e",
         "stepIndex": 5,
-        "step": "Preload sandbox workload image",
+        "step": "Pull sandbox workload image",
         "kind": "run",
-        "value": "docker pull node:22-slim"
+        "value": "SANDBOX_IMAGE=\"$(\n  pnpm exec tsx -e 'import { loadCompatibilityPolicy } from \"./scripts/kubernetes-compat/policy.ts\"; loadCompatibilityPolicy().then((policy) => process.stdout.write(policy.images.sandboxWorkload))'\n)\"\ndocker pull \"$SANDBOX_IMAGE\"\n"
       },
       {
         "classification": "safe",
@@ -1170,7 +1170,7 @@
         "stepIndex": 2,
         "step": "Prime kind tool cache",
         "kind": "run",
-        "value": "scripts/prime-kind-cache.sh v0.31.0 v1.35.0"
+        "value": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
       },
       {
         "classification": "safe",
@@ -1186,7 +1186,7 @@
         "stepIndex": 4,
         "step": "Install dawn-app (placeholder image) and verify it serves",
         "kind": "run",
-        "value": "helm install dawn-app charts/dawn-app \\\n  --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \\\n  --wait --timeout 3m\nkubectl rollout status deploy/dawn-app --timeout=120s\nkubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
+        "value": "set -eu\nPLACEHOLDER_IMAGE=\"$(jq -er '.images.placeholderApp' .github/kubernetes-compatibility.json)\"\nREACHABILITY_IMAGE=\"$(jq -er '.images.reachabilityProbe' .github/kubernetes-compatibility.json)\"\nPLACEHOLDER_WITH_TAG=\"${PLACEHOLDER_IMAGE%@sha256:*}\"\nPLACEHOLDER_REPOSITORY=\"${PLACEHOLDER_WITH_TAG%:*}\"\nPLACEHOLDER_DIGEST=\"sha256:${PLACEHOLDER_IMAGE##*@sha256:}\"\nprintf '%s\\n' \"$PLACEHOLDER_DIGEST\" | grep -Eq '^sha256:[0-9a-f]{64}$'\nprintf '%s\\n' \"$REACHABILITY_IMAGE\" | grep -Eq '@sha256:[0-9a-f]{64}$'\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-app charts/dawn-app \\\n  --set-string image.repository=\"$PLACEHOLDER_REPOSITORY\" \\\n  --set-string image.digest=\"$PLACEHOLDER_DIGEST\" \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --wait --timeout 3m\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" rollout status deploy/dawn-app --timeout=120s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" run curl --image=\"$REACHABILITY_IMAGE\" --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
       }
     ],
     "claude-review.yml": [
@@ -1305,6 +1305,152 @@
         "step": "Upload sealed receipt",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      }
+    ],
+    "kubernetes-compat.yml": [
+      {
+        "classification": "safe",
+        "job": "scope",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "scope",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "scope",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "scope",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "scope",
+        "stepIndex": 4,
+        "step": "Compute compatibility scope",
+        "kind": "run",
+        "value": "set -eu\ncase \"$EVENT_NAME\" in\n  pull_request)\n    REQUIRED=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event pull_request --base \"$BASE_SHA\" --head \"$HEAD_SHA\")\"\n    ;;\n  schedule|workflow_dispatch)\n    REQUIRED=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts scope --event \"$EVENT_NAME\")\"\n    ;;\n  *)\n    echo \"Unsupported workflow event: $EVENT_NAME\" >&2\n    exit 1\n    ;;\nesac\ncase \"$REQUIRED\" in\n  true|false) ;;\n  *) echo \"Malformed compatibility scope output\" >&2; exit 1 ;;\nesac\nMATRIX=\"$(pnpm exec tsx scripts/kubernetes-compat/workflow.ts matrix)\"\n[ -n \"$MATRIX\" ] || { echo \"Empty compatibility matrix output\" >&2; exit 1; }\n[ \"$(printf '%s' \"$MATRIX\" | wc -l | tr -d ' ')\" -eq 0 ] \\\n  || { echo \"Compatibility matrix output must be compact\" >&2; exit 1; }\nprintf 'required=%s\\nmatrix=%s\\n' \"$REQUIRED\" \"$MATRIX\" >> \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 4,
+        "step": "Setup Helm",
+        "kind": "step-uses",
+        "value": "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 5,
+        "step": "Verify chart/provider permission parity",
+        "kind": "run",
+        "value": "pnpm exec vitest --run --config test/k8s-compat/vitest.config.ts chart-rbac"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 6,
+        "step": "Prime kind tool cache",
+        "kind": "run",
+        "value": "scripts/prime-kind-cache.sh v0.32.0 v1.35.6"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 7,
+        "step": "Create kind cluster",
+        "kind": "step-uses",
+        "value": "helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 8,
+        "step": "Prepare verified Calico manifest",
+        "kind": "run",
+        "value": "pnpm exec tsx scripts/kubernetes-compat/workflow.ts prepare-calico --output \"$CALICO_MANIFEST\""
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 9,
+        "step": "Install verified Calico",
+        "kind": "run",
+        "value": "set -eu\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" apply --filename \"$CALICO_MANIFEST\"\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" -n kube-system rollout status daemonset/calico-node --timeout=180s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" wait --for=condition=Ready nodes --all --timeout=180s\n"
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 10,
+        "step": "Run Kubernetes compatibility harness",
+        "kind": "run",
+        "value": "pnpm verify:k8s:compat -- --target \"$DAWN_K8S_TARGET\" --context \"$DAWN_TEST_K8S_CONTEXT\""
+      },
+      {
+        "classification": "safe",
+        "job": "compat",
+        "stepIndex": 11,
+        "step": "Upload Kubernetes compatibility artifacts",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+      },
+      {
+        "classification": "safe",
+        "job": "kubernetes-compat",
+        "stepIndex": 0,
+        "step": "Evaluate Kubernetes compatibility result",
+        "kind": "run",
+        "value": "set -eu\nif [ \"$SCOPE_RESULT\" != \"success\" ]; then\n  echo \"Kubernetes compatibility scope did not succeed: $SCOPE_RESULT\" >&2\n  exit 1\nfi\ncase \"$REQUIRED\" in\n  false)\n    if [ \"$COMPAT_RESULT\" = \"skipped\" ]; then\n      exit 0\n    fi\n    echo \"Unrequired Kubernetes compatibility work was not skipped: $COMPAT_RESULT\" >&2\n    exit 1\n    ;;\n  true)\n    if [ \"$COMPAT_RESULT\" = \"success\" ]; then\n      exit 0\n    fi\n    echo \"Required Kubernetes compatibility work did not succeed: $COMPAT_RESULT\" >&2\n    exit 1\n    ;;\n  *)\n    echo \"Malformed or missing Kubernetes compatibility scope output\" >&2\n    exit 1\n    ;;\nesac\n"
       }
     ],
     "publish-chart.yml": [

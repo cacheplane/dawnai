@@ -24,6 +24,7 @@ export default defineConfig({
       "./packages/testing/vitest.config.ts",
       "./packages/vite-plugin/vitest.config.ts",
       "./packages/workspace/vitest.config.ts",
+      "./test/k8s-compat/vitest.config.ts",
       "./examples/chat/server/vitest.config.ts",
       "./examples/research/server/vitest.config.ts",
       "./examples/research/web/vitest.config.ts",

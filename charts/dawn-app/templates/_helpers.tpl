@@ -43,10 +43,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The ServiceAccount name to use, honoring create vs. reuse-existing.
+The ServiceAccount name to use. An empty value follows the chart's
+release-scoped fullname so the canonical dawn-app release creates dawn-app.
 */}}
 {{- define "dawn-app.serviceAccountName" -}}
-{{- .Values.serviceAccount.name -}}
+{{- default (include "dawn-app.fullname" .) .Values.serviceAccount.name -}}
 {{- end -}}
 
 {{/*

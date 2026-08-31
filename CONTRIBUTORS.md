@@ -94,6 +94,27 @@ Treat these lanes as distinct: package tests prove package behavior, harness lan
 - **Final-owner reachability defines the script hash set.** `scripts/release/test/fixtures/release-script-hashes.json` must contain exactly the repository scripts reachable from the final release-owner workflows. The suite derives that set from literal `scripts/...` paths in workflow `run:` bodies and action `with:` inputs, plus one-level `pnpm` package-script expansion. An unpinned reachable script, stale pin, or command that cannot be followed fails closed. Editing a reachable script also fails until its SHA256 is updated in the same commit, so both the command-line and content changes receive release-integrity review.
 - **In-repo scripts generally are not pinned.** Everything else under `scripts/` — including `check-docs.mjs`, `check-changesets.mjs`, and `prime-kind-cache.sh`, which run in CI rather than in the release — is covered by branch protection and review, not by a content hash.
 
+### Kubernetes compatibility
+
+For ordinary local compatibility verification against the cluster already
+selected in kubeconfig, run:
+
+```sh
+pnpm verify:k8s:compat -- --target <1.34|1.35|1.36> --context <exact-context> [--storage-class <name>] [--keep-on-failure]
+```
+
+The context argument must exactly match the current context. The command
+preflights its tools, server minor, storage selection, unused temporary
+namespaces, and complete administrative permission set before installation; it
+also requires Pod Security Admission and a policy-enforcing CNI. Dynamic RWO
+provisioning is a runtime prerequisite verified by the lifecycle, not proven by
+preflight.
+
+The policy-pinned Kind/Calico matrix covers Kubernetes 1.34, Kubernetes 1.35,
+and Kubernetes 1.36. The lower and upper endpoint Kind lanes are scoped to
+Kubernetes-relevant pull requests and also run nightly (or by manual dispatch).
+The full packaged-app `sandbox-k8s-e2e` lane remains on Kubernetes 1.35.
+
 ## Documentation Sources
 
 - Root docs (`README.md` and this file) are the primary repo entrypoints.

@@ -93,21 +93,17 @@ podDisruptionBudget:
   enabled: false
   minAvailable: 1
 
-# serviceAccount: the sandbox wiring. The app process calls the Kubernetes
-# API to create sandbox pods, so its Pod must run under a ServiceAccount
-# bound to the dawn-sandbox-infra chart's orchestrator Role.
+# serviceAccount: the application identity. The chart creates an
+# application-owned ServiceAccount in its release namespace by default. Apps
+# that call the Kubernetes API through kubernetesSandbox must bind this account
+# as a cross-namespace subject of the dawn-sandbox-infra orchestrator Role.
 serviceAccount:
-  # create: whether this chart creates a ServiceAccount in the app's
-  # namespace. If true, the operator must bind it to the sandbox-infra
-  # Role via that chart's `orchestrator.subjects` — NOTES.txt prints the
-  # exact subject to add.
-  create: false
-  # name: the ServiceAccount name. When create=false (default), this must
-  # name an existing ServiceAccount — typically the sandbox-infra chart's
-  # orchestrator SA (dawn-orchestrator), which requires this app to run in
-  # the sandbox namespace (see sandboxNamespace) or be added as a
-  # cross-namespace subject.
-  name: dawn-orchestrator
+  # create: whether this chart creates the application ServiceAccount in the
+  # release namespace.
+  create: true
+  # name: optional explicit ServiceAccount name. Leave empty to use the
+  # release-scoped chart fullname (dawn-app for the canonical release).
+  name: ""
   annotations: {}
 
 # automountServiceAccountToken: the app needs the token when kubernetesSandbox

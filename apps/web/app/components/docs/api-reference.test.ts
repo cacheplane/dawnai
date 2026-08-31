@@ -292,6 +292,7 @@ const EXPECTED_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
   "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubeAuthorizationReviewError",
   "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
   "@dawn-ai/sandbox#.:dockerSandbox",
   "@dawn-ai/sandbox#.:kubernetesSandbox",
@@ -1065,7 +1066,7 @@ describe("package catalog", { timeout: 30_000 }, () => {
 
   it("registers every authored high-value signature contract exactly once", () => {
     expect(API_REQUIRED_CONTRACT_KEYS).toEqual(EXPECTED_REQUIRED_CONTRACT_KEYS)
-    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(105)
+    expect(API_REQUIRED_CONTRACT_KEYS).toHaveLength(106)
     expect(new Set(API_REQUIRED_CONTRACT_KEYS).size).toBe(API_REQUIRED_CONTRACT_KEYS.length)
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/sdk#.:agent")
     expect(API_REQUIRED_CONTRACT_KEYS).toContain("@dawn-ai/memory#.:MemoryStore")

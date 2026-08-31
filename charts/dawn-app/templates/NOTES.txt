@@ -23,27 +23,47 @@ Service URL:
   then browse to http://localhost:8080
 {{- end }}
 
-ServiceAccount / namespace wiring (the sandbox crux):
+ServiceAccount / namespace wiring:
 
 This app's Pod runs under ServiceAccount "{{ include "dawn-app.serviceAccountName" . }}"
-in namespace "{{ .Release.Namespace }}". For the in-cluster kubernetesSandbox
-provider (baked into your image's dawn.config.ts) to work, that ServiceAccount
-must be bound to the dawn-sandbox-infra chart's orchestrator Role.
+in the dawn-app management namespace "{{ .Release.Namespace }}". Keep this namespace, the
+app credentials, and both charts' Helm release Secrets separate from the
+sandbox namespace "{{ .Values.sandboxNamespace }}". For the in-cluster
+kubernetesSandbox provider (baked into your image's dawn.config.ts) to work,
+that ServiceAccount must be bound to the dawn-sandbox-infra chart's orchestrator
+Role.
+
+By default, sandbox resources live in dawn-sandboxes while the application,
+credentials, and Helm releases live in the separate dawn-app management
+namespace.
 
 {{- if .Values.serviceAccount.create }}
 
-serviceAccount.create=true — this chart created the ServiceAccount above in
-THIS namespace ("{{ .Release.Namespace }}"). Before sending sandbox traffic,
-bind it to the sandbox-infra orchestrator Role without overwriting existing
-cross-namespace subjects.
+serviceAccount.create=true (default) — this chart created the ServiceAccount
+above in THIS namespace ("{{ .Release.Namespace }}"). An empty
+serviceAccount.name resolves to the release-scoped chart fullname.
+{{- else }}
 
-First export the release's effective values:
+serviceAccount.create=false — this chart is using the operator-provided
+ServiceAccount named "{{ include "dawn-app.serviceAccountName" . }}" in the
+management namespace. Confirm it exists before sending traffic.
+{{- end }}
 
+Before sending sandbox traffic, bind that ServiceAccount to the sandbox-infra
+orchestrator Role without overwriting existing cross-namespace subjects.
+
+First capture the installed infrastructure chart version and export the
+release's effective values:
+
+  INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra --namespace {{ .Release.Namespace }} | awk '$1 == "VERSION:" { print $2 }')"
+  test -n "$INFRA_CHART_VERSION" || { printf '%s\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }
   helm get values dawn-sandbox-infra --all --output yaml \
+    --namespace {{ .Release.Namespace }} \
     > dawn-sandbox-infra-rbac-values.yaml
 
-Edit dawn-sandbox-infra-rbac-values.yaml so orchestrator.subjects contains the
-complete intended subject list: preserve every existing item and append:
+Edit dawn-sandbox-infra-rbac-values.yaml so `orchestrator.subjects` contains the
+complete intended subject list: preserve every existing item and append the
+application ServiceAccount as a cross-namespace subject:
 
   - kind: ServiceAccount
     name: {{ include "dawn-app.serviceAccountName" . }}
@@ -54,21 +74,9 @@ a guessed numeric subject index:
 
   helm upgrade dawn-sandbox-infra \
     oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --version "$INFRA_CHART_VERSION" \
+    --namespace {{ .Release.Namespace }} \
     --values dawn-sandbox-infra-rbac-values.yaml
-{{- else }}
-
-serviceAccount.create=false (default) — this chart is reusing an EXISTING
-ServiceAccount named "{{ include "dawn-app.serviceAccountName" . }}". This
-works out of the box only if one of the following is true:
-
-  1. This app is installed in the sandbox namespace itself
-     (currently: "{{ .Release.Namespace }}"; expected: "{{ .Values.sandboxNamespace }}"),
-     where the dawn-sandbox-infra chart already created that SA; OR
-  2. The operator has added
-       {kind: ServiceAccount, name: {{ include "dawn-app.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
-     as a cross-namespace subject on the dawn-sandbox-infra chart's
-     `orchestrator.subjects` using a complete values file as described above.
-{{- end }}
 
 Make sure your app's `dawn.config.ts` points the kubernetesSandbox provider at
 the same namespace as the dawn-sandbox-infra chart:

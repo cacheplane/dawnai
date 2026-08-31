@@ -97,7 +97,7 @@ orchestration-only (`private: true`, one level above `server`/`web`) and are
 
 | Chart | Purpose |
 |---|---|
-| `charts/dawn-app` | Runs a built Dawn app image (from `langgraphjs dockerfile`) on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget, wired to the in-cluster `kubernetesSandbox` orchestrator ServiceAccount. |
+| `charts/dawn-app` | Runs a built Dawn app image on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget, with an application-owned ServiceAccount in the chart release namespace. Sandbox access is bound cross-namespace to the `dawn-sandbox-infra` orchestrator Role. |
 | `charts/dawn-sandbox-infra` | Cluster-side infrastructure for the Dawn `kubernetesSandbox` provider — namespace, least-privilege RBAC, default-deny egress, quotas/limits, Pod Security Standards, and a PVC reaper. |
 
 `test/` and `scripts/` are repo-level (verification lanes and workspace

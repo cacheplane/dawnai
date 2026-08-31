@@ -8,7 +8,7 @@
 # BUILD CONTEXT MUST BE `test/k8s-smoke/` (so both aimock/ and app/fixtures/ are
 # reachable), e.g.:
 #   docker build -f test/k8s-smoke/aimock/Dockerfile -t dawn-smoke-aimock test/k8s-smoke
-FROM node:22-slim
+FROM docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
 WORKDIR /app
 
 # Pin the exact version the repo resolves for deterministic smoke runs.

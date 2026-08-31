@@ -5,6 +5,9 @@
 # NetworkPolicy backstop, a ResourceQuota + LimitRange (cpu/memory/
 # ephemeral-storage), configurable Pod Security Standards, and a
 # self-bookkeeping PVC reaper. (PID limits are node-level on K8s — see README.)
+# Sandbox operation requires dynamic RWO volume provisioning and Pod Security
+# Admission. NetworkPolicy enforcement additionally requires a policy-enforcing
+# CNI; creating NetworkPolicy objects is not itself enforcement.
 
 namespace:
   # create: whether the chart creates the namespace. Set to false to
@@ -12,10 +15,20 @@ namespace:
   create: true
   # name: the namespace the provider's `opts.namespace` must match.
   name: dawn-sandboxes
+  # extraLabels: additional namespace labels. All pod-security.kubernetes.io/*
+  # keys plus helm.sh/chart, app.kubernetes.io/name,
+  # app.kubernetes.io/instance, and app.kubernetes.io/managed-by are reserved
+  # and rejected by the namespace template.
+  extraLabels: {}
 
 podSecurityStandard:
+  # Restricted is the default. Baseline is needed only for workloads or
+  # settings that actually violate Restricted admission, such as
+  # security.runAsNonRoot: false. security.readOnlyRootFilesystem: false alone
+  # remains Restricted-compatible and does not require lowering the namespace
+  # to Baseline. The chart never downgrades automatically.
   # enforce: baseline | restricted | privileged
-  enforce: baseline
+  enforce: restricted
   warn: restricted
   audit: restricted
   # version: the PSS policy version to pin the enforce/warn/audit labels to.

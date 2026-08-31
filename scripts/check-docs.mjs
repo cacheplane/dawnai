@@ -20,6 +20,7 @@ import {
 } from "typescript/unstable/ast/is"
 import { createVirtualFileSystem } from "typescript/unstable/fs"
 import { API } from "typescript/unstable/sync"
+import { parse as parseYaml } from "yaml"
 import tsCompiler from "../packages/core/node_modules/typescript/lib/typescript.js"
 import {
   analyzeApiInventoryBatch,
@@ -1251,6 +1252,7 @@ const EXPECTED_API_REQUIRED_CONTRACT_KEYS = [
   "@dawn-ai/postgres-storage#.:createPostgresThreadsStore",
   "@dawn-ai/postgres-storage#.:postgresCheckpointer",
   "@dawn-ai/sandbox#./testing:runProviderConformance",
+  "@dawn-ai/sandbox#.:KubeAuthorizationReviewError",
   "@dawn-ai/sandbox#.:KubernetesSandboxOptions",
   "@dawn-ai/sandbox#.:dockerSandbox",
   "@dawn-ai/sandbox#.:kubernetesSandbox",
@@ -2444,7 +2446,8 @@ const accuracyContracts = [
       "liveness",
       "not dependency readiness",
       "dawn-sandboxes",
-      "dawn-orchestrator",
+      "serviceAccount.create=true",
+      'serviceAccount.name=""',
       "shared durable stores",
       "thread-aware",
       "No orchestrator RoleBinding is needed",
@@ -2452,7 +2455,13 @@ const accuracyContracts = [
       "complete intended subject list",
       "dawn-sandbox-infra-rbac-values.yaml",
     ],
-    forbidden: ["/healthz proves dependency readiness", "HPA makes", "orchestrator.subjects[0]"],
+    forbidden: [
+      "/healthz proves dependency readiness",
+      "HPA makes",
+      "orchestrator.subjects[0]",
+      "dawn-orchestrator",
+      "serviceAccount.create=false",
+    ],
   },
   {
     file: "apps/web/content/docs/sandbox.mdx",
@@ -2499,8 +2508,8 @@ const accuracyContracts = [
       "cannot override",
       "PID limits",
       "node/runtime",
-      "Pod-create authorization only",
-      "NetworkPolicy enforcement is unknown",
+      "every Kubernetes API operation the provider can perform",
+      "unconfirmed policy-capable CNI produces a warning",
       "every unreferenced Dawn PVC",
       "still-live thread",
       "reaper.ttlHours",
@@ -2638,8 +2647,26 @@ const accuracyContracts = [
       "helm get values dawn-sandbox-infra --all",
       "complete intended subject list",
       "dawn-sandbox-infra-rbac-values.yaml",
+      "serviceAccount.create=true (default)",
     ],
-    forbidden: ["orchestrator.subjects[0]", "same command shown above"],
+    forbidden: [
+      "orchestrator.subjects[0]",
+      "same command shown above",
+      "serviceAccount.create=false (default)",
+    ],
+  },
+  {
+    file: "charts/dawn-sandbox-infra/README.md",
+    required: [
+      "complete planned subject list",
+      "helm get values dawn-sandbox-infra --all --output yaml",
+      "preserve every existing item",
+      "Helm replaces arrays",
+      "never write a guessed numeric subject index",
+      "--values dawn-sandbox-infra-values.yaml",
+      "--values dawn-sandbox-infra-rbac-values.yaml",
+    ],
+    forbidden: ["orchestrator.subjects[0]"],
   },
   {
     file: "charts/dawn-app/README.md",
@@ -2657,6 +2684,15 @@ const accuracyContracts = [
       "!.dawn/build/**",
       "COPY . .",
       "image layer",
+      "dawn-app management namespace",
+      "complete intended subject list",
+      "preserve every existing",
+      "Helm replaces arrays",
+      "helm upgrade --install dawn-sandbox-infra ./charts/dawn-sandbox-infra",
+      "The application runs under an application-owned ServiceAccount in the `dawn-app` management namespace.",
+      "That ServiceAccount is bound as a cross-namespace subject to the `dawn-sandbox-infra` orchestrator Role in `dawn-sandboxes`.",
+      "| `serviceAccount.create` | `true` | Creates an application-owned ServiceAccount in the release namespace. |",
+      '| `serviceAccount.name` | `""` | Defaults to the release-scoped chart fullname (`dawn-app` for the canonical release). |',
     ],
     forbidden: [
       "backend that does not exist yet",
@@ -2666,7 +2702,18 @@ const accuracyContracts = [
       "image built the alternate way",
       "containerize the `langsmith` target",
       "generated Dockerfile copies only the files needed at runtime",
+      "--namespace dawn-sandboxes",
+      "same namespace",
+      "orchestrator.subjects[0]",
+      "via the ServiceAccount +\nnamespace provisioned by the `dawn-sandbox-infra` chart",
+      "dawn-orchestrator",
+      "create: false` (chart default)",
     ],
+  },
+  {
+    file: "charts/dawn-app/Chart.yaml",
+    required: ["application-owned ServiceAccount"],
+    forbidden: ["orchestrator ServiceAccount", "langgraphjs dockerfile"],
   },
   {
     file: "charts/dawn-app/values.yaml",
@@ -3256,6 +3303,30 @@ for (const requiredExampleText of [
 }
 
 const appChartValuesSource = readFileSync(resolve(repoRoot, "charts/dawn-app/values.yaml"), "utf8")
+const appChartValues = parseYaml(appChartValuesSource)
+if (
+  appChartValues?.serviceAccount?.create !== true ||
+  appChartValues?.serviceAccount?.name !== ""
+) {
+  failures.push(
+    'charts/dawn-app/values.yaml must default serviceAccount.create=true and serviceAccount.name=""',
+  )
+}
+if (appChartValuesSource.includes("dawn-orchestrator")) {
+  failures.push(
+    "charts/dawn-app/values.yaml must not retain the retired dawn-orchestrator ServiceAccount topology",
+  )
+}
+const sandboxInfraChartSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-sandbox-infra/Chart.yaml"),
+  "utf8",
+)
+const sandboxInfraChart = parseYaml(sandboxInfraChartSource)
+if (sandboxInfraChart?.version !== "0.1.4") {
+  failures.push(
+    `charts/dawn-sandbox-infra/Chart.yaml must publish the documentation patch as version 0.1.4; found ${sandboxInfraChart?.version ?? "missing"}`,
+  )
+}
 const canonicalKubernetesSandboxUrl = "https://dawnai.org/docs/sandbox/kubernetes"
 const canonicalKubernetesSandboxUrlCount =
   appChartValuesSource.split(canonicalKubernetesSandboxUrl).length - 1
@@ -3270,12 +3341,12 @@ if (canonicalKubernetesSandboxUrlCount !== 1) {
 // expected command counts exact so a new unpinned example cannot hide beside
 // an older pinned one.
 const helmInstallExampleContracts = [
-  { file: "apps/web/content/docs/deployment/kubernetes.mdx", expectedCount: 3 },
+  { file: "apps/web/content/docs/deployment/kubernetes.mdx", expectedCount: 2 },
   {
     file: "charts/dawn-app/README.md",
     expectedCount: 2,
     requiredInEveryCommand: [
-      "--namespace dawn-sandboxes",
+      "--namespace dawn-app",
       "--set image.repository=ghcr.io/you/your-app",
       "--set image.tag=2026-08-10",
     ],
@@ -3349,20 +3420,143 @@ const kubernetesDeploymentSource = readFileSync(
   resolve(repoRoot, "apps/web/content/docs/deployment/kubernetes.mdx"),
   "utf8",
 )
+const canonicalAppSubjectValues = `orchestrator:
+  subjects:
+    - kind: ServiceAccount
+      name: dawn-app
+      namespace: dawn-app`
+const infrastructureChartReadmeSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-sandbox-infra/README.md"),
+  "utf8",
+)
+const appChartNotesSource = readFileSync(
+  resolve(repoRoot, "charts/dawn-app/templates/NOTES.txt"),
+  "utf8",
+)
+const rbacOnlyUpgradeContracts = [
+  {
+    file: "charts/dawn-sandbox-infra/README.md",
+    source: infrastructureChartReadmeSource,
+  },
+  {
+    file: "apps/web/content/docs/deployment/kubernetes.mdx",
+    source: kubernetesDeploymentSource,
+  },
+  {
+    file: "charts/dawn-app/templates/NOTES.txt",
+    source: appChartNotesSource,
+  },
+]
+const installedInfrastructureChartVersionGuard = `test -n "$INFRA_CHART_VERSION" || { printf '%s\\n' "unable to determine installed infrastructure chart version" >&2; exit 1; }`
+for (const { file, source } of rbacOnlyUpgradeContracts) {
+  const captureIndex = source.indexOf('INFRA_CHART_VERSION="$(helm get metadata dawn-sandbox-infra')
+  const guardIndex = source.indexOf(installedInfrastructureChartVersionGuard, captureIndex)
+  const upgrades = [
+    ...source.matchAll(/^\s*helm upgrade dawn-sandbox-infra\b(?:[^\n]*\\\n)*[^\n]*/gm),
+  ]
+  const rbacUpgrades = upgrades
+    .map((match) => ({ index: match.index, command: match[0].replaceAll(/\\\s*\n\s*/g, " ") }))
+    .filter(({ command }) => command.includes("--values dawn-sandbox-infra-rbac-values.yaml"))
+
+  if (captureIndex === -1 || !source.includes(`awk '$1 == "VERSION:" { print $2 }')"`)) {
+    failures.push(`${file} must capture the installed infrastructure chart VERSION table row`)
+  }
+  if (guardIndex === -1) {
+    failures.push(
+      `${file} must fail closed when the installed infrastructure chart version is empty`,
+    )
+  } else if (guardIndex <= captureIndex) {
+    failures.push(
+      `${file} must guard the installed infrastructure chart version after capturing it`,
+    )
+  }
+  if (/^\s*test -n "\$INFRA_CHART_VERSION"\s*$/m.test(source)) {
+    failures.push(`${file} must not use a non-terminating bare infrastructure chart version guard`)
+  }
+  if (rbacUpgrades.length !== 1) {
+    failures.push(`${file} must contain exactly one RBAC-only infrastructure upgrade`)
+    continue
+  }
+  const rbacUpgrade = rbacUpgrades[0]
+  if (!rbacUpgrade?.command.includes('--version "$INFRA_CHART_VERSION"')) {
+    failures.push(`${file} RBAC-only infrastructure upgrade must reuse INFRA_CHART_VERSION`)
+  }
+  if (rbacUpgrade === undefined || guardIndex >= rbacUpgrade.index) {
+    failures.push(`${file} must guard INFRA_CHART_VERSION before the RBAC-only upgrade`)
+  }
+}
+const standaloneValuesMarker = "For a fresh release, prepare `dawn-sandbox-infra-values.yaml`"
+const standaloneValuesSource = infrastructureChartReadmeSource.slice(
+  infrastructureChartReadmeSource.indexOf(standaloneValuesMarker),
+)
+const standaloneSubjectValues = /```yaml[^\n]*\n([\s\S]*?)```/
+  .exec(standaloneValuesSource)?.[1]
+  .trim()
+if (standaloneSubjectValues !== canonicalAppSubjectValues) {
+  failures.push(
+    "charts/dawn-sandbox-infra/README.md fresh-release values must bind ServiceAccount dawn-app from namespace dawn-app",
+  )
+}
+const initialSubjectValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+const existingSubjectValuesFence = `\`\`\`yaml title="dawn-sandbox-infra-rbac-values.yaml"
+${canonicalAppSubjectValues}
+\`\`\``
+const initialSubjectValues = kubernetesDeploymentSource.indexOf(initialSubjectValuesFence)
+const initialInfrastructureInstall = kubernetesDeploymentSource.indexOf(
+  "helm upgrade --install dawn-sandbox-infra",
+)
+const initialSandboxAppInstall = kubernetesDeploymentSource.indexOf(
+  "helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
+)
+const initialInfrastructureCommand = [
+  ...kubernetesDeploymentSource.matchAll(
+    /^helm upgrade --install dawn-sandbox-infra\b[\s\S]*?(?=\n\n|```)/gm,
+  ),
+][0]?.[0]
+if (initialSubjectValues === -1) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must define the exact dawn-app ServiceAccount subject before installation",
+  )
+}
+if (!kubernetesDeploymentSource.includes(existingSubjectValuesFence)) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx existing-release values must bind ServiceAccount dawn-app from namespace dawn-app",
+  )
+}
+if (!initialInfrastructureCommand?.includes("--values dawn-sandbox-infra-values.yaml")) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx initial infrastructure install must apply dawn-sandbox-infra-values.yaml",
+  )
+}
+if (initialInfrastructureInstall === -1 || initialSandboxAppInstall === -1) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must show both initial sandbox infrastructure and app installs",
+  )
+} else if (
+  initialSubjectValues === -1 ||
+  initialSubjectValues > initialInfrastructureInstall ||
+  initialInfrastructureInstall > initialSandboxAppInstall
+) {
+  failures.push(
+    "apps/web/content/docs/deployment/kubernetes.mdx must define the planned RoleBinding subject, apply it during infrastructure installation, then install the app",
+  )
+}
+const effectiveValuesExport = kubernetesDeploymentSource.indexOf(
+  "helm get values dawn-sandbox-infra --all",
+)
 const crossNamespaceRoleBinding = kubernetesDeploymentSource.indexOf(
   "helm upgrade dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra",
+  effectiveValuesExport,
 )
-const crossNamespaceAppInstall = kubernetesDeploymentSource.indexOf(
-  "helm upgrade --install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app",
-  kubernetesDeploymentSource.indexOf("For a separate application namespace"),
-)
-if (crossNamespaceRoleBinding === -1 || crossNamespaceAppInstall === -1) {
+if (effectiveValuesExport === -1 || crossNamespaceRoleBinding === -1) {
   failures.push(
-    "apps/web/content/docs/deployment/kubernetes.mdx must show both cross-namespace RoleBinding update and app install",
+    "apps/web/content/docs/deployment/kubernetes.mdx must show the effective-values cross-namespace RoleBinding update",
   )
-} else if (crossNamespaceRoleBinding > crossNamespaceAppInstall) {
+} else if (effectiveValuesExport > crossNamespaceRoleBinding) {
   failures.push(
-    "apps/web/content/docs/deployment/kubernetes.mdx must update the cross-namespace RoleBinding before installing the app ServiceAccount",
+    "apps/web/content/docs/deployment/kubernetes.mdx must export effective values before updating the cross-namespace RoleBinding",
   )
 }
 for (const required of ["future ServiceAccount", "Ready-but-sandbox-broken"]) {
@@ -3389,8 +3583,6 @@ if (!noSandboxInstall) {
     "--namespace my-app",
     "--set image.repository=ghcr.io/you/my-dawn-app",
     "--set image.tag=2026-08-10",
-    "--set serviceAccount.create=true",
-    "--set serviceAccount.name=dawn-app",
   ]) {
     if (!noSandboxInstall.includes(required)) {
       failures.push(

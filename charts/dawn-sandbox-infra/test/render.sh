@@ -2,16 +2,60 @@
 # Renders the chart and greps assertions. Usage: test/render.sh
 set -eu
 CHART="$(dirname "$0")/.."
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/dawn-sandbox-infra-render.XXXXXX")"
+cleanup() { rm -rf "$TMP"; }
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
 tmpl() { helm template test "$CHART" "$@"; }
 assert() { if ! grep -qE "$2"; then echo "FAIL: $1"; exit 1; fi; echo "ok: $1"; }
 refute() { if grep -qE "$2"; then echo "FAIL (expected absent): $1"; exit 1; fi; echo "ok: $1"; }
+assert_extra_label_rejected() {
+  label="$1"
+  set_value="$2"
+  output="$TMP/reserved-label-output"
+  if tmpl --show-only templates/namespace.yaml --set-string "$set_value" >"$output" 2>&1; then
+    echo "FAIL: namespace.extraLabels must not override $label"
+    cat "$output"
+    exit 1
+  fi
+  expected="namespace.extraLabels key \"$label\" is reserved"
+  if ! grep -Fq "$expected" "$output"; then
+    echo "FAIL: namespace.extraLabels rejection for $label failed for an unexpected reason"
+    cat "$output"
+    exit 1
+  fi
+  echo "ok: namespace.extraLabels rejects $label"
+}
 
-# Namespace + PSS (default baseline enforce, restricted warn/audit)
-tmpl --show-only templates/namespace.yaml | assert "ns name" 'name: dawn-sandboxes'
-tmpl --show-only templates/namespace.yaml | assert "pss enforce baseline" 'pod-security.kubernetes.io/enforce: baseline'
-tmpl --show-only templates/namespace.yaml | assert "pss warn restricted" 'pod-security.kubernetes.io/warn: restricted'
-# Override: enforce restricted
-tmpl --show-only templates/namespace.yaml --set podSecurityStandard.enforce=restricted | assert "pss enforce override" 'pod-security.kubernetes.io/enforce: restricted'
+# Namespace + PSS (restricted by default)
+NAMESPACE="$(tmpl --show-only templates/namespace.yaml)"
+printf '%s\n' "$NAMESPACE" | assert "ns name" 'name: dawn-sandboxes'
+printf '%s\n' "$NAMESPACE" | assert "pss enforce restricted" 'pod-security.kubernetes.io/enforce: restricted'
+printf '%s\n' "$NAMESPACE" | assert "pss warn restricted" 'pod-security.kubernetes.io/warn: restricted'
+printf '%s\n' "$NAMESPACE" | assert "pss audit restricted" 'pod-security.kubernetes.io/audit: restricted'
+
+COMPAT_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.dawn\.sh/compat-run=run-123')"
+printf '%s\n' "$COMPAT_NAMESPACE" | assert "compat run label" 'dawn\.sh/compat-run: run-123'
+
+EXTRA_LABEL_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.example\.com/team=platform')"
+printf '%s\n' "$EXTRA_LABEL_NAMESPACE" | assert "unrelated extra label" 'example\.com/team: platform'
+
+VERSION_LABEL_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.app\.kubernetes\.io/version=1.2.3')"
+printf '%s\n' "$VERSION_LABEL_NAMESPACE" | assert "version extra label" 'app\.kubernetes\.io/version: 1\.2\.3'
+
+assert_extra_label_rejected "pod-security.kubernetes.io/enforce" \
+  'namespace.extraLabels.pod-security\.kubernetes\.io/enforce=privileged'
+assert_extra_label_rejected "helm.sh/chart" \
+  'namespace.extraLabels.helm\.sh/chart=override'
+assert_extra_label_rejected "app.kubernetes.io/name" \
+  'namespace.extraLabels.app\.kubernetes\.io/name=override'
+assert_extra_label_rejected "app.kubernetes.io/instance" \
+  'namespace.extraLabels.app\.kubernetes\.io/instance=override'
+assert_extra_label_rejected "app.kubernetes.io/managed-by" \
+  'namespace.extraLabels.app\.kubernetes\.io/managed-by=override'
 
 # Orchestrator RBAC: ServiceAccount, Role (exact rule surface), RoleBinding
 RBAC="$(tmpl --show-only templates/rbac-orchestrator.yaml)"
