@@ -73,6 +73,7 @@ export async function runShadowReconcile({
     const github = createGitHubReader({
       owner,
       repo,
+      ...(env.GITHUB_REPOSITORY_ID === undefined ? {} : { repositoryId: env.GITHUB_REPOSITORY_ID }),
       ...(token === undefined || token === "" ? {} : { token }),
     })
     const inventoryReader = {

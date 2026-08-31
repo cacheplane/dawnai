@@ -111,6 +111,9 @@ export async function runArtifactStoreCli(
   const metadataReader = createGitHubReader({
     owner: repository.owner,
     repo: repository.repo,
+    ...(environment.GITHUB_REPOSITORY_ID === undefined
+      ? {}
+      : { repositoryId: environment.GITHUB_REPOSITORY_ID }),
     token,
     apiOrigin,
     fetchImpl,
@@ -118,6 +121,9 @@ export async function runArtifactStoreCli(
   const binaryReader = createGitHubReader({
     owner: repository.owner,
     repo: repository.repo,
+    ...(environment.GITHUB_REPOSITORY_ID === undefined
+      ? {}
+      : { repositoryId: environment.GITHUB_REPOSITORY_ID }),
     token,
     apiOrigin,
     fetchImpl,

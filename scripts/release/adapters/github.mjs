@@ -35,6 +35,7 @@ const MAX_GITHUB_TOKEN_BYTES = 4_096
 export function createGitHubReader({
   owner,
   repo,
+  repositoryId,
   token,
   apiOrigin = API_ORIGIN,
   fetchImpl = fetch,
@@ -46,6 +47,7 @@ export function createGitHubReader({
 }) {
   assertIdentity(owner, OWNER_PATTERN, "GitHub owner", MAX_GITHUB_OWNER_BYTES)
   assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository", MAX_GITHUB_REPOSITORY_BYTES)
+  const normalizedRepositoryId = repositoryId === undefined ? null : normalizeId(repositoryId)
   assertInputByteLength(token, MAX_GITHUB_TOKEN_BYTES, "GitHub token")
   if (
     token !== undefined &&
@@ -69,6 +71,8 @@ export function createGitHubReader({
   const context = {
     base,
     apiOrigin: normalizedApiOrigin,
+    repositoryId: normalizedRepositoryId,
+    repositoryPath: new URL(base).pathname,
     http,
     token: token ?? null,
     timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
@@ -377,6 +381,8 @@ async function readPaginated(
       initialUrl,
       cursorPagination,
       context.apiOrigin,
+      context.repositoryPath,
+      context.repositoryId,
     )
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
@@ -543,21 +549,41 @@ function requestHeaders(token, accept) {
   }
 }
 
-function normalizeNextUrl(value, initialValue, cursorPagination, apiOrigin) {
+function normalizeNextUrl(
+  value,
+  initialValue,
+  cursorPagination,
+  apiOrigin,
+  repositoryPath,
+  repositoryId,
+) {
   try {
     const url = new URL(value)
     const initial = new URL(initialValue)
-    return url.origin === apiOrigin &&
-      url.username === "" &&
-      url.password === "" &&
-      url.hash === "" &&
-      url.pathname === initial.pathname &&
-      paginationQueryMatches(url.searchParams, initial.searchParams, cursorPagination)
-      ? url.href
-      : null
+    if (
+      url.origin !== apiOrigin ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== "" ||
+      !paginationPathMatches(url.pathname, initial.pathname, repositoryPath, repositoryId) ||
+      !paginationQueryMatches(url.searchParams, initial.searchParams, cursorPagination)
+    ) {
+      return null
+    }
+    url.pathname = initial.pathname
+    return url.href
   } catch {
     return null
   }
+}
+
+function paginationPathMatches(actual, initial, repositoryPath, repositoryId) {
+  if (actual === initial) return true
+  if (repositoryId === null || !initial.startsWith(`${repositoryPath}/`)) {
+    return false
+  }
+  const endpointSuffix = initial.slice(repositoryPath.length)
+  return actual === `/repositories/${repositoryId}${endpointSuffix}`
 }
 
 function normalizeApiOrigin(value) {

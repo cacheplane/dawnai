@@ -326,9 +326,10 @@ async function main() {
   const repository = environmentValue(process.env, "GITHUB_REPOSITORY")
   if (repository !== REPOSITORY) throw new TypeError("Independent audit repository is invalid")
   const token = environmentValue(process.env, "GITHUB_TOKEN")
+  const repositoryId = environmentValue(process.env, "GITHUB_REPOSITORY_ID")
   const defaultBranch = environmentValue(process.env, "GITHUB_DEFAULT_BRANCH")
   const [owner, repo] = repository.split("/")
-  const reader = createGitHubReader({ owner, repo, token })
+  const reader = createGitHubReader({ owner, repo, repositoryId, token })
   const writer = createGitHubWriter({ owner, repo, token, reader })
   const result = await coordinateIndependentAudit({
     eventName: environmentValue(process.env, "GITHUB_EVENT_NAME"),

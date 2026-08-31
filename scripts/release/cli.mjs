@@ -1769,6 +1769,7 @@ function snapshotEnvironment(environment) {
   for (const name of [
     "GITHUB_TOKEN",
     "GITHUB_REPOSITORY",
+    "GITHUB_REPOSITORY_ID",
     "GITHUB_REF",
     "GITHUB_SHA",
     "GITHUB_RUN_ID",
@@ -1920,6 +1921,9 @@ async function requireGitHub(runtime) {
   )({
     owner: "cacheplane",
     repo: "dawnai",
+    ...(runtime.environment.GITHUB_REPOSITORY_ID === undefined
+      ? {}
+      : { repositoryId: runtime.environment.GITHUB_REPOSITORY_ID }),
     token,
   })
   const writer = moduleFunction(
@@ -1985,6 +1989,9 @@ async function requireProductionGitHub(runtime) {
   )({
     owner: "cacheplane",
     repo: "dawnai",
+    ...(runtime.environment.GITHUB_REPOSITORY_ID === undefined
+      ? {}
+      : { repositoryId: runtime.environment.GITHUB_REPOSITORY_ID }),
     token,
   })
 }
