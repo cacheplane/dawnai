@@ -1820,12 +1820,22 @@ function currentPublisherRunFromEnvironment(environment, candidate) {
   ) {
     return null
   }
+  const runId = optionalEnvironmentPositiveInteger(projected, "GITHUB_RUN_ID")
+  const runAttempt = optionalEnvironmentPositiveInteger(projected, "GITHUB_RUN_ATTEMPT")
+  if (runId === null || runAttempt === null) return null
   return Object.freeze({
-    runId: environmentPositiveInteger(projected, "GITHUB_RUN_ID"),
-    runAttempt: environmentPositiveInteger(projected, "GITHUB_RUN_ATTEMPT"),
+    runId,
+    runAttempt,
     ref: projected.GITHUB_REF,
     sha: projected.GITHUB_SHA,
   })
+}
+
+function optionalEnvironmentPositiveInteger(environment, name) {
+  const value = environment[name]
+  if (typeof value !== "string" || !DECIMAL_ID_PATTERN.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null
 }
 
 function environmentPositiveInteger(environment, name) {

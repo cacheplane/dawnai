@@ -2893,6 +2893,29 @@ test("observe CLI identifies its exact current tag attempt before downstream job
     assert.deepEqual(result.diagnostics, [])
     assert.equal(result.before.plan.state, "CANDIDATE_TAGGED")
     assert.equal(result.before.plan.nextTransition, "prepare-artifacts")
+
+    for (const environment of [
+      {
+        GITHUB_REF: `refs/tags/v${VERSION}`,
+        GITHUB_SHA: COMMIT_SHA,
+        GITHUB_RUN_ATTEMPT: "1",
+      },
+      {
+        GITHUB_REF: `refs/tags/v${VERSION}`,
+        GITHUB_SHA: COMMIT_SHA,
+        GITHUB_RUN_ID: "not-a-run-id",
+        GITHUB_RUN_ATTEMPT: "1",
+      },
+    ]) {
+      dependencies.environment = environment
+      await rm(reportPath, { force: true })
+      const blocked = await runReleaseCli(
+        ["observe", "--event", eventPath, "--report", reportPath, "--github-output", outputPath],
+        dependencies,
+      )
+      assert.ok(blocked.diagnostics.some((entry) => entry.code === "PUBLISHER_JOB_HISTORY_INVALID"))
+      assert.equal(blocked.before.plan.disposition, "blocked")
+    }
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
