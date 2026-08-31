@@ -1,5 +1,28 @@
 # @dawn-ai/vite-plugin
 
+## 0.8.22
+
+### Patch Changes
+
+- bedad77: Documentation only: every public export of this package now has an API reference
+  page on dawnai.org, and the package README leads with a concise entrypoint. No
+  runtime behavior changed.
+- d42774e: **Breaking:** scenario files must default export `scenarios("<route>")` from
+  `@dawn-ai/sdk/testing`. A plain default-exported array now throws
+  `RunScenarioLoadError` at load; wrap the array in `scenarios("/route")` to
+  migrate.
+
+  Add route-scoped fluent `dawn test` scenarios with generated application-tool
+  types, invocation-local in-process tool mocks, and declarative mock call
+  assertions.
+
+- Updated dependencies [a530e70]
+- Updated dependencies [8398c90]
+- Updated dependencies [3c68800]
+- Updated dependencies [908d690]
+- Updated dependencies [d42774e]
+  - @dawn-ai/core@0.8.22
+
 ## 0.8.21
 
 ### Patch Changes

@@ -1,5 +1,39 @@
 # @dawn-example/research-server
 
+## 0.0.10
+
+### Patch Changes
+
+- Updated dependencies [b9381c4]
+- Updated dependencies [6cce98d]
+- Updated dependencies [3c68800]
+- Updated dependencies [bedad77]
+- Updated dependencies [a530e70]
+- Updated dependencies [3c68800]
+- Updated dependencies [8398c90]
+- Updated dependencies [2be1448]
+- Updated dependencies [3c68800]
+- Updated dependencies [3c68800]
+- Updated dependencies [1ca14d3]
+- Updated dependencies [ffdbcd9]
+- Updated dependencies [f317dd7]
+- Updated dependencies [908d690]
+- Updated dependencies [81ebe73]
+- Updated dependencies [3c68800]
+- Updated dependencies [56d2758]
+- Updated dependencies [d42774e]
+- Updated dependencies [5cc8d4d]
+- Updated dependencies [984c3ad]
+- Updated dependencies [496b54c]
+- Updated dependencies [67030fa]
+- Updated dependencies [730b136]
+- Updated dependencies [bcfd42c]
+  - @dawn-ai/cli@0.8.22
+  - @dawn-ai/sandbox@0.8.22
+  - @dawn-ai/langchain@0.8.22
+  - @dawn-ai/core@0.8.22
+  - @dawn-ai/sdk@0.8.22
+
 ## 0.0.9
 
 ### Patch Changes

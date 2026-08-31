@@ -1,5 +1,61 @@
 # @dawn-ai/langchain
 
+## 0.8.22
+
+### Patch Changes
+
+- bedad77: Documentation only: every public export of this package now has an API reference
+  page on dawnai.org, and the package README leads with a concise entrypoint. No
+  runtime behavior changed.
+- 1ca14d3: Stop recording an episodic memory for a turn that parked on a human-in-the-loop
+  approval. On the non-streaming route path — the one `POST /threads/:id/runs/wait`
+  uses — the agent adapter discarded the interrupt and returned only the final
+  state, which never carries `__interrupt__` under `streamEvents`. The recorder
+  therefore treated the park as a completed run, and the resuming turn recorded a
+  second episode for the same run: recall saw both a fragment and a duplicate.
+
+  The adapter now offers `executeAgentTurn`, which reports the final output and
+  whether the turn parked, and both route paths tell the recorder which happened.
+  `executeAgent` is unchanged for existing callers.
+
+- ffdbcd9: Key root AG-UI/Agent-Protocol tool events by the model's tool-call ID
+  (logical identity) whenever the model provides one, instead of the internal
+  execution run ID. Interrupted-and-resumed tool calls now re-emit under the
+  same ID, so standard AG-UI clients converge them into a single tool card
+  instead of showing a duplicate. Streams without model tool-call IDs keep the
+  previous behavior.
+- 908d690: Carry the model's tool-call ID from a tool execution into the capability
+  stream: `StreamTransformerInput` gains an optional `toolCallId`, and the
+  planning capability echoes it as `tool_call_id` on `plan_update`. Child
+  capability events keep their subagent's tool-call ID internal. This is the
+  correlation plumbing behind presenting built-in orchestration work once; the
+  presentation change that consumes it ships in this same release.
+- d42774e: **Breaking:** scenario files must default export `scenarios("<route>")` from
+  `@dawn-ai/sdk/testing`. A plain default-exported array now throws
+  `RunScenarioLoadError` at load; wrap the array in `scenarios("/route")` to
+  migrate.
+
+  Add route-scoped fluent `dawn test` scenarios with generated application-tool
+  types, invocation-local in-process tool mocks, and declarative mock call
+  assertions.
+
+- Updated dependencies [bedad77]
+- Updated dependencies [a530e70]
+- Updated dependencies [8398c90]
+- Updated dependencies [3c68800]
+- Updated dependencies [3c68800]
+- Updated dependencies [f317dd7]
+- Updated dependencies [908d690]
+- Updated dependencies [3c68800]
+- Updated dependencies [d42774e]
+- Updated dependencies [984c3ad]
+- Updated dependencies [496b54c]
+- Updated dependencies [67030fa]
+- Updated dependencies [730b136]
+  - @dawn-ai/workspace@0.8.22
+  - @dawn-ai/core@0.8.22
+  - @dawn-ai/sdk@0.8.22
+
 ## 0.8.21
 
 ### Patch Changes

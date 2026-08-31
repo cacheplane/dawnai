@@ -1,10 +1,10 @@
 {
   "name": "@dawn-ai/inspector",
-  "version": "0.8.21",
+  "version": "0.8.22",
   "private": false,
   "type": "module",
   "license": "MIT",
-  "description": "Dawn runtime inspector \u2014 browser UI for inspecting a Dawn app (memory panel).",
+  "description": "Dawn runtime inspector — browser UI for inspecting a Dawn app (memory panel).",
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
   "repository": {
     "type": "git",

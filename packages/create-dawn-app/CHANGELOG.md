@@ -1,5 +1,69 @@
 # create-dawn-ai-app
 
+## 0.8.22
+
+### Patch Changes
+
+- 95abcf5: Expose Dawn planning and subagent progress as bounded standard AG-UI activity
+  snapshots. The research web example renders plan checklists and delegated-work
+  status from those snapshots, which exclude child prose, prompts, tool inputs,
+  tool outputs, and final child answers. The generated research starter renders these
+  activities in the web client it ships.
+- bedad77: Documentation only: every public export of this package now has an API reference
+  page on dawnai.org, and the package README leads with a concise entrypoint. No
+  runtime behavior changed.
+- 0bf4ed9: Leave CopilotKit telemetry off in a scaffolded app.
+
+  CopilotKit's runtime reports usage by default, so `npm run build` on a freshly
+  generated app POSTed to `https://telemetry.copilotkit.ai/ingest` while Next
+  collected page data — before the author had written a line of code. The
+  generated `web/next.config.mjs` now sets `COPILOTKIT_TELEMETRY_DISABLED` unless
+  the environment already says otherwise, so opting back in is still one variable
+  away.
+
+  The placement is the fix, not a detail. CopilotKit builds its telemetry client
+  at module scope and reads the environment inside that constructor, and ESM
+  evaluates imports before the importing module's body — so setting this in the
+  route handler that imports the runtime would look correct and change nothing.
+  `next.config.mjs` is the first module Next evaluates, for `next build`,
+  `next dev` and `next start` alike.
+
+- 56d2758: Scaffold the Dawn Workbench alongside the agent.
+
+  `npm create dawn-ai-app` now generates a two-package npm workspace instead of a
+  flat server-only app. `server/` holds everything that used to sit at the project
+  root and runs on port 3002; `web/` is the Dawn Workbench — a Next 16 client with
+  a thread rail, a streaming transcript, plan and subagent activity cards, tool
+  cards, permission prompts that survive a reload, a memory-candidate panel, and a
+  connect screen — on port 3010. One `npm install` at the root installs both, and
+  the root scripts delegate into the package that owns each job.
+
+  The template's web tree mirrors `examples/research/web` under a parity guard that
+  compares the two trees byte-for-byte, so the shipped scaffold cannot drift from
+  the example it is dogfooded against.
+
+  Two fixes fall out of the restructure. `dawn verify`'s dependency probe now walks
+  parent `node_modules` directories the way Node itself resolves, so hoisted
+  workspace dependencies are no longer reported as missing. And the generated web
+  package ships an ambient CSS declaration, so `npm run typecheck` succeeds on a
+  freshly scaffolded app rather than only after a build has generated Next's own
+  type declarations.
+
+- 8ec1cfa: Point new users at a UI after scaffolding. The research template's next steps
+  name `npx dawn inspect` (the Inspector the template already installs), and the
+  basic template no longer points at a README it does not ship.
+- 1f5f3f8: The research scaffold gains a complete npm lifecycle (`install` → `verify` →
+  `dev`) and an explicit `.env` handoff, and its AG-UI wiring is checked against
+  the packaged build.
+- Updated dependencies [95abcf5]
+- Updated dependencies [bedad77]
+- Updated dependencies [0bf4ed9]
+- Updated dependencies [56d2758]
+- Updated dependencies [8ec1cfa]
+- Updated dependencies [d42774e]
+- Updated dependencies [1f5f3f8]
+  - @dawn-ai/devkit@0.8.22
+
 ## 0.8.21
 
 ### Patch Changes

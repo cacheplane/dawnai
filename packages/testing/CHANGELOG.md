@@ -1,5 +1,238 @@
 # @dawn-ai/testing
 
+## 0.8.22
+
+### Patch Changes
+
+- a530e70: Documentation only: this package gains a canonical API reference on dawnai.org
+  and a concise npm entrypoint. No runtime behavior changed. (`dawn docs` also
+  now discovers every registered detailed API page.)
+- 5c68311: Evaluate regular expression compilation and matching inside a fresh, time-bounded
+  Node context, reject over-limit expression sources and matcher inputs, and make
+  global and sticky expression matching deterministic across repeated calls.
+- 3c68800: `BrowseQuery.status` and `.kind` now accept a set, not just one value.
+
+  `browse({ status: ["candidate", "superseded"] })` matches any of them. A bare
+  value behaves exactly as before, so every existing caller is unaffected.
+
+  An **empty** set matches nothing rather than everything: "any of none" is false,
+  and reading it as "unfiltered" would show every row to a caller that had just
+  narrowed its filter to zero. Both backends implement it — sqlite via `IN (…)`,
+  Postgres via `= ANY($n::text[])`, where an empty array is already false — and
+  five new contract tests in `runMemoryStoreConformance` hold them to the same
+  reading, including that `total` counts the whole matching set.
+
+  The Inspector's list route accepts the filter repeated (`?status=a&status=b`).
+  One bad value rejects the request rather than being silently dropped. A param
+  that appears zero times is absent, not an empty set, so the empty-set rule is
+  unreachable over HTTP.
+
+- 8398c90: `BrowseQuery` grows a real query language, and `BrowsePage` grows a continuation.
+
+  **Breaking for anyone who implements `MemoryStore` themselves.** `BrowsePage.continuation`
+  is required, and `browse` must now honor `filters`, `namespace`, `orderBy` and `cursor`.
+  Run `runMemoryStoreConformance` from `@dawn-ai/testing`: it is the definition of the new
+  obligations, and it runs against SQLite in-process and against a real Postgres behind
+  `DAWN_TEST_PGVECTOR=1`. Both bundled stores are updated.
+
+  New on `BrowseQuery`:
+
+  - `filters` — AND-combined normalized predicates, at most one per field and eight in
+    total: `status`/`kind` (`in`/`notIn`), `content`
+    (`contains`/`notContains`/`equals`/`notEquals`/`startsWith`/`endsWith`, case-insensitive
+    substring — not LIKE, so `%` and `_` are literal), `namespace` (`equals`/`startsWith`,
+    byte-exact), `confidence` (comparisons plus an inclusive `between`), and `updatedAt`
+    (`onDay`/`beforeDay`/`afterDay`/`betweenDays` over UTC day buckets).
+  - `namespace` — an EXACT namespace, distinct from the prefix. `namespacePrefix` keeps its
+    byte-exact semantics and is now a sargable range instead of a `substr()` scan.
+  - `orderBy` — up to three entries over a closed whitelist
+    (`updatedAt`/`createdAt`/`confidence`/`namespace`/`kind`/`status`), always terminated by
+    an `id` tie-break so every window is deterministic. Absent or empty is still
+    `updated_at DESC`.
+  - `cursor` — an opaque keyset continuation. It carries a fingerprint of the query that
+    issued it, so replaying it against a different filter or sort is rejected rather than
+    silently answering the wrong question.
+
+  `BrowsePage.total` is now read from the same transaction snapshot as `records` (SQLite
+  `BEGIN DEFERRED`, Postgres `REPEATABLE READ`), so a response can no longer report rows and
+  a count from two different versions of the table. It remains the size of the whole
+  matching set, never what is left after a cursor.
+
+  `validateBrowseQuery` is exported (also from the pure `@dawn-ai/memory/browse` subpath,
+  which never pulls `node:sqlite`). Both stores run it defensively and throw; the Inspector's
+  list route runs it at the HTTP boundary and returns 400. An unknown enum value used to
+  match zero rows and look like an empty dataset — now it is an error. `limit` is bounded to
+  1..1000 at the HTTP boundary only; in-process callers such as the CLI's consolidation scan
+  are unaffected.
+
+  `@dawn-ai/core`'s structural mirror is now the named `BrowseQueryLike` / `BrowsePageLike`
+  (plus `BrowseFilterLike` / `BrowseSortEntryLike`), compared directly by the contract-parity
+  tripwire. The previous inline shape drifted silently because method parameters are checked
+  bivariantly.
+
+  Both backends gain an index on the global browse order (`updated_at DESC, id ASC`);
+  Postgres also gains a C-collated namespace index so the prefix range is sargable there.
+
+- f5fae17: `runMemoryStoreConformance` now asserts that a composed browse filter (exact namespace +
+  `status in` + `kind in` + `content contains`, ordered by `updatedAt desc`) returns a
+  byte-exact ordered id list on every backend. The case covers rows that share an
+  `updatedAt` stamp, so a store whose sort omits the id tie-break now fails conformance
+  instead of passing on a window where the ambiguity happens not to surface.
+- 3c68800: Wait for subprocess applications to finish terminating before `close()` or async disposal resolves.
+- 3c68800: **Breaking for callers that passed it, though it had no effect:** remove the
+  unsupported `mode` property from `createAgentHarness()` options — a call site
+  that set it stops type-checking, and should simply drop the property. The
+  harness remains the in-process testing API; use the existing
+  `createAgentProtocolInjector()` or `createSubprocessApp()` factory when testing
+  those execution boundaries.
+- 984c3ad: Thread endpoints can now be authorized with a `src/thread-access.ts` policy.
+
+  `defineThreadAccess` answers a different question from route middleware — may
+  this caller create, read, mutate or destroy this thread — and is keyed on the
+  thread object rather than on route identity, because a thread has no owning
+  route. Five endpoints that previously ran no middleware at all are gated by it:
+  `POST /threads`, `GET /threads/:thread_id`, `GET /threads/:thread_id/state`,
+  `POST /threads/:thread_id/cancel` and `DELETE /threads/:thread_id`. A read
+  denial answers the same 404 a genuine miss answers, so a policy cannot be used
+  to enumerate thread ids, and a `delete` is authorized even when the row is
+  missing so a 403 cannot confirm that a thread exists.
+
+  The policy loader is fail-closed, unlike the middleware probe: a
+  `thread-access.ts` that exists but cannot be imported or binds no usable policy
+  fails the boot with `DAWN_E3003` rather than degrading to "no gate". An app with
+  no policy file behaves exactly as before, and every boot logs which layer the
+  policy came from, or that there is none.
+
+  `dawn build` now fails with `DAWN_E1005` for the `langsmith` target while a
+  policy file exists, because that runtime cannot carry the hook. The `node`,
+  `hono` and `vercel` targets are unaffected: `node`'s emitted server probes the
+  policy at boot, and the bundled web targets carry it in their static manifest.
+
+  One behavior change applies with or without a policy: `POST /threads` drops the
+  reserved `dawn:access` key from client-supplied `metadata`. That key holds the
+  server-issued access stamp, so a client can never write one — including in an
+  app that adopts a policy later.
+
+  `POST /threads/:thread_id/cancel` now binds its cancel to the run the caller
+  observed, so a cancel can no longer land on a later run of the same thread; when
+  the observed run has already finished it answers the existing
+  `409 no_run_in_flight`.
+
+  `@dawn-ai/testing` gains `createThreadAccessHarness` for unit-testing a policy
+  without booting a server, and `createAgentProtocolInjector` accepts a
+  `threadAccess` policy.
+
+  The run endpoints — `/runs/stream`, `/runs/wait`, `/resume` and `/agui` — plus
+  `GET /threads/:thread_id/pending_interrupts` are gated on this policy too.
+
+- 496b54c: Add `resuming` to `ThreadAccessRequest`: a required boolean that is `true` when
+  the request carries a resume credential and will continue a parked turn. A
+  policy that ignores it behaves the same for resumed and ordinary turns.
+
+  A policy that wants resumes treated differently from ordinary turns — step-up
+  auth, a second approver, extra logging — should check `req.resuming` rather than
+  `req.operation`. Two endpoints resume, and only one of them says so in its
+  operation: `POST /threads/{thread_id}/resume` reports `run.resume`, but a
+  `POST /agui/{routeId}` carrying a `resume` array reports `run.agui`, exactly as
+  an ordinary AG-UI turn does. The request body is the only thing that separates
+  them, and a policy never sees it, so keying the rule on `operation` leaves every
+  AG-UI resume ungoverned.
+
+  `resuming` is `false` everywhere else and never absent, so no policy needs
+  `?? false`. An endpoint that gates more than once for one request — the gate
+  before its side effects, the mid-flight recheck, the implicit create's recheck —
+  reports the same value at every site.
+
+  `createThreadAccessHarness().check()` accepts an optional `resuming`, defaulting
+  to `false`.
+
+- 67030fa: Thread access now authorizes the run endpoints and the pending-interrupts read.
+
+  Two things to know about the shipped surface.
+
+  **`ThreadOperation` includes `"thread.pending_interrupts"`**, under
+  `action: "read"`. An exhaustive `switch` or mapped type over the union must
+  handle every member.
+
+  **Ten endpoints are gated on the thread-access axis**, including
+  `POST /threads/:id/runs/stream`, `/runs/wait`, `/resume`,
+  `POST /agui/:routeId` and `GET /threads/:id/pending_interrupts`. The hazard to
+  watch is a policy whose `fallback` returns a bare `{ allow: false }`, or denies
+  any operation it does not recognize: it denies these endpoints too, where route
+  middleware alone used to decide. Read your `fallback` before
+  upgrading. A `run.*` operation on a thread that exists arrives under
+  `action: "update"`; on a thread id with no row yet, `run.stream`, `run.wait` and
+  `run.agui` arrive under `action: "create"` — see the companion note on stamping
+  the implicit create, which lands in the same release. A policy that permits
+  `update` for the thread's owner therefore needs one more decision than it did
+  before: what its `create` handler should answer for a thread id the client
+  picked. `run.resume` never creates and is always an `update`.
+
+  These gates compose with route middleware as AND rather than replacing it;
+  middleware still answers "may this caller run this route" and keeps doing the
+  per-caller work it does today. An app with no policy file is unaffected.
+
+  `POST /threads/:id/resume` and `GET /threads/:id/pending_interrupts` gate
+  **before** middleware rather than after it, so on those two a caller who would
+  have received a middleware `401` now receives a thread-access deny — a `403` on
+  `/resume`, a `404` on `/pending_interrupts`. That is forced: both resolve the
+  route identity middleware would authorize against out of the thread's own
+  metadata, so gating after middleware would mean reading a thread the caller is
+  not yet authorized to read. On `/resume` it also stops a denied caller taking
+  the thread's resume claim, which was a denial of service against a parked turn
+  that needed no credential, and reading the `400`/`409` codes as an oracle on a
+  guessed `interruptId`/`resumeKey`. A `/pending_interrupts` deny returns the
+  handler's own `404 thread_not_found`, indistinguishable from a genuine miss.
+
+  `dawn build --target hono` and `--target vercel` bundle the policy into the
+  static module manifest and run it on those runtimes exactly as `dawn dev` does.
+  A build that saw a policy file stamps that fact into its entry point, and boot
+  fails when such an entry point is paired with a manifest carrying no
+  thread-access entry — a stale manifest would otherwise come up with every thread
+  endpoint open and nothing to say so. `--target langsmith` refuses with
+  `DAWN_E1005`, permanently: it materializes per-route graphs with no Dawn HTTP
+  layer to run a policy in.
+
+  `create-dawn-app` templates now carry a deny-by-default `src/thread-access.ts`
+  and the shared `src/auth.ts` it imports, both as `.example` files that a rename
+  activates. They ship inert because a deny-by-default policy denies every request
+  from a caller the app cannot yet authenticate.
+
+  `@dawn-ai/testing`'s `runThreadsStoreConformance` gains two cases, both
+  properties the access stamp depends on: a `createThread` on an id that already
+  exists never applies the caller's metadata, and `updateMetadata` leaves a
+  top-level key its patch does not name intact. Custom `ThreadsStore`
+  implementations should re-run the kit.
+
+- Updated dependencies [b9381c4]
+- Updated dependencies [6cce98d]
+- Updated dependencies [3c68800]
+- Updated dependencies [bedad77]
+- Updated dependencies [a530e70]
+- Updated dependencies [3c68800]
+- Updated dependencies [3c68800]
+- Updated dependencies [8398c90]
+- Updated dependencies [2be1448]
+- Updated dependencies [3c68800]
+- Updated dependencies [3c68800]
+- Updated dependencies [1ca14d3]
+- Updated dependencies [f317dd7]
+- Updated dependencies [908d690]
+- Updated dependencies [81ebe73]
+- Updated dependencies [3c68800]
+- Updated dependencies [56d2758]
+- Updated dependencies [d42774e]
+- Updated dependencies [984c3ad]
+- Updated dependencies [496b54c]
+- Updated dependencies [67030fa]
+- Updated dependencies [730b136]
+- Updated dependencies [bcfd42c]
+  - @dawn-ai/cli@0.8.22
+  - @dawn-ai/workspace@0.8.22
+  - @dawn-ai/core@0.8.22
+  - @dawn-ai/memory@0.8.22
+  - @dawn-ai/sdk@0.8.22
+
 ## 0.8.21
 
 ### Patch Changes
