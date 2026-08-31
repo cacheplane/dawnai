@@ -87,6 +87,7 @@ class InternalDevSession {
   }
 
   async start(): Promise<void> {
+    this.restartInFlight = true
     this.watcher = watchApp({
       appRoot: this.appRoot,
       onChange: (path) => {
@@ -94,8 +95,23 @@ class InternalDevSession {
       },
     })
 
-    await this.startOrRestart()
-    writeLine(this.io.stdout, `Dawn dev ready at ${this.url}`)
+    try {
+      await this.startOrRestart()
+
+      while (this.pendingRestart && !this.closed) {
+        const reason = this.pendingRestartReason ?? "app change"
+        this.pendingRestart = false
+        this.pendingRestartReason = undefined
+        writeLine(this.io.stdout, `Restarting Dawn dev server (${reason})`)
+        await this.startOrRestart()
+      }
+
+      if (!this.closed) {
+        writeLine(this.io.stdout, `Dawn dev ready at ${this.url}`)
+      }
+    } finally {
+      this.restartInFlight = false
+    }
   }
 
   async close(): Promise<void> {

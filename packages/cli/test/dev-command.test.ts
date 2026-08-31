@@ -335,6 +335,59 @@ describe("dawn dev lifecycle", () => {
     expect(await updatedResponse.json()).toMatchObject({ version: "v2" })
   })
 
+  test("serializes a watched edit that arrives during initial child startup", {
+    timeout: 30_000,
+  }, async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "v1" });\n`,
+    })
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
+    const bindGatePath = join(tmpdir(), `dawn-initial-bind-gate-${process.pid}-${Date.now()}.lock`)
+    const pidPath = join(tmpdir(), `dawn-initial-child-pid-${process.pid}-${Date.now()}.txt`)
+
+    await writeFile(bindGatePath, "", "utf8")
+    const dev = await startDevProcess({
+      cwd: appRoot,
+      env: {
+        DAWN_DEV_CHILD_BIND_GATE_PATH: bindGatePath,
+        DAWN_DEV_CHILD_PID_PATH: pidPath,
+      },
+    })
+    devProcesses.push(dev)
+
+    try {
+      await waitForPath(pidPath)
+      await writeFile(routePath, `export const graph = async () => ({ version: "v2" });\n`, "utf8")
+
+      // Give the recursive watcher time to enqueue the edit while the initial
+      // child is still blocked before bind. The bind gate keeps startup in the
+      // same state for the full interval, so this does not race server boot.
+      await delay(250)
+      await rm(bindGatePath, { force: true })
+
+      const url = await dev.waitForReady()
+      const response = await invokeRunsWait(url, {
+        assistantId: "/support/[tenant]#graph",
+        input: {},
+        mode: "graph",
+        routeId: "/support/[tenant]",
+        routePath: "src/app/support/[tenant]/index.ts",
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ version: "v2" })
+      await delay(500)
+      expect(dev.exited).toBe(false)
+      expect(dev.stderr).not.toContain("Port ")
+      expect(dev.stderr).not.toContain("Fatal dev session error")
+    } finally {
+      await rm(bindGatePath, { force: true })
+      await rm(pidPath, { force: true })
+    }
+  })
+
   test("coalesces bursty edits during restart into at most one follow-up restart", {
     timeout: 30_000,
   }, async () => {
