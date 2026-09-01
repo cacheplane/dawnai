@@ -169,6 +169,147 @@ const actualCapabilityPackages = [
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
+const capabilityExampleAnchors = new Map([
+  ["@dawn-ai/ag-ui", ["fromRunAgentInput", "toAguiEvents", "@dawn-ai/ag-ui/sse"]],
+  ["@dawn-ai/evals", ["contains", "defineEval", "gate", "runEval"]],
+  ["@dawn-ai/inspector", ["pnpm exec dawn inspect"]],
+  [
+    "@dawn-ai/memory",
+    [
+      "sqliteMemoryStore",
+      "@dawn-ai/memory/browse",
+      "@dawn-ai/memory/namespace",
+      "@dawn-ai/memory/reconcile",
+    ],
+  ],
+  ["@dawn-ai/memory-pgvector", ["pgvectorMemoryStore", "await store.close()"]],
+  ["@dawn-ai/permissions", ["matchPermission"]],
+  ["@dawn-ai/postgres-storage", ["createPostgresThreadsStore"]],
+  ["@dawn-ai/sandbox", ["dockerSandbox", "fakeSandbox"]],
+  ["@dawn-ai/sqlite-storage", ["createThreadsStore", "sqliteCheckpointer"]],
+  ["@dawn-ai/testing", ["createAgentHarness", "script", "expectFinalMessage"]],
+  ["@dawn-ai/workspace", ["compose", "FilesystemBackend", "localFilesystem"]],
+])
+const capabilityCaveatContracts = new Map([
+  [
+    "@dawn-ai/ag-ui",
+    [
+      [
+        "React renderer entry",
+        /## React renderers/u,
+        (readme) => readme.replace("## React renderers", "## Client rendering"),
+      ],
+      [
+        "drop-in renderers",
+        /\bdawnActivityRenderers\b/u,
+        (readme) => readme.replaceAll("dawnActivityRenderers", "customRenderers"),
+      ],
+      [
+        "tokens rung",
+        /^\*\*Rung 1\s+—\s+tokens\.\*\*/mu,
+        (readme) => readme.replace("**Rung 1 — tokens.**", "**Rung 1 — templates.**"),
+      ],
+      [
+        "classNames rung",
+        /^\*\*Rung 2\s+—\s+`classNames`\.\*\*/mu,
+        (readme) => readme.replace("**Rung 2 — `classNames`.**", "**Rung 2 — themes.**"),
+      ],
+      [
+        "components rung",
+        /^\*\*Rung 3\s+—\s+`components`\.\*\*/mu,
+        (readme) => readme.replace("**Rung 3 — `components`.**", "**Rung 3 — hooks.**"),
+      ],
+      [
+        "eject rung",
+        /^\*\*Rung 4\s+—\s+eject\.\*\*/mu,
+        (readme) => readme.replace("**Rung 4 — eject.**", "**Rung 4 — presets.**"),
+      ],
+    ],
+  ],
+  [
+    "@dawn-ai/memory",
+    [
+      [
+        "plaintext storage warning",
+        /SQLite rows contain plaintext (?:content|data)/iu,
+        (readme) =>
+          readme.replace(
+            "SQLite rows contain plaintext content",
+            "SQLite rows do not contain plaintext content",
+          ),
+      ],
+      [
+        "tenant-scope warning",
+        /^(?![^\n]*(?:do not|don't|never|automatic))[^\n]*enforce tenant scope[^\n]*caller boundary[^\n]*$/imu,
+        (readme) =>
+          readme.replace(
+            "enforce tenant scope at the caller boundary",
+            "do not enforce tenant scope at the caller boundary",
+          ),
+      ],
+    ],
+  ],
+  [
+    "@dawn-ai/memory-pgvector",
+    [
+      [
+        "store-created pool shutdown",
+        /`?close\(\)`? ends? (?:a|the) store-created pool/iu,
+        (readme) =>
+          readme.replace(
+            "Calling `close()` ends a store-created pool",
+            "Calling `close()` does not end a store-created pool",
+          ),
+      ],
+      [
+        "injected caller-owned pool no-op",
+        /^(?![^\n]*not a no-op)(?=[^\n]*injected caller-owned pool)(?=[^\n]*`?close\(\)`? is a no-op)[^\n]+$/imu,
+        (readme) =>
+          readme.replace(
+            "For an injected caller-owned pool, `close()` is a no-op",
+            "For an injected caller-owned pool, `close()` is not a no-op",
+          ),
+      ],
+    ],
+  ],
+  [
+    "@dawn-ai/postgres-storage",
+    [
+      [
+        "injected pool ownership",
+        /injected pool (?:remains|is) caller-owned (?:unless|except when)[^\n]*`ownsPool: true`/iu,
+        (readme) =>
+          readme.replace(
+            "An injected pool remains caller-owned unless `ownsPool: true`",
+            "An injected pool is caller-owned when `ownsPool: true`",
+          ),
+      ],
+      [
+        "caller-owned pool shutdown",
+        /(?:(?:close|end) stores? and caller-owned pools|(?:close|end) caller-owned pools and stores?)[^\n]*(?:during|at)[^\n]*shutdown/iu,
+        (readme) =>
+          readme.replace(
+            "Close stores and caller-owned pools during application shutdown",
+            "Close stores; caller-owned pools may remain open during application shutdown",
+          ),
+      ],
+    ],
+  ],
+  [
+    "@dawn-ai/testing",
+    [
+      [
+        "single-process concurrency warning",
+        /do not run concurrent harnesses in one process/iu,
+        (readme) =>
+          readme.replace(
+            "do not run concurrent harnesses in one process",
+            "concurrent harnesses are safe in one process",
+          ),
+      ],
+    ],
+  ],
+])
 const relatedPackageDestinations = new Map([
   [
     "create-dawn-ai-app",
@@ -290,6 +431,46 @@ function assertRelatedPackageDestinations(packageName, readme) {
       `${packageName} Related must link to ${destination}`,
     )
   }
+}
+
+function actualCapabilityReadme(packageName) {
+  const readme = actualCapabilityPackages.find(
+    ({ manifest }) => manifest.name === packageName,
+  )?.readme
+  assert.ok(readme, `Missing actual capability README for ${packageName}`)
+  return readme
+}
+
+function assertCapabilityExampleAnchors(packageName, readme) {
+  const example = readmeSection(readme, "Example")
+  for (const anchor of capabilityExampleAnchors.get(packageName) ?? []) {
+    assert.ok(example.includes(anchor), `${packageName} Example must include ${anchor}`)
+  }
+}
+
+function assertCapabilityAnchorCoverage(packages, anchors) {
+  assert.deepEqual([...anchors.keys()].sort(), packages.map(({ manifest }) => manifest.name).sort())
+}
+
+function assertCapabilityCaveats(packageName, readme) {
+  for (const [label, pattern] of capabilityCaveatContracts.get(packageName) ?? []) {
+    assert.match(readme, pattern, `${packageName} README must retain its ${label}`)
+  }
+}
+
+function readmeSection(readme, heading) {
+  const start = readme.indexOf(`## ${heading}`)
+  assert.notEqual(start, -1, `README must include ## ${heading}`)
+  const end = readme.indexOf("\n## ", start + heading.length + 3)
+  return readme.slice(start, end === -1 ? undefined : end)
+}
+
+function assertNoCapabilityCampaignGif(packageName, readme) {
+  assert.doesNotMatch(
+    readme,
+    /product-loop\.gif/iu,
+    `${packageName} capability README must not include the campaign product-loop GIF`,
+  )
 }
 
 describe("validatePackageReadme", () => {
@@ -752,9 +933,55 @@ describe("entry-package README contracts", () => {
 })
 
 describe("capability-package README contracts", () => {
+  it("defines example anchors for every capability package", () => {
+    assertCapabilityAnchorCoverage(actualCapabilityPackages, capabilityExampleAnchors)
+  })
+
+  it("rejects omitting a capability package from the example-anchor map", () => {
+    const mutated = new Map(capabilityExampleAnchors)
+    mutated.delete("@dawn-ai/workspace")
+    assert.throws(() => assertCapabilityAnchorCoverage(actualCapabilityPackages, mutated))
+  })
+
   for (const { manifest, readme } of actualCapabilityPackages) {
     it(`accepts the actual ${manifest.name} README`, () => {
       assert.deepEqual(validatePackageReadme({ tier: "capability", manifest, readme }), [])
+    })
+
+    it(`keeps the actual ${manifest.name} example anchors`, () => {
+      assertCapabilityExampleAnchors(manifest.name, readme)
+    })
+
+    it(`rejects removing an example anchor from the actual ${manifest.name} README`, () => {
+      for (const anchor of capabilityExampleAnchors.get(manifest.name) ?? []) {
+        const mutated = readme.replaceAll(anchor, "")
+        assert.notEqual(mutated, readme, `${manifest.name} ${anchor} mutation must apply`)
+        assert.throws(() => assertCapabilityExampleAnchors(manifest.name, mutated))
+      }
+    })
+
+    it(`keeps the campaign GIF out of the actual ${manifest.name} README`, () => {
+      assertNoCapabilityCampaignGif(manifest.name, readme)
+    })
+
+    it(`rejects adding the campaign GIF to the actual ${manifest.name} README`, () => {
+      const mutated = `${readme}\n![Dawn product loop](docs/brand/product-loop.gif)\n`
+      assert.throws(() => assertNoCapabilityCampaignGif(manifest.name, mutated))
+    })
+  }
+
+  for (const [packageName, contracts] of capabilityCaveatContracts) {
+    it(`keeps the actual ${packageName} high-risk caveats`, () => {
+      assertCapabilityCaveats(packageName, actualCapabilityReadme(packageName))
+    })
+
+    it(`rejects contradicting high-risk caveats in the actual ${packageName} README`, () => {
+      const readme = actualCapabilityReadme(packageName)
+      for (const [label, , mutate] of contracts) {
+        const mutated = mutate(readme)
+        assert.notEqual(mutated, readme, `${packageName} ${label} mutation must apply`)
+        assert.throws(() => assertCapabilityCaveats(packageName, mutated))
+      }
     })
   }
 })

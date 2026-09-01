@@ -28,11 +28,14 @@ const store = pgvectorMemoryStore({
   connectionString,
   dimensions: 1536,
 })
+
+// During application shutdown:
+await store.close()
 ```
 
 ## Runtime and stability
 
-`@dawn-ai/memory-pgvector` is a supported node-only application surface. It initializes the pgvector extension and tables lazily, so the database role needs the corresponding DDL and extension privileges. Stored memory is plaintext application data. Updating a record preserves its existing embedding; re-embed changed semantic content before relying on vector retrieval.
+`@dawn-ai/memory-pgvector` is a supported node-only application surface. It initializes the pgvector extension and tables lazily, so the database role needs the corresponding DDL and extension privileges. Calling `close()` ends a store-created pool. For an injected caller-owned pool, `close()` is a no-op; the caller must end the pool separately. Stored memory is plaintext application data. Updating a record preserves its existing embedding; re-embed changed semantic content before relying on vector retrieval.
 
 ## Related
 
