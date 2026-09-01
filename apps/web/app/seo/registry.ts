@@ -1,7 +1,7 @@
 import "server-only"
 
 import { ALL_DOCS_PAGES, breadcrumbsFor, type DocsPageHref } from "../components/docs/nav"
-import { STATIC_LASTMOD } from "./lastmod.generated"
+import { STATIC_LASTMOD } from "./lastmod"
 import type { SeoPage, TechArticleSeoPage, WebPageSeoPage } from "./types"
 
 export interface DocsSeoEntry {
