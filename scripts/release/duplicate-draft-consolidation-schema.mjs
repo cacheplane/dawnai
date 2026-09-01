@@ -867,12 +867,16 @@ function normalizeReleaseSemantic(value) {
 	}
 	const body = assertString(value.body, "Release body");
 	const bodySha256 = assertSha256(value.bodySha256, "Release body digest");
+	const targetCommitish = assertString(
+		value.targetCommitish,
+		"Release target commitish",
+	);
+	if (targetCommitish !== "main") {
+		throw new TypeError('Release target commitish must be exactly "main"');
+	}
 	return {
 		name: assertNonemptyString(value.name, "Release name"),
-		targetCommitish: assertGitSha(
-			value.targetCommitish,
-			"Release target commitish",
-		),
+		targetCommitish,
 		draft: value.draft,
 		immutable: value.immutable,
 		prerelease: value.prerelease,

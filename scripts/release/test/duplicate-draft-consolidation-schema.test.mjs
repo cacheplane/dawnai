@@ -750,9 +750,6 @@ test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {
 	withSha256Objects.confirmation.commitSha = sha64;
 	withSha256Objects.annotatedTag.objectSha = sha64;
 	withSha256Objects.annotatedTag.targetSha = sha64;
-	for (const release of withSha256Objects.releases) {
-		release.semantic.targetCommitish = sha64;
-	}
 	assert.doesNotThrow(() =>
 		createConsolidationEnvelope("proposed", withSha256Objects),
 	);
@@ -769,6 +766,39 @@ test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {
 			undefined,
 			`accepted impossible Git object SHA length ${length}`,
 		);
+	}
+});
+
+test("Release evidence requires the exact main target commitish", () => {
+	assert.doesNotThrow(() =>
+		createConsolidationEnvelope("proposed", proposedRecord()),
+	);
+
+	for (const targetCommitish of [
+		SHA,
+		"develop",
+		"refs/heads/main",
+		"main\n",
+		"ma\u0456n",
+	]) {
+		const proposed = proposedRecord();
+		proposed.releases[0].semantic.targetCommitish = targetCommitish;
+		assert.throws(() => createConsolidationEnvelope("proposed", proposed));
+
+		const resume = journalEvent("resume-reconciliation", {
+			targetReleaseId: DUPLICATE_IDS[0],
+			attemptNumber: 1,
+			classification: "present-unchanged-retryable",
+			releaseEvidence: releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000),
+			observedAt: NOW,
+		});
+		resume.payload.releaseEvidence.semantic.targetCommitish = targetCommitish;
+		assert.throws(() => canonicalEventEnvelope(resume, null));
+
+		const { proposedEnvelope, journalEnvelope } = envelopeFixtures();
+		const final = finalRecord(proposedEnvelope, journalEnvelope);
+		final.finalSurvivor.semantic.targetCommitish = targetCommitish;
+		assert.throws(() => createConsolidationEnvelope("final", final));
 	}
 });
 
@@ -1075,7 +1105,7 @@ function releaseEvidence(role, id, assetIdStart) {
 		updatedAt: NOW,
 		semantic: {
 			name: "v0.8.22 escrow",
-			targetCommitish: SHA,
+			targetCommitish: "main",
 			draft: true,
 			immutable: false,
 			prerelease: false,
