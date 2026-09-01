@@ -133,13 +133,13 @@ claim `qualify` or `remove` and do not write the stronger README claim.
 
 - [ ] **Step 4: Verify current implementation evidence**
 
-Run the existing local scaffold tests and inspect the current scaffold help and
-generated package scripts:
+Run the existing local scaffold tests and inspect the current scaffold
+implementation, assertions, and generated package scripts:
 
 ```bash
 pnpm build
 pnpm --filter create-dawn-ai-app test
-node packages/create-dawn-app/dist/bin.js --help
+rg -n 'NODE_FLOOR_MAJOR|let template = "research"|3002|3010' packages/create-dawn-app/src/index.ts packages/create-dawn-app/test/create-app.test.ts packages/devkit/templates/app-research
 ```
 
 Expected: build and scaffold tests PASS; the matrix records the exact observed
@@ -599,8 +599,10 @@ git commit -m "docs(brand): publish reproducible product-loop assets"
 **Files:**
 - Create: `docs/brand/demo/upload.mjs`
 - Create after upload: `apps/web/app/lib/demo-media.json`
+- Modify: `docs/brand/demo/check-media.mjs`
 - Extend tests: `docs/brand/demo/demo.test.mjs`
 - Modify: `package.json`
+- Modify: `pnpm-lock.yaml`
 
 - [ ] **Step 1: Write failing upload/manifest tests**
 
@@ -619,7 +621,9 @@ demo/run.webm
 
 Require every catalog entry to contain `mp4`, `webm`, `poster`, `caption`,
 `ariaLabel`, and `transcript`. Require HEAD verification of `200`,
-`video/mp4`, and `video/webm` before writing the catalog.
+`video/mp4`, and `video/webm` before writing the catalog. Also test that
+`check-media.mjs --remote` reads the checked-in catalog, performs the same HEAD
+checks, and fails on a missing URL, non-200 response, or wrong content type.
 
 - [ ] **Step 2: Run tests and verify they fail**
 
@@ -628,6 +632,17 @@ Run: `node --test docs/brand/demo/demo.test.mjs`
 Expected: FAIL because upload/manifest support is missing.
 
 - [ ] **Step 3: Implement dry-run-first upload support**
+
+Add the official Blob client as an explicit root development dependency:
+
+```bash
+pnpm add -Dw @vercel/blob@2.4.0
+```
+
+Use `put()` from `@vercel/blob` with `access: "public"`,
+`addRandomSuffix: false`, `allowOverwrite: true`, an explicit content type, and
+the token passed as an option. Do not call undocumented storage endpoints with
+raw `fetch`.
 
 `upload.mjs` must:
 
@@ -638,6 +653,10 @@ Expected: FAIL because upload/manifest support is missing.
 - Verify every URL and content type.
 - Write `apps/web/app/lib/demo-media.json` only after all files verify.
 - Never print the token.
+
+Extend `check-media.mjs` with a mutually exclusive `--remote` mode. It loads
+`apps/web/app/lib/demo-media.json`, sends HEAD requests for every MP4/WebM URL,
+and validates status and content type without requiring the write token.
 
 Add the root command:
 
@@ -678,7 +697,7 @@ Expected: all eight URLs return `200` with the expected video content type;
 - [ ] **Step 7: Commit the uploader and verified catalog**
 
 ```bash
-git add package.json docs/brand/demo/upload.mjs docs/brand/demo/demo.test.mjs apps/web/app/lib/demo-media.json
+git add package.json pnpm-lock.yaml docs/brand/demo/upload.mjs docs/brand/demo/check-media.mjs docs/brand/demo/demo.test.mjs apps/web/app/lib/demo-media.json
 git commit -m "build(brand): verify hosted demo media"
 ```
 
