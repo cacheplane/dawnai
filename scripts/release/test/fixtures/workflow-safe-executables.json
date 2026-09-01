@@ -14,6 +14,30 @@
     "ci.yml": [
       {
         "classification": "safe",
+        "job": "metadata_scope",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "metadata_scope",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "metadata_scope",
+        "stepIndex": 2,
+        "step": "Classify metadata-only change",
+        "kind": "run",
+        "value": "set -eu\nMETADATA_ONLY=\"$(node scripts/ci-scope.mjs --event pull_request --base \"$BASE_SHA\" --head \"$HEAD_SHA\")\"\ncase \"$METADATA_ONLY\" in\n  true|false) ;;\n  *) echo \"Malformed metadata-only scope output\" >&2; exit 1 ;;\nesac\nprintf 'metadata_only=%s\\n' \"$METADATA_ONLY\" >> \"$GITHUB_OUTPUT\"\n"
+      },
+      {
+        "classification": "safe",
         "job": "changesets",
         "stepIndex": 0,
         "step": "Checkout",

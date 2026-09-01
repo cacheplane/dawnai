@@ -98,6 +98,8 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-chart-apply"
             },
+            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 15
           },
@@ -531,6 +533,53 @@
         },
         {
           "classification": "safe",
+          "id": "metadata_scope",
+          "descriptor": {
+            "if": "github.event_name == 'pull_request'",
+            "name": "metadata-scope",
+            "outputs": {
+              "metadata_only": "${{ steps.classify.outputs.metadata_only }}"
+            },
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 5
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                  "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"
+                },
+                "id": "classify",
+                "name": "Classify metadata-only change",
+                "run": "set -eu\nMETADATA_ONLY=\"$(node scripts/ci-scope.mjs --event pull_request --base \"$BASE_SHA\" --head \"$HEAD_SHA\")\"\ncase \"$METADATA_ONLY\" in\n  true|false) ;;\n  *) echo \"Malformed metadata-only scope output\" >&2; exit 1 ;;\nesac\nprintf 'metadata_only=%s\\n' \"$METADATA_ONLY\" >> \"$GITHUB_OUTPUT\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "pgvector-docker",
           "descriptor": {
             "runs-on": "ubuntu-latest",
@@ -727,6 +776,8 @@
             "env": {
               "DAWN_TEST_SMOKE_E2E": "1"
             },
+            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30
           },
@@ -811,6 +862,8 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-k8s-canonical"
             },
+            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 35
           },
@@ -943,6 +996,8 @@
               "DAWN_TEST_SMOKE_E2E": "1",
               "KIND_CLUSTER": "dawn-smoke"
             },
+            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30
           },
