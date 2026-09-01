@@ -169,6 +169,55 @@ const actualCapabilityPackages = [
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
+const actualToolingPackages = [
+  {
+    directory: "core",
+    description:
+      "Low-level Dawn APIs for route discovery, configuration, state resolution, and type generation.",
+    keywords: ["dawn", "typescript", "langgraph", "ai-agents", "routing", "type-generation"],
+  },
+  {
+    directory: "langchain",
+    description:
+      "LangChain adapters for Dawn agents, chains, tools, streaming, embeddings, and retry.",
+    keywords: ["dawn", "typescript", "langchain", "langgraph", "ai-agents", "streaming"],
+  },
+  {
+    directory: "langgraph",
+    description:
+      "LangGraph.js adapters and route contracts for Dawn agents, workflows, and graphs.",
+    keywords: ["dawn", "typescript", "langgraph", "langgraphjs", "ai-agents", "workflows"],
+  },
+  {
+    directory: "vite-plugin",
+    description: "Vite integration for Dawn route discovery and generated TypeScript types.",
+    keywords: ["dawn", "typescript", "vite", "langgraph", "type-generation", "developer-tools"],
+  },
+  {
+    directory: "devkit",
+    description: "Scaffold templates and development utilities shared by Dawn tooling.",
+    keywords: ["dawn", "typescript", "scaffolding", "templates", "developer-tools"],
+  },
+  {
+    directory: "config-biome",
+    description: "Shared Biome configuration for Dawn TypeScript workspace packages.",
+    keywords: ["dawn", "biome", "linting", "formatting", "typescript", "configuration"],
+  },
+  {
+    directory: "config-typescript",
+    description: "Shared TypeScript compiler configurations for Dawn packages and applications.",
+    keywords: ["dawn", "typescript", "tsconfig", "configuration", "nodejs", "nextjs"],
+  },
+].map(({ directory, description, keywords }) => {
+  const packageRoot = new URL(`../packages/${directory}/`, import.meta.url)
+  const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
+
+  return {
+    // Task 10 verifies the actual manifests; these approved overlays isolate README behavior here.
+    manifest: { ...actualManifest, description, keywords },
+    readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
+  }
+})
 const capabilityExampleAnchors = new Map([
   ["@dawn-ai/ag-ui", ["fromRunAgentInput", "toAguiEvents", "@dawn-ai/ag-ui/sse"]],
   ["@dawn-ai/evals", ["contains", "defineEval", "gate", "runEval"]],
@@ -189,6 +238,23 @@ const capabilityExampleAnchors = new Map([
   ["@dawn-ai/sqlite-storage", ["createThreadsStore", "sqliteCheckpointer"]],
   ["@dawn-ai/testing", ["createAgentHarness", "script", "expectFinalMessage"]],
   ["@dawn-ai/workspace", ["compose", "FilesystemBackend", "localFilesystem"]],
+])
+const toolingReadmeAnchors = new Map([
+  ["@dawn-ai/core", ["config", "renderDawnTypes", "@dawn-ai/sdk"]],
+  ["@dawn-ai/langchain", ["chainAdapter", "openaiEmbedder", "edge-safe"]],
+  [
+    "@dawn-ai/langgraph",
+    [
+      "defineEntry",
+      "graphAdapter",
+      "@dawn-ai/langgraph/define-entry",
+      "@dawn-ai/langgraph/route-module",
+    ],
+  ],
+  ["@dawn-ai/vite-plugin", ["dawnToolSchemaPlugin as dawn", "plugins: [dawn()]", "Node-only"]],
+  ["@dawn-ai/devkit", ["resolveTemplateDir", "Node-only"]],
+  ["@dawn-ai/config-biome", ["extends", "--config-path", "dev dependency"]],
+  ["@dawn-ai/config-typescript", ["extends", "@dawn-ai/config-typescript/node", "dev dependency"]],
 ])
 const capabilityCaveatContracts = new Map([
   [
@@ -470,6 +536,20 @@ function assertNoCapabilityCampaignGif(packageName, readme) {
     readme,
     /product-loop\.gif/iu,
     `${packageName} capability README must not include the campaign product-loop GIF`,
+  )
+}
+
+function assertToolingReadmeAnchors(packageName, readme) {
+  for (const anchor of toolingReadmeAnchors.get(packageName) ?? []) {
+    assert.ok(readme.includes(anchor), `${packageName} README must include ${anchor}`)
+  }
+}
+
+function assertNoToolingCampaignGif(packageName, readme) {
+  assert.doesNotMatch(
+    readme,
+    /product-loop\.gif/iu,
+    `${packageName} tooling README must not include the campaign product-loop GIF`,
   )
 }
 
@@ -997,6 +1077,31 @@ describe("capability-package README contracts", () => {
       assert.notEqual(mutated, readme, `${contradiction} mutation must apply`)
       assert.throws(() => assertCapabilityCaveats("@dawn-ai/postgres-storage", mutated))
     }
+  })
+})
+
+describe("tooling-package README contracts", () => {
+  for (const { manifest, readme } of actualToolingPackages) {
+    it(`accepts the actual ${manifest.name} README`, () => {
+      assert.deepEqual(validatePackageReadme({ tier: "tooling", manifest, readme }), [])
+    })
+
+    it(`keeps the actual ${manifest.name} package-specific anchors`, () => {
+      assertToolingReadmeAnchors(manifest.name, readme)
+    })
+
+    it(`keeps the campaign GIF out of the actual ${manifest.name} README`, () => {
+      assertNoToolingCampaignGif(manifest.name, readme)
+    })
+  }
+
+  it("documents the vite plugin through its real named export", () => {
+    const vitePluginReadme = actualToolingPackages.find(
+      ({ manifest }) => manifest.name === "@dawn-ai/vite-plugin",
+    )?.readme
+
+    assert.match(vitePluginReadme ?? "", /import \{ dawnToolSchemaPlugin as dawn \}/u)
+    assert.doesNotMatch(vitePluginReadme ?? "", /import dawn from/u)
   })
 })
 
