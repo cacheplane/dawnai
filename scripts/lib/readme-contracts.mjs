@@ -460,6 +460,58 @@ function maskHtmlComments(source) {
 	);
 }
 
+function htmlTagEnd(source, start) {
+	let quote = null;
+	for (let index = start + 1; index < source.length; index++) {
+		const character = source[index];
+		if (quote) {
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			continue;
+		}
+		if (character === ">") return index;
+	}
+	return -1;
+}
+
+function maskNestedRawTextElements(source) {
+	const characters = source.split("");
+	let index = 0;
+	while (index < source.length) {
+		if (source[index] !== "<") {
+			index++;
+			continue;
+		}
+
+		const openingTag = /^<([a-z][a-z0-9-]*)(?=[\s/>])/iu
+			.exec(source.slice(index))?.[1]
+			?.toLowerCase();
+		const openingEnd = htmlTagEnd(source, index);
+		if (openingEnd === -1) break;
+		if (!openingTag || !RAW_TEXT_HTML_BLOCK_TAGS.has(openingTag)) {
+			index = openingEnd + 1;
+			continue;
+		}
+
+		const closingPattern = new RegExp(`</${openingTag}[ \\t\\r\\n]*>`, "giu");
+		closingPattern.lastIndex = openingEnd + 1;
+		const closing = closingPattern.exec(source);
+		const rawTextEnd = closing
+			? closing.index + closing[0].length
+			: source.length;
+		for (let rawIndex = index; rawIndex < rawTextEnd; rawIndex++) {
+			if (characters[rawIndex] !== "\r" && characters[rawIndex] !== "\n") {
+				characters[rawIndex] = " ";
+			}
+		}
+		index = rawTextEnd;
+	}
+	return characters.join("");
+}
+
 function codeSpanDelimiterLength(source, start) {
 	let end = start;
 	while (source[end] === "`") end++;
@@ -510,7 +562,7 @@ function visibleBlockProjections(source) {
 	const projections = markdownBlockProjections(maskHtmlComments(source));
 	return {
 		markdown: maskInlineCode(projections.markdown),
-		rendered: maskInlineCode(projections.rendered),
+		rendered: maskInlineCode(maskNestedRawTextElements(projections.rendered)),
 	};
 }
 
@@ -838,11 +890,7 @@ export function validateRootReadme(source) {
 	}
 
 	const withoutComments = maskHtmlComments(readme);
-	const blockProjections = markdownBlockProjections(withoutComments);
-	const visible = {
-		markdown: maskInlineCode(blockProjections.markdown),
-		rendered: maskInlineCode(blockProjections.rendered),
-	};
+	const visible = visibleBlockProjections(readme);
 	if (!canonicalScaffoldCommandPresent(withoutComments)) {
 		failures.push(
 			"README is missing the canonical scaffold command: pnpm create dawn-ai-app my-app",

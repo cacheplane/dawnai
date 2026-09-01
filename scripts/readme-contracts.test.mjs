@@ -181,6 +181,38 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	for (const tag of ["script", "style", "textarea"]) {
+		it(`does not accept an HTML image nested in <div><${tag}>`, () => {
+			const readme = entryReadme.replace(
+				/!\[Dawn product loop\].*$/u,
+				`<div>\n<${tag}>\n<img src="docs/brand/product-loop.gif" alt="Decoy">\n</${tag}>\n</div>`,
+			);
+			assertFailure(
+				validatePackageReadme({
+					tier: "entry",
+					manifest: entryManifest,
+					readme,
+				}),
+				/product-loop\.gif/,
+			);
+		});
+
+		it(`does not count purpose prose nested in <div><${tag}>`, () => {
+			const readme = entryReadme.replace(
+				"Author-facing TypeScript SDK.",
+				`<div>\n<${tag}>\nAuthor-facing TypeScript SDK.\n</${tag}>\n</div>`,
+			);
+			assertFailure(
+				validatePackageReadme({
+					tier: "entry",
+					manifest: entryManifest,
+					readme,
+				}),
+				/purpose statement/,
+			);
+		});
+	}
+
 	for (const [name, source, expected] of [
 		[
 			"Use this when guidance",
