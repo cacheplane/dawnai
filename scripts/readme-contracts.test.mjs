@@ -110,6 +110,16 @@ const relatedPackageDestinations = new Map([
     ["https://www.npmjs.com/package/@dawn-ai/sdk", "https://www.npmjs.com/package/@dawn-ai/core"],
   ],
 ])
+const entryReadmeAssets = new Map([
+  [
+    "logo",
+    "https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png",
+  ],
+  [
+    "product loop",
+    "https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif",
+  ],
+])
 const canonicalHeroCommandBlock = `\`\`\`bash
 npm create dawn-ai-app@latest my-agent
 \`\`\``
@@ -132,6 +142,33 @@ function assertFailure(failures, expected) {
     failures.some((failure) => expected.test(failure)),
     `Expected a failure matching ${expected}, received:\n${failures.join("\n")}`,
   )
+}
+
+function assertAbsoluteEntryAssets(packageName, readme) {
+  for (const [assetName, destination] of entryReadmeAssets) {
+    assert.ok(
+      readme.includes(`src="${destination}"`),
+      `${packageName} must use the absolute ${assetName} URL ${destination}`,
+    )
+  }
+}
+
+function relatedSection(readme) {
+  const relatedStart = readme.indexOf("## Related")
+  const relatedEnd = readme.indexOf("\n## ", relatedStart + 1)
+  return readme.slice(relatedStart, relatedEnd === -1 ? undefined : relatedEnd)
+}
+
+function assertRelatedPackageDestinations(packageName, readme) {
+  const expectedDestinations = relatedPackageDestinations.get(packageName) ?? []
+  const related = relatedSection(readme)
+
+  for (const destination of expectedDestinations) {
+    assert.ok(
+      related.includes(`](${destination})`),
+      `${packageName} Related must link to ${destination}`,
+    )
+  }
 }
 
 describe("validatePackageReadme", () => {
@@ -519,18 +556,49 @@ describe("entry-package README contracts", () => {
       assert.deepEqual(validatePackageReadme({ tier: "entry", manifest, readme }), [])
     })
 
-    it(`links the actual ${manifest.name} README to a related Dawn package`, () => {
-      const relatedStart = readme.indexOf("## Related")
-      const relatedEnd = readme.indexOf("\n## ", relatedStart + 1)
-      const related = readme.slice(relatedStart, relatedEnd === -1 ? undefined : relatedEnd)
-      const expectedDestinations = relatedPackageDestinations.get(manifest.name) ?? []
-
-      assert.ok(
-        expectedDestinations.some((destination) => related.includes(`](${destination})`)),
-        `${manifest.name} Related must link to one of: ${expectedDestinations.join(", ")}`,
-      )
+    it(`uses npm-safe absolute assets in the actual ${manifest.name} README`, () => {
+      assertAbsoluteEntryAssets(manifest.name, readme)
     })
+
+    for (const [assetName, destination] of entryReadmeAssets) {
+      it(`rejects a repository-relative ${assetName} in the actual ${manifest.name} README`, () => {
+        const mutated = readme.replace(destination, destination.slice(destination.indexOf("docs/")))
+        assert.notEqual(mutated, readme)
+        assert.throws(() => assertAbsoluteEntryAssets(manifest.name, mutated))
+      })
+    }
+
+    it(`links the actual ${manifest.name} README to every intended Dawn package`, () => {
+      assertRelatedPackageDestinations(manifest.name, readme)
+    })
+
+    for (const destination of relatedPackageDestinations.get(manifest.name) ?? []) {
+      it(`rejects removing ${destination} from the actual ${manifest.name} Related section`, () => {
+        const mutated = readme.replace(`](${destination})`, "](https://example.invalid)")
+        assert.notEqual(mutated, readme)
+        assert.throws(() => assertRelatedPackageDestinations(manifest.name, mutated))
+      })
+    }
   }
+
+  it("keeps the actual create-dawn-ai-app release history valid after later publishes", () => {
+    const createReadme = actualEntryPackages.find(
+      ({ manifest }) => manifest.name === "create-dawn-ai-app",
+    )?.readme
+
+    assert.match(
+      createReadme ?? "",
+      /0\.8\.21[^\n]*single-package[^\n]*0\.8\.22[^\n]*`server`[^\n]*`web`/u,
+    )
+    assert.match(createReadme ?? "", /`npm view create-dawn-ai-app@latest version`/u)
+    for (const selfInvalidatingPhrase of [
+      "published `@latest` version was verified as 0.8.21",
+      "current 0.8.22 repository source",
+      "until that version is published",
+    ]) {
+      assert.equal(createReadme?.includes(selfInvalidatingPhrase), false)
+    }
+  })
 
   it("labels the actual @dawn-ai/cli/testing subpath as deprecated compatibility", () => {
     const cliReadme = actualEntryPackages.find(

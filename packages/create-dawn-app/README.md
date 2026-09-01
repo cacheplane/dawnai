@@ -29,7 +29,7 @@ npm install
 npm test
 ```
 
-The `research` template is the default. The published `@latest` version was verified as 0.8.21 on August 31, 2026; it generates the earlier single-package research starter. The current 0.8.22 repository source contains a newer `server` and `web` workspace shape, which should not be attributed to `@latest` until that version is published and verified. For a smaller greeter application, select the optional `basic` template with `npm create dawn-ai-app@latest my-agent -- --template basic`.
+The `research` template is the default. Version 0.8.21 generated the earlier single-package research starter; version 0.8.22 introduced the `server` and `web` workspace. Run `npm view create-dawn-ai-app@latest version` to see which release the current dist-tag selects. For a smaller greeter application, select the optional `basic` template with `npm create dawn-ai-app@latest my-agent -- --template basic`.
 
 ## Runtime and stability
 
