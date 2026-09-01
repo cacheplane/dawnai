@@ -510,6 +510,235 @@ test("rejects a constant-counter bypass and concurrent terminal-read race", asyn
 	await assert.rejects(pendingCapture, /terminal|epoch|failed/iu);
 });
 
+test("a fabricated authority cannot arm DELETE after only terminal reads", async () => {
+	const source = await authorityFixture();
+	const captured = await captureConsolidationAuthority(source.input);
+	const victim = await authorityFixture();
+	const terminal = victim.adapters.authorityEpoch.beginTerminalRead({
+		releaseId: DUPLICATE_DRAFT_IDS[0],
+	});
+	await terminal.github.getRelease({ releaseId: DUPLICATE_DRAFT_IDS[0] });
+	await terminal.github.listReleaseAssets({
+		releaseId: DUPLICATE_DRAFT_IDS[0],
+	});
+	const epoch = terminal.seal();
+	const proposedEnvelope = createConsolidationEnvelope(
+		"proposed",
+		victim.proposal,
+	);
+	const confirmation = exactConfirmation(proposedEnvelope);
+	const confirmationSha256 = createHash("sha256")
+		.update(confirmation, "utf8")
+		.digest("hex");
+	let predecessor = createConsolidationJournal({
+		proposedEnvelope,
+		confirmationSha256,
+		recordedAt: captured.authority.observedAt,
+	});
+	predecessor = appendJournalEvent(
+		predecessor,
+		"delete-authority-observed",
+		{
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			attemptNumber: 1,
+			authority: captured.authority,
+		},
+		captured.authority.observedAt,
+	);
+	await writePrivateEnvelope(
+		victim.journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", predecessor),
+	);
+	const predecessorRead = await readPrivateEnvelope(
+		victim.journalPath,
+		64 * 1024 * 1024,
+	);
+	const predecessorState = deriveConsolidationState(predecessor);
+	const committed = appendJournalEvent(
+		predecessor,
+		"delete-intent",
+		{
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			attemptNumber: 1,
+			authorityEventSha256: predecessorState.lastEventSha256,
+		},
+		captured.authority.observedAt,
+	);
+	await writePrivateEnvelope(
+		victim.journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", committed),
+	);
+	const committedRead = await readPrivateEnvelope(
+		victim.journalPath,
+		64 * 1024 * 1024,
+	);
+
+	assert.throws(
+		() =>
+			epoch.armTransition({
+				targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+				authority: captured.authority,
+				proposedEnvelope,
+				confirmation,
+				predecessorJournal: predecessorRead,
+				committedJournal: committedRead,
+			}),
+		/capture|trace|provenance|authority|session/iu,
+	);
+	assert.equal(
+		victim.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+});
+
+test("skipped or reordered broad reads invalidate the exclusive capture", async () => {
+	const fixture = await authorityFixture();
+	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
+		stage: "pre-delete-1",
+		proposal: fixture.proposal,
+		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+	});
+	await assert.rejects(
+		capture.github.getRepository(),
+		/order|trace|capture|authority/iu,
+	);
+	await assert.rejects(
+		captureConsolidationAuthority(fixture.input),
+		/capture|adapter|state|authority/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+});
+
+test("concurrent broad reads invalidate the complete capture trace", async () => {
+	const fixture = await authorityFixture();
+	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
+		stage: "pre-delete-1",
+		proposal: fixture.proposal,
+		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+	});
+	const first = capture.local.readState();
+	const second = capture.local.readState();
+	await assert.rejects(second, /concurrent|order|trace|capture|authority/iu);
+	await assert.rejects(first, /invalid|trace|capture|authority/iu);
+	await assert.rejects(
+		captureConsolidationAuthority(fixture.input),
+		/capture|adapter|state|authority/iu,
+	);
+});
+
+test("a missing durable head bootstraps only exact operation genesis", async (t) => {
+	await t.test("post-genesis authority history rejects", async () => {
+		const fixture = await authorityFixture();
+		const captured = await captureConsolidationAuthority(fixture.input);
+		const consumption = await journalIntentConsumption(captured, fixture);
+		await rm(fixture.journalHeadPath, { force: true });
+		await assert.rejects(
+			captured.networkEpoch.consume(consumption),
+			/head|anchor|genesis|missing|history/iu,
+		);
+		assert.equal(
+			fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+			false,
+		);
+	});
+
+	await t.test(
+		"exact genesis creates and binds the head before stopping",
+		async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const consumption = await journalIntentConsumption(captured, fixture);
+			const genesis = createConsolidationJournal({
+				proposedEnvelope: createConsolidationEnvelope(
+					"proposed",
+					fixture.proposal,
+				),
+				confirmationSha256:
+					consumption.currentJournal.record.confirmationSha256,
+				recordedAt: captured.authority.observedAt,
+			});
+			await writePrivateEnvelope(
+				fixture.journalPath,
+				canonicalConsolidationEnvelopeBytes("journal", genesis),
+			);
+			await rm(fixture.journalHeadPath, { force: true });
+			await assert.rejects(
+				captured.networkEpoch.consume({
+					...consumption,
+					currentJournal: genesis,
+				}),
+				/authority|predecessor|state|intent/iu,
+			);
+			assert.deepEqual(
+				await readFile(fixture.journalHeadPath),
+				journalHeadBytes(fixture, genesis),
+			);
+		},
+	);
+
+	await t.test(
+		"deleting both files cannot reset post-genesis history",
+		async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const consumption = await journalIntentConsumption(captured, fixture);
+			await writePrivateEnvelope(
+				fixture.journalHeadPath,
+				journalHeadBytes(fixture, consumption.currentJournal),
+			);
+			await rm(fixture.journalPath);
+			await rm(fixture.journalHeadPath);
+			await writePrivateEnvelope(
+				fixture.journalPath,
+				canonicalConsolidationEnvelopeBytes(
+					"journal",
+					consumption.currentJournal,
+				),
+			);
+			await assert.rejects(
+				captured.networkEpoch.consume(consumption),
+				/head|anchor|genesis|missing|history/iu,
+			);
+		},
+	);
+
+	await t.test(
+		"same-binding divergent history cannot create a new head",
+		async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const consumption = await journalIntentConsumption(captured, fixture);
+			const divergent = appendJournalEvent(
+				consumption.currentJournal,
+				"delete-intent",
+				{
+					targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+					attemptNumber: 1,
+					authorityEventSha256: deriveConsolidationState(
+						consumption.currentJournal,
+					).lastEventSha256,
+				},
+				captured.authority.observedAt,
+			);
+			await writePrivateEnvelope(
+				fixture.journalPath,
+				canonicalConsolidationEnvelopeBytes("journal", divergent),
+			);
+			await rm(fixture.journalHeadPath, { force: true });
+			await assert.rejects(
+				captured.networkEpoch.consume({
+					...consumption,
+					currentJournal: divergent,
+				}),
+				/head|anchor|genesis|missing|history/iu,
+			);
+		},
+	);
+});
+
 test("real Task4 composition binds the executed workflow query into Task5 authority", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
@@ -1693,6 +1922,14 @@ async function journalIntentConsumption(captured, fixture, overrides = {}) {
 		confirmationSha256,
 		recordedAt,
 	});
+	await writePrivateEnvelope(
+		fixture.journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", currentJournal),
+	);
+	await writePrivateEnvelope(
+		fixture.journalHeadPath,
+		journalHeadBytes(fixture, currentJournal),
+	);
 	currentJournal = appendJournalEvent(
 		currentJournal,
 		"delete-authority-observed",

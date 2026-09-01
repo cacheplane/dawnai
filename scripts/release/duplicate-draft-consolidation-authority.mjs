@@ -22,10 +22,6 @@ import {
 	createConsolidationEnvelope,
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 } from "./duplicate-draft-consolidation-schema.mjs";
-import {
-	claimConsolidationTransitionFacade,
-	invokeConsolidationTransition,
-} from "./duplicate-draft-consolidation-transition.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
 import { parseReleaseMarker } from "./metadata.mjs";
 
@@ -151,9 +147,14 @@ export async function captureConsolidationAuthority(input) {
 			"Authority target is not the approved current next duplicate",
 		);
 	}
+	const adapters = context.adapters.authorityEpoch.beginAuthorityCapture({
+		stage: context.stage,
+		proposal,
+		targetReleaseId: context.targetReleaseId,
+	});
 
 	const localState = snapshotPlain(
-		await context.adapters.local.readState(),
+		await adapters.local.readState(),
 		"local checkout state",
 	);
 	assertExactKeys(
@@ -173,22 +174,20 @@ export async function captureConsolidationAuthority(input) {
 	}
 
 	const repository = snapshotPlain(
-		await context.adapters.github.getRepository(),
+		await adapters.github.getRepository(),
 		"GitHub repository",
 	);
 	const actor = snapshotPlain(
-		await context.adapters.github.getAuthenticatedUser(),
+		await adapters.github.getAuthenticatedUser(),
 		"GitHub actor",
 	);
-	const githubMainSha = await context.adapters.github.getDefaultBranchSha();
+	const githubMainSha = await adapters.github.getDefaultBranchSha();
 	const workflow = snapshotPlain(
-		await context.adapters.github.getWorkflowState(),
+		await adapters.github.getWorkflowState(),
 		"Release workflow",
 	);
 	const nonterminalRunRead = snapshotPlain(
-		await context.adapters.github.listNonterminalWorkflowRuns(
-			WORKFLOW_RUN_QUERY,
-		),
+		await adapters.github.listNonterminalWorkflowRuns(WORKFLOW_RUN_QUERY),
 		"nonterminal workflow-run read",
 	);
 	const nonterminalRuns = normalizeNonterminalRunRead(
@@ -196,11 +195,11 @@ export async function captureConsolidationAuthority(input) {
 		WORKFLOW_RUN_QUERY,
 	);
 	const annotatedTag = snapshotPlain(
-		await context.adapters.github.getAnnotatedTag({ name: CANDIDATE.tag }),
+		await adapters.github.getAnnotatedTag({ name: CANDIDATE.tag }),
 		"annotated tag",
 	);
 	const releaseEnvelope = snapshotPlain(
-		await context.adapters.github.listReleases(),
+		await adapters.github.listReleases(),
 		"Release enumeration",
 	);
 	const listedReleases = presentValue(releaseEnvelope, "releases");
@@ -229,10 +228,7 @@ export async function captureConsolidationAuthority(input) {
 		workflow,
 		nonterminalRuns,
 		query: WORKFLOW_RUN_QUERY,
-		observedAt: callTimestamp(
-			context.adapters.now,
-			"workflow authority observation",
-		),
+		observedAt: callTimestamp(adapters.now, "workflow authority observation"),
 	});
 	const currentTag = normalizeAnnotatedTag(annotatedTag);
 	assertStableTagAndWorkflow(currentTag, workflowAuthority, proposal);
@@ -240,8 +236,8 @@ export async function captureConsolidationAuthority(input) {
 	const npmInventory = await captureNpmInventory({
 		stage: context.stage,
 		candidate: proposal.candidate,
-		npm: context.adapters.npm.source,
-		now: context.adapters.now,
+		npm: adapters.npm.source,
+		now: adapters.now,
 	});
 	const selectedRaw = selectManagedReleases(
 		listedReleases,
@@ -252,9 +248,9 @@ export async function captureConsolidationAuthority(input) {
 		stage: context.stage,
 		selectedRaw,
 		proposal,
-		github: context.adapters.github,
-		attestations: context.adapters.attestations,
-		contextNow: context.adapters.now,
+		github: adapters.github,
+		attestations: adapters.attestations,
+		contextNow: adapters.now,
 	});
 	let releases = broadEvidence.releases;
 	const payloadProof = broadEvidence.payloadProof;
@@ -267,7 +263,7 @@ export async function captureConsolidationAuthority(input) {
 		);
 		if (targetIndex < 0)
 			throw new Error("Authority target is absent from the Release list");
-		const terminal = context.adapters.authorityEpoch.beginTerminalRead({
+		const terminal = adapters.beginTerminalRead({
 			releaseId: stageRule.targetReleaseId,
 		});
 		try {
@@ -279,7 +275,7 @@ export async function captureConsolidationAuthority(input) {
 					({ id }) => id === stageRule.targetReleaseId,
 				),
 				github: terminal.github,
-				now: context.adapters.now,
+				now: adapters.now,
 			});
 			adapterEpoch = terminal.seal();
 		} catch {
@@ -294,15 +290,12 @@ export async function captureConsolidationAuthority(input) {
 		releases = releases.with(targetIndex, targetRead.evidence);
 	} else {
 		try {
-			adapterEpoch = context.adapters.authorityEpoch.sealWithoutTarget();
+			adapterEpoch = adapters.sealWithoutTarget();
 		} catch {
 			throw new Error("Final network epoch failed closed");
 		}
 	}
-	const observedAt = callTimestamp(
-		context.adapters.now,
-		"authority observation",
-	);
+	const observedAt = callTimestamp(adapters.now, "authority observation");
 	const authority = normalizeAuthorityStage({
 		stage: context.stage,
 		controller: {
@@ -325,6 +318,7 @@ export async function captureConsolidationAuthority(input) {
 	}
 
 	try {
+		await adapterEpoch.bindAuthority({ authority, proposal });
 		adapterEpoch.validate();
 	} catch {
 		throw new Error("Network epoch was invalidated after terminal completion");
@@ -334,7 +328,6 @@ export async function captureConsolidationAuthority(input) {
 		proposal,
 		targetReleaseId: stageRule.targetReleaseId,
 		adapterEpoch,
-		transitionCapability: context.transitionCapability,
 	});
 	const result = { authority };
 	Object.defineProperty(result, "networkEpoch", {
@@ -382,7 +375,6 @@ function normalizeCaptureInput(input) {
 		target === null ? null : canonicalId(target, "authority target");
 	const rawAdapters = dataValue(value, "adapters", "consolidation adapters");
 	const adapters = bindAdapterFacade(rawAdapters);
-	const transitionCapability = claimConsolidationTransitionFacade(rawAdapters);
 	return {
 		stage,
 		proposal: snapshotPlain(
@@ -391,7 +383,6 @@ function normalizeCaptureInput(input) {
 		),
 		targetReleaseId,
 		adapters,
-		transitionCapability,
 	};
 }
 
@@ -917,7 +908,6 @@ function createNetworkEpoch({
 	proposal,
 	targetReleaseId,
 	adapterEpoch,
-	transitionCapability,
 }) {
 	const authoritySha256 = canonicalRecordSha256(authority);
 	const proposalSha256 = canonicalRecordSha256(proposal);
@@ -1129,7 +1119,7 @@ function createNetworkEpoch({
 						completedTimestamp,
 					);
 					adapterEpoch.validate();
-					return invokeConsolidationTransition(transitionCapability, {
+					return adapterEpoch.armTransition({
 						targetReleaseId: consumedTarget,
 						authority: consumedAuthority,
 						proposedEnvelope,
@@ -1178,6 +1168,11 @@ async function reconcileJournalHead({ journalHeadPath, journalPath, journal }) {
 		headBytes = await readPrivateEnvelope(journalHeadPath, 16 * 1024);
 	} catch (error) {
 		if (!hasErrorCode(error, "ENOENT")) throw error;
+		if (!isExactJournalGenesis(journal)) {
+			throw new Error(
+				"Missing durable journal head may bootstrap only exact operation genesis",
+			);
+		}
 		await writePrivateEnvelope(
 			journalHeadPath,
 			canonicalJournalHeadBytes(journalPath, journal),
@@ -1209,6 +1204,15 @@ async function reconcileJournalHead({ journalHeadPath, journalPath, journal }) {
 		headBytes,
 	);
 	return readPrivateEnvelope(journalHeadPath, 16 * 1024);
+}
+
+function isExactJournalGenesis(journal) {
+	return (
+		journal.record.events.length === 1 &&
+		journal.record.events[0].event.type === "operation-started" &&
+		journal.record.events[0].event.sequence === 1 &&
+		journal.record.events[0].event.previousEventSha256 === null
+	);
 }
 
 function canonicalJournalHeadBytes(journalPath, journal) {
@@ -1392,6 +1396,7 @@ function bindAuthorityCapability(value, facade) {
 			"now",
 			"journalPath",
 			"validateFacade",
+			"beginAuthorityCapture",
 			"beginTerminalRead",
 			"sealWithoutTarget",
 			"toJSON",
@@ -1408,6 +1413,11 @@ function bindAuthorityCapability(value, facade) {
 		value,
 		"beginTerminalRead",
 		"terminal-read capability",
+	);
+	const beginAuthorityCapture = hiddenDataFunction(
+		value,
+		"beginAuthorityCapture",
+		"authority-capture capability",
 	);
 	const sealWithoutTarget = hiddenDataFunction(
 		value,
@@ -1428,6 +1438,13 @@ function bindAuthorityCapability(value, facade) {
 			}
 		},
 		journalPath: hiddenDataValue(value, "journalPath", "adapter journal path"),
+		beginAuthorityCapture(input) {
+			try {
+				return bindAuthorityCapture(beginAuthorityCapture.call(value, input));
+			} catch {
+				throw new Error("Authority capture session failed closed");
+			}
+		},
 		beginTerminalRead(input) {
 			try {
 				return bindTerminalCapability(beginTerminalRead.call(value, input));
@@ -1445,10 +1462,88 @@ function bindAuthorityCapability(value, facade) {
 	});
 }
 
+function bindAuthorityCapture(value) {
+	assertHiddenCapability(
+		value,
+		[
+			"local",
+			"github",
+			"npm",
+			"attestations",
+			"now",
+			"beginTerminalRead",
+			"sealWithoutTarget",
+			"abort",
+			"toJSON",
+		],
+		"authority capture capability",
+	);
+	const beginTerminalRead = hiddenDataFunction(
+		value,
+		"beginTerminalRead",
+		"captured terminal-read capability",
+	);
+	const sealWithoutTarget = hiddenDataFunction(
+		value,
+		"sealWithoutTarget",
+		"captured final-stage capability",
+	);
+	const abort = hiddenDataFunction(value, "abort", "authority capture abort");
+	const now = hiddenDataFunction(value, "now", "authority capture clock");
+	return Object.freeze({
+		local: bindBoundary(
+			hiddenDataValue(value, "local", "captured local reader"),
+			["readState"],
+			"authority captured local Git reader",
+		),
+		github: bindBoundary(
+			hiddenDataValue(value, "github", "captured GitHub reader"),
+			[
+				"getRepository",
+				"getAuthenticatedUser",
+				"getDefaultBranchSha",
+				"getWorkflowState",
+				"listNonterminalWorkflowRuns",
+				"getAnnotatedTag",
+				"listReleases",
+				"getRelease",
+				"listReleaseAssets",
+				"downloadReleaseAsset",
+			],
+			"authority captured GitHub Release reader",
+		),
+		npm: bindBoundary(
+			hiddenDataValue(value, "npm", "captured npm reader"),
+			["observePackageVersion"],
+			"authority captured npm reader",
+		),
+		attestations: bindBoundary(
+			hiddenDataValue(value, "attestations", "captured attestation verifier"),
+			["verify"],
+			"authority captured attestation verifier",
+		),
+		now: () => now.call(value),
+		beginTerminalRead(input) {
+			return bindTerminalCapability(beginTerminalRead.call(value, input));
+		},
+		sealWithoutTarget() {
+			return bindSealedEpoch(sealWithoutTarget.call(value));
+		},
+		abort: () => abort.call(value),
+	});
+}
+
 function bindFinalEpoch(value) {
 	assertHiddenCapability(
 		value,
-		["now", "journalPath", "validate", "toJSON"],
+		[
+			"now",
+			"journalPath",
+			"validate",
+			"bindAuthority",
+			"armTransition",
+			"toJSON",
+		],
 		"final adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "final adapter clock");
@@ -1457,10 +1552,22 @@ function bindFinalEpoch(value) {
 		"validate",
 		"final epoch validator",
 	);
+	const bindAuthority = hiddenDataFunction(
+		value,
+		"bindAuthority",
+		"captured authority binder",
+	);
+	const armTransition = hiddenDataFunction(
+		value,
+		"armTransition",
+		"captured transition boundary",
+	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "final journal path"),
 		validate: () => validate.call(value),
+		bindAuthority: (input) => bindAuthority.call(value, input),
+		armTransition: (input) => armTransition.call(value, input),
 	});
 }
 
@@ -1499,7 +1606,14 @@ function bindTerminalCapability(value) {
 function bindSealedEpoch(value) {
 	assertHiddenCapability(
 		value,
-		["now", "journalPath", "validate", "toJSON"],
+		[
+			"now",
+			"journalPath",
+			"validate",
+			"bindAuthority",
+			"armTransition",
+			"toJSON",
+		],
 		"sealed adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "sealed adapter clock");
@@ -1508,10 +1622,22 @@ function bindSealedEpoch(value) {
 		"validate",
 		"sealed epoch validator",
 	);
+	const bindAuthority = hiddenDataFunction(
+		value,
+		"bindAuthority",
+		"captured authority binder",
+	);
+	const armTransition = hiddenDataFunction(
+		value,
+		"armTransition",
+		"captured transition boundary",
+	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "sealed journal path"),
 		validate: () => validate.call(value),
+		bindAuthority: (input) => bindAuthority.call(value, input),
+		armTransition: (input) => armTransition.call(value, input),
 	});
 }
 

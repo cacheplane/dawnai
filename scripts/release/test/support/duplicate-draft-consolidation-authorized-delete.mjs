@@ -218,6 +218,26 @@ export async function createAuthorizedDeleteHarness({ fetchImpl, deleteNow }) {
 		confirmationSha256,
 		recordedAt: captured.authority.observedAt,
 	});
+	const journalPath = path.join(
+		root,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	const journalHeadPath = path.join(
+		root,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.head.json",
+	);
+	await writePrivateEnvelope(
+		journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", journal),
+	);
+	await writePrivateEnvelope(
+		journalHeadPath,
+		journalHeadBytes(journalPath, journal),
+	);
 	journal = appendJournalEvent(
 		journal,
 		"delete-authority-observed",
@@ -227,12 +247,6 @@ export async function createAuthorizedDeleteHarness({ fetchImpl, deleteNow }) {
 			authority: captured.authority,
 		},
 		captured.authority.observedAt,
-	);
-	const journalPath = path.join(
-		root,
-		".dawn",
-		"release",
-		"duplicate-draft-consolidation.journal.json",
 	);
 	await writePrivateEnvelope(
 		journalPath,
@@ -253,6 +267,22 @@ export async function createAuthorizedDeleteHarness({ fetchImpl, deleteNow }) {
 function exactConfirmation(proposal) {
 	const { candidate, roles } = proposal.record;
 	return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`;
+}
+
+function journalHeadBytes(journalPath, journal) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			journalPath,
+			repository: journal.record.repository,
+			proposedRecordSha256: journal.record.proposedRecordSha256,
+			journalRecordSha256: journal.recordSha256,
+			lastEventSha256: journal.record.events.at(-1).eventSha256,
+			sequence: journal.record.events.length,
+			updatedAt: journal.record.updatedAt,
+		})}\n`,
+		"utf8",
+	);
 }
 
 function workflowQuery() {

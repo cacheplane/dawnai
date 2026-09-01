@@ -6,10 +6,6 @@ import {
 	createDuplicateDraftConsolidationAdapters,
 	createExactDuplicateDeleteEffect,
 } from "../duplicate-draft-consolidation-adapters.mjs";
-import {
-	claimConsolidationTransitionFacade,
-	invokeConsolidationTransition,
-} from "../duplicate-draft-consolidation-transition.mjs";
 import { createAuthorizedDeleteHarness } from "./support/duplicate-draft-consolidation-authorized-delete.mjs";
 
 const REPOSITORY = "cacheplane/dawnai";
@@ -200,46 +196,10 @@ test("terminal authority exposes no publicly callable permit issuer", async () =
 		"now",
 		"journalPath",
 		"validate",
+		"bindAuthority",
+		"armTransition",
 		"toJSON",
 	]);
-	await assert.rejects(
-		adapters.writer.deleteDuplicate({
-			releaseId: DUPLICATES[0],
-			permit: Object.freeze({}),
-		}),
-		/permit|guard|one-use|valid/iu,
-	);
-	assert.equal(fetches, 0);
-});
-
-test("the internal handshake never reveals a raw arming callback", async () => {
-	let fetches = 0;
-	const adapters = await createTerminalAdapters({
-		fetchImpl: async () => {
-			fetches += 1;
-			return new Response(null, { status: 204 });
-		},
-	});
-	const terminal = adapters.authorityEpoch.beginTerminalRead({
-		releaseId: DUPLICATES[0],
-	});
-	await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
-	await terminal.github.listReleaseAssets({ releaseId: DUPLICATES[0] });
-	terminal.seal();
-
-	const capability = claimConsolidationTransitionFacade(adapters);
-	assert.equal(typeof capability, "object");
-	assert.equal(Object.getPrototypeOf(capability), null);
-	assert.equal(Object.isFrozen(capability), true);
-	assert.deepEqual(Reflect.ownKeys(capability), []);
-	assert.throws(
-		() => invokeConsolidationTransition(capability, {}),
-		/transition|target|option|invalid/iu,
-	);
-	assert.throws(
-		() => invokeConsolidationTransition(capability, {}),
-		/absent|consumed|untrusted/iu,
-	);
 	await assert.rejects(
 		adapters.writer.deleteDuplicate({
 			releaseId: DUPLICATES[0],

@@ -11,7 +11,10 @@ import { createGitHubReader as defaultCreateGitHubReader } from "./adapters/gith
 import { createHttpGet } from "./adapters/http.mjs";
 import { createNpmReader as defaultCreateNpmReader } from "./adapters/npm.mjs";
 import { createCliAttestationVerifier as defaultCreateCliAttestationVerifier } from "./artifact-store.mjs";
-import { assertEvidenceEqualsProposal } from "./duplicate-draft-consolidation-evidence.mjs";
+import {
+	assertEvidenceEqualsProposal,
+	captureDirectTargetRead,
+} from "./duplicate-draft-consolidation-evidence.mjs";
 import { readPrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
 import {
 	appendJournalEvent,
@@ -20,10 +23,12 @@ import {
 } from "./duplicate-draft-consolidation-journal.mjs";
 import {
 	canonicalConsolidationEnvelopeBytes,
+	canonicalRecordSha256,
+	createConsolidationEnvelope,
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 	parseConsolidationEnvelope,
 } from "./duplicate-draft-consolidation-schema.mjs";
-import { registerConsolidationTransitionFacade } from "./duplicate-draft-consolidation-transition.mjs";
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
 import { createOwnerPreflightAdapters as defaultCreateOwnerPreflightAdapters } from "./preflight-owner-adapters.mjs";
 import { createReleasePreparationRunner as defaultCreateReleasePreparationRunner } from "./process-runner.mjs";
 
@@ -208,12 +213,13 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 		environment: safeEnvironment,
 		run: ownerRun,
 	});
-	const local = createLocalGitReader({
+	const rawLocal = createLocalGitReader({
 		cwd,
 		environment: safeEnvironment,
 		run,
 		ownerAdapters,
 	});
+	const local = guardNetworkFacade(rawLocal, networkGuard, "local Git reader");
 	const npmReader = createNpmReader({ fetchImpl: guardedFetch });
 	const observePackageVersion = bindMethod(
 		npmReader,
@@ -225,6 +231,7 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 			const result = await networkGuard.runRequest(
 				"npm package-version reader",
 				() => observePackageVersion(input),
+				[input],
 			);
 			return deepFreeze(
 				normalizeAdapterEnvelope(containsProxy(result) ? null : result, {
@@ -257,8 +264,10 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 	);
 	const attestations = deepFreeze({
 		async verify(input) {
-			return networkGuard.runRequest("attestation verifier", async () =>
-				normalizeAttestationResult(await verifyAttestations(input)),
+			return networkGuard.runRequest(
+				"attestation verifier",
+				async () => normalizeAttestationResult(await verifyAttestations(input)),
+				[input],
 			);
 		},
 	});
@@ -302,10 +311,6 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 		configurable: false,
 	});
 	Object.freeze(adapters);
-	registerConsolidationTransitionFacade(
-		adapters,
-		networkGuard.armTask6Transition,
-	);
 	return adapters;
 }
 
@@ -648,9 +653,442 @@ function guardNetworkFacade(source, guard, label) {
 	for (const name of Object.keys(source)) {
 		const method = bindMethod(source, name, label);
 		facade[name] = (...args) =>
-			guard.runRequest(`${label} ${name}`, () => method(...args));
+			guard.runRequest(`${label} ${name}`, () => method(...args), args);
 	}
 	return deepFreeze(facade);
+}
+
+function expectedAuthorityTrace(proposal, stage) {
+	const exact = (label, args, validate) => ({
+		label,
+		args: snapshotJson(args),
+		validate,
+	});
+	const equals = (expected, label) => (actual) => {
+		if (!isDeepStrictEqual(actual, expected)) {
+			throw new Error(`${label} differs from the authority proposal`);
+		}
+	};
+	const steps = [
+		exact("local Git reader readState", [], (actual) => {
+			if (
+				actual.headSha !== proposal.controller.headSha ||
+				actual.originMainSha !== proposal.controller.originMainSha ||
+				actual.branch !== "main" ||
+				actual.porcelainStatus !== ""
+			) {
+				throw new Error("Local capture differs from the authority proposal");
+			}
+		}),
+		exact("GitHub reader getRepository", [], (actual) => {
+			equals(
+				{
+					name: proposal.repository.name,
+					id: proposal.repository.id,
+					defaultBranch: proposal.repository.defaultBranch,
+				},
+				"Repository capture",
+			)(actual);
+		}),
+		exact(
+			"GitHub reader getAuthenticatedUser",
+			[],
+			equals(proposal.repository.actor, "Actor capture"),
+		),
+		exact(
+			"GitHub reader getDefaultBranchSha",
+			[],
+			equals(proposal.controller.githubMainSha, "GitHub main capture"),
+		),
+		exact("GitHub reader getWorkflowState", [], (actual) => {
+			const {
+				workflowId,
+				path: workflowPath,
+				state: workflowState,
+			} = proposal.workflowAuthority;
+			equals(
+				{ workflowId, path: workflowPath, state: workflowState },
+				"Workflow capture",
+			)(actual);
+		}),
+		exact(
+			"GitHub reader listNonterminalWorkflowRuns",
+			[proposal.workflowAuthority.query],
+			(actual) => {
+				equals(
+					{
+						query: proposal.workflowAuthority.query,
+						runs: proposal.workflowAuthority.nonterminalRuns,
+					},
+					"Workflow-run capture",
+				)(actual);
+			},
+		),
+		exact(
+			"GitHub reader getAnnotatedTag",
+			[{ name: proposal.candidate.tag }],
+			(actual) => {
+				for (const name of ["name", "objectSha", "targetSha", "objectType"]) {
+					if (actual[name] !== proposal.annotatedTag[name]) {
+						throw new Error("Annotated-tag capture differs from the proposal");
+					}
+				}
+			},
+		),
+		exact("GitHub reader listReleases", [], (actual, session) => {
+			if (
+				actual.status !== "PRESENT" ||
+				actual.operation !== "releases" ||
+				actual.httpStatus !== 200 ||
+				actual.code !== null ||
+				!Array.isArray(actual.value)
+			) {
+				throw new Error("Release-list capture is malformed");
+			}
+			session.keyResults.set("releases", actual);
+			appendExpectedPayloadTrace(
+				session.expected,
+				proposal,
+				stage,
+				actual.value,
+				exact,
+				equals,
+			);
+		}),
+	];
+	for (const name of CANONICAL_RELEASE_PACKAGE_ORDER) {
+		steps.push(
+			exact(
+				"npm package-version reader",
+				[{ name, version: proposal.candidate.version }],
+				equals(
+					{
+						status: "ABSENT",
+						operation: "package-version",
+						httpStatus: 404,
+						code: "E404",
+					},
+					"npm capture",
+				),
+			),
+		);
+	}
+	return steps;
+}
+
+function appendExpectedPayloadTrace(
+	steps,
+	proposal,
+	stage,
+	rawReleases,
+	exact,
+	equals,
+) {
+	const remainingIds =
+		stage === "pre-delete-1"
+			? [SURVIVOR_ID, ...DUPLICATE_IDS]
+			: stage === "pre-delete-2"
+				? [SURVIVOR_ID, DUPLICATE_IDS[1]]
+				: [SURVIVOR_ID];
+	for (const releaseId of remainingIds) {
+		const release = proposal.releases.find(({ id }) => id === releaseId);
+		const rawRelease = rawReleases.find(({ id }) => String(id) === releaseId);
+		if (release === undefined || rawRelease === undefined) {
+			throw new Error("Authority proposal is missing a required Release");
+		}
+		const orderedAssets =
+			stage === "pre-delete-1" ? rawRelease.assets : release.assets;
+		for (const rawAsset of orderedAssets) {
+			const asset = release.assets.find(({ id }) => id === String(rawAsset.id));
+			if (asset === undefined) {
+				throw new Error("Broad Release contains an unexpected asset");
+			}
+			steps.push(
+				exact(
+					"GitHub reader downloadReleaseAsset",
+					[
+						{
+							releaseId,
+							assetId: asset.id,
+							maximumBytes: asset.size,
+						},
+					],
+					(actual) => assertCapturedDownload(actual, asset),
+				),
+			);
+		}
+		if (stage === "pre-delete-1") {
+			steps.push(
+				exact("attestation verifier", null, (actual) => {
+					equals(
+						proposal.payloadProof.attestationVerification,
+						"Attestation capture",
+					)(actual);
+				}),
+			);
+		}
+	}
+	if (stage !== "final") {
+		const targetReleaseId =
+			stage === "pre-delete-1" ? DUPLICATE_IDS[0] : DUPLICATE_IDS[1];
+		steps.push(
+			exact(
+				"terminal Release GET",
+				[{ releaseId: targetReleaseId }],
+				(actual, session) => {
+					session.keyResults.set("terminal-release", actual);
+				},
+			),
+			exact(
+				"terminal asset enumeration",
+				[{ releaseId: targetReleaseId }],
+				(actual, session) => {
+					session.keyResults.set("terminal-assets", actual);
+				},
+			),
+		);
+	}
+}
+
+function assertCapturedDownload(actual, asset) {
+	if (
+		actual.status !== "PRESENT" ||
+		actual.operation !== "release-asset-download" ||
+		actual.httpStatus !== 200 ||
+		actual.code !== null ||
+		typeof actual.contentBase64 !== "string"
+	) {
+		throw new Error("Release download capture is malformed");
+	}
+	const bytes = Buffer.from(actual.contentBase64, "base64");
+	if (
+		bytes.byteLength !== asset.size ||
+		bytes.toString("base64") !== actual.contentBase64 ||
+		createHash("sha256").update(bytes).digest("hex") !== asset.downloadSha256
+	) {
+		throw new Error("Release download capture differs from the proposal");
+	}
+}
+
+function canonicalTraceEntry(label, args, result) {
+	return Object.freeze({
+		label,
+		argsSha256: traceSha256(normalizeTraceValue(args)),
+		resultSha256: traceSha256(result),
+	});
+}
+
+function traceSha256(value) {
+	return createHash("sha256")
+		.update(JSON.stringify(value), "utf8")
+		.digest("hex");
+}
+
+function normalizeTraceValue(value, ancestors = new Set()) {
+	if (Buffer.isBuffer(value)) {
+		return { bufferBase64: value.toString("base64") };
+	}
+	if (
+		value === null ||
+		typeof value === "string" ||
+		typeof value === "boolean" ||
+		(typeof value === "number" && Number.isFinite(value))
+	) {
+		return value;
+	}
+	if (
+		typeof value !== "object" ||
+		utilTypes.isProxy(value) ||
+		ancestors.has(value)
+	) {
+		throw new TypeError("Authority trace contains an invalid value");
+	}
+	ancestors.add(value);
+	try {
+		if (Array.isArray(value)) {
+			return value.map((entry) => normalizeTraceValue(entry, ancestors));
+		}
+		if (
+			Object.getPrototypeOf(value) !== Object.prototype &&
+			Object.getPrototypeOf(value) !== null
+		) {
+			throw new TypeError("Authority trace contains a non-plain value");
+		}
+		const output = {};
+		for (const name of Object.keys(value).sort()) {
+			const descriptor = Object.getOwnPropertyDescriptor(value, name);
+			if (
+				descriptor?.enumerable !== true ||
+				!("value" in descriptor) ||
+				descriptor.get !== undefined ||
+				descriptor.set !== undefined
+			) {
+				throw new TypeError("Authority trace contains an unsafe field");
+			}
+			output[name] = normalizeTraceValue(descriptor.value, ancestors);
+		}
+		return output;
+	} finally {
+		ancestors.delete(value);
+	}
+}
+
+function assertCapturedClockBinding(capture, authority) {
+	const clocks = capture.clockReads;
+	const npm = authority.npmInventory;
+	if (
+		clocks.length < 25 ||
+		authority.workflowAuthority.observedAt !== clocks[0] ||
+		npm.startedAt !== clocks[1] ||
+		npm.completedAt !== clocks[CANONICAL_RELEASE_PACKAGE_ORDER.length + 2] ||
+		authority.observedAt !== clocks.at(-1) ||
+		npm.packages.some((entry, index) => entry.observedAt !== clocks[index + 2])
+	) {
+		throw new Error("Authority timestamps differ from the guard-owned trace");
+	}
+	if (capture.targetReleaseId !== null) {
+		const terminalClocks = clocks.slice(-5, -1);
+		const target = authority.targetRead;
+		if (
+			target === null ||
+			!isDeepStrictEqual(terminalClocks, [
+				target.releaseGetStartedAt,
+				target.releaseGetCompletedAt,
+				target.assetsListStartedAt,
+				target.assetsListCompletedAt,
+			])
+		) {
+			throw new Error("Terminal chronology differs from the guard-owned trace");
+		}
+	}
+}
+
+function assertCapturedAuthorityProjection(capture, authority) {
+	const local = capture.keyResults.get("local Git reader readState");
+	const main = capture.keyResults.get("GitHub reader getDefaultBranchSha");
+	const tag = capture.keyResults.get("GitHub reader getAnnotatedTag");
+	const workflow = capture.keyResults.get("GitHub reader getWorkflowState");
+	const runs = capture.keyResults.get(
+		"GitHub reader listNonterminalWorkflowRuns",
+	);
+	if (
+		local === undefined ||
+		main === undefined ||
+		tag === undefined ||
+		workflow === undefined ||
+		runs === undefined ||
+		!isDeepStrictEqual(authority.controller, {
+			headSha: local.headSha,
+			originMainSha: local.originMainSha,
+			githubMainSha: main,
+		}) ||
+		!isDeepStrictEqual(authority.annotatedTag, tag) ||
+		!isDeepStrictEqual(authority.workflowAuthority, {
+			...workflow,
+			query: runs.query,
+			nonterminalRuns: runs.runs,
+			observedAt: capture.clockReads[0],
+		})
+	) {
+		throw new Error(
+			"Authority projection differs from exact guard-recorded results",
+		);
+	}
+}
+
+async function validateCapturedReleaseEvidence(capture, authority) {
+	const proposal = capture.proposedEnvelope.record;
+	const expectedIds =
+		capture.stage === "pre-delete-1"
+			? [SURVIVOR_ID, ...DUPLICATE_IDS]
+			: capture.stage === "pre-delete-2"
+				? [SURVIVOR_ID, DUPLICATE_IDS[1]]
+				: [SURVIVOR_ID];
+	if (
+		!Array.isArray(authority.releases) ||
+		!isDeepStrictEqual(
+			authority.releases.map(({ id }) => id),
+			expectedIds,
+		)
+	) {
+		throw new Error("Captured authority has the wrong remaining Releases");
+	}
+	const releaseEnvelope = capture.keyResults.get("releases");
+	if (releaseEnvelope === undefined) {
+		throw new Error("Captured authority has no broad Release enumeration");
+	}
+	const rawReleases = releaseEnvelope.value;
+	for (const authorityRelease of authority.releases) {
+		const proposed = proposal.releases.find(
+			({ id }) => id === authorityRelease.id,
+		);
+		const raw = rawReleases.find(
+			({ id }) => String(id) === authorityRelease.id,
+		);
+		if (proposed === undefined || raw === undefined) {
+			throw new Error("Captured Release is absent from broad enumeration");
+		}
+		assertEvidenceEqualsProposal(authorityRelease, proposed);
+		await captureDirectTargetRead({
+			candidate: proposal.candidate,
+			releaseId: authorityRelease.id,
+			role: authorityRelease.role,
+			expectedEvidence: authorityRelease,
+			github: Object.freeze({
+				async getRelease() {
+					return {
+						status: "PRESENT",
+						operation: "release",
+						httpStatus: 200,
+						code: null,
+						value: raw,
+					};
+				},
+				async listReleaseAssets() {
+					return {
+						status: "PRESENT",
+						operation: "release-assets",
+						httpStatus: 200,
+						code: null,
+						value: raw.assets,
+					};
+				},
+			}),
+			now: () => authority.observedAt,
+		});
+	}
+	if (capture.targetReleaseId !== null) {
+		const releaseResult = capture.keyResults.get("terminal-release");
+		const assetsResult = capture.keyResults.get("terminal-assets");
+		const targetAuthority = authority.releases.find(
+			({ id }) => id === capture.targetReleaseId,
+		);
+		if (
+			releaseResult === undefined ||
+			assetsResult === undefined ||
+			targetAuthority === undefined
+		) {
+			throw new Error("Captured terminal Release evidence is incomplete");
+		}
+		const terminal = await captureDirectTargetRead({
+			candidate: proposal.candidate,
+			releaseId: capture.targetReleaseId,
+			role: "duplicate",
+			expectedEvidence: targetAuthority,
+			github: Object.freeze({
+				async getRelease() {
+					return releaseResult;
+				},
+				async listReleaseAssets() {
+					return assetsResult;
+				},
+			}),
+			now: () => authority.observedAt,
+		});
+		if (!isDeepStrictEqual(terminal.evidence, authority.targetRead.evidence)) {
+			throw new Error("Terminal evidence differs from captured authority");
+		}
+	}
 }
 
 function createNetworkGuard({ cwd, now }) {
@@ -666,10 +1104,21 @@ function createNetworkGuard({ cwd, now }) {
 	let activeRequests = 0;
 	let sequence = 0;
 	let terminal = null;
+	let capture = null;
 	let lastClockMillis = null;
 	let boundWriterIdentity = null;
+	let guardFacade;
 
 	const trustedNow = () => {
+		const owner = context.getStore();
+		if (
+			capture !== null &&
+			(state === "capturing" || state === "terminal") &&
+			owner !== capture.token
+		) {
+			invalidate();
+			throw new TypeError("Trusted adapter clock is outside authority capture");
+		}
 		let timestamp;
 		try {
 			timestamp = canonicalTimestamp(callClock(now));
@@ -689,19 +1138,68 @@ function createNetworkGuard({ cwd, now }) {
 		if (state !== "deleting" && state !== "spent") state = "invalidated";
 	};
 
-	const runRequest = async (label, operation) => {
+	const runRequest = async (label, operation, traceArgs) => {
 		const owner = context.getStore();
+		const captureOwner = capture !== null && owner === capture.token;
 		const terminalOwner =
 			state === "terminal" && terminal !== null && owner === terminal.token;
 		const deleteOwner = state === "deleting" && owner === terminal?.deleteToken;
-		if (state !== "open" && !terminalOwner && !deleteOwner) {
+		if (state !== "open" && !captureOwner && !terminalOwner && !deleteOwner) {
 			invalidate();
 			throw new Error(`${label} rejected by the sealed network epoch`);
+		}
+		const traced = traceArgs !== undefined && capture !== null;
+		if (traced) {
+			if (
+				(!captureOwner && !terminalOwner) ||
+				capture.inFlight ||
+				capture.nextStep >= capture.expected.length
+			) {
+				invalidate();
+				throw new Error(`${label} rejected by the authority capture trace`);
+			}
+			const expected = capture.expected[capture.nextStep];
+			if (
+				expected.label !== label ||
+				(expected.args !== null &&
+					!isDeepStrictEqual(snapshotJson(traceArgs), expected.args))
+			) {
+				invalidate();
+				throw new Error(
+					`${label} is out of order in the authority capture trace`,
+				);
+			}
+			capture.inFlight = true;
 		}
 		sequence += 1;
 		activeRequests += 1;
 		try {
-			return await operation();
+			const result = await operation();
+			if (traced) {
+				if (capture.invalidated || state === "invalidated") {
+					throw new Error(
+						`${label} completed after authority capture invalidation`,
+					);
+				}
+				const expected = capture.expected[capture.nextStep];
+				const resultSnapshot = snapshotJson(result);
+				expected.validate(resultSnapshot, capture);
+				if (!capture.keyResults.has(label)) {
+					capture.keyResults.set(label, resultSnapshot);
+				}
+				capture.entries.push(
+					canonicalTraceEntry(label, traceArgs, resultSnapshot),
+				);
+				capture.nextStep += 1;
+				capture.inFlight = false;
+			}
+			return result;
+		} catch (error) {
+			if (traced) {
+				capture.inFlight = false;
+				invalidate();
+			}
+			throw error;
 		} finally {
 			activeRequests -= 1;
 		}
@@ -725,6 +1223,15 @@ function createNetworkGuard({ cwd, now }) {
 			now: hiddenMethod(trustedNow),
 			journalPath: hiddenValue(journalPath),
 			validate: hiddenMethod(() => assertSealed(session)),
+			bindAuthority: hiddenMethod((input) =>
+				bindCapturedAuthority(session, input),
+			),
+			armTransition: hiddenMethod((input) => {
+				if (session !== terminal || guardFacade === undefined) {
+					throw new Error("Authority capture epoch is no longer current");
+				}
+				return guardFacade.armTask6Transition(input);
+			}),
 			toJSON: hiddenMethod(() => {
 				throw new TypeError(
 					"Adapter network epoch capability cannot be serialized",
@@ -732,6 +1239,168 @@ function createNetworkGuard({ cwd, now }) {
 			}),
 		};
 		Object.defineProperties(capability, descriptors);
+		return Object.freeze(capability);
+	};
+
+	const bindCapturedAuthority = async (session, input) => {
+		assertSealed(session);
+		if (
+			capture === null ||
+			capture.invalidated ||
+			capture.bound !== null ||
+			capture.nextStep !== capture.expected.length ||
+			capture.inFlight
+		) {
+			invalidate();
+			throw new Error("Authority capture trace is not sealable");
+		}
+		const value = exactDataOptions(
+			input,
+			new Set(["authority", "proposal"]),
+			"Captured authority binding",
+		);
+		const authority = snapshotJson(
+			required(value, "authority", "Captured authority"),
+		);
+		const proposedEnvelope = createConsolidationEnvelope(
+			"proposed",
+			snapshotJson(required(value, "proposal", "Captured proposal")),
+		);
+		if (
+			proposedEnvelope.recordSha256 !== capture.proposedEnvelope.recordSha256 ||
+			authority.stage !== capture.stage ||
+			(authority.targetRead?.evidence?.id ?? null) !== capture.targetReleaseId
+		) {
+			invalidate();
+			throw new Error("Captured authority identity differs from its trace");
+		}
+		assertCapturedClockBinding(capture, authority);
+		assertCapturedAuthorityProjection(capture, authority);
+		await validateCapturedReleaseEvidence(capture, authority);
+		capture.bound = Object.freeze({
+			traceSha256: traceSha256(capture.entries),
+			authoritySha256: canonicalRecordSha256(authority),
+			proposalSha256: proposedEnvelope.recordSha256,
+			targetReadSha256: traceSha256(normalizeTraceValue(authority.targetRead)),
+		});
+		return undefined;
+	};
+
+	const sealCapturedWithoutTarget = (session) => {
+		if (
+			capture !== session ||
+			state !== "capturing" ||
+			session.invalidated ||
+			session.inFlight ||
+			session.nextStep !== session.expected.length ||
+			activeRequests !== 0 ||
+			session.targetReleaseId !== null
+		) {
+			invalidate();
+			throw new Error("Final authority capture trace is incomplete");
+		}
+		terminal = {
+			token: Object.freeze({}),
+			deleteToken: Object.freeze({}),
+			releaseId: null,
+			nextStep: 0,
+			completedSteps: 0,
+			inFlight: false,
+			invalidated: false,
+			sealedSequence: sequence,
+		};
+		state = "sealed";
+		return sealedEpoch(terminal);
+	};
+
+	const beginAuthorityCapture = (facade, rawGithub, input) => {
+		const value = exactDataOptions(
+			input,
+			new Set(["stage", "proposal", "targetReleaseId"]),
+			"Authority capture options",
+		);
+		const stage = required(value, "stage", "Authority capture stage");
+		if (!new Set(["pre-delete-1", "pre-delete-2", "final"]).has(stage)) {
+			throw new TypeError("Authority capture stage is invalid");
+		}
+		const proposedEnvelope = createConsolidationEnvelope(
+			"proposed",
+			snapshotJson(required(value, "proposal", "Authority capture proposal")),
+		);
+		const targetValue = required(
+			value,
+			"targetReleaseId",
+			"Authority capture target",
+		);
+		const targetReleaseId =
+			targetValue === null ? null : canonicalStringId(targetValue);
+		const expectedTarget =
+			stage === "pre-delete-1"
+				? DUPLICATE_IDS[0]
+				: stage === "pre-delete-2"
+					? DUPLICATE_IDS[1]
+					: null;
+		if (
+			targetReleaseId !== expectedTarget ||
+			state !== "open" ||
+			activeRequests !== 0 ||
+			capture !== null
+		) {
+			invalidate();
+			throw new Error("Authority capture cannot start from this adapter state");
+		}
+		const session = {
+			token: Object.freeze({}),
+			stage,
+			targetReleaseId,
+			proposedEnvelope,
+			expected: expectedAuthorityTrace(proposedEnvelope.record, stage),
+			nextStep: 0,
+			inFlight: false,
+			entries: [],
+			clockReads: [],
+			keyResults: new Map(),
+			invalidated: false,
+			bound: null,
+		};
+		capture = session;
+		state = "capturing";
+		const scope = (source) => {
+			const scoped = {};
+			for (const name of Object.keys(source)) {
+				scoped[name] = (...args) =>
+					context.run(session.token, () => source[name](...args));
+			}
+			return deepFreeze(scoped);
+		};
+		const capability = {};
+		Object.defineProperties(capability, {
+			local: hiddenValue(scope(facade.local)),
+			github: hiddenValue(scope(facade.github)),
+			npm: hiddenValue(scope(facade.npm)),
+			attestations: hiddenValue(scope(facade.attestations)),
+			now: hiddenMethod(() =>
+				context.run(session.token, () => {
+					const timestamp = trustedNow();
+					session.clockReads.push(timestamp);
+					return timestamp;
+				}),
+			),
+			beginTerminalRead: hiddenMethod((terminalInput) =>
+				context.run(session.token, () =>
+					beginTerminalRead(rawGithub, terminalInput),
+				),
+			),
+			sealWithoutTarget: hiddenMethod(() =>
+				context.run(session.token, () => sealCapturedWithoutTarget(session)),
+			),
+			abort: hiddenMethod(() => invalidate()),
+			toJSON: hiddenMethod(() => {
+				throw new TypeError(
+					"Authority capture capability cannot be serialized",
+				);
+			}),
+		});
 		return Object.freeze(capability);
 	};
 
@@ -748,7 +1417,12 @@ function createNetworkGuard({ cwd, now }) {
 			invalidate();
 			throw new TypeError("Terminal Release ID is not an approved duplicate");
 		}
-		if (state !== "open" || activeRequests !== 0) {
+		const captureOwner =
+			capture !== null && context.getStore() === capture.token;
+		if (
+			(state !== "open" && !(state === "capturing" && captureOwner)) ||
+			activeRequests !== 0
+		) {
 			invalidate();
 			throw new Error(
 				"Terminal network read cannot absorb a concurrent request",
@@ -802,7 +1476,7 @@ function createNetworkGuard({ cwd, now }) {
 			session.nextStep = step + 1;
 			try {
 				const result = await context.run(session.token, () =>
-					runRequest(`terminal ${name}`, () => operation(call)),
+					runRequest(`terminal ${name}`, () => operation(call), [call]),
 				);
 				if (
 					state !== "terminal" ||
@@ -854,6 +1528,16 @@ function createNetworkGuard({ cwd, now }) {
 					state = "invalidated";
 					throw new Error("Terminal network read did not complete exactly");
 				}
+				if (
+					capture !== null &&
+					(capture.invalidated ||
+						capture.inFlight ||
+						capture.nextStep !== capture.expected.length)
+				) {
+					session.invalidated = true;
+					state = "invalidated";
+					throw new Error("Authority capture trace is incomplete");
+				}
 				state = "sealed";
 				session.sealedSequence = sequence;
 				return sealedEpoch(session);
@@ -869,7 +1553,7 @@ function createNetworkGuard({ cwd, now }) {
 		return Object.freeze(capability);
 	};
 
-	return Object.freeze({
+	guardFacade = Object.freeze({
 		now: trustedNow,
 		runRequest,
 		bindWriter(writer) {
@@ -888,8 +1572,15 @@ function createNetworkGuard({ cwd, now }) {
 		armTask6Transition(input) {
 			try {
 				const session = terminal;
-				if (session === null) {
-					throw new Error("Task6 transition has no terminal session");
+				if (
+					session === null ||
+					capture === null ||
+					capture.bound === null ||
+					capture.invalidated
+				) {
+					throw new Error(
+						"Task6 transition has no bound authority capture trace",
+					);
 				}
 				assertSealed(session);
 				if (
@@ -961,6 +1652,17 @@ function createNetworkGuard({ cwd, now }) {
 					proposedEnvelope.record,
 					targetReleaseId,
 				);
+				if (
+					capture.bound.traceSha256 !== traceSha256(capture.entries) ||
+					capture.bound.authoritySha256 !== canonicalRecordSha256(authority) ||
+					capture.bound.proposalSha256 !== proposedEnvelope.recordSha256 ||
+					capture.bound.targetReadSha256 !==
+						traceSha256(normalizeTraceValue(authority.targetRead))
+				) {
+					throw new Error(
+						"Task6 authority differs from the sealed guard-owned trace",
+					);
+				}
 				if (
 					predecessorEnvelope.record.proposedRecordSha256 !==
 						proposedEnvelope.recordSha256 ||
@@ -1111,6 +1813,9 @@ function createNetworkGuard({ cwd, now }) {
 						);
 					}
 				}),
+				beginAuthorityCapture: hiddenMethod((input) =>
+					beginAuthorityCapture(facade, rawGithub, input),
+				),
 				beginTerminalRead: hiddenMethod((input) =>
 					beginTerminalRead(rawGithub, input),
 				),
@@ -1143,6 +1848,7 @@ function createNetworkGuard({ cwd, now }) {
 			return Object.freeze(capability);
 		},
 	});
+	return guardFacade;
 }
 
 function hiddenMethod(value) {
