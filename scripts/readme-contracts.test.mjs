@@ -93,6 +93,82 @@ const actualEntryPackages = [
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
+const actualCapabilityPackages = [
+  {
+    directory: "ag-ui",
+    description: "AG-UI protocol adapters for streaming Dawn agent runs to compatible clients.",
+    keywords: ["dawn", "typescript", "langgraph", "ag-ui", "ai-agents", "streaming"],
+  },
+  {
+    directory: "evals",
+    description: "Evaluation definitions, scorers, datasets, and runners for Dawn agents.",
+    keywords: ["dawn", "typescript", "ai-agents", "evals", "testing", "llm"],
+  },
+  {
+    directory: "inspector",
+    description: "Browser inspector for reviewing memory and runtime state in a Dawn application.",
+    keywords: ["dawn", "typescript", "ai-agents", "inspector", "memory", "developer-tools"],
+  },
+  {
+    directory: "memory",
+    description:
+      "Long-term memory storage, ranking, recall, and distillation primitives for Dawn agents.",
+    keywords: ["dawn", "typescript", "ai-agents", "memory", "retrieval", "llm"],
+  },
+  {
+    directory: "memory-pgvector",
+    description: "Postgres and pgvector storage for shared Dawn agent memory and vector retrieval.",
+    keywords: ["dawn", "typescript", "ai-agents", "memory", "postgres", "pgvector"],
+  },
+  {
+    directory: "permissions",
+    description: "Permission matching, approval gates, and access-control stores for Dawn agents.",
+    keywords: [
+      "dawn",
+      "typescript",
+      "ai-agents",
+      "permissions",
+      "access-control",
+      "human-in-the-loop",
+    ],
+  },
+  {
+    directory: "postgres-storage",
+    description: "Postgres persistence for Dawn checkpoints, threads, and permission decisions.",
+    keywords: ["dawn", "typescript", "langgraph", "postgres", "persistence", "ai-agents"],
+  },
+  {
+    directory: "sandbox",
+    description: "Docker and Kubernetes sandbox providers for isolated Dawn workspace execution.",
+    keywords: ["dawn", "typescript", "ai-agents", "sandbox", "docker", "kubernetes"],
+  },
+  {
+    directory: "sqlite-storage",
+    description:
+      "SQLite persistence for Dawn checkpoints, Agent Protocol threads, and local state.",
+    keywords: ["dawn", "typescript", "langgraph", "sqlite", "persistence", "ai-agents"],
+  },
+  {
+    directory: "testing",
+    description:
+      "Deterministic harnesses, fixtures, and matchers for testing Dawn agent applications.",
+    keywords: ["dawn", "typescript", "ai-agents", "testing", "fixtures", "llm"],
+  },
+  {
+    directory: "workspace",
+    description: "Filesystem and shell workspace contracts and tools for Dawn agent applications.",
+    keywords: ["dawn", "typescript", "ai-agents", "filesystem", "shell", "developer-tools"],
+  },
+].map(({ directory, description, keywords }) => {
+  const packageRoot = new URL(`../packages/${directory}/`, import.meta.url)
+  const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
+
+  return {
+    // Actual discovery metadata is intentionally deferred to Task 10.
+    manifest: { ...actualManifest, description, keywords },
+    readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
+  }
+})
 const relatedPackageDestinations = new Map([
   [
     "create-dawn-ai-app",
@@ -673,6 +749,14 @@ describe("entry-package README contracts", () => {
       /`@dawn-ai\/cli\/testing`[^\n]*\bdeprecated\b[^\n]*`@dawn-ai\/sdk\/testing`/iu,
     )
   })
+})
+
+describe("capability-package README contracts", () => {
+  for (const { manifest, readme } of actualCapabilityPackages) {
+    it(`accepts the actual ${manifest.name} README`, () => {
+      assert.deepEqual(validatePackageReadme({ tier: "capability", manifest, readme }), [])
+    })
+  }
 })
 
 describe("validatePackageDiscoveryMetadata", () => {
