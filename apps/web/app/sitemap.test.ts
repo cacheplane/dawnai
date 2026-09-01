@@ -54,7 +54,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.doUnmock("./seo/resolve")
-  vi.doUnmock("./seo/lastmod.generated")
+  vi.doUnmock("./seo/lastmod")
   vi.resetModules()
 })
 
@@ -223,7 +223,7 @@ describe("sitemap documentation entries", () => {
   it("fails closed when a static route lacks a valid manifest date", async () => {
     vi.resetModules()
     vi.stubEnv("NODE_ENV", "production")
-    vi.doMock("./seo/lastmod.generated", () => ({
+    vi.doMock("./seo/lastmod", () => ({
       STATIC_LASTMOD: { "/": "2026-08-10T18:36:49.000Z" },
     }))
 
