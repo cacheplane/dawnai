@@ -50,6 +50,7 @@ The external media upload is an explicit authorization gate. Do not upload, crea
 
 ### GitHub/npm surface
 
+- Create: `docs/brand/demo/evidence-matrix.md` — material root README claims mapped to current evidence, conditions, and drift controls.
 - Create: `scripts/lib/readme-contracts.mjs` — root/package README and package discovery metadata validators.
 - Create: `scripts/readme-contracts.test.mjs` — unit tests for the validators.
 - Modify: `scripts/check-docs.mjs` — invoke the validators for the root and release-inventory public packages.
@@ -75,6 +76,83 @@ The external media upload is an explicit authorization gate. Do not upload, crea
 - Modify: `apps/web/app/components/landing/FeatureDevLoop.tsx` — add the Test/Animation proof switcher.
 - Modify: `apps/web/app/components/landing/DurableByDefault.tsx` — add the Run restoration clip.
 - Modify: `apps/web/app/page.tsx` — add the stable `#product-loop` target if the hero component cannot own it cleanly.
+
+---
+
+### Task 0: Establish the root README claim-evidence matrix
+
+**Files:**
+- Create: `docs/brand/demo/evidence-matrix.md`
+
+- [ ] **Step 1: Inventory every material planned root README claim**
+
+Create a table with the columns `Claim`, `Code/test/doc evidence`,
+`Conditionality`, `Drift control`, and `Disposition`. Include one row for each
+of these planned claim families before writing README prose:
+
+- Dawn is a TypeScript meta-framework for LangGraph.js.
+- File-system routes and route identity, including `/research#agent`.
+- Shared and route-local tools.
+- Generated TypeScript types.
+- Deterministic fixture-backed tests.
+- Durable thread/checkpoint behavior, distinguishing browser reload from server
+  restart.
+- Build/deployment targets and their stated boundaries.
+- The research starter workspace shape, default ports, and `gpt-5-mini` example.
+- The canonical `npm create dawn-ai-app@latest my-agent` activation path.
+- Pre-1.0 maturity and support language.
+- Each comparison made in `How Dawn fits` and `When Dawn fits`.
+
+- [ ] **Step 2: Populate evidence from checked-in sources**
+
+For each row, cite exact repository paths and, where practical, a test name or
+export rather than a general directory. Mark environment-dependent claims as
+conditional. Set `Disposition` to `keep`, `qualify`, or `remove`; no row may be
+left undecided. Do not add benchmark, popularity, adoption, or quantitative
+code-reduction claims.
+
+- [ ] **Step 3: Verify the published canonical activation in a clean room**
+
+Run the exact public command in a fresh temporary directory and retain its
+observed success line in the matrix:
+
+```bash
+activation_root="$(mktemp -d)"
+(
+  cd "$activation_root"
+  npm create dawn-ai-app@latest my-agent
+  cd my-agent
+  npm install
+  npm test
+)
+```
+
+Expected: the published scaffold installs and its default no-key test passes.
+Record the exact Node/npm versions and output; if it fails, mark the activation
+claim `qualify` or `remove` and do not write the stronger README claim.
+
+- [ ] **Step 4: Verify current implementation evidence**
+
+Run the existing local scaffold tests and inspect the current scaffold help and
+generated package scripts:
+
+```bash
+pnpm build
+pnpm --filter create-dawn-ai-app test
+node packages/create-dawn-app/dist/bin.js --help
+```
+
+Expected: build and scaffold tests PASS; the matrix records the exact observed
+template/default behavior, supported Node/package-manager requirements, and
+generated dev ports. If any planned README wording conflicts with this evidence,
+change the planned wording before Task 6 rather than weakening the evidence row.
+
+- [ ] **Step 5: Commit the evidence baseline**
+
+```bash
+git add docs/brand/demo/evidence-matrix.md
+git commit -m "docs: establish README claim evidence"
+```
 
 ---
 
@@ -312,7 +390,8 @@ check toolchain -> build -> scaffold --mode internal -> install -> npm test
 -> record close -> stop all children -> remove temporary workspace
 ```
 
-Assert the child server receives only:
+Assert the child server receives these exact model/telemetry overrides on top of
+a sanitized inherited operational environment:
 
 ```js
 {
@@ -324,7 +403,15 @@ Assert the child server receives only:
 ```
 
 Assert `OPENAI_BASE_URL` starts with loopback and reject any capture whose model
-base URL resolves to a public host.
+base URL resolves to a public host. Preserve only environment needed to run the
+local toolchain (for example `PATH`, package-manager configuration, locale, and
+temporary-directory settings); remove provider API keys and provider base URLs
+before applying the four overrides. Test that representative OpenAI, Anthropic,
+Google, and AWS provider credentials from the parent are absent in children.
+
+Test port assignment by asking the OS for free loopback ports. If either chosen
+port loses a bind race, retry that service with a newly assigned port up to three
+times; never silently fall back to the scaffold defaults `3002` or `3010`.
 
 - [ ] **Step 2: Run the orchestration tests and verify they fail**
 
@@ -347,6 +434,13 @@ the ignored artifact directory; send only normalized output to the compositor.
 
 Start aimock in the parent process with the scenario fixture. Spawn the Dawn
 server with its URL/key environment and the Workbench with telemetry disabled.
+Use a `node:net` helper in `processes.mjs` to obtain distinct loopback ports,
+then launch the generated server with
+`npm exec -- dawn dev --port <serverPort>` from `server/` and the generated
+Workbench with
+`npm exec -- next dev --hostname 127.0.0.1 -p <workbenchPort>` from `web/`.
+Pass `DAWN_SERVER_URL=http://127.0.0.1:<serverPort>` to the Workbench. Retry only
+an `EADDRINUSE` startup failure, up to three assigned ports per service.
 
 - [ ] **Step 4: Record exact Playwright scene assertions**
 
@@ -445,6 +539,12 @@ flagship. Use 30 fps and 16:9 output; preserve legible code at README width.
 `check-media.mjs --local` reads ffprobe JSON, file sizes, transcript, and
 posters. It prints one PASS line per contract and exits nonzero on any failure.
 
+Add the root command before invoking it:
+
+```json
+"media:readme:check": "node docs/brand/demo/check-media.mjs"
+```
+
 - [ ] **Step 5: Write the exact transcript and regeneration docs**
 
 The transcript must name the generated paths, the `npm test` action, the two
@@ -483,15 +583,9 @@ docs/brand/quickstart.gif
 docs/brand/stub-openai.mjs
 ```
 
-- [ ] **Step 8: Add scripts and commit**
+- [ ] **Step 8: Commit generated small assets and sources**
 
-Add:
-
-```json
-"media:readme:check": "node docs/brand/demo/check-media.mjs"
-```
-
-Commit generated small assets and sources, not raw recordings or MP4/WebM:
+Do not commit raw recordings or MP4/WebM:
 
 ```bash
 git add package.json docs/brand apps/web/public/demo .gitignore
@@ -594,6 +688,7 @@ git commit -m "build(brand): verify hosted demo media"
 
 **Files:**
 - Modify: `README.md`
+- Modify if new claims appear: `docs/brand/demo/evidence-matrix.md`
 - Test: `scripts/readme-contracts.test.mjs`
 
 - [ ] **Step 1: Add a failing full-root fixture test**
@@ -660,6 +755,11 @@ State only the clean-room-observed result. Keep live-provider setup in the later
 
 - [ ] **Step 5: Replace the body with the approved information architecture**
 
+Before retaining any material sentence, match it to a `keep` or `qualify` row
+in `docs/brand/demo/evidence-matrix.md`; apply the recorded condition in prose.
+Delete claims marked `remove`. If implementation reveals a new material claim,
+add and resolve its matrix row in the same commit.
+
 Write these exact sections in order:
 
 - `## Why Dawn` — four outcome-first pillars.
@@ -690,12 +790,14 @@ node --test scripts/readme-contracts.test.mjs
 node scripts/check-docs.mjs
 ```
 
-Expected: root contract PASS; package contract failures remain until Tasks 7-10.
+Expected: root contract and the pre-existing docs check PASS. Package contracts
+are still exercised only by their generic fixtures until Tasks 7-9 add
+actual-file coverage.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add README.md scripts/readme-contracts.test.mjs
+git add README.md docs/brand/demo/evidence-matrix.md scripts/readme-contracts.test.mjs
 git commit -m "docs(readme): lead with the Dawn product loop"
 ```
 
@@ -764,7 +866,7 @@ review the changelog when upgrading.
 
 Run: `node --test scripts/readme-contracts.test.mjs`
 
-Expected: entry-tier files PASS; other actual-package fixtures still fail.
+Expected: entry-tier actual files and the generic contract fixtures PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -835,7 +937,8 @@ node --test scripts/readme-contracts.test.mjs
 node scripts/check-docs.mjs
 ```
 
-Expected: capability README contracts PASS; tooling and manifest failures remain.
+Expected: entry and capability actual-file contracts plus the existing docs
+check PASS. Tooling actual-file coverage is added in Task 9.
 
 - [ ] **Step 6: Commit**
 
@@ -889,7 +992,8 @@ node --test scripts/readme-contracts.test.mjs
 node scripts/check-docs.mjs
 ```
 
-Expected: README content contracts PASS; metadata failures remain until Task 10.
+Expected: all 21 README actual-file contracts and the existing docs check PASS.
+Manifest actual-file coverage and repository-wide wiring are added in Task 10.
 
 - [ ] **Step 4: Commit**
 
@@ -1189,6 +1293,7 @@ git commit -m "feat(web): add product proof clips to the homepage"
 ### Task 14: Clean-room activation, GFM/npm rendering, and final verification
 
 **Files:**
+- Modify: `docs/brand/demo/evidence-matrix.md` — record final clean-room evidence and any corrected disposition.
 - Modify only if failures expose real drift in files already in scope.
 
 - [ ] **Step 1: Verify toolchain and clean worktree intent**
@@ -1240,6 +1345,23 @@ Render GitHub Flavored Markdown for:
 - `packages/testing/README.md` (capability).
 - `packages/core/README.md` (tooling).
 - `packages/config-typescript/README.md` (configuration).
+
+Use GitHub's GFM renderer through the installed GitHub CLI, writing only to a
+fresh temporary directory:
+
+```bash
+readme_render_dir="$(mktemp -d)"
+gh auth status
+gh api --method POST markdown -f mode=gfm -f context=cacheplane/dawnai -F text=@README.md > "$readme_render_dir/root.html"
+gh api --method POST markdown -f mode=gfm -f context=cacheplane/dawnai -F text=@packages/create-dawn-app/README.md > "$readme_render_dir/create-dawn-ai-app.html"
+gh api --method POST markdown -f mode=gfm -f context=cacheplane/dawnai -F text=@packages/testing/README.md > "$readme_render_dir/testing.html"
+gh api --method POST markdown -f mode=gfm -f context=cacheplane/dawnai -F text=@packages/core/README.md > "$readme_render_dir/core.html"
+gh api --method POST markdown -f mode=gfm -f context=cacheplane/dawnai -F text=@packages/config-typescript/README.md > "$readme_render_dir/config-typescript.html"
+```
+
+Expected: every request exits `0` and produces non-empty HTML. Open those exact
+files in the browser; because the API returns an HTML fragment, inspect emitted
+`href`/`src` attributes directly as well as the visual output.
 
 Inspect image URLs, section hierarchy, code fences, `<details>`, and link targets
 at narrow and desktop widths. Confirm npm-safe absolute image URLs in package
