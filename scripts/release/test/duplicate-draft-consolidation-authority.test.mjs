@@ -21,6 +21,17 @@ const ACTOR = Object.freeze({ login: "blove", id: "61436" });
 const TAG_OBJECT_SHA = "a".repeat(40);
 const WORKFLOW_ID = "202458345";
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z");
+const EXACT_WORKFLOW_RUN_QUERY = Object.freeze({
+	statuses: Object.freeze([
+		"in_progress",
+		"pending",
+		"queued",
+		"requested",
+		"waiting",
+	]),
+	perPage: 100,
+	maximumPages: 100,
+});
 
 test("captures exact pre-delete authority and leaves direct GET plus asset enumeration terminal", async () => {
 	const fixture = await authorityFixture();
@@ -116,6 +127,62 @@ test("fails capture if the adapter counter advances after terminal completion bu
 		captureConsolidationAuthority(fixture.input),
 		/epoch|intervening|read|terminal/iu,
 	);
+});
+
+test("binds the frozen exact workflow-run query to the executed adapter read", async () => {
+	const fixture = await authorityFixture();
+	const github = fixture.input.github;
+	let receivedQuery;
+	fixture.input.github = Object.freeze({
+		...github,
+		async listNonterminalWorkflowRuns(query) {
+			receivedQuery = query;
+			assert.equal(Object.isFrozen(query), true);
+			assert.equal(Object.isFrozen(query.statuses), true);
+			return {
+				query: structuredClone(query),
+				runs: await github.listNonterminalWorkflowRuns(query),
+			};
+		},
+	});
+
+	const captured = await captureConsolidationAuthority(fixture.input);
+	assert.deepEqual(receivedQuery, EXACT_WORKFLOW_RUN_QUERY);
+	assert.notEqual(receivedQuery, EXACT_WORKFLOW_RUN_QUERY);
+	assert.deepEqual(
+		captured.authority.workflowAuthority.query,
+		EXACT_WORKFLOW_RUN_QUERY,
+	);
+});
+
+test("rejects an adapter echo that drifts the executed workflow-run query", async (t) => {
+	for (const [name, mutate] of [
+		["incomplete statuses", (query) => query.statuses.pop()],
+		["status order", (query) => query.statuses.reverse()],
+		["per-page bound", (query) => (query.perPage = 99)],
+		["maximum-pages bound", (query) => (query.maximumPages = 99)],
+	]) {
+		await t.test(name, async () => {
+			const fixture = await authorityFixture();
+			const github = fixture.input.github;
+			fixture.input.github = Object.freeze({
+				...github,
+				async listNonterminalWorkflowRuns(query) {
+					const echoedQuery = structuredClone(query);
+					mutate(echoedQuery);
+					return {
+						query: echoedQuery,
+						runs: await github.listNonterminalWorkflowRuns(query),
+					};
+				},
+			});
+
+			await assert.rejects(
+				captureConsolidationAuthority(fixture.input),
+				/query|workflow|status|page|bound/iu,
+			);
+		});
+	}
 });
 
 test("captures exact ordered npm absence evidence with bounded canonical timestamps", async () => {
@@ -371,6 +438,156 @@ test("epoch rejects proposal drift before invoking the journal-intent writer", a
 		}),
 		/proposal|binding|changed/iu,
 	);
+	await assert.rejects(
+		captured.networkEpoch.consume({
+			authority: captured.authority,
+			proposal: fixture.proposal,
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			now: new Date(fixture.nowMs).toISOString(),
+			writeIntent: async () => assert.fail("burned epoch must not write"),
+		}),
+		/consumed|epoch/iu,
+	);
+});
+
+test("epoch attempts burn before validation and callback failures", async (t) => {
+	const invalidCases = [
+		[
+			"wrong authority",
+			({ authority }) => {
+				authority.controller.headSha = "b".repeat(40);
+			},
+		],
+		[
+			"wrong target",
+			({ consumption }) => {
+				consumption.targetReleaseId = DUPLICATE_DRAFT_IDS[1];
+			},
+		],
+		[
+			"invalid now",
+			({ consumption }) => {
+				consumption.now = "2026-09-01T12:00:00Z";
+			},
+		],
+		[
+			"stale now",
+			({ authority, consumption }) => {
+				consumption.now = new Date(
+					Date.parse(authority.npmInventory.completedAt) + 120_001,
+				).toISOString();
+			},
+		],
+		[
+			"future now",
+			({ authority, consumption }) => {
+				consumption.now = new Date(
+					Date.parse(authority.observedAt) - 1,
+				).toISOString();
+			},
+		],
+	];
+	for (const [name, mutate] of invalidCases) {
+		await t.test(name, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const authority = structuredClone(captured.authority);
+			let writes = 0;
+			const consumption = {
+				authority,
+				proposal: fixture.proposal,
+				targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+				now: new Date(fixture.nowMs).toISOString(),
+				writeIntent: async () => {
+					writes += 1;
+				},
+			};
+			mutate({ authority, consumption });
+			await assert.rejects(
+				captured.networkEpoch.consume(consumption),
+				/authority|binding|canonical|clock|epoch|fresh|future|proposal|sha|stale|target|timestamp/iu,
+			);
+			assert.equal(writes, 0);
+			await assert.rejects(
+				captured.networkEpoch.consume({
+					...consumption,
+					authority: captured.authority,
+					targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+					now: new Date(fixture.nowMs).toISOString(),
+				}),
+				/consumed|epoch/iu,
+			);
+			assert.equal(writes, 0);
+		});
+	}
+
+	await t.test("callback failure", async () => {
+		const fixture = await authorityFixture();
+		const captured = await captureConsolidationAuthority(fixture.input);
+		const consumption = {
+			authority: captured.authority,
+			proposal: fixture.proposal,
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			now: new Date(fixture.nowMs).toISOString(),
+			writeIntent: async () => {
+				throw new Error("secret callback failure");
+			},
+		};
+		await assert.rejects(
+			captured.networkEpoch.consume(consumption),
+			/may already be durable.*do not delete/iu,
+		);
+		await assert.rejects(
+			captured.networkEpoch.consume(consumption),
+			/consumed|epoch/iu,
+		);
+	});
+});
+
+test("epoch rejects counter drift while a deferred journal intent is pending", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	let signalEntered;
+	let finishWrite;
+	const entered = new Promise((resolve) => {
+		signalEntered = resolve;
+	});
+	const pendingWrite = new Promise((resolve) => {
+		finishWrite = resolve;
+	});
+	let destructiveContinuation = false;
+	const consumption = captured.networkEpoch
+		.consume({
+			authority: captured.authority,
+			proposal: fixture.proposal,
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			now: new Date(fixture.nowMs).toISOString(),
+			writeIntent: async () => {
+				signalEntered();
+				return pendingWrite;
+			},
+		})
+		.then(() => {
+			destructiveContinuation = true;
+		});
+	await entered;
+	fixture.incrementNetworkRead();
+	finishWrite("DELETE_PERMISSION");
+	await assert.rejects(
+		consumption,
+		/may already be durable|do not delete|intent.*durable/iu,
+	);
+	assert.equal(destructiveContinuation, false);
+	await assert.rejects(
+		captured.networkEpoch.consume({
+			authority: captured.authority,
+			proposal: fixture.proposal,
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			now: new Date(fixture.nowMs).toISOString(),
+			writeIntent: async () => assert.fail("burned epoch must not write"),
+		}),
+		/consumed|epoch/iu,
+	);
 });
 
 test("captures pre-delete-2 and final authority with their exact remaining-set rules", async () => {
@@ -470,6 +687,80 @@ test("writer freshness accepts exactly 120000ms and rejects 120001ms, future evi
 			),
 		/order|monotone|timestamp/iu,
 	);
+});
+
+test("writer validation owns every adjacent target-read chronology boundary", async (t) => {
+	const fixture = await authorityFixture();
+	const { authority } = await captureConsolidationAuthority(fixture.input);
+	const ordered = structuredClone(authority);
+	let timestamp = Date.parse(ordered.npmInventory.completedAt);
+	for (const [object, key] of [
+		[ordered.targetRead, "releaseGetStartedAt"],
+		[ordered.targetRead, "releaseGetCompletedAt"],
+		[ordered.targetRead, "assetsListStartedAt"],
+		[ordered.targetRead, "assetsListCompletedAt"],
+		[ordered, "observedAt"],
+	]) {
+		timestamp += 1;
+		object[key] = new Date(timestamp).toISOString();
+	}
+	const boundaries = [
+		[
+			"npm completion to release GET start",
+			(authorityValue) => authorityValue.npmInventory.completedAt,
+			(authorityValue) => [authorityValue.targetRead, "releaseGetStartedAt"],
+		],
+		[
+			"release GET start to completion",
+			(authorityValue) => authorityValue.targetRead.releaseGetStartedAt,
+			(authorityValue) => [authorityValue.targetRead, "releaseGetCompletedAt"],
+		],
+		[
+			"release GET completion to asset-list start",
+			(authorityValue) => authorityValue.targetRead.releaseGetCompletedAt,
+			(authorityValue) => [authorityValue.targetRead, "assetsListStartedAt"],
+		],
+		[
+			"asset-list start to completion",
+			(authorityValue) => authorityValue.targetRead.assetsListStartedAt,
+			(authorityValue) => [authorityValue.targetRead, "assetsListCompletedAt"],
+		],
+		[
+			"asset-list completion to authority observation",
+			(authorityValue) => authorityValue.targetRead.assetsListCompletedAt,
+			(authorityValue) => [authorityValue, "observedAt"],
+		],
+	];
+	for (const [name, earlierValue, laterLocation] of boundaries) {
+		await t.test(`${name} accepts equality`, () => {
+			const equal = structuredClone(ordered);
+			const [object, key] = laterLocation(equal);
+			object[key] = earlierValue(equal);
+			assert.doesNotThrow(() =>
+				assertFreshWriterAuthority(
+					equal,
+					fixture.proposal,
+					new Date(timestamp + 1).toISOString(),
+				),
+			);
+		});
+		await t.test(`${name} rejects reversal`, () => {
+			const reversed = structuredClone(ordered);
+			const [object, key] = laterLocation(reversed);
+			object[key] = new Date(
+				Date.parse(earlierValue(reversed)) - 1,
+			).toISOString();
+			assert.throws(
+				() =>
+					assertFreshWriterAuthority(
+						reversed,
+						fixture.proposal,
+						new Date(timestamp + 1).toISOString(),
+					),
+				/chronology|monotone|target|timestamp/iu,
+			);
+		});
+	}
 });
 
 test("descriptor-hostile inputs fail without invoking getters", async () => {

@@ -32,6 +32,11 @@ const WORKFLOW_STATUSES = Object.freeze([
 	"requested",
 	"waiting",
 ]);
+const WORKFLOW_RUN_QUERY = Object.freeze({
+	statuses: WORKFLOW_STATUSES,
+	perPage: 100,
+	maximumPages: 100,
+});
 const NPM_STAGES = new Set([
 	"inspect-initial",
 	"inspect-ready",
@@ -165,9 +170,13 @@ export async function captureConsolidationAuthority(input) {
 		await context.github.getWorkflowState(),
 		"Release workflow",
 	);
-	const nonterminalRuns = snapshotPlain(
-		await context.github.listNonterminalWorkflowRuns(),
-		"nonterminal workflow runs",
+	const nonterminalRunRead = snapshotPlain(
+		await context.github.listNonterminalWorkflowRuns(WORKFLOW_RUN_QUERY),
+		"nonterminal workflow-run read",
+	);
+	const nonterminalRuns = normalizeNonterminalRunRead(
+		nonterminalRunRead,
+		WORKFLOW_RUN_QUERY,
 	);
 	const annotatedTag = snapshotPlain(
 		await context.github.getAnnotatedTag({ name: CANDIDATE.tag }),
@@ -202,6 +211,7 @@ export async function captureConsolidationAuthority(input) {
 	const workflowAuthority = normalizeWorkflowAuthority({
 		workflow,
 		nonterminalRuns,
+		query: WORKFLOW_RUN_QUERY,
 		observedAt: callTimestamp(context.now, "workflow authority observation"),
 	});
 	const currentTag = normalizeAnnotatedTag(annotatedTag);
@@ -454,7 +464,35 @@ function assertRepositoryAuthority({ repository, actor, proposal }) {
 	}
 }
 
-function normalizeWorkflowAuthority({ workflow, nonterminalRuns, observedAt }) {
+function normalizeNonterminalRunRead(value, executedQuery) {
+	if (Array.isArray(value)) return value;
+	assertExactKeys(value, ["query", "runs"], "nonterminal workflow-run read");
+	const echoedQuery = snapshotPlain(
+		value.query,
+		"nonterminal workflow-run query echo",
+	);
+	assertExactKeys(
+		echoedQuery,
+		["statuses", "perPage", "maximumPages"],
+		"nonterminal workflow-run query echo",
+	);
+	if (!isDeepStrictEqual(echoedQuery, executedQuery)) {
+		throw new Error(
+			"Nonterminal workflow-run query echo differs from the executed query",
+		);
+	}
+	if (!Array.isArray(value.runs)) {
+		throw new TypeError("Nonterminal workflow-run result is malformed");
+	}
+	return value.runs;
+}
+
+function normalizeWorkflowAuthority({
+	workflow,
+	nonterminalRuns,
+	query,
+	observedAt,
+}) {
 	assertExactKeys(
 		workflow,
 		["workflowId", "path", "state"],
@@ -477,9 +515,9 @@ function normalizeWorkflowAuthority({ workflow, nonterminalRuns, observedAt }) {
 		path: WORKFLOW_PATH,
 		state: "disabled_manually",
 		query: {
-			statuses: [...WORKFLOW_STATUSES],
-			perPage: 100,
-			maximumPages: 100,
+			statuses: [...query.statuses],
+			perPage: query.perPage,
+			maximumPages: query.maximumPages,
 		},
 		nonterminalRuns: [],
 		observedAt,
@@ -858,21 +896,30 @@ function assertAuthorityTemporalOrder(authority, ceiling) {
 		}
 	}
 	if (authority.targetRead !== null) {
-		assertTimestampOrder(
-			inventory.completedAt,
-			authority.targetRead.releaseGetStartedAt,
-			"terminal target read",
-		);
-		assertTimestampOrder(
-			authority.targetRead.assetsListCompletedAt,
-			authority.observedAt,
-			"terminal target read",
-		);
+		assertTargetReadChronology(authority, inventory.completedAt);
 	} else {
 		assertTimestampOrder(
 			inventory.completedAt,
 			authority.observedAt,
 			"authority observation phase",
+		);
+	}
+}
+
+function assertTargetReadChronology(authority, npmCompletedAt) {
+	const chronology = [
+		npmCompletedAt,
+		authority.targetRead.releaseGetStartedAt,
+		authority.targetRead.releaseGetCompletedAt,
+		authority.targetRead.assetsListStartedAt,
+		authority.targetRead.assetsListCompletedAt,
+		authority.observedAt,
+	];
+	for (let index = 1; index < chronology.length; index += 1) {
+		assertTimestampOrder(
+			chronology[index - 1],
+			chronology[index],
+			"terminal target-read chronology",
 		);
 	}
 }
@@ -944,12 +991,14 @@ function createNetworkEpoch({
 				try {
 					result = await writeIntent();
 				} catch {
-					throw new Error("Local journal-intent write failed closed");
+					throw new Error(
+						"Local journal intent may already be durable; the writer failed, so do not DELETE or reconsume",
+					);
 				}
 				const afterWriteCount = readNetworkCount(networkReadCount);
 				if (afterWriteCount !== terminalReadCount) {
 					throw new Error(
-						"Local journal-intent write performed a network read",
+						"Local journal intent may already be durable; the network epoch changed, so do not DELETE or reconsume",
 					);
 				}
 				return result;
