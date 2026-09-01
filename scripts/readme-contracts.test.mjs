@@ -65,6 +65,24 @@ const rootReadme = `# Dawn
 
 ## Maturity and support`
 
+const actualRootReadme = readFileSync(new URL("../README.md", import.meta.url), "utf8")
+const canonicalHeroCommandBlock = `\`\`\`bash
+npm create dawn-ai-app@latest my-agent
+\`\`\``
+const canonicalProductLoopBlock = `<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="docs/brand/product-loop.gif" alt="Animation showing an existing generated research workspace, a deterministic test, and the Dawn Workbench" width="900">
+  </a>
+</p>`
+const canonicalQualifiedCredentials = `Credentials are provider-specific: the published research starter's OpenAI live
+path requires \`OPENAI_API_KEY\`, while a local Ollama route requires no provider
+key.`
+const canonicalFinalCta = `Ready to start?
+
+\`\`\`bash
+npm create dawn-ai-app@latest my-agent
+\`\`\``
+
 function assertFailure(failures, expected) {
   assert.ok(
     failures.some((failure) => expected.test(failure)),
@@ -506,21 +524,178 @@ describe("validatePackageDiscoveryMetadata", () => {
 
 describe("validateRootReadme", () => {
   it("accepts the actual root README", () => {
-    const actualRootReadme = readFileSync(new URL("../README.md", import.meta.url), "utf8")
-    assert.deepEqual(validateRootReadme(actualRootReadme), [])
+    assert.deepEqual(validateRootReadme(actualRootReadme, { canonical: true }), [])
+  })
+
+  it("documents the working published latest run path before current-source commands", () => {
+    const publishedStart = actualRootReadme.indexOf("### Published `@latest` (0.8.21)")
+    const currentSourceStart = actualRootReadme.indexOf("### Current source (unreleased 0.8.22)")
+    assert.ok(publishedStart !== -1 && publishedStart < currentSourceStart)
+    const published = actualRootReadme.slice(publishedStart, currentSourceStart)
+    assert.match(published, /OPENAI_API_KEY/)
+    assert.match(published, /npm run dev(?:\s|$)/)
+    assert.match(published, /npm run build/)
+    assert.match(published, /\/docs\/dev-server\/agent-protocol/)
+    assert.match(published, /\/docs\/recipes\/research-web-ui/)
+    assert.doesNotMatch(published, /^npm (?:run dev:(?:server|web)|start)$/mu)
+  })
+
+  it("labels unreleased current-source server, Workbench, build, and start commands", () => {
+    const currentSourceStart = actualRootReadme.indexOf("### Current source (unreleased 0.8.22)")
+    const maturityStart = actualRootReadme.indexOf("## Maturity and support")
+    assert.ok(currentSourceStart !== -1 && currentSourceStart < maturityStart)
+    const currentSource = actualRootReadme.slice(currentSourceStart, maturityStart)
+    for (const command of ["npm run dev:server", "npm run dev:web", "npm run build", "npm start"]) {
+      assert.match(currentSource, new RegExp(command.replaceAll(" ", "\\s+")))
+    }
+    for (const deployment of ["node", "langsmith", "edge", "kubernetes"]) {
+      assert.match(currentSource, new RegExp(`/docs/deployment/${deployment}`))
+    }
   })
 
   it("accepts the required root README structure and references", () => {
     assert.deepEqual(validateRootReadme(rootReadme), [])
   })
 
-  it("rejects the universal claim that live model calls require credentials", () => {
-    assertFailure(
-      validateRootReadme(
-        `${rootReadme}\n\nLive model calls require credentials for the provider you select.`,
-      ),
-      /not every live model call requires credentials/i,
+  it("requires the exact canonical hero", () => {
+    const source = actualRootReadme.replace(
+      "# Build LangGraph agents like Next.js apps.",
+      "# Build LangGraph agents with fewer conventions.",
     )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exact canonical hero/i)
+  })
+
+  it("rejects a sixth hero badge", () => {
+    const source = actualRootReadme.replace(
+      '</p>\n\n<p align="center">\n  <a href="https://dawnai.org/docs/getting-started">',
+      '  <a href="https://example.com"><img src="https://example.com/sixth.svg" alt="Sixth badge"></a>\n</p>\n\n<p align="center">\n  <a href="https://dawnai.org/docs/getting-started">',
+    )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
+  })
+
+  for (const [name, source] of [
+    [
+      "missing hero navigation link",
+      actualRootReadme.replace('  <a href="https://dawnai.org/docs">Documentation</a> ·\n', ""),
+    ],
+    [
+      "extra hero navigation link",
+      actualRootReadme.replace(
+        '  <a href="https://dawnai.org/docs">Documentation</a> ·\n',
+        '  <a href="https://dawnai.org/docs">Documentation</a> ·\n  <a href="https://example.com">Extra</a> ·\n',
+      ),
+    ],
+  ]) {
+    it(`rejects a ${name}`, () => {
+      assertFailure(
+        validateRootReadme(source, { canonical: true }),
+        /exactly four canonical hero navigation links/i,
+      )
+    })
+  }
+
+  it("requires the first scaffold command before the product-loop GIF", () => {
+    const source = actualRootReadme
+      .replace(`${canonicalHeroCommandBlock}\n\n`, "")
+      .replace(
+        "[Read the product-loop transcript]",
+        `${canonicalHeroCommandBlock}\n\n[Read the product-loop transcript]`,
+      )
+    assertFailure(validateRootReadme(source, { canonical: true }), /before the product-loop GIF/i)
+  })
+
+  for (const [name, source] of [
+    [
+      "unlinked product-loop GIF",
+      actualRootReadme.replace(
+        canonicalProductLoopBlock,
+        '<p align="center">\n  <img src="docs/brand/product-loop.gif" alt="Animation showing an existing generated research workspace, a deterministic test, and the Dawn Workbench" width="900">\n</p>',
+      ),
+    ],
+    [
+      "wrong product-loop anchor",
+      actualRootReadme.replace("https://dawnai.org/#product-loop", "https://dawnai.org/docs"),
+    ],
+    [
+      "wrong product-loop alt text",
+      actualRootReadme.replace(
+        "Animation showing an existing generated research workspace, a deterministic test, and the Dawn Workbench",
+        "Dawn product loop",
+      ),
+    ],
+  ]) {
+    it(`rejects a ${name}`, () => {
+      assertFailure(
+        validateRootReadme(source, { canonical: true }),
+        /linked product-loop GIF with canonical anchor and alt text/i,
+      )
+    })
+  }
+
+  it("requires the complete no-key Quickstart sequence", () => {
+    const source = actualRootReadme.replace(
+      "cd my-agent\nnpm install\nnpm test",
+      "cd my-agent\nnpm install",
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /complete no-key Quickstart sequence/i,
+    )
+  })
+
+  it("requires the canonical transcript link in the actual README", () => {
+    const source = actualRootReadme.replace(
+      "[Read the product-loop transcript](docs/brand/demo/transcript.md).",
+      "",
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /canonical product-loop transcript link/i,
+    )
+  })
+
+  it("requires a final scaffold CTA", () => {
+    const source = actualRootReadme.replace(canonicalFinalCta, "Ready to start?")
+    assertFailure(validateRootReadme(source, { canonical: true }), /final scaffold CTA/i)
+  })
+
+  it("requires the canonical License section", () => {
+    const source = actualRootReadme.replace("## License\n\nMIT. See [LICENSE](./LICENSE).", "")
+    assertFailure(validateRootReadme(source, { canonical: true }), /canonical License section/i)
+  })
+
+  it("requires canonical provider-specific credential guidance", () => {
+    assertFailure(
+      validateRootReadme(actualRootReadme.replace(canonicalQualifiedCredentials, ""), {
+        canonical: true,
+      }),
+      /canonical provider-specific credential guidance/i,
+    )
+  })
+
+  for (const universal of [
+    "Every live model call needs an API key.",
+    "All live model calls require credentials.",
+    "Live provider runs always need credentials.",
+  ]) {
+    it(`rejects the universal credentials paraphrase ${JSON.stringify(universal)}`, () => {
+      const source = actualRootReadme.replace(
+        "## Run it live\n\n",
+        `## Run it live\n\n${universal}\n\n`,
+      )
+      assertFailure(
+        validateRootReadme(source, { canonical: true }),
+        /not every live model call requires credentials/i,
+      )
+    })
+  }
+
+  it("does not reject explicit negation of the universal credentials claim", () => {
+    const source = actualRootReadme.replace(
+      "## Run it live\n\n",
+      "## Run it live\n\nNot all live model calls require credentials.\n\n",
+    )
+    assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
   })
 
   for (const [name, literal] of [

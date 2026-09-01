@@ -56,6 +56,63 @@ const ROOT_LINK_CONTRACTS = {
   },
 }
 
+const CANONICAL_ROOT_HERO = `<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/dawn-logo-horizontal-white-on-black.png">
+    <img src="docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="360">
+  </picture>
+</p>
+
+<p align="center"><strong>TypeScript meta-framework for LangGraph.js</strong></p>
+
+# Build LangGraph agents like Next.js apps.
+
+Dawn adds file-system routes, shared and route-local tools, generated types,
+deterministic tests, durable threads, and build targets around LangGraph.js.
+Keep the runtime. Drop the boilerplate.`
+
+const CANONICAL_ROOT_BADGES = `<p align="center">
+  <a href="https://www.npmjs.com/package/create-dawn-ai-app"><img src="https://img.shields.io/npm/v/create-dawn-ai-app?label=create-dawn-ai-app" alt="create-dawn-ai-app npm version"></a>
+  <a href="https://github.com/cacheplane/dawnai/actions/workflows/ci.yml"><img src="https://github.com/cacheplane/dawnai/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-111827.svg" alt="MIT license"></a>
+  <a href="https://github.com/cacheplane/dawnai/stargazers"><img src="https://img.shields.io/github/stars/cacheplane/dawnai" alt="GitHub stars"></a>
+  <a href="https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml"><img src="https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg" alt="OpenSSF Scorecard"></a>
+</p>`
+
+const CANONICAL_ROOT_NAVIGATION = `<p align="center">
+  <a href="https://dawnai.org/docs/getting-started">Get started</a> ·
+  <a href="https://dawnai.org/docs/migrating-from-langgraph">Migrate from LangGraph.js</a> ·
+  <a href="https://dawnai.org/docs">Documentation</a> ·
+  <a href="https://github.com/cacheplane/dawnai/discussions">Discussions</a>
+</p>`
+
+const CANONICAL_PRODUCT_LOOP_BLOCK = `<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="docs/brand/product-loop.gif" alt="Animation showing an existing generated research workspace, a deterministic test, and the Dawn Workbench" width="900">
+  </a>
+</p>`
+
+const CANONICAL_QUICKSTART_BLOCK = `Requires Node.js 24 or later.
+
+\`\`\`bash
+npm create dawn-ai-app@latest my-agent
+cd my-agent
+npm install
+npm test
+\`\`\``
+
+const CANONICAL_TRANSCRIPT_LINK =
+  "[Read the product-loop transcript](docs/brand/demo/transcript.md)."
+const CANONICAL_FINAL_CTA = `Ready to start?
+
+\`\`\`bash
+npm create dawn-ai-app@latest my-agent
+\`\`\``
+const CANONICAL_LICENSE_SECTION = "## License\n\nMIT. See [LICENSE](./LICENSE)."
+const CANONICAL_PROVIDER_CREDENTIAL_GUIDANCE = `Credentials are provider-specific: the published research starter's OpenAI live
+path requires \`OPENAI_API_KEY\`, while a local Ollama route requires no provider
+key.`
+
 const COMMONMARK_BLOCK_TAGS = new Set([
   "address",
   "article",
@@ -714,6 +771,61 @@ function canonicalScaffoldCommandPresent(source) {
   return /(?:^|[\s`$>])npm create dawn-ai-app@latest my-agent(?=$|[\s`'";|&])/mu.test(source)
 }
 
+function universalCredentialClaimPresent(source) {
+  const withoutNegatedClaims = source.replace(
+    /\bnot\s+(?:all|every)\s+live model calls?\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/giu,
+    "",
+  )
+  return [
+    /\b(?:all|every)\s+live model calls?\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
+    /\blive model calls?\s+(?:always\s+)?(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
+    /\blive provider runs?\s+always\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
+  ].some((pattern) => pattern.test(withoutNegatedClaims))
+}
+
+function validateCanonicalRootReadme(readme, withoutComments) {
+  const failures = []
+
+  if (!readme.startsWith(CANONICAL_ROOT_HERO)) {
+    failures.push("README is missing the exact canonical hero")
+  }
+  if (!readme.includes(CANONICAL_ROOT_BADGES)) {
+    failures.push("README must contain exactly five approved badges")
+  }
+  if (!readme.includes(CANONICAL_ROOT_NAVIGATION)) {
+    failures.push("README must contain exactly four canonical hero navigation links")
+  }
+
+  const firstCommand = withoutComments.indexOf("npm create dawn-ai-app@latest my-agent")
+  const productLoopGif = withoutComments.indexOf("docs/brand/product-loop.gif")
+  if (firstCommand === -1 || productLoopGif === -1 || firstCommand >= productLoopGif) {
+    failures.push("README must put the first scaffold command before the product-loop GIF")
+  }
+
+  if (!readme.includes(CANONICAL_PRODUCT_LOOP_BLOCK)) {
+    failures.push(
+      "README is missing the linked product-loop GIF with canonical anchor and alt text",
+    )
+  }
+  if (!readme.includes(CANONICAL_QUICKSTART_BLOCK)) {
+    failures.push("README is missing the complete no-key Quickstart sequence")
+  }
+  if (!readme.includes(CANONICAL_TRANSCRIPT_LINK)) {
+    failures.push("README is missing the canonical product-loop transcript link")
+  }
+  if (!readme.includes(CANONICAL_FINAL_CTA)) {
+    failures.push("README is missing the final scaffold CTA")
+  }
+  if (!readme.trimEnd().endsWith(CANONICAL_LICENSE_SECTION)) {
+    failures.push("README is missing the canonical License section")
+  }
+  if (!readme.includes(CANONICAL_PROVIDER_CREDENTIAL_GUIDANCE)) {
+    failures.push("README is missing canonical provider-specific credential guidance")
+  }
+
+  return failures
+}
+
 export function validatePackageDiscoveryMetadata(manifest) {
   const failures = []
   const packageName = typeof manifest?.name === "string" ? manifest.name : "package"
@@ -807,7 +919,7 @@ export function validatePackageReadme({ tier, manifest, readme }) {
   return failures
 }
 
-export function validateRootReadme(source) {
+export function validateRootReadme(source, options = {}) {
   const failures = []
   const readme = typeof source === "string" ? source : ""
   const headings = markdownHeadings(readme)
@@ -857,8 +969,11 @@ export function validateRootReadme(source) {
   if (readme.includes(OLD_GIF_CAPTION)) {
     failures.push("README still contains the old GIF caption")
   }
-  if (/\b(?:all\s+)?live model calls require credentials\b/iu.test(visible.rendered)) {
+  if (universalCredentialClaimPresent(visible.rendered)) {
     failures.push("README: not every live model call requires credentials")
+  }
+  if (options?.canonical === true) {
+    failures.push(...validateCanonicalRootReadme(readme, withoutComments))
   }
 
   return failures
