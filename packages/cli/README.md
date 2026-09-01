@@ -57,12 +57,14 @@ console.log(runtime.url)
 - `@dawn-ai/cli` and its `dawn` command are supported node-only application and tooling surfaces.
 - `@dawn-ai/cli/fetch` is a supported edge-safe integration surface for generated fetch deployments.
 - `@dawn-ai/cli/runtime` is Node-only and low-level.
-- `@dawn-ai/cli/testing` is a supported Node-only testing surface.
+- `@dawn-ai/cli/testing` is a deprecated, back-compat-only node-only alias of `@dawn-ai/sdk/testing`; it remains supported only for existing imports, and new scenario code should use the SDK subpath.
 
 `serveRuntime()` starts once and does not watch files or run type generation at boot. Use `dawn dev` for the development watcher and generated types.
 
 ## Related
 
+- [`@dawn-ai/sdk`](https://www.npmjs.com/package/@dawn-ai/sdk) supplies the route and runtime contracts consumed by the CLI.
+- [`@dawn-ai/core`](https://www.npmjs.com/package/@dawn-ai/core) provides the route discovery, configuration, and type-generation primitives used by the CLI.
 - [CLI guide](https://dawnai.org/docs/cli)
 - [CLI API reference](https://dawnai.org/docs/api/cli)
 - [Embed the runtime](https://dawnai.org/docs/embedding)

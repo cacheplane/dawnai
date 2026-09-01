@@ -37,7 +37,7 @@ The `research` template is the default. The published `@latest` version was veri
 
 ## Related
 
-See the [API catalog](https://dawnai.org/docs/api#create-dawn-ai-app), [Getting Started](https://dawnai.org/docs/getting-started), [testing guide](https://dawnai.org/docs/testing-agents), [CLI guide](https://dawnai.org/docs/cli), and [`create-dawn-ai-app` changelog](https://github.com/cacheplane/dawnai/blob/main/packages/create-dawn-app/CHANGELOG.md).
+Related packages are [`@dawn-ai/cli`](https://www.npmjs.com/package/@dawn-ai/cli), which develops and builds the generated app, and [`@dawn-ai/sdk`](https://www.npmjs.com/package/@dawn-ai/sdk), which supplies its author-facing declarations. See the [API catalog](https://dawnai.org/docs/api#create-dawn-ai-app), [Getting Started](https://dawnai.org/docs/getting-started), [testing guide](https://dawnai.org/docs/testing-agents), [CLI guide](https://dawnai.org/docs/cli), and [`create-dawn-ai-app` changelog](https://github.com/cacheplane/dawnai/blob/main/packages/create-dawn-app/CHANGELOG.md).
 
 ## Maturity and support
 

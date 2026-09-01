@@ -75,6 +75,8 @@ export default defineMiddleware(() => ({ action: "continue" }))
 
 ## Related
 
+- [`@dawn-ai/cli`](https://www.npmjs.com/package/@dawn-ai/cli) develops, tests, builds, and serves routes declared with the SDK.
+- [`@dawn-ai/testing`](https://www.npmjs.com/package/@dawn-ai/testing) provides programmatic harnesses for Dawn applications.
 - [SDK API reference](https://dawnai.org/docs/api/sdk)
 - [Agents](https://dawnai.org/docs/agents)
 - [Tools](https://dawnai.org/docs/tools)

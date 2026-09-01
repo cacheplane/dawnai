@@ -93,6 +93,23 @@ const actualEntryPackages = [
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
+const relatedPackageDestinations = new Map([
+  [
+    "create-dawn-ai-app",
+    ["https://www.npmjs.com/package/@dawn-ai/cli", "https://www.npmjs.com/package/@dawn-ai/sdk"],
+  ],
+  [
+    "@dawn-ai/sdk",
+    [
+      "https://www.npmjs.com/package/@dawn-ai/cli",
+      "https://www.npmjs.com/package/@dawn-ai/testing",
+    ],
+  ],
+  [
+    "@dawn-ai/cli",
+    ["https://www.npmjs.com/package/@dawn-ai/sdk", "https://www.npmjs.com/package/@dawn-ai/core"],
+  ],
+])
 const canonicalHeroCommandBlock = `\`\`\`bash
 npm create dawn-ai-app@latest my-agent
 \`\`\``
@@ -501,7 +518,34 @@ describe("entry-package README contracts", () => {
     it(`accepts the actual ${manifest.name} README`, () => {
       assert.deepEqual(validatePackageReadme({ tier: "entry", manifest, readme }), [])
     })
+
+    it(`links the actual ${manifest.name} README to a related Dawn package`, () => {
+      const relatedStart = readme.indexOf("## Related")
+      const relatedEnd = readme.indexOf("\n## ", relatedStart + 1)
+      const related = readme.slice(relatedStart, relatedEnd === -1 ? undefined : relatedEnd)
+      const expectedDestinations = relatedPackageDestinations.get(manifest.name) ?? []
+
+      assert.ok(
+        expectedDestinations.some((destination) => related.includes(`](${destination})`)),
+        `${manifest.name} Related must link to one of: ${expectedDestinations.join(", ")}`,
+      )
+    })
   }
+
+  it("labels the actual @dawn-ai/cli/testing subpath as deprecated compatibility", () => {
+    const cliReadme = actualEntryPackages.find(
+      ({ manifest }) => manifest.name === "@dawn-ai/cli",
+    )?.readme
+
+    assert.doesNotMatch(
+      cliReadme ?? "",
+      /`@dawn-ai\/cli\/testing`[ \t]+is[ \t]+a[ \t]+supported\b/iu,
+    )
+    assert.match(
+      cliReadme ?? "",
+      /`@dawn-ai\/cli\/testing`[^\n]*\bdeprecated\b[^\n]*`@dawn-ai\/sdk\/testing`/iu,
+    )
+  })
 })
 
 describe("validatePackageDiscoveryMetadata", () => {
