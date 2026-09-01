@@ -19,7 +19,6 @@ const READ_FILE_SYSTEM_METHODS = Object.freeze(["lstat", "open"]);
 const WRITE_FILE_SYSTEM_METHODS = Object.freeze([
 	...READ_FILE_SYSTEM_METHODS,
 	"rename",
-	"unlink",
 ]);
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -213,7 +212,7 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 		temporaryHandle = await openNoFollow(
 			runtime.operations,
 			temporaryPath,
-			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+			fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL,
 			policy.label,
 			policy.mode,
 		);
@@ -221,6 +220,7 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 		temporaryOperations = snapshotHandleOperations(temporaryHandle, [
 			"chmod",
 			"close",
+			"read",
 			"stat",
 			"sync",
 			"write",
@@ -259,9 +259,6 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 			policy,
 			bytes.byteLength,
 		);
-		await temporaryOperations.close();
-		temporaryHandle = undefined;
-
 		await assertParentChainCurrent(
 			runtime.operations,
 			parentChain,
@@ -277,32 +274,38 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 		);
 		await runtime.operations.rename(temporaryPath, target);
 		renamed = true;
-		publishedIdentity = await assertPublishedDestination(
-			runtime.operations,
-			target,
-			temporaryIdentity,
-			runtime.effectiveUserId,
-			policy,
-			false,
-		);
 		try {
+			publishedIdentity = await verifyPublishedBytes(
+				runtime.operations,
+				temporaryOperations,
+				target,
+				temporaryIdentity,
+				bytes,
+				runtime.effectiveUserId,
+				policy,
+				false,
+			);
 			await parentGuard.operations.sync();
 			await assertParentChainCurrent(
 				runtime.operations,
 				parentChain,
 				policy.label,
 			);
-			await assertPublishedDestination(
+			await verifyPublishedBytes(
 				runtime.operations,
+				temporaryOperations,
 				target,
 				publishedIdentity,
+				bytes,
 				runtime.effectiveUserId,
 				policy,
 				true,
 			);
+			await temporaryOperations.close();
+			temporaryHandle = undefined;
 		} catch (error) {
 			throw new Error(
-				`${capitalize(policy.label)} was atomically replaced but its durability is ambiguous`,
+				`${capitalize(policy.label)} publication or durability is ambiguous after atomic replacement`,
 				{ cause: error },
 			);
 		}
@@ -321,16 +324,21 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 			secondaryErrors.push(error);
 		}
 	}
-	if (temporaryCreated && !renamed && temporaryIdentity !== undefined) {
+	if (temporaryCreated && !renamed) {
 		try {
-			await cleanupOwnedTemporary(
+			await observeRetainedTemporary(
 				runtime.operations,
 				temporaryPath,
 				temporaryIdentity,
-				policy.label,
 			);
 		} catch (error) {
 			secondaryErrors.push(error);
+		}
+		if (primaryError !== null) {
+			primaryError = new Error(
+				`${capitalize(policy.label)} failed before publication; temporary pathname ${temporaryPath} was retained for safe inspection`,
+				{ cause: primaryError },
+			);
 		}
 	}
 	try {
@@ -338,11 +346,19 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 	} catch (error) {
 		secondaryErrors.push(error);
 	}
+	if (renamed && primaryError === null && secondaryErrors.length > 0) {
+		primaryError = new Error(
+			`${capitalize(policy.label)} publication completed but descriptor cleanup status is ambiguous`,
+			{ cause: secondaryErrors.shift() },
+		);
+	}
 
 	throwCombined(
 		primaryError,
 		secondaryErrors,
-		`${capitalize(policy.label)} write and cleanup both failed`,
+		renamed
+			? `${capitalize(policy.label)} publication or durability is ambiguous and descriptor cleanup also failed`
+			: `${capitalize(policy.label)} write and retained-path inspection both failed`,
 	);
 	return Buffer.from(bytes);
 }
@@ -517,11 +533,7 @@ function requireNoFollowSupport(needsWrite) {
 		fsConstants.O_DIRECTORY,
 	];
 	if (needsWrite) {
-		required.push(
-			fsConstants.O_WRONLY,
-			fsConstants.O_CREAT,
-			fsConstants.O_EXCL,
-		);
+		required.push(fsConstants.O_RDWR, fsConstants.O_CREAT, fsConstants.O_EXCL);
 	}
 	if (
 		required.some((value) => !Number.isInteger(value)) ||
@@ -753,54 +765,83 @@ async function assertTemporaryPathCurrent(
 	assertTemporaryFile(current, expectedUserId, policy, Number(expected.size));
 }
 
-async function assertPublishedDestination(
+async function verifyPublishedBytes(
 	operations,
+	descriptor,
 	target,
 	expected,
+	intendedBytes,
 	expectedUserId,
 	policy,
 	includeChangeMetadata,
 ) {
-	const current = await operations.lstat(target, { bigint: true });
+	const before = await descriptor.stat({ bigint: true });
 	if (
-		current.isSymbolicLink() ||
-		current.dev !== expected.dev ||
-		current.ino !== expected.ino ||
-		current.size !== expected.size ||
-		(includeChangeMetadata && !sameFileState(expected, current)) ||
-		current.nlink !== 1n
+		before.dev !== expected.dev ||
+		before.ino !== expected.ino ||
+		before.size !== expected.size ||
+		(includeChangeMetadata && !sameIdentityRecord(expected, before))
 	) {
 		throw new Error(
 			`${capitalize(policy.label)} changed during atomic publication`,
 		);
 	}
+	assertTemporaryFile(before, expectedUserId, policy, intendedBytes.byteLength);
+	const observedBytes = Buffer.allocUnsafe(intendedBytes.byteLength);
+	let offset = 0;
+	while (offset < observedBytes.byteLength) {
+		const requested = Math.min(
+			IO_CHUNK_BYTES,
+			observedBytes.byteLength - offset,
+		);
+		const readResult = await descriptor.read(
+			observedBytes,
+			offset,
+			requested,
+			offset,
+		);
+		const bytesRead = resultCount(
+			readResult,
+			"bytesRead",
+			requested,
+			`${policy.label} publication read`,
+		);
+		if (bytesRead === 0) break;
+		offset += bytesRead;
+	}
+	const after = await descriptor.stat({ bigint: true });
+	const current = await operations.lstat(target, { bigint: true });
+	if (
+		offset !== intendedBytes.byteLength ||
+		!observedBytes.equals(intendedBytes) ||
+		!sameFileState(before, after) ||
+		current.isSymbolicLink() ||
+		!sameFileState(after, current)
+	) {
+		throw new Error(
+			`${capitalize(policy.label)} bytes changed during atomic publication`,
+		);
+	}
+	assertSourcePolicy(after, expectedUserId, policy);
 	assertSourcePolicy(current, expectedUserId, policy);
-	return fileIdentity(current);
+	return fileIdentity(after);
 }
 
-async function cleanupOwnedTemporary(
-	operations,
-	temporaryPath,
-	expected,
-	label,
-) {
-	let current;
+async function observeRetainedTemporary(operations, temporaryPath, expected) {
 	try {
-		current = await operations.lstat(temporaryPath, { bigint: true });
+		const current = await operations.lstat(temporaryPath, { bigint: true });
+		if (
+			expected !== undefined &&
+			!current.isSymbolicLink() &&
+			current.dev === expected.dev &&
+			current.ino === expected.ino
+		) {
+			return;
+		}
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return;
 		throw error;
 	}
-	if (
-		current.isSymbolicLink() ||
-		current.dev !== expected.dev ||
-		current.ino !== expected.ino
-	) {
-		throw new Error(
-			`${capitalize(label)} cleanup refused an attacker-replaced temporary path`,
-		);
-	}
-	await operations.unlink(temporaryPath);
 }
 
 function sameFileState(before, after) {

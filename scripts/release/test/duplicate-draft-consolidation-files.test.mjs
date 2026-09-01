@@ -237,6 +237,9 @@ test("temporary-file validation rejects injected special permission bits before 
 		["tracked", writeTrackedReceipt, 0o4644],
 	]) {
 		const target = path.join(repository, `${label}.json`);
+		const temporaryBefore = new Set(
+			(await entries(repository)).filter((name) => name.endsWith(".tmp")),
+		);
 		let renames = 0;
 		const fileSystem = fileSystemWith({
 			async open(filePath, flags, mode) {
@@ -256,11 +259,16 @@ test("temporary-file validation rejects injected special permission bits before 
 
 		await assert.rejects(
 			writeEnvelope(target, Buffer.from("replacement\n"), { fileSystem }),
-			/0600|special|mode/iu,
+			/retained/iu,
 			label,
 		);
 		assert.equal(renames, 0, label);
 		await assert.rejects(lstat(target), { code: "ENOENT" });
+		const retained = (await entries(repository)).filter(
+			(name) => name.endsWith(".tmp") && !temporaryBefore.has(name),
+		);
+		assert.equal(retained.length, 1, label);
+		await rm(path.join(repository, retained[0]));
 	}
 	assert.deepEqual(
 		(await entries(repository)).filter((name) => name.endsWith(".tmp")),
@@ -384,13 +392,16 @@ test("reads revalidate the final pathname after consuming the descriptor", async
 	assert.equal(targetLstats, 1);
 });
 
-test("partial writes and every pre-rename failure preserve the previous complete destination", async (t) => {
+test("partial writes and every pre-rename failure preserve the destination and retain the temporary pathname", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(repository, "private.json");
 	const previous = Buffer.from("previous complete evidence\n");
 	await writeFile(target, previous, { mode: PRIVATE_MODE });
 
 	for (const fault of ["partial-write", "file-sync", "rename"]) {
+		const temporaryBefore = new Set(
+			(await entries(repository)).filter((name) => name.endsWith(".tmp")),
+		);
 		const fileSystem = fileSystemWith({
 			async open(filePath, flags, mode) {
 				const handle = await open(filePath, flags, mode);
@@ -431,19 +442,19 @@ test("partial writes and every pre-rename failure preserve the previous complete
 			writePrivateEnvelope(target, Buffer.from(`replacement ${fault}\n`), {
 				fileSystem,
 			}),
-			/injected/iu,
+			/retained/iu,
 			fault,
 		);
 		assert.deepEqual(await readFile(target), previous, fault);
-		assert.deepEqual(
-			(await entries(repository)).filter((name) => name.endsWith(".tmp")),
-			[],
-			fault,
+		const retained = (await entries(repository)).filter(
+			(name) => name.endsWith(".tmp") && !temporaryBefore.has(name),
 		);
+		assert.equal(retained.length, 1, fault);
+		await rm(path.join(repository, retained[0]));
 	}
 });
 
-test("failure cleanup never removes an attacker replacement or a sibling path", async (t) => {
+test("failure retention never unlinks a replacement swapped after cleanup identity observation", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(repository, "private.json");
 	const identifier = "11111111-1111-4111-8111-111111111111";
@@ -454,23 +465,34 @@ test("failure cleanup never removes an attacker replacement or a sibling path", 
 	const sibling = path.join(repository, "operation-owned-sibling.tmp");
 	await writeFile(target, "previous\n", { mode: PRIVATE_MODE });
 	let attacked = false;
+	let writeFailed = false;
+	let unlinkCalls = 0;
 	const fileSystem = fileSystemWith({
+		async lstat(filePath, options) {
+			const status = await lstat(filePath, options);
+			if (filePath === temporary && writeFailed && !attacked) {
+				attacked = true;
+				await rename(temporary, sibling);
+				await writeFile(temporary, "attacker replacement\n", {
+					mode: PRIVATE_MODE,
+				});
+			}
+			return status;
+		},
 		async open(filePath, flags, mode) {
 			const handle = await open(filePath, flags, mode);
 			if (filePath !== temporary) return handle;
 			return wrapHandle(handle, {
 				async write(...arguments_) {
 					await handle.write(...arguments_);
-					if (!attacked) {
-						attacked = true;
-						await rename(temporary, sibling);
-						await writeFile(temporary, "attacker replacement\n", {
-							mode: PRIVATE_MODE,
-						});
-					}
+					writeFailed = true;
 					throw new Error("injected post-attack write failure");
 				},
 			});
+		},
+		async unlink(filePath) {
+			unlinkCalls += 1;
+			return unlink(filePath);
 		},
 	});
 
@@ -479,7 +501,7 @@ test("failure cleanup never removes an attacker replacement or a sibling path", 
 			fileSystem,
 			randomUUID: () => identifier,
 		}),
-		/injected|cleanup/iu,
+		/retained/iu,
 	);
 	assert.deepEqual(await readFile(target), Buffer.from("previous\n"));
 	assert.deepEqual(
@@ -487,6 +509,31 @@ test("failure cleanup never removes an attacker replacement or a sibling path", 
 		Buffer.from("attacker replacement\n"),
 	);
 	assert.equal((await lstat(sibling)).isFile(), true);
+	assert.equal(unlinkCalls, 0);
+});
+
+test("same-inode same-size mutation immediately after rename is reported as ambiguous publication", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(repository, "private.json");
+	const intended = Buffer.from("AAAA\n");
+	const changed = Buffer.from("BBBB\n");
+	let inodeBeforeMutation;
+	let inodeAfterMutation;
+	const fileSystem = fileSystemWith({
+		async rename(from, to) {
+			await rename(from, to);
+			inodeBeforeMutation = (await lstat(to)).ino;
+			await writeFile(to, changed, { mode: PRIVATE_MODE });
+			inodeAfterMutation = (await lstat(to)).ino;
+		},
+	});
+
+	await assert.rejects(
+		writePrivateEnvelope(target, intended, { fileSystem }),
+		/ambiguous|publication|durability/iu,
+	);
+	assert.equal(inodeAfterMutation, inodeBeforeMutation);
+	assert.deepEqual(await readFile(target), changed);
 });
 
 test("writes fsync the file before rename and the parent directory after rename", async (t) => {
