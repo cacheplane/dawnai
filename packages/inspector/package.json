@@ -4,7 +4,7 @@
   "private": false,
   "type": "module",
   "license": "MIT",
-  "description": "Dawn runtime inspector — browser UI for inspecting a Dawn app (memory panel).",
+  "description": "Dawn runtime inspector \u2014 browser UI for inspecting a Dawn app (memory panel).",
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
   "repository": {
     "type": "git",
@@ -30,10 +30,10 @@
   "scripts": {
     "build": "next build && node scripts/post-build.mjs",
     "dev": "next dev",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test e2e playwright.config.ts tsconfig.json tsconfig.e2e.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test e2e playwright.config.ts tsconfig.json tsconfig.e2e.json tsconfig.test.json",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "test:e2e": "playwright test --config playwright.config.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@dawn-ai/core": "workspace:*",
