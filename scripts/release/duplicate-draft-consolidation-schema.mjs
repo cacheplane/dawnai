@@ -49,6 +49,10 @@ const EVENT_FIELDS = Object.freeze([
 	"recordedAt",
 	"payload",
 ]);
+const AUTHORITY_EVENT_TYPES = new Set([
+	"delete-authority-observed",
+	"final-authority-observed",
+]);
 const WORKFLOW_STATUSES = Object.freeze([
 	"in_progress",
 	"pending",
@@ -183,7 +187,7 @@ export function canonicalRecordSha256(record) {
 
 export function canonicalEventEnvelope(event, previousEventSha256) {
 	return withCanonicalBudget(
-		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+		journalEventEnvelopeBudget(ownDataDiscriminator(event, "type")),
 		"journal event envelope",
 		() => {
 			chargeCanonicalBytes(
@@ -213,7 +217,9 @@ export function parseJournalEventEnvelope(
 	previousEventSha256,
 ) {
 	return withCanonicalBudget(
-		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+		journalEventEnvelopeBudget(
+			ownDataDiscriminator(ownDataDiscriminator(value, "event"), "type"),
+		),
 		"journal event envelope",
 		() => {
 			value = assertExactFields(
@@ -1016,7 +1022,10 @@ function normalizeAuthorityStage(value) {
 	return withCanonicalBudget(
 		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
 		"authority stage",
-		() => normalizeAuthorityStageValue(value),
+		() => {
+			chargeCurrentCanonicalBytes(1);
+			return normalizeAuthorityStageValue(value);
+		},
 	);
 }
 
@@ -1545,6 +1554,13 @@ function ownDataDiscriminator(value, field) {
 	return descriptor !== undefined && "value" in descriptor
 		? descriptor.value
 		: undefined;
+}
+
+function journalEventEnvelopeBudget(type) {
+	return AUTHORITY_EVENT_TYPES.has(type)
+		? DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes
+		: DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes;
 }
 
 function assertExactFields(value, fields, label) {

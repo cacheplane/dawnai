@@ -666,6 +666,74 @@ test("incremental accounting accepts canonical evidence close to its proposed ca
 	);
 });
 
+test("authority-bearing events compose exact authority and wrapper budgets", () => {
+	for (const [type, authority, payload] of [
+		[
+			"delete-authority-observed",
+			authorityStage("pre-delete-1"),
+			(authorityValue) => ({
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				authority: authorityValue,
+			}),
+		],
+		[
+			"final-authority-observed",
+			authorityStage("final", null),
+			(authorityValue) => ({ authority: authorityValue }),
+		],
+	]) {
+		resizeAuthorityStage(
+			authority,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+		);
+		const event = journalEvent(type, payload(authority));
+		const envelope = canonicalEventEnvelope(event, null);
+		assert.deepEqual(parseJournalEventEnvelope(envelope, 1, null), envelope);
+
+		const oversized = structuredClone(authority);
+		resizeAuthorityStage(
+			oversized,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes + 1,
+		);
+		const oversizedEvent = journalEvent(type, payload(oversized));
+		assert.throws(() => canonicalEventEnvelope(oversizedEvent, null));
+		assert.throws(() =>
+			parseJournalEventEnvelope(
+				{
+					event: oversizedEvent,
+					eventSha256: canonicalRecordSha256(oversizedEvent),
+				},
+				1,
+				null,
+			),
+		);
+	}
+
+	const resumeEvidence = releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000);
+	resumeEvidence.semantic.body = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+	);
+	const oversizedResumeEvent = journalEvent("resume-reconciliation", {
+		targetReleaseId: DUPLICATE_IDS[0],
+		attemptNumber: 1,
+		classification: "present-unchanged-retryable",
+		releaseEvidence: resumeEvidence,
+		observedAt: NOW,
+	});
+	assert.throws(() => canonicalEventEnvelope(oversizedResumeEvent, null));
+	assert.throws(() =>
+		parseJournalEventEnvelope(
+			{
+				event: oversizedResumeEvent,
+				eventSha256: canonicalRecordSha256(oversizedResumeEvent),
+			},
+			1,
+			null,
+		),
+	);
+});
+
 test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {
 	assert.doesNotThrow(() =>
 		createConsolidationEnvelope("proposed", proposedRecord()),
@@ -1092,6 +1160,24 @@ function authorityStage(stage, read = targetRead()) {
 		targetRead: read,
 		observedAt: NOW,
 	};
+}
+
+function resizeAuthorityStage(authority, canonicalBytes) {
+	const currentBytes = Buffer.byteLength(
+		`${JSON.stringify(authority)}\n`,
+		"utf8",
+	);
+	const currentNameBytes = Buffer.byteLength(
+		JSON.stringify(authority.annotatedTag.name),
+		"utf8",
+	);
+	const replacementBytes = canonicalBytes - currentBytes + currentNameBytes;
+	assert.ok(replacementBytes >= 2);
+	authority.annotatedTag.name = "x".repeat(replacementBytes - 2);
+	assert.equal(
+		Buffer.byteLength(`${JSON.stringify(authority)}\n`, "utf8"),
+		canonicalBytes,
+	);
 }
 
 function operationStartedEvent(proposedRecordSha256 = DIGEST) {
