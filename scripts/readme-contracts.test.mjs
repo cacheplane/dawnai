@@ -581,6 +581,14 @@ describe("validateRootReadme", () => {
     assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
   })
 
+  it("rejects a sixth Markdown hero badge before Quickstart", () => {
+    const source = actualRootReadme.replace(
+      canonicalHeroCommandBlock,
+      `[![Sixth](https://example.com/sixth.svg)](https://example.com)\n\n${canonicalHeroCommandBlock}`,
+    )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
+  })
+
   for (const [name, source] of [
     [
       "missing hero navigation link",
@@ -606,6 +614,17 @@ describe("validateRootReadme", () => {
     const source = actualRootReadme.replace(
       canonicalHeroCommandBlock,
       `<p align="center"><a href="https://example.com">Fifth link</a></p>\n\n${canonicalHeroCommandBlock}`,
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /exactly four canonical hero navigation links/i,
+    )
+  })
+
+  it("rejects a fifth Markdown hero navigation link before Quickstart", () => {
+    const source = actualRootReadme.replace(
+      canonicalHeroCommandBlock,
+      `[Fifth link](https://example.com)\n\n${canonicalHeroCommandBlock}`,
     )
     assertFailure(
       validateRootReadme(source, { canonical: true }),

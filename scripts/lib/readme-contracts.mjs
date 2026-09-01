@@ -727,7 +727,23 @@ function linkDestination(linkBody) {
   return body.slice(0, destinationEnd)
 }
 
-function markdownLinkDestinations(source) {
+function markdownImageDestinations(source) {
+  const destinations = []
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] !== "!" || source[index + 1] !== "[" || isEscaped(source, index)) continue
+    const labelStart = index + 1
+    const labelEnd = matchingDelimiterEnd(source, labelStart, "[", "]")
+    if (labelEnd === -1 || source[labelEnd + 1] !== "(") continue
+    const linkEnd = matchingDelimiterEnd(source, labelEnd + 1, "(", ")")
+    if (linkEnd === -1) continue
+    const destination = linkDestination(source.slice(labelEnd + 2, linkEnd))
+    if (destination) destinations.push(destination)
+    index = linkEnd
+  }
+  return destinations
+}
+
+function markdownLinkDestinations(source, options = {}) {
   const destinations = []
   for (let index = 0; index < source.length; index++) {
     if (
@@ -739,7 +755,11 @@ function markdownLinkDestinations(source) {
     }
     const labelEnd = matchingDelimiterEnd(source, index, "[", "]")
     if (labelEnd === -1 || source[labelEnd + 1] !== "(") continue
-    if (markdownLinkDestinations(source.slice(index + 1, labelEnd)).length > 0) {
+    const label = source.slice(index + 1, labelEnd)
+    if (
+      markdownLinkDestinations(label).length > 0 ||
+      (options.excludeImageLabels === true && markdownImageDestinations(label).length > 0)
+    ) {
       index = labelEnd
       continue
     }
@@ -783,7 +803,7 @@ function universalCredentialClaimPresent(source) {
   ].some((pattern) => pattern.test(withoutNegatedClaims))
 }
 
-function validateCanonicalRootReadme(readme, withoutComments, visibleRendered) {
+function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, visibleRendered) {
   const failures = []
 
   if (!readme.startsWith(CANONICAL_ROOT_HERO)) {
@@ -797,7 +817,9 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleRendered) {
   }
 
   const quickstartHeading = /^## Quickstart[ \t]*$/mu.exec(visibleRendered)
-  const firstScroll = visibleRendered.slice(0, quickstartHeading?.index ?? visibleRendered.length)
+  const firstScrollEnd = quickstartHeading?.index ?? visibleRendered.length
+  const firstScroll = visibleRendered.slice(0, firstScrollEnd)
+  const firstScrollMarkdown = visibleMarkdown.slice(0, firstScrollEnd)
   const firstScrollImages = [
     ...firstScroll.matchAll(/<img\b[^>]*\bsrc=(?:"([^"]+)"|'([^']+)')[^>]*>/giu),
   ]
@@ -807,13 +829,23 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleRendered) {
         source !== "docs/brand/dawn-logo-horizontal-black-on-white.png" &&
         source !== "docs/brand/product-loop.gif",
     )
-  if (firstScrollImages.length !== 5) {
+  const firstScrollMarkdownImages = markdownImageDestinations(firstScrollMarkdown).filter(
+    (destination) =>
+      ![
+        "docs/brand/dawn-logo-horizontal-black-on-white.png",
+        "docs/brand/product-loop.gif",
+      ].includes(destination.split(/[?#]/u, 1)[0]),
+  )
+  if (firstScrollImages.length + firstScrollMarkdownImages.length !== 5) {
     failures.push("README must contain exactly five approved badges")
   }
   const firstScrollTextLinks = [...firstScroll.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/giu)].filter(
     (match) => !/<img\b/iu.test(match[1]),
   )
-  if (firstScrollTextLinks.length !== 4) {
+  const firstScrollMarkdownTextLinks = markdownLinkDestinations(firstScrollMarkdown, {
+    excludeImageLabels: true,
+  }).filter((destination) => destination.split(/[?#]/u, 1)[0] !== "docs/brand/demo/transcript.md")
+  if (firstScrollTextLinks.length + firstScrollMarkdownTextLinks.length !== 4) {
     failures.push("README must contain exactly four canonical hero navigation links")
   }
 
@@ -994,7 +1026,9 @@ export function validateRootReadme(source, options = {}) {
     failures.push("README: not every live model call requires credentials")
   }
   if (options?.canonical === true) {
-    failures.push(...validateCanonicalRootReadme(readme, withoutComments, visible.rendered))
+    failures.push(
+      ...validateCanonicalRootReadme(readme, withoutComments, visible.markdown, visible.rendered),
+    )
   }
 
   return failures
