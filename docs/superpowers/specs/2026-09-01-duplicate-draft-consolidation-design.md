@@ -257,9 +257,27 @@ Each envelope is `{ "record": <exact-schema object>, "recordSha256": <hex> }`.
 one newline; the digest field is outside the hashed projection. The proposed,
 journal, and receipt records use separate schema identifiers and exact field
 sets. All arrays have fixed canonical order, timestamps are canonical UTC, and
-the maximum serialized sizes are 4 MiB for proposed, 4 MiB for journal, and 8
+the maximum serialized sizes are 4 MiB for proposed, 64 MiB for journal, and 96
 MiB for final receipt. Unknown/missing fields, noncanonical bytes, invalid
 UTF-8, duplicate keys, digest mismatch, or excessive size are rejected.
+
+The limit module also defines 8 MiB for one authority stage, 2 MiB for one
+survivor evidence record, 8 MiB journal-event reserve, and 1 MiB
+canonical-envelope reserve. Initialization and tests require:
+
+```text
+journalBytes >= ((targets * maximumAttempts) + finalStages) *
+                authorityStageBytes + journalEventReserveBytes
+
+finalReceiptBytes >= proposedBytes + journalBytes +
+                     authorityStageBytes + survivorEvidenceBytes +
+                     envelopeReserveBytes
+```
+
+With two targets, three attempts each, and one final stage, the journal minimum
+is 64 MiB. The chosen 96 MiB final cap preserves 17 MiB of additional headroom
+over its 79 MiB minimum. Tests exercise the maximum attempt/event shape and both
+relationships.
 
 ### Exact shared records
 
@@ -304,7 +322,10 @@ verified subject: {name, sha256}
 
 authorityStage:
   {stage, controller, annotatedTag, workflowAuthority, npmInventory,
-   releases, payloadProof, observedAt}
+   releases, payloadProof, targetRead, observedAt}
+targetRead:
+  {releaseGetStartedAt, releaseGetCompletedAt, assetsListStartedAt,
+   assetsListCompletedAt, evidence, evidenceSha256}
 ```
 
 IDs use canonical positive decimal strings; SHAs and digests use canonical
@@ -314,7 +335,7 @@ order. `workflowAuthority.state` must be `disabled_manually`, `path` must be
 `.github/workflows/release.yml`, and `nonterminalRuns` must be empty after the
 bounded query. The query is exactly statuses `["in_progress","pending",
 "queued","requested","waiting"]`, `perPage: 100`, and `maximumPages: 100`.
-Every npm package observation must be exact `NOT_FOUND`, HTTP 404, code `E404`,
+Every npm package observation must be exact `ABSENT`, HTTP 404, code `E404`,
 in canonical fixed-group order.
 
 Release/asset evidence includes service identity and volatile fields for honest
@@ -328,6 +349,12 @@ verifier. Proposed npm stages are exactly `inspect-initial` and
 stage-labeled inventories at minimum. A resumed attempt may append another
 `perform-initial` plus the target's `pre-delete-1` or `pre-delete-2` inventory,
 distinguished by event sequence and attempt number.
+
+`targetRead` is `null` only for the `final` authority stage. For every
+pre-delete stage it embeds the complete direct-ID Release and paginated asset
+evidence plus the digest of those canonical evidence bytes. Its timestamps must
+be monotone, its evidence must equal the target entry semantically, and its
+asset identities and metadata must be the latest accepted target view.
 
 ### Proposed envelope
 
@@ -389,6 +416,8 @@ current complete target evidence for the former and `null` for the latter.
 Allowed convergence `basis` values are `confirmed-204` and `ambiguous`.
 All proposed, journal, final, and journal-event `schemaVersion` fields are the
 integer `1`, interpreted by their distinct strict parser contexts.
+`attemptNumber` is a canonical integer from 1 through 3; no target may receive
+more than three `delete-intent` events.
 
 Every delete attempt embeds a complete immediately preceding
 `authorityStage`—including fresh controller, workflow/run, tag, npm, remaining
@@ -407,6 +436,15 @@ the target:
   `pre-delete-2` inventory;
 - absent: append `absent-ambiguous` and perform bounded absence convergence;
 - changed, published, or malformed: stop without another write.
+
+The same state decision applies after a durably recorded ambiguous outcome. If
+the six-read/90-second window repeatedly observes the target present and
+semantically unchanged, with complete enumeration still including it and every
+other authority input unchanged, append `present-unchanged-retryable` and begin
+a fully fresh numbered attempt. If it becomes absent, append
+`absence-converged`. A changed target, reader disagreement/error, or a third
+ambiguous attempt that remains present stops. A target present after a recorded
+`confirmed-204` also stops; it is not eligible for retry.
 
 Only `absence-converged` completes a target. The next target cannot receive an
 authority or intent event until the preceding target has that terminal event.
@@ -455,18 +493,25 @@ payload. The first public durable copy is the focused receipt follow-up commit.
    production escrow/attestation verification, and prove the exact equality
    projections against the proposal.
 5. Capture the `pre-delete-1` complete npm E404 inventory and all other fresh
-   authority into a `delete-authority-observed` event. Require it semantically
-   equal to the proposal, then append `delete-intent` and begin the first DELETE
-   while that inventory is no more than two minutes old.
+   authority. After every other network read, directly GET Release `379982100`
+   by ID and completely enumerate its assets; record this terminal target read
+   in `delete-authority-observed` and require it semantically equal to the
+   proposal. Then perform only the local atomic journal write for
+   `delete-intent` before issuing DELETE—no intervening network request—while
+   the npm inventory is no more than two minutes old.
 6. Delete Release `379982100`; append the exact outcome or reconcile an
-   interrupted intent, then run bounded read-only convergence and append
-   `absence-converged`.
+   interrupted intent. Run bounded read-only convergence; append
+   `absence-converged` if absent, or use the bounded new-attempt path if an
+   ambiguous outcome remains present and unchanged.
 7. Require direct GET of `379982100` to return 404 and a complete paginated
    Release enumeration to exclude it, while the survivor and Release
    `379986168` remain projection/payload-identical to the proposal.
 8. Capture complete `pre-delete-2` controller/workflow/run/tag/npm and remaining
-   Release/asset evidence in a new `delete-authority-observed` event. Append the
-   second `delete-intent` only if every check passes.
+   Release/asset evidence. End the authority stage with direct GET of Release
+   `379986168` plus its complete asset enumeration. Append the resulting
+   `delete-authority-observed`, then perform only the local atomic intent write
+   before DELETE. Any intervening network request invalidates the authority
+   stage and requires a fresh one.
 9. Delete Release `379986168`, append or reconcile the exact outcome, and
    require the same two-source bounded absence convergence while the survivor
    remains unchanged.
@@ -480,7 +525,9 @@ payload. The first public durable copy is the focused receipt follow-up commit.
 Convergence retries only reads: at most six complete direct-GET/list attempts
 within 90 seconds, with bounded backoff no longer than 30 seconds. `403`, `429`,
 `5xx`, timeouts, pagination failure,
-or failure to converge blocks the next writer. GitHub does not provide this
+or changed/discordant evidence blocks the next writer. An exact unchanged target
+after an ambiguous outcome may retry only under the three-attempt protocol
+above; exhausting it blocks. GitHub does not provide this
 design with an atomic multi-Release transaction or a documented conditional
 delete. Single-operator exclusivity and disabled Release automation minimize
 the GET-to-DELETE race but do not eliminate it; the receipt records the last
@@ -515,9 +562,12 @@ procedure above may restore authority.
   present and semantically unchanged, append `present-unchanged-retryable`,
   refresh all authority, and create a new attempt. If absent, append
   `absent-ambiguous` and reconcile. Any other state stops.
-- After `delete-outcome`, preserve its exact classification and reconcile only
-  when direct GET returns 404 and complete paginated enumeration excludes the
-  ID.
+- After an ambiguous `delete-outcome`, preserve its exact classification. If
+  direct GET returns 404 and complete paginated enumeration excludes the ID,
+  reconcile absence. If the bounded window instead proves the target remained
+  present and exactly unchanged, append `present-unchanged-retryable` and use a
+  fully fresh numbered attempt, subject to the three-attempt cap. Any other
+  result stops. A `confirmed-204` target that is present stops.
 - After resolving `379982100`: require Release `379986168` and the survivor still
   exactly match the proposal, repeat all authority checks including fresh npm
   absence, then continue with the second deletion.
@@ -546,8 +596,9 @@ Stop before mutation or before the next deletion on any of these conditions:
 - local, origin, or GitHub main SHA disagreement;
 - actor/repository mismatch, pagination overflow, aggregate byte overflow, or
   malformed API response;
-- deletion response ambiguity that cannot be reconciled by both bounded absence
-  readers, or any ambiguous result followed by changed remaining objects;
+- deletion response ambiguity that is neither reconciled absent nor proven
+  present-and-unchanged within the bounded window, exhaustion of three attempts,
+  or any ambiguous result followed by changed remaining objects;
 - proposed/journal/receipt drift or noncanonical bytes.
 
 There is no force mode, survivor override, ID auto-selection, delete-all option,
