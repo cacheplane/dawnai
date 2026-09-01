@@ -27,7 +27,7 @@
     "mp4": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/run.mp4",
     "webm": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/run.webm",
     "poster": "/demo/run-poster.webp",
-    "caption": "Complete a fixture-backed Workbench run, reload the browser, reopen the same thread, and restore its transcript.",
+    "caption": "Complete a fixture-backed Workbench run, then use a browser reload to reopen the same thread and restore its checkpoint-backed transcript.",
     "ariaLabel": "Dawn Run clip: reload and restore the same Workbench thread",
     "transcript": "https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md#run-clip-10-seconds"
   }
