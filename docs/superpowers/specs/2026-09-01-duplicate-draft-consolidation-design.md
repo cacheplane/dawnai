@@ -52,7 +52,8 @@ explicitly named it as the draft to converge and preserve.
 - Delete only Releases `379982100` and `379986168` after exhaustive equality
   and live-authority checks.
 - Emit a canonical, bounded, self-verifying receipt suitable for source control.
-- Make interruption after the first deletion safely resumable.
+- Make interruption after the first deletion safely resumable while the
+  required main-change freeze remains intact.
 - Keep Release disabled and repeatedly observe npm absence throughout
   consolidation. This excludes the active Release automation but cannot prevent
   an out-of-band publisher from racing the operator.
@@ -146,6 +147,11 @@ Use bounded, paginated production readers for Releases, assets, annotated tags,
 workflow states, workflow runs, and asset downloads. Authentication remains in
 the environment or the existing `gh` session; tokens never appear in argv,
 receipts, logs, or source files.
+
+Release, asset, and workflow-run enumeration uses `per_page=100`, follows only
+validated GitHub Link relations, accepts at most 100 pages and 10,000 raw
+records, rejects duplicate IDs across pages, and requires stable reported totals
+where the endpoint supplies them.
 
 The only writer deletes one exact Release ID. It accepts the statically validated
 duplicate-ID set and cannot receive the survivor ID. GitHub documents `204` and
@@ -251,152 +257,225 @@ Each envelope is `{ "record": <exact-schema object>, "recordSha256": <hex> }`.
 one newline; the digest field is outside the hashed projection. The proposed,
 journal, and receipt records use separate schema identifiers and exact field
 sets. All arrays have fixed canonical order, timestamps are canonical UTC, and
-the maximum serialized sizes are 4 MiB for proposed, 512 KiB for journal, and
-8 MiB for final receipt. Unknown/missing fields,
-noncanonical bytes, invalid UTF-8, duplicate keys, digest mismatch, or excessive
-size are rejected.
+the maximum serialized sizes are 4 MiB for proposed, 4 MiB for journal, and 8
+MiB for final receipt. Unknown/missing fields, noncanonical bytes, invalid
+UTF-8, duplicate keys, digest mismatch, or excessive size are rejected.
 
-The exact top-level `record` fields, in canonical order, are:
+### Exact shared records
 
-```text
-proposed:
-  schemaVersion, repository, controller, candidate, roles, confirmation,
-  annotatedTag, workflowAuthority, npmAuthority, releases, payloadProof,
-  inspectedAt
-
-journal:
-  schemaVersion, repository, candidate, proposedRecordSha256,
-  confirmationSha256, deletionOrder, targets, updatedAt
-
-final:
-  schemaVersion, proposed, proposedRecordSha256, journal,
-  finalAuthority, finalSurvivor, completedAt
-```
-
-`roles` is exactly `{survivor, duplicates}` in the fixed ID order;
-the proposed `confirmation` is exactly `{version, commitSha, survivor,
-duplicates, template}` and its template retains the literal
-`<64-lowercase-hex-digest>` placeholder, avoiding a self-reference to the
-proposed envelope digest. The journal binds the fully substituted operator
-string through `confirmationSha256`. `releases` is a three-element
-survivor-then-duplicates array of the exact Release and asset projections
-defined in Equality Contract; `payloadProof` is exactly
-`{baseAssetSet, baseAssetSetSha256, consolidationPayloadSha256,
-attestationVerification}`. `npmAuthority` contains ordered 21-package complete
-inventories and their start/end timestamps. `workflowAuthority` contains the
-workflow file/id/state plus the bounded run query and result.
-
-`repository` is exactly `{name, id, defaultBranch, actor}` with `actor` exactly
-`{login, id}`. `controller` is exactly `{headSha, originMainSha,
-githubMainSha}` and all three SHAs must match. `candidate` is exactly
-`{version, commitSha, tag}`. `annotatedTag` is exactly `{name, objectSha,
-targetSha, objectType}`. Each authority observation carries its own
-`observedAt`; no global timestamp is used to imply simultaneous reads.
-
-Each journal `targets` entry is exactly `{releaseId, status, intent, outcome,
-convergence}` in deletion order. Nullable subrecords remain present as `null`:
-`intent` is `{persistedAt, lastObservationSha256}`, where the digest binds the
-complete direct-read projection already materialized in the proposed record; `outcome` is
-`{classification, httpStatus, observedAt}`; and `convergence` is
-`{directGet404At, listAbsentAt, attempts, completedAt}`. `finalAuthority` and
-`finalSurvivor` reuse the exact authority and survivor projections rather than
-introducing weaker summary shapes. The implementation plan will translate
-these field lists directly into strict parsers and canonicalizers; it may not
-add evidence fields without revising this design and tests first.
-
-The proposed record contains the immutable inspection evidence: repository and
-candidate identity, controller SHA, exact ID roles, tag/workflow/npm authority,
-all three Release and asset projections, the canonical base-asset-set proof,
-attestation verification result, and `consolidationPayloadSha256`. It contains
-no credentials or full asset payloads.
-
-The journal contains the proposed-record digest, exact confirmation digest,
-ordered deletion plan, and a state for each target:
+These field lists are normative, including field order. Every object is exact;
+nullable values remain present as `null`.
 
 ```text
-pending -> intent-persisted -> outcome-recorded -> absence-reconciled
+repository: {name, id, defaultBranch, actor}
+actor: {login, id}
+controller: {headSha, originMainSha, githubMainSha}
+candidate: {version, commitSha, tag}
+roles: {survivor, duplicates}
+confirmation: {version, commitSha, survivor, duplicates, template}
+annotatedTag: {name, objectSha, targetSha, objectType, observedAt}
+
+workflowAuthority:
+  {workflowId, path, state, query, nonterminalRuns, observedAt}
+workflow query: {statuses, perPage, maximumPages}
+workflow run:
+  {id, runAttempt, status, event, headSha, headBranch}
+
+npmInventory: {stage, startedAt, completedAt, packages}
+npm package observation:
+  {name, version, status, httpStatus, code, observedAt}
+
+releaseEvidence:
+  {role, id, nodeId, tagName, createdAt, updatedAt, semantic, assets}
+release semantic:
+  {name, targetCommitish, draft, immutable, prerelease, publishedAt,
+   body, bodySha256, author}
+release author / asset uploader: {login, id, nodeId}
+assetEvidence:
+  {id, nodeId, name, label, state, contentType, size, digest, uploader,
+   createdAt, updatedAt, downloadCount, downloadSha256}
+
+payloadProof:
+  {baseAssetSet, baseAssetSetSha256, consolidationPayloadSha256,
+   attestationVerification}
+baseAssetSet entry: {name, sha256}
+attestationVerification: {status, subjects}
+verified subject: {name, sha256}
+
+authorityStage:
+  {stage, controller, annotatedTag, workflowAuthority, npmInventory,
+   releases, payloadProof, observedAt}
 ```
 
-Before every request, `intent-persisted` plus the digest binding the target's
-complete last observation to the proposed record is atomically durable. At
-`outcome-recorded`, outcome classification
-is exactly `confirmed-204` or `outcome-ambiguous`. Only a response actually
-received as `204` is confirmed. A timeout, transport failure, process loss, or
-`404` after that initially-present observation is never relabeled as confirmed;
-it is ambiguous. Both classifications must pass the bounded convergence checks
-before status advances to `absence-reconciled`. A target initially absent
-without a matching persisted intent is an illegal state.
+IDs use canonical positive decimal strings; SHAs and digests use canonical
+lowercase hexadecimal. `controller` requires all three SHAs to match.
+`roles.survivor` and `roles.duplicates` are the fixed Release IDs in approved
+order. `workflowAuthority.state` must be `disabled_manually`, `path` must be
+`.github/workflows/release.yml`, and `nonterminalRuns` must be empty after the
+bounded query. The query is exactly statuses `["in_progress","pending",
+"queued","requested","waiting"]`, `perPage: 100`, and `maximumPages: 100`.
+Every npm package observation must be exact `NOT_FOUND`, HTTP 404, code `E404`,
+in canonical fixed-group order.
 
-Local evidence files are opened no-follow, must be regular files owned by the
-operator, use mode `0600`, and are replaced through same-directory temporary
-file + fsync + atomic rename + parent-directory fsync. Creation refuses an
-existing symlink or unsafe path. The journal is write-ahead state, not merely a
-log written after the request.
+Release/asset evidence includes service identity and volatile fields for honest
+recording, while only the semantic projections in Equality Contract are used
+for parity. `baseAssetSet` is the exact 45-entry ordered `{name, sha256}` array
+from `canonicalBaseAssetSet`; `attestationVerification` is exactly `VERIFIED`
+plus the ordered 22-subject `{name, sha256}` result from the production
+verifier. Proposed npm stages are exactly `inspect-initial` and
+`inspect-ready`. Perform stages are exactly `perform-initial`,
+`pre-delete-1`, `pre-delete-2`, and `final`; the final receipt retains all six
+stage-labeled inventories at minimum. A resumed attempt may append another
+`perform-initial` plus the target's `pre-delete-1` or `pre-delete-2` inventory,
+distinguished by event sequence and attempt number.
 
-`perform` materializes a final canonical receipt at:
+### Proposed envelope
+
+The proposed `record` fields are exactly:
 
 ```text
-scripts/release/duplicate-draft-consolidation.json
+schemaVersion, repository, controller, candidate, roles, confirmation,
+annotatedTag, workflowAuthority, npmInventories, releases, payloadProof,
+inspectedAt
 ```
 
-The final receipt records:
+`confirmation.template` retains the literal `<64-lowercase-hex-digest>`
+placeholder, avoiding self-reference to the proposed digest. `npmInventories`
+contains the two inspect stages. `releases` contains survivor then duplicates.
+The proposed record contains no credentials or full asset payloads.
 
-- schema version, repository identity, operator login/ID, controller SHA, exact
-  confirmation, and timestamps;
-- candidate and annotated-tag object/target identity;
-- Release workflow state and bounded nonterminal-run query;
-- both npm E404 observations and their interval;
-- survivor before/after metadata, body digest, asset projection, and canonical
-  base-asset-set digest;
-- each duplicate's Release/node/tag identity, body digest, asset projection, and
-  canonical base-asset-set digest;
-- deterministic deletion order and, for each target, either a received
-  `confirmed-204` observation or an honest
-  `outcome-ambiguous-but-absence-reconciled` observation;
-- final bounded Release enumeration proving exactly one managed draft;
-- the full pre-delete proposed record, its digest, and the final journal state.
+### Hash-chained journal envelope
 
-Receipt parsing uses the same safe-file and canonical-envelope rules. The
-tracked receipt is created only from a completed live operation; the repository
-contains no placeholder success receipt. `verify` can prove the receipt's
-integrity, current survivor equality, deleted-ID absence, and current authority
-postconditions. It cannot independently re-download deleted historical bytes;
-those are supported by the embedded pre-delete observation and the survivor's
-still-live identical payload. The first public durable copy is the focused
-receipt follow-up commit after consolidation.
+The journal `record` fields are exactly:
+
+```text
+schemaVersion, repository, candidate, proposedRecordSha256,
+confirmationSha256, deletionOrder, events, updatedAt
+```
+
+`events` is an append-only array of envelopes
+`{ "event": <event>, "eventSha256": <hex> }`. The event digest is over canonical
+event bytes plus one newline. Every event is exactly
+`{schemaVersion, sequence, previousEventSha256, type, recordedAt, payload}`;
+sequence starts at one and the first previous digest is `null`. Later events
+must bind the immediately preceding event digest. Event types and exact payloads
+are:
+
+```text
+operation-started:
+  {proposedRecordSha256, confirmationSha256, controllerSha, deletionOrder}
+npm-observed:
+  {targetReleaseId, attemptNumber, inventory}
+delete-authority-observed:
+  {targetReleaseId, attemptNumber, authority}
+delete-intent:
+  {targetReleaseId, attemptNumber, authorityEventSha256}
+delete-outcome:
+  {targetReleaseId, attemptNumber, classification, httpStatus, observedAt}
+resume-reconciliation:
+  {targetReleaseId, attemptNumber, classification, releaseEvidence, observedAt}
+absence-converged:
+  {targetReleaseId, attemptNumber, basis, directGet404At, listAbsentAt,
+   attempts, completedAt}
+final-authority-observed:
+  {authority}
+```
+
+Allowed `delete-outcome.classification` values are `confirmed-204`,
+`transport-ambiguous`, and `response-404-ambiguous`; `httpStatus` is 204, null,
+or 404 respectively. Allowed resume classifications are
+`present-unchanged-retryable` and `absent-ambiguous`; `releaseEvidence` is the
+current complete target evidence for the former and `null` for the latter.
+Allowed convergence `basis` values are `confirmed-204` and `ambiguous`.
+All proposed, journal, final, and journal-event `schemaVersion` fields are the
+integer `1`, interpreted by their distinct strict parser contexts.
+
+Every delete attempt embeds a complete immediately preceding
+`authorityStage`—including fresh controller, workflow/run, tag, npm, remaining
+Release/asset, and payload evidence—in `delete-authority-observed`. The intent
+binds that event digest and is atomically durable before the request. A received
+204 produces `confirmed-204`. Timeout, transport failure, or a received 404 is
+ambiguous. If the process disappears before recording an outcome, resume reads
+the target:
+
+- present and semantically identical: append
+  `present-unchanged-retryable`, refresh every authority source into a new
+  attempt, persist a new intent, and only then retry DELETE. If the prior
+  complete npm inventory is more than two minutes old, append a new
+  `perform-initial` inventory, wait at least 60 seconds while repeating the
+  heavy payload checks, then capture the target's new `pre-delete-1` or
+  `pre-delete-2` inventory;
+- absent: append `absent-ambiguous` and perform bounded absence convergence;
+- changed, published, or malformed: stop without another write.
+
+Only `absence-converged` completes a target. The next target cannot receive an
+authority or intent event until the preceding target has that terminal event.
+The hash chain is the complete transition history verified on every resume.
+
+### Final receipt envelope
+
+The final `record` fields are exactly:
+
+```text
+schemaVersion, proposedEnvelope, journalEnvelope, finalAuthority,
+finalSurvivor, completedAt
+```
+
+The embedded values are the complete canonical envelopes, not bare records or
+summary hashes. `finalAuthority` is the exact `final` authority stage and
+`finalSurvivor` is the same exact survivor `releaseEvidence` contained within
+it. Canonical outcome is never renamed in the receipt: deletion certainty is
+derived from the recorded outcome/resume classification plus the required
+`absence-converged` event.
+
+The `.dawn` proposed and journal files are opened no-follow, must be regular
+files owned by the operator, use mode `0600`, and are replaced through a
+same-directory temporary file + fsync + atomic rename + parent-directory fsync.
+Creation refuses an existing symlink or unsafe path. The tracked receipt uses a
+separate source-file rule: no-follow regular file, expected owner, nonexecutable,
+and no group/other write bits; ordinary Git mode `0644` is accepted.
+
+`verify` proves envelope/hash-chain integrity, current survivor equality,
+deleted-ID absence, and current authority postconditions. It cannot
+independently re-download deleted historical bytes; those are supported by the
+embedded pre-delete observations and the survivor's still-live identical
+payload. The first public durable copy is the focused receipt follow-up commit.
 
 ## Mutation Flow
 
-1. Re-read local/remote/main SHA identity and require a clean merged checkout.
-2. Require Release `disabled_manually` and zero nonterminal Release runs.
-3. Read all paginated Releases and require the exact three-ID managed set.
-4. Verify the annotated tag and capture the first complete npm E404 inventory.
-5. During the at-least-60-second gap, download all 135 asset instances, apply
+1. Begin the operational main-change freeze: the sole owner makes no merge or
+   direct push to `main` until the final receipt is durable. Re-read
+   local/remote/main SHA identity and require a clean merged checkout.
+2. Validate the reviewed proposed envelope and exact confirmation. Append
+   `operation-started` to a new journal.
+3. Require Release `disabled_manually`, zero nonterminal Release runs, and the
+   exact three-ID managed set. Capture and append the complete
+   `perform-initial` npm E404 inventory bound to target `379982100`, attempt 1.
+4. During the at-least-60-second gap, download all 135 asset instances, apply
    production escrow/attestation verification, and prove the exact equality
-   projections.
-6. Capture the second complete npm E404 inventory. Then repeat
-   main/workflow/run/tag/Release/body/asset metadata reads, bind them to the
-   proposed-record digest, and require that no more than two minutes elapse
-   before the first writer begins.
-7. Immediately before the request, directly GET Release `379982100` and its
-   complete paginated assets, require exact equality, and atomically persist its
-   `intent-persisted` journal state.
-8. Delete Release `379982100`; record `confirmed-204` or honest ambiguous
-   outcome, then run bounded read-only convergence.
-9. Require direct GET of `379982100` to return 404 and a complete paginated
+   projections against the proposal.
+5. Capture the `pre-delete-1` complete npm E404 inventory and all other fresh
+   authority into a `delete-authority-observed` event. Require it semantically
+   equal to the proposal, then append `delete-intent` and begin the first DELETE
+   while that inventory is no more than two minutes old.
+6. Delete Release `379982100`; append the exact outcome or reconcile an
+   interrupted intent, then run bounded read-only convergence and append
+   `absence-converged`.
+7. Require direct GET of `379982100` to return 404 and a complete paginated
    Release enumeration to exclude it, while the survivor and Release
-   `379986168` remain byte-for-byte/projection-identical to the proposal.
-10. Repeat main/workflow/run/tag checks, require a fresh complete npm E404
-    inventory, directly GET Release `379986168` and all its assets, and persist
-    its `intent-persisted` state.
-11. Delete Release `379986168`, classify the response honestly, and require the
-    same two-source bounded absence convergence while the survivor remains
-    unchanged.
-12. Re-read GitHub and npm. Require only survivor `379991871`, unchanged body
-    and 45 downloaded assets, unchanged annotated tag, Release still disabled,
-    no nonterminal run, and a final complete npm E404 inventory.
-13. Atomically write the final canonical receipt and verify its envelope and
-    current-state claims independently.
+   `379986168` remain projection/payload-identical to the proposal.
+8. Capture complete `pre-delete-2` controller/workflow/run/tag/npm and remaining
+   Release/asset evidence in a new `delete-authority-observed` event. Append the
+   second `delete-intent` only if every check passes.
+9. Delete Release `379986168`, append or reconcile the exact outcome, and
+   require the same two-source bounded absence convergence while the survivor
+   remains unchanged.
+10. Capture and append the complete `final` authority stage. Require only
+    survivor `379991871`, unchanged body and 45 downloaded assets, unchanged
+    annotated tag, Release still disabled, no nonterminal run, and a final
+    complete npm E404 inventory.
+11. Atomically write the final canonical receipt, independently verify its
+    envelopes/hash chain/current-state claims, then end the main-change freeze.
 
 Convergence retries only reads: at most six complete direct-GET/list attempts
 within 90 seconds, with bounded backoff no longer than 30 seconds. `403`, `429`,
@@ -409,17 +488,34 @@ observation, not a server-side compare-and-swap. Exact-ID writers, immediate
 full re-reads, deterministic order, the write-ahead journal, and postconditions
 make uncertainty visible rather than guessed away.
 
+The main-change freeze is a required operational precondition, not an API lock.
+The command rechecks all three main SHAs before each DELETE and at finalization.
+If `main` advances after the first deletion, the command stops and no longer
+claims automatic resumability. The operator preserves the proposed/journal
+files and requests a focused reviewed migration change. That change must name
+the exact old and successor controller SHAs, parse and verify the old envelopes
+and event chain without rewriting them, prove the successor preserves this
+command's schemas and safety behavior, emit a migration event/receipt binding
+both SHAs, and repeat the full fresh authority sequence before authorizing a
+remaining delete. There is no unreviewed SHA override or automatic migration.
+
 ## Interruption and Recovery
 
-The operation is resumable only through the same CLI and journal. Resume first
-validates the proposed envelope, confirmation digest, repository/controller
-identity, and complete journal transition history; it never infers permission
-to delete from current absence alone.
+While the main-change freeze remains intact, the operation is resumable only
+through the exact same controller CLI and journal. Resume first validates the
+proposed envelope, confirmation digest, repository/controller identity, and
+complete hash-chained event history; it never infers permission to delete from
+current absence alone. If the freeze was violated, only the reviewed migration
+procedure above may restore authority.
 
-- Before any deletion: rerun from inspection.
-- At `intent-persisted` after a restart, no response was durably recorded, so
-  classify the result as ambiguous. At `outcome-recorded`, preserve the durable
-  `confirmed-204` or ambiguous classification. In either case reconcile only
+- Before any intent: the journal may be discarded and `perform` rerun. The
+  proposal is reference evidence rather than fresh mutation authority; all live
+  parity and authority reads are repeated by `perform`, and any mismatch stops.
+- After `delete-intent` with no later event, directly read the target. If it is
+  present and semantically unchanged, append `present-unchanged-retryable`,
+  refresh all authority, and create a new attempt. If absent, append
+  `absent-ambiguous` and reconcile. Any other state stops.
+- After `delete-outcome`, preserve its exact classification and reconcile only
   when direct GET returns 404 and complete paginated enumeration excludes the
   ID.
 - After resolving `379982100`: require Release `379986168` and the survivor still
@@ -455,7 +551,9 @@ Stop before mutation or before the next deletion on any of these conditions:
 - proposed/journal/receipt drift or noncanonical bytes.
 
 There is no force mode, survivor override, ID auto-selection, delete-all option,
-manual repair path, tag mutation, or best-effort continuation.
+inline manual repair path, tag mutation, or best-effort continuation. The
+reviewed successor-controller migration is a new focused recovery change, not a
+runtime bypass.
 
 ## Testing and Rehearsal
 
@@ -474,6 +572,11 @@ Implementation follows test-first development and must cover:
   reconciled ambiguity;
 - direct-GET/list disagreement, delayed delete convergence, exhausted read-only
   retries, and every `403`/`429`/`5xx`/timeout stop path;
+- crash after intent while the target remains unchanged, safe fresh-authority
+  retry as a new attempt, crash after server-side absence, and hash-chain
+  tampering/reordering/truncation;
+- main advance before either writer and after the first deletion, proving the
+  current CLI stops and cannot accept an unreviewed successor SHA;
 - idempotent resume from each legal journal state;
 - rejection of every illegal partial state;
 - proposed/journal/final exact schemas, hash projections, canonicalization,
