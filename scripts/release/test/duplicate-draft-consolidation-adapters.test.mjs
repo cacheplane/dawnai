@@ -465,6 +465,154 @@ test("asset downloads preserve the production one-hop signed-host boundary", asy
   assert.equal(extraHopResult.code, "REDIRECT")
   assert.equal(extraHop.calls.length, 2)
   assert.equal(Object.hasOwn(extraHop.calls[1].init.headers, "Authorization"), false)
+
+  const source = await readFile(
+    new URL("../duplicate-draft-consolidation-adapters.mjs", import.meta.url),
+    "utf8",
+  )
+  for (const duplicatedAuthority of [
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "productionresultssa",
+  ]) {
+    assert.equal(source.includes(duplicatedAuthority), false)
+  }
+})
+
+test("signed download transport rejects caller-driven second hops", async () => {
+  const calls = []
+  const signedUrl =
+    "https://release-assets.githubusercontent.com/github-production-release-asset/1210070282/91/manifest.json?sig=exact"
+  const adapters = await createDuplicateDraftConsolidationAdapters({
+    cwd: "/workspace",
+    token: TOKEN,
+    environment: { HOME: "/home/release", PATH: "/tools" },
+    dependencies: {
+      fetchImpl: async (...args) => {
+        calls.push(args)
+        return binaryResponse(Buffer.from("asset"))
+      },
+      run: commandRunner([]),
+      now: () => NOW,
+      createGitHubReader({ fetchImpl }) {
+        return {
+          ...githubBoundary(),
+          async downloadReleaseAsset() {
+            await fetchImpl(signedUrl, { method: "GET", headers: {}, redirect: "manual" })
+            return {
+              status: "PRESENT",
+              operation: "release-asset-download",
+              httpStatus: 200,
+              code: null,
+              contentBase64: "YXNzZXQ=",
+            }
+          },
+        }
+      },
+    },
+  })
+
+  await assert.rejects(
+    () => adapters.github.downloadReleaseAsset({ assetId: "91", maximumBytes: 5 }),
+    /flow|hop|origin|trusted|download/iu,
+  )
+  assert.equal(calls.length, 0)
+
+  const seeded = recordingFetch([redirectResponse(signedUrl), binaryResponse(Buffer.from("asset"))])
+  const seededAdapters = await createDuplicateDraftConsolidationAdapters({
+    cwd: "/workspace",
+    token: TOKEN,
+    environment: { HOME: "/home/release", PATH: "/tools" },
+    dependencies: {
+      fetchImpl: seeded.fetchImpl,
+      run: commandRunner([]),
+      now: () => NOW,
+      createGitHubReader({ fetchImpl }) {
+        return {
+          ...githubBoundary(),
+          async downloadReleaseAsset() {
+            await fetchImpl(`${BASE}/releases/assets/91`, {
+              method: "GET",
+              headers: {},
+              redirect: "manual",
+            })
+            await fetchImpl(signedUrl, { method: "GET", headers: {}, redirect: "manual" })
+            return {
+              status: "PRESENT",
+              operation: "release-asset-download",
+              httpStatus: 200,
+              code: null,
+              contentBase64: "YXNzZXQ=",
+            }
+          },
+        }
+      },
+    },
+  })
+  await assert.rejects(
+    () => seededAdapters.github.downloadReleaseAsset({ assetId: "91", maximumBytes: 5 }),
+    /flow|hop|origin|trusted|download/iu,
+  )
+  assert.equal(seeded.calls.length, 1)
+})
+
+test("authorized download hops strip credentials at the transport boundary", async () => {
+  const signedUrl =
+    "https://release-assets.githubusercontent.com/github-production-release-asset/1210070282/91/manifest.json?sig=exact"
+  const recording = recordingFetch([
+    redirectResponse(signedUrl),
+    binaryResponse(Buffer.from("asset")),
+  ])
+  const adapters = await createDuplicateDraftConsolidationAdapters({
+    cwd: "/workspace",
+    token: TOKEN,
+    environment: { HOME: "/home/release", PATH: "/tools" },
+    dependencies: {
+      fetchImpl: recording.fetchImpl,
+      run: commandRunner([]),
+      now: () => NOW,
+      createGitHubReader({ fetchImpl }) {
+        return {
+          ...githubBoundary(),
+          async downloadReleaseAsset() {
+            const first = await fetchImpl(`${BASE}/releases/assets/91`, {
+              method: "GET",
+              headers: {
+                Accept: "application/octet-stream",
+                Authorization: `Bearer ${TOKEN}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+              redirect: "manual",
+            })
+            await fetchImpl(first.headers.get("location"), {
+              method: "GET",
+              headers: {
+                Accept: "application/octet-stream",
+                Authorization: `Bearer ${TOKEN}`,
+              },
+              redirect: "manual",
+            })
+            return {
+              status: "PRESENT",
+              operation: "release-asset-download",
+              httpStatus: 200,
+              code: null,
+              contentBase64: "YXNzZXQ=",
+            }
+          },
+        }
+      },
+    },
+  })
+
+  assert.equal(
+    (await adapters.github.downloadReleaseAsset({ assetId: "91", maximumBytes: 5 })).contentBase64,
+    "YXNzZXQ=",
+  )
+  assert.equal(recording.calls.length, 2)
+  assert.equal(Object.hasOwn(recording.calls[1].init.headers, "Authorization"), false)
+  assert.equal(recording.calls[1].init.headers.Accept, "application/octet-stream")
+  assert.equal(recording.calls[1].init.headers["User-Agent"], USER_AGENT)
 })
 
 test("release and asset readers reject duplicate numeric identities across pages", async () => {
@@ -505,18 +653,27 @@ test("release and asset readers reject duplicate numeric identities across pages
   }
 })
 
-test("release and asset pagination reject contradictory complete Link graphs", async () => {
-  for (const [operation, endpoint, invoke] of [
-    ["releases", `${BASE}/releases?per_page=100&page=2`, (github) => github.listReleases()],
+test("release and asset pagination accept compatible shared Link targets", async () => {
+  for (const [operation, firstUrl, secondUrl, invoke] of [
+    [
+      "releases",
+      `${BASE}/releases?per_page=100&page=1`,
+      `${BASE}/releases?per_page=100&page=2`,
+      (github) => github.listReleases(),
+    ],
     [
       "release-assets",
+      `${BASE}/releases/${SURVIVOR}/assets?per_page=100&page=1`,
       `${BASE}/releases/${SURVIVOR}/assets?per_page=100&page=2`,
       (github) => github.listReleaseAssets({ releaseId: SURVIVOR }),
     ],
   ]) {
     const recording = recordingFetch([
-      jsonResponse([], 200, {
-        Link: `<${endpoint}>; rel="next", <${endpoint}>; rel="prev"`,
+      jsonResponse([{ id: 2, name: "second" }], 200, {
+        Link: `<${secondUrl}>; rel="next", <${secondUrl}>; rel="last"`,
+      }),
+      jsonResponse([{ id: 1, name: "first" }], 200, {
+        Link: `<${firstUrl}>; rel="prev", <${firstUrl}>; rel="first"`,
       }),
     ])
     const adapters = await createAdapters({
@@ -524,12 +681,55 @@ test("release and asset pagination reject contradictory complete Link graphs", a
       run: commandRunner([]),
     })
     assert.deepEqual(await invoke(adapters.github), {
-      status: "ERROR",
+      status: "PRESENT",
       operation,
       httpStatus: 200,
-      code: "MALFORMED_LINK_HEADER",
+      code: null,
+      value: [
+        { id: 1, name: "first" },
+        { id: 2, name: "second" },
+      ],
     })
-    assert.equal(recording.calls.length, 1)
+    assert.equal(recording.calls.length, 2)
+  }
+})
+
+test("release and asset pagination reject incompatible complete Link graphs", async () => {
+  for (const [operation, page2, page3, invoke] of [
+    [
+      "releases",
+      `${BASE}/releases?per_page=100&page=2`,
+      `${BASE}/releases?per_page=100&page=3`,
+      (github) => github.listReleases(),
+    ],
+    [
+      "release-assets",
+      `${BASE}/releases/${SURVIVOR}/assets?per_page=100&page=2`,
+      `${BASE}/releases/${SURVIVOR}/assets?per_page=100&page=3`,
+      (github) => github.listReleaseAssets({ releaseId: SURVIVOR }),
+    ],
+  ]) {
+    for (const link of [
+      `<${page2}>; rel="next", <${page2}>; rel="prev"`,
+      `<${page2}>; rel="next", <${page2}>; rel="first"`,
+      `<${page2}>; rel="last", <${page2}>; rel="prev"`,
+      `<${page2}>; rel="last", <${page2}>; rel="first"`,
+      `<${page2}>; rel="next", <${page3}>; rel="next"`,
+      `<${page2}>; rel="next last"`,
+    ]) {
+      const recording = recordingFetch([jsonResponse([], 200, { Link: link })])
+      const adapters = await createAdapters({
+        fetchImpl: recording.fetchImpl,
+        run: commandRunner([]),
+      })
+      assert.deepEqual(await invoke(adapters.github), {
+        status: "ERROR",
+        operation,
+        httpStatus: 200,
+        code: "MALFORMED_LINK_HEADER",
+      })
+      assert.equal(recording.calls.length, 1)
+    }
   }
 })
 
@@ -606,6 +806,10 @@ test("workflow-run enumeration requires one exact trusted Link next relation", a
     `<${endpoint}&extra=true>; rel="next"`,
     `<${endpoint}>; rel="next prev"`,
     `<${endpoint}>; rel="next", <${endpoint}>; rel="prev"`,
+    `<${endpoint}>; rel="next", <${endpoint}>; rel="first"`,
+    `<${endpoint}>; rel="last", <${endpoint}>; rel="prev"`,
+    `<${endpoint}>; rel="last", <${endpoint}>; rel="first"`,
+    `<${endpoint}>; rel="next last"`,
     `<${endpoint}>; rel="next", <${endpoint}>; rel="next"`,
     `<${endpoint}>; rel="next", malformed`,
   ]) {
@@ -623,6 +827,33 @@ test("workflow-run enumeration requires one exact trusted Link next relation", a
       /Link|pagination|next|trusted|URL/iu,
     )
   }
+})
+
+test("workflow-run pagination accepts compatible next-last and prev-first aliases", async () => {
+  const firstPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=1`
+  const secondPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2`
+  const page = Array.from({ length: 100 }, (_unused, index) => workflowRun(index + 1))
+  const recording = recordingFetch([
+    jsonResponse({ total_count: 101, workflow_runs: page }, 200, {
+      Link: `<${secondPageUrl}>; rel="next", <${secondPageUrl}>; rel="last"`,
+    }),
+    jsonResponse({ total_count: 101, workflow_runs: [workflowRun(101)] }, 200, {
+      Link: `<${firstPageUrl}>; rel="prev", <${firstPageUrl}>; rel="first"`,
+    }),
+  ])
+  const adapters = await createAdapters({
+    fetchImpl: recording.fetchImpl,
+    run: commandRunner([]),
+  })
+
+  const runs = await adapters.github.listNonterminalWorkflowRuns()
+  assert.equal(runs.length, 101)
+  assert.deepEqual(runs[0], normalizedWorkflowRun("1"))
+  assert.deepEqual(runs.at(-1), normalizedWorkflowRun("101"))
+  assert.deepEqual(
+    recording.calls.map(({ url }) => url),
+    [firstPageUrl, secondPageUrl],
+  )
 })
 
 test("local Git reads use exact argv arrays and reject detached, dirty, or malformed output", async () => {

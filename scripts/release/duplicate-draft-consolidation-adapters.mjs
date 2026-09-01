@@ -16,13 +16,6 @@ const API_ORIGIN = "https://api.github.com"
 const API_VERSION = "2022-11-28"
 const JSON_ACCEPT = "application/vnd.github+json"
 const USER_AGENT = "dawn-duplicate-draft-consolidation/1"
-const SIGNED_DOWNLOAD_HOSTS = new Set([
-  "objects.githubusercontent.com",
-  "release-assets.githubusercontent.com",
-  "github-releases.githubusercontent.com",
-  "pipelines.actions.githubusercontent.com",
-])
-const SIGNED_AZURE_HOST_PATTERN = /^productionresultssa[0-9]+\.blob\.core\.windows\.net$/u
 const RELEASE_WORKFLOW = ".github/workflows/release.yml"
 const APPROVED_TAG = "v0.8.22"
 const SURVIVOR_ID = "379991871"
@@ -550,16 +543,19 @@ function workflowNextUrl(value) {
     throw new TypeError("GitHub workflow-run Link header is malformed")
   }
   const next = []
-  const urls = new Set()
   const relations = new Set()
+  const targetRelations = new Map()
   for (const entry of graph) {
     const url = exactWorkflowPageUrl(entry.url)
-    if (urls.has(url) || relations.has(entry.relation)) {
+    if (relations.has(entry.relation)) {
       throw new TypeError("GitHub workflow-run Link graph is contradictory")
     }
-    urls.add(url)
     relations.add(entry.relation)
+    addTargetRelation(targetRelations, url, entry.relation)
     if (entry.relation === "next") next.push(url)
+  }
+  if (!hasCompatibleSharedLinkTargets(targetRelations)) {
+    throw new TypeError("GitHub workflow-run Link graph is contradictory")
   }
   return next[0] ?? null
 }
@@ -647,6 +643,7 @@ function hasExactKeys(value, expected) {
 }
 
 function githubFetch(fetchImpl) {
+  const authorizedDownloadHops = new Set()
   return async (url, init) => {
     let parsed
     try {
@@ -655,35 +652,69 @@ function githubFetch(fetchImpl) {
       throw new TypeError("GitHub request URL is invalid")
     }
     const apiRequest = parsed.origin === API_ORIGIN
-    const signedDownloadRequest =
-      parsed.protocol === "https:" &&
-      parsed.username === "" &&
-      parsed.password === "" &&
-      parsed.hash === "" &&
-      (SIGNED_DOWNLOAD_HOSTS.has(parsed.hostname.toLowerCase()) ||
-        SIGNED_AZURE_HOST_PATTERN.test(parsed.hostname.toLowerCase()))
+    const authorizedDownloadHop = !apiRequest && authorizedDownloadHops.delete(parsed.href)
     if (
       parsed.protocol !== "https:" ||
       parsed.username !== "" ||
       parsed.password !== "" ||
       parsed.hash !== "" ||
-      (!apiRequest && !signedDownloadRequest)
+      (!apiRequest && !authorizedDownloadHop)
     ) {
       throw new TypeError("GitHub request origin is not trusted")
     }
     const headerEntries = Object.entries(init.headers ?? {})
-    if (
-      signedDownloadRequest &&
-      headerEntries.some(([name]) => name.toLowerCase() === "authorization")
-    ) {
-      throw new TypeError("GitHub signed download request contains credentials")
-    }
+    const forwardedHeaders = authorizedDownloadHop
+      ? Object.fromEntries(headerEntries.filter(([name]) => name.toLowerCase() !== "authorization"))
+      : { ...init.headers }
     const response = await fetchImpl(parsed.href, {
       ...init,
-      headers: { ...init.headers, "User-Agent": USER_AGENT },
+      headers: { ...forwardedHeaders, "User-Agent": USER_AGENT },
     })
-    return apiRequest ? enforcePaginationLinkGraph(response, parsed) : response
+    if (apiRequest) {
+      authorizeProductionDownloadHop(parsed, init, response, authorizedDownloadHops)
+      return enforcePaginationLinkGraph(response, parsed)
+    }
+    return response
   }
+}
+
+function authorizeProductionDownloadHop(requestUrl, init, response, authorizedDownloadHops) {
+  const headers = Object.entries(init.headers ?? {})
+  if (
+    init.method !== "GET" ||
+    init.redirect !== "manual" ||
+    requestUrl.search !== "" ||
+    headers.length !== 3 ||
+    exactHeaderValue(headers, "accept") !== "application/octet-stream" ||
+    exactHeaderValue(headers, "x-github-api-version") !== API_VERSION ||
+    !/^Bearer [^\s]+$/u.test(exactHeaderValue(headers, "authorization") ?? "") ||
+    !/^\/repos\/cacheplane\/dawnai\/releases\/assets\/[1-9][0-9]*$/u.test(requestUrl.pathname)
+  ) {
+    return
+  }
+  let status
+  let location
+  try {
+    status = response?.status
+    location = response?.headers?.get("location")
+  } catch {
+    return
+  }
+  if (
+    status !== 302 ||
+    typeof location !== "string" ||
+    location.length === 0 ||
+    Buffer.byteLength(location, "utf8") > MAX_LINK_HEADER_BYTES
+  ) {
+    return
+  }
+  const normalized = normalizedAbsoluteUrl(location)
+  if (normalized !== null) authorizedDownloadHops.add(normalized)
+}
+
+function exactHeaderValue(entries, expectedName) {
+  const matches = entries.filter(([name]) => name.toLowerCase() === expectedName)
+  return matches.length === 1 && typeof matches[0][1] === "string" ? matches[0][1] : null
 }
 
 function enforcePaginationLinkGraph(response, requestUrl) {
@@ -706,20 +737,41 @@ function enforcePaginationLinkGraph(response, requestUrl) {
 function validPaginationLinkGraph(value, requestUrl) {
   const graph = exactLinkGraph(value)
   if (graph === null) return false
-  const urls = new Set()
   const relations = new Set()
+  const targetRelations = new Map()
   for (const entry of graph) {
     const url = normalizedAbsoluteUrl(entry.url)
     if (
       url === null ||
-      urls.has(url) ||
       relations.has(entry.relation) ||
       (entry.relation !== "next" && exactPaginationLinkUrl(url, requestUrl) === null)
     ) {
       return false
     }
-    urls.add(url)
     relations.add(entry.relation)
+    addTargetRelation(targetRelations, url, entry.relation)
+  }
+  return hasCompatibleSharedLinkTargets(targetRelations)
+}
+
+function addTargetRelation(targetRelations, url, relation) {
+  const relations = targetRelations.get(url) ?? new Set()
+  relations.add(relation)
+  targetRelations.set(url, relations)
+}
+
+function hasCompatibleSharedLinkTargets(targetRelations) {
+  for (const relations of targetRelations.values()) {
+    if (relations.size === 1) continue
+    if (
+      relations.size !== 2 ||
+      !(
+        (relations.has("next") && relations.has("last")) ||
+        (relations.has("prev") && relations.has("first"))
+      )
+    ) {
+      return false
+    }
   }
   return true
 }
