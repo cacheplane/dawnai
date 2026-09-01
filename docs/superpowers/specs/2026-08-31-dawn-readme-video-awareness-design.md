@@ -15,7 +15,7 @@ coordinated story:
 Dawn is the TypeScript meta-framework for LangGraph.js. The awareness campaign
 will make that category concrete through a deterministic product loop:
 
-1. Author a small file-system route and route-local tool.
+1. Author a small file-system route and inspect a discovered tool.
 2. Prove it with the scaffold's offline test path.
 3. Run the same route in the shipped Dawn Workbench.
 
@@ -108,7 +108,7 @@ checked-in route + fixture + capture script
                   |
          +--------+--------+
          |                 |
-    terminal capture   Workbench capture
+ browser compositor   Workbench capture
          |                 |
          +--------+--------+
                   |
@@ -134,10 +134,14 @@ primary entry point.
 
 The flagship is a 20-30 second, silent 16:9 product-loop video with four beats:
 
-1. **Author (6-8 seconds).** Show the real generated research workspace in an
-   editor. The file tree exposes `src/app/research/`, `index.ts`, `tools/`, and
-   the co-located test. The camera emphasizes one `agent()` descriptor and one
-   route-local tool; it does not show installation output.
+1. **Author (6-8 seconds).** Show the real generated research workspace. The
+   file tree exposes `server/src/app/research/index.ts`, its co-located
+   `state.ts` and `plan.md`, the discovered shared tool at
+   `server/src/tools/searchCorpus.ts`, and the harness at
+   `server/test/research.test.ts`. The camera emphasizes the `agent()`
+   descriptor and the small tool implementation; it does not show installation
+   output or imply that the default research starter places tools inside the
+   route directory.
 2. **Prove (5-7 seconds).** Run the canonical root `npm test` path and show the
    deterministic research scenario passing without an API key.
 3. **Run (9-12 seconds).** Open the generated Dawn Workbench, invoke the same
@@ -155,9 +159,9 @@ The same capture session produces three 8-12 second clips:
 
 | Clip | Proof | Homepage placement |
 | --- | --- | --- |
-| Author | File-system route plus route-local tool | File-system routing section |
+| Author | File-system route plus discovered shared tool | File-system routing section |
 | Test | Offline deterministic scenario passes | Development loop section |
-| Run | Workbench run and thread restoration | Durability section |
+| Run | Workbench run, browser reload, and checkpoint-backed transcript restoration | Durability section |
 
 The flagship master is also suitable for ordinary 16:9 social posts. Vertical
 or square reframing is deferred.
@@ -176,8 +180,9 @@ Large MP4/WebM outputs are generated into a gitignored artifact directory and
 uploaded separately to a Dawn-owned public Vercel Blob store using stable
 pathnames. Capture sources, fixtures, the final README GIF, posters, and the
 transcript are committed. Uploading is an explicit authorized release step. If
-the store cannot be created or verified, the homepage portion does not ship
-with broken or temporary media URLs.
+the store cannot be created or verified, neither the README links to the full
+video nor the homepage video integration ships with broken or temporary media
+URLs.
 
 ### Deterministic capture pipeline
 
@@ -189,12 +194,21 @@ The capture command will:
 3. Create a temporary research workspace from the local scaffold in internal
    mode.
 4. Install dependencies inside that workspace.
-5. Start only fixture-backed model/runtime services.
+5. Start only fixture-backed model/runtime services. Aimock is injected through
+   the capture server environment; the generated Workbench does not gain a
+   fixture mode or marketing-only runtime branch.
 6. Start the Dawn server and generated Workbench on assigned local ports.
-7. Record the fixed editor/terminal/browser scenes at a fixed viewport.
-8. Encode all output variants and posters.
-9. Validate duration, dimensions, codecs, byte budgets, and transcript presence.
-10. Stop child processes and remove the temporary workspace on success or
+7. Run the real test command and save its stdout/stderr and exit code as capture
+   inputs.
+8. Render the author and test acts in a capture-only browser compositor. The
+   compositor reads the generated workspace files and real command log, applies
+   fixed Dawn-branded code/terminal chrome, and contains no hand-authored fake
+   output. It is capture tooling, not a user-facing demo application.
+9. Use Playwright video recording for the compositor and the real Workbench at
+   one fixed viewport. No native VS Code or terminal recorder is required.
+10. Encode all output variants and posters.
+11. Validate duration, dimensions, codecs, byte budgets, and transcript presence.
+12. Stop child processes and remove the temporary workspace on success or
     failure.
 
 No capture command may silently fall back to a live model. The recording must
@@ -205,6 +219,11 @@ The implementation should reuse the existing aimock/fixture and Playwright
 patterns from Dawn examples. It should retire the obsolete VHS pipeline and
 replace the manual `docs/brand/recording-guide.md` instructions with the new
 reproducible process.
+
+The Run derivative defines restoration precisely: complete a run, keep the Dawn
+server alive, reload the browser page, reopen the same thread id from the rail,
+observe a successful `GET /threads/:id/state`, and show the transcript restored
+from the server checkpoint. It does not claim to demonstrate a server restart.
 
 ## Root GitHub README
 
@@ -250,6 +269,11 @@ denominator.
 
 All 21 public packages receive a shared information model with tier-specific
 depth.
+
+The verified package set comes from the release inventory derived from public
+workspace manifests and is cross-checked against the website API-reference
+inventory/tests. A package is not added to or removed from this list solely to
+make the README tiers symmetrical.
 
 ### Tier 1: primary entry points
 
@@ -387,7 +411,8 @@ workspace.
 
 - Capture completes with networking to live model providers disabled.
 - Scene assertions verify editor file paths, passing test output, Workbench tool
-  activity, and thread state.
+  activity, and the explicit browser-reload restoration sequence: same thread
+  id, successful state fetch, and restored transcript.
 - Encoded assets meet dimensions, codec, duration, and byte budgets.
 - Poster and transcript exist for each clip.
 - Stable remote URLs return successful responses with expected content types.
@@ -442,13 +467,14 @@ more common first success.
 This is one coordinated project delivered in reviewable stages:
 
 1. **Media foundation:** evidence matrix, deterministic capture scenario,
-   encoding/validation, flagship and derivative assets, transcript, and asset
-   documentation.
+   browser compositor, encoding/validation, flagship and derivative assets,
+   transcript, asset documentation, and an authorized media-publish gate that
+   verifies the stable remote URLs.
 2. **GitHub and npm:** root README, all package READMEs, manifest metadata,
-   changeset, and documentation/package checks.
+   changeset, and documentation/package checks. This stage starts only after the
+   full-video URL and committed GIF/poster are available.
 3. **Homepage:** shared media catalog/player, hero Video/Code switcher,
-   derivative clips in existing sections, responsive/accessibility tests, and
-   production media upload verification.
+   derivative clips in existing sections, and responsive/accessibility tests.
 
 Each stage must be internally reviewable and must not leave broken asset links.
 The project can use multiple pull requests while preserving this single design.
