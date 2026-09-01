@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
+	lstat,
 	mkdtemp,
 	mkdir,
 	readFile,
 	readdir,
 	rename as renameFile,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,9 +43,13 @@ import {
 } from "./capture.mjs";
 import {
 	checkLocalMedia,
+	checkRemoteMedia,
+	MEDIA_CAPTIONS,
 	MEDIA_CONTRACTS,
 	parseMediaCheckArguments,
 	probeFile,
+	runBoundedRemoteOperation,
+	validateDemoMediaCatalog,
 	validateMediaManifestLayout,
 	validateLocalMediaContract,
 	validateStagedMediaManifest,
@@ -66,6 +73,16 @@ import {
 } from "./processes.mjs";
 import { DEMO_FIXTURES, DEMO_PROMPT } from "./scenario.mjs";
 import { renderStage } from "./stage.mjs";
+import {
+	buildDemoMediaCatalog,
+	createUploadPlan,
+	MEDIA_UPLOAD_PATHS,
+	parseUploadArguments,
+	uploadReadmeMedia,
+	validatePublicBaseUrl,
+	validateUploadPathname,
+	writeDemoMediaCatalog,
+} from "./upload.mjs";
 
 function videoProbe({
 	codecName,
@@ -460,8 +477,8 @@ test("local checker adapters surface manifest, probe, and CLI failures", async (
 		local: true,
 	});
 	assert.throws(
-		() => parseMediaCheckArguments(["--remote"]),
-		/Usage:.*--local/,
+		() => parseMediaCheckArguments(["--invalid"]),
+		/Usage:.*--local.*--remote/,
 	);
 });
 
@@ -3125,4 +3142,1532 @@ test("non-record-only capture cleans up when the encoder fails", async () => {
 		fixture.operations.at(-1),
 		/^remove \/repo\/docs\/brand\/demo\/artifacts\/runs\/[A-Za-z0-9_-]+\/capture-summary\.json$/,
 	);
+});
+
+const EXPECTED_UPLOAD_PATHS = [
+	"demo/product-loop.mp4",
+	"demo/product-loop.webm",
+	"demo/author.mp4",
+	"demo/author.webm",
+	"demo/test.mp4",
+	"demo/test.webm",
+	"demo/run.mp4",
+	"demo/run.webm",
+];
+const AUTHORIZED_MEDIA_STORE_ID = "store_9RQ8eZyGheVy0wOp";
+const AUTHORIZED_MEDIA_ORIGIN =
+	"https://9rq8ezyghevy0wop.public.blob.vercel-storage.com";
+
+function authorizedLegacyToken(secret) {
+	return `vercel_blob_rw_9RQ8eZyGheVy0wOp_${secret}`;
+}
+
+const AUTHORIZED_LEGACY_TOKEN = authorizedLegacyToken("testsecret");
+
+function validUploadFixture(repoRoot = "/repo", runId = "run-upload") {
+	const fixture = validManifestLayout(repoRoot, runId);
+	fixture.manifest.captions = { ...MEDIA_CAPTIONS };
+	return fixture;
+}
+
+function uploadBodies(manifest) {
+	return new Map(
+		EXPECTED_UPLOAD_PATHS.map((pathname) => {
+			const [name, format] = pathname.slice("demo/".length).split(".");
+			const sourcePath = manifest.clips[name][format];
+			return [sourcePath, Buffer.from(`immutable:${pathname}`)];
+		}),
+	);
+}
+
+function validatedUploadMedia(pointer, manifest, bodies = uploadBodies(manifest)) {
+	return {
+		pointer,
+		manifest,
+		sourceFiles: new Map(
+			[...bodies].map(([sourcePath, body]) => [
+				sourcePath,
+				{
+					size: body.byteLength,
+					probe: { validated: true },
+					sha256: createHash("sha256").update(body).digest("hex"),
+				},
+			]),
+		),
+	};
+}
+
+function response(status, contentType) {
+	return {
+		status,
+		headers: new Headers(
+			contentType === undefined ? {} : { "content-type": contentType },
+		),
+	};
+}
+
+function inspectErrorSurface(error) {
+	const seen = new Set();
+	function inspect(value) {
+		if (value === null || typeof value !== "object") return value;
+		if (seen.has(value)) return "<circular>";
+		seen.add(value);
+		return Object.fromEntries(
+			Reflect.ownKeys(value).map((key) => [String(key), inspect(value[key])]),
+		);
+	}
+	return JSON.stringify(inspect(error));
+}
+
+test("upload plan binds the exact suffix-free paths to the validated run manifest", () => {
+	const repoRoot = "/repo";
+	const { pointer, manifest } = validUploadFixture(repoRoot);
+	const plan = createUploadPlan({
+		repoRoot,
+		pointer,
+		manifest,
+		baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+	});
+
+	assert.deepEqual(MEDIA_UPLOAD_PATHS, EXPECTED_UPLOAD_PATHS);
+	assert.deepEqual(
+		plan.map(({ pathname }) => pathname),
+		EXPECTED_UPLOAD_PATHS,
+	);
+	assert.deepEqual(
+		plan.map(({ sourcePath }) => sourcePath),
+		EXPECTED_UPLOAD_PATHS.map((pathname) =>
+			`${repoRoot}/docs/brand/demo/artifacts/runs/run-upload/output/${pathname.slice("demo/".length)}`,
+		),
+	);
+	assert.deepEqual(
+		plan.map(({ contentType }) => contentType),
+		EXPECTED_UPLOAD_PATHS.map((pathname) =>
+			pathname.endsWith(".mp4") ? "video/mp4" : "video/webm",
+		),
+	);
+	assert.deepEqual(
+		plan.map(({ url }) => url),
+		EXPECTED_UPLOAD_PATHS.map(
+			(pathname) =>
+				`${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+		),
+	);
+
+	assert.throws(
+		() =>
+			createUploadPlan({
+				repoRoot,
+				pointer,
+				manifest: {
+					...manifest,
+					clips: {
+						...manifest.clips,
+						run: { ...manifest.clips.run, mp4: "/tmp/unbound/run.mp4" },
+					},
+				},
+				baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+			}),
+		/run\.mp4.*expected run output root/,
+	);
+});
+
+test("upload options default to dry run and reject conflicting or unknown flags", () => {
+	assert.deepEqual(parseUploadArguments([]), { apply: false });
+	assert.deepEqual(parseUploadArguments(["--dry-run"]), { apply: false });
+	assert.deepEqual(parseUploadArguments(["--", "--apply"]), { apply: true });
+	assert.throws(
+		() => parseUploadArguments(["--dry-run", "--apply"]),
+		/Usage:.*--dry-run.*--apply/,
+	);
+	assert.throws(() => parseUploadArguments(["--force"]), /Usage:/);
+});
+
+test("recording guide documents the local development OIDC requirement", async () => {
+	const guide = await readFile(
+		join(import.meta.dirname, "../recording-guide.md"),
+		"utf8",
+	);
+	assert.match(guide, /vercel env pull/u);
+	assert.match(guide, /local OIDC tokens.*development/u);
+	assert.match(guide, /store connection.*include.*development/u);
+	const [, committedOutputs] =
+		guide.match(/Committed outputs are:\n\n```text\n([\s\S]*?)\n```/u) ?? [];
+	assert.ok(committedOutputs, "recording guide must list committed outputs");
+	assert.match(
+		committedOutputs,
+		/^apps\/web\/app\/lib\/demo-media\.json$/mu,
+	);
+});
+
+test("upload validation rejects unsafe bases and randomized or nested path suffixes", () => {
+	assert.equal(
+		validatePublicBaseUrl(
+			AUTHORIZED_MEDIA_ORIGIN,
+		),
+		AUTHORIZED_MEDIA_ORIGIN,
+	);
+	assert.equal(
+		validatePublicBaseUrl("https://[2001:db8::1]"),
+		"https://[2001:db8::1]",
+	);
+	assert.equal(
+		validatePublicBaseUrl("https://xn--xample-9ua.com"),
+		"https://xn--xample-9ua.com",
+	);
+	for (const unsafeBase of [
+		"http://dawn-media.example.com",
+		"https://user:secret@dawn-media.example.com",
+		"https://dawn-media.example.com:443",
+		" https://dawn-media.example.com",
+		"https://dawn-media.example.com ",
+		"https:\\dawn-media.example.com",
+		"HTTPS://dawn-media.example.com",
+		"https://Dawn-Media.example.com",
+		"https://éxample.com",
+		"https://[2001:0db8::1]",
+		"https://dawn-media.example.com/",
+		"https://dawn-media.example.com/prefix",
+		"https://dawn-media.example.com?token=secret",
+		"not a URL",
+	]) {
+		assert.throws(() => validatePublicBaseUrl(unsafeBase), /public base URL/i);
+	}
+	for (const unsafePath of [
+		"demo/product-loop-abc123.mp4",
+		"demo/nested/product-loop.mp4",
+		"../demo/product-loop.mp4",
+		"demo/product-loop.mov",
+		"demo/product-loop.mp4?download=1",
+	]) {
+		assert.throws(() => validateUploadPathname(unsafePath), /stable media path/i);
+	}
+	for (const pathname of EXPECTED_UPLOAD_PATHS) {
+		assert.equal(validateUploadPathname(pathname), pathname);
+	}
+});
+
+test("dry run validates local media but performs no network or catalog I/O", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const lines = [];
+	let validationCalls = 0;
+	const env = new Proxy(
+		{},
+		{
+			get(_target, property) {
+				if (
+					[
+						"VERCEL_OIDC_TOKEN",
+						"BLOB_STORE_ID",
+						"BLOB_READ_WRITE_TOKEN",
+						"DAWN_MEDIA_PUBLIC_BASE_URL",
+					].includes(property)
+				) {
+					throw new Error(`dry run must not read ${property}`);
+				}
+				return undefined;
+			},
+		},
+	);
+	const result = await uploadReadmeMedia({
+		args: [],
+		env,
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			validationCalls += 1;
+			return { pointer, manifest };
+		},
+		async readFile() {
+			throw new Error("dry run must not read upload bodies");
+		},
+		async put() {
+			throw new Error("dry run must not call put");
+		},
+		async fetch() {
+			throw new Error("dry run must not call fetch");
+		},
+		async writeCatalog() {
+			throw new Error("dry run must not write a catalog");
+		},
+		log(line) {
+			lines.push(line);
+		},
+	});
+
+	assert.equal(validationCalls, 1);
+	assert.equal(result.applied, false);
+	assert.equal(result.catalog, undefined);
+	assert.match(lines[0], /DRY RUN.*no uploads.*no catalog/i);
+	for (const [index, pathname] of EXPECTED_UPLOAD_PATHS.entries()) {
+		assert.match(lines[index + 1], new RegExp(pathname.replaceAll(".", "\\.")));
+		assert.match(lines[index + 1], /\/repo\/docs\/brand\/demo\/artifacts\/runs\/run-upload\/output/);
+		assert.match(lines[index + 1], /<DAWN_MEDIA_PUBLIC_BASE_URL>/);
+	}
+});
+
+test("apply rejects missing, partial, conflicting, or incorrectly bound credential modes", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	let validationCalls = 0;
+	const options = {
+		args: ["--apply"],
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			validationCalls += 1;
+			return { pointer, manifest };
+		},
+		log() {},
+	};
+	for (const [env, expected] of [
+		[{}, /exactly one.*credential mode/i],
+		[{ VERCEL_OIDC_TOKEN: "oidc-secret" }, /VERCEL_OIDC_TOKEN.*BLOB_STORE_ID/i],
+		[{ BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID }, /VERCEL_OIDC_TOKEN.*BLOB_STORE_ID/i],
+		[
+			{
+				VERCEL_OIDC_TOKEN: "oidc-secret",
+				BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID,
+				BLOB_READ_WRITE_TOKEN: "legacy-secret",
+			},
+			/exactly one.*credential mode|conflicting/i,
+		],
+		[
+			{
+				VERCEL_OIDC_TOKEN: "oidc-secret",
+				BLOB_STORE_ID: "9RQ8eZyGheVy0wOp",
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			/BLOB_STORE_ID.*authorized Dawn media store/i,
+		],
+		[
+			{
+				VERCEL_OIDC_TOKEN: "oidc-secret",
+				BLOB_STORE_ID: `${AUTHORIZED_MEDIA_STORE_ID} `,
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			/BLOB_STORE_ID.*authorized Dawn media store/i,
+		],
+		[
+			{
+				VERCEL_OIDC_TOKEN: "oidc-secret",
+				BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					"https://other.public.blob.vercel-storage.com",
+			},
+			/public base URL.*authorized.*store/i,
+		],
+	]) {
+		await assert.rejects(uploadReadmeMedia({ ...options, env }), expected);
+	}
+	assert.equal(validationCalls, 0);
+});
+
+test("legacy credentials reject malformed or wrong-store tokens and a mismatched base before put", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	let validationCalls = 0;
+	let puts = 0;
+	const options = {
+		args: ["--apply"],
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			validationCalls += 1;
+			return { pointer, manifest };
+		},
+		async put() {
+			puts += 1;
+		},
+		log() {},
+	};
+	for (const [env, expected] of [
+		[
+			{
+				BLOB_READ_WRITE_TOKEN: "not-a-vercel-blob-token",
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			/BLOB_READ_WRITE_TOKEN.*canonical Vercel Blob/i,
+		],
+		[
+			{
+				BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_wrongStore_secret",
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			/BLOB_READ_WRITE_TOKEN.*authorized Dawn media store/i,
+		],
+		[
+			{
+				BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					"https://other.public.blob.vercel-storage.com",
+			},
+			/public base URL.*authorized.*store/i,
+		],
+	]) {
+		await assert.rejects(uploadReadmeMedia({ ...options, env }), expected);
+	}
+	assert.equal(validationCalls, 0);
+	assert.equal(puts, 0);
+});
+
+test("credential values reject surrounding whitespace without leaking their trimmed secrets", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	let validationCalls = 0;
+	let puts = 0;
+	const cases = [
+		{
+			env: {
+				VERCEL_OIDC_TOKEN: " oidc-whitespace-secret ",
+				BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID,
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			secret: "oidc-whitespace-secret",
+		},
+		{
+			env: {
+				BLOB_READ_WRITE_TOKEN: ` ${AUTHORIZED_LEGACY_TOKEN} `,
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			secret: AUTHORIZED_LEGACY_TOKEN,
+		},
+	];
+	for (const { env, secret } of cases) {
+		let captured;
+		try {
+			await uploadReadmeMedia({
+				args: ["--apply"],
+				env,
+				repoRoot: "/repo",
+				async loadValidatedMedia() {
+					validationCalls += 1;
+					return { pointer, manifest };
+				},
+				async put() {
+					puts += 1;
+				},
+				log() {},
+			});
+		} catch (error) {
+			captured = error;
+		}
+		assert.match(captured.message, /credential.*surrounding whitespace/i);
+		assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(secret));
+	}
+	assert.equal(validationCalls, 0);
+	assert.equal(puts, 0);
+});
+
+test("OIDC apply passes only the explicit authorized oidcToken and storeId to put", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const oidcToken = "short-lived-oidc-secret";
+	const puts = [];
+	await uploadReadmeMedia({
+		args: ["--apply"],
+		env: {
+			VERCEL_OIDC_TOKEN: oidcToken,
+			BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID,
+			DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+		},
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			return validatedUploadMedia(pointer, manifest, bodies);
+		},
+		async readFile(path) {
+			return bodies.get(path);
+		},
+		async put(pathname, _body, options) {
+			puts.push({ pathname, options });
+			return { url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}` };
+		},
+		async fetch(url) {
+			return response(200, url.endsWith(".mp4") ? "video/mp4" : "video/webm");
+		},
+		async writeCatalog() {},
+		log(line) {
+			assert.doesNotMatch(line, new RegExp(oidcToken));
+		},
+	});
+	assert.equal(puts.length, 8);
+	for (const { options } of puts) {
+		assert.equal(options.oidcToken, oidcToken);
+		assert.equal(options.storeId, AUTHORIZED_MEDIA_STORE_ID);
+		assert.equal(Object.hasOwn(options, "token"), false);
+	}
+});
+
+test("OIDC provider failures redact the credential from the full error surface", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const oidcToken = "provider-oidc-secret";
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				VERCEL_OIDC_TOKEN: oidcToken,
+				BLOB_STORE_ID: AUTHORIZED_MEDIA_STORE_ID,
+				DAWN_MEDIA_PUBLIC_BASE_URL: AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put() {
+				const error = new Error(`OIDC authorization failed: ${oidcToken}`);
+				error.authorization = oidcToken;
+				throw error;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(captured.cause, undefined);
+	assert.match(captured.message, /OIDC authorization failed: <redacted>/);
+	assert.doesNotMatch(captured.stack, new RegExp(oidcToken));
+	assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(oidcToken));
+});
+
+test("legacy apply remains compatible and requires an explicit safe public base", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const legacyToken = authorizedLegacyToken("topsecrettoken");
+	const options = {
+		args: ["--apply"],
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			return { pointer, manifest };
+		},
+		log() {},
+	};
+	await assert.rejects(
+		uploadReadmeMedia({ ...options, env: {} }),
+		/BLOB_READ_WRITE_TOKEN/,
+	);
+	await assert.rejects(
+		uploadReadmeMedia({
+			...options,
+			env: { BLOB_READ_WRITE_TOKEN: legacyToken },
+		}),
+		(error) => {
+			assert.match(error.message, /DAWN_MEDIA_PUBLIC_BASE_URL/);
+			assert.doesNotMatch(error.message, new RegExp(legacyToken));
+			return true;
+		},
+	);
+	await assert.rejects(
+		uploadReadmeMedia({
+			...options,
+			env: {
+				BLOB_READ_WRITE_TOKEN: legacyToken,
+				DAWN_MEDIA_PUBLIC_BASE_URL: "http://unsafe.example.com",
+			},
+		}),
+		(error) => {
+			assert.doesNotMatch(error.message, new RegExp(legacyToken));
+			return /public base URL/i.test(error.message);
+		},
+	);
+});
+
+test("provider failures expose no token-bearing cause, stack, or serialized property", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const token = authorizedLegacyToken("providersecretwritetoken");
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: token,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put() {
+				const providerError = new Error(
+					`provider rejected Authorization: Bearer ${token}`,
+				);
+				providerError.request = {
+					headers: { authorization: `Bearer ${token}` },
+				};
+				throw providerError;
+			},
+			async fetch() {
+				throw new Error("fetch must not run after a failed put");
+			},
+			async writeCatalog() {
+				throw new Error("catalog must not be written after a failed put");
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.ok(captured instanceof Error);
+	assert.match(captured.message, /Upload did not converge at demo\/product-loop\.mp4/);
+	assert.match(captured.message, /provider rejected Authorization: Bearer <redacted>/);
+	assert.equal(captured.cause, undefined);
+	assert.doesNotMatch(captured.stack, new RegExp(token));
+	assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(token));
+});
+
+test("upload preflights all bodies and hashes before the first put", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const events = [];
+	const putBodies = [];
+	const result = await uploadReadmeMedia({
+		args: ["--apply"],
+		env: {
+			BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+			DAWN_MEDIA_PUBLIC_BASE_URL:
+				AUTHORIZED_MEDIA_ORIGIN,
+		},
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			return validatedUploadMedia(pointer, manifest, bodies);
+		},
+		async readFile(path) {
+			events.push(`read:${path}`);
+			return bodies.get(path);
+		},
+		async put(pathname, body) {
+			events.push(`put:${pathname}`);
+			putBodies.push(body);
+			return {
+				url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+			};
+		},
+		async fetch(url) {
+			return response(200, url.endsWith(".mp4") ? "video/mp4" : "video/webm");
+		},
+		async writeCatalog() {},
+		log() {},
+	});
+
+	assert.equal(events.slice(0, 8).every((event) => event.startsWith("read:")), true);
+	assert.equal(events.slice(8).every((event) => event.startsWith("put:")), true);
+	assert.equal(Object.isFrozen(result.plan), true);
+	for (const [index, entry] of result.plan.entries()) {
+		const expectedBody = bodies.get(entry.sourcePath);
+		assert.equal(Object.isFrozen(entry), true);
+		assert.equal(entry.body, expectedBody);
+		assert.equal(putBodies[index], entry.body);
+		assert.equal(entry.size, expectedBody.byteLength);
+		assert.equal(
+			entry.sha256,
+			createHash("sha256").update(expectedBody).digest("hex"),
+		);
+	}
+});
+
+test("a late preflight read failure performs zero puts", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	let reads = 0;
+	let puts = 0;
+	await assert.rejects(
+		uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				reads += 1;
+				if (reads === 8) throw new Error("late local read failed");
+				return bodies.get(path);
+			},
+			async put() {
+				puts += 1;
+			},
+			log() {},
+		}),
+		/late local read failed/,
+	);
+	assert.equal(reads, 8);
+	assert.equal(puts, 0);
+});
+
+test("same-size video mutation fails the validation-time hash before any put", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const validatedBodies = uploadBodies(manifest);
+	const mutatedBodies = new Map(validatedBodies);
+	const sourcePath = manifest.clips.author.mp4;
+	const original = validatedBodies.get(sourcePath);
+	const mutated = Buffer.from(original);
+	mutated[0] ^= 0xff;
+	assert.equal(mutated.byteLength, original.byteLength);
+	mutatedBodies.set(sourcePath, mutated);
+	let puts = 0;
+	await assert.rejects(
+		uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, validatedBodies);
+			},
+			async readFile(path) {
+				return mutatedBodies.get(path);
+			},
+			async put() {
+				puts += 1;
+			},
+			log() {},
+		}),
+		/author\.mp4.*SHA-256.*validation-time hash/i,
+	);
+	assert.equal(puts, 0);
+});
+
+test("partial provider failure reports safe convergence and a full replay succeeds", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const token = authorizedLegacyToken("convergencesecret");
+	let writes = 0;
+	const firstPuts = [];
+	let firstError;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: token,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname) {
+				firstPuts.push(pathname);
+				if (firstPuts.length === 4) {
+					throw new Error(`provider failed ${token}`);
+				}
+				return {
+					url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+				};
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		firstError = error;
+	}
+	assert.equal(writes, 0);
+	assert.deepEqual(firstPuts, EXPECTED_UPLOAD_PATHS.slice(0, 4));
+	assert.match(firstError.message, /completed.*product-loop\.mp4.*author\.mp4/is);
+	assert.match(firstError.message, /potentially completed.*author\.webm/is);
+	assert.match(firstError.message, /definitely pending.*test\.mp4.*run\.webm/is);
+	assert.match(firstError.message, /full eight-path.*idempotent.*replay/is);
+	assert.doesNotMatch(inspectErrorSurface(firstError), new RegExp(token));
+	assert.doesNotMatch(firstError.message, /rollback/i);
+
+	const replayPuts = [];
+	let heads = 0;
+	await uploadReadmeMedia({
+		args: ["--apply"],
+		env: {
+			BLOB_READ_WRITE_TOKEN: token,
+			DAWN_MEDIA_PUBLIC_BASE_URL:
+				AUTHORIZED_MEDIA_ORIGIN,
+		},
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			return validatedUploadMedia(pointer, manifest, bodies);
+		},
+		async readFile(path) {
+			return bodies.get(path);
+		},
+		async put(pathname, body, options) {
+			replayPuts.push({ pathname, body, options });
+			return {
+				url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+			};
+		},
+		async fetch(url) {
+			heads += 1;
+			return response(200, url.endsWith(".mp4") ? "video/mp4" : "video/webm");
+		},
+		async writeCatalog() {
+			writes += 1;
+		},
+		log() {},
+	});
+	assert.deepEqual(
+		replayPuts.map(({ pathname }) => pathname),
+		EXPECTED_UPLOAD_PATHS,
+	);
+	for (const put of replayPuts) {
+		assert.equal(put.options.allowOverwrite, true);
+		assert.equal(put.options.addRandomSuffix, false);
+		assert.equal(put.body, bodies.get(manifest.clips[put.pathname.split("/")[1].split(".")[0]][put.pathname.endsWith(".mp4") ? "mp4" : "webm"]));
+	}
+	assert.equal(heads, 8);
+	assert.equal(writes, 1);
+});
+
+test("apply uses official stable put options and writes only after all HEAD checks", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const events = [];
+	const token = authorizedLegacyToken("privatewritetoken");
+	const baseUrl = AUTHORIZED_MEDIA_ORIGIN;
+	const result = await uploadReadmeMedia({
+		args: ["--apply"],
+		env: {
+			BLOB_READ_WRITE_TOKEN: token,
+			DAWN_MEDIA_PUBLIC_BASE_URL: baseUrl,
+		},
+		repoRoot: "/repo",
+		async loadValidatedMedia() {
+			return validatedUploadMedia(pointer, manifest, bodies);
+		},
+		async readFile(path) {
+			events.push({ type: "read", path });
+			return bodies.get(path);
+		},
+		async put(pathname, body, options) {
+			events.push({ type: "put", pathname, body, options });
+			return { url: `${baseUrl}/${pathname}` };
+		},
+		async fetch(url, options) {
+			events.push({ type: "head", url, options });
+			return response(
+				200,
+				url.endsWith(".mp4") ? "video/mp4" : "video/webm",
+			);
+		},
+		async writeCatalog(catalog) {
+			events.push({ type: "write", catalog });
+		},
+		log(line) {
+			assert.doesNotMatch(line, new RegExp(token));
+		},
+	});
+
+	const putEvents = events.filter(({ type }) => type === "put");
+	assert.equal(putEvents.length, 8);
+	for (const [index, event] of putEvents.entries()) {
+		assert.equal(event.pathname, EXPECTED_UPLOAD_PATHS[index]);
+		assert.ok(Buffer.isBuffer(event.body));
+		assert.ok(event.options.abortSignal instanceof AbortSignal);
+		assert.deepEqual({ ...event.options, abortSignal: undefined }, {
+			access: "public",
+			addRandomSuffix: false,
+			allowOverwrite: true,
+			contentType: event.pathname.endsWith(".mp4")
+				? "video/mp4"
+				: "video/webm",
+			token,
+			abortSignal: undefined,
+		});
+	}
+	const headEvents = events.filter(({ type }) => type === "head");
+	assert.equal(headEvents.length, 8);
+	for (const event of headEvents) {
+		assert.equal(event.options.method, "HEAD");
+		assert.equal(event.options.redirect, "error");
+		assert.ok(event.options.signal instanceof AbortSignal);
+		assert.equal("headers" in event.options, false);
+	}
+	assert.equal(events.at(-1).type, "write");
+	assert.deepEqual(result.catalog, events.at(-1).catalog);
+	assert.equal(result.applied, true);
+	assert.doesNotMatch(JSON.stringify(result.catalog), new RegExp(token));
+});
+
+test("returned URL mismatch reports the current mutation uncertainty and safe convergence", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const token = authorizedLegacyToken("mismatchsecret");
+	let puts = 0;
+	let writes = 0;
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: token,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname) {
+				puts += 1;
+				return {
+					url:
+						puts === 3
+							? `https://other.example.com/${pathname}-${token}`
+							: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+				};
+			},
+			async fetch() {
+				throw new Error("HEAD must wait for valid upload URLs");
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(puts, 3);
+	assert.equal(writes, 0);
+	assert.equal(captured.cause, undefined);
+	assert.match(captured.message, /returned URL.*stable public URL/i);
+	assert.match(
+		captured.message,
+		/confirmed completed.*product-loop\.mp4.*product-loop\.webm/is,
+	);
+	assert.match(captured.message, /potentially completed.*author\.mp4/is);
+	assert.match(
+		captured.message,
+		/definitely pending.*author\.webm.*run\.webm/is,
+	);
+	assert.match(
+		captured.message,
+		/correct.*BLOB_READ_WRITE_TOKEN.*DAWN_MEDIA_PUBLIC_BASE_URL.*full eight-path.*replay/is,
+	);
+	assert.match(captured.message, /catalog.*not written|catalog.*withheld/i);
+	assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(token));
+});
+
+test("non-timeout HEAD failure withholds the catalog and reports safe post-mutation convergence", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	let writes = 0;
+	let headCalls = 0;
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname) {
+				return {
+					url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+				};
+			},
+			async fetch(url) {
+				headCalls += 1;
+				return response(
+					url.endsWith("run.webm") ? 503 : 200,
+					url.endsWith(".mp4") ? "video/mp4" : "video/webm",
+				);
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(headCalls, 8);
+	assert.equal(writes, 0);
+	assert.match(captured.message, /run\.webm.*200.*503/i);
+	assert.match(captured.message, /all eight upload calls returned/i);
+	assert.match(captured.message, /catalog.*not written|catalog.*withheld/i);
+	assert.match(
+		captured.message,
+		/verification outcome.*uncertain.*run\.webm/is,
+	);
+	assert.match(captured.message, /full eight-path.*replay|re-verif/is);
+});
+
+test("HEAD timeout after all puts preserves safe identity and post-mutation guidance", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const token = authorizedLegacyToken("headtimeoutsecret");
+	let puts = 0;
+	let heads = 0;
+	let writes = 0;
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: token,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			timeoutMs: 5,
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname) {
+				puts += 1;
+				return {
+					url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+				};
+			},
+			async fetch(_url, options) {
+				heads += 1;
+				return new Promise((_resolve, reject) => {
+					options.signal.addEventListener(
+						"abort",
+						() => reject(options.signal.reason),
+						{ once: true },
+					);
+				});
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(puts, 8);
+	assert.equal(heads, 1);
+	assert.equal(writes, 0);
+	assert.equal(captured.code, "DAWN_MEDIA_REMOTE_TIMEOUT");
+	assert.equal(captured.cause, undefined);
+	assert.match(captured.message, /all eight upload calls returned/i);
+	for (const pathname of EXPECTED_UPLOAD_PATHS) {
+		assert.match(captured.message, new RegExp(pathname.replace(".", "\\.")));
+	}
+	assert.match(captured.message, /catalog.*not written|catalog.*withheld/i);
+	assert.match(
+		captured.message,
+		/verification outcome.*uncertain.*https:\/\/9rq8ezyghevy0wop\.public\.blob\.vercel-storage\.com\/demo\/product-loop\.mp4/is,
+	);
+	assert.match(captured.message, /full eight-path.*replay|re-verif/is);
+	assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(token));
+});
+
+test("HEAD abort after all puts preserves safe abort identity without a secret-bearing cause", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	const token = authorizedLegacyToken("headabortsecret");
+	let puts = 0;
+	let writes = 0;
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: token,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname) {
+				puts += 1;
+				return {
+					url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+				};
+			},
+			async fetch() {
+				const error = new Error(`provider abort ${token}`);
+				error.name = "AbortError";
+				throw error;
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(puts, 8);
+	assert.equal(writes, 0);
+	assert.equal(captured.name, "AbortError");
+	assert.equal(captured.code, "DAWN_MEDIA_REMOTE_ABORT");
+	assert.equal(captured.cause, undefined);
+	assert.match(captured.message, /all eight upload calls returned/i);
+	assert.match(captured.message, /catalog.*not written|catalog.*withheld/i);
+	assert.match(captured.message, /verification outcome.*uncertain/i);
+	assert.match(captured.message, /full eight-path.*replay|re-verif/is);
+	assert.doesNotMatch(inspectErrorSurface(captured), new RegExp(token));
+});
+
+test("stalled put and HEAD operations abort at the bounded timeout", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	let putSignal;
+	await assert.rejects(
+		uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: AUTHORIZED_LEGACY_TOKEN,
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			timeoutMs: 5,
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(_pathname, _body, options) {
+				putSignal = options.abortSignal;
+				return new Promise((_resolve, reject) => {
+					setTimeout(() => reject(new Error("put safety timeout")), 30);
+					options.abortSignal?.addEventListener(
+						"abort",
+						() => reject(options.abortSignal.reason),
+						{ once: true },
+					);
+				});
+			},
+			log() {},
+		}),
+		/put demo\/product-loop\.mp4 timed out after 5ms/,
+	);
+	assert.equal(putSignal.aborted, true);
+
+	const catalog = buildDemoMediaCatalog({
+		manifest,
+		plan: createUploadPlan({
+			repoRoot: "/repo",
+			pointer,
+			manifest,
+			baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+		}),
+	});
+	let headSignal;
+	await assert.rejects(
+		checkRemoteMedia({
+			repoRoot: "/repo",
+			timeoutMs: 5,
+			async readFile() {
+				return JSON.stringify(catalog);
+			},
+			async fetch(_url, options) {
+				headSignal = options.signal;
+				return new Promise((_resolve, reject) => {
+					setTimeout(() => reject(new Error("HEAD safety timeout")), 30);
+					options.signal?.addEventListener(
+						"abort",
+						() => reject(options.signal.reason),
+						{ once: true },
+					);
+				});
+			},
+			log() {},
+		}),
+		/HEAD productLoop\.mp4 timed out after 5ms/,
+	);
+	assert.equal(headSignal.aborted, true);
+});
+
+test("timeout after prior puts reports uncertainty and full idempotent convergence", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const bodies = uploadBodies(manifest);
+	let puts = 0;
+	let writes = 0;
+	let captured;
+	try {
+		await uploadReadmeMedia({
+			args: ["--apply"],
+			env: {
+				BLOB_READ_WRITE_TOKEN: authorizedLegacyToken("timeoutsecret"),
+				DAWN_MEDIA_PUBLIC_BASE_URL:
+					AUTHORIZED_MEDIA_ORIGIN,
+			},
+			timeoutMs: 5,
+			repoRoot: "/repo",
+			async loadValidatedMedia() {
+				return validatedUploadMedia(pointer, manifest, bodies);
+			},
+			async readFile(path) {
+				return bodies.get(path);
+			},
+			async put(pathname, _body, options) {
+				puts += 1;
+				if (puts < 3) {
+					return {
+						url: `${AUTHORIZED_MEDIA_ORIGIN}/${pathname}`,
+					};
+				}
+				return new Promise((_resolve, reject) => {
+					options.abortSignal.addEventListener(
+						"abort",
+						() => reject(options.abortSignal.reason),
+						{ once: true },
+					);
+				});
+			},
+			async writeCatalog() {
+				writes += 1;
+			},
+			log() {},
+		});
+	} catch (error) {
+		captured = error;
+	}
+	assert.equal(puts, 3);
+	assert.equal(writes, 0);
+	assert.equal(captured.code, "DAWN_MEDIA_REMOTE_TIMEOUT");
+	assert.equal(captured.cause, undefined);
+	assert.match(
+		captured.message,
+		/confirmed completed.*product-loop\.mp4.*product-loop\.webm/is,
+	);
+	assert.match(captured.message, /potentially completed.*author\.mp4/is);
+	assert.match(
+		captured.message,
+		/definitely pending.*author\.webm.*run\.webm/is,
+	);
+	assert.match(captured.message, /full eight-path.*idempotent.*replay/is);
+	assert.doesNotMatch(inspectErrorSurface(captured), /timeout-secret/);
+});
+
+test("bounded remote operation rejects a fired timeout after an ignoring operation resolves", async () => {
+	let operationSignal;
+	await assert.rejects(
+		runBoundedRemoteOperation({
+			label: "late provider operation",
+			timeoutMs: 5,
+			async operation(signal) {
+				operationSignal = signal;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				return "late success";
+			},
+		}),
+		(error) =>
+			error.code === "DAWN_MEDIA_REMOTE_TIMEOUT" &&
+			/late provider operation timed out after 5ms/.test(error.message),
+	);
+	assert.equal(operationSignal.aborted, true);
+});
+
+test("catalog entries contain exactly the six required fields", () => {
+	const { pointer, manifest } = validUploadFixture();
+	const plan = createUploadPlan({
+		repoRoot: "/repo",
+		pointer,
+		manifest,
+		baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+	});
+	const catalog = buildDemoMediaCatalog({ manifest, plan });
+	assert.deepEqual(Object.keys(catalog), ["productLoop", "author", "test", "run"]);
+	for (const entry of Object.values(catalog)) {
+		assert.deepEqual(Object.keys(entry).sort(), [
+			"ariaLabel",
+			"caption",
+			"mp4",
+			"poster",
+			"transcript",
+			"webm",
+		]);
+	}
+	assert.deepEqual(validateDemoMediaCatalog(catalog), catalog);
+	const missingTranscript = structuredClone(catalog);
+	delete missingTranscript.run.transcript;
+	assert.throws(
+		() => validateDemoMediaCatalog(missingTranscript),
+		/run\.transcript.*required/i,
+	);
+	const unexpectedField = structuredClone(catalog);
+	unexpectedField.author.extra = true;
+	assert.throws(
+		() => validateDemoMediaCatalog(unexpectedField),
+		/author.*exactly.*ariaLabel.*transcript/i,
+	);
+});
+
+test("catalog media URLs require exact stable paths with no authority or URL suffix drift", () => {
+	const { pointer, manifest } = validUploadFixture();
+	const catalog = buildDemoMediaCatalog({
+		manifest,
+		plan: createUploadPlan({
+			repoRoot: "/repo",
+			pointer,
+			manifest,
+			baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+		}),
+	});
+	for (const [name, url, pattern] of [
+		[
+			"extra path prefix",
+			"https://dawn-media.public.blob.vercel-storage.com/extra/demo/run.mp4",
+			/run\.mp4.*exact stable path/i,
+		],
+		[
+			"query suffix",
+			"https://dawn-media.public.blob.vercel-storage.com/demo/run.mp4?unstable=1",
+			/run\.mp4.*query|exact stable path/i,
+		],
+		[
+			"fragment suffix",
+			"https://dawn-media.public.blob.vercel-storage.com/demo/run.mp4#unstable",
+			/run\.mp4.*fragment|exact stable path/i,
+		],
+		[
+			"credentials",
+			"https://user:secret@dawn-media.public.blob.vercel-storage.com/demo/run.mp4",
+			/run\.mp4.*credentials/i,
+		],
+		[
+			"nonstandard port",
+			"https://dawn-media.public.blob.vercel-storage.com:8443/demo/run.mp4",
+			/run\.mp4.*port|same public origin/i,
+		],
+		[
+			"explicit default port",
+			"https://dawn-media.public.blob.vercel-storage.com:443/demo/run.mp4",
+			/run\.mp4.*explicit port/i,
+		],
+		[
+			"leading whitespace",
+			" https://dawn-media.public.blob.vercel-storage.com/demo/run.mp4",
+			/run\.mp4.*canonical/i,
+		],
+		[
+			"trailing whitespace",
+			"https://dawn-media.public.blob.vercel-storage.com/demo/run.mp4 ",
+			/run\.mp4.*canonical/i,
+		],
+		[
+			"backslashes",
+			"https://dawn-media.public.blob.vercel-storage.com\\demo\\run.mp4",
+			/run\.mp4.*canonical/i,
+		],
+		[
+			"uppercase host",
+			"https://DAWN-MEDIA.public.blob.vercel-storage.com/demo/run.mp4",
+			/run\.mp4.*canonical/i,
+		],
+	]) {
+		const candidate = structuredClone(catalog);
+		candidate.run.mp4 = url;
+		assert.throws(
+			() => validateDemoMediaCatalog(candidate),
+			pattern,
+			name,
+		);
+	}
+	for (const [name, noncanonicalHost] of [
+		["Unicode IDN", "éxample.com"],
+		["expanded IPv6", "[2001:0db8::1]"],
+	]) {
+		const candidate = structuredClone(catalog);
+		for (const entry of Object.values(candidate)) {
+			entry.mp4 = entry.mp4.replace(
+				new URL(AUTHORIZED_MEDIA_ORIGIN).host,
+				noncanonicalHost,
+			);
+			entry.webm = entry.webm.replace(
+				new URL(AUTHORIZED_MEDIA_ORIGIN).host,
+				noncanonicalHost,
+			);
+		}
+		assert.throws(
+			() => validateDemoMediaCatalog(candidate),
+			/canonical/i,
+			name,
+		);
+	}
+	for (const canonicalHost of ["xn--xample-9ua.com", "[2001:db8::1]"]) {
+		const candidate = structuredClone(catalog);
+		for (const entry of Object.values(candidate)) {
+			entry.mp4 = entry.mp4.replace(
+				new URL(AUTHORIZED_MEDIA_ORIGIN).host,
+				canonicalHost,
+			);
+			entry.webm = entry.webm.replace(
+				new URL(AUTHORIZED_MEDIA_ORIGIN).host,
+				canonicalHost,
+			);
+		}
+		assert.doesNotThrow(() => validateDemoMediaCatalog(candidate));
+	}
+});
+
+test("remote checker loads the checked-in catalog and HEAD-verifies every URL without a token", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const plan = createUploadPlan({
+		repoRoot: "/repo",
+		pointer,
+		manifest,
+		baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+	});
+	const catalog = buildDemoMediaCatalog({ manifest, plan });
+	const calls = [];
+	const lines = [];
+	const result = await checkRemoteMedia({
+		repoRoot: "/repo",
+		async readFile(path) {
+			assert.equal(path, "/repo/apps/web/app/lib/demo-media.json");
+			return JSON.stringify(catalog);
+		},
+		async fetch(url, options) {
+			calls.push({ url, options });
+			return response(
+				200,
+				url.endsWith(".mp4") ? "video/mp4" : "video/webm",
+			);
+		},
+		log(line) {
+			lines.push(line);
+		},
+	});
+	assert.deepEqual(result.catalog, catalog);
+	assert.equal(calls.length, 8);
+	for (const call of calls) {
+		assert.equal(call.options.method, "HEAD");
+		assert.equal(call.options.redirect, "error");
+		assert.ok(call.options.signal instanceof AbortSignal);
+		assert.equal("headers" in call.options, false);
+	}
+	assert.equal(lines.length, 8);
+	assert.ok(lines.every((line) => line.startsWith("PASS remote:")));
+});
+
+test("remote checker fails for a missing URL, non-200 status, or wrong content type", async () => {
+	const { pointer, manifest } = validUploadFixture();
+	const catalog = buildDemoMediaCatalog({
+		manifest,
+		plan: createUploadPlan({
+			repoRoot: "/repo",
+			pointer,
+			manifest,
+			baseUrl: AUTHORIZED_MEDIA_ORIGIN,
+		}),
+	});
+	for (const [name, mutate, fetch, pattern] of [
+		[
+			"missing URL",
+			(value) => {
+				value.test.webm = "";
+			},
+			async () => response(200, "video/webm"),
+			/test\.webm.*HTTPS URL/i,
+		],
+		[
+			"non-200",
+			() => {},
+			async (url) =>
+				response(
+					url.endsWith("author.mp4") ? 404 : 200,
+					url.endsWith(".mp4") ? "video/mp4" : "video/webm",
+				),
+			/author\.mp4.*200.*404/i,
+		],
+		[
+			"wrong type",
+			() => {},
+			async (url) =>
+				response(
+					200,
+					url.endsWith("run.webm")
+						? "application/octet-stream"
+						: url.endsWith(".mp4")
+							? "video/mp4"
+							: "video/webm",
+				),
+			/run\.webm.*video\/webm.*application\/octet-stream/i,
+		],
+	]) {
+		const candidate = structuredClone(catalog);
+		mutate(candidate);
+		await assert.rejects(
+			checkRemoteMedia({
+				repoRoot: "/repo",
+				async readFile() {
+					return JSON.stringify(candidate);
+				},
+				fetch,
+				log() {},
+			}),
+			pattern,
+			name,
+		);
+	}
+});
+
+test("media checker CLI requires exactly one local or remote mode", () => {
+	assert.deepEqual(parseMediaCheckArguments(["--", "--remote"]), {
+		remote: true,
+	});
+	assert.deepEqual(parseMediaCheckArguments(["--local"]), { local: true });
+	for (const args of [[], ["--local", "--remote"], ["--remote", "--remote"]]) {
+		assert.throws(
+			() => parseMediaCheckArguments(args),
+			/Usage:.*--local.*--remote/,
+		);
+	}
+});
+
+test("catalog writer removes its temporary path after real write and rename failures", async () => {
+	const root = await mkdtemp(join(tmpdir(), "dawn-demo-catalog-atomic-"));
+	try {
+		const target = join(root, "apps/web/app/lib/demo-media.json");
+		const temporary = `${target}.tmp`;
+		const parent = join(root, "apps/web/app/lib");
+		await mkdir(parent, { recursive: true });
+		const outsideDirectory = join(root, "outside-directory");
+		await mkdir(outsideDirectory);
+		await symlink(outsideDirectory, temporary);
+		await assert.rejects(
+			writeDemoMediaCatalog({ safe: true }, { repoRoot: root }),
+			/EISDIR|illegal operation|directory/i,
+		);
+		await assert.rejects(lstat(temporary), /ENOENT/);
+		assert.equal((await lstat(outsideDirectory)).isDirectory(), true);
+		await mkdir(target);
+		await assert.rejects(
+			writeDemoMediaCatalog({ safe: true }, { repoRoot: root }),
+			/EISDIR|ENOTEMPTY|directory/i,
+		);
+		await assert.rejects(lstat(temporary), /ENOENT/);
+		assert.equal((await lstat(target)).isDirectory(), true);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

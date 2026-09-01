@@ -100,6 +100,58 @@ the pointer using rollback backups. The checker requires exact run-scoped paths
 and verifies that the fixed poster/GIF hashes match the selected run. Raw
 recordings, logs, MP4, and WebM files are not committed.
 
+## Authorized publication convergence
+
+Preview the publication plan without credentials or remote I/O:
+
+```bash
+pnpm media:readme:upload -- --dry-run
+```
+
+The local checker records a SHA-256 digest for each validated MP4/WebM alongside
+its ffprobe and byte-size facts. An authorized `--apply` re-reads all eight
+run-scoped files and requires each in-memory body's size and SHA-256 digest to
+match those validation-time facts. No upload starts unless the entire preflight
+succeeds. Every upload then uses its stable `demo/*.mp4` or `demo/*.webm` path
+with overwrites enabled and random suffixes disabled.
+
+If an upload fails or returns a mismatched URL, the command reports three exact
+sets: the prior stable paths whose upload calls are confirmed complete, the
+current stable path as potentially completed or mutated, and the later stable
+paths as definitely pending. The media catalog is withheld. The command does
+not claim or attempt remote rollback.
+
+If a `HEAD` check fails after all eight upload calls return, all eight remote
+paths may have changed while the verification outcome for the current public
+URL remains uncertain; the catalog is again withheld. Use exactly one
+credential mode: the preferred short-lived `VERCEL_OIDC_TOKEN` together with
+`BLOB_STORE_ID`, or the legacy `BLOB_READ_WRITE_TOKEN`. The OIDC store ID and
+the store ID encoded in a canonical legacy token must both match the authorized
+Dawn media store. In either mode, `DAWN_MEDIA_PUBLIC_BASE_URL` is pinned to that
+store's exact public origin. Credential values with surrounding whitespace are
+rejected before local validation or remote I/O.
+
+Vercel issues local OIDC tokens only for the development environment through
+`vercel env pull`, even when another environment was previously pulled. The
+Dawn Blob store connection must therefore include the development environment
+for local publication. Pull the token into an untracked or temporary environment
+file, export it without printing it, and remove that file after the command. The
+preferred invocation is:
+
+```bash
+VERCEL_OIDC_TOKEN='<short-lived OIDC token>' \
+BLOB_STORE_ID='store_9RQ8eZyGheVy0wOp' \
+DAWN_MEDIA_PUBLIC_BASE_URL='https://9rq8ezyghevy0wop.public.blob.vercel-storage.com' \
+pnpm media:readme:upload -- --apply
+```
+
+With that correct credential/base/store pairing, rerunning the same authorized
+command is the safe convergence path: it performs a fresh complete preflight,
+overwrites all eight stable paths idempotently, verifies every public URL with
+`HEAD`, and only then atomically publishes the catalog. Equivalently, an
+operator may re-verify all eight public URLs before publishing the catalog
+through the same atomic path.
+
 Committed outputs are:
 
 ```text
@@ -108,6 +160,7 @@ apps/web/public/demo/product-loop-poster.webp
 apps/web/public/demo/author-poster.webp
 apps/web/public/demo/test-poster.webp
 apps/web/public/demo/run-poster.webp
+apps/web/app/lib/demo-media.json
 docs/brand/demo/transcript.md
 ```
 

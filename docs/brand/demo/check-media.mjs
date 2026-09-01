@@ -312,6 +312,7 @@ async function collectMediaFiles(
 		access = nodeAccess,
 		probe = probeFile,
 		readFile = nodeReadFile,
+		hash = (path) => hashFile(path, readFile),
 		signal,
 	} = {},
 ) {
@@ -328,6 +329,7 @@ async function collectMediaFiles(
 			files.set(logicalPath, {
 				size: info.size,
 				probe: await probe(actualPath, { signal }),
+				sha256: await hash(actualPath),
 			});
 		}
 		const posterPath = published ? join(repoRoot, contract.poster) : clip?.poster;
@@ -400,6 +402,7 @@ export async function validateStagedMediaManifest({
 		access,
 		probe,
 		readFile,
+		hash,
 		signal,
 	});
 	const failures = await validateLocalMediaContract({
@@ -450,7 +453,7 @@ export async function checkLocalMedia({
 	log = console.log,
 	signal,
 } = {}) {
-	const { manifest } = await readLatestManifest(repoRoot, readFile);
+	const { pointer, manifest } = await readLatestManifest(repoRoot, readFile);
 	await verifyPublishedCorrespondence(repoRoot, manifest, { hash });
 	const files = await collectMediaFiles(repoRoot, manifest, {
 		published: true,
@@ -458,6 +461,7 @@ export async function checkLocalMedia({
 		access,
 		probe,
 		readFile,
+		hash,
 		signal,
 	});
 	const failures = await validateLocalMediaContract({
@@ -478,15 +482,265 @@ export async function checkLocalMedia({
 		"PASS captions: no caption claims scaffolding appears",
 	];
 	for (const line of passLines) log(line);
-	return { manifest, passLines };
+	const sourceFiles = new Map();
+	for (const contract of MEDIA_CONTRACTS) {
+		for (const format of ["mp4", "webm"]) {
+			sourceFiles.set(
+				manifest.clips[contract.name][format],
+				files.get(contract[format]),
+			);
+		}
+	}
+	return { pointer, manifest, sourceFiles, passLines };
+}
+
+const DEMO_MEDIA_KEYS = Object.freeze([
+	"productLoop",
+	"author",
+	"test",
+	"run",
+]);
+const DEMO_MEDIA_FIELDS = Object.freeze([
+	"mp4",
+	"webm",
+	"poster",
+	"caption",
+	"ariaLabel",
+	"transcript",
+]);
+const DEMO_MEDIA_NAMES = Object.freeze({
+	productLoop: "product-loop",
+	author: "author",
+	test: "test",
+	run: "run",
+});
+
+export function urlHasExplicitPort(value) {
+	if (typeof value !== "string") return false;
+	const authorityMatch = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/iu.exec(value);
+	if (authorityMatch === null) return false;
+	const authority = authorityMatch[1];
+	const hostAndPort = authority.slice(authority.lastIndexOf("@") + 1);
+	if (hostAndPort.startsWith("[")) {
+		const closingBracket = hostAndPort.indexOf("]");
+		return closingBracket !== -1 && hostAndPort[closingBracket + 1] === ":";
+	}
+	return hostAndPort.includes(":");
+}
+
+function requireHttpsUrl(value, description) {
+	let parsed;
+	try {
+		parsed = new URL(value);
+	} catch {
+		throw new Error(`${description} must be an HTTPS URL`);
+	}
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.username !== "" ||
+		parsed.password !== ""
+	) {
+		throw new Error(`${description} must be an HTTPS URL without credentials`);
+	}
+	if (urlHasExplicitPort(value)) {
+		throw new Error(`${description} must not use an explicit port`);
+	}
+	if (value !== parsed.href) {
+		throw new Error(`${description} must use canonical HTTPS URL serialization`);
+	}
+	return parsed;
+}
+
+function requireStableMediaUrl(value, key, format) {
+	const description = `${key}.${format}`;
+	const parsed = requireHttpsUrl(value, description);
+	const expectedPath = `/demo/${DEMO_MEDIA_NAMES[key]}.${format}`;
+	if (
+		parsed.pathname !== expectedPath ||
+		parsed.search !== "" ||
+		parsed.hash !== ""
+	) {
+		throw new Error(
+			`${description} must use the exact stable path ${expectedPath} with no query or fragment`,
+		);
+	}
+	return parsed;
+}
+
+export function validateDemoMediaCatalog(catalog) {
+	if (catalog === null || typeof catalog !== "object" || Array.isArray(catalog)) {
+		throw new Error("demo media catalog must be an object");
+	}
+	const actualKeys = Object.keys(catalog);
+	if (
+		actualKeys.length !== DEMO_MEDIA_KEYS.length ||
+		DEMO_MEDIA_KEYS.some((key, index) => actualKeys[index] !== key)
+	) {
+		throw new Error(
+			`demo media catalog must contain exactly ${DEMO_MEDIA_KEYS.join(", ")} in order`,
+		);
+	}
+	let mediaOrigin;
+	for (const key of DEMO_MEDIA_KEYS) {
+		const entry = catalog[key];
+		if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+			throw new Error(`${key} catalog entry must be an object`);
+		}
+		const actualFields = Object.keys(entry).sort();
+		const expectedFields = [...DEMO_MEDIA_FIELDS].sort();
+		const missingField = DEMO_MEDIA_FIELDS.find(
+			(field) => !Object.hasOwn(entry, field),
+		);
+		if (missingField !== undefined) {
+			throw new Error(`${key}.${missingField} is required`);
+		}
+		if (
+			actualFields.length !== expectedFields.length ||
+			expectedFields.some((field, index) => actualFields[index] !== field)
+		) {
+			throw new Error(
+				`${key} catalog entry must contain exactly ${DEMO_MEDIA_FIELDS.join(", ")}`,
+			);
+		}
+		for (const field of ["poster", "caption", "ariaLabel", "transcript"]) {
+			if (typeof entry[field] !== "string" || entry[field].trim() === "") {
+				throw new Error(`${key}.${field} is required`);
+			}
+		}
+		const mp4 = requireStableMediaUrl(entry.mp4, key, "mp4");
+		const webm = requireStableMediaUrl(entry.webm, key, "webm");
+		mediaOrigin ??= mp4.origin;
+		if (mp4.origin !== mediaOrigin || webm.origin !== mediaOrigin) {
+			throw new Error("all demo media URLs must use the same public origin");
+		}
+		if (entry.poster !== `/demo/${DEMO_MEDIA_NAMES[key]}-poster.webp`) {
+			throw new Error(`${key}.poster must use its local /demo/*.webp path`);
+		}
+		requireHttpsUrl(entry.transcript, `${key}.transcript`);
+	}
+	return catalog;
+}
+
+export async function runBoundedRemoteOperation({
+	label,
+	timeoutMs,
+	signal,
+	operation,
+}) {
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+		throw new TypeError("remote operation timeout must be a positive integer");
+	}
+	signal?.throwIfAborted();
+	const controller = new AbortController();
+	const forwardAbort = () => controller.abort(signal.reason);
+	signal?.addEventListener("abort", forwardAbort, { once: true });
+	const timer = setTimeout(() => {
+		const timeout = new Error(`${label} timed out after ${timeoutMs}ms`);
+		timeout.code = "DAWN_MEDIA_REMOTE_TIMEOUT";
+		controller.abort(timeout);
+	}, timeoutMs);
+	try {
+		const result = await operation(controller.signal);
+		if (controller.signal.aborted) throw controller.signal.reason;
+		return result;
+	} catch (error) {
+		if (controller.signal.aborted) throw controller.signal.reason;
+		throw error;
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forwardAbort);
+	}
+}
+
+export async function verifyRemoteMediaCatalog({
+	catalog,
+	fetch = globalThis.fetch,
+	log = console.log,
+	timeoutMs = 15_000,
+	signal,
+} = {}) {
+	validateDemoMediaCatalog(catalog);
+	const checks = [];
+	for (const key of DEMO_MEDIA_KEYS) {
+		for (const [format, expectedContentType] of [
+			["mp4", "video/mp4"],
+			["webm", "video/webm"],
+		]) {
+			const url = catalog[key][format];
+			try {
+				const response = await runBoundedRemoteOperation({
+					label: `HEAD ${key}.${format}`,
+					timeoutMs,
+					signal,
+					operation: (operationSignal) =>
+						fetch(url, {
+							method: "HEAD",
+							redirect: "error",
+							signal: operationSignal,
+						}),
+				});
+				if (response.status !== 200) {
+					throw new Error(
+						`${key}.${format} must return 200; received ${response.status}`,
+					);
+				}
+				const actualContentType = response.headers.get("content-type");
+				if (actualContentType !== expectedContentType) {
+					throw new Error(
+						`${key}.${format} must return ${expectedContentType}; received ${actualContentType ?? "missing"}`,
+					);
+				}
+			} catch (error) {
+				const annotated = new Error(
+					error instanceof Error ? error.message : String(error),
+				);
+				annotated.verificationUrl = url;
+				if (error?.code === "DAWN_MEDIA_REMOTE_TIMEOUT") {
+					annotated.code = "DAWN_MEDIA_REMOTE_TIMEOUT";
+				}
+				if (error?.name === "AbortError") annotated.name = "AbortError";
+				throw annotated;
+			}
+			const line = `PASS remote: ${key}.${format} is 200 ${expectedContentType}`;
+			log(line);
+			checks.push(line);
+		}
+	}
+	return checks;
+}
+
+export async function checkRemoteMedia({
+	repoRoot = DEFAULT_REPO_ROOT,
+	readFile = nodeReadFile,
+	fetch = globalThis.fetch,
+	log = console.log,
+	timeoutMs = 15_000,
+	signal,
+} = {}) {
+	const catalogPath = join(repoRoot, "apps/web/app/lib/demo-media.json");
+	const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
+	const passLines = await verifyRemoteMediaCatalog({
+		catalog,
+		fetch,
+		log,
+		timeoutMs,
+		signal,
+	});
+	return { catalog, passLines };
 }
 
 export function parseMediaCheckArguments(args) {
 	const forwarded = args.filter((arg) => arg !== "--");
-	if (forwarded.length !== 1 || forwarded[0] !== "--local") {
-		throw new Error("Usage: node docs/brand/demo/check-media.mjs --local");
+	if (forwarded.length !== 1) {
+		throw new Error(
+			"Usage: node docs/brand/demo/check-media.mjs (--local | --remote)",
+		);
 	}
-	return { local: true };
+	if (forwarded[0] === "--local") return { local: true };
+	if (forwarded[0] === "--remote") return { remote: true };
+	throw new Error(
+		"Usage: node docs/brand/demo/check-media.mjs (--local | --remote)",
+	);
 }
 
 function isMainModule() {
@@ -498,8 +752,9 @@ function isMainModule() {
 
 if (isMainModule()) {
 	try {
-		parseMediaCheckArguments(process.argv.slice(2));
-		await checkLocalMedia();
+		const mode = parseMediaCheckArguments(process.argv.slice(2));
+		if (mode.local) await checkLocalMedia();
+		else await checkRemoteMedia();
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		process.exitCode = 1;
