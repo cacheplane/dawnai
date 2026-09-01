@@ -1,9 +1,9 @@
 # Dawn product-loop media transcript
 
-The flagship and three derivative clips are silent. Their short act labels are
-repeated here so the same proof remains available without motion or audio. The
-footage begins inside an existing generated research workspace; it does not show
-the scaffold command running.
+The flagship and three derivative clips are silent. Their visible short act
+labels — **Author**, **Prove**, and **Run** — are repeated here so the same proof
+remains available without motion or audio. The footage begins inside an existing
+generated research workspace; it does not show the scaffold command running.
 
 ## Product loop (24 seconds)
 
@@ -22,14 +22,14 @@ The editor focuses on the `export default agent({` route descriptor and the
 shared `searchCorpus` tool. The compositor uses frozen-frame holds to keep the
 real captured source legible; the holds do not add product events.
 
-### Test
+### Prove
 
 The terminal compositor runs the generated workspace's canonical `npm test`
 command. The real, narrowly normalized log shows the named deterministic
 research scenario passing without a provider key. A frozen-frame hold leaves
 the passing result on screen long enough to read.
 
-### Workbench
+### Run
 
 The actual generated Dawn Workbench submits “What are common agent
 architectures?” to `/research#agent`. Visible tool activity names the

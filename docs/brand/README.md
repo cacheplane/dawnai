@@ -56,3 +56,7 @@ names, PASS/FAIL text, commands, counts, ports, and other numeric output.
 Because the raw captured scenes are intentionally brief, encoding uses honest
 frozen-frame holds around those same frames for legibility. It never fabricates
 a source file, test result, tool call, response, reload, or restored state.
+Sharp renders deterministic **Author**, **Prove**, and **Run** label chips into
+the ignored run artifacts; ffmpeg composites them over the matching captured
+segments. Posters are extracted from the labeled MP4 output, so their act and
+footage remain in sync without changing Dawn runtime behavior.

@@ -43,11 +43,18 @@ all other numeric output remain untouched.
 After Playwright finalizes its recording and the capture summary is published,
 ffmpeg creates four timelines:
 
-1. `product-loop` — Author → Test → Workbench → Close, 24 seconds.
-2. `author` — the generated route and shared tool, 9 seconds.
-3. `test` — the real offline passing result, 9 seconds.
-4. `run` — completed Workbench run → browser reload → restored transcript, 10
-   seconds.
+1. `product-loop` — **Author** source → **Prove** test → **Run** Workbench →
+   Close, 24 seconds.
+2. `author` — **Author**, the generated route and shared tool, 9 seconds.
+3. `test` — **Prove**, the real offline passing result, 9 seconds.
+4. `run` — **Run**, completed Workbench run → browser reload → restored
+   transcript, 10 seconds.
+
+Sharp renders the three short label chips as transparent PNGs inside the
+gitignored run artifacts. ffmpeg overlays each chip only on its matching
+timeline segment; this needs neither ffmpeg `drawtext` nor a WebP encoder.
+Posters are extracted from the labeled MP4 output so the fallback and video
+always identify the same act.
 
 The raw scenes are shorter than their delivery windows. The encoder uses only
 frozen-frame holds around actual captured frames to make source, terminal, and
@@ -104,6 +111,7 @@ docs/brand/demo/transcript.md
 Inspect every poster and representative frames from every local MP4/WebM at full
 1440×810 size and at reduced README/mobile widths. Confirm that file paths, the
 `npm test` result, `searchCorpus`, `readDoc`, the cited answer, browser reload,
-and restored transcript correspond exactly to
+restored transcript, and the **Author**, **Prove**, and **Run** labels correspond
+exactly to
 [the transcript](./demo/transcript.md). No remote upload or store mutation is
 part of regeneration or local validation.

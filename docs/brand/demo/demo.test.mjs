@@ -32,6 +32,7 @@ import {
 	validateLocalMediaContract,
 } from "./check-media.mjs";
 import {
+	buildTimelineFilter,
 	createTimelinePlan,
 	encodePoster,
 	runEncoderCommand,
@@ -317,11 +318,32 @@ test("encoding plan builds the four honest capture timelines", () => {
 		plan.run.segments.map(({ scene }) => scene),
 		["run-completed", "reload-and-restoration"],
 	);
+	assert.deepEqual(
+		plan["product-loop"].segments.map(({ actLabel }) => actLabel ?? null),
+		["Author", "Prove", "Run", null],
+		"the encoded flagship must visibly identify its three acts",
+	);
+	assert.deepEqual(
+		[plan.author.actLabel, plan.test.actLabel, plan.run.actLabel],
+		["Author", "Prove", "Run"],
+		"derivative encodes must preserve the matching visual act label",
+	);
 	assert.equal(plan["product-loop"].segments[0].sourceEnd, 1.3);
 	assert.equal(plan.author.segments[0].sourceEnd, 1.3);
 	assert.equal(plan.test.segments[0].sourceEnd, 2.8);
 	assert.equal(plan.run.segments[0].sourceEnd, 8);
 	assert.equal(plan.run.segments[1].sourceEnd, 11.8);
+	const flagshipFilter = buildTimelineFilter(plan["product-loop"], {
+		labelInputIndexes: [1, 2, 3, undefined],
+	}).filter;
+	assert.match(flagshipFilter, /\[segment0base\]\[1:v\]overlay=/);
+	assert.match(flagshipFilter, /\[segment1base\]\[2:v\]overlay=/);
+	assert.match(flagshipFilter, /\[segment2base\]\[3:v\]overlay=/);
+	assert.match(flagshipFilter, /\[segment3base\]null\[segment3\]/);
+	assert.throws(
+		() => buildTimelineFilter(plan["product-loop"]),
+		/Author act label has no visual input/,
+	);
 });
 
 test("poster encoding extracts a real frame before WebP conversion", async () => {
