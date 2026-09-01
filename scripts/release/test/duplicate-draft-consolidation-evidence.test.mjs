@@ -9,6 +9,7 @@ import {
 	semanticAssetProjection,
 	semanticReleaseProjection,
 } from "../duplicate-draft-consolidation-evidence.mjs";
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs";
 import {
 	createDuplicateDraftConsolidationFixture,
 	DUPLICATE_DRAFT_CANDIDATE,
@@ -50,6 +51,8 @@ test("proves three ordered mutable drafts have the exact production 45-asset esc
 	assert.equal(result.payloadProof.attestationVerification.status, "VERIFIED");
 	assert.equal(result.payloadProof.attestationVerification.subjects.length, 22);
 	assert.equal(result.releases[0].semantic.targetCommitish, "main");
+	assert.equal(result.releases[0].createdAt, "2026-08-31T00:00:00.000Z");
+	assert.equal(result.releases[0].assets[0].createdAt.endsWith(".000Z"), true);
 	assert.equal(fixture.downloadCount, 135);
 	assert.equal(Object.isFrozen(result), true);
 	assert.equal(Object.isFrozen(result.releases[0].assets), true);
@@ -67,6 +70,167 @@ test("proves three ordered mutable drafts have the exact production 45-asset esc
 			result.releases[0].assets.map(semanticAssetProjection),
 		),
 	);
+});
+
+test("normalizes exact GitHub timestamps and rejects invalid raw calendar or precision forms", async (t) => {
+	const cases = [
+		["Release creation", (release, value) => (release.created_at = value)],
+		["Release update", (release, value) => (release.updated_at = value)],
+		[
+			"asset creation",
+			(release, value) => (release.assets[0].created_at = value),
+		],
+		[
+			"asset update",
+			(release, value) => (release.assets[0].updated_at = value),
+		],
+	];
+	for (const [name, mutate] of cases) {
+		await t.test(`${name} second precision`, async () => {
+			const fixture = createDuplicateDraftConsolidationFixture();
+			mutate(fixture.releases[0], "2026-08-31T19:15:59Z");
+			const result = await inspectEquivalentDrafts(INPUT(fixture));
+			const evidence = result.releases[0];
+			const normalized = name.startsWith("Release")
+				? name.endsWith("creation")
+					? evidence.createdAt
+					: evidence.updatedAt
+				: name.endsWith("creation")
+					? evidence.assets.find(
+							({ name }) => name === fixture.releases[0].assets[0].name,
+						).createdAt
+					: evidence.assets.find(
+							({ name }) => name === fixture.releases[0].assets[0].name,
+						).updatedAt;
+			assert.equal(normalized, "2026-08-31T19:15:59.000Z");
+		});
+		for (const invalid of [
+			"2026-02-30T19:15:59Z",
+			"2026-08-31T19:15:59.00Z",
+			"2026-08-31T19:15:59+00:00",
+			"2026-08-31T19:15:60Z",
+		]) {
+			await t.test(`${name} rejects ${invalid}`, async () => {
+				const fixture = createDuplicateDraftConsolidationFixture();
+				mutate(fixture.releases[0], invalid);
+				await assert.rejects(
+					inspectEquivalentDrafts(INPUT(fixture)),
+					/timestamp|calendar|GitHub|canonical/iu,
+				);
+			});
+		}
+	}
+});
+
+test("enforces namespace-specific declared-size caps before any asset download", async (t) => {
+	const categories = [
+		[
+			"release record",
+			"release-record.json",
+			RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+		],
+		["manifest", "manifest.json", RELEASE_PAYLOAD_LIMITS.manifestBytes],
+		[
+			"bundle",
+			(name) => name.endsWith(".intoto.jsonl"),
+			RELEASE_PAYLOAD_LIMITS.attestationBundleBytes,
+		],
+		[
+			"package",
+			(name) => name.endsWith(".tgz"),
+			RELEASE_PAYLOAD_LIMITS.tarballBytes,
+		],
+	];
+	for (const [label, selector, maximum] of categories) {
+		await t.test(`${label} one over`, async () => {
+			const fixture = createDuplicateDraftConsolidationFixture();
+			const asset = fixture.releases[0].assets.find(({ name }) =>
+				typeof selector === "string" ? name === selector : selector(name),
+			);
+			asset.size = maximum + 1;
+			await assert.rejects(
+				inspectEquivalentDrafts(INPUT(fixture)),
+				/bundle|manifest|package|payload|record|size|tarball/iu,
+			);
+			assert.equal(fixture.downloadCount, 0);
+		});
+	}
+
+	const acceptedBoundaries = [
+		[
+			"release record",
+			"release-record.json",
+			RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+		],
+		["manifest", "manifest.json", RELEASE_PAYLOAD_LIMITS.manifestBytes],
+		[
+			"bundle",
+			(name) => name.endsWith(".intoto.jsonl"),
+			RELEASE_PAYLOAD_LIMITS.attestationBundleBytes,
+		],
+		[
+			"package prepared",
+			(name) => name.endsWith(".tgz"),
+			RELEASE_PAYLOAD_LIMITS.preparedTarballsBytes,
+		],
+	];
+	for (const [label, selector, maximum] of acceptedBoundaries) {
+		await t.test(
+			`${label} applicable boundary reaches its download`,
+			async () => {
+				const fixture = createDuplicateDraftConsolidationFixture();
+				const asset = fixture.releases[0].assets.find(({ name }) =>
+					typeof selector === "string" ? name === selector : selector(name),
+				);
+				if (label === "package prepared") {
+					for (const other of fixture.releases[0].assets.filter(
+						({ name }) => name.endsWith(".tgz") && name !== asset.name,
+					)) {
+						other.size = 0;
+					}
+				}
+				asset.size = maximum;
+				await assert.rejects(
+					inspectEquivalentDrafts(INPUT(fixture)),
+					/bytes conflict|declared size/iu,
+				);
+				assert.equal(
+					fixture.operations.includes(
+						`download:${fixture.survivorId}:${asset.id}`,
+					),
+					true,
+				);
+			},
+		);
+	}
+});
+
+test("rejects prepared-package and bundle aggregate overflow before the offending download", async (t) => {
+	await t.test("prepared packages", async () => {
+		const fixture = createDuplicateDraftConsolidationFixture();
+		const asset = fixture.releases[0].assets.find(({ name }) =>
+			name.endsWith(".tgz"),
+		);
+		asset.size = RELEASE_PAYLOAD_LIMITS.preparedTarballsBytes + 1;
+		await assert.rejects(
+			inspectEquivalentDrafts(INPUT(fixture)),
+			/prepared|package|tarball|payload/iu,
+		);
+		assert.equal(fixture.downloadCount, 0);
+	});
+	await t.test("attestation bundles", async () => {
+		const fixture = createDuplicateDraftConsolidationFixture();
+		for (const asset of fixture.releases[0].assets
+			.filter(({ name }) => name.endsWith(".intoto.jsonl"))
+			.slice(0, 16)) {
+			asset.size = RELEASE_PAYLOAD_LIMITS.attestationBundleBytes;
+		}
+		await assert.rejects(
+			inspectEquivalentDrafts(INPUT(fixture)),
+			/attestation|bundle|payload/iu,
+		);
+		assert.equal(fixture.downloadCount, 0);
+	});
 });
 
 test("excludes only recorded Release and asset service volatility from equality", async (t) => {

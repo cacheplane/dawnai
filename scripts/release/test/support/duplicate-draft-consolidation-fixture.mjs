@@ -94,8 +94,8 @@ export function createDuplicateDraftConsolidationFixture() {
 				size: bytes.byteLength,
 				digest: `sha256:${entry.sha256}`,
 				uploader: { ...AUTHOR },
-				created_at: `2026-08-31T0${releaseIndex}:01:${String(assetIndex).padStart(2, "0")}.000Z`,
-				updated_at: `2026-08-31T0${releaseIndex}:02:${String(assetIndex).padStart(2, "0")}.000Z`,
+				created_at: `2026-08-31T0${releaseIndex}:01:${String(assetIndex).padStart(2, "0")}Z`,
+				updated_at: `2026-08-31T0${releaseIndex}:02:${String(assetIndex).padStart(2, "0")}Z`,
 				download_count: releaseIndex + assetIndex,
 				browser_download_url: `https://github.invalid/releases/assets/${id}`,
 			};
@@ -115,8 +115,8 @@ export function createDuplicateDraftConsolidationFixture() {
 			published_at: null,
 			body,
 			author: { ...AUTHOR },
-			created_at: `2026-08-31T0${releaseIndex}:00:00.000Z`,
-			updated_at: `2026-08-31T0${releaseIndex}:30:00.000Z`,
+			created_at: `2026-08-31T0${releaseIndex}:00:00Z`,
+			updated_at: `2026-08-31T0${releaseIndex}:30:00Z`,
 			assets,
 			html_url: `https://github.invalid/releases/${identity.id}`,
 		};

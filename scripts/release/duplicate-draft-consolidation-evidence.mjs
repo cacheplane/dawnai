@@ -72,6 +72,8 @@ const DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/u;
 const ID_PATTERN = /^[1-9][0-9]*$/u;
 const TIMESTAMP_PATTERN =
 	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u;
+const GITHUB_TIMESTAMP_PATTERN =
+	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/u;
 const AGGREGATE_ESCROW_BYTES = 3 * RELEASE_PAYLOAD_LIMITS.escrowBytes;
 
 export async function inspectEquivalentDrafts(input) {
@@ -101,7 +103,10 @@ export async function inspectEquivalentDrafts(input) {
 		role: index === 0 ? "survivor" : "duplicate",
 	}));
 	preflightDownloads(
-		selected.map(({ release }) => release),
+		selected.map(({ release, marker }) => ({
+			release,
+			expectedNames: markerAssetNames(marker),
+		})),
 		context.accounting,
 	);
 
@@ -232,7 +237,12 @@ export async function captureDirectTargetRead(input) {
 	if (!Array.isArray(assets))
 		throw new TypeError("Direct target asset enumeration is invalid");
 	const directRelease = { ...snapshotPlain(release, "direct Release"), assets };
-	preflightDownloads([directRelease]);
+	preflightDownloads([
+		{
+			release: directRelease,
+			expectedNames: expectedEvidence.assets.map(({ name }) => name),
+		},
+	]);
 	const directEvidence = buildDirectEvidence({
 		release: directRelease,
 		role,
@@ -382,11 +392,11 @@ function buildDirectEvidence({ release, role, candidate, expectedEvidence }) {
 		id: canonicalId(release.id, "Direct target Release id"),
 		nodeId: nonemptyString(release.node_id, "Direct target Release node id"),
 		tagName: nonemptyString(release.tag_name, "Direct target Release tag name"),
-		createdAt: canonicalTimestamp(
+		createdAt: githubTimestamp(
 			release.created_at,
 			"Direct target Release creation timestamp",
 		),
-		updatedAt: canonicalTimestamp(
+		updatedAt: githubTimestamp(
 			release.updated_at,
 			"Direct target Release update timestamp",
 		),
@@ -552,17 +562,68 @@ function candidateReleases(releases, candidate) {
 	return { drafts, published };
 }
 
+function markerAssetNames(marker) {
+	return [
+		"release-record.json",
+		...marker.attestationSet.subjects.map(({ subjectName }) => subjectName),
+		...marker.attestationSet.subjects.map(({ bundleName }) => bundleName),
+	];
+}
+
+function assetCategory(name) {
+	if (name === "release-record.json") {
+		return {
+			kind: "record",
+			label: "Release record",
+			maximumBytes: RELEASE_PAYLOAD_LIMITS.releaseRecordBytes,
+		};
+	}
+	if (name === "manifest.json") {
+		return {
+			kind: "manifest",
+			label: "Release manifest",
+			maximumBytes: RELEASE_PAYLOAD_LIMITS.manifestBytes,
+		};
+	}
+	if (name.endsWith(".intoto.jsonl")) {
+		return {
+			kind: "bundle",
+			label: "Attestation bundle",
+			maximumBytes: RELEASE_PAYLOAD_LIMITS.attestationBundleBytes,
+		};
+	}
+	if (name.endsWith(".tgz")) {
+		return {
+			kind: "package",
+			label: "Release package tarball",
+			maximumBytes: RELEASE_PAYLOAD_LIMITS.tarballBytes,
+		};
+	}
+	throw new Error("Release asset is outside the canonical namespace");
+}
+
 function preflightDownloads(
-	releases,
+	entries,
 	accounting = { downloadedAssets: 0, downloadedBytes: 0 },
 ) {
 	let aggregate = accounting.downloadedBytes;
 	let downloads = accounting.downloadedAssets;
-	for (const [releaseIndex, release] of releases.entries()) {
+	for (const [releaseIndex, entry] of entries.entries()) {
+		const { release, expectedNames } = entry;
 		if (!Array.isArray(release.assets) || release.assets.length !== 45) {
 			throw new Error(`Release ${releaseIndex} must expose exactly 45 assets`);
 		}
+		if (
+			!Array.isArray(expectedNames) ||
+			expectedNames.length !== 45 ||
+			new Set(expectedNames).size !== 45
+		) {
+			throw new Error("Release canonical asset namespace is invalid");
+		}
+		const expected = new Set(expectedNames);
 		let releaseBytes = 0;
+		let preparedBytes = 0;
+		let bundleBytes = 0;
 		const ids = new Set();
 		const names = new Set();
 		for (const asset of release.assets) {
@@ -575,12 +636,44 @@ function preflightDownloads(
 			}
 			ids.add(id);
 			names.add(name);
+			if (!expected.has(name)) {
+				throw new Error("Release asset is outside the canonical namespace");
+			}
 			const size = nonnegativeInteger(asset.size, "Release asset size");
-			if (size > RELEASE_PAYLOAD_LIMITS.tarballBytes) {
-				throw new Error("Release asset exceeds the per-asset payload limit");
+			const category = assetCategory(name);
+			if (size > category.maximumBytes) {
+				throw new Error(
+					`${category.label} exceeds its namespace payload limit`,
+				);
+			}
+			if (category.kind === "package") {
+				preparedBytes = checkedAdd(
+					preparedBytes,
+					size,
+					"Prepared package payload",
+				);
+			}
+			if (category.kind === "bundle") {
+				bundleBytes = checkedAdd(
+					bundleBytes,
+					size,
+					"Attestation bundle payload",
+				);
 			}
 			releaseBytes = checkedAdd(releaseBytes, size, "Release escrow payload");
 			downloads += 1;
+		}
+		if (
+			names.size !== expected.size ||
+			expectedNames.some((name) => !names.has(name))
+		) {
+			throw new Error("Release asset namespace is incomplete");
+		}
+		if (preparedBytes > RELEASE_PAYLOAD_LIMITS.preparedTarballsBytes) {
+			throw new Error("Prepared package payload exceeds its aggregate limit");
+		}
+		if (bundleBytes > RELEASE_PAYLOAD_LIMITS.attestationBundlesBytes) {
+			throw new Error("Attestation bundle payload exceeds its aggregate limit");
 		}
 		if (releaseBytes > RELEASE_PAYLOAD_LIMITS.escrowBytes) {
 			throw new Error(
@@ -615,13 +708,7 @@ async function hydrateRelease({
 	validateRawReleasePolicy(release, candidate);
 	const parsedMarker =
 		marker ?? parseCandidateMarker(release.body, candidate, "Managed Release");
-	const expectedNames = [
-		"release-record.json",
-		...parsedMarker.attestationSet.subjects.map(
-			({ subjectName }) => subjectName,
-		),
-		...parsedMarker.attestationSet.subjects.map(({ bundleName }) => bundleName),
-	];
+	const expectedNames = markerAssetNames(parsedMarker);
 	const observedNames = new Set(release.assets.map(({ name }) => name));
 	if (
 		release.assets.length !== expectedNames.length ||
@@ -761,14 +848,11 @@ async function hydrateRelease({
 		id: canonicalId(release.id, "Release id"),
 		nodeId: nonemptyString(release.node_id, "Release node id"),
 		tagName: nonemptyString(release.tag_name, "Release tag name"),
-		createdAt: canonicalTimestamp(
+		createdAt: githubTimestamp(
 			release.created_at,
 			"Release creation timestamp",
 		),
-		updatedAt: canonicalTimestamp(
-			release.updated_at,
-			"Release update timestamp",
-		),
+		updatedAt: githubTimestamp(release.updated_at, "Release update timestamp"),
 		semantic,
 		assets,
 	});
@@ -866,8 +950,8 @@ function parseRawAsset(value) {
 		size: nonnegativeInteger(value.size, "Asset size"),
 		digest,
 		uploader: parseRawIdentity(value.uploader, "Asset uploader"),
-		createdAt: canonicalTimestamp(value.created_at, "Asset creation timestamp"),
-		updatedAt: canonicalTimestamp(value.updated_at, "Asset update timestamp"),
+		createdAt: githubTimestamp(value.created_at, "Asset creation timestamp"),
+		updatedAt: githubTimestamp(value.updated_at, "Asset update timestamp"),
 		downloadCount: nonnegativeInteger(
 			value.download_count,
 			"Asset download count",
@@ -1193,6 +1277,25 @@ function canonicalTimestamp(value, label) {
 		throw new TypeError(`${label} is not a canonical timestamp`);
 	}
 	return value;
+}
+
+function githubTimestamp(value, label) {
+	if (typeof value !== "string" || !GITHUB_TIMESTAMP_PATTERN.test(value)) {
+		throw new TypeError(`${label} is not an exact GitHub timestamp`);
+	}
+	const normalized = value.endsWith(".000Z")
+		? value
+		: value.includes(".")
+			? value
+			: `${value.slice(0, -1)}.000Z`;
+	try {
+		if (new Date(normalized).toISOString() !== normalized) {
+			throw new TypeError(`${label} has an invalid GitHub calendar value`);
+		}
+	} catch {
+		throw new TypeError(`${label} has an invalid GitHub calendar value`);
+	}
+	return normalized;
 }
 
 function assertMonotone(left, right, label) {
