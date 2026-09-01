@@ -382,6 +382,91 @@ test("GitHub reads use exact trusted endpoints, headers, pagination, and normali
   }
 })
 
+test("asset downloads preserve the production one-hop signed-host boundary", async () => {
+  const signedUrl =
+    "https://release-assets.githubusercontent.com/github-production-release-asset/1210070282/91/manifest.json?sp=r&sv=2025-01-05&sig=exact-signature"
+  const recording = recordingFetch([
+    redirectResponse(signedUrl),
+    binaryResponse(Buffer.from("asset")),
+  ])
+  const adapters = await createAdapters({
+    fetchImpl: recording.fetchImpl,
+    run: commandRunner([]),
+  })
+
+  assert.equal(
+    Buffer.from(
+      (await adapters.github.downloadReleaseAsset({ assetId: "91", maximumBytes: 5 }))
+        .contentBase64,
+      "base64",
+    ).toString(),
+    "asset",
+  )
+  assert.deepEqual(recording.calls, [
+    {
+      url: `${BASE}/releases/assets/91`,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/octet-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": USER_AGENT,
+        },
+        redirect: "manual",
+        signal: recording.calls[0].init.signal,
+      },
+    },
+    {
+      url: signedUrl,
+      init: {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT },
+        redirect: "manual",
+        signal: recording.calls[1].init.signal,
+      },
+    },
+  ])
+  assert.equal(recording.calls[0].init.headers.Authorization, `Bearer ${TOKEN}`)
+  assert.equal(Object.hasOwn(recording.calls[1].init.headers, "Authorization"), false)
+
+  for (const location of [
+    "https://evil.example/github-production-release-asset/1210070282/91/manifest.json?sig=x",
+    "https://release-assets.githubusercontent.com.evil.example/asset?sig=x",
+    "https://release-assets.githubusercontent.com/asset#fragment",
+  ]) {
+    const unsafe = recordingFetch([redirectResponse(location)])
+    const unsafeAdapters = await createAdapters({
+      fetchImpl: unsafe.fetchImpl,
+      run: commandRunner([]),
+    })
+    const result = await unsafeAdapters.github.downloadReleaseAsset({
+      assetId: "91",
+      maximumBytes: 5,
+    })
+    assert.equal(result.status, "ERROR")
+    assert.equal(result.code, "UNSAFE_DOWNLOAD_URL")
+    assert.equal(unsafe.calls.length, 1)
+  }
+
+  const extraHop = recordingFetch([
+    redirectResponse(signedUrl),
+    redirectResponse(`${signedUrl}&retry=1`),
+  ])
+  const extraHopAdapters = await createAdapters({
+    fetchImpl: extraHop.fetchImpl,
+    run: commandRunner([]),
+  })
+  const extraHopResult = await extraHopAdapters.github.downloadReleaseAsset({
+    assetId: "91",
+    maximumBytes: 5,
+  })
+  assert.equal(extraHopResult.status, "ERROR")
+  assert.equal(extraHopResult.code, "REDIRECT")
+  assert.equal(extraHop.calls.length, 2)
+  assert.equal(Object.hasOwn(extraHop.calls[1].init.headers, "Authorization"), false)
+})
+
 test("release and asset readers reject duplicate numeric identities across pages", async () => {
   for (const [method, firstUrl, secondUrl, invoke, code] of [
     [
@@ -417,6 +502,34 @@ test("release and asset readers reject duplicate numeric identities across pages
       recording.calls.map(({ url }) => url),
       [firstUrl, secondUrl],
     )
+  }
+})
+
+test("release and asset pagination reject contradictory complete Link graphs", async () => {
+  for (const [operation, endpoint, invoke] of [
+    ["releases", `${BASE}/releases?per_page=100&page=2`, (github) => github.listReleases()],
+    [
+      "release-assets",
+      `${BASE}/releases/${SURVIVOR}/assets?per_page=100&page=2`,
+      (github) => github.listReleaseAssets({ releaseId: SURVIVOR }),
+    ],
+  ]) {
+    const recording = recordingFetch([
+      jsonResponse([], 200, {
+        Link: `<${endpoint}>; rel="next", <${endpoint}>; rel="prev"`,
+      }),
+    ])
+    const adapters = await createAdapters({
+      fetchImpl: recording.fetchImpl,
+      run: commandRunner([]),
+    })
+    assert.deepEqual(await invoke(adapters.github), {
+      status: "ERROR",
+      operation,
+      httpStatus: 200,
+      code: "MALFORMED_LINK_HEADER",
+    })
+    assert.equal(recording.calls.length, 1)
   }
 })
 
@@ -492,6 +605,7 @@ test("workflow-run enumeration requires one exact trusted Link next relation", a
     `<${BASE}/issues?per_page=100&page=2>; rel="next"`,
     `<${endpoint}&extra=true>; rel="next"`,
     `<${endpoint}>; rel="next prev"`,
+    `<${endpoint}>; rel="next", <${endpoint}>; rel="prev"`,
     `<${endpoint}>; rel="next", <${endpoint}>; rel="next"`,
     `<${endpoint}>; rel="next", malformed`,
   ]) {
@@ -664,7 +778,10 @@ test("delete boundary rejects every non-approved construction or call before fet
     { apiOrigin: "http://api.github.com" },
     { apiOrigin: "https://evil.example" },
     { survivorId: DUPLICATES[0] },
+    { survivorId: Number(SURVIVOR) },
     { duplicateIds: [...DUPLICATES].reverse() },
+    { duplicateIds: [Number(DUPLICATES[0]), DUPLICATES[1]] },
+    { duplicateIds: [DUPLICATES[0], Number(DUPLICATES[1])] },
     { duplicateIds: [DUPLICATES[0]] },
     { duplicateIds: [...DUPLICATES, "1"] },
     { duplicateIds: [DUPLICATES[0], DUPLICATES[0]] },
@@ -675,7 +792,7 @@ test("delete boundary rejects every non-approved construction or call before fet
     const fetchCalls = []
     assert.throws(
       () => createWriter({ ...override, fetchImpl: (...args) => fetchCalls.push(args) }),
-      /approved|duplicate|survivor|repository|origin|token|invalid/iu,
+      /approved|canonical|duplicate|survivor|repository|origin|token|invalid/iu,
     )
     assert.equal(fetchCalls.length, 0)
   }
@@ -773,6 +890,36 @@ test("delete cancels bodies on 204 and hard HTTP failure responses", async () =>
       await assert.rejects(writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), /HTTP 500/iu)
     }
     assert.equal(cancelled, 1)
+  }
+})
+
+test("delete fails closed when a response body cannot be boundedly canceled", async () => {
+  const malformed = createWriter({
+    fetchImpl: async () => ({ status: 204, headers: new Headers(), body: {} }),
+  })
+  await assert.rejects(
+    () => malformed.deleteDuplicate({ releaseId: DUPLICATES[0] }),
+    /body|cancel|malformed|response/iu,
+  )
+
+  for (const status of [204, 404, 500]) {
+    for (const cancel of [
+      async () => {
+        throw new Error(`${TOKEN} cancel failed`)
+      },
+      async () => new Promise(() => {}),
+    ]) {
+      const writer = createWriter({
+        fetchImpl: async () => ({ status, headers: new Headers(), body: { cancel } }),
+        timeoutMs: 5,
+      })
+      await assert.rejects(
+        () => writer.deleteDuplicate({ releaseId: DUPLICATES[0] }),
+        (error) =>
+          /body|cancel|failed|deadline|timeout/iu.test(String(error)) &&
+          !String(error).includes(TOKEN),
+      )
+    }
   }
 })
 
@@ -985,6 +1132,10 @@ function binaryResponse(value, status = 200) {
     status,
     headers: { "content-type": "application/octet-stream" },
   })
+}
+
+function redirectResponse(location) {
+  return new Response(null, { status: 302, headers: { location } })
 }
 
 function githubHeaders() {

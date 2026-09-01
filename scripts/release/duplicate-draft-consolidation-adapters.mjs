@@ -16,6 +16,13 @@ const API_ORIGIN = "https://api.github.com"
 const API_VERSION = "2022-11-28"
 const JSON_ACCEPT = "application/vnd.github+json"
 const USER_AGENT = "dawn-duplicate-draft-consolidation/1"
+const SIGNED_DOWNLOAD_HOSTS = new Set([
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+  "pipelines.actions.githubusercontent.com",
+])
+const SIGNED_AZURE_HOST_PATTERN = /^productionresultssa[0-9]+\.blob\.core\.windows\.net$/u
 const RELEASE_WORKFLOW = ".github/workflows/release.yml"
 const APPROVED_TAG = "v0.8.22"
 const SURVIVOR_ID = "379991871"
@@ -26,10 +33,12 @@ const MAX_TOKEN_BYTES = 4_096
 const MAX_DIRECT_JSON_BYTES = 8 * 1024 * 1024
 const DELETE_TIMEOUT_MS = 15_000
 const MAX_DELETE_TIMEOUT_MS = 60_000
+const MAX_LINK_HEADER_BYTES = 16_384
 const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const ID_PATTERN = /^[1-9][0-9]*$/u
 const NONTERMINAL_STATUSES = new Set(["in_progress", "pending", "queued", "requested", "waiting"])
+const PAGINATION_RELATIONS = new Set(["first", "last", "next", "prev"])
 const ROOT_OPTION_FIELDS = new Set(["cwd", "token", "environment", "dependencies"])
 const DEPENDENCY_FIELDS = new Set([
   "fetchImpl",
@@ -204,14 +213,14 @@ export function createExactDuplicateDeleteEffect(options) {
   if (required(value, "apiOrigin", "Delete API origin") !== API_ORIGIN) {
     throw new TypeError("Delete API origin is not the approved trusted origin")
   }
-  const survivorId = canonicalId(required(value, "survivorId", "Delete survivor ID"))
+  const survivorId = canonicalStringId(required(value, "survivorId", "Delete survivor ID"))
   if (survivorId !== SURVIVOR_ID) {
     throw new TypeError("Delete survivor is not the approved survivor")
   }
   const duplicateIds = snapshotStringArray(
     required(value, "duplicateIds", "Delete duplicate IDs"),
     "Delete duplicate IDs",
-  ).map(canonicalId)
+  ).map(canonicalStringId)
   if (!arraysEqual(duplicateIds, DUPLICATE_IDS) || duplicateIds.includes(survivorId)) {
     throw new TypeError("Delete duplicate IDs are not the approved ordered duplicate set")
   }
@@ -254,10 +263,12 @@ export function createExactDuplicateDeleteEffect(options) {
         deadline.dispose()
         return deleteOutcome("transport-ambiguous", null, now)
       }
-      deadline.dispose()
-
-      const normalized = deleteResponse(response)
-      safelyCancelBody(normalized.body)
+      let normalized
+      try {
+        normalized = await deleteResponse(response, deadline)
+      } finally {
+        deadline.dispose()
+      }
       if (normalized.status === 204) {
         return deleteOutcome("confirmed-204", 204, now)
       }
@@ -534,26 +545,22 @@ function workflowRunsUrl(page) {
 
 function workflowNextUrl(value) {
   if (value === null) return null
-  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > 16_384) {
+  const graph = exactLinkGraph(value)
+  if (graph === null) {
     throw new TypeError("GitHub workflow-run Link header is malformed")
   }
   const next = []
-  for (const part of value.split(",")) {
-    const match = /^\s*<([^<>\s]+)>\s*;\s*rel="([A-Za-z][A-Za-z0-9._ -]*)"\s*$/u.exec(part)
-    if (match === null) throw new TypeError("GitHub workflow-run Link header is malformed")
-    const relations = match[2].split(/ +/u)
-    if (
-      relations.length === 0 ||
-      new Set(relations).size !== relations.length ||
-      (relations.includes("next") && relations.includes("prev")) ||
-      relations.some((relation) => !/^[A-Za-z][A-Za-z0-9._-]*$/u.test(relation))
-    ) {
-      throw new TypeError("GitHub workflow-run Link relation is malformed")
+  const urls = new Set()
+  const relations = new Set()
+  for (const entry of graph) {
+    const url = exactWorkflowPageUrl(entry.url)
+    if (urls.has(url) || relations.has(entry.relation)) {
+      throw new TypeError("GitHub workflow-run Link graph is contradictory")
     }
-    const url = exactWorkflowPageUrl(match[1])
-    if (relations.includes("next")) next.push(url)
+    urls.add(url)
+    relations.add(entry.relation)
+    if (entry.relation === "next") next.push(url)
   }
-  if (next.length > 1) throw new TypeError("GitHub workflow-run Link contains duplicate next URLs")
   return next[0] ?? null
 }
 
@@ -647,20 +654,150 @@ function githubFetch(fetchImpl) {
     } catch {
       throw new TypeError("GitHub request URL is invalid")
     }
+    const apiRequest = parsed.origin === API_ORIGIN
+    const signedDownloadRequest =
+      parsed.protocol === "https:" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.hash === "" &&
+      (SIGNED_DOWNLOAD_HOSTS.has(parsed.hostname.toLowerCase()) ||
+        SIGNED_AZURE_HOST_PATTERN.test(parsed.hostname.toLowerCase()))
     if (
-      parsed.origin !== API_ORIGIN ||
       parsed.protocol !== "https:" ||
       parsed.username !== "" ||
       parsed.password !== "" ||
-      parsed.hash !== ""
+      parsed.hash !== "" ||
+      (!apiRequest && !signedDownloadRequest)
     ) {
       throw new TypeError("GitHub request origin is not trusted")
     }
-    return fetchImpl(parsed.href, {
+    const headerEntries = Object.entries(init.headers ?? {})
+    if (
+      signedDownloadRequest &&
+      headerEntries.some(([name]) => name.toLowerCase() === "authorization")
+    ) {
+      throw new TypeError("GitHub signed download request contains credentials")
+    }
+    const response = await fetchImpl(parsed.href, {
       ...init,
       headers: { ...init.headers, "User-Agent": USER_AGENT },
     })
+    return apiRequest ? enforcePaginationLinkGraph(response, parsed) : response
   }
+}
+
+function enforcePaginationLinkGraph(response, requestUrl) {
+  let link
+  try {
+    link = response?.headers?.get("link")
+  } catch {
+    return response
+  }
+  if (link === null || validPaginationLinkGraph(link, requestUrl)) return response
+  try {
+    const headers = new Headers(response.headers)
+    headers.set("Link", "malformed")
+    return { status: response.status, headers, body: response.body }
+  } catch {
+    return response
+  }
+}
+
+function validPaginationLinkGraph(value, requestUrl) {
+  const graph = exactLinkGraph(value)
+  if (graph === null) return false
+  const urls = new Set()
+  const relations = new Set()
+  for (const entry of graph) {
+    const url = normalizedAbsoluteUrl(entry.url)
+    if (
+      url === null ||
+      urls.has(url) ||
+      relations.has(entry.relation) ||
+      (entry.relation !== "next" && exactPaginationLinkUrl(url, requestUrl) === null)
+    ) {
+      return false
+    }
+    urls.add(url)
+    relations.add(entry.relation)
+  }
+  return true
+}
+
+function normalizedAbsoluteUrl(value) {
+  try {
+    return new URL(value).href
+  } catch {
+    return null
+  }
+}
+
+function exactLinkGraph(value) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > MAX_LINK_HEADER_BYTES
+  ) {
+    return null
+  }
+  const entries = []
+  for (const part of value.split(",")) {
+    const match = /^\s*<([^<>\s]+)>\s*;\s*rel="([A-Za-z][A-Za-z0-9._ -]*)"\s*$/u.exec(part)
+    if (match === null) return null
+    const relations = match[2].split(/ +/u)
+    if (
+      relations.length !== 1 ||
+      !PAGINATION_RELATIONS.has(relations[0]) ||
+      !/^[A-Za-z][A-Za-z0-9._-]*$/u.test(relations[0])
+    ) {
+      return null
+    }
+    entries.push({ url: match[1], relation: relations[0] })
+  }
+  return entries.length === 0 ? null : entries
+}
+
+function exactPaginationLinkUrl(value, requestUrl) {
+  try {
+    const url = new URL(value)
+    const current = new URL(requestUrl)
+    if (
+      url.origin !== API_ORIGIN ||
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== "" ||
+      url.pathname !== current.pathname
+    ) {
+      return null
+    }
+    const currentQuery = uniqueQuery(current.searchParams)
+    const linkQuery = uniqueQuery(url.searchParams)
+    if (
+      currentQuery === null ||
+      linkQuery === null ||
+      linkQuery.size !== currentQuery.size + (currentQuery.has("page") ? 0 : 1) ||
+      linkQuery.get("per_page") !== "100" ||
+      !ID_PATTERN.test(linkQuery.get("page"))
+    ) {
+      return null
+    }
+    for (const [name, queryValue] of currentQuery) {
+      if (name !== "page" && linkQuery.get(name) !== queryValue) return null
+    }
+    return url.href
+  } catch {
+    return null
+  }
+}
+
+function uniqueQuery(searchParams) {
+  const values = new Map()
+  for (const [name, value] of searchParams) {
+    if (values.has(name)) return null
+    values.set(name, value)
+  }
+  return values
 }
 
 function githubHeaders(token) {
@@ -795,7 +932,7 @@ function deleteDeadline(timeoutMs, callerSignal) {
   }
 }
 
-function deleteResponse(response) {
+async function deleteResponse(response, deadline) {
   if (utilTypes.isProxy(response) || response === null || typeof response !== "object") {
     throw new TypeError("GitHub DELETE response is malformed")
   }
@@ -809,27 +946,38 @@ function deleteResponse(response) {
   } catch {
     throw new TypeError("GitHub DELETE response is malformed")
   }
-  if (
+  const malformed =
     !Number.isInteger(status) ||
     status < 100 ||
     status > 599 ||
     headers === null ||
     typeof headers !== "object" ||
     typeof headers.get !== "function"
-  ) {
-    safelyCancelBody(body)
+  await cancelDeleteResponseBody(body, deadline)
+  if (malformed) {
     throw new TypeError("GitHub DELETE response is malformed")
   }
-  return { status, body }
+  return { status }
 }
 
-function safelyCancelBody(body) {
-  if (body !== null && typeof body === "object" && typeof body.cancel === "function") {
-    try {
-      Promise.resolve(body.cancel()).catch(() => {})
-    } catch {
-      // The response has already been classified without trusting its body.
-    }
+async function cancelDeleteResponseBody(body, deadline) {
+  if (body === null) return
+  if (utilTypes.isProxy(body) || typeof body !== "object") {
+    throw new TypeError("GitHub DELETE response body is malformed")
+  }
+  let cancel
+  try {
+    cancel = body.cancel
+  } catch {
+    throw new TypeError("GitHub DELETE response body is malformed")
+  }
+  if (typeof cancel !== "function" || utilTypes.isProxy(cancel)) {
+    throw new TypeError("GitHub DELETE response body is malformed")
+  }
+  try {
+    await deadline.race(Promise.resolve().then(() => cancel.call(body)))
+  } catch {
+    throw new Error("GitHub DELETE response body cancellation failed closed")
   }
 }
 
