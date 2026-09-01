@@ -1226,11 +1226,30 @@ function bindAuthorityCapability(value, facade) {
 		},
 		sealWithoutTarget() {
 			try {
-				return bindSealedEpoch(sealWithoutTarget.call(value));
+				return bindFinalEpoch(sealWithoutTarget.call(value));
 			} catch {
 				throw new Error("Final network epoch failed closed");
 			}
 		},
+	});
+}
+
+function bindFinalEpoch(value) {
+	assertHiddenCapability(
+		value,
+		["now", "journalPath", "validate", "toJSON"],
+		"final adapter epoch",
+	);
+	const now = hiddenDataFunction(value, "now", "final adapter clock");
+	const validate = hiddenDataFunction(
+		value,
+		"validate",
+		"final epoch validator",
+	);
+	return Object.freeze({
+		now: () => now.call(value),
+		journalPath: hiddenDataValue(value, "journalPath", "final journal path"),
+		validate: () => validate.call(value),
 	});
 }
 

@@ -102,6 +102,189 @@ test("workflow-run reads require and return the exact frozen executed query", as
 	assert.equal(recording.calls.length, 1);
 });
 
+test("terminal target methods bind exact options to the declared Release ID before request", async (t) => {
+	for (const method of ["getRelease", "listReleaseAssets"]) {
+		for (const invalid of [
+			undefined,
+			{},
+			{ releaseId: Number(DUPLICATES[0]) },
+			{ releaseId: DUPLICATES[1] },
+			{ releaseId: DUPLICATES[0], extra: true },
+		]) {
+			await t.test(`${method} rejects ${JSON.stringify(invalid)}`, async () => {
+				let releaseRequests = 0;
+				let assetRequests = 0;
+				const adapters = await createTerminalAdapters({
+					async getRelease() {
+						releaseRequests += 1;
+						return present("release", {});
+					},
+					async listReleaseAssets() {
+						assetRequests += 1;
+						return present("release-assets", []);
+					},
+				});
+				const terminal = adapters.authorityEpoch.beginTerminalRead({
+					releaseId: DUPLICATES[0],
+				});
+				if (method === "listReleaseAssets") {
+					await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
+				}
+				await assert.rejects(
+					terminal.github[method](invalid),
+					/terminal|release|option|canonical|target|invalid/iu,
+				);
+				assert.equal(releaseRequests, method === "getRelease" ? 0 : 1);
+				assert.equal(assetRequests, 0);
+				await assert.rejects(
+					terminal.github[method]({ releaseId: DUPLICATES[0] }),
+					/terminal|invalid|order|epoch/iu,
+				);
+				assert.equal(releaseRequests, method === "getRelease" ? 0 : 1);
+				assert.equal(assetRequests, 0);
+				assert.throws(() => terminal.seal(), /terminal|complete|invalid/iu);
+			});
+		}
+	}
+});
+
+test("targetless final epochs validate but cannot mint any delete permit", async () => {
+	let fetches = 0;
+	const adapters = await createTerminalAdapters({
+		fetchImpl: async () => {
+			fetches += 1;
+			return new Response(null, { status: 204 });
+		},
+	});
+	const epoch = adapters.authorityEpoch.sealWithoutTarget();
+	assert.doesNotThrow(() => epoch.validate());
+	assert.equal(Object.hasOwn(epoch, "issueDeletePermit"), false);
+	await assert.rejects(
+		adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATES[0],
+			permit: Object.freeze({}),
+		}),
+		/permit|guard|one-use|valid/iu,
+	);
+	assert.equal(fetches, 0);
+});
+
+test("permit minting binds the successful terminal session target", async () => {
+	let fetches = 0;
+	const adapters = await createTerminalAdapters({
+		fetchImpl: async () => {
+			fetches += 1;
+			return new Response(null, { status: 204 });
+		},
+	});
+	const terminal = adapters.authorityEpoch.beginTerminalRead({
+		releaseId: DUPLICATES[0],
+	});
+	await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
+	await terminal.github.listReleaseAssets({ releaseId: DUPLICATES[0] });
+	const epoch = terminal.seal();
+	assert.throws(
+		() =>
+			epoch.issueDeletePermit({
+				targetReleaseId: DUPLICATES[1],
+				authoritySha256: "a".repeat(64),
+				proposalSha256: "b".repeat(64),
+				intentSha256: "c".repeat(64),
+			}),
+		/session|target|permit|terminal/iu,
+	);
+	await assert.rejects(
+		adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATES[1],
+			permit: Object.freeze({}),
+		}),
+		/permit|guard|one-use|valid/iu,
+	);
+	assert.equal(fetches, 0);
+});
+
+test("terminal steps reserve synchronously and concurrent calls invalidate the session", async (t) => {
+	for (const race of ["two GETs", "GET and assets"]) {
+		await t.test(race, async () => {
+			let releaseGet;
+			let entered;
+			let releaseRequests = 0;
+			let assetRequests = 0;
+			const getEntered = new Promise((resolve) => {
+				entered = resolve;
+			});
+			const getGate = new Promise((resolve) => {
+				releaseGet = resolve;
+			});
+			const adapters = await createTerminalAdapters({
+				async getRelease() {
+					releaseRequests += 1;
+					entered();
+					await getGate;
+					return present("release", {});
+				},
+				async listReleaseAssets() {
+					assetRequests += 1;
+					return present("release-assets", []);
+				},
+			});
+			const terminal = adapters.authorityEpoch.beginTerminalRead({
+				releaseId: DUPLICATES[0],
+			});
+			const first = terminal.github.getRelease({ releaseId: DUPLICATES[0] });
+			await getEntered;
+			const concurrent =
+				race === "two GETs"
+					? terminal.github.getRelease({ releaseId: DUPLICATES[0] })
+					: terminal.github.listReleaseAssets({ releaseId: DUPLICATES[0] });
+			await assert.rejects(concurrent, /terminal|concurrent|order|invalid/iu);
+			assert.equal(releaseRequests, 1);
+			assert.equal(assetRequests, 0);
+			releaseGet();
+			await assert.rejects(first, /terminal|concurrent|order|invalid/iu);
+			assert.throws(() => terminal.seal(), /terminal|complete|invalid/iu);
+		});
+	}
+});
+
+test("a failed terminal step cannot be retried, sealed, or used to mint", async (t) => {
+	for (const failedStep of ["GET", "assets"]) {
+		await t.test(failedStep, async () => {
+			let releaseRequests = 0;
+			let assetRequests = 0;
+			const adapters = await createTerminalAdapters({
+				async getRelease() {
+					releaseRequests += 1;
+					if (failedStep === "GET") throw new Error("cancelled target GET");
+					return present("release", {});
+				},
+				async listReleaseAssets() {
+					assetRequests += 1;
+					throw new Error("cancelled target asset list");
+				},
+			});
+			const terminal = adapters.authorityEpoch.beginTerminalRead({
+				releaseId: DUPLICATES[0],
+			});
+			if (failedStep === "assets") {
+				await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
+			}
+			const method = failedStep === "GET" ? "getRelease" : "listReleaseAssets";
+			await assert.rejects(
+				terminal.github[method]({ releaseId: DUPLICATES[0] }),
+				/cancelled|failed|terminal/iu,
+			);
+			await assert.rejects(
+				terminal.github[method]({ releaseId: DUPLICATES[0] }),
+				/terminal|order|invalid/iu,
+			);
+			assert.equal(releaseRequests, 1);
+			assert.equal(assetRequests, failedStep === "assets" ? 1 : 0);
+			assert.throws(() => terminal.seal(), /terminal|complete|invalid/iu);
+		});
+	}
+});
+
 test("composition resolves safe environment credentials before gh auth token", async () => {
 	for (const [name, value] of [
 		["GH_TOKEN", "gh_environment_token"],
@@ -1805,6 +1988,28 @@ function createWriter(overrides = {}) {
 		timeoutMs: 100,
 		now: () => NOW,
 		...overrides,
+	});
+}
+
+function createTerminalAdapters({
+	fetchImpl = assert.fail,
+	getRelease = async () => present("release", {}),
+	listReleaseAssets = async () => present("release-assets", []),
+} = {}) {
+	return createDuplicateDraftConsolidationAdapters({
+		cwd: "/workspace",
+		token: TOKEN,
+		environment: { HOME: "/home/release", PATH: "/tools" },
+		dependencies: {
+			fetchImpl,
+			run: commandRunner([]),
+			now: () => NOW,
+			createGitHubReader: () => ({
+				...githubBoundary(),
+				getRelease,
+				listReleaseAssets,
+			}),
+		},
 	});
 }
 

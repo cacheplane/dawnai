@@ -699,14 +699,31 @@ function createNetworkGuard({ cwd, now }) {
 		}
 	};
 
-	const sealedEpoch = (session) => {
+	const sealedEpoch = (session, { permitIssuing }) => {
 		const capability = {};
-		Object.defineProperties(capability, {
+		const descriptors = {
 			now: hiddenMethod(trustedNow),
 			journalPath: hiddenValue(journalPath),
 			validate: hiddenMethod(() => assertSealed(session)),
-			issueDeletePermit: hiddenMethod((input) => {
+			toJSON: hiddenMethod(() => {
+				throw new TypeError(
+					"Adapter network epoch capability cannot be serialized",
+				);
+			}),
+		};
+		if (permitIssuing) {
+			descriptors.issueDeletePermit = hiddenMethod((input) => {
 				assertSealed(session);
+				if (
+					session.releaseId === null ||
+					!DUPLICATE_IDS.includes(session.releaseId) ||
+					session.completedSteps !== 2 ||
+					session.inFlight
+				) {
+					throw new Error(
+						"Delete permit requires a completed approved terminal target read",
+					);
+				}
 				if (boundWriterIdentity === null) {
 					throw new Error("Adapter network guard has no bound delete writer");
 				}
@@ -723,6 +740,13 @@ function createNetworkGuard({ cwd, now }) {
 				const targetReleaseId = canonicalStringId(
 					required(binding, "targetReleaseId", "Delete permit target"),
 				);
+				if (targetReleaseId !== session.releaseId) {
+					session.invalidated = true;
+					state = "invalidated";
+					throw new Error(
+						"Delete permit target differs from the completed terminal session",
+					);
+				}
 				for (const name of [
 					"authoritySha256",
 					"proposalSha256",
@@ -761,13 +785,9 @@ function createNetworkGuard({ cwd, now }) {
 				});
 				state = "permitted";
 				return permit;
-			}),
-			toJSON: hiddenMethod(() => {
-				throw new TypeError(
-					"Adapter network epoch capability cannot be serialized",
-				);
-			}),
-		});
+			});
+		}
+		Object.defineProperties(capability, descriptors);
 		return Object.freeze(capability);
 	};
 
@@ -780,6 +800,10 @@ function createNetworkGuard({ cwd, now }) {
 		const releaseId = canonicalStringId(
 			required(call, "releaseId", "Terminal Release ID"),
 		);
+		if (!DUPLICATE_IDS.includes(releaseId)) {
+			invalidate();
+			throw new TypeError("Terminal Release ID is not an approved duplicate");
+		}
 		if (state !== "open" || activeRequests !== 0) {
 			invalidate();
 			throw new Error(
@@ -791,37 +815,81 @@ function createNetworkGuard({ cwd, now }) {
 			deleteToken: Object.freeze({}),
 			releaseId,
 			nextStep: 0,
+			completedSteps: 0,
+			inFlight: false,
 			invalidated: false,
 			sealedSequence: null,
 		};
 		terminal = session;
 		state = "terminal";
-		const terminalStep = async (step, name, operation) => {
+		const terminalStep = async (step, name, options, operation) => {
+			let call;
+			try {
+				call = exactDataOptions(
+					options,
+					new Set(["releaseId"]),
+					`Terminal ${name} options`,
+				);
+				const requestedReleaseId = canonicalStringId(
+					required(call, "releaseId", `Terminal ${name} Release ID`),
+				);
+				if (requestedReleaseId !== session.releaseId) {
+					throw new TypeError(
+						"Terminal request target differs from its session",
+					);
+				}
+			} catch {
+				session.invalidated = true;
+				state = "invalidated";
+				throw new TypeError("Terminal request options failed closed");
+			}
 			if (
 				state !== "terminal" ||
 				terminal !== session ||
 				session.invalidated ||
-				session.nextStep !== step
+				session.nextStep !== step ||
+				session.inFlight
 			) {
 				session.invalidated = true;
 				state = "invalidated";
 				throw new Error("Terminal network read order is invalid");
 			}
-			const result = await context.run(session.token, () =>
-				runRequest(`terminal ${name}`, operation),
-			);
-			session.nextStep += 1;
-			return result;
+			session.inFlight = true;
+			session.nextStep = step + 1;
+			try {
+				const result = await context.run(session.token, () =>
+					runRequest(`terminal ${name}`, () => operation(call)),
+				);
+				if (
+					state !== "terminal" ||
+					terminal !== session ||
+					session.invalidated ||
+					!session.inFlight ||
+					session.nextStep !== step + 1
+				) {
+					throw new Error(
+						"Terminal network read was invalidated while pending",
+					);
+				}
+				session.inFlight = false;
+				session.completedSteps = step + 1;
+				return result;
+			} catch {
+				session.inFlight = false;
+				session.invalidated = true;
+				state = "invalidated";
+				throw new Error(`Terminal ${name} failed closed`);
+			}
 		};
 		const github = deepFreeze({
 			getRelease(options) {
-				return terminalStep(0, "Release GET", () =>
-					rawGithub.getRelease(options),
+				return terminalStep(0, "Release GET", options, (owned) =>
+					rawGithub.getRelease(owned),
 				);
 			},
 			listReleaseAssets(options) {
-				return terminalStep(1, "asset enumeration", () =>
-					rawGithub.listReleaseAssets(options),
+				return terminalStep(1, "asset enumeration", options, (owned) =>
+					rawGithub.listReleaseAssets(owned),
 				);
 			},
 		});
@@ -834,6 +902,8 @@ function createNetworkGuard({ cwd, now }) {
 					terminal !== session ||
 					session.invalidated ||
 					session.nextStep !== 2 ||
+					session.completedSteps !== 2 ||
+					session.inFlight ||
 					activeRequests !== 0
 				) {
 					session.invalidated = true;
@@ -842,7 +912,7 @@ function createNetworkGuard({ cwd, now }) {
 				}
 				state = "sealed";
 				session.sealedSequence = sequence;
-				return sealedEpoch(session);
+				return sealedEpoch(session, { permitIssuing: true });
 			}),
 			abort: hiddenMethod(() => {
 				session.invalidated = true;
@@ -936,11 +1006,13 @@ function createNetworkGuard({ cwd, now }) {
 						deleteToken: Object.freeze({}),
 						releaseId: null,
 						nextStep: 0,
+						completedSteps: 0,
+						inFlight: false,
 						invalidated: false,
 						sealedSequence: sequence,
 					};
 					state = "sealed";
-					return sealedEpoch(terminal);
+					return sealedEpoch(terminal, { permitIssuing: false });
 				}),
 				toJSON: hiddenMethod(() => {
 					throw new TypeError(
