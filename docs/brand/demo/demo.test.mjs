@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import {
+	mkdtemp,
+	mkdir,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { script } from "../../../packages/testing/dist/index.js";
@@ -28,13 +38,20 @@ import {
 	waitForWorkbenchRunCompletion,
 } from "./capture.mjs";
 import {
+	checkLocalMedia,
 	MEDIA_CONTRACTS,
+	parseMediaCheckArguments,
+	validateMediaManifestLayout,
 	validateLocalMediaContract,
 } from "./check-media.mjs";
 import {
 	buildTimelineFilter,
 	createTimelinePlan,
+	encodeCaptureArtifacts,
+	encodeGif,
 	encodePoster,
+	encodeVideo,
+	publishFixedAssets,
 	runEncoderCommand,
 } from "./encode.mjs";
 import { normalizeLog } from "./normalize-log.mjs";
@@ -290,6 +307,186 @@ test("media contracts require H.264 MP4, VP9 WebM, and 30 fps", async () => {
 	assert.ok(failures.some((failure) => /author\.webm.*30 fps/.test(failure)));
 });
 
+function validManifestLayout(repoRoot = "/repo", runId = "run-a") {
+	const runRoot = `${repoRoot}/docs/brand/demo/artifacts/runs/${runId}`;
+	const outputRoot = `${runRoot}/output`;
+	const publicationRoot = `${runRoot}/publication`;
+	return {
+		pointer: {
+			schemaVersion: 1,
+			runId,
+			manifestPath: `${runRoot}/media-manifest.json`,
+		},
+		manifest: {
+			schemaVersion: 1,
+			runId,
+			outputRoot,
+			clips: Object.fromEntries(
+				MEDIA_CONTRACTS.map(({ name }) => [
+					name,
+					{
+						mp4: `${outputRoot}/${name}.mp4`,
+						webm: `${outputRoot}/${name}.webm`,
+						poster: `${publicationRoot}/${name}-poster.webp`,
+					},
+				]),
+			),
+			gif: `${publicationRoot}/product-loop.gif`,
+			assetHashes: {
+				gif: "a".repeat(64),
+				posters: Object.fromEntries(
+					MEDIA_CONTRACTS.map(({ name }) => [name, "b".repeat(64)]),
+				),
+			},
+		},
+	};
+}
+
+test("media manifest layout rejects stale identity and cross-run paths", () => {
+	const repoRoot = "/repo";
+	const { pointer, manifest } = validManifestLayout(repoRoot);
+	assert.doesNotThrow(() =>
+		validateMediaManifestLayout({ repoRoot, pointer, manifest }),
+	);
+	assert.throws(
+		() =>
+			validateMediaManifestLayout({
+				repoRoot,
+				pointer: {
+					...pointer,
+					runId: "stale-run",
+					manifestPath:
+						"/repo/docs/brand/demo/artifacts/runs/stale-run/media-manifest.json",
+				},
+				manifest,
+			}),
+		/pointer and manifest run IDs differ/,
+	);
+	assert.throws(
+		() =>
+			validateMediaManifestLayout({
+				repoRoot,
+				pointer,
+				manifest: {
+					...manifest,
+					clips: {
+						...manifest.clips,
+						run: {
+							...manifest.clips.run,
+							mp4: "/tmp/other-run/run.mp4",
+						},
+					},
+				},
+			}),
+		/run\.mp4.*expected run output root/,
+	);
+	assert.throws(
+		() =>
+			validateMediaManifestLayout({
+				repoRoot,
+				pointer: { ...pointer, schemaVersion: 2 },
+				manifest,
+			}),
+		/unsupported latest-media schema/,
+	);
+});
+
+test("local checker adapters surface manifest, probe, and CLI failures", async () => {
+	await assert.rejects(
+		checkLocalMedia({
+			repoRoot: "/repo",
+			async readFile() {
+				throw new Error("manifest read failed");
+			},
+		}),
+		/manifest read failed/,
+	);
+	const unsafeReads = [];
+	await assert.rejects(
+		checkLocalMedia({
+			repoRoot: "/repo",
+			async readFile(path) {
+				unsafeReads.push(path);
+				if (path.endsWith("latest-media.json")) {
+					return JSON.stringify({
+						schemaVersion: 1,
+						runId: "run-a",
+						manifestPath: "/tmp/untrusted-manifest.json",
+					});
+				}
+				throw new Error("unsafe manifest read");
+			},
+		}),
+		/manifest path.*expected run output root/,
+	);
+	assert.deepEqual(unsafeReads, [
+		"/repo/docs/brand/demo/artifacts/latest-media.json",
+	]);
+	const repoRoot = "/repo";
+	const { pointer, manifest } = validManifestLayout(repoRoot);
+	await assert.rejects(
+		checkLocalMedia({
+			repoRoot,
+			async readFile(path) {
+				if (path.endsWith("latest-media.json")) return JSON.stringify(pointer);
+				if (path.endsWith("media-manifest.json")) return JSON.stringify(manifest);
+				if (path.endsWith("transcript.md")) return "transcript";
+				throw new Error(`unexpected read: ${path}`);
+			},
+			async stat(path) {
+				return {
+					size: path.endsWith(".gif")
+						? 3_500_000
+						: path.endsWith(".mp4")
+							? 1_200_000
+							: 80_000,
+				};
+			},
+			async access() {},
+			async probe() {
+				throw new Error("probe failed");
+			},
+			async hash(path) {
+				return path.endsWith(".gif") ? "a".repeat(64) : "b".repeat(64);
+			},
+			log() {},
+		}),
+		/probe failed/,
+	);
+	assert.deepEqual(parseMediaCheckArguments(["--", "--local"]), {
+		local: true,
+	});
+	assert.throws(
+		() => parseMediaCheckArguments(["--remote"]),
+		/Usage:.*--local/,
+	);
+});
+
+test("local checker rejects a fixed asset that differs from its selected run", async () => {
+	const repoRoot = "/repo";
+	const { pointer, manifest } = validManifestLayout(repoRoot);
+	const fixedProductPoster = join(
+		repoRoot,
+		MEDIA_CONTRACTS[0].poster,
+	);
+	await assert.rejects(
+		checkLocalMedia({
+			repoRoot,
+			async readFile(path) {
+				if (path.endsWith("latest-media.json")) return JSON.stringify(pointer);
+				if (path.endsWith("media-manifest.json")) return JSON.stringify(manifest);
+				throw new Error(`unexpected read: ${path}`);
+			},
+			async hash(path) {
+				if (path === fixedProductPoster) return "c".repeat(64);
+				return path.endsWith(".gif") ? "a".repeat(64) : "b".repeat(64);
+			},
+			log() {},
+		}),
+		/product-loop fixed poster does not correspond to run run-a/,
+	);
+});
+
 test("encoding plan builds the four honest capture timelines", () => {
 	const plan = createTimelinePlan({
 		videoTimeline: {
@@ -346,6 +543,30 @@ test("encoding plan builds the four honest capture timelines", () => {
 	);
 });
 
+test("encoding refuses to truncate an overlong Workbench restoration endpoint", () => {
+	const plan = createTimelinePlan({
+		videoTimeline: {
+			unit: "milliseconds",
+			scenes: {
+				author: { startMs: 0, endMs: 1_500 },
+				test: { startMs: 1_500, endMs: 3_000 },
+				"workbench-run": { startMs: 3_000, endMs: 8_000 },
+				"pre-reload-complete": { startMs: 8_000, endMs: 9_000 },
+				restoration: { startMs: 9_000, endMs: 13_500 },
+				close: { startMs: 13_500, endMs: 15_000 },
+			},
+		},
+	});
+
+	assert.throws(
+		() =>
+			buildTimelineFilter(plan["product-loop"], {
+				labelInputIndexes: [1, 2, 3, undefined],
+			}),
+		/workbench.*restored endpoint.*10\.3.*9 seconds/i,
+	);
+});
+
 test("poster encoding extracts a real frame before WebP conversion", async () => {
 	const calls = [];
 	await encodePoster({
@@ -385,6 +606,194 @@ test("poster encoding extracts a real frame before WebP conversion", async () =>
 	assert.deepEqual(calls[3], {
 		remove: "/repo/apps/web/public/demo/author-poster.webp.tmp.png",
 	});
+});
+
+test("video and GIF encoders recheck abort before rename and clean their temps", async () => {
+	const plan = {
+		duration: 2,
+		segments: [
+			{
+				scene: "author",
+				sourceStart: 0,
+				sourceEnd: 1,
+				duration: 2,
+				actLabel: "Author",
+			},
+		],
+	};
+	const labelAssets = new Map([["Author", "/run/labels/author.png"]]);
+	for (const [name, encode, destination, expectedTemporaryPath] of [
+		[
+			"video",
+			encodeVideo,
+			"/run/output/author.mp4",
+			"/run/output/author.mp4.tmp.mp4",
+		],
+		[
+			"GIF",
+			encodeGif,
+			"/run/publication/product-loop.gif",
+			"/run/publication/product-loop.gif.tmp.gif",
+		],
+	]) {
+		const controller = new AbortController();
+		const calls = [];
+		await assert.rejects(
+			encode({
+				source: "/run/raw.webm",
+				destination,
+				plan,
+				...(name === "video" ? { format: "mp4" } : {}),
+				labelAssets,
+				signal: controller.signal,
+				async run() {
+					controller.abort(new Error(`abort ${name}`));
+				},
+				async rename(...args) {
+					calls.push(["rename", ...args]);
+				},
+				async remove(path) {
+					calls.push(["remove", path]);
+				},
+			}),
+			new RegExp(`abort ${name}`),
+		);
+		assert.deepEqual(calls, [["remove", expectedTemporaryPath]]);
+	}
+});
+
+test("fixed media publication rolls back every prior asset and pointer", async () => {
+	const root = await mkdtemp(join(tmpdir(), "dawn-media-publish-"));
+	try {
+		for (const failureAt of ["poster", "gif", "pointer"]) {
+			const caseRoot = join(root, failureAt);
+			const stagedRoot = join(caseRoot, "staged");
+			const fixedRoot = join(caseRoot, "fixed");
+			await Promise.all([
+				mkdir(stagedRoot, { recursive: true }),
+				mkdir(fixedRoot, { recursive: true }),
+			]);
+			const entries = ["poster", "gif", "pointer"].map((name) => ({
+				name,
+				stagedPath: join(stagedRoot, name),
+				targetPath: join(fixedRoot, name),
+			}));
+			for (const entry of entries) {
+				await writeFile(entry.stagedPath, `new-${entry.name}`);
+				await writeFile(entry.targetPath, `old-${entry.name}`);
+			}
+
+			await assert.rejects(
+				publishFixedAssets({
+					entries,
+					transactionId: `run-${failureAt}`,
+					async afterPublish(name) {
+						if (name === failureAt) throw new Error(`fail after ${name}`);
+					},
+				}),
+				new RegExp(`fail after ${failureAt}`),
+			);
+			for (const entry of entries) {
+				assert.equal(
+					await readFile(entry.targetPath, "utf8"),
+					`old-${entry.name}`,
+				);
+			}
+			assert.deepEqual((await readdir(fixedRoot)).sort(), ["gif", "pointer", "poster"]);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("encoding failures never mix fixed assets or the latest pointer across runs", async () => {
+	const root = await mkdtemp(join(tmpdir(), "dawn-media-encode-"));
+	try {
+		for (const failureAt of ["video", "poster", "gif", "pointer"]) {
+			const repoRoot = join(root, failureAt);
+			const runId = `run-${failureAt}`;
+			const artifactsDir = join(
+				repoRoot,
+				"docs/brand/demo/artifacts/runs",
+				runId,
+			);
+			const recordingsDir = join(
+				repoRoot,
+				"docs/brand/demo/raw-recordings/runs",
+				runId,
+			);
+			const source = join(recordingsDir, "raw.webm");
+			const summaryPath = join(artifactsDir, "capture-summary.json");
+			const fixedPaths = [
+				join(artifactsDir, "media-manifest.json"),
+				...MEDIA_CONTRACTS.map(({ name }) =>
+					join(repoRoot, `apps/web/public/demo/${name}-poster.webp`),
+				),
+				join(repoRoot, "docs/brand/product-loop.gif"),
+				join(repoRoot, "docs/brand/demo/artifacts/latest-media.json"),
+			];
+			await Promise.all([
+				mkdir(recordingsDir, { recursive: true }),
+				mkdir(artifactsDir, { recursive: true }),
+				mkdir(join(repoRoot, "apps/web/public/demo"), { recursive: true }),
+				mkdir(join(repoRoot, "docs/brand"), { recursive: true }),
+				mkdir(join(repoRoot, "docs/brand/demo/artifacts"), { recursive: true }),
+			]);
+			await writeFile(source, "raw");
+			for (const path of fixedPaths) await writeFile(path, `old:${path}`);
+			const summary = {
+				runId,
+				videoPath: source,
+				videoTimeline: {
+					unit: "milliseconds",
+					scenes: {
+						author: { startMs: 0, endMs: 1_500 },
+						test: { startMs: 1_500, endMs: 3_000 },
+						"workbench-run": { startMs: 3_000, endMs: 7_000 },
+						"pre-reload-complete": { startMs: 7_000, endMs: 8_200 },
+						restoration: { startMs: 8_200, endMs: 12_000 },
+						close: { startMs: 12_000, endMs: 13_500 },
+					},
+				},
+			};
+
+			await assert.rejects(
+				encodeCaptureArtifacts({
+					repoRoot,
+					artifactsDir,
+					recordingsDir,
+					summary,
+					summaryPath,
+					dependencies: {
+						async encodeVideo({ destination }) {
+							await writeFile(destination, "video");
+						},
+						async encodePoster({ destination }) {
+							await writeFile(destination, "poster");
+						},
+						async encodeGif({ destination }) {
+							await writeFile(destination, "gif");
+						},
+						async validateStagedMedia() {},
+						async afterPhase(phase) {
+							if (phase === failureAt) throw new Error(`fail after ${phase}`);
+						},
+					},
+				}),
+				new RegExp(`fail after ${failureAt}`),
+			);
+			for (const path of fixedPaths) {
+				assert.equal(await readFile(path, "utf8"), `old:${path}`);
+			}
+			const fixedNames = await readdir(join(repoRoot, "apps/web/public/demo"));
+			assert.equal(
+				fixedNames.some((name) => /\.(?:next|backup|tmp)-/u.test(name)),
+				false,
+			);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 const GENERATED_TREE = [

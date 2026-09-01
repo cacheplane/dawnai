@@ -9,9 +9,9 @@ source tree.
 - Node.js 24 or newer. The capture summary records the exact version.
 - Corepack with the repository's exact pnpm 10.33.0.
 - Playwright Chromium installed for `@playwright/test` 1.62.1.
-- ffmpeg and ffprobe 8.1.1 with `libx264` and `libvpx-vp9`. The checked-in
-  `sharp` development dependency encodes the WebP poster after ffmpeg extracts
-  its exact source frame.
+- ffmpeg and ffprobe with `libx264` and `libvpx-vp9`; these assets are tested
+  with version 8.1.1. The checked-in `sharp` development dependency encodes the
+  WebP poster after ffmpeg extracts its exact source frame.
 - Repository dependencies installed and enough temporary disk space for a local
   generated research workspace and raw recording.
 
@@ -23,11 +23,13 @@ Run every command from the repository root.
 pnpm media:readme:capture
 ```
 
-The command checks the toolchain, builds the repository, creates the current
-research starter in a temporary directory with `--mode internal`, installs it,
-and runs the generated root `npm test` command. It then starts aimock, the Dawn
-server, and the generated Workbench on assigned loopback ports and records at
-1440×810.
+The command checks Node and pnpm before it builds the repository, creates the
+current research starter in a temporary directory with `--mode internal`,
+installs it, and runs the generated root `npm test` command. It then starts
+aimock, the Dawn server, and the generated Workbench on assigned loopback ports
+and records at 1440×810. ffmpeg is exercised when encoding begins; ffprobe is
+exercised by the local checker, so a missing executable, encoder, or probe fails
+at that boundary with the command's diagnostic.
 
 Aimock is the only model endpoint. Provider credentials are excluded from child
 environments and capture fails if the model base URL is not loopback. The
@@ -92,8 +94,11 @@ docs/brand/demo/artifacts/runs/<run-id>/
 
 Its local MP4 and WebM files are in the run's `output/` directory. A gitignored
 `docs/brand/demo/artifacts/latest-media.json` pointer lets the local checker find
-the most recent successful encode. Raw recordings, logs, MP4, and WebM files are
-not committed.
+the most recent successful encode. Posters and the GIF are first completed and
+validated in that run's `publication/` directory, then published together with
+the pointer using rollback backups. The checker requires exact run-scoped paths
+and verifies that the fixed poster/GIF hashes match the selected run. Raw
+recordings, logs, MP4, and WebM files are not committed.
 
 Committed outputs are:
 

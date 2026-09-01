@@ -1,4 +1,5 @@
 import { execFile as nodeExecFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	access as nodeAccess,
 	readFile as nodeReadFile,
@@ -12,6 +13,7 @@ const execFile = promisify(nodeExecFile);
 const DEFAULT_REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const VIDEO_BYTE_LIMIT = 2_000_000;
 const GIF_BYTE_LIMIT = 4_000_000;
+const MEDIA_SCHEMA_VERSION = 1;
 
 export const MEDIA_CAPTIONS = Object.freeze({
 	"product-loop":
@@ -40,6 +42,87 @@ export const MEDIA_CONTRACTS = Object.freeze(
 		}),
 	),
 );
+
+function requireExactPath(actualPath, expectedPath, description) {
+	if (
+		typeof actualPath !== "string" ||
+		resolve(actualPath) !== resolve(expectedPath)
+	) {
+		throw new Error(
+			`${description} must be inside the expected run output root at ${expectedPath}`,
+		);
+	}
+}
+
+function validateLatestPointerLayout({ repoRoot, pointer }) {
+	if (pointer?.schemaVersion !== MEDIA_SCHEMA_VERSION) {
+		throw new Error(
+			`unsupported latest-media schema ${pointer?.schemaVersion ?? "missing"}`,
+		);
+	}
+	if (
+		typeof pointer.runId !== "string" ||
+		!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(pointer.runId)
+	) {
+		throw new Error("latest-media pointer has an invalid run ID");
+	}
+	const runRoot = join(
+		resolve(repoRoot),
+		"docs/brand/demo/artifacts/runs",
+		pointer.runId,
+	);
+	const manifestPath = join(runRoot, "media-manifest.json");
+	requireExactPath(pointer.manifestPath, manifestPath, "manifest path");
+	return { runRoot, manifestPath };
+}
+
+export function validateMediaManifestLayout({ repoRoot, pointer, manifest }) {
+	const { runRoot, manifestPath } = validateLatestPointerLayout({
+		repoRoot,
+		pointer,
+	});
+	if (manifest?.schemaVersion !== MEDIA_SCHEMA_VERSION) {
+		throw new Error(
+			`unsupported media manifest schema ${manifest?.schemaVersion ?? "missing"}`,
+		);
+	}
+	if (pointer.runId !== manifest.runId) {
+		throw new Error("pointer and manifest run IDs differ");
+	}
+	const outputRoot = join(runRoot, "output");
+	requireExactPath(manifest.outputRoot, outputRoot, "manifest output root");
+	const publicationRoot = join(runRoot, "publication");
+	for (const { name } of MEDIA_CONTRACTS) {
+		const clip = manifest.clips?.[name];
+		requireExactPath(
+			clip?.mp4,
+			join(outputRoot, `${name}.mp4`),
+			`${name}.mp4`,
+		);
+		requireExactPath(
+			clip?.webm,
+			join(outputRoot, `${name}.webm`),
+			`${name}.webm`,
+		);
+		requireExactPath(
+			clip?.poster,
+			join(publicationRoot, `${name}-poster.webp`),
+			`${name} poster`,
+		);
+		if (!/^[a-f0-9]{64}$/u.test(manifest.assetHashes?.posters?.[name] ?? "")) {
+			throw new Error(`${name} poster hash is missing or invalid`);
+		}
+	}
+	requireExactPath(
+		manifest.gif,
+		join(publicationRoot, "product-loop.gif"),
+		"flagship GIF",
+	);
+	if (!/^[a-f0-9]{64}$/u.test(manifest.assetHashes?.gif ?? "")) {
+		throw new Error("flagship GIF hash is missing or invalid");
+	}
+	return { runRoot, manifestPath, outputRoot, publicationRoot };
+}
 
 function videoStream(probe) {
 	return probe?.streams?.find((stream) => stream.codec_type === "video");
@@ -190,19 +273,36 @@ async function probeFile(path) {
 	return JSON.parse(stdout);
 }
 
-async function readLatestManifest(repoRoot) {
+async function hashFile(path, readFile = nodeReadFile) {
+	return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function readLatestManifest(repoRoot, readFile = nodeReadFile) {
 	const pointerPath = join(
 		repoRoot,
 		"docs/brand/demo/artifacts/latest-media.json",
 	);
-	const pointer = JSON.parse(await nodeReadFile(pointerPath, "utf8"));
+	const pointer = JSON.parse(await readFile(pointerPath, "utf8"));
 	if (typeof pointer.manifestPath !== "string") {
 		throw new Error(`${pointerPath} does not name a media manifest`);
 	}
-	return JSON.parse(await nodeReadFile(pointer.manifestPath, "utf8"));
+	validateLatestPointerLayout({ repoRoot, pointer });
+	const manifest = JSON.parse(await readFile(pointer.manifestPath, "utf8"));
+	validateMediaManifestLayout({ repoRoot, pointer, manifest });
+	return { pointer, manifest };
 }
 
-async function collectLocalFiles(repoRoot, manifest) {
+async function collectMediaFiles(
+	repoRoot,
+	manifest,
+	{
+		published,
+		stat = nodeStat,
+		access = nodeAccess,
+		probe = probeFile,
+		readFile = nodeReadFile,
+	} = {},
+) {
 	const files = new Map();
 	for (const contract of MEDIA_CONTRACTS) {
 		const clip = manifest.clips?.[contract.name];
@@ -212,42 +312,138 @@ async function collectLocalFiles(repoRoot, manifest) {
 		]) {
 			const actualPath = clip?.[kind];
 			if (typeof actualPath !== "string") continue;
-			const info = await nodeStat(actualPath);
+			const info = await stat(actualPath);
 			files.set(logicalPath, {
 				size: info.size,
-				probe: await probeFile(actualPath),
+				probe: await probe(actualPath),
 			});
 		}
-		const posterPath = join(repoRoot, contract.poster);
+		const posterPath = published ? join(repoRoot, contract.poster) : clip?.poster;
 		try {
-			await nodeAccess(posterPath);
+			await access(posterPath);
 			files.set(contract.poster, {
-				size: (await nodeStat(posterPath)).size,
-				probe: await probeFile(posterPath),
+				size: (await stat(posterPath)).size,
+				probe: await probe(posterPath),
 			});
-		} catch {}
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
 	}
-	const gifPath = join(repoRoot, "docs/brand/product-loop.gif");
+	const gifPath = published
+		? join(repoRoot, "docs/brand/product-loop.gif")
+		: manifest.gif;
 	try {
-		const info = await nodeStat(gifPath);
+		const info = await stat(gifPath);
 		files.set("docs/brand/product-loop.gif", {
 			size: info.size,
-			probe: await probeFile(gifPath),
+			probe: await probe(gifPath),
 		});
-	} catch {}
+	} catch (error) {
+		if (error?.code !== "ENOENT") throw error;
+	}
 	const transcriptPath = join(repoRoot, "docs/brand/demo/transcript.md");
 	try {
 		files.set("docs/brand/demo/transcript.md", {
-			size: (await nodeStat(transcriptPath)).size,
-			text: await nodeReadFile(transcriptPath, "utf8"),
+			size: (await stat(transcriptPath)).size,
+			text: await readFile(transcriptPath, "utf8"),
 		});
-	} catch {}
+	} catch (error) {
+		if (error?.code !== "ENOENT") throw error;
+	}
 	return files;
 }
 
-export async function checkLocalMedia({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
-	const manifest = await readLatestManifest(repoRoot);
-	const files = await collectLocalFiles(repoRoot, manifest);
+export async function validateStagedMediaManifest({
+	repoRoot,
+	manifest,
+	manifestPath,
+	stat = nodeStat,
+	access = nodeAccess,
+	probe = probeFile,
+	readFile = nodeReadFile,
+	hash = (path) => hashFile(path, readFile),
+}) {
+	validateMediaManifestLayout({
+		repoRoot,
+		pointer: {
+			schemaVersion: MEDIA_SCHEMA_VERSION,
+			runId: manifest.runId,
+			manifestPath,
+		},
+		manifest,
+	});
+	for (const { name } of MEDIA_CONTRACTS) {
+		const measured = await hash(manifest.clips[name].poster);
+		if (measured !== manifest.assetHashes.posters[name]) {
+			throw new Error(`${name} staged poster hash does not match its manifest`);
+		}
+	}
+	if ((await hash(manifest.gif)) !== manifest.assetHashes.gif) {
+		throw new Error("staged flagship GIF hash does not match its manifest");
+	}
+	const files = await collectMediaFiles(repoRoot, manifest, {
+		published: false,
+		stat,
+		access,
+		probe,
+		readFile,
+	});
+	const failures = await validateLocalMediaContract({
+		files,
+		captions: manifest.captions ?? MEDIA_CAPTIONS,
+	});
+	if (failures.length > 0) {
+		throw new Error(`Staged media contract failed:\n- ${failures.join("\n- ")}`);
+	}
+}
+
+async function verifyPublishedCorrespondence(
+	repoRoot,
+	manifest,
+	{ hash = hashFile } = {},
+) {
+	for (const contract of MEDIA_CONTRACTS) {
+		const stagedHash = await hash(manifest.clips[contract.name].poster);
+		const publishedHash = await hash(join(repoRoot, contract.poster));
+		const expectedHash = manifest.assetHashes.posters[contract.name];
+		if (stagedHash !== expectedHash || publishedHash !== expectedHash) {
+			throw new Error(
+				`${contract.name} fixed poster does not correspond to run ${manifest.runId}`,
+			);
+		}
+	}
+	const stagedGifHash = await hash(manifest.gif);
+	const publishedGifHash = await hash(
+		join(repoRoot, "docs/brand/product-loop.gif"),
+	);
+	if (
+		stagedGifHash !== manifest.assetHashes.gif ||
+		publishedGifHash !== manifest.assetHashes.gif
+	) {
+		throw new Error(
+			`fixed flagship GIF does not correspond to run ${manifest.runId}`,
+		);
+	}
+}
+
+export async function checkLocalMedia({
+	repoRoot = DEFAULT_REPO_ROOT,
+	readFile = nodeReadFile,
+	stat = nodeStat,
+	access = nodeAccess,
+	probe = probeFile,
+	hash = (path) => hashFile(path, readFile),
+	log = console.log,
+} = {}) {
+	const { manifest } = await readLatestManifest(repoRoot, readFile);
+	await verifyPublishedCorrespondence(repoRoot, manifest, { hash });
+	const files = await collectMediaFiles(repoRoot, manifest, {
+		published: true,
+		stat,
+		access,
+		probe,
+		readFile,
+	});
 	const failures = await validateLocalMediaContract({
 		files,
 		captions: manifest.captions ?? MEDIA_CAPTIONS,
@@ -265,11 +461,11 @@ export async function checkLocalMedia({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
 		"PASS transcript: the static walkthrough exists",
 		"PASS captions: no caption claims scaffolding appears",
 	];
-	for (const line of passLines) console.log(line);
+	for (const line of passLines) log(line);
 	return { manifest, passLines };
 }
 
-function parseArguments(args) {
+export function parseMediaCheckArguments(args) {
 	const forwarded = args.filter((arg) => arg !== "--");
 	if (forwarded.length !== 1 || forwarded[0] !== "--local") {
 		throw new Error("Usage: node docs/brand/demo/check-media.mjs --local");
@@ -286,7 +482,7 @@ function isMainModule() {
 
 if (isMainModule()) {
 	try {
-		parseArguments(process.argv.slice(2));
+		parseMediaCheckArguments(process.argv.slice(2));
 		await checkLocalMedia();
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);

@@ -1,15 +1,22 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+	access as nodeAccess,
+	copyFile as nodeCopyFile,
 	mkdir as nodeMkdir,
 	rename as nodeRename,
+	readFile as nodeReadFile,
 	rm as nodeRm,
 	writeFile as nodeWriteFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import sharp from "sharp";
 
-import { MEDIA_CAPTIONS } from "./check-media.mjs";
+import {
+	MEDIA_CAPTIONS,
+	validateStagedMediaManifest,
+} from "./check-media.mjs";
 import { spawnManaged, stopManaged } from "./processes.mjs";
 
 const OUTPUT_WIDTH = 1440;
@@ -245,6 +252,92 @@ export function runEncoderCommand(
 	});
 }
 
+async function pathExists(path, access = nodeAccess) {
+	try {
+		await access(path);
+		return true;
+	} catch (error) {
+		if (error?.code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+export async function publishFixedAssets({
+	entries,
+	transactionId,
+	signal,
+	afterPublish = () => {},
+	copy = nodeCopyFile,
+	rename = nodeRename,
+	remove = (path) => nodeRm(path, { force: true }),
+	access = nodeAccess,
+}) {
+	if (!Array.isArray(entries) || entries.length === 0) {
+		throw new TypeError("publication entries must be a non-empty array");
+	}
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(transactionId ?? "")) {
+		throw new TypeError("publication transaction ID is invalid");
+	}
+	const prepared = entries.map((entry) => ({
+		...entry,
+		candidatePath: `${entry.targetPath}.next-${transactionId}`,
+		backupPath: `${entry.targetPath}.backup-${transactionId}`,
+	}));
+	const states = [];
+	try {
+		for (const entry of prepared) {
+			signal?.throwIfAborted();
+			await remove(entry.candidatePath);
+			await remove(entry.backupPath);
+			await copy(entry.stagedPath, entry.candidatePath);
+		}
+		for (const entry of prepared) {
+			signal?.throwIfAborted();
+			const state = {
+				entry,
+				hadPrevious: await pathExists(entry.targetPath, access),
+				published: false,
+			};
+			if (state.hadPrevious) {
+				await rename(entry.targetPath, entry.backupPath);
+			}
+			states.push(state);
+			signal?.throwIfAborted();
+			await rename(entry.candidatePath, entry.targetPath);
+			state.published = true;
+			signal?.throwIfAborted();
+			await afterPublish(entry.name);
+		}
+	} catch (error) {
+		const rollbackErrors = [];
+		for (const state of states.reverse()) {
+			try {
+				if (state.published) await remove(state.entry.targetPath);
+				if (state.hadPrevious) {
+					await rename(state.entry.backupPath, state.entry.targetPath);
+				}
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+		}
+		if (rollbackErrors.length > 0) {
+			throw new AggregateError(
+				[error, ...rollbackErrors],
+				"media publication failed and rollback was incomplete",
+				{ cause: error },
+			);
+		}
+		throw error;
+	} finally {
+		await Promise.all(
+			prepared.flatMap((entry) => [
+				remove(entry.candidatePath),
+				remove(entry.backupPath),
+			]),
+		);
+	}
+}
+
 export function buildTimelineFilter(
 	plan,
 	{ gif = false, labelInputIndexes = [] } = {},
@@ -252,12 +345,15 @@ export function buildTimelineFilter(
 	const filters = [];
 	const labels = [];
 	for (const [index, plannedSegment] of plan.segments.entries()) {
-		const sourceDuration = Math.min(
-			plannedSegment.duration,
-			plannedSegment.sourceEnd - plannedSegment.sourceStart,
-		);
+		const sourceDuration =
+			plannedSegment.sourceEnd - plannedSegment.sourceStart;
 		if (!(sourceDuration > 0)) {
 			throw new Error(`${plannedSegment.scene} has no source frames`);
+		}
+		if (sourceDuration > plannedSegment.duration) {
+			throw new Error(
+				`${plannedSegment.scene} restored endpoint requires ${sourceDuration} seconds but its delivery segment is ${plannedSegment.duration} seconds; refusing to truncate captured evidence`,
+			);
 		}
 		const holdDuration = Math.max(0, plannedSegment.duration - sourceDuration);
 		const baseLabel = `segment${index}base`;
@@ -356,15 +452,19 @@ function buildLabelInputs(plan, labelAssets) {
 	return { inputArguments, labelInputIndexes };
 }
 
-async function encodeVideo({
+export async function encodeVideo({
 	source,
 	destination,
 	plan,
 	format,
 	labelAssets,
 	signal,
+	run = runEncoderCommand,
+	rename = nodeRename,
+	remove = (path) => nodeRm(path, { force: true }),
 }) {
 	const temporaryPath = `${destination}.tmp.${format}`;
+	let published = false;
 	const { inputArguments, labelInputIndexes } = buildLabelInputs(
 		plan,
 		labelAssets,
@@ -402,9 +502,10 @@ async function encodeVideo({
 					"-row-mt",
 					"1",
 				];
-	await runEncoderCommand(
-		"ffmpeg",
-		[
+	try {
+		await run(
+			"ffmpeg",
+			[
 			"-hide_banner",
 			"-loglevel",
 			"error",
@@ -419,10 +520,15 @@ async function encodeVideo({
 			"-an",
 			...codecArguments,
 			temporaryPath,
-		],
-		{ signal },
-	);
-	await nodeRename(temporaryPath, destination);
+			],
+			{ signal },
+		);
+		signal?.throwIfAborted();
+		await rename(temporaryPath, destination);
+		published = true;
+	} finally {
+		if (!published) await remove(temporaryPath);
+	}
 }
 
 export async function encodePoster({
@@ -470,8 +576,18 @@ export async function encodePoster({
 	}
 }
 
-async function encodeGif({ source, destination, plan, labelAssets, signal }) {
+export async function encodeGif({
+	source,
+	destination,
+	plan,
+	labelAssets,
+	signal,
+	run = runEncoderCommand,
+	rename = nodeRename,
+	remove = (path) => nodeRm(path, { force: true }),
+}) {
 	const temporaryPath = `${destination}.tmp.gif`;
+	let published = false;
 	const { inputArguments, labelInputIndexes } = buildLabelInputs(
 		plan,
 		labelAssets,
@@ -480,9 +596,10 @@ async function encodeGif({ source, destination, plan, labelAssets, signal }) {
 		gif: true,
 		labelInputIndexes,
 	});
-	await runEncoderCommand(
-		"ffmpeg",
-		[
+	try {
+		await run(
+			"ffmpeg",
+			[
 			"-hide_banner",
 			"-loglevel",
 			"error",
@@ -498,16 +615,36 @@ async function encodeGif({ source, destination, plan, labelAssets, signal }) {
 			"-gifflags",
 			"+transdiff",
 			temporaryPath,
-		],
-		{ signal },
-	);
-	await nodeRename(temporaryPath, destination);
+			],
+			{ signal },
+		);
+		signal?.throwIfAborted();
+		await rename(temporaryPath, destination);
+		published = true;
+	} finally {
+		if (!published) await remove(temporaryPath);
+	}
 }
 
-async function writeJsonAtomic(path, value) {
+async function writeJsonAtomic(path, value, { signal } = {}) {
 	const temporaryPath = `${path}.tmp`;
-	await nodeWriteFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-	await nodeRename(temporaryPath, path);
+	let published = false;
+	try {
+		await nodeWriteFile(
+			temporaryPath,
+			`${JSON.stringify(value, null, 2)}\n`,
+			"utf8",
+		);
+		signal?.throwIfAborted();
+		await nodeRename(temporaryPath, path);
+		published = true;
+	} finally {
+		if (!published) await nodeRm(temporaryPath, { force: true });
+	}
+}
+
+async function hashFile(path) {
+	return createHash("sha256").update(await nodeReadFile(path)).digest("hex");
 }
 
 export async function encodeCaptureArtifacts({
@@ -517,6 +654,7 @@ export async function encodeCaptureArtifacts({
 	summary,
 	summaryPath,
 	signal,
+	dependencies = {},
 }) {
 	for (const [value, name] of [
 		[repoRoot, "repoRoot"],
@@ -533,15 +671,51 @@ export async function encodeCaptureArtifacts({
 	if (typeof source !== "string" || source === "") {
 		throw new Error("capture summary does not name a raw recording");
 	}
-	if (!source.startsWith(`${recordingsDir}/`)) {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(summary.runId ?? "")) {
+		throw new Error("capture summary has an invalid run ID");
+	}
+	const expectedArtifactsDir = join(
+		resolve(repoRoot),
+		"docs/brand/demo/artifacts/runs",
+		summary.runId,
+	);
+	const expectedRecordingsDir = join(
+		resolve(repoRoot),
+		"docs/brand/demo/raw-recordings/runs",
+		summary.runId,
+	);
+	if (resolve(artifactsDir) !== expectedArtifactsDir) {
+		throw new Error("artifacts directory does not match the capture run ID");
+	}
+	if (resolve(recordingsDir) !== expectedRecordingsDir) {
+		throw new Error("recordings directory does not match the capture run ID");
+	}
+	if (resolve(summaryPath) !== join(expectedArtifactsDir, "capture-summary.json")) {
+		throw new Error("capture summary path does not match the capture run ID");
+	}
+	const sourceRelativePath = relative(resolve(recordingsDir), resolve(source));
+	if (
+		sourceRelativePath === "" ||
+		sourceRelativePath === ".." ||
+		sourceRelativePath.startsWith(`..${sep}`) ||
+		isAbsolute(sourceRelativePath)
+	) {
 		throw new Error("capture recording is outside the run recordings directory");
 	}
+	const encodeVideoImplementation = dependencies.encodeVideo ?? encodeVideo;
+	const encodePosterImplementation = dependencies.encodePoster ?? encodePoster;
+	const encodeGifImplementation = dependencies.encodeGif ?? encodeGif;
+	const validateStagedMedia =
+		dependencies.validateStagedMedia ?? validateStagedMediaManifest;
+	const afterPhase = dependencies.afterPhase ?? (() => {});
 	const plans = createTimelinePlan(summary);
 	const outputDir = join(artifactsDir, "output");
 	const labelDir = join(artifactsDir, "labels");
+	const publicationDir = join(artifactsDir, "publication");
 	const posterDir = join(repoRoot, "apps/web/public/demo");
 	await Promise.all([
 		nodeMkdir(outputDir, { recursive: true }),
+		nodeMkdir(publicationDir, { recursive: true }),
 		nodeMkdir(posterDir, { recursive: true }),
 	]);
 	const labelAssets = await createActLabelAssets({ labelDir, signal });
@@ -551,8 +725,8 @@ export async function encodeCaptureArtifacts({
 		signal?.throwIfAborted();
 		const mp4 = join(outputDir, `${name}.mp4`);
 		const webm = join(outputDir, `${name}.webm`);
-		const poster = join(posterDir, `${name}-poster.webp`);
-		await encodeVideo({
+		const poster = join(publicationDir, `${name}-poster.webp`);
+		await encodeVideoImplementation({
 			source,
 			destination: mp4,
 			plan,
@@ -560,7 +734,7 @@ export async function encodeCaptureArtifacts({
 			labelAssets,
 			signal,
 		});
-		await encodeVideo({
+		await encodeVideoImplementation({
 			source,
 			destination: webm,
 			plan,
@@ -568,25 +742,39 @@ export async function encodeCaptureArtifacts({
 			labelAssets,
 			signal,
 		});
-		await encodePoster({
+		await afterPhase("video", { name });
+		await encodePosterImplementation({
 			source: mp4,
 			destination: poster,
 			time: plan.posterTime,
 			signal,
 		});
+		await afterPhase("poster", { name });
 		clips[name] = { mp4, webm, poster, duration: plan.duration };
 	}
-	const gif = join(repoRoot, "docs/brand/product-loop.gif");
-	await encodeGif({
+	const gif = join(publicationDir, "product-loop.gif");
+	await encodeGifImplementation({
 		source,
 		destination: gif,
 		plan: plans["product-loop"],
 		labelAssets,
 		signal,
 	});
+	await afterPhase("gif");
 	signal?.throwIfAborted();
 
 	const manifestPath = join(artifactsDir, "media-manifest.json");
+	const assetHashes = {
+		gif: await hashFile(gif),
+		posters: Object.fromEntries(
+			await Promise.all(
+				Object.entries(clips).map(async ([name, clip]) => [
+					name,
+					await hashFile(clip.poster),
+				]),
+			),
+		),
+	};
 	const manifest = {
 		schemaVersion: 1,
 		runId: summary.runId,
@@ -595,13 +783,51 @@ export async function encodeCaptureArtifacts({
 		outputRoot: outputDir,
 		clips,
 		gif,
+		assetHashes,
 		actLabels: Object.values(ACT_LABELS),
 		captions: MEDIA_CAPTIONS,
 	};
-	await writeJsonAtomic(manifestPath, manifest);
+	await validateStagedMedia({ repoRoot, manifest, manifestPath });
+	signal?.throwIfAborted();
+	const stagedManifest = join(publicationDir, "media-manifest.json");
+	await writeJsonAtomic(stagedManifest, manifest, { signal });
+	const stagedPointer = join(publicationDir, "latest-media.json");
 	await writeJsonAtomic(
-		join(repoRoot, "docs/brand/demo/artifacts/latest-media.json"),
+		stagedPointer,
 		{ schemaVersion: 1, runId: summary.runId, manifestPath },
+		{ signal },
 	);
+	await publishFixedAssets({
+		transactionId: summary.runId,
+		signal,
+		entries: [
+			{
+				name: "manifest",
+				stagedPath: stagedManifest,
+				targetPath: manifestPath,
+			},
+			...Object.entries(clips).map(([name, clip]) => ({
+				name: `poster:${name}`,
+				stagedPath: clip.poster,
+				targetPath: join(posterDir, `${name}-poster.webp`),
+			})),
+			{
+				name: "gif",
+				stagedPath: gif,
+				targetPath: join(repoRoot, "docs/brand/product-loop.gif"),
+			},
+			{
+				name: "pointer",
+				stagedPath: stagedPointer,
+				targetPath: join(
+					repoRoot,
+					"docs/brand/demo/artifacts/latest-media.json",
+				),
+			},
+		],
+		afterPublish: async (name) => {
+			if (name === "pointer") await afterPhase("pointer");
+		},
+	});
 	return manifest;
 }
