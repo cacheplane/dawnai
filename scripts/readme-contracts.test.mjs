@@ -98,6 +98,28 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	it("does not accept Markdown image syntax inside a raw HTML block", () => {
+		const readme = entryReadme.replace(
+			/!\[Dawn product loop\].*$/u,
+			"<p>\n    ![Loop](docs/brand/product-loop.gif)\n</p>",
+		);
+		assertFailure(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			/product-loop\.gif/,
+		);
+	});
+
+	it("accepts visible purpose prose inside a raw HTML block", () => {
+		const readme = entryReadme.replace(
+			"Author-facing TypeScript SDK.",
+			"<div>\nAuthor-facing TypeScript SDK.\n</div>",
+		);
+		assert.deepEqual(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			[],
+		);
+	});
+
 	for (const [name, source, expected] of [
 		[
 			"Use this when guidance",
@@ -488,6 +510,13 @@ describe("validateRootReadme", () => {
 		assertFailure(validateRootReadme(misleading), /Quickstart/);
 	});
 
+	it("ignores Markdown headings inside raw HTML blocks", () => {
+		const misleading = rootReadme
+			.replace("## Quickstart\n", "")
+			.concat("\n\n<div>\n  ## Quickstart\n</div>");
+		assertFailure(validateRootReadme(misleading), /Quickstart/);
+	});
+
 	it("requires exact H2 spelling for root section headings", () => {
 		assertFailure(
 			validateRootReadme(rootReadme.replace("## Quickstart", "### quickstart")),
@@ -531,6 +560,28 @@ describe("validateRootReadme", () => {
 		assertFailure(failures, /migrating-from-langgraph/);
 		assertFailure(failures, /transcript\.md/);
 	});
+
+	for (const [name, reference, decoy, expected] of [
+		[
+			"migration",
+			"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
+			"[Migration](/docs/migrating-from-langgraph)",
+			/migrating-from-langgraph/,
+		],
+		[
+			"transcript",
+			"[Read the demo transcript](docs/brand/demo/transcript.md)",
+			"[Transcript](docs/brand/demo/transcript.md)",
+			/transcript\.md/,
+		],
+	]) {
+		it(`does not accept a Markdown ${name} link inside a raw HTML block`, () => {
+			const source = rootReadme
+				.replace(reference, "")
+				.concat(`\n\n<div>\n    ${decoy}\n</div>`);
+			assertFailure(validateRootReadme(source), expected);
+		});
+	}
 
 	it("does not accept root assets and links written as inline code", () => {
 		const inlineReferences = rootReadme

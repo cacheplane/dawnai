@@ -283,68 +283,80 @@ function closesRawHtmlBlock(line, htmlBlock) {
 	return new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "iu").test(line);
 }
 
-function maskMarkdownCodeBlocks(source) {
+function markdownBlockProjections(source) {
 	let fence = null;
 	let htmlBlock = null;
-	return source
-		.split(/(?<=\n)/u)
-		.map((line) => {
-			const content = line.replace(/\r?\n$/u, "");
-			if (fence) {
-				const container = blockquoteContainer(content);
-				const listContainerEnded =
-					fence.listIndentColumns > 0 &&
-					content.trim().length > 0 &&
-					contentAfterIndent(container.content, fence.listIndentColumns) ===
-						null;
-				if (container.depth < fence.quoteDepth || listContainerEnded) {
-					fence = null;
-				} else {
-					const closing = closingFenceRun(content, fence);
-					if (
-						closing &&
-						closing.length >= fence.length &&
-						[...closing].every((character) => character === fence.character)
-					) {
-						fence = null;
-					}
-					return maskText(line);
-				}
-			}
+	const markdown = [];
+	const rendered = [];
+	const append = (markdownLine, renderedLine = markdownLine) => {
+		markdown.push(markdownLine);
+		rendered.push(renderedLine);
+	};
 
-			if (htmlBlock) {
-				const container = blockquoteContainer(content);
-				const containedContent = contentAfterIndent(
-					container.content,
-					htmlBlock.listIndentColumns,
-				);
-				const containerEnded =
-					container.depth < htmlBlock.quoteDepth || containedContent === null;
-				if (containerEnded || (containedContent?.trim().length ?? 0) === 0) {
-					htmlBlock = null;
-				} else {
-					if (closesRawHtmlBlock(containedContent, htmlBlock)) htmlBlock = null;
-					return line;
-				}
-			}
-
+	for (const line of source.split(/(?<=\n)/u)) {
+		const content = line.replace(/\r?\n$/u, "");
+		if (fence) {
 			const container = blockquoteContainer(content);
-			if (listContainers(container.content).indentedCode) return maskText(line);
-
-			const htmlOpening = rawHtmlBlockOpening(content);
-			if (htmlOpening) {
-				if (!closesRawHtmlBlock(content, htmlOpening)) htmlBlock = htmlOpening;
-				return line;
+			const listContainerEnded =
+				fence.listIndentColumns > 0 &&
+				content.trim().length > 0 &&
+				contentAfterIndent(container.content, fence.listIndentColumns) === null;
+			if (container.depth < fence.quoteDepth || listContainerEnded) {
+				fence = null;
+			} else {
+				const closing = closingFenceRun(content, fence);
+				if (
+					closing &&
+					closing.length >= fence.length &&
+					[...closing].every((character) => character === fence.character)
+				) {
+					fence = null;
+				}
+				append(maskText(line));
+				continue;
 			}
+		}
 
-			const opening = fenceOpening(content);
-			if (opening) {
-				fence = opening;
-				return maskText(line);
+		if (htmlBlock) {
+			const container = blockquoteContainer(content);
+			const containedContent = contentAfterIndent(
+				container.content,
+				htmlBlock.listIndentColumns,
+			);
+			const containerEnded =
+				container.depth < htmlBlock.quoteDepth || containedContent === null;
+			if (containerEnded || (containedContent?.trim().length ?? 0) === 0) {
+				htmlBlock = null;
+			} else {
+				if (closesRawHtmlBlock(containedContent, htmlBlock)) htmlBlock = null;
+				append(maskText(line), line);
+				continue;
 			}
-			return line;
-		})
-		.join("");
+		}
+
+		const container = blockquoteContainer(content);
+		if (listContainers(container.content).indentedCode) {
+			append(maskText(line));
+			continue;
+		}
+
+		const htmlOpening = rawHtmlBlockOpening(content);
+		if (htmlOpening) {
+			if (!closesRawHtmlBlock(content, htmlOpening)) htmlBlock = htmlOpening;
+			append(maskText(line), line);
+			continue;
+		}
+
+		const opening = fenceOpening(content);
+		if (opening) {
+			fence = opening;
+			append(maskText(line));
+			continue;
+		}
+		append(line);
+	}
+
+	return { markdown: markdown.join(""), rendered: rendered.join("") };
 }
 
 function maskHtmlComments(source) {
@@ -399,12 +411,16 @@ function maskInlineCode(source) {
 	return characters.join("");
 }
 
-function maskNonRenderedMarkdown(source) {
-	return maskInlineCode(maskHtmlComments(maskMarkdownCodeBlocks(source)));
+function visibleBlockProjections(source) {
+	const projections = markdownBlockProjections(maskHtmlComments(source));
+	return {
+		markdown: maskInlineCode(projections.markdown),
+		rendered: maskInlineCode(projections.rendered),
+	};
 }
 
 function markdownHeadings(source) {
-	const visible = maskHtmlComments(maskMarkdownCodeBlocks(source));
+	const visible = markdownBlockProjections(maskHtmlComments(source)).markdown;
 	return [...visible.matchAll(/^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/gmu)].map(
 		(match) => ({
 			index: match.index,
@@ -427,7 +443,7 @@ function hasPurposeStatement(readme, firstH1, headings) {
 		h1LineEnd === -1 ? readme.length : h1LineEnd + 1,
 		nextHeading?.index,
 	);
-	const visible = maskNonRenderedMarkdown(body);
+	const visible = visibleBlockProjections(body).rendered;
 	return visible
 		.split(/\r?\n/u)
 		.map((line) => line.trim())
@@ -446,13 +462,13 @@ function hasPurposeStatement(readme, firstH1, headings) {
 		);
 }
 
-function productLoopImagePresent(source) {
+function productLoopImagePresent(markdownSource, htmlSource) {
 	return (
 		/!\[[^\]]*\]\([^\r\n)]*docs\/brand\/product-loop\.gif(?:[?#][^\r\n)]*)?\)/iu.test(
-			source,
+			markdownSource,
 		) ||
 		/<img\b[^>]*\bsrc=["'][^"']*docs\/brand\/product-loop\.gif(?:[?#][^"']*)?["'][^>]*>/iu.test(
-			source,
+			htmlSource,
 		)
 	);
 }
@@ -643,8 +659,8 @@ export function validatePackageReadme({ tier, manifest, readme }) {
 		);
 	}
 
-	const visibleSource = maskNonRenderedMarkdown(source);
-	if (!/^\*\*Use this when:\*\*[ \t]+\S/mu.test(visibleSource)) {
+	const visible = visibleBlockProjections(source);
+	if (!/^\*\*Use this when:\*\*[ \t]+\S/mu.test(visible.markdown)) {
 		failures.push(
 			`${packageName ?? "package"}: README is missing **Use this when:** guidance`,
 		);
@@ -680,7 +696,10 @@ export function validatePackageReadme({ tier, manifest, readme }) {
 		}
 	}
 
-	if (tier === "entry" && !productLoopImagePresent(visibleSource)) {
+	if (
+		tier === "entry" &&
+		!productLoopImagePresent(visible.markdown, visible.rendered)
+	) {
 		failures.push(
 			`${packageName ?? "package"}: entry README is missing the docs/brand/product-loop.gif image`,
 		);
@@ -724,21 +743,25 @@ export function validateRootReadme(source) {
 	}
 
 	const withoutComments = maskHtmlComments(readme);
-	const visibleSource = maskInlineCode(maskMarkdownCodeBlocks(withoutComments));
+	const blockProjections = markdownBlockProjections(withoutComments);
+	const visible = {
+		markdown: maskInlineCode(blockProjections.markdown),
+		rendered: maskInlineCode(blockProjections.rendered),
+	};
 	if (!canonicalScaffoldCommandPresent(withoutComments)) {
 		failures.push(
 			"README is missing the canonical scaffold command: pnpm create dawn-ai-app my-app",
 		);
 	}
-	if (!productLoopImagePresent(visibleSource)) {
+	if (!productLoopImagePresent(visible.markdown, visible.rendered)) {
 		failures.push("README is missing the docs/brand/product-loop.gif image");
 	}
-	if (!markdownLinkPresent(visibleSource, ROOT_LINK_CONTRACTS.migration)) {
+	if (!markdownLinkPresent(visible.markdown, ROOT_LINK_CONTRACTS.migration)) {
 		failures.push(
 			"README is missing the /docs/migrating-from-langgraph migration link",
 		);
 	}
-	if (!markdownLinkPresent(visibleSource, ROOT_LINK_CONTRACTS.transcript)) {
+	if (!markdownLinkPresent(visible.markdown, ROOT_LINK_CONTRACTS.transcript)) {
 		failures.push("README is missing the docs/brand/demo/transcript.md link");
 	}
 	if (readme.includes(OLD_GIF_CAPTION)) {
