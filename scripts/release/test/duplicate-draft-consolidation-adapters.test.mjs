@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
 	createDuplicateDraftConsolidationAdapters,
 	createExactDuplicateDeleteEffect,
 } from "../duplicate-draft-consolidation-adapters.mjs";
+import {
+	readPrivateEnvelope,
+	writePrivateEnvelope,
+} from "../duplicate-draft-consolidation-files.mjs";
 
 const REPOSITORY = "cacheplane/dawnai";
 const API_ORIGIN = "https://api.github.com";
@@ -17,6 +23,12 @@ const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 const TAG_OBJECT_SHA = "123456789abcdef0123456789abcdef012345678";
 const USER_AGENT = "dawn-duplicate-draft-consolidation/1";
 const NOW = "2026-09-01T12:34:56.789Z";
+const TEMPORARY_ROOTS = [];
+test.after(async () => {
+	await Promise.all(
+		TEMPORARY_ROOTS.map((root) => rm(root, { recursive: true, force: true })),
+	);
+});
 
 test("composition resolves an injected token in memory and sends it only in trusted headers", async () => {
 	const recording = recordingFetch([
@@ -169,7 +181,7 @@ test("targetless final epochs validate but cannot mint any delete permit", async
 	assert.equal(fetches, 0);
 });
 
-test("permit minting binds the successful terminal session target", async () => {
+test("terminal authority exposes no publicly callable permit issuer", async () => {
 	let fetches = 0;
 	const adapters = await createTerminalAdapters({
 		fetchImpl: async () => {
@@ -183,19 +195,15 @@ test("permit minting binds the successful terminal session target", async () => 
 	await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
 	await terminal.github.listReleaseAssets({ releaseId: DUPLICATES[0] });
 	const epoch = terminal.seal();
-	assert.throws(
-		() =>
-			epoch.issueDeletePermit({
-				targetReleaseId: DUPLICATES[1],
-				authoritySha256: "a".repeat(64),
-				proposalSha256: "b".repeat(64),
-				intentSha256: "c".repeat(64),
-			}),
-		/session|target|permit|terminal/iu,
+	assert.equal(Object.hasOwn(epoch, "issueDeletePermit"), false);
+	assert.equal(Object.hasOwn(epoch, "mintPermit"), false);
+	assert.equal(
+		Reflect.ownKeys(epoch).some((key) => /permit|mint/iu.test(String(key))),
+		false,
 	);
 	await assert.rejects(
 		adapters.writer.deleteDuplicate({
-			releaseId: DUPLICATES[1],
+			releaseId: DUPLICATES[0],
 			permit: Object.freeze({}),
 		}),
 		/permit|guard|one-use|valid/iu,
@@ -1901,18 +1909,18 @@ test("delete outcomes require a canonical clock value", async () => {
 	}
 });
 
-test("delete prevalidates its one outcome timestamp before the side effect", async () => {
+test("delete rechecks authority and prevalidates outcome time immediately before send", async () => {
 	let clockCalls = 0;
 	let fetchCalls = 0;
 	const writer = await createGuardedWriter({
 		now: () => {
 			clockCalls += 1;
-			if (clockCalls > 1) throw new Error("clock must not run after send");
+			if (clockCalls > 3) throw new Error("clock must not run after send");
 			return NOW;
 		},
 		fetchImpl: async () => {
 			fetchCalls += 1;
-			assert.equal(clockCalls, 1);
+			assert.equal(clockCalls, 3);
 			return { status: 204, headers: new Headers(), body: null };
 		},
 	});
@@ -1923,7 +1931,7 @@ test("delete prevalidates its one outcome timestamp before the side effect", asy
 		observedAt: NOW,
 	});
 	assert.equal(fetchCalls, 1);
-	assert.equal(clockCalls, 1);
+	assert.equal(clockCalls, 3);
 });
 
 test("composition and delete writer are deeply frozen owned capability sets", async () => {
@@ -2017,10 +2025,21 @@ async function createGuardedWriter(overrides = {}) {
 	const fetchImpl =
 		overrides.fetchImpl ?? (async () => new Response(null, { status: 204 }));
 	const now = overrides.now ?? (() => NOW);
+	const root = await mkdtemp(
+		path.join(await realpath(os.tmpdir()), "dawn-adapter-delete-"),
+	);
+	TEMPORARY_ROOTS.push(root);
+	const journalPath = path.join(
+		root,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(journalPath), { recursive: true });
 	return Object.freeze({
 		async deleteDuplicate(input) {
 			const adapters = await createDuplicateDraftConsolidationAdapters({
-				cwd: "/workspace",
+				cwd: root,
 				token: TOKEN,
 				environment: { HOME: "/home/release", PATH: "/tools" },
 				dependencies: {
@@ -2036,11 +2055,12 @@ async function createGuardedWriter(overrides = {}) {
 			await terminal.github.getRelease({ releaseId: input.releaseId });
 			await terminal.github.listReleaseAssets({ releaseId: input.releaseId });
 			const epoch = terminal.seal();
-			const permit = epoch.issueDeletePermit({
+			await writePrivateEnvelope(journalPath, Buffer.from("test journal\n"));
+			const committedJournal = await readPrivateEnvelope(journalPath, 1024);
+			const permit = epoch.commitJournalTransition({
 				targetReleaseId: input.releaseId,
-				authoritySha256: "a".repeat(64),
-				proposalSha256: "b".repeat(64),
-				intentSha256: "c".repeat(64),
+				committedJournal,
+				authorityExpiresAt: new Date(Date.parse(NOW) + 120_000).toISOString(),
 			});
 			return adapters.writer.deleteDuplicate({ ...input, permit });
 		},

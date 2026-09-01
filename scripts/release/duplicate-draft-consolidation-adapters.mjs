@@ -10,6 +10,8 @@ import { createGitHubReader as defaultCreateGitHubReader } from "./adapters/gith
 import { createHttpGet } from "./adapters/http.mjs";
 import { createNpmReader as defaultCreateNpmReader } from "./adapters/npm.mjs";
 import { createCliAttestationVerifier as defaultCreateCliAttestationVerifier } from "./artifact-store.mjs";
+import { readPrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
+import { DUPLICATE_DRAFT_CONSOLIDATION_LIMITS } from "./duplicate-draft-consolidation-schema.mjs";
 import { createOwnerPreflightAdapters as defaultCreateOwnerPreflightAdapters } from "./preflight-owner-adapters.mjs";
 import { createReleasePreparationRunner as defaultCreateReleasePreparationRunner } from "./process-runner.mjs";
 
@@ -102,6 +104,7 @@ const WINDOWS_ENVIRONMENT_MARKERS = new Set([
 ]);
 const DELETE_WRITER_IDENTITIES = new WeakMap();
 const DELETE_PERMIT_BINDINGS = new WeakMap();
+const PRIVATE_IDENTITY_PROPERTY = "consolidationPrivateFileIdentity";
 
 export async function createDuplicateDraftConsolidationAdapters(options) {
 	const root = exactDataOptions(options, ROOT_OPTION_FIELDS, "Adapter options");
@@ -699,7 +702,7 @@ function createNetworkGuard({ cwd, now }) {
 		}
 	};
 
-	const sealedEpoch = (session, { permitIssuing }) => {
+	const sealedEpoch = (session, { deleteTransition }) => {
 		const capability = {};
 		const descriptors = {
 			now: hiddenMethod(trustedNow),
@@ -711,8 +714,8 @@ function createNetworkGuard({ cwd, now }) {
 				);
 			}),
 		};
-		if (permitIssuing) {
-			descriptors.issueDeletePermit = hiddenMethod((input) => {
+		if (deleteTransition) {
+			descriptors.commitJournalTransition = hiddenMethod((input) => {
 				assertSealed(session);
 				if (
 					session.releaseId === null ||
@@ -731,14 +734,13 @@ function createNetworkGuard({ cwd, now }) {
 					input,
 					new Set([
 						"targetReleaseId",
-						"authoritySha256",
-						"proposalSha256",
-						"intentSha256",
+						"committedJournal",
+						"authorityExpiresAt",
 					]),
-					"Delete permit binding",
+					"Committed journal transition",
 				);
 				const targetReleaseId = canonicalStringId(
-					required(binding, "targetReleaseId", "Delete permit target"),
+					required(binding, "targetReleaseId", "Delete transition target"),
 				);
 				if (targetReleaseId !== session.releaseId) {
 					session.invalidated = true;
@@ -747,19 +749,15 @@ function createNetworkGuard({ cwd, now }) {
 						"Delete permit target differs from the completed terminal session",
 					);
 				}
-				for (const name of [
-					"authoritySha256",
-					"proposalSha256",
-					"intentSha256",
-				]) {
-					if (
-						!/^[0-9a-f]{64}$/u.test(
-							required(binding, name, `Delete permit ${name}`),
-						)
-					) {
-						throw new TypeError("Delete permit digest is invalid");
-					}
-				}
+				const committedJournal = required(
+					binding,
+					"committedJournal",
+					"Committed private journal read",
+				);
+				assertAuthenticatedPrivateRead(committedJournal);
+				const authorityExpiresAt = canonicalTimestamp(
+					required(binding, "authorityExpiresAt", "Delete authority expiry"),
+				);
 				const permit = {};
 				Object.defineProperty(permit, "toJSON", {
 					...hiddenMethod(() => {
@@ -773,9 +771,8 @@ function createNetworkGuard({ cwd, now }) {
 					session,
 					targetReleaseId,
 					used: false,
-					authoritySha256: binding.authoritySha256,
-					proposalSha256: binding.proposalSha256,
-					intentSha256: binding.intentSha256,
+					committedJournal,
+					authorityExpiresAt,
 				});
 				DELETE_PERMIT_BINDINGS.set(permit, {
 					writerIdentity: boundWriterIdentity,
@@ -912,7 +909,7 @@ function createNetworkGuard({ cwd, now }) {
 				}
 				state = "sealed";
 				session.sealedSequence = sequence;
-				return sealedEpoch(session, { permitIssuing: true });
+				return sealedEpoch(session, { deleteTransition: true });
 			}),
 			abort: hiddenMethod(() => {
 				session.invalidated = true;
@@ -968,7 +965,37 @@ function createNetworkGuard({ cwd, now }) {
 				);
 			}
 			record.used = true;
+			permitBinding.used = true;
+			try {
+				const beforeRead = trustedNow();
+				if (beforeRead > record.authorityExpiresAt) {
+					throw new Error(
+						"Delete permit expired with its absolute npm authority",
+					);
+				}
+				const currentJournal = await readPrivateEnvelope(
+					journalPath,
+					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+				);
+				if (
+					!sameAuthenticatedPrivateRead(currentJournal, record.committedJournal)
+				) {
+					throw new Error(
+						"Delete journal identity or bytes changed after permit issuance",
+					);
+				}
+				const immediatelyBeforeSend = trustedNow();
+				if (immediatelyBeforeSend > record.authorityExpiresAt) {
+					throw new Error(
+						"Delete permit expired with its absolute npm authority",
+					);
+				}
+			} catch (error) {
+				state = "spent";
+				throw error;
+			}
 			permitBinding.armed = true;
+			permitBinding.used = false;
 			state = "deleting";
 			try {
 				return await context.run(record.session.deleteToken, () =>
@@ -1012,7 +1039,7 @@ function createNetworkGuard({ cwd, now }) {
 						sealedSequence: sequence,
 					};
 					state = "sealed";
-					return sealedEpoch(terminal, { permitIssuing: false });
+					return sealedEpoch(terminal, { deleteTransition: false });
 				}),
 				toJSON: hiddenMethod(() => {
 					throw new TypeError(
@@ -1032,6 +1059,58 @@ function hiddenMethod(value) {
 
 function hiddenValue(value) {
 	return { value, enumerable: false, writable: false, configurable: false };
+}
+
+function assertAuthenticatedPrivateRead(value) {
+	if (!Buffer.isBuffer(value)) {
+		throw new TypeError("Committed journal must be a private no-follow read");
+	}
+	const descriptor = Object.getOwnPropertyDescriptor(
+		value,
+		PRIVATE_IDENTITY_PROPERTY,
+	);
+	if (
+		descriptor === undefined ||
+		descriptor.enumerable !== false ||
+		descriptor.writable !== false ||
+		descriptor.configurable !== false ||
+		!isFileIdentity(descriptor.value)
+	) {
+		throw new TypeError("Committed journal file identity is not authenticated");
+	}
+}
+
+function sameAuthenticatedPrivateRead(actual, expected) {
+	assertAuthenticatedPrivateRead(actual);
+	assertAuthenticatedPrivateRead(expected);
+	const actualIdentity = Object.getOwnPropertyDescriptor(
+		actual,
+		PRIVATE_IDENTITY_PROPERTY,
+	).value;
+	const expectedIdentity = Object.getOwnPropertyDescriptor(
+		expected,
+		PRIVATE_IDENTITY_PROPERTY,
+	).value;
+	return (
+		actual.equals(expected) &&
+		sameFileIdentity(actualIdentity, expectedIdentity)
+	);
+}
+
+function isFileIdentity(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		["ctimeNs", "dev", "ino", "mtimeNs", "nlink", "size"].every(
+			(name) => typeof value[name] === "bigint",
+		)
+	);
+}
+
+function sameFileIdentity(left, right) {
+	return ["ctimeNs", "dev", "ino", "mtimeNs", "nlink", "size"].every(
+		(name) => left[name] === right[name],
+	);
 }
 
 function createLocalGitReader({ cwd, environment, run, ownerAdapters }) {

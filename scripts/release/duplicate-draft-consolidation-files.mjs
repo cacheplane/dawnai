@@ -22,6 +22,8 @@ const WRITE_FILE_SYSTEM_METHODS = Object.freeze([
 ]);
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const PRIVATE_READ_IDENTITIES = new WeakMap();
+const PRIVATE_IDENTITY_PROPERTY = "consolidationPrivateFileIdentity";
 
 const POLICIES = Object.freeze({
 	private: Object.freeze({ label: "private envelope", mode: PRIVATE_MODE }),
@@ -36,8 +38,19 @@ export async function readPrivateEnvelope(
 	return readEvidence(filePath, maximumBytes, dependencies, POLICIES.private);
 }
 
-export async function writePrivateEnvelope(filePath, bytes, dependencies) {
-	return writeEvidence(filePath, bytes, dependencies, POLICIES.private);
+export async function writePrivateEnvelope(
+	filePath,
+	bytes,
+	dependencies,
+	expectedCurrent,
+) {
+	return writeEvidence(
+		filePath,
+		bytes,
+		dependencies,
+		POLICIES.private,
+		expectedCurrent,
+	);
 }
 
 export async function readTrackedReceipt(filePath, maximumBytes, dependencies) {
@@ -134,6 +147,16 @@ async function readEvidence(filePath, maximumBytes, dependencies, policy) {
 			policy.label,
 		);
 		result = Buffer.from(bytes);
+		if (policy === POLICIES.private) {
+			const identity = fileIdentity(after);
+			PRIVATE_READ_IDENTITIES.set(result, identity);
+			Object.defineProperty(result, PRIVATE_IDENTITY_PROPERTY, {
+				value: identity,
+				enumerable: false,
+				writable: false,
+				configurable: false,
+			});
+		}
 	} catch (error) {
 		primaryError = error;
 	}
@@ -159,9 +182,16 @@ async function readEvidence(filePath, maximumBytes, dependencies, policy) {
 	return result;
 }
 
-async function writeEvidence(filePath, inputBytes, dependencies, policy) {
+async function writeEvidence(
+	filePath,
+	inputBytes,
+	dependencies,
+	policy,
+	expectedCurrent,
+) {
 	const target = snapshotPath(filePath);
 	const bytes = snapshotWriteBytes(inputBytes, policy.label);
+	const expected = snapshotExpectedCurrent(expectedCurrent, policy);
 	const runtime = snapshotDependencies(dependencies, true);
 	requireNoFollowSupport(true);
 	const identifier = runtime.randomUUID();
@@ -208,6 +238,7 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 			target,
 			policy,
 			parentChain,
+			expected,
 		);
 		temporaryHandle = await openNoFollow(
 			runtime.operations,
@@ -534,6 +565,35 @@ function snapshotWriteBytes(value, label) {
 	}
 }
 
+function snapshotExpectedCurrent(value, policy) {
+	if (value === undefined) return null;
+	if (policy !== POLICIES.private) {
+		throw new TypeError(
+			"Only private envelopes support authenticated replacement",
+		);
+	}
+	const identity =
+		value !== null && typeof value === "object"
+			? PRIVATE_READ_IDENTITIES.get(value)
+			: undefined;
+	const descriptor =
+		value !== null && typeof value === "object"
+			? Object.getOwnPropertyDescriptor(value, PRIVATE_IDENTITY_PROPERTY)
+			: undefined;
+	if (
+		identity === undefined ||
+		descriptor?.value !== identity ||
+		descriptor.enumerable !== false ||
+		descriptor.writable !== false ||
+		descriptor.configurable !== false
+	) {
+		throw new TypeError(
+			"Authenticated private replacement requires the exact no-follow read result",
+		);
+	}
+	return Object.freeze({ bytes: Buffer.from(value), identity });
+}
+
 function requireNoFollowSupport(needsWrite) {
 	const required = [
 		fsConstants.O_RDONLY,
@@ -702,6 +762,7 @@ async function inspectExistingDestination(
 	target,
 	policy,
 	parentChain,
+	expected,
 ) {
 	let handle;
 	try {
@@ -712,13 +773,67 @@ async function inspectExistingDestination(
 			policy.label,
 		);
 	} catch (error) {
-		if (errorCode(error) === "ENOENT") return null;
+		if (errorCode(error) === "ENOENT" && expected === null) return null;
+		if (errorCode(error) === "ENOENT") {
+			throw new Error(
+				`${capitalize(policy.label)} authenticated current file is missing`,
+				{ cause: error },
+			);
+		}
 		throw error;
 	}
-	const operations = snapshotHandleOperations(handle, ["close", "stat"]);
+	const operations = snapshotHandleOperations(handle, [
+		"close",
+		"stat",
+		...(expected === null ? [] : ["read"]),
+	]);
 	try {
 		const status = await operations.stat({ bigint: true });
 		assertSourcePolicy(status, runtime.effectiveUserId, policy);
+		if (expected !== null && !sameIdentityRecord(expected.identity, status)) {
+			throw new Error(
+				`${capitalize(policy.label)} no longer identifies the authenticated current file`,
+			);
+		}
+		if (expected !== null) {
+			if (status.size !== BigInt(expected.bytes.byteLength)) {
+				throw new Error(
+					`${capitalize(policy.label)} current bytes differ before authenticated replacement`,
+				);
+			}
+			const observed = Buffer.allocUnsafe(expected.bytes.byteLength);
+			let offset = 0;
+			while (offset < observed.byteLength) {
+				const requested = Math.min(
+					IO_CHUNK_BYTES,
+					observed.byteLength - offset,
+				);
+				const readResult = await operations.read(
+					observed,
+					offset,
+					requested,
+					offset,
+				);
+				const bytesRead = resultCount(
+					readResult,
+					"bytesRead",
+					requested,
+					`${policy.label} authenticated current read`,
+				);
+				if (bytesRead === 0) break;
+				offset += bytesRead;
+			}
+			const afterRead = await operations.stat({ bigint: true });
+			if (
+				offset !== observed.byteLength ||
+				!observed.equals(expected.bytes) ||
+				!sameFileState(status, afterRead)
+			) {
+				throw new Error(
+					`${capitalize(policy.label)} current bytes changed before authenticated replacement`,
+				);
+			}
+		}
 		const current = await runtime.operations.lstat(target, { bigint: true });
 		if (current.isSymbolicLink() || !sameFileState(status, current)) {
 			throw new Error(

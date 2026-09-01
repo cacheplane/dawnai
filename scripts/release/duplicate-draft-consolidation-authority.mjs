@@ -6,12 +6,21 @@ import {
 	captureDirectTargetRead,
 	inspectEquivalentDrafts,
 } from "./duplicate-draft-consolidation-evidence.mjs";
-import { writePrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
 import {
+	readPrivateEnvelope,
+	writePrivateEnvelope,
+} from "./duplicate-draft-consolidation-files.mjs";
+import {
+	appendJournalEvent,
+	deriveConsolidationState,
+	parseConsolidationJournal,
+} from "./duplicate-draft-consolidation-journal.mjs";
+import {
+	canonicalConsolidationEnvelopeBytes,
 	canonicalEventEnvelope,
 	canonicalRecordSha256,
 	createConsolidationEnvelope,
-	parseConsolidationEnvelope,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 } from "./duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
 import { parseReleaseMarker } from "./metadata.mjs";
@@ -923,7 +932,7 @@ function createNetworkEpoch({
 						"proposal",
 						"targetReleaseId",
 						"intentPath",
-						"intentBytes",
+						"currentJournal",
 					],
 					"network epoch consumption",
 				);
@@ -960,15 +969,54 @@ function createNetworkEpoch({
 						"Journal intent path is not the adapter-owned private path",
 					);
 				}
-				const intentBytes = snapshotIntentBytes(
-					dataValue(value, "intentBytes", "journal intent bytes"),
+				const expectedCurrent = parseConsolidationJournal(
+					dataValue(value, "currentJournal", "current journal"),
 				);
-				const intentSha256 = validateIntentBinding({
-					bytes: intentBytes,
-					authority: consumedAuthority,
-					proposal: consumedProposal,
-					targetReleaseId: consumedTarget,
-				});
+				const expectedConfirmationSha256 = canonicalRecordSha256(
+					consumedProposal.confirmation,
+				);
+				const expectedCurrentState = deriveConsolidationState(expectedCurrent);
+				if (
+					expectedCurrent.record.proposedRecordSha256 !== proposalSha256 ||
+					expectedCurrent.record.confirmationSha256 !==
+						expectedConfirmationSha256 ||
+					expectedCurrentState.controllerSha !==
+						consumedAuthority.controller.headSha ||
+					expectedCurrentState.phase !== "delete-authority-observed" ||
+					expectedCurrentState.currentTargetReleaseId !== consumedTarget ||
+					!isDeepStrictEqual(
+						expectedCurrentState.lastAuthority,
+						consumedAuthority,
+					)
+				) {
+					throw new Error(
+						"Current journal does not bind proposal confirmation, controller, and exact delete authority",
+					);
+				}
+				let currentBytes;
+				try {
+					currentBytes = await readPrivateEnvelope(
+						intentPath,
+						DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+					);
+				} catch {
+					throw new Error(
+						"Exact current private journal could not be authenticated; do not DELETE",
+					);
+				}
+				const currentEnvelope = parseConsolidationJournal(currentBytes);
+				const expectedCurrentBytes = canonicalConsolidationEnvelopeBytes(
+					"journal",
+					expectedCurrent,
+				);
+				if (
+					!currentBytes.equals(expectedCurrentBytes) ||
+					!isDeepStrictEqual(currentEnvelope, expectedCurrent)
+				) {
+					throw new Error(
+						"Current journal file differs from the authenticated expected history",
+					);
+				}
 				const beforeWriteTimestamp = readTrustedEpochClock(adapterEpoch);
 				assertFreshWriterAuthority(
 					consumedAuthority,
@@ -976,14 +1024,48 @@ function createNetworkEpoch({
 					beforeWriteTimestamp,
 				);
 				assertAdapterEpochSealed(adapterEpoch);
+				const intentEnvelope = appendJournalEvent(
+					currentEnvelope,
+					"delete-intent",
+					{
+						targetReleaseId: consumedTarget,
+						attemptNumber: expectedCurrentState.attemptNumber,
+						authorityEventSha256: expectedCurrentState.lastEventSha256,
+					},
+					beforeWriteTimestamp,
+				);
+				const intentBytes = canonicalConsolidationEnvelopeBytes(
+					"journal",
+					intentEnvelope,
+				);
 				try {
-					await writePrivateEnvelope(intentPath, intentBytes);
+					await writePrivateEnvelope(
+						intentPath,
+						intentBytes,
+						undefined,
+						currentBytes,
+					);
 				} catch {
 					throw new Error(
 						"Journal intent may already be durable; persistence failed, so do not DELETE or reconsume",
 					);
 				}
 				try {
+					const committedJournal = await readPrivateEnvelope(
+						intentPath,
+						DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+					);
+					if (!committedJournal.equals(intentBytes)) {
+						throw new Error(
+							"Committed journal bytes differ from the legal intent",
+						);
+					}
+					const parsedCommitted = parseConsolidationJournal(committedJournal);
+					if (!isDeepStrictEqual(parsedCommitted, intentEnvelope)) {
+						throw new Error(
+							"Committed journal envelope differs from the legal intent",
+						);
+					}
 					const completedTimestamp = readTrustedEpochClock(adapterEpoch);
 					assertFreshWriterAuthority(
 						consumedAuthority,
@@ -991,11 +1073,13 @@ function createNetworkEpoch({
 						completedTimestamp,
 					);
 					adapterEpoch.validate();
-					return adapterEpoch.issueDeletePermit({
+					return adapterEpoch.commitJournalTransition({
 						targetReleaseId: consumedTarget,
-						authoritySha256,
-						proposalSha256,
-						intentSha256,
+						committedJournal,
+						authorityExpiresAt: new Date(
+							Date.parse(consumedAuthority.npmInventory.completedAt) +
+								MAXIMUM_WRITER_AGE_MS,
+						).toISOString(),
 					});
 				} catch {
 					throw new Error(
@@ -1030,52 +1114,6 @@ function readTrustedEpochClock(adapterEpoch) {
 	} catch {
 		throw new TypeError("Trusted adapter clock failed closed");
 	}
-}
-
-function snapshotIntentBytes(value) {
-	if (
-		!(value instanceof Uint8Array) ||
-		utilTypes.isProxy(value) ||
-		(typeof SharedArrayBuffer === "function" &&
-			value.buffer instanceof SharedArrayBuffer)
-	) {
-		throw new TypeError("Journal intent bytes must be one owned byte array");
-	}
-	return Buffer.from(value);
-}
-
-function validateIntentBinding({
-	bytes,
-	authority,
-	proposal,
-	targetReleaseId,
-}) {
-	const envelope = parseConsolidationEnvelope("journal", bytes);
-	if (
-		envelope.record.proposedRecordSha256 !== canonicalRecordSha256(proposal) ||
-		!isDeepStrictEqual(envelope.record.repository, proposal.repository) ||
-		!isDeepStrictEqual(envelope.record.candidate, proposal.candidate)
-	) {
-		throw new Error("Journal intent does not bind the approved proposal");
-	}
-	const authorityEvent = envelope.record.events.at(-2);
-	const intentEvent = envelope.record.events.at(-1);
-	if (
-		authorityEvent?.event.type !== "delete-authority-observed" ||
-		intentEvent?.event.type !== "delete-intent" ||
-		authorityEvent.event.payload.targetReleaseId !== targetReleaseId ||
-		intentEvent.event.payload.targetReleaseId !== targetReleaseId ||
-		authorityEvent.event.payload.attemptNumber !==
-			intentEvent.event.payload.attemptNumber ||
-		intentEvent.event.payload.authorityEventSha256 !==
-			authorityEvent.eventSha256 ||
-		!isDeepStrictEqual(authorityEvent.event.payload.authority, authority)
-	) {
-		throw new Error(
-			"Journal intent is not the exact authority-bound next delete intent",
-		);
-	}
-	return createHash("sha256").update(bytes).digest("hex");
 }
 
 function exactInput(value, expectedKeys, label) {
@@ -1288,7 +1326,7 @@ function bindTerminalCapability(value) {
 function bindSealedEpoch(value) {
 	assertHiddenCapability(
 		value,
-		["now", "journalPath", "validate", "issueDeletePermit", "toJSON"],
+		["now", "journalPath", "validate", "commitJournalTransition", "toJSON"],
 		"sealed adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "sealed adapter clock");
@@ -1297,16 +1335,17 @@ function bindSealedEpoch(value) {
 		"validate",
 		"sealed epoch validator",
 	);
-	const issueDeletePermit = hiddenDataFunction(
+	const commitJournalTransition = hiddenDataFunction(
 		value,
-		"issueDeletePermit",
-		"delete permit issuer",
+		"commitJournalTransition",
+		"committed journal transition",
 	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "sealed journal path"),
 		validate: () => validate.call(value),
-		issueDeletePermit: (input) => issueDeletePermit.call(value, input),
+		commitJournalTransition: (input) =>
+			commitJournalTransition.call(value, input),
 	});
 }
 
