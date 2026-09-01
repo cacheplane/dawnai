@@ -404,10 +404,7 @@ export function validateRootReadme(source) {
 	return failures;
 }
 
-export function resolvePublicPackageTiers(
-	publicPackageNames,
-	tierDefinitions = DEFAULT_PUBLIC_PACKAGE_TIERS,
-) {
+export function resolvePublicPackageTiers(publicPackageNames) {
 	if (!Array.isArray(publicPackageNames)) {
 		throw new TypeError("Public package names must be an array");
 	}
@@ -422,10 +419,7 @@ export function resolvePublicPackageTiers(
 
 	const classifications = new Map();
 	for (const tier of ["entry", "capability", "tooling"]) {
-		const packages = tierDefinitions[tier];
-		if (!Array.isArray(packages)) {
-			throw new TypeError(`Public package tier ${tier} must be an array`);
-		}
+		const packages = DEFAULT_PUBLIC_PACKAGE_TIERS[tier];
 		for (const packageName of packages) {
 			if (classifications.has(packageName)) {
 				throw new Error(

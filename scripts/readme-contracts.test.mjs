@@ -626,15 +626,34 @@ describe("resolvePublicPackageTiers", () => {
 		);
 	});
 
-	it("rejects package tier definitions with multiple classifications", () => {
-		const overlappingDefinitions = {
-			entry,
-			capability: [...capability, "@dawn-ai/sdk"],
+	it("does not let caller-supplied tiers disguise an unknown package", () => {
+		const alteredDefinitions = {
+			entry: [...entry, "@dawn-ai/unknown"],
+			capability,
 			tooling,
 		};
 		assert.throws(
-			() => resolvePublicPackageTiers(publicPackages, overlappingDefinitions),
-			/Multiple classifications.*@dawn-ai\/sdk/,
+			() =>
+				resolvePublicPackageTiers(
+					[...publicPackages, "@dawn-ai/unknown"],
+					alteredDefinitions,
+				),
+			/Unknown public package.*@dawn-ai\/unknown/,
 		);
+	});
+
+	it("does not let caller-supplied tiers swap known package classifications", () => {
+		const swappedDefinitions = {
+			entry: entry.map((name) =>
+				name === "@dawn-ai/sdk" ? "@dawn-ai/core" : name,
+			),
+			capability,
+			tooling: tooling.map((name) =>
+				name === "@dawn-ai/core" ? "@dawn-ai/sdk" : name,
+			),
+		};
+		const tiers = resolvePublicPackageTiers(publicPackages, swappedDefinitions);
+		assert.equal(tiers["@dawn-ai/sdk"], "entry");
+		assert.equal(tiers["@dawn-ai/core"], "tooling");
 	});
 });
