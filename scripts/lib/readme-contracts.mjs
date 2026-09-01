@@ -857,6 +857,9 @@ export function validateRootReadme(source) {
   if (readme.includes(OLD_GIF_CAPTION)) {
     failures.push("README still contains the old GIF caption")
   }
+  if (/\b(?:all\s+)?live model calls require credentials\b/iu.test(visible.rendered)) {
+    failures.push("README: not every live model call requires credentials")
+  }
 
   return failures
 }

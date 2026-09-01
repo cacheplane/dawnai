@@ -514,6 +514,15 @@ describe("validateRootReadme", () => {
     assert.deepEqual(validateRootReadme(rootReadme), [])
   })
 
+  it("rejects the universal claim that live model calls require credentials", () => {
+    assertFailure(
+      validateRootReadme(
+        `${rootReadme}\n\nLive model calls require credentials for the provider you select.`,
+      ),
+      /not every live model call requires credentials/i,
+    )
+  })
+
   for (const [name, literal] of [
     ["inline code", "`<!--`"],
     ["a fenced block", "```md\n<!--\n```"],

@@ -138,8 +138,9 @@ Scaffold a new Dawn app and help me build an agent. Dawn is the TypeScript meta-
 
 ## Run it live
 
-Live model calls require credentials for the provider you select. For the
-current checked-in research template, set the OpenAI key used by its
+Credentials depend on the provider: hosted providers require the credentials
+they specify, while local providers such as Ollama can run without a key. For
+the current checked-in research template, set the OpenAI key used by its
 `gpt-5-mini` example, then start the server:
 
 ```bash
