@@ -66,6 +66,33 @@ const rootReadme = `# Dawn
 ## Maturity and support`
 
 const actualRootReadme = readFileSync(new URL("../README.md", import.meta.url), "utf8")
+const actualEntryPackages = [
+  {
+    directory: "create-dawn-app",
+    description: "Scaffold a Dawn TypeScript agent application with supported starter templates.",
+    keywords: ["dawn", "typescript", "langgraph", "ai-agents", "scaffolding", "create-app"],
+  },
+  {
+    directory: "sdk",
+    description:
+      "Author-facing TypeScript SDK for defining Dawn agents, tools, middleware, memory, and routes.",
+    keywords: ["dawn", "typescript", "langgraph", "ai-agents", "sdk", "agent-framework"],
+  },
+  {
+    directory: "cli",
+    description:
+      "Command-line development, testing, build, and runtime tools for Dawn applications.",
+    keywords: ["dawn", "typescript", "langgraph", "cli", "ai-agents", "developer-tools"],
+  },
+].map(({ directory, description, keywords }) => {
+  const packageRoot = new URL(`../packages/${directory}/`, import.meta.url)
+  const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
+
+  return {
+    manifest: { ...actualManifest, description, keywords },
+    readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
+  }
+})
 const canonicalHeroCommandBlock = `\`\`\`bash
 npm create dawn-ai-app@latest my-agent
 \`\`\``
@@ -466,6 +493,15 @@ describe("validatePackageReadme", () => {
       /Unknown README tier/,
     )
   })
+})
+
+describe("entry-package README contracts", () => {
+  // Actual discovery metadata is intentionally deferred to the later actual-manifest tests.
+  for (const { manifest, readme } of actualEntryPackages) {
+    it(`accepts the actual ${manifest.name} README`, () => {
+      assert.deepEqual(validatePackageReadme({ tier: "entry", manifest, readme }), [])
+    })
+  }
 })
 
 describe("validatePackageDiscoveryMetadata", () => {
