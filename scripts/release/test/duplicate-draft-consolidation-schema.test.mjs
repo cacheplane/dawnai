@@ -1,0 +1,574 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+	canonicalConsolidationEnvelopeBytes,
+	canonicalEventEnvelope,
+	canonicalRecordSha256,
+	createConsolidationEnvelope,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
+	parseConsolidationEnvelope,
+	parseJournalEventEnvelope,
+} from "../duplicate-draft-consolidation-schema.mjs";
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs";
+
+const MEBIBYTE = 1024 * 1024;
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+const DIGEST = `${SHA}0123456789abcdef01234567`;
+const NOW = "2026-09-01T12:00:00.000Z";
+const SURVIVOR_ID = "379991871";
+const DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
+
+test("dedicated consolidation limits preserve journal and receipt headroom", () => {
+	assert.deepEqual(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS, {
+		proposedBytes: 4 * MEBIBYTE,
+		journalBytes: 64 * MEBIBYTE,
+		finalReceiptBytes: 96 * MEBIBYTE,
+		authorityStageBytes: 8 * MEBIBYTE,
+		survivorEvidenceBytes: 2 * MEBIBYTE,
+		journalEventReserveBytes: 8 * MEBIBYTE,
+		envelopeReserveBytes: MEBIBYTE,
+		maximumDeleteAttempts: 3,
+		maximumTargets: 2,
+		maximumAssetDownloads: 135,
+	});
+	assert.ok(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes >=
+			(2 * 3 + 1) * DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+	);
+	assert.ok(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes >=
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.survivorEvidenceBytes +
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.envelopeReserveBytes,
+	);
+	assert.equal(Object.isFrozen(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS), true);
+});
+
+test("proposed envelopes round trip as canonical newline-terminated bytes", () => {
+	const envelope = createConsolidationEnvelope("proposed", proposedRecord());
+	const bytes = canonicalConsolidationEnvelopeBytes("proposed", envelope);
+
+	assert.deepEqual(parseConsolidationEnvelope("proposed", bytes), envelope);
+	assert.match(envelope.recordSha256, /^[0-9a-f]{64}$/u);
+	assert.equal(envelope.recordSha256, canonicalRecordSha256(envelope.record));
+	assert.equal(bytes.at(-1), 0x0a);
+	assert.equal(bytes.at(-2) === 0x0a, false);
+});
+
+test("all three top-level record schemas and the journal event envelope are exact", () => {
+	const proposedEnvelope = createConsolidationEnvelope(
+		"proposed",
+		proposedRecord(),
+	);
+	const eventEnvelope = canonicalEventEnvelope(
+		operationStartedEvent(proposedEnvelope.recordSha256),
+		null,
+	);
+	const journalEnvelope = createConsolidationEnvelope(
+		"journal",
+		journalRecord(proposedEnvelope, [eventEnvelope]),
+	);
+	const finalEnvelope = createConsolidationEnvelope(
+		"final",
+		finalRecord(proposedEnvelope, journalEnvelope),
+	);
+
+	for (const [kind, envelope] of [
+		["proposed", proposedEnvelope],
+		["journal", journalEnvelope],
+		["final", finalEnvelope],
+	]) {
+		const bytes = canonicalConsolidationEnvelopeBytes(kind, envelope);
+		assert.deepEqual(parseConsolidationEnvelope(kind, bytes), envelope);
+
+		for (const path of requiredObjectFieldPaths(envelope.record)) {
+			const missing = structuredClone(envelope.record);
+			delete valueAtPath(missing, path.slice(0, -1))[path.at(-1)];
+			assert.throws(
+				() => createConsolidationEnvelope(kind, missing),
+				undefined,
+				`${kind} accepted missing ${path.join(".")}`,
+			);
+		}
+
+		const unknown = structuredClone(envelope.record);
+		unknown.unexpected = true;
+		assert.throws(() => createConsolidationEnvelope(kind, unknown));
+	}
+
+	assert.deepEqual(
+		parseJournalEventEnvelope(eventEnvelope, 1, null),
+		eventEnvelope,
+	);
+	const unknownEvent = structuredClone(eventEnvelope.event);
+	unknownEvent.unexpected = true;
+	assert.throws(() => canonicalEventEnvelope(unknownEvent, null));
+});
+
+test("fixed array order, identities, workflow authority, and npm absence are enforced", () => {
+	const reorderedStatuses = proposedRecord();
+	reorderedStatuses.workflowAuthority.query.statuses.reverse();
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", reorderedStatuses),
+	);
+
+	const reorderedRoles = proposedRecord();
+	reorderedRoles.roles.duplicates.reverse();
+	assert.throws(() => createConsolidationEnvelope("proposed", reorderedRoles));
+
+	const consistentlyReorderedRoles = proposedRecord();
+	consistentlyReorderedRoles.roles.duplicates.reverse();
+	consistentlyReorderedRoles.confirmation.duplicates.reverse();
+	const [survivor, firstDuplicate, secondDuplicate] =
+		consistentlyReorderedRoles.releases;
+	consistentlyReorderedRoles.releases = [
+		survivor,
+		secondDuplicate,
+		firstDuplicate,
+	];
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", consistentlyReorderedRoles),
+	);
+
+	const reorderedReleases = proposedRecord();
+	reorderedReleases.releases.reverse();
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", reorderedReleases),
+	);
+
+	const wrongWorkflow = proposedRecord();
+	wrongWorkflow.workflowAuthority.state = "active";
+	assert.throws(() => createConsolidationEnvelope("proposed", wrongWorkflow));
+
+	const publishedPackage = proposedRecord();
+	publishedPackage.npmInventories[0].packages[0].status = "PRESENT";
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", publishedPackage),
+	);
+});
+
+test("canonical byte parsing rejects duplicate keys, drift, invalid UTF-8, and every size bound", () => {
+	const envelope = createConsolidationEnvelope("proposed", proposedRecord());
+	const canonical = canonicalConsolidationEnvelopeBytes("proposed", envelope);
+	const source = canonical.toString("utf8");
+
+	assert.throws(() =>
+		parseConsolidationEnvelope(
+			"proposed",
+			Buffer.from(
+				source.replace('{"record":', '{"recordSha256":"0","record":'),
+			),
+		),
+	);
+
+	const changedDigest = structuredClone(envelope);
+	changedDigest.recordSha256 = "f".repeat(64);
+	assert.throws(() =>
+		parseConsolidationEnvelope(
+			"proposed",
+			Buffer.from(`${JSON.stringify(changedDigest)}\n`, "utf8"),
+		),
+	);
+	assert.throws(() =>
+		parseConsolidationEnvelope("proposed", canonical.subarray(0, -1)),
+	);
+	assert.throws(() =>
+		parseConsolidationEnvelope("proposed", Buffer.from([0xc3, 0x28, 0x0a])),
+	);
+
+	for (const [kind, maximum] of [
+		["proposed", DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes],
+		["journal", DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes],
+		["final", DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes],
+	]) {
+		assert.throws(() =>
+			parseConsolidationEnvelope(kind, Buffer.alloc(maximum + 1, 0x20)),
+		);
+	}
+
+	const oversizedRecord = proposedRecord();
+	oversizedRecord.releases[0].semantic.body = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes,
+	);
+	assert.throws(() => createConsolidationEnvelope("proposed", oversizedRecord));
+});
+
+test("journal events enforce the hash chain and every exact typed payload", () => {
+	const events = eventFixtures();
+	let previous = null;
+	for (let index = 0; index < events.length; index += 1) {
+		const event = {
+			...events[index],
+			sequence: index + 1,
+			previousEventSha256: previous,
+		};
+		const envelope = canonicalEventEnvelope(event, previous);
+		assert.deepEqual(
+			parseJournalEventEnvelope(envelope, index + 1, previous),
+			envelope,
+		);
+
+		for (const path of requiredObjectFieldPaths(event)) {
+			const missingField = structuredClone(event);
+			delete valueAtPath(missingField, path.slice(0, -1))[path.at(-1)];
+			assert.throws(
+				() => canonicalEventEnvelope(missingField, previous),
+				undefined,
+				`${event.type} accepted missing ${path.join(".")}`,
+			);
+		}
+
+		previous = envelope.eventSha256;
+	}
+
+	const first = canonicalEventEnvelope(operationStartedEvent(), null);
+	assert.throws(() => parseJournalEventEnvelope(first, 2, null));
+	assert.throws(() => parseJournalEventEnvelope(first, 1, DIGEST));
+	assert.throws(() =>
+		parseJournalEventEnvelope({ ...first, eventSha256: DIGEST }, 1, null),
+	);
+});
+
+function proposedRecord() {
+	const releases = [
+		releaseEvidence("survivor", SURVIVOR_ID, 1000),
+		releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000),
+		releaseEvidence("duplicate", DUPLICATE_IDS[1], 3000),
+	];
+	return {
+		schemaVersion: 1,
+		repository: repository(),
+		controller: controller(),
+		candidate: candidate(),
+		roles: { survivor: SURVIVOR_ID, duplicates: [...DUPLICATE_IDS] },
+		confirmation: {
+			version: "0.8.22",
+			commitSha: SHA,
+			survivor: SURVIVOR_ID,
+			duplicates: [...DUPLICATE_IDS],
+			template: "Consolidate <64-lowercase-hex-digest>",
+		},
+		annotatedTag: annotatedTag(),
+		workflowAuthority: workflowAuthority(),
+		npmInventories: [
+			npmInventory("inspect-initial"),
+			npmInventory("inspect-ready"),
+		],
+		releases,
+		payloadProof: payloadProof(),
+		inspectedAt: NOW,
+	};
+}
+
+function journalRecord(proposedEnvelope, events) {
+	return {
+		schemaVersion: 1,
+		repository: repository(),
+		candidate: candidate(),
+		proposedRecordSha256: proposedEnvelope.recordSha256,
+		confirmationSha256: DIGEST,
+		deletionOrder: [...DUPLICATE_IDS],
+		events,
+		updatedAt: NOW,
+	};
+}
+
+function finalRecord(proposedEnvelope, journalEnvelope) {
+	const finalAuthority = authorityStage("final", null);
+	return {
+		schemaVersion: 1,
+		proposedEnvelope,
+		journalEnvelope,
+		finalAuthority,
+		finalSurvivor: finalAuthority.releases[0],
+		completedAt: NOW,
+	};
+}
+
+function repository() {
+	return {
+		name: "cacheplane/dawnai",
+		id: "123456789",
+		defaultBranch: "main",
+		actor: { login: "blove", id: "1234" },
+	};
+}
+
+function controller() {
+	return { headSha: SHA, originMainSha: SHA, githubMainSha: SHA };
+}
+
+function candidate() {
+	return { version: "0.8.22", commitSha: SHA, tag: "v0.8.22" };
+}
+
+function annotatedTag() {
+	return {
+		name: "v0.8.22",
+		objectSha: SHA,
+		targetSha: SHA,
+		objectType: "tag",
+		observedAt: NOW,
+	};
+}
+
+function workflowAuthority() {
+	return {
+		workflowId: "12345",
+		path: ".github/workflows/release.yml",
+		state: "disabled_manually",
+		query: {
+			statuses: ["in_progress", "pending", "queued", "requested", "waiting"],
+			perPage: 100,
+			maximumPages: 100,
+		},
+		nonterminalRuns: [],
+		observedAt: NOW,
+	};
+}
+
+function npmInventory(stage) {
+	return {
+		stage,
+		startedAt: NOW,
+		completedAt: NOW,
+		packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => ({
+			name,
+			version: "0.8.22",
+			status: "ABSENT",
+			httpStatus: 404,
+			code: "E404",
+			observedAt: NOW,
+		})),
+	};
+}
+
+function releaseEvidence(role, id, assetIdStart) {
+	return {
+		role,
+		id,
+		nodeId: `RE_${id}`,
+		tagName: `untagged-${id}`,
+		createdAt: NOW,
+		updatedAt: NOW,
+		semantic: {
+			name: "v0.8.22 escrow",
+			targetCommitish: SHA,
+			draft: true,
+			immutable: false,
+			prerelease: false,
+			publishedAt: null,
+			body: "ESCROWED",
+			bodySha256: DIGEST,
+			author: {
+				login: "github-actions[bot]",
+				id: "41898282",
+				nodeId: "MDQ6VXNlcjQxODk4Mjgy",
+			},
+		},
+		assets: Array.from({ length: 45 }, (_, index) => ({
+			id: String(assetIdStart + index),
+			nodeId: `RA_${assetIdStart + index}`,
+			name: `asset-${String(index).padStart(2, "0")}`,
+			label: null,
+			state: "uploaded",
+			contentType: "application/octet-stream",
+			size: 1,
+			digest: `sha256:${DIGEST}`,
+			uploader: {
+				login: "github-actions[bot]",
+				id: "41898282",
+				nodeId: "MDQ6VXNlcjQxODk4Mjgy",
+			},
+			createdAt: NOW,
+			updatedAt: NOW,
+			downloadCount: 0,
+			downloadSha256: DIGEST,
+		})),
+	};
+}
+
+function payloadProof() {
+	const baseAssetSet = Array.from({ length: 45 }, (_, index) => ({
+		name: `asset-${String(index).padStart(2, "0")}`,
+		sha256: DIGEST,
+	}));
+	return {
+		baseAssetSet,
+		baseAssetSetSha256: DIGEST,
+		consolidationPayloadSha256: DIGEST,
+		attestationVerification: {
+			status: "VERIFIED",
+			subjects: Array.from({ length: 22 }, (_, index) => ({
+				name: `subject-${String(index).padStart(2, "0")}`,
+				sha256: DIGEST,
+			})),
+		},
+	};
+}
+
+function targetRead() {
+	const evidence = releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000);
+	return {
+		releaseGetStartedAt: NOW,
+		releaseGetCompletedAt: NOW,
+		assetsListStartedAt: NOW,
+		assetsListCompletedAt: NOW,
+		evidence,
+		evidenceSha256: canonicalRecordSha256(evidence),
+	};
+}
+
+function authorityStage(stage, read = targetRead()) {
+	return {
+		stage,
+		controller: controller(),
+		annotatedTag: annotatedTag(),
+		workflowAuthority: workflowAuthority(),
+		npmInventory: npmInventory(stage),
+		releases:
+			stage === "final"
+				? [releaseEvidence("survivor", SURVIVOR_ID, 1000)]
+				: [
+						releaseEvidence("survivor", SURVIVOR_ID, 1000),
+						releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000),
+						releaseEvidence("duplicate", DUPLICATE_IDS[1], 3000),
+					],
+		payloadProof: payloadProof(),
+		targetRead: read,
+		observedAt: NOW,
+	};
+}
+
+function operationStartedEvent(proposedRecordSha256 = DIGEST) {
+	return {
+		schemaVersion: 1,
+		sequence: 1,
+		previousEventSha256: null,
+		type: "operation-started",
+		recordedAt: NOW,
+		payload: {
+			proposedRecordSha256,
+			confirmationSha256: DIGEST,
+			controllerSha: SHA,
+			deletionOrder: [...DUPLICATE_IDS],
+		},
+	};
+}
+
+function eventFixtures() {
+	return [
+		operationStartedEvent(),
+		{
+			schemaVersion: 1,
+			sequence: 2,
+			previousEventSha256: null,
+			type: "npm-observed",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				inventory: npmInventory("perform-initial"),
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 3,
+			previousEventSha256: null,
+			type: "delete-authority-observed",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				authority: authorityStage("pre-delete-1"),
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 4,
+			previousEventSha256: null,
+			type: "delete-intent",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				authorityEventSha256: DIGEST,
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 5,
+			previousEventSha256: null,
+			type: "delete-outcome",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "confirmed-204",
+				httpStatus: 204,
+				observedAt: NOW,
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 6,
+			previousEventSha256: null,
+			type: "resume-reconciliation",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "absent-ambiguous",
+				releaseEvidence: null,
+				observedAt: NOW,
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 7,
+			previousEventSha256: null,
+			type: "absence-converged",
+			recordedAt: NOW,
+			payload: {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				basis: "confirmed-204",
+				directGet404At: NOW,
+				listAbsentAt: NOW,
+				attempts: 1,
+				completedAt: NOW,
+			},
+		},
+		{
+			schemaVersion: 1,
+			sequence: 8,
+			previousEventSha256: null,
+			type: "final-authority-observed",
+			recordedAt: NOW,
+			payload: { authority: authorityStage("final", null) },
+		},
+	];
+}
+
+function requiredObjectFieldPaths(value, prefix = []) {
+	const paths = [];
+	if (value === null || typeof value !== "object") return paths;
+	if (Array.isArray(value)) {
+		if (value.length > 0)
+			paths.push(...requiredObjectFieldPaths(value[0], [...prefix, 0]));
+		return paths;
+	}
+	for (const [key, child] of Object.entries(value)) {
+		const path = [...prefix, key];
+		paths.push(path);
+		paths.push(...requiredObjectFieldPaths(child, path));
+	}
+	return paths;
+}
+
+function valueAtPath(value, path) {
+	return path.reduce((current, key) => current[key], value);
+}
