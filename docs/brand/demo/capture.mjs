@@ -619,6 +619,8 @@ async function runOwnedAbortablePhase({
 	action,
 	services,
 	abortController,
+	onInterrupt,
+	disposeResult,
 }) {
 	abortController.signal.throwIfAborted();
 	const operation = Promise.resolve().then(action);
@@ -630,13 +632,43 @@ async function runOwnedAbortablePhase({
 			abortController.signal,
 		);
 	} catch (error) {
-		// The operation owns any child it creates and must settle after observing
-		// this signal. Waiting here prevents a rejected race from orphaning work.
+		// The operation owns any resource or child it creates and must settle after
+		// observing this signal. Waiting prevents a rejected race from orphaning work.
 		if (!abortController.signal.aborted) abortController.abort(error);
-		try {
-			await operation;
-		} catch {
-			// Preserve the lifecycle failure that interrupted the phase.
+		const interruption =
+			typeof onInterrupt === "function"
+				? Promise.resolve().then(() => onInterrupt(error))
+				: Promise.resolve();
+		const [operationSettlement, interruptionSettlement] = await Promise.all([
+			operation.then(
+				(value) => ({ status: "fulfilled", value }),
+				(reason) => ({ reason, status: "rejected" }),
+			),
+			interruption.then(
+				(value) => ({ status: "fulfilled", value }),
+				(reason) => ({ reason, status: "rejected" }),
+			),
+		]);
+		const ownershipErrors = [];
+		if (interruptionSettlement.status === "rejected") {
+			ownershipErrors.push(interruptionSettlement.reason);
+		}
+		if (
+			operationSettlement.status === "fulfilled" &&
+			typeof disposeResult === "function"
+		) {
+			try {
+				await disposeResult(operationSettlement.value);
+			} catch (cleanupError) {
+				ownershipErrors.push(cleanupError);
+			}
+		}
+		if (ownershipErrors.length > 0) {
+			throw new AggregateError(
+				[error, ...ownershipErrors],
+				`${errorMessage(error)}; interrupted operation cleanup also failed`,
+				{ cause: error },
+			);
 		}
 		throw error;
 	}
@@ -878,17 +910,22 @@ export async function createBrowserResources({
 	chromium,
 	recordingsDir,
 	viewport,
+	signal,
 }) {
 	let browser;
 	let context;
 	let page;
 	try {
+		signal?.throwIfAborted();
 		browser = await chromium.launch({ headless: true });
+		signal?.throwIfAborted();
 		context = await browser.newContext({
 			viewport,
 			recordVideo: { dir: recordingsDir, size: viewport },
 		});
+		signal?.throwIfAborted();
 		page = await context.newPage();
+		signal?.throwIfAborted();
 		return { browser, context, page, video: page.video() };
 	} catch (error) {
 		const cleanupErrors = [];
@@ -911,45 +948,98 @@ export async function createBrowserResources({
 
 function createBrowserAdapter() {
 	return {
-		async open({ recordingsDir, viewport }) {
+		async open({ recordingsDir, viewport, signal }) {
+			signal?.throwIfAborted();
 			const { chromium } = await import("@playwright/test");
 			const { browser, context, page, video } = await createBrowserResources({
 				chromium,
 				recordingsDir,
 				viewport,
+				signal,
 			});
 			let closePromise;
+			const close = () => {
+				closePromise ??= closeBrowserResources({ context, video, browser });
+				return closePromise;
+			};
+			const runSessionOperation = async (operationSignal, action) => {
+				if (operationSignal?.aborted) {
+					await close();
+					operationSignal.throwIfAborted();
+				}
+				let abortClosePromise;
+				const onAbort = () => {
+					abortClosePromise ??= close();
+					abortClosePromise.catch(() => {});
+				};
+				operationSignal?.addEventListener("abort", onAbort, { once: true });
+				try {
+					const value = await action();
+					if (operationSignal?.aborted) {
+						await (abortClosePromise ?? close());
+						operationSignal.throwIfAborted();
+					}
+					return value;
+				} catch (error) {
+					if (!operationSignal?.aborted) throw error;
+					const cancellation = operationSignal.reason ?? error;
+					try {
+						await (abortClosePromise ?? close());
+					} catch (cleanupError) {
+						throw new AggregateError(
+							[cancellation, cleanupError],
+							`${errorMessage(cancellation)}; browser cleanup also failed`,
+							{ cause: cancellation },
+						);
+					}
+					throw cancellation;
+				} finally {
+					operationSignal?.removeEventListener("abort", onAbort);
+				}
+			};
 			return {
-				async recordStage({ html }) {
-					await page.setContent(html, { waitUntil: "load" });
-					await page.locator("body").waitFor({ state: "visible" });
-					await page.waitForTimeout(1_400);
+				async recordStage({ html, signal: operationSignal }) {
+					return runSessionOperation(operationSignal, async () => {
+						await page.setContent(html, { waitUntil: "load" });
+						await page.locator("body").waitFor({ state: "visible" });
+						await page.waitForTimeout(1_400);
+					});
 				},
-				async runScenario({ url, prompt, tools, answer }) {
-					await openReadyWorkbench(page, url);
-					await fillActiveWorkbenchComposer(page, prompt);
-					await page.getByRole("button", { name: "Send", exact: true }).click();
-					for (const tool of tools) {
-						await page.getByText(tool, { exact: true }).last().waitFor({
+				async runScenario({
+					url,
+					prompt,
+					tools,
+					answer,
+					signal: operationSignal,
+				}) {
+					return runSessionOperation(operationSignal, async () => {
+						await openReadyWorkbench(page, url);
+						await fillActiveWorkbenchComposer(page, prompt);
+						await page
+							.getByRole("button", { name: "Send", exact: true })
+							.click();
+						for (const tool of tools) {
+							await page.getByText(tool, { exact: true }).last().waitFor({
+								state: "visible",
+								timeout: 120_000,
+							});
+						}
+						await page.getByText(answer, { exact: true }).last().waitFor({
 							state: "visible",
 							timeout: 120_000,
 						});
-					}
-					await page.getByText(answer, { exact: true }).last().waitFor({
-						state: "visible",
-						timeout: 120_000,
+						await waitForWorkbenchRunCompletion(page);
+						const threadId = await page.evaluate((title) => {
+							const raw = localStorage.getItem("dawn.workbench.threads");
+							const threads = raw === null ? [] : JSON.parse(raw);
+							const thread = threads.find((entry) => entry?.title === title);
+							return typeof thread?.id === "string" ? thread.id : undefined;
+						}, prompt);
+						if (threadId === undefined) {
+							throw new Error("Workbench did not persist the active thread id");
+						}
+						return { threadId };
 					});
-					await waitForWorkbenchRunCompletion(page);
-					const threadId = await page.evaluate((title) => {
-						const raw = localStorage.getItem("dawn.workbench.threads");
-						const threads = raw === null ? [] : JSON.parse(raw);
-						const thread = threads.find((entry) => entry?.title === title);
-						return typeof thread?.id === "string" ? thread.id : undefined;
-					}, prompt);
-					if (threadId === undefined) {
-						throw new Error("Workbench did not persist the active thread id");
-					}
-					return { threadId };
 				},
 				async reloadAndRestore({
 					workbenchUrl,
@@ -957,22 +1047,24 @@ function createBrowserAdapter() {
 					prompt,
 					tools,
 					answer,
+					signal: operationSignal,
 				}) {
-					return restoreWorkbenchThread(page, {
-						workbenchUrl,
-						threadId,
-						prompt,
-						tools,
-						answer,
-					});
+					return runSessionOperation(operationSignal, () =>
+						restoreWorkbenchThread(page, {
+							workbenchUrl,
+							threadId,
+							prompt,
+							tools,
+							answer,
+						}),
+					);
 				},
-				async recordRun() {
-					await page.waitForTimeout(1_800);
+				async recordRun({ signal: operationSignal } = {}) {
+					return runSessionOperation(operationSignal, () =>
+						page.waitForTimeout(1_800),
+					);
 				},
-				async close() {
-					closePromise ??= closeBrowserResources({ context, video, browser });
-					return closePromise;
-				},
+				close,
 			};
 		},
 	};
@@ -1070,6 +1162,7 @@ export async function captureDemo({
 	let workbenchChild;
 	const managedServices = [];
 	let browserSession;
+	let closeBrowserSession;
 	let browserResult = {};
 	let result;
 	let finalSummary;
@@ -1207,16 +1300,36 @@ export async function captureDemo({
 			throw new Error("Author compositor is missing the canonical Dawn source");
 		}
 		const testHtml = renderStage({ act: "test", testLog: normalizedTestLog });
-		browserSession = await racePhase("open browser", () =>
-			adapters.browser.open({
-				recordingsDir,
-				viewport: { ...VIEWPORT },
-				signal: signalScope.signal,
-			}),
-		);
+		browserSession = await runOwnedAbortablePhase({
+			label: "open browser",
+			services: managedServices,
+			abortController,
+			action: () =>
+				adapters.browser.open({
+					recordingsDir,
+					viewport: { ...VIEWPORT },
+					signal: signalScope.signal,
+				}),
+			disposeResult: (lateSession) => lateSession.close(),
+		});
+		let browserClosePromise;
+		closeBrowserSession = () => {
+			browserClosePromise ??= Promise.resolve().then(() =>
+				browserSession.close(),
+			);
+			return browserClosePromise;
+		};
+		const browserPhase = (label, action) =>
+			runOwnedAbortablePhase({
+				label,
+				action,
+				services: managedServices,
+				abortController,
+				onInterrupt: closeBrowserSession,
+			});
 		const timeline = createVideoTimeline(timing.now);
 		await timeline.scene("author", () =>
-			racePhase("record author", () =>
+			browserPhase("record author", () =>
 				browserSession.recordStage({
 					act: "author",
 					html: authorHtml,
@@ -1225,7 +1338,7 @@ export async function captureDemo({
 			),
 		);
 		await timeline.scene("test", () =>
-			racePhase("record test", () =>
+			browserPhase("record test", () =>
 				browserSession.recordStage({
 					act: "test",
 					html: testHtml,
@@ -1234,7 +1347,7 @@ export async function captureDemo({
 			),
 		);
 		const scenario = await timeline.scene("workbench-run", () =>
-			racePhase("run Workbench scenario", () =>
+			browserPhase("run Workbench scenario", () =>
 				browserSession.runScenario({
 					url: `http://127.0.0.1:${workbenchStart.port}`,
 					prompt: DEMO_PROMPT,
@@ -1245,7 +1358,7 @@ export async function captureDemo({
 			),
 		);
 		await timeline.scene("pre-reload-complete", () =>
-			racePhase("hold completed run", () =>
+			browserPhase("hold completed run", () =>
 				timing.sleep(holdDurations.preReloadMs, {
 					signal: signalScope.signal,
 				}),
@@ -1253,7 +1366,7 @@ export async function captureDemo({
 		);
 		let restoration;
 		await timeline.scene("restoration", async () => {
-			restoration = await racePhase("restore Workbench thread", () =>
+			restoration = await browserPhase("restore Workbench thread", () =>
 				browserSession.reloadAndRestore({
 					workbenchUrl: `http://127.0.0.1:${workbenchStart.port}`,
 					threadId: scenario.threadId,
@@ -1263,17 +1376,17 @@ export async function captureDemo({
 					signal: signalScope.signal,
 				}),
 			);
-			await racePhase("record restored run", () =>
+			await browserPhase("record restored run", () =>
 				browserSession.recordRun({ signal: signalScope.signal }),
 			);
-			await racePhase("hold restored run", () =>
+			await browserPhase("hold restored run", () =>
 				timing.sleep(holdDurations.restorationMs, {
 					signal: signalScope.signal,
 				}),
 			);
 		});
 		await timeline.scene("close", () =>
-			racePhase("record close", () =>
+			browserPhase("record close", () =>
 				browserSession.recordStage({
 					act: "close",
 					html: renderStage({ act: "close" }),
@@ -1296,11 +1409,11 @@ export async function captureDemo({
 			videoTimeline: timeline.manifest(),
 		};
 
-		const completedBrowserSession = browserSession;
-		browserSession = undefined;
-		browserResult = await racePhase("finalize browser recording", () =>
-			completedBrowserSession.close(),
+		browserResult = await browserPhase("finalize browser recording", () =>
+			closeBrowserSession(),
 		);
+		browserSession = undefined;
+		closeBrowserSession = undefined;
 		const summary = {
 			...result,
 			...browserResult,
@@ -1358,7 +1471,7 @@ export async function captureDemo({
 	const cleanupErrors = [];
 	if (browserSession !== undefined) {
 		await cleanupResource(async () => {
-			browserResult = await browserSession.close();
+			browserResult = await closeBrowserSession();
 		}, cleanupErrors);
 	}
 	if (workbenchChild !== undefined) {

@@ -1520,56 +1520,176 @@ test("SIGTERM during Dawn readiness aborts and confirms the startup child before
 	assert.equal(signals.handlers.size, 0);
 });
 
-test("SIGINT during capture triggers normal owned-resource cleanup and restores handlers", async () => {
+test("capture awaits and closes a browser session acquired after cancellation", {
+	timeout: 1_000,
+}, async () => {
 	const fixture = orchestrationFixture();
-	const handlers = new Map();
-	const signalCalls = [];
-	const signalAdapter = {
-		on(signal, handler) {
-			signalCalls.push(["on", signal]);
-			handlers.set(signal, handler);
-		},
-		off(signal, handler) {
-			signalCalls.push(["off", signal]);
-			assert.equal(handlers.get(signal), handler);
-			handlers.delete(signal);
-		},
-		forceExit() {
-			throw new Error("force exit must not run for one signal");
+	const signals = captureSignalFixture();
+	let resolveAcquisition;
+	let captureSettled = false;
+	let closeCount = 0;
+	const lateSession = {
+		async close() {
+			closeCount += 1;
+			fixture.operations.push("close late browser");
 		},
 	};
+	fixture.adapters.browser.open = ({ signal }) => {
+		assert.ok(signal instanceof AbortSignal);
+		queueMicrotask(() => signals.handlers.get("SIGINT")());
+		return new Promise((resolve) => {
+			resolveAcquisition = resolve;
+		});
+	};
+
+	const outcome = captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: true,
+		runIdFactory: () => "run-late-browser",
+		signalAdapter: signals.adapter,
+	})
+		.then(() => ({ status: "fulfilled" }))
+		.catch((error) => ({ error, status: "rejected" }))
+		.finally(() => {
+			captureSettled = true;
+		});
+	await new Promise((resolve) => setImmediate(resolve));
+	const settledBeforeAcquisition = captureSettled;
+	resolveAcquisition(lateSession);
+	const result = await outcome;
+
+	assert.equal(settledBeforeAcquisition, false);
+	assert.equal(result.status, "rejected");
+	assert.match(result.error.message, /cancelled by SIGINT/);
+	assert.equal(closeCount, 1);
+	assert.equal(
+		fixture.operations.indexOf("close late browser") <
+			fixture.operations.indexOf("stop workbench"),
+		true,
+	);
+	assert.equal(signals.handlers.size, 0);
+});
+
+test("capture closes the browser and awaits an aborted session action before service cleanup", {
+	timeout: 1_000,
+}, async () => {
+	const fixture = orchestrationFixture();
+	const signals = captureSignalFixture();
 	const originalOpen = fixture.adapters.browser.open;
+	let rejectAction;
+	let closeCount = 0;
+	let captureSettled = false;
 	fixture.adapters.browser.open = async (options) => {
 		const session = await originalOpen(options);
-		session.runScenario = async () => {
-			handlers.get("SIGINT")();
-			return new Promise(() => {});
+		session.runScenario = ({ signal }) =>
+			new Promise((_, reject) => {
+				rejectAction = () => {
+					fixture.operations.push("session action settled");
+					reject(signal.reason);
+				};
+				signal.addEventListener(
+					"abort",
+					() => fixture.operations.push("session action observed abort"),
+					{ once: true },
+				);
+				queueMicrotask(() => signals.handlers.get("SIGINT")());
+			});
+		session.close = async () => {
+			closeCount += 1;
+			fixture.operations.push("close browser");
 		};
 		return session;
 	};
 
-	await assert.rejects(
-		captureDemo({
-			repoRoot: "/repo",
-			adapters: fixture.adapters,
-			recordOnly: true,
-			runIdFactory: () => "run-signal-cleanup",
-			signalAdapter,
-		}),
-		/cancelled by SIGINT/,
+	const outcome = captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: true,
+		runIdFactory: () => "run-session-action-cancel",
+		signalAdapter: signals.adapter,
+	})
+		.then(() => ({ status: "fulfilled" }))
+		.catch((error) => ({ error, status: "rejected" }))
+		.finally(() => {
+			captureSettled = true;
+		});
+	await new Promise((resolve) => setImmediate(resolve));
+	const settledBeforeAction = captureSettled;
+	const stoppedBeforeAction = fixture.operations.includes("stop workbench");
+	rejectAction();
+	const result = await outcome;
+
+	assert.equal(settledBeforeAction, false);
+	assert.equal(stoppedBeforeAction, false);
+	assert.equal(result.status, "rejected");
+	assert.match(result.error.message, /cancelled by SIGINT/);
+	assert.equal(closeCount, 1);
+	assert.equal(
+		fixture.operations.indexOf("session action settled") <
+			fixture.operations.indexOf("stop workbench"),
+		true,
 	);
-	assert.deepEqual(fixture.operations.slice(-5), [
-		"close browser",
-		"stop workbench",
-		"stop server",
-		"close aimock",
-		`remove ${fixture.workspaceRoot}`,
-	]);
-	assert.deepEqual(signalCalls.slice(-2), [
-		["off", "SIGINT"],
-		["off", "SIGTERM"],
-	]);
-	assert.equal(handlers.size, 0);
+	assert.equal(signals.handlers.size, 0);
+});
+
+test("capture retains and awaits its memoized browser finalization after cancellation", {
+	timeout: 1_000,
+}, async () => {
+	const fixture = orchestrationFixture();
+	const signals = captureSignalFixture();
+	const originalOpen = fixture.adapters.browser.open;
+	let resolveFinalization;
+	let closeCount = 0;
+	let captureSettled = false;
+	fixture.adapters.browser.open = async (options) => {
+		const session = await originalOpen(options);
+		let closePromise;
+		session.close = () => {
+			closeCount += 1;
+			fixture.operations.push("begin browser finalization");
+			queueMicrotask(() => signals.handlers.get("SIGTERM")());
+			closePromise ??= new Promise((resolve) => {
+				resolveFinalization = () => {
+					fixture.operations.push("browser finalization settled");
+					resolve({ videoPath: `${options.recordingsDir}/demo.webm` });
+				};
+			});
+			return closePromise;
+		};
+		return session;
+	};
+
+	const outcome = captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: true,
+		runIdFactory: () => "run-finalization-cancel",
+		signalAdapter: signals.adapter,
+	})
+		.then(() => ({ status: "fulfilled" }))
+		.catch((error) => ({ error, status: "rejected" }))
+		.finally(() => {
+			captureSettled = true;
+		});
+	await new Promise((resolve) => setImmediate(resolve));
+	const settledBeforeFinalization = captureSettled;
+	const stoppedBeforeFinalization =
+		fixture.operations.includes("stop workbench");
+	resolveFinalization();
+	const result = await outcome;
+
+	assert.equal(settledBeforeFinalization, false);
+	assert.equal(stoppedBeforeFinalization, false);
+	assert.equal(result.status, "rejected");
+	assert.match(result.error.message, /cancelled by SIGTERM/);
+	assert.equal(closeCount, 1);
+	assert.equal(
+		fixture.operations.indexOf("browser finalization settled") <
+			fixture.operations.indexOf("stop workbench"),
+		true,
+	);
+	assert.equal(signals.handlers.size, 0);
 });
 
 test("browser cleanup always closes Chromium even when context finalization fails", async () => {
@@ -1629,6 +1749,40 @@ test("browser acquisition closes Chromium when context creation fails", async ()
 		},
 	);
 	assert.deepEqual(calls, ["launch", "new context", "close browser"]);
+});
+
+test("browser acquisition rolls back a late Chromium launch after abort", async () => {
+	const calls = [];
+	const controller = new AbortController();
+	const cancellation = new Error("cancel browser launch");
+	let resolveLaunch;
+	const browser = {
+		async newContext() {
+			calls.push("new context");
+			throw new Error("context must not start after cancellation");
+		},
+		async close() {
+			calls.push("close browser");
+		},
+	};
+	const acquiring = createBrowserResources({
+		chromium: {
+			launch() {
+				calls.push("launch");
+				return new Promise((resolve) => {
+					resolveLaunch = resolve;
+				});
+			},
+		},
+		recordingsDir: "/ignored/raw-recordings",
+		viewport: { width: 1440, height: 810 },
+		signal: controller.signal,
+	});
+	controller.abort(cancellation);
+	resolveLaunch(browser);
+
+	await assert.rejects(acquiring, (error) => error === cancellation);
+	assert.deepEqual(calls, ["launch", "close browser"]);
 });
 
 test("browser acquisition closes context then Chromium when page creation fails", async () => {
