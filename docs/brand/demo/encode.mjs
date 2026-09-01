@@ -284,17 +284,24 @@ export async function publishFixedAssets({
 		backupPath: `${entry.targetPath}.backup-${transactionId}`,
 		preserveBackup: false,
 	}));
+	signal?.throwIfAborted();
+	const existingRecoveryPaths = [];
+	for (const entry of prepared) {
+		if (await pathExists(entry.backupPath, access)) {
+			entry.preserveBackup = true;
+			existingRecoveryPaths.push(entry.backupPath);
+		}
+	}
+	if (existingRecoveryPaths.length > 0) {
+		throw new Error(
+			`media publication recovery backups already exist at: ${existingRecoveryPaths.join(", ")}`,
+		);
+	}
 	const states = [];
 	try {
 		for (const entry of prepared) {
 			signal?.throwIfAborted();
 			await remove(entry.candidatePath);
-			if (await pathExists(entry.backupPath, access)) {
-				entry.preserveBackup = true;
-				throw new Error(
-					`media publication recovery backup already exists at ${entry.backupPath}`,
-				);
-			}
 			await copy(entry.stagedPath, entry.candidatePath);
 		}
 		for (const entry of prepared) {

@@ -805,6 +805,49 @@ test("failed backup restoration preserves and reports the recovery file", async 
 	}
 });
 
+test("publication preflight preserves and reports every existing recovery backup", async () => {
+	const root = await mkdtemp(join(tmpdir(), "dawn-media-preflight-"));
+	try {
+		const transactionId = "run-preflight";
+		const entries = ["manifest", "pointer"].map((name) => ({
+			name,
+			stagedPath: join(root, `${name}.staged`),
+			targetPath: join(root, `${name}.fixed`),
+		}));
+		for (const entry of entries) {
+			await writeFile(entry.stagedPath, `new:${entry.name}`);
+			await writeFile(entry.targetPath, `old:${entry.name}`);
+			await writeFile(
+				`${entry.targetPath}.backup-${transactionId}`,
+				`recovery:${entry.name}`,
+			);
+			await writeFile(
+				`${entry.targetPath}.next-${transactionId}`,
+				`candidate:${entry.name}`,
+			);
+		}
+		let thrown;
+		try {
+			await publishFixedAssets({ entries, transactionId });
+		} catch (error) {
+			thrown = error;
+		}
+		assert.ok(thrown instanceof Error);
+		for (const entry of entries) {
+			const backupPath = `${entry.targetPath}.backup-${transactionId}`;
+			assert.match(thrown.message, new RegExp(backupPath.replaceAll("/", "\\/")));
+			assert.equal(await readFile(entry.targetPath, "utf8"), `old:${entry.name}`);
+			assert.equal(await readFile(backupPath, "utf8"), `recovery:${entry.name}`);
+			assert.equal(
+				await readFile(`${entry.targetPath}.next-${transactionId}`, "utf8"),
+				`candidate:${entry.name}`,
+			);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("encoding failures never mix fixed assets or the latest pointer across runs", async () => {
 	const root = await mkdtemp(join(tmpdir(), "dawn-media-encode-"));
 	try {
