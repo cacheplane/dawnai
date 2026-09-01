@@ -1,5 +1,6 @@
 import { isDeepStrictEqual, types as utilTypes } from "node:util";
 
+import { assertEvidenceEqualsProposal } from "./duplicate-draft-consolidation-evidence.mjs";
 import {
 	canonicalConsolidationEnvelopeBytes,
 	canonicalEventEnvelope,
@@ -214,6 +215,7 @@ export function createFinalConsolidationReceipt(input) {
 	if (!isDeepStrictEqual(finalAuthority, state.lastAuthority)) {
 		throw new Error("Final authority differs from the journal terminal event");
 	}
+	assertFinalAuthorityMatchesProposal(finalAuthority, proposedEnvelope.record);
 	const completedAt = canonicalTimestamp(
 		dataValue(value, "completedAt", "receipt completion timestamp"),
 		"receipt completion timestamp",
@@ -289,7 +291,17 @@ function applyEvent(state, event, eventSha256) {
 		throw new Error("Final authority must be the journal's terminal event");
 	}
 	if (event.type === "npm-observed") {
-		assertCurrentAttempt(state, event.payload, "npm observation");
+		const expectedAttempt =
+			state.phase === "resume-present"
+				? state.attemptNumber + 1
+				: state.attemptNumber;
+		assertCurrentTarget(state, event.payload, "npm observation");
+		if (event.payload.attemptNumber !== expectedAttempt) {
+			throw new Error("npm observation is not for the next legal attempt");
+		}
+		if (expectedAttempt > MAXIMUM_DELETE_ATTEMPTS) {
+			throw new Error("Delete attempts are exhausted at the reviewed maximum");
+		}
 		if (
 			!["operation-started", "target-converged", "resume-present"].includes(
 				state.phase,
@@ -305,6 +317,7 @@ function applyEvent(state, event, eventSha256) {
 			);
 		}
 		state.phase = "npm-observed";
+		state.attemptNumber = expectedAttempt;
 		return;
 	}
 	if (event.type === "delete-authority-observed") {
@@ -450,6 +463,58 @@ function applyEvent(state, event, eventSha256) {
 		return;
 	}
 	throw new Error(`Illegal journal event ${event.type}`);
+}
+
+function assertFinalAuthorityMatchesProposal(authority, proposal) {
+	if (
+		authority.stage !== "final" ||
+		!isDeepStrictEqual(authority.controller, proposal.controller)
+	) {
+		throw new Error("Final authority controller differs from the proposal");
+	}
+	const stableTag = ({ observedAt: _observedAt, ...value }) => value;
+	const stableWorkflow = ({ observedAt: _observedAt, ...value }) => value;
+	if (
+		!isDeepStrictEqual(
+			stableTag(authority.annotatedTag),
+			stableTag(proposal.annotatedTag),
+		) ||
+		!isDeepStrictEqual(
+			stableWorkflow(authority.workflowAuthority),
+			stableWorkflow(proposal.workflowAuthority),
+		)
+	) {
+		throw new Error(
+			"Final authority tag or workflow differs from the proposal",
+		);
+	}
+	if (
+		authority.releases.length !== 1 ||
+		authority.releases[0].id !== proposal.roles.survivor ||
+		proposal.roles.duplicates.some((id) =>
+			authority.releases.some((release) => release.id === id),
+		)
+	) {
+		throw new Error("Final authority does not contain only the survivor");
+	}
+	const proposedSurvivor = proposal.releases.find(
+		({ id }) => id === proposal.roles.survivor,
+	);
+	if (proposedSurvivor === undefined) {
+		throw new Error("Proposal survivor evidence is missing");
+	}
+	assertEvidenceEqualsProposal(authority.releases[0], proposedSurvivor);
+	if (!isDeepStrictEqual(authority.payloadProof, proposal.payloadProof)) {
+		throw new Error("Final authority payload proof differs from the proposal");
+	}
+	if (
+		authority.npmInventory.stage !== "final" ||
+		authority.npmInventory.packages.some(
+			(entry) => entry.version !== proposal.candidate.version,
+		)
+	) {
+		throw new Error("Final authority npm evidence differs from the candidate");
+	}
 }
 
 function assertCurrentAttempt(state, payload, label) {

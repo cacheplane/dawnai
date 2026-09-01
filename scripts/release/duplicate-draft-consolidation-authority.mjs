@@ -22,6 +22,10 @@ import {
 	createConsolidationEnvelope,
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 } from "./duplicate-draft-consolidation-schema.mjs";
+import {
+	claimConsolidationTransitionFacade,
+	invokeConsolidationTransition,
+} from "./duplicate-draft-consolidation-transition.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
 import { parseReleaseMarker } from "./metadata.mjs";
 
@@ -330,6 +334,7 @@ export async function captureConsolidationAuthority(input) {
 		proposal,
 		targetReleaseId: stageRule.targetReleaseId,
 		adapterEpoch,
+		transitionCapability: context.transitionCapability,
 	});
 	const result = { authority };
 	Object.defineProperty(result, "networkEpoch", {
@@ -375,9 +380,9 @@ function normalizeCaptureInput(input) {
 	const target = dataValue(value, "targetReleaseId", "authority target");
 	const targetReleaseId =
 		target === null ? null : canonicalId(target, "authority target");
-	const adapters = bindAdapterFacade(
-		dataValue(value, "adapters", "consolidation adapters"),
-	);
+	const rawAdapters = dataValue(value, "adapters", "consolidation adapters");
+	const adapters = bindAdapterFacade(rawAdapters);
+	const transitionCapability = claimConsolidationTransitionFacade(rawAdapters);
 	return {
 		stage,
 		proposal: snapshotPlain(
@@ -386,6 +391,7 @@ function normalizeCaptureInput(input) {
 		),
 		targetReleaseId,
 		adapters,
+		transitionCapability,
 	};
 }
 
@@ -911,6 +917,7 @@ function createNetworkEpoch({
 	proposal,
 	targetReleaseId,
 	adapterEpoch,
+	transitionCapability,
 }) {
 	const authoritySha256 = canonicalRecordSha256(authority);
 	const proposalSha256 = canonicalRecordSha256(proposal);
@@ -930,6 +937,7 @@ function createNetworkEpoch({
 					[
 						"authority",
 						"proposal",
+						"confirmation",
 						"targetReleaseId",
 						"intentPath",
 						"currentJournal",
@@ -946,6 +954,16 @@ function createNetworkEpoch({
 				const consumedProposal = normalizeProposal(
 					dataValue(value, "proposal", "epoch proposal"),
 				);
+				const proposedEnvelope = createConsolidationEnvelope(
+					"proposed",
+					consumedProposal,
+				);
+				const confirmation = dataString(
+					value,
+					"confirmation",
+					"operator confirmation",
+				);
+				assertExactIncidentConfirmation(confirmation, proposedEnvelope);
 				const consumedTarget = canonicalId(
 					dataValue(value, "targetReleaseId", "epoch target"),
 					"epoch target",
@@ -972,25 +990,19 @@ function createNetworkEpoch({
 				const expectedCurrent = parseConsolidationJournal(
 					dataValue(value, "currentJournal", "current journal"),
 				);
-				const expectedConfirmationSha256 = canonicalRecordSha256(
-					consumedProposal.confirmation,
-				);
+				const expectedConfirmationSha256 = createHash("sha256")
+					.update(confirmation, "utf8")
+					.digest("hex");
 				const expectedCurrentState = deriveConsolidationState(expectedCurrent);
 				if (
 					expectedCurrent.record.proposedRecordSha256 !== proposalSha256 ||
 					expectedCurrent.record.confirmationSha256 !==
 						expectedConfirmationSha256 ||
 					expectedCurrentState.controllerSha !==
-						consumedAuthority.controller.headSha ||
-					expectedCurrentState.phase !== "delete-authority-observed" ||
-					expectedCurrentState.currentTargetReleaseId !== consumedTarget ||
-					!isDeepStrictEqual(
-						expectedCurrentState.lastAuthority,
-						consumedAuthority,
-					)
+						consumedAuthority.controller.headSha
 				) {
 					throw new Error(
-						"Current journal does not bind proposal confirmation, controller, and exact delete authority",
+						"Current journal does not bind proposal confirmation and controller",
 					);
 				}
 				let currentBytes;
@@ -1015,6 +1027,31 @@ function createNetworkEpoch({
 				) {
 					throw new Error(
 						"Current journal file differs from the authenticated expected history",
+					);
+				}
+				const journalHeadPath = `${intentPath.slice(0, -"journal.json".length)}journal.head.json`;
+				let currentHeadBytes;
+				try {
+					currentHeadBytes = await reconcileJournalHead({
+						journalHeadPath,
+						journalPath: intentPath,
+						journal: currentEnvelope,
+					});
+				} catch {
+					throw new Error(
+						"Durable journal head anchor is missing, ahead, divergent, or unsafe; do not DELETE",
+					);
+				}
+				if (
+					expectedCurrentState.phase !== "delete-authority-observed" ||
+					expectedCurrentState.currentTargetReleaseId !== consumedTarget ||
+					!isDeepStrictEqual(
+						expectedCurrentState.lastAuthority,
+						consumedAuthority,
+					)
+				) {
+					throw new Error(
+						"Current journal is not the exact legal delete-authority predecessor",
 					);
 				}
 				const beforeWriteTimestamp = readTrustedEpochClock(adapterEpoch);
@@ -1066,6 +1103,25 @@ function createNetworkEpoch({
 							"Committed journal envelope differs from the legal intent",
 						);
 					}
+					const committedHeadBytes = canonicalJournalHeadBytes(
+						intentPath,
+						intentEnvelope,
+					);
+					await writePrivateEnvelope(
+						journalHeadPath,
+						committedHeadBytes,
+						undefined,
+						currentHeadBytes,
+					);
+					const committedHead = await readPrivateEnvelope(
+						journalHeadPath,
+						16 * 1024,
+					);
+					if (!committedHead.equals(committedHeadBytes)) {
+						throw new Error(
+							"Committed journal head differs from the legal intent",
+						);
+					}
 					const completedTimestamp = readTrustedEpochClock(adapterEpoch);
 					assertFreshWriterAuthority(
 						consumedAuthority,
@@ -1073,13 +1129,13 @@ function createNetworkEpoch({
 						completedTimestamp,
 					);
 					adapterEpoch.validate();
-					return adapterEpoch.commitJournalTransition({
+					return invokeConsolidationTransition(transitionCapability, {
 						targetReleaseId: consumedTarget,
+						authority: consumedAuthority,
+						proposedEnvelope,
+						confirmation,
+						predecessorJournal: currentBytes,
 						committedJournal,
-						authorityExpiresAt: new Date(
-							Date.parse(consumedAuthority.npmInventory.completedAt) +
-								MAXIMUM_WRITER_AGE_MS,
-						).toISOString(),
 					});
 				} catch {
 					throw new Error(
@@ -1114,6 +1170,123 @@ function readTrustedEpochClock(adapterEpoch) {
 	} catch {
 		throw new TypeError("Trusted adapter clock failed closed");
 	}
+}
+
+async function reconcileJournalHead({ journalHeadPath, journalPath, journal }) {
+	let headBytes;
+	try {
+		headBytes = await readPrivateEnvelope(journalHeadPath, 16 * 1024);
+	} catch (error) {
+		if (!hasErrorCode(error, "ENOENT")) throw error;
+		await writePrivateEnvelope(
+			journalHeadPath,
+			canonicalJournalHeadBytes(journalPath, journal),
+			undefined,
+			null,
+		);
+		return readPrivateEnvelope(journalHeadPath, 16 * 1024);
+	}
+	const head = parseJournalHead(headBytes, journalPath);
+	if (journalHeadMatches(head, journal)) return headBytes;
+	if (head.sequence + 1 !== journal.record.events.length) {
+		throw new Error("Journal and durable head have divergent sequence lineage");
+	}
+	const predecessor = createConsolidationEnvelope("journal", {
+		...journal.record,
+		events: journal.record.events.slice(0, -1),
+		updatedAt: journal.record.events.at(-2).event.recordedAt,
+	});
+	parseConsolidationJournal(predecessor);
+	if (!journalHeadMatches(head, predecessor)) {
+		throw new Error(
+			"Journal is not one legal append ahead of its durable head",
+		);
+	}
+	await writePrivateEnvelope(
+		journalHeadPath,
+		canonicalJournalHeadBytes(journalPath, journal),
+		undefined,
+		headBytes,
+	);
+	return readPrivateEnvelope(journalHeadPath, 16 * 1024);
+}
+
+function canonicalJournalHeadBytes(journalPath, journal) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			journalPath,
+			repository: journal.record.repository,
+			proposedRecordSha256: journal.record.proposedRecordSha256,
+			journalRecordSha256: journal.recordSha256,
+			lastEventSha256: journal.record.events.at(-1).eventSha256,
+			sequence: journal.record.events.length,
+			updatedAt: journal.record.updatedAt,
+		})}\n`,
+		"utf8",
+	);
+}
+
+function parseJournalHead(bytes, expectedJournalPath) {
+	let value;
+	try {
+		value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+	} catch {
+		throw new Error("Journal head is not canonical UTF-8 JSON");
+	}
+	assertExactKeys(
+		value,
+		[
+			"schemaVersion",
+			"journalPath",
+			"repository",
+			"proposedRecordSha256",
+			"journalRecordSha256",
+			"lastEventSha256",
+			"sequence",
+			"updatedAt",
+		],
+		"journal head",
+	);
+	if (
+		value.schemaVersion !== 1 ||
+		value.journalPath !== expectedJournalPath ||
+		!Number.isSafeInteger(value.sequence) ||
+		value.sequence < 1 ||
+		!/^[0-9a-f]{64}$/u.test(value.proposedRecordSha256) ||
+		!/^[0-9a-f]{64}$/u.test(value.journalRecordSha256) ||
+		!/^[0-9a-f]{64}$/u.test(value.lastEventSha256) ||
+		canonicalTimestamp(value.updatedAt, "journal head timestamp") !==
+			value.updatedAt ||
+		!Buffer.from(`${JSON.stringify(value)}\n`, "utf8").equals(bytes)
+	) {
+		throw new Error("Journal head fields or canonical bytes are invalid");
+	}
+	return value;
+}
+
+function journalHeadMatches(head, journal) {
+	return (
+		head.journalRecordSha256 === journal.recordSha256 &&
+		head.proposedRecordSha256 === journal.record.proposedRecordSha256 &&
+		head.lastEventSha256 === journal.record.events.at(-1).eventSha256 &&
+		head.sequence === journal.record.events.length &&
+		head.updatedAt === journal.record.updatedAt &&
+		isDeepStrictEqual(head.repository, journal.record.repository)
+	);
+}
+
+function hasErrorCode(error, code) {
+	if (error !== null && typeof error === "object") {
+		if (error.code === code) return true;
+		if (hasErrorCode(error.cause, code)) return true;
+		if (
+			Array.isArray(error.errors) &&
+			error.errors.some((entry) => hasErrorCode(entry, code))
+		)
+			return true;
+	}
+	return false;
 }
 
 function exactInput(value, expectedKeys, label) {
@@ -1326,7 +1499,7 @@ function bindTerminalCapability(value) {
 function bindSealedEpoch(value) {
 	assertHiddenCapability(
 		value,
-		["now", "journalPath", "validate", "commitJournalTransition", "toJSON"],
+		["now", "journalPath", "validate", "toJSON"],
 		"sealed adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "sealed adapter clock");
@@ -1335,17 +1508,10 @@ function bindSealedEpoch(value) {
 		"validate",
 		"sealed epoch validator",
 	);
-	const commitJournalTransition = hiddenDataFunction(
-		value,
-		"commitJournalTransition",
-		"committed journal transition",
-	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "sealed journal path"),
 		validate: () => validate.call(value),
-		commitJournalTransition: (input) =>
-			commitJournalTransition.call(value, input),
 	});
 }
 
@@ -1591,6 +1757,26 @@ function canonicalTimestamp(value, label) {
 		throw new TypeError(`${label} must be a canonical timestamp`);
 	}
 	return value;
+}
+
+function assertExactIncidentConfirmation(value, proposedEnvelope) {
+	if (
+		typeof value !== "string" ||
+		Buffer.byteLength(value, "utf8") > 512 ||
+		[...value].some((character) => {
+			const codePoint = character.codePointAt(0);
+			return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+		})
+	) {
+		throw new TypeError(
+			"Operator confirmation must be an exact control-free string",
+		);
+	}
+	const { candidate, roles } = proposedEnvelope.record;
+	const expected = `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`;
+	if (value !== expected) {
+		throw new Error("Operator confirmation does not exactly bind the proposal");
+	}
 }
 
 function assertTimestampOrder(earlier, later, label) {

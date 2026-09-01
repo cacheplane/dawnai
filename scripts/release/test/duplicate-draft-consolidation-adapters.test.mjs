@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { readFile, rm } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -9,9 +7,10 @@ import {
 	createExactDuplicateDeleteEffect,
 } from "../duplicate-draft-consolidation-adapters.mjs";
 import {
-	readPrivateEnvelope,
-	writePrivateEnvelope,
-} from "../duplicate-draft-consolidation-files.mjs";
+	claimConsolidationTransitionFacade,
+	invokeConsolidationTransition,
+} from "../duplicate-draft-consolidation-transition.mjs";
+import { createAuthorizedDeleteHarness } from "./support/duplicate-draft-consolidation-authorized-delete.mjs";
 
 const REPOSITORY = "cacheplane/dawnai";
 const API_ORIGIN = "https://api.github.com";
@@ -197,9 +196,49 @@ test("terminal authority exposes no publicly callable permit issuer", async () =
 	const epoch = terminal.seal();
 	assert.equal(Object.hasOwn(epoch, "issueDeletePermit"), false);
 	assert.equal(Object.hasOwn(epoch, "mintPermit"), false);
-	assert.equal(
-		Reflect.ownKeys(epoch).some((key) => /permit|mint/iu.test(String(key))),
-		false,
+	assert.deepEqual(Reflect.ownKeys(epoch), [
+		"now",
+		"journalPath",
+		"validate",
+		"toJSON",
+	]);
+	await assert.rejects(
+		adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATES[0],
+			permit: Object.freeze({}),
+		}),
+		/permit|guard|one-use|valid/iu,
+	);
+	assert.equal(fetches, 0);
+});
+
+test("the internal handshake never reveals a raw arming callback", async () => {
+	let fetches = 0;
+	const adapters = await createTerminalAdapters({
+		fetchImpl: async () => {
+			fetches += 1;
+			return new Response(null, { status: 204 });
+		},
+	});
+	const terminal = adapters.authorityEpoch.beginTerminalRead({
+		releaseId: DUPLICATES[0],
+	});
+	await terminal.github.getRelease({ releaseId: DUPLICATES[0] });
+	await terminal.github.listReleaseAssets({ releaseId: DUPLICATES[0] });
+	terminal.seal();
+
+	const capability = claimConsolidationTransitionFacade(adapters);
+	assert.equal(typeof capability, "object");
+	assert.equal(Object.getPrototypeOf(capability), null);
+	assert.equal(Object.isFrozen(capability), true);
+	assert.deepEqual(Reflect.ownKeys(capability), []);
+	assert.throws(
+		() => invokeConsolidationTransition(capability, {}),
+		/transition|target|option|invalid/iu,
+	);
+	assert.throws(
+		() => invokeConsolidationTransition(capability, {}),
+		/absent|consumed|untrusted/iu,
 	);
 	await assert.rejects(
 		adapters.writer.deleteDuplicate({
@@ -1661,7 +1700,7 @@ test("delete boundary rejects every non-approved construction or call before fet
 	});
 	await assert.rejects(
 		() => writer.deleteDuplicate({ releaseId: "379991871" }),
-		/survivor|approved duplicate/iu,
+		/survivor|approved duplicate|permit/iu,
 	);
 	assert.equal(fetchCalls.length, 0);
 	for (const releaseId of [
@@ -1674,7 +1713,7 @@ test("delete boundary rejects every non-approved construction or call before fet
 	]) {
 		await assert.rejects(
 			() => writer.deleteDuplicate({ releaseId }),
-			/canonical|approved|duplicate|invalid/iu,
+			/canonical|approved|duplicate|invalid|permit/iu,
 		);
 		assert.equal(fetchCalls.length, 0);
 	}
@@ -1748,7 +1787,7 @@ test("delete classifies received 404 and cancels any response body", async () =>
 			},
 		}),
 	});
-	assert.deepEqual(await writer.deleteDuplicate({ releaseId: DUPLICATES[1] }), {
+	assert.deepEqual(await writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), {
 		classification: "response-404-ambiguous",
 		httpStatus: 404,
 		observedAt: NOW,
@@ -1851,7 +1890,7 @@ test("delete classifies caller abort after send and transport loss as ambiguous"
 			throw new Error(`${TOKEN} socket lost`);
 		},
 	});
-	const outcome = await lost.deleteDuplicate({ releaseId: DUPLICATES[1] });
+	const outcome = await lost.deleteDuplicate({ releaseId: DUPLICATES[0] });
 	assert.deepEqual(outcome, {
 		classification: "transport-ambiguous",
 		httpStatus: null,
@@ -2025,44 +2064,17 @@ async function createGuardedWriter(overrides = {}) {
 	const fetchImpl =
 		overrides.fetchImpl ?? (async () => new Response(null, { status: 204 }));
 	const now = overrides.now ?? (() => NOW);
-	const root = await mkdtemp(
-		path.join(await realpath(os.tmpdir()), "dawn-adapter-delete-"),
-	);
-	TEMPORARY_ROOTS.push(root);
-	const journalPath = path.join(
-		root,
-		".dawn",
-		"release",
-		"duplicate-draft-consolidation.journal.json",
-	);
-	await mkdir(path.dirname(journalPath), { recursive: true });
 	return Object.freeze({
 		async deleteDuplicate(input) {
-			const adapters = await createDuplicateDraftConsolidationAdapters({
-				cwd: root,
-				token: TOKEN,
-				environment: { HOME: "/home/release", PATH: "/tools" },
-				dependencies: {
-					fetchImpl,
-					run: commandRunner([]),
-					now,
-					createGitHubReader: () => githubBoundary(),
-				},
+			const harness = await createAuthorizedDeleteHarness({
+				fetchImpl,
+				deleteNow: now,
 			});
-			const terminal = adapters.authorityEpoch.beginTerminalRead({
-				releaseId: input.releaseId,
+			TEMPORARY_ROOTS.push(harness.root);
+			return harness.adapters.writer.deleteDuplicate({
+				...input,
+				permit: harness.permit,
 			});
-			await terminal.github.getRelease({ releaseId: input.releaseId });
-			await terminal.github.listReleaseAssets({ releaseId: input.releaseId });
-			const epoch = terminal.seal();
-			await writePrivateEnvelope(journalPath, Buffer.from("test journal\n"));
-			const committedJournal = await readPrivateEnvelope(journalPath, 1024);
-			const permit = epoch.commitJournalTransition({
-				targetReleaseId: input.releaseId,
-				committedJournal,
-				authorityExpiresAt: new Date(Date.parse(NOW) + 120_000).toISOString(),
-			});
-			return adapters.writer.deleteDuplicate({ ...input, permit });
 		},
 	});
 }

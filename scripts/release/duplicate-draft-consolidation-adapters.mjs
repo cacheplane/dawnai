@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { types as utilTypes } from "node:util";
+import { isDeepStrictEqual, types as utilTypes } from "node:util";
 
 import {
 	normalizeAdapterEnvelope,
@@ -10,8 +11,19 @@ import { createGitHubReader as defaultCreateGitHubReader } from "./adapters/gith
 import { createHttpGet } from "./adapters/http.mjs";
 import { createNpmReader as defaultCreateNpmReader } from "./adapters/npm.mjs";
 import { createCliAttestationVerifier as defaultCreateCliAttestationVerifier } from "./artifact-store.mjs";
+import { assertEvidenceEqualsProposal } from "./duplicate-draft-consolidation-evidence.mjs";
 import { readPrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
-import { DUPLICATE_DRAFT_CONSOLIDATION_LIMITS } from "./duplicate-draft-consolidation-schema.mjs";
+import {
+	appendJournalEvent,
+	deriveConsolidationState,
+	parseConsolidationJournal,
+} from "./duplicate-draft-consolidation-journal.mjs";
+import {
+	canonicalConsolidationEnvelopeBytes,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
+	parseConsolidationEnvelope,
+} from "./duplicate-draft-consolidation-schema.mjs";
+import { registerConsolidationTransitionFacade } from "./duplicate-draft-consolidation-transition.mjs";
 import { createOwnerPreflightAdapters as defaultCreateOwnerPreflightAdapters } from "./preflight-owner-adapters.mjs";
 import { createReleasePreparationRunner as defaultCreateReleasePreparationRunner } from "./process-runner.mjs";
 
@@ -289,7 +301,12 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 		writable: false,
 		configurable: false,
 	});
-	return Object.freeze(adapters);
+	Object.freeze(adapters);
+	registerConsolidationTransitionFacade(
+		adapters,
+		networkGuard.armTask6Transition,
+	);
+	return adapters;
 }
 
 export function createExactDuplicateDeleteEffect(options) {
@@ -702,7 +719,7 @@ function createNetworkGuard({ cwd, now }) {
 		}
 	};
 
-	const sealedEpoch = (session, { deleteTransition }) => {
+	const sealedEpoch = (session) => {
 		const capability = {};
 		const descriptors = {
 			now: hiddenMethod(trustedNow),
@@ -714,76 +731,6 @@ function createNetworkGuard({ cwd, now }) {
 				);
 			}),
 		};
-		if (deleteTransition) {
-			descriptors.commitJournalTransition = hiddenMethod((input) => {
-				assertSealed(session);
-				if (
-					session.releaseId === null ||
-					!DUPLICATE_IDS.includes(session.releaseId) ||
-					session.completedSteps !== 2 ||
-					session.inFlight
-				) {
-					throw new Error(
-						"Delete permit requires a completed approved terminal target read",
-					);
-				}
-				if (boundWriterIdentity === null) {
-					throw new Error("Adapter network guard has no bound delete writer");
-				}
-				const binding = exactDataOptions(
-					input,
-					new Set([
-						"targetReleaseId",
-						"committedJournal",
-						"authorityExpiresAt",
-					]),
-					"Committed journal transition",
-				);
-				const targetReleaseId = canonicalStringId(
-					required(binding, "targetReleaseId", "Delete transition target"),
-				);
-				if (targetReleaseId !== session.releaseId) {
-					session.invalidated = true;
-					state = "invalidated";
-					throw new Error(
-						"Delete permit target differs from the completed terminal session",
-					);
-				}
-				const committedJournal = required(
-					binding,
-					"committedJournal",
-					"Committed private journal read",
-				);
-				assertAuthenticatedPrivateRead(committedJournal);
-				const authorityExpiresAt = canonicalTimestamp(
-					required(binding, "authorityExpiresAt", "Delete authority expiry"),
-				);
-				const permit = {};
-				Object.defineProperty(permit, "toJSON", {
-					...hiddenMethod(() => {
-						throw new TypeError(
-							"Delete permit capability cannot be serialized",
-						);
-					}),
-				});
-				Object.freeze(permit);
-				permitRecords.set(permit, {
-					session,
-					targetReleaseId,
-					used: false,
-					committedJournal,
-					authorityExpiresAt,
-				});
-				DELETE_PERMIT_BINDINGS.set(permit, {
-					writerIdentity: boundWriterIdentity,
-					releaseId: targetReleaseId,
-					armed: false,
-					used: false,
-				});
-				state = "permitted";
-				return permit;
-			});
-		}
 		Object.defineProperties(capability, descriptors);
 		return Object.freeze(capability);
 	};
@@ -909,7 +856,7 @@ function createNetworkGuard({ cwd, now }) {
 				}
 				state = "sealed";
 				session.sealedSequence = sequence;
-				return sealedEpoch(session, { deleteTransition: true });
+				return sealedEpoch(session);
 			}),
 			abort: hiddenMethod(() => {
 				session.invalidated = true;
@@ -937,6 +884,152 @@ function createNetworkGuard({ cwd, now }) {
 				);
 			}
 			boundWriterIdentity = identity;
+		},
+		armTask6Transition(input) {
+			try {
+				const session = terminal;
+				if (session === null) {
+					throw new Error("Task6 transition has no terminal session");
+				}
+				assertSealed(session);
+				if (
+					session.releaseId === null ||
+					!DUPLICATE_IDS.includes(session.releaseId) ||
+					session.completedSteps !== 2 ||
+					session.inFlight ||
+					boundWriterIdentity === null
+				) {
+					throw new Error(
+						"Task6 transition requires a completed approved terminal target read",
+					);
+				}
+				const binding = exactDataOptions(
+					input,
+					new Set([
+						"targetReleaseId",
+						"authority",
+						"proposedEnvelope",
+						"confirmation",
+						"predecessorJournal",
+						"committedJournal",
+					]),
+					"Task6 journal transition",
+				);
+				const targetReleaseId = canonicalStringId(
+					required(binding, "targetReleaseId", "Task6 transition target"),
+				);
+				if (targetReleaseId !== session.releaseId) {
+					throw new Error(
+						"Task6 transition target differs from the terminal session",
+					);
+				}
+				const predecessorJournal = required(
+					binding,
+					"predecessorJournal",
+					"Task6 predecessor journal",
+				);
+				const committedJournal = required(
+					binding,
+					"committedJournal",
+					"Task6 committed journal",
+				);
+				assertAuthenticatedPrivateRead(predecessorJournal);
+				assertAuthenticatedPrivateRead(committedJournal);
+				const predecessorEnvelope =
+					parseConsolidationJournal(predecessorJournal);
+				const committedEnvelope = parseConsolidationJournal(committedJournal);
+				const proposedEnvelope = parseConsolidationEnvelope(
+					"proposed",
+					canonicalConsolidationEnvelopeBytes(
+						"proposed",
+						required(binding, "proposedEnvelope", "Task6 proposed envelope"),
+					),
+				);
+				const confirmation = required(
+					binding,
+					"confirmation",
+					"Task6 confirmation",
+				);
+				assertExactIncidentConfirmation(confirmation, proposedEnvelope);
+				const confirmationSha256 = createHash("sha256")
+					.update(confirmation, "utf8")
+					.digest("hex");
+				const predecessorState = deriveConsolidationState(predecessorEnvelope);
+				const authority = required(binding, "authority", "Task6 authority");
+				assertTransitionAuthorityMatchesProposal(
+					authority,
+					proposedEnvelope.record,
+					targetReleaseId,
+				);
+				if (
+					predecessorEnvelope.record.proposedRecordSha256 !==
+						proposedEnvelope.recordSha256 ||
+					predecessorEnvelope.record.confirmationSha256 !==
+						confirmationSha256 ||
+					predecessorState.controllerSha !==
+						proposedEnvelope.record.controller.headSha ||
+					predecessorState.phase !== "delete-authority-observed" ||
+					predecessorState.currentTargetReleaseId !== targetReleaseId ||
+					!isDeepStrictEqual(predecessorState.lastAuthority, authority)
+				) {
+					throw new Error(
+						"Task6 transition predecessor does not bind confirmation, controller, target, and authority",
+					);
+				}
+				const expectedCommitted = appendJournalEvent(
+					predecessorEnvelope,
+					"delete-intent",
+					{
+						targetReleaseId,
+						attemptNumber: predecessorState.attemptNumber,
+						authorityEventSha256: predecessorState.lastEventSha256,
+					},
+					committedEnvelope.record.updatedAt,
+				);
+				if (
+					!committedJournal.equals(
+						canonicalConsolidationEnvelopeBytes("journal", expectedCommitted),
+					) ||
+					!isDeepStrictEqual(committedEnvelope, expectedCommitted)
+				) {
+					throw new Error(
+						"Task6 committed journal is not exactly one legal intent append",
+					);
+				}
+				const authorityExpiresAt = new Date(
+					Date.parse(authority.npmInventory.completedAt) + 120_000,
+				).toISOString();
+				if (trustedNow() > authorityExpiresAt) {
+					throw new Error("Task6 authority expired before permit issuance");
+				}
+				const permit = {};
+				Object.defineProperty(permit, "toJSON", {
+					...hiddenMethod(() => {
+						throw new TypeError(
+							"Delete permit capability cannot be serialized",
+						);
+					}),
+				});
+				Object.freeze(permit);
+				permitRecords.set(permit, {
+					session,
+					targetReleaseId,
+					used: false,
+					committedJournal,
+					authorityExpiresAt,
+				});
+				DELETE_PERMIT_BINDINGS.set(permit, {
+					writerIdentity: boundWriterIdentity,
+					releaseId: targetReleaseId,
+					armed: false,
+					used: false,
+				});
+				state = "permitted";
+				return permit;
+			} catch (error) {
+				invalidate();
+				throw error;
+			}
 		},
 		runDelete: async (permit, releaseId, operation) => {
 			const record =
@@ -1039,7 +1132,7 @@ function createNetworkGuard({ cwd, now }) {
 						sealedSequence: sequence,
 					};
 					state = "sealed";
-					return sealedEpoch(terminal, { deleteTransition: false });
+					return sealedEpoch(terminal);
 				}),
 				toJSON: hiddenMethod(() => {
 					throw new TypeError(
@@ -2177,6 +2270,65 @@ function hasControlCharacters(value) {
 		const codePoint = character.codePointAt(0);
 		return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
 	});
+}
+
+function assertExactIncidentConfirmation(value, proposedEnvelope) {
+	if (typeof value !== "string" || hasControlCharacters(value)) {
+		throw new TypeError(
+			"Task6 confirmation must be an exact control-free string",
+		);
+	}
+	const { candidate, roles } = proposedEnvelope.record;
+	const expected = `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`;
+	if (value !== expected) {
+		throw new Error("Task6 confirmation does not exactly bind the proposal");
+	}
+}
+
+function assertTransitionAuthorityMatchesProposal(
+	authority,
+	proposal,
+	targetReleaseId,
+) {
+	const expectedStage =
+		targetReleaseId === DUPLICATE_IDS[0] ? "pre-delete-1" : "pre-delete-2";
+	const stableTag = ({ observedAt: _observedAt, ...value }) => value;
+	const stableWorkflow = ({ observedAt: _observedAt, ...value }) => value;
+	if (
+		authority.stage !== expectedStage ||
+		!isDeepStrictEqual(authority.controller, proposal.controller) ||
+		!isDeepStrictEqual(
+			stableTag(authority.annotatedTag),
+			stableTag(proposal.annotatedTag),
+		) ||
+		!isDeepStrictEqual(
+			stableWorkflow(authority.workflowAuthority),
+			stableWorkflow(proposal.workflowAuthority),
+		) ||
+		!isDeepStrictEqual(authority.payloadProof, proposal.payloadProof)
+	) {
+		throw new Error(
+			"Task6 authority controller, tag, workflow, or payload differs from the proposal",
+		);
+	}
+	for (const release of authority.releases) {
+		const proposed = proposal.releases.find(({ id }) => id === release.id);
+		if (proposed === undefined) {
+			throw new Error("Task6 authority contains an unproposed Release");
+		}
+		assertEvidenceEqualsProposal(release, proposed);
+	}
+	if (
+		authority.targetRead?.evidence.id !== targetReleaseId ||
+		authority.npmInventory.stage !== expectedStage ||
+		authority.npmInventory.packages.some(
+			(entry) => entry.version !== proposal.candidate.version,
+		)
+	) {
+		throw new Error(
+			"Task6 authority target or npm evidence differs from the proposal",
+		);
+	}
 }
 
 function singleLine(value, label) {

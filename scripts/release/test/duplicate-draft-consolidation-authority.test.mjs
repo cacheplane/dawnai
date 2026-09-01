@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
 import {
 	appendJournalEvent,
 	createConsolidationJournal,
+	deriveConsolidationState,
 	parseConsolidationJournal,
 } from "../duplicate-draft-consolidation-journal.mjs";
 import {
@@ -175,6 +177,61 @@ test("cannot authorize DELETE without the exact current private journal", async 
 	);
 });
 
+test("requires the exact incident confirmation string instead of a template-object digest", async () => {
+	for (const variant of ["spacing", "newline", "template-object"]) {
+		const fixture = await authorityFixture();
+		const captured = await captureConsolidationAuthority(fixture.input);
+		const consumption = await journalIntentConsumption(captured, fixture);
+		const confirmation =
+			variant === "spacing"
+				? consumption.confirmation.replace(" SURVIVOR ", "  SURVIVOR ")
+				: variant === "newline"
+					? `${consumption.confirmation}\n`
+					: JSON.stringify(fixture.proposal.confirmation);
+		await assert.rejects(
+			captured.networkEpoch.consume({ ...consumption, confirmation }),
+			/confirmation|exact|consumed|epoch/iu,
+		);
+	}
+
+	const secondFixture = await authorityFixture();
+	const secondCapture = await captureConsolidationAuthority(
+		secondFixture.input,
+	);
+	const second = await journalIntentConsumption(secondCapture, secondFixture);
+	const templateDigestJournal = createConsolidationJournal({
+		proposedEnvelope: createConsolidationEnvelope(
+			"proposed",
+			secondFixture.proposal,
+		),
+		confirmationSha256: canonicalRecordSha256(
+			secondFixture.proposal.confirmation,
+		),
+		recordedAt: secondCapture.authority.observedAt,
+	});
+	const withAuthority = appendJournalEvent(
+		templateDigestJournal,
+		"delete-authority-observed",
+		{
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			attemptNumber: 1,
+			authority: secondCapture.authority,
+		},
+		secondCapture.authority.observedAt,
+	);
+	await writePrivateEnvelope(
+		secondFixture.journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", withAuthority),
+	);
+	await assert.rejects(
+		secondCapture.networkEpoch.consume({
+			...second,
+			currentJournal: withAuthority,
+		}),
+		/confirmation|digest|journal|bind/iu,
+	);
+});
+
 test("rejects unrelated valid journal replacement without overwriting it", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
@@ -264,6 +321,114 @@ test("rejects an illegal intent append from a journal without current delete aut
 		/authority|journal|state|intent|bind/iu,
 	);
 	assert.deepEqual(await readFile(fixture.journalPath), operationOnlyBytes);
+});
+
+test("rejects canonical journal truncation or divergence against the durable head anchor", async (t) => {
+	for (const mode of ["truncated", "divergent"]) {
+		await t.test(mode, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const consumption = await journalIntentConsumption(captured, fixture);
+			await writePrivateEnvelope(
+				fixture.journalHeadPath,
+				journalHeadBytes(fixture, consumption.currentJournal),
+			);
+			let changed;
+			if (mode === "truncated") {
+				changed = createConsolidationJournal({
+					proposedEnvelope: createConsolidationEnvelope(
+						"proposed",
+						fixture.proposal,
+					),
+					confirmationSha256:
+						consumption.currentJournal.record.confirmationSha256,
+					recordedAt: captured.authority.observedAt,
+				});
+			} else {
+				const divergent = structuredClone(consumption.currentJournal);
+				divergent.record.events[0].event.payload.confirmationSha256 =
+					"e".repeat(64);
+				divergent.record.confirmationSha256 = "e".repeat(64);
+				divergent.record.events = rebuildEventChain(divergent.record.events);
+				changed = createConsolidationEnvelope("journal", divergent.record);
+			}
+			const changedBytes = canonicalConsolidationEnvelopeBytes(
+				"journal",
+				changed,
+			);
+			await writePrivateEnvelope(fixture.journalPath, changedBytes);
+			await assert.rejects(
+				captured.networkEpoch.consume({
+					...consumption,
+					currentJournal: changed,
+				}),
+				/head|anchor|lineage|truncat|diverg|confirmation/iu,
+			);
+			assert.deepEqual(await readFile(fixture.journalPath), changedBytes);
+		});
+	}
+});
+
+test("recovers an anchor behind by exactly one legal append and advances it with intent", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const consumption = await journalIntentConsumption(captured, fixture);
+	const predecessor = createConsolidationJournal({
+		proposedEnvelope: createConsolidationEnvelope("proposed", fixture.proposal),
+		confirmationSha256: consumption.currentJournal.record.confirmationSha256,
+		recordedAt: captured.authority.observedAt,
+	});
+	await writePrivateEnvelope(
+		fixture.journalHeadPath,
+		journalHeadBytes(fixture, predecessor),
+	);
+
+	await captured.networkEpoch.consume(consumption);
+	const committed = parseConsolidationJournal(
+		await readPrivateEnvelope(fixture.journalPath, 64 * 1024 * 1024),
+	);
+	assert.equal(committed.record.events.at(-1).event.type, "delete-intent");
+	assert.deepEqual(
+		await readFile(fixture.journalHeadPath),
+		journalHeadBytes(fixture, committed),
+	);
+});
+
+test("repairs the intent-written anchor crash window without issuing another permit", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const consumption = await journalIntentConsumption(captured, fixture);
+	await writePrivateEnvelope(
+		fixture.journalHeadPath,
+		journalHeadBytes(fixture, consumption.currentJournal),
+	);
+	const state = deriveConsolidationState(consumption.currentJournal);
+	const intent = appendJournalEvent(
+		consumption.currentJournal,
+		"delete-intent",
+		{
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			attemptNumber: 1,
+			authorityEventSha256: state.lastEventSha256,
+		},
+		captured.authority.observedAt,
+	);
+	await writePrivateEnvelope(
+		fixture.journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", intent),
+	);
+
+	await assert.rejects(
+		captured.networkEpoch.consume({
+			...consumption,
+			currentJournal: intent,
+		}),
+		/predecessor|authority|state|legal/iu,
+	);
+	assert.deepEqual(
+		await readFile(fixture.journalHeadPath),
+		journalHeadBytes(fixture, intent),
+	);
 });
 
 test("burns a delayed permit at the absolute npm-authority expiry with zero DELETE fetches", async () => {
@@ -1439,6 +1604,12 @@ async function authorityFixture({
 			"release",
 			"duplicate-draft-consolidation.journal.json",
 		),
+		journalHeadPath: path.join(
+			root,
+			".dawn",
+			"release",
+			"duplicate-draft-consolidation.journal.head.json",
+		),
 		proposal,
 		localState,
 		repository,
@@ -1508,14 +1679,15 @@ function commandResult(stdout) {
 
 async function journalIntentConsumption(captured, fixture, overrides = {}) {
 	const targetReleaseId = captured.authority.targetRead.evidence.id;
-	const confirmationSha256 = canonicalRecordSha256(
-		fixture.proposal.confirmation,
-	);
 	const recordedAt = captured.authority.observedAt;
 	const proposedEnvelope = createConsolidationEnvelope(
 		"proposed",
 		fixture.proposal,
 	);
+	const confirmation = exactConfirmation(proposedEnvelope);
+	const confirmationSha256 = createHash("sha256")
+		.update(confirmation, "utf8")
+		.digest("hex");
 	let currentJournal = createConsolidationJournal({
 		proposedEnvelope,
 		confirmationSha256,
@@ -1538,11 +1710,33 @@ async function journalIntentConsumption(captured, fixture, overrides = {}) {
 	return {
 		authority: captured.authority,
 		proposal: fixture.proposal,
+		confirmation,
 		targetReleaseId,
 		intentPath: fixture.journalPath,
 		currentJournal,
 		...overrides,
 	};
+}
+
+function exactConfirmation(proposedEnvelope) {
+	const { candidate, roles } = proposedEnvelope.record;
+	return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`;
+}
+
+function journalHeadBytes(fixture, journal) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			journalPath: fixture.journalPath,
+			repository: journal.record.repository,
+			proposedRecordSha256: journal.record.proposedRecordSha256,
+			journalRecordSha256: journal.recordSha256,
+			lastEventSha256: journal.record.events.at(-1).eventSha256,
+			sequence: journal.record.events.length,
+			updatedAt: journal.record.updatedAt,
+		})}\n`,
+		"utf8",
+	);
 }
 
 function deepFreeze(value) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import { inspectEquivalentDrafts } from "../duplicate-draft-consolidation-evidence.mjs";
@@ -11,6 +12,7 @@ import {
 	parseConsolidationJournal,
 } from "../duplicate-draft-consolidation-journal.mjs";
 import {
+	canonicalEventEnvelope,
 	canonicalRecordSha256,
 	createConsolidationEnvelope,
 } from "../duplicate-draft-consolidation-schema.mjs";
@@ -28,12 +30,15 @@ const ACTOR = Object.freeze({ login: "blove", id: "61436" });
 const TAG_OBJECT_SHA = "a".repeat(40);
 const WORKFLOW_ID = "202458345";
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z");
-const CONFIRMATION_SHA256 = "c".repeat(64);
+let confirmationSha256;
 
 let fixture;
 
 test.before(async () => {
 	fixture = await journalFixture();
+	confirmationSha256 = createHash("sha256")
+		.update(exactConfirmation(fixture.proposedEnvelope), "utf8")
+		.digest("hex");
 });
 
 test("creates and strictly parses an immutable canonical operation journal", () => {
@@ -214,6 +219,29 @@ test("an intent with no outcome and unchanged target requires reconciliation the
 	assert.equal(state.phase, "delete-intent");
 });
 
+test("a retry perform-initial observation advances and binds the next attempt", () => {
+	const authority = preDeleteAuthority(0);
+	let journal = appendAuthority(newJournal(), 0, 1, authority, 1);
+	journal = appendIntent(journal, 0, 1, 2);
+	journal = appendReconciliation(
+		journal,
+		0,
+		1,
+		"present-unchanged-retryable",
+		targetEvidence(authority),
+		3,
+	);
+	journal = appendNpm(journal, 0, 2, "perform-initial", 4);
+	assert.equal(deriveConsolidationState(journal).attemptNumber, 2);
+	journal = appendAuthority(journal, 0, 2, preDeleteAuthority(0), 5);
+	journal = appendIntent(journal, 0, 2, 6);
+	assert.equal(deriveConsolidationState(journal).attemptNumber, 2);
+	assert.throws(
+		() => appendNpm(journal, 0, 3, "perform-initial", 7),
+		/state|attempt|legal/iu,
+	);
+});
+
 test("recorded ambiguity requires six unchanged reads before retry, or reconciles absence", () => {
 	const authority = preDeleteAuthority(0);
 	let journal = appendOutcome(
@@ -383,6 +411,32 @@ test("creates a final receipt only from a completed two-target journal", () => {
 		journal.recordSha256,
 	);
 	assert.deepEqual(receipt.record.finalSurvivor, final.releases[0]);
+	for (const mutate of [
+		(authority) => {
+			authority.annotatedTag.objectSha = "b".repeat(40);
+		},
+		(authority) => {
+			authority.workflowAuthority.state = "active";
+		},
+		(authority) => {
+			authority.releases[0].semantic.name = "changed survivor";
+		},
+		(authority) => {
+			authority.payloadProof.consolidationPayloadSha256 = "f".repeat(64);
+		},
+	]) {
+		const changed = structuredClone(final);
+		mutate(changed);
+		assert.throws(() => {
+			const changedJournal = replaceFinalAuthority(journal, changed);
+			createFinalConsolidationReceipt({
+				proposedEnvelope: fixture.proposedEnvelope,
+				journalEnvelope: changedJournal,
+				finalAuthority: changed,
+				completedAt: at(10),
+			});
+		}, /tag|workflow|survivor|payload|proposal|authority|state/iu);
+	}
 
 	const incomplete = appendAuthority(
 		newJournal(),
@@ -406,8 +460,37 @@ test("creates a final receipt only from a completed two-target journal", () => {
 function newJournal() {
 	return createConsolidationJournal({
 		proposedEnvelope: fixture.proposedEnvelope,
-		confirmationSha256: CONFIRMATION_SHA256,
+		confirmationSha256,
 		recordedAt: at(0),
+	});
+}
+
+function exactConfirmation(proposedEnvelope) {
+	const { candidate, roles } = proposedEnvelope.record;
+	return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`;
+}
+
+function replaceFinalAuthority(journal, authority) {
+	const changed = structuredClone(journal);
+	changed.record.events.at(-1).event.payload.authority = authority;
+	changed.record.events = rebuildEventChain(changed.record.events);
+	changed.record.updatedAt = changed.record.events.at(-1).event.recordedAt;
+	return createConsolidationEnvelope("journal", changed.record);
+}
+
+function rebuildEventChain(events) {
+	let previousEventSha256 = null;
+	return events.map(({ event }, index) => {
+		const envelope = canonicalEventEnvelope(
+			{
+				...event,
+				sequence: index + 1,
+				previousEventSha256,
+			},
+			previousEventSha256,
+		);
+		previousEventSha256 = envelope.eventSha256;
+		return envelope;
 	});
 }
 

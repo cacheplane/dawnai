@@ -572,6 +572,7 @@ function snapshotExpectedCurrent(value, policy) {
 			"Only private envelopes support authenticated replacement",
 		);
 	}
+	if (value === null) return Object.freeze({ absent: true });
 	const identity =
 		value !== null && typeof value === "object"
 			? PRIVATE_READ_IDENTITIES.get(value)
@@ -773,7 +774,11 @@ async function inspectExistingDestination(
 			policy.label,
 		);
 	} catch (error) {
-		if (errorCode(error) === "ENOENT" && expected === null) return null;
+		if (
+			errorCode(error) === "ENOENT" &&
+			(expected === null || expected?.absent === true)
+		)
+			return null;
 		if (errorCode(error) === "ENOENT") {
 			throw new Error(
 				`${capitalize(policy.label)} authenticated current file is missing`,
@@ -790,6 +795,11 @@ async function inspectExistingDestination(
 	try {
 		const status = await operations.stat({ bigint: true });
 		assertSourcePolicy(status, runtime.effectiveUserId, policy);
+		if (expected?.absent === true) {
+			throw new Error(
+				`${capitalize(policy.label)} appeared before authenticated creation`,
+			);
+		}
 		if (expected !== null && !sameIdentityRecord(expected.identity, status)) {
 			throw new Error(
 				`${capitalize(policy.label)} no longer identifies the authenticated current file`,
