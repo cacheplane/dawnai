@@ -66,6 +66,18 @@ test("normalizeLog validates meaningful inputs", () => {
 	);
 });
 
+test("stage exports a frozen canonical generated-path inventory", async () => {
+	const { GENERATED_PATHS } = await import("./stage.mjs");
+	assert.deepEqual(GENERATED_PATHS, [
+		"server/src/app/research/index.ts",
+		"server/src/app/research/state.ts",
+		"server/src/app/research/plan.md",
+		"server/src/tools/searchCorpus.ts",
+		"server/test/research.test.ts",
+	]);
+	assert.equal(Object.isFrozen(GENERATED_PATHS), true);
+});
+
 test("author stage renders exactly the generated tree and escaped source", () => {
 	const html = renderStage({
 		act: "author",
@@ -155,6 +167,13 @@ class FakeChild extends EventEmitter {
 	}
 }
 
+class ExitDuringListenerChild extends FakeChild {
+	once(event, listener) {
+		if (event === "exit" && this.exitCode === null) this.exitCode = 23;
+		return super.once(event, listener);
+	}
+}
+
 function manualTimers() {
 	const scheduled = [];
 	return {
@@ -240,6 +259,21 @@ test("waitForHttp rejects when the managed child already exited by signal", asyn
 	assert.equal(fetchCalls, 0);
 });
 
+test("waitForHttp catches exit state that changes while its listener is installed", async () => {
+	const child = new ExitDuringListenerChild();
+	let fetchCalls = 0;
+	await assert.rejects(
+		waitForHttp("http://127.0.0.1:3002/health", child, {
+			fetch: async () => {
+				fetchCalls += 1;
+				return { ok: true };
+			},
+		}),
+		/already exited with code 23/,
+	);
+	assert.equal(fetchCalls, 0);
+});
+
 test("waitForHttp rejects on the injected readiness timeout", async () => {
 	const child = new FakeChild();
 	const { scheduled, timers } = manualTimers();
@@ -287,22 +321,66 @@ test("stopManaged does not signal a child that already exited by signal", async 
 	assert.deepEqual(signals, []);
 });
 
-test("stopManaged escalates only the known child PID after its bounded timeout", async () => {
+test("stopManaged catches exit state that changes while its listener is installed", async () => {
+	const child = new ExitDuringListenerChild(4321);
+	const signals = [];
+	await stopManaged(child, {
+		kill(pid, signal) {
+			signals.push([pid, signal]);
+		},
+	});
+	assert.deepEqual(signals, []);
+});
+
+test("stopManaged waits for confirmed child close after escalating its known PID", async () => {
 	const child = new FakeChild(9876);
 	const { scheduled, timers } = manualTimers();
 	const signals = [];
+	let settled = false;
 	const stopped = stopManaged(child, {
 		kill(pid, signal) {
 			signals.push([pid, signal]);
 		},
 		timers,
 		timeoutMs: 250,
+		confirmationTimeoutMs: 100,
 	});
+	void stopped.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
 	assert.equal(scheduled[0]?.delay, 250);
 	scheduled[0].callback();
-	await stopped;
+	await Promise.resolve();
 	assert.deepEqual(signals, [
 		[9876, "SIGTERM"],
 		[9876, "SIGKILL"],
 	]);
+	assert.equal(settled, false);
+	assert.equal(scheduled[1]?.delay, 100);
+	child.emit("close", null, "SIGKILL");
+	await stopped;
+	assert.equal(settled, true);
+});
+
+test("stopManaged rejects when SIGKILL termination is not confirmed in time", async () => {
+	const child = new FakeChild(9876);
+	const { scheduled, timers } = manualTimers();
+	const stopped = stopManaged(child, {
+		kill() {},
+		timers,
+		timeoutMs: 250,
+		confirmationTimeoutMs: 100,
+	});
+	scheduled[0].callback();
+	assert.equal(scheduled[1]?.delay, 100);
+	scheduled[1].callback();
+	await assert.rejects(
+		stopped,
+		/Managed child PID 9876 did not exit within 100ms after SIGKILL/,
+	);
 });

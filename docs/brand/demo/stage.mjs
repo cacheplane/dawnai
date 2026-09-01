@@ -1,11 +1,11 @@
 const ACTS = ["author", "test", "close"];
-const GENERATED_PATHS = [
+export const GENERATED_PATHS = Object.freeze([
 	"server/src/app/research/index.ts",
 	"server/src/app/research/state.ts",
 	"server/src/app/research/plan.md",
 	"server/src/tools/searchCorpus.ts",
 	"server/test/research.test.ts",
-];
+]);
 
 function escapeHtml(value) {
 	return value
