@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+	assertDisjointPackageTiers,
 	resolvePublicPackageTiers,
 	validatePackageDiscoveryMetadata,
 	validatePackageReadme,
@@ -590,6 +591,28 @@ describe("resolvePublicPackageTiers", () => {
 		"@dawn-ai/config-typescript",
 	];
 	const publicPackages = [...entry, ...capability, ...tooling];
+
+	it("accepts disjoint package tier definitions", () => {
+		assert.doesNotThrow(() =>
+			assertDisjointPackageTiers({
+				entry: ["entry-package"],
+				capability: ["capability-package"],
+				tooling: ["tooling-package"],
+			}),
+		);
+	});
+
+	it("rejects a package classified in multiple tiers", () => {
+		assert.throws(
+			() =>
+				assertDisjointPackageTiers({
+					entry: ["shared-package"],
+					capability: ["shared-package"],
+					tooling: [],
+				}),
+			/Multiple classifications.*shared-package/,
+		);
+	});
 
 	it("classifies the complete public release inventory", () => {
 		assert.deepEqual(

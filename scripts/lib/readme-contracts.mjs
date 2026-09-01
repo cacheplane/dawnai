@@ -404,6 +404,24 @@ export function validateRootReadme(source) {
 	return failures;
 }
 
+export function assertDisjointPackageTiers(definitions) {
+	const classifications = new Map();
+	for (const tier of ["entry", "capability", "tooling"]) {
+		const packages = definitions?.[tier];
+		if (!Array.isArray(packages)) {
+			throw new TypeError(`Public package tier ${tier} must be an array`);
+		}
+		for (const packageName of packages) {
+			if (classifications.has(packageName)) {
+				throw new Error(
+					`Multiple classifications for public package: ${packageName}`,
+				);
+			}
+			classifications.set(packageName, tier);
+		}
+	}
+}
+
 export function resolvePublicPackageTiers(publicPackageNames) {
 	if (!Array.isArray(publicPackageNames)) {
 		throw new TypeError("Public package names must be an array");
@@ -417,15 +435,12 @@ export function resolvePublicPackageTiers(publicPackageNames) {
 		inventorySeen.add(packageName);
 	}
 
+	assertDisjointPackageTiers(DEFAULT_PUBLIC_PACKAGE_TIERS);
+
 	const classifications = new Map();
 	for (const tier of ["entry", "capability", "tooling"]) {
 		const packages = DEFAULT_PUBLIC_PACKAGE_TIERS[tier];
 		for (const packageName of packages) {
-			if (classifications.has(packageName)) {
-				throw new Error(
-					`Multiple classifications for public package: ${packageName}`,
-				);
-			}
 			classifications.set(packageName, tier);
 		}
 	}
