@@ -650,9 +650,11 @@ function packedManifest(
 ) {
   return {
     bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+    description: "Dawn package fixture for TypeScript tooling pack verification.",
     engines: { node: ">=22.12.0" },
     exports: { ".": { default: "./dist/index.js", types: "./dist/index.d.ts" } },
     homepage: `https://github.com/cacheplane/dawnai/tree/main/${name}`,
+    keywords: ["dawn", "typescript", "developer-tools"],
     license: "MIT",
     name,
     publishConfig: { access: "public" },
