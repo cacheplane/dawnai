@@ -668,6 +668,38 @@ describe("validateRootReadme", () => {
 		});
 	}
 
+	for (const [name, block] of [
+		[
+			"processing-instruction",
+			"<?dawn\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n?>",
+		],
+		[
+			"declaration",
+			"<!DECLARATION dawn\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n>",
+		],
+		[
+			"CDATA",
+			"<![CDATA[\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n]]>",
+		],
+		[
+			"pre block containing a blank line",
+			"<pre>\ncode\n\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n</pre>",
+		],
+	]) {
+		it(`does not accept Markdown links inside a ${name}`, () => {
+			const source = rootReadme
+				.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+				.replace(
+					"[Read the demo transcript](docs/brand/demo/transcript.md)",
+					"",
+				)
+				.concat(`\n\n${block}`);
+			const failures = validateRootReadme(source);
+			assertFailure(failures, /migrating-from-langgraph/);
+			assertFailure(failures, /transcript\.md/);
+		});
+	}
+
 	it("does not accept root assets and links written as inline code", () => {
 		const inlineReferences = rootReadme
 			.replace(

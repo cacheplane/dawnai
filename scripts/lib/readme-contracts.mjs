@@ -64,10 +64,13 @@ const COMMONMARK_BLOCK_TAGS = new Set([
 	"address",
 	"article",
 	"aside",
+	"base",
+	"basefont",
 	"blockquote",
 	"body",
 	"caption",
 	"center",
+	"col",
 	"colgroup",
 	"dd",
 	"details",
@@ -91,17 +94,23 @@ const COMMONMARK_BLOCK_TAGS = new Set([
 	"h6",
 	"head",
 	"header",
+	"hr",
 	"html",
 	"iframe",
 	"legend",
 	"li",
+	"link",
 	"main",
 	"menu",
+	"menuitem",
 	"nav",
 	"noframes",
 	"ol",
+	"optgroup",
+	"option",
 	"p",
-	"pre",
+	"param",
+	"search",
 	"section",
 	"summary",
 	"table",
@@ -112,6 +121,7 @@ const COMMONMARK_BLOCK_TAGS = new Set([
 	"thead",
 	"title",
 	"tr",
+	"track",
 	"ul",
 ]);
 const RAW_TEXT_HTML_BLOCK_TAGS = new Set(["script", "style", "textarea"]);
@@ -275,15 +285,47 @@ function rawHtmlBlockOpening(line) {
 	if (lists.indentedCode) return null;
 
 	const candidate = stripFenceIndent(lists.content);
-	const rawTextTag = /^<([a-z][a-z0-9-]*)(?=[\s>])/iu
+	const location = {
+		listIndentColumns: lists.listIndentColumns,
+		quoteDepth: container.depth,
+		openingContent: candidate,
+	};
+	if (candidate.startsWith("<?")) {
+		return {
+			...location,
+			kind: "processing-instruction",
+			projection: "suppressed",
+			termination: { type: "sequence", value: "?>" },
+		};
+	}
+	if (candidate.startsWith("<![CDATA[")) {
+		return {
+			...location,
+			kind: "cdata",
+			projection: "suppressed",
+			termination: { type: "sequence", value: "]]>" },
+		};
+	}
+	if (/^<![A-Z]/u.test(candidate)) {
+		return {
+			...location,
+			kind: "declaration",
+			projection: "suppressed",
+			termination: { type: "sequence", value: ">" },
+		};
+	}
+
+	const explicitCloseTag = /^<(pre|script|style|textarea)(?=[\s>])/iu
 		.exec(candidate)?.[1]
 		?.toLowerCase();
-	if (rawTextTag && RAW_TEXT_HTML_BLOCK_TAGS.has(rawTextTag)) {
+	if (explicitCloseTag) {
 		return {
-			kind: "raw-text",
-			tag: rawTextTag,
-			listIndentColumns: lists.listIndentColumns,
-			quoteDepth: container.depth,
+			...location,
+			kind: explicitCloseTag === "pre" ? "pre" : "raw-text",
+			projection: RAW_TEXT_HTML_BLOCK_TAGS.has(explicitCloseTag)
+				? "suppressed"
+				: "rendered",
+			termination: { type: "closing-tag", tag: explicitCloseTag },
 		};
 	}
 
@@ -292,16 +334,29 @@ function rawHtmlBlockOpening(line) {
 		?.toLowerCase();
 	if (!blockTag || !COMMONMARK_BLOCK_TAGS.has(blockTag)) {
 		if (!isCompleteHtmlTag(candidate)) return null;
+		return {
+			...location,
+			kind: "complete-tag",
+			projection: "rendered",
+			termination: { type: "blank-line" },
+		};
 	}
 	return {
-		kind: "rendered",
-		listIndentColumns: lists.listIndentColumns,
-		quoteDepth: container.depth,
+		...location,
+		kind: "block-tag",
+		projection: "rendered",
+		termination: { type: "blank-line" },
 	};
 }
 
-function closesRawTextHtmlBlock(line, htmlBlock) {
-	return new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "iu").test(line);
+function htmlBlockEnds(line, htmlBlock) {
+	if (htmlBlock.termination.type === "blank-line") {
+		return line.trim().length === 0;
+	}
+	if (htmlBlock.termination.type === "sequence") {
+		return line.includes(htmlBlock.termination.value);
+	}
+	return new RegExp(`</${htmlBlock.termination.tag}[ \\t]*>`, "iu").test(line);
 }
 
 function markdownBlockProjections(source) {
@@ -340,24 +395,32 @@ function markdownBlockProjections(source) {
 
 		if (htmlBlock) {
 			const container = blockquoteContainer(content);
-			const containedContent = contentAfterIndent(
+			const contentWithinList = contentAfterIndent(
 				container.content,
 				htmlBlock.listIndentColumns,
 			);
 			const containerEnded =
-				container.depth < htmlBlock.quoteDepth || containedContent === null;
+				container.depth < htmlBlock.quoteDepth ||
+				(htmlBlock.listIndentColumns > 0 &&
+					content.trim().length > 0 &&
+					contentWithinList === null);
 			if (containerEnded) {
 				htmlBlock = null;
-			} else if (htmlBlock.kind === "raw-text") {
-				if (closesRawTextHtmlBlock(containedContent, htmlBlock)) {
-					htmlBlock = null;
-				}
-				append(maskText(line));
-				continue;
-			} else if ((containedContent?.trim().length ?? 0) === 0) {
+			} else if (htmlBlockEnds(contentWithinList ?? "", htmlBlock)) {
+				const endedBlock = htmlBlock;
 				htmlBlock = null;
+				if (endedBlock.termination.type !== "blank-line") {
+					append(
+						maskText(line),
+						endedBlock.projection === "rendered" ? line : maskText(line),
+					);
+					continue;
+				}
 			} else {
-				append(maskText(line), line);
+				append(
+					maskText(line),
+					htmlBlock.projection === "rendered" ? line : maskText(line),
+				);
 				continue;
 			}
 		}
@@ -370,15 +433,12 @@ function markdownBlockProjections(source) {
 
 		const htmlOpening = rawHtmlBlockOpening(content);
 		if (htmlOpening) {
-			if (htmlOpening.kind === "raw-text") {
-				if (!closesRawTextHtmlBlock(content, htmlOpening)) {
-					htmlBlock = htmlOpening;
-				}
-				append(maskText(line));
-			} else {
-				htmlBlock = htmlOpening;
-				append(maskText(line), line);
-			}
+			const { openingContent, ...block } = htmlOpening;
+			if (!htmlBlockEnds(openingContent, block)) htmlBlock = block;
+			append(
+				maskText(line),
+				block.projection === "rendered" ? line : maskText(line),
+			);
 			continue;
 		}
 
