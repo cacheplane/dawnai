@@ -6,10 +6,12 @@ import {
 	captureDirectTargetRead,
 	inspectEquivalentDrafts,
 } from "./duplicate-draft-consolidation-evidence.mjs";
+import { writePrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
 import {
 	canonicalEventEnvelope,
 	canonicalRecordSha256,
 	createConsolidationEnvelope,
+	parseConsolidationEnvelope,
 } from "./duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
 import { parseReleaseMarker } from "./metadata.mjs";
@@ -138,7 +140,7 @@ export async function captureConsolidationAuthority(input) {
 	}
 
 	const localState = snapshotPlain(
-		await context.local.readState(),
+		await context.adapters.local.readState(),
 		"local checkout state",
 	);
 	assertExactKeys(
@@ -158,20 +160,22 @@ export async function captureConsolidationAuthority(input) {
 	}
 
 	const repository = snapshotPlain(
-		await context.github.getRepository(),
+		await context.adapters.github.getRepository(),
 		"GitHub repository",
 	);
 	const actor = snapshotPlain(
-		await context.github.getAuthenticatedUser(),
+		await context.adapters.github.getAuthenticatedUser(),
 		"GitHub actor",
 	);
-	const githubMainSha = await context.github.getDefaultBranchSha();
+	const githubMainSha = await context.adapters.github.getDefaultBranchSha();
 	const workflow = snapshotPlain(
-		await context.github.getWorkflowState(),
+		await context.adapters.github.getWorkflowState(),
 		"Release workflow",
 	);
 	const nonterminalRunRead = snapshotPlain(
-		await context.github.listNonterminalWorkflowRuns(WORKFLOW_RUN_QUERY),
+		await context.adapters.github.listNonterminalWorkflowRuns(
+			WORKFLOW_RUN_QUERY,
+		),
 		"nonterminal workflow-run read",
 	);
 	const nonterminalRuns = normalizeNonterminalRunRead(
@@ -179,11 +183,11 @@ export async function captureConsolidationAuthority(input) {
 		WORKFLOW_RUN_QUERY,
 	);
 	const annotatedTag = snapshotPlain(
-		await context.github.getAnnotatedTag({ name: CANDIDATE.tag }),
+		await context.adapters.github.getAnnotatedTag({ name: CANDIDATE.tag }),
 		"annotated tag",
 	);
 	const releaseEnvelope = snapshotPlain(
-		await context.github.listReleases(),
+		await context.adapters.github.listReleases(),
 		"Release enumeration",
 	);
 	const listedReleases = presentValue(releaseEnvelope, "releases");
@@ -212,7 +216,10 @@ export async function captureConsolidationAuthority(input) {
 		workflow,
 		nonterminalRuns,
 		query: WORKFLOW_RUN_QUERY,
-		observedAt: callTimestamp(context.now, "workflow authority observation"),
+		observedAt: callTimestamp(
+			context.adapters.now,
+			"workflow authority observation",
+		),
 	});
 	const currentTag = normalizeAnnotatedTag(annotatedTag);
 	assertStableTagAndWorkflow(currentTag, workflowAuthority, proposal);
@@ -220,8 +227,8 @@ export async function captureConsolidationAuthority(input) {
 	const npmInventory = await captureNpmInventory({
 		stage: context.stage,
 		candidate: proposal.candidate,
-		npm: context.npm.source,
-		now: context.now,
+		npm: context.adapters.npm.source,
+		now: context.adapters.now,
 	});
 	const selectedRaw = selectManagedReleases(
 		listedReleases,
@@ -232,42 +239,57 @@ export async function captureConsolidationAuthority(input) {
 		stage: context.stage,
 		selectedRaw,
 		proposal,
-		github: context.github,
-		attestations: context.attestations,
-		contextNow: context.now,
+		github: context.adapters.github,
+		attestations: context.adapters.attestations,
+		contextNow: context.adapters.now,
 	});
 	let releases = broadEvidence.releases;
 	const payloadProof = broadEvidence.payloadProof;
 
 	let targetRead = null;
-	let terminalReadCount;
+	let adapterEpoch;
 	if (stageRule.targetReleaseId !== null) {
 		const targetIndex = releases.findIndex(
 			({ id }) => id === stageRule.targetReleaseId,
 		);
 		if (targetIndex < 0)
 			throw new Error("Authority target is absent from the Release list");
-		targetRead = await captureDirectTargetRead({
-			candidate: proposal.candidate,
+		const terminal = context.adapters.authorityEpoch.beginTerminalRead({
 			releaseId: stageRule.targetReleaseId,
-			role: "duplicate",
-			expectedEvidence: proposal.releases.find(
-				({ id }) => id === stageRule.targetReleaseId,
-			),
-			github: context.github.source,
-			now: context.now,
 		});
+		try {
+			targetRead = await captureDirectTargetRead({
+				candidate: proposal.candidate,
+				releaseId: stageRule.targetReleaseId,
+				role: "duplicate",
+				expectedEvidence: proposal.releases.find(
+					({ id }) => id === stageRule.targetReleaseId,
+				),
+				github: terminal.github,
+				now: context.adapters.now,
+			});
+			adapterEpoch = terminal.seal();
+		} catch {
+			terminal.abort();
+			throw new Error("Terminal target read failed closed");
+		}
 		if (!isDeepStrictEqual(targetRead.evidence, releases[targetIndex])) {
 			throw new Error(
 				"Direct target evidence disagrees with the complete Release list",
 			);
 		}
 		releases = releases.with(targetIndex, targetRead.evidence);
-		terminalReadCount = readNetworkCount(context.networkReadCount);
 	} else {
-		terminalReadCount = readNetworkCount(context.networkReadCount);
+		try {
+			adapterEpoch = context.adapters.authorityEpoch.sealWithoutTarget();
+		} catch {
+			throw new Error("Final network epoch failed closed");
+		}
 	}
-	const observedAt = callTimestamp(context.now, "authority observation");
+	const observedAt = callTimestamp(
+		context.adapters.now,
+		"authority observation",
+	);
 	const authority = normalizeAuthorityStage({
 		stage: context.stage,
 		controller: {
@@ -289,17 +311,16 @@ export async function captureConsolidationAuthority(input) {
 		assertFreshWriterAuthority(authority, proposal, observedAt);
 	}
 
-	if (readNetworkCount(context.networkReadCount) !== terminalReadCount) {
-		throw new Error(
-			"Network epoch was invalidated after terminal read completion",
-		);
+	try {
+		adapterEpoch.validate();
+	} catch {
+		throw new Error("Network epoch was invalidated after terminal completion");
 	}
 	const networkEpoch = createNetworkEpoch({
 		authority,
 		proposal,
 		targetReleaseId: stageRule.targetReleaseId,
-		terminalReadCount,
-		networkReadCount: context.networkReadCount,
+		adapterEpoch,
 	});
 	const result = { authority };
 	Object.defineProperty(result, "networkEpoch", {
@@ -336,17 +357,7 @@ export function assertFreshWriterAuthority(authority, proposal, now) {
 function normalizeCaptureInput(input) {
 	const value = exactInput(
 		input,
-		[
-			"stage",
-			"proposal",
-			"targetReleaseId",
-			"local",
-			"github",
-			"npm",
-			"attestations",
-			"networkReadCount",
-			"now",
-		],
+		["stage", "proposal", "targetReleaseId", "adapters"],
 		"authority capture input",
 	);
 	const stage = dataString(value, "stage", "authority stage");
@@ -355,36 +366,8 @@ function normalizeCaptureInput(input) {
 	const target = dataValue(value, "targetReleaseId", "authority target");
 	const targetReleaseId =
 		target === null ? null : canonicalId(target, "authority target");
-	const local = bindBoundary(
-		dataValue(value, "local", "local reader"),
-		["readState"],
-		"local reader",
-	);
-	const github = bindBoundary(
-		dataValue(value, "github", "GitHub reader"),
-		[
-			"getRepository",
-			"getAuthenticatedUser",
-			"getDefaultBranchSha",
-			"getWorkflowState",
-			"listNonterminalWorkflowRuns",
-			"getAnnotatedTag",
-			"listReleases",
-			"downloadReleaseAsset",
-			"getRelease",
-			"listReleaseAssets",
-		],
-		"GitHub reader",
-	);
-	const npm = bindBoundary(
-		dataValue(value, "npm", "npm reader"),
-		["observePackageVersion"],
-		"npm reader",
-	);
-	const attestations = bindBoundary(
-		dataValue(value, "attestations", "attestation verifier"),
-		["verify"],
-		"attestation verifier",
+	const adapters = bindAdapterFacade(
+		dataValue(value, "adapters", "consolidation adapters"),
 	);
 	return {
 		stage,
@@ -393,16 +376,7 @@ function normalizeCaptureInput(input) {
 			"proposal",
 		),
 		targetReleaseId,
-		local,
-		github,
-		npm,
-		attestations,
-		networkReadCount: dataFunction(
-			value,
-			"networkReadCount",
-			"network read counter",
-		),
-		now: dataFunction(value, "now", "authority clock"),
+		adapters,
 	};
 }
 
@@ -465,7 +439,6 @@ function assertRepositoryAuthority({ repository, actor, proposal }) {
 }
 
 function normalizeNonterminalRunRead(value, executedQuery) {
-	if (Array.isArray(value)) return value;
 	assertExactKeys(value, ["query", "runs"], "nonterminal workflow-run read");
 	const echoedQuery = snapshotPlain(
 		value.query,
@@ -928,8 +901,7 @@ function createNetworkEpoch({
 	authority,
 	proposal,
 	targetReleaseId,
-	terminalReadCount,
-	networkReadCount,
+	adapterEpoch,
 }) {
 	const authoritySha256 = canonicalRecordSha256(authority);
 	const proposalSha256 = canonicalRecordSha256(proposal);
@@ -946,19 +918,21 @@ function createNetworkEpoch({
 				consumed = true;
 				const value = exactInput(
 					input,
-					["authority", "proposal", "targetReleaseId", "now", "writeIntent"],
+					[
+						"authority",
+						"proposal",
+						"targetReleaseId",
+						"intentPath",
+						"intentBytes",
+					],
 					"network epoch consumption",
 				);
-				const currentReadCount = readNetworkCount(networkReadCount);
-				if (currentReadCount !== terminalReadCount) {
-					throw new Error(
-						"Network epoch was invalidated by an intervening adapter read",
-					);
-				}
+				assertAdapterEpochSealed(adapterEpoch);
+				const currentTimestamp = readTrustedEpochClock(adapterEpoch);
 				const consumedAuthority = assertFreshWriterAuthority(
 					dataValue(value, "authority", "epoch authority"),
 					dataValue(value, "proposal", "epoch proposal"),
-					dataString(value, "now", "epoch clock"),
+					currentTimestamp,
 				);
 				const consumedProposal = normalizeProposal(
 					dataValue(value, "proposal", "epoch proposal"),
@@ -976,32 +950,58 @@ function createNetworkEpoch({
 						"Network epoch authority, proposal, or target binding changed",
 					);
 				}
-				const writeIntent = dataFunction(
+				const intentPath = dataString(
 					value,
-					"writeIntent",
-					"local journal-intent writer",
+					"intentPath",
+					"journal intent path",
 				);
-				const beforeWriteCount = readNetworkCount(networkReadCount);
-				if (beforeWriteCount !== terminalReadCount) {
+				if (intentPath !== adapterEpoch.journalPath) {
 					throw new Error(
-						"Network epoch changed before the local journal-intent write",
+						"Journal intent path is not the adapter-owned private path",
 					);
 				}
-				let result;
+				const intentBytes = snapshotIntentBytes(
+					dataValue(value, "intentBytes", "journal intent bytes"),
+				);
+				const intentSha256 = validateIntentBinding({
+					bytes: intentBytes,
+					authority: consumedAuthority,
+					proposal: consumedProposal,
+					targetReleaseId: consumedTarget,
+				});
+				const beforeWriteTimestamp = readTrustedEpochClock(adapterEpoch);
+				assertFreshWriterAuthority(
+					consumedAuthority,
+					consumedProposal,
+					beforeWriteTimestamp,
+				);
+				assertAdapterEpochSealed(adapterEpoch);
 				try {
-					result = await writeIntent();
+					await writePrivateEnvelope(intentPath, intentBytes);
 				} catch {
 					throw new Error(
-						"Local journal intent may already be durable; the writer failed, so do not DELETE or reconsume",
+						"Journal intent may already be durable; persistence failed, so do not DELETE or reconsume",
 					);
 				}
-				const afterWriteCount = readNetworkCount(networkReadCount);
-				if (afterWriteCount !== terminalReadCount) {
+				try {
+					const completedTimestamp = readTrustedEpochClock(adapterEpoch);
+					assertFreshWriterAuthority(
+						consumedAuthority,
+						consumedProposal,
+						completedTimestamp,
+					);
+					adapterEpoch.validate();
+					return adapterEpoch.issueDeletePermit({
+						targetReleaseId: consumedTarget,
+						authoritySha256,
+						proposalSha256,
+						intentSha256,
+					});
+				} catch {
 					throw new Error(
-						"Local journal intent may already be durable; the network epoch changed, so do not DELETE or reconsume",
+						"Journal intent may already be durable; post-write authority failed, so do not DELETE or reconsume",
 					);
 				}
-				return result;
 			},
 		},
 		toJSON: {
@@ -1016,11 +1016,326 @@ function createNetworkEpoch({
 	return Object.freeze(capability);
 }
 
+function assertAdapterEpochSealed(adapterEpoch) {
+	try {
+		adapterEpoch.validate();
+	} catch {
+		throw new Error("Adapter network epoch is invalid or no longer sealed");
+	}
+}
+
+function readTrustedEpochClock(adapterEpoch) {
+	try {
+		return canonicalTimestamp(adapterEpoch.now(), "trusted adapter clock");
+	} catch {
+		throw new TypeError("Trusted adapter clock failed closed");
+	}
+}
+
+function snapshotIntentBytes(value) {
+	if (
+		!(value instanceof Uint8Array) ||
+		utilTypes.isProxy(value) ||
+		(typeof SharedArrayBuffer === "function" &&
+			value.buffer instanceof SharedArrayBuffer)
+	) {
+		throw new TypeError("Journal intent bytes must be one owned byte array");
+	}
+	return Buffer.from(value);
+}
+
+function validateIntentBinding({
+	bytes,
+	authority,
+	proposal,
+	targetReleaseId,
+}) {
+	const envelope = parseConsolidationEnvelope("journal", bytes);
+	if (
+		envelope.record.proposedRecordSha256 !== canonicalRecordSha256(proposal) ||
+		!isDeepStrictEqual(envelope.record.repository, proposal.repository) ||
+		!isDeepStrictEqual(envelope.record.candidate, proposal.candidate)
+	) {
+		throw new Error("Journal intent does not bind the approved proposal");
+	}
+	const authorityEvent = envelope.record.events.at(-2);
+	const intentEvent = envelope.record.events.at(-1);
+	if (
+		authorityEvent?.event.type !== "delete-authority-observed" ||
+		intentEvent?.event.type !== "delete-intent" ||
+		authorityEvent.event.payload.targetReleaseId !== targetReleaseId ||
+		intentEvent.event.payload.targetReleaseId !== targetReleaseId ||
+		authorityEvent.event.payload.attemptNumber !==
+			intentEvent.event.payload.attemptNumber ||
+		intentEvent.event.payload.authorityEventSha256 !==
+			authorityEvent.eventSha256 ||
+		!isDeepStrictEqual(authorityEvent.event.payload.authority, authority)
+	) {
+		throw new Error(
+			"Journal intent is not the exact authority-bound next delete intent",
+		);
+	}
+	return createHash("sha256").update(bytes).digest("hex");
+}
+
 function exactInput(value, expectedKeys, label) {
 	if (!isPlainObject(value) || utilTypes.isProxy(value))
 		throw new TypeError(`${label} must be a plain non-proxy object`);
 	assertExactKeys(value, expectedKeys, label, { allowFunctions: true });
 	return value;
+}
+
+function bindAdapterFacade(value) {
+	if (
+		!isPlainObject(value) ||
+		utilTypes.isProxy(value) ||
+		!Object.isFrozen(value) ||
+		Object.getOwnPropertySymbols(value).length !== 0
+	) {
+		throw new TypeError(
+			"consolidation adapters must be an immutable plain non-proxy facade",
+		);
+	}
+	const descriptors = Object.getOwnPropertyDescriptors(value);
+	const expected = new Set([
+		"local",
+		"github",
+		"npm",
+		"attestations",
+		"writer",
+		"authorityEpoch",
+	]);
+	if (
+		Object.keys(descriptors).length !== expected.size ||
+		Object.keys(descriptors).some((key) => !expected.has(key))
+	) {
+		throw new TypeError("consolidation adapter facade fields are invalid");
+	}
+	for (const name of ["local", "github", "npm", "attestations", "writer"]) {
+		const descriptor = descriptors[name];
+		if (
+			descriptor?.enumerable !== true ||
+			!("value" in descriptor) ||
+			descriptor.get !== undefined ||
+			descriptor.set !== undefined
+		) {
+			throw new TypeError("consolidation adapter facade fields are invalid");
+		}
+	}
+	const epochDescriptor = descriptors.authorityEpoch;
+	if (
+		epochDescriptor?.enumerable !== false ||
+		epochDescriptor.writable !== false ||
+		epochDescriptor.configurable !== false ||
+		!("value" in epochDescriptor)
+	) {
+		throw new TypeError("adapter authority capability descriptor is invalid");
+	}
+	const authorityEpoch = bindAuthorityCapability(epochDescriptor.value, value);
+	return Object.freeze({
+		local: bindBoundary(
+			descriptors.local.value,
+			["readState"],
+			"local Git reader",
+		),
+		github: bindBoundary(
+			descriptors.github.value,
+			[
+				"getRepository",
+				"getAuthenticatedUser",
+				"getDefaultBranchSha",
+				"getWorkflowState",
+				"listNonterminalWorkflowRuns",
+				"getAnnotatedTag",
+				"listReleases",
+				"getRelease",
+				"listReleaseAssets",
+				"downloadReleaseAsset",
+			],
+			"GitHub authority reader",
+		),
+		npm: bindBoundary(
+			descriptors.npm.value,
+			["observePackageVersion"],
+			"npm authority reader",
+		),
+		attestations: bindBoundary(
+			descriptors.attestations.value,
+			["verify"],
+			"attestation authority reader",
+		),
+		writer: bindBoundary(
+			descriptors.writer.value,
+			["deleteDuplicate"],
+			"duplicate delete writer",
+		),
+		authorityEpoch,
+		now: authorityEpoch.now,
+	});
+}
+
+function bindAuthorityCapability(value, facade) {
+	assertHiddenCapability(
+		value,
+		[
+			"now",
+			"journalPath",
+			"validateFacade",
+			"beginTerminalRead",
+			"sealWithoutTarget",
+			"toJSON",
+		],
+		"adapter authority capability",
+	);
+	const now = hiddenDataFunction(value, "now", "adapter authority clock");
+	const validateFacade = hiddenDataFunction(
+		value,
+		"validateFacade",
+		"adapter facade validator",
+	);
+	const beginTerminalRead = hiddenDataFunction(
+		value,
+		"beginTerminalRead",
+		"terminal-read capability",
+	);
+	const sealWithoutTarget = hiddenDataFunction(
+		value,
+		"sealWithoutTarget",
+		"final-stage capability",
+	);
+	try {
+		validateFacade.call(value, facade);
+	} catch {
+		throw new TypeError("adapter authority capability binding failed closed");
+	}
+	return Object.freeze({
+		now: () => {
+			try {
+				return now.call(value);
+			} catch {
+				throw new TypeError("Trusted adapter clock failed closed");
+			}
+		},
+		journalPath: hiddenDataValue(value, "journalPath", "adapter journal path"),
+		beginTerminalRead(input) {
+			try {
+				return bindTerminalCapability(beginTerminalRead.call(value, input));
+			} catch {
+				throw new Error("Terminal network epoch failed closed");
+			}
+		},
+		sealWithoutTarget() {
+			try {
+				return bindSealedEpoch(sealWithoutTarget.call(value));
+			} catch {
+				throw new Error("Final network epoch failed closed");
+			}
+		},
+	});
+}
+
+function bindTerminalCapability(value) {
+	assertHiddenCapability(
+		value,
+		["github", "seal", "abort", "toJSON"],
+		"terminal network capability",
+	);
+	const github = bindBoundary(
+		hiddenDataValue(value, "github", "terminal GitHub reader"),
+		["getRelease", "listReleaseAssets"],
+		"terminal GitHub reader",
+	).source;
+	const seal = hiddenDataFunction(value, "seal", "terminal epoch seal");
+	const abort = hiddenDataFunction(value, "abort", "terminal epoch abort");
+	return Object.freeze({
+		github,
+		seal() {
+			try {
+				return bindSealedEpoch(seal.call(value));
+			} catch {
+				throw new Error("Terminal network epoch seal failed closed");
+			}
+		},
+		abort() {
+			try {
+				abort.call(value);
+			} catch {
+				throw new Error("Terminal network epoch abort failed closed");
+			}
+		},
+	});
+}
+
+function bindSealedEpoch(value) {
+	assertHiddenCapability(
+		value,
+		["now", "journalPath", "validate", "issueDeletePermit", "toJSON"],
+		"sealed adapter epoch",
+	);
+	const now = hiddenDataFunction(value, "now", "sealed adapter clock");
+	const validate = hiddenDataFunction(
+		value,
+		"validate",
+		"sealed epoch validator",
+	);
+	const issueDeletePermit = hiddenDataFunction(
+		value,
+		"issueDeletePermit",
+		"delete permit issuer",
+	);
+	return Object.freeze({
+		now: () => now.call(value),
+		journalPath: hiddenDataValue(value, "journalPath", "sealed journal path"),
+		validate: () => validate.call(value),
+		issueDeletePermit: (input) => issueDeletePermit.call(value, input),
+	});
+}
+
+function assertHiddenCapability(value, expectedKeys, label) {
+	if (
+		!isPlainObject(value) ||
+		utilTypes.isProxy(value) ||
+		!Object.isFrozen(value) ||
+		Object.getOwnPropertySymbols(value).length !== 0
+	) {
+		throw new TypeError(`${label} is invalid`);
+	}
+	const descriptors = Object.getOwnPropertyDescriptors(value);
+	const expected = new Set(expectedKeys);
+	if (
+		Object.keys(descriptors).length !== expected.size ||
+		Object.keys(descriptors).some((key) => !expected.has(key)) ||
+		Object.values(descriptors).some(
+			(descriptor) =>
+				descriptor.enumerable !== false ||
+				descriptor.writable !== false ||
+				descriptor.configurable !== false ||
+				!("value" in descriptor),
+		)
+	) {
+		throw new TypeError(`${label} fields or descriptors are invalid`);
+	}
+}
+
+function hiddenDataValue(value, name, label) {
+	const descriptor = Object.getOwnPropertyDescriptor(value, name);
+	if (
+		descriptor?.enumerable !== false ||
+		descriptor.writable !== false ||
+		descriptor.configurable !== false ||
+		!("value" in descriptor)
+	) {
+		throw new TypeError(`${label} is invalid`);
+	}
+	return descriptor.value;
+}
+
+function hiddenDataFunction(value, name, label) {
+	const result = hiddenDataValue(value, name, label);
+	if (typeof result !== "function" || utilTypes.isProxy(result)) {
+		throw new TypeError(`${label} must be a non-proxy function`);
+	}
+	return result;
 }
 
 function bindBoundary(value, methods, label) {
@@ -1092,9 +1407,10 @@ function assertExactKeys(
 		throw new TypeError(`${label} contains symbol properties`);
 	const descriptors = Object.getOwnPropertyDescriptors(value);
 	const keys = Object.keys(descriptors);
+	const expectedSet = new Set(expected);
 	if (
 		keys.length !== expected.length ||
-		keys.some((key, index) => key !== expected[index]) ||
+		keys.some((key) => !expectedSet.has(key)) ||
 		keys.some((key) => {
 			const descriptor = descriptors[key];
 			return (
@@ -1224,22 +1540,6 @@ function assertTimestampOrder(earlier, later, label) {
 	const second = canonicalTimestamp(later, label);
 	if (Date.parse(second) < Date.parse(first))
 		throw new Error(`${label} timestamps are not monotone`);
-}
-
-function assertReadCount(value) {
-	if (!Number.isSafeInteger(value) || value < 0)
-		throw new TypeError("Network read counter is invalid");
-}
-
-function readNetworkCount(networkReadCount) {
-	let value;
-	try {
-		value = networkReadCount();
-	} catch {
-		throw new TypeError("Network read counter failed closed");
-	}
-	assertReadCount(value);
-	return value;
 }
 
 function isPlainObject(value) {

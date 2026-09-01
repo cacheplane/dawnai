@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-
+import {
+	createDuplicateDraftConsolidationAdapters,
+	createExactDuplicateDeleteEffect,
+} from "../duplicate-draft-consolidation-adapters.mjs";
 import {
 	assertFreshWriterAuthority,
 	captureConsolidationAuthority,
 	captureNpmInventory,
 } from "../duplicate-draft-consolidation-authority.mjs";
 import { inspectEquivalentDrafts } from "../duplicate-draft-consolidation-evidence.mjs";
-import { createConsolidationEnvelope } from "../duplicate-draft-consolidation-schema.mjs";
+import {
+	canonicalConsolidationEnvelopeBytes,
+	canonicalEventEnvelope,
+	canonicalRecordSha256,
+	createConsolidationEnvelope,
+} from "../duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs";
 import {
 	createDuplicateDraftConsolidationFixture,
@@ -21,6 +32,12 @@ const ACTOR = Object.freeze({ login: "blove", id: "61436" });
 const TAG_OBJECT_SHA = "a".repeat(40);
 const WORKFLOW_ID = "202458345";
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z");
+const TEMPORARY_ROOTS = [];
+test.after(async () => {
+	await Promise.all(
+		TEMPORARY_ROOTS.map((root) => rm(root, { recursive: true, force: true })),
+	);
+});
 const EXACT_WORKFLOW_RUN_QUERY = Object.freeze({
 	statuses: Object.freeze([
 		"in_progress",
@@ -70,119 +87,92 @@ test("captures exact pre-delete authority and leaves direct GET plus asset enume
 		/serialize|capability|epoch/iu,
 	);
 
-	let writes = 0;
-	const result = await captured.networkEpoch.consume({
-		authority: captured.authority,
-		proposal: fixture.proposal,
-		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-		now: new Date(fixture.nowMs).toISOString(),
-		writeIntent: async () => {
-			writes += 1;
-			return "written";
-		},
-	});
-	assert.equal(result, "written");
-	assert.equal(writes, 1);
-	await assert.rejects(
-		captured.networkEpoch.consume({
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => "again",
+	const consumption = journalIntentConsumption(captured, fixture);
+	const permit = await captured.networkEpoch.consume(consumption);
+	assert.equal(Object.isFrozen(permit), true);
+	assert.deepEqual(Object.keys(permit), []);
+	assert.throws(() => JSON.stringify(permit), /serialize|permit|capability/iu);
+	assert.deepEqual(
+		await readFile(fixture.journalPath),
+		consumption.intentBytes,
+	);
+	assert.equal((await stat(fixture.journalPath)).mode & 0o777, 0o600);
+	assert.deepEqual(
+		await fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
 		}),
+		{
+			classification: "confirmed-204",
+			httpStatus: 204,
+			observedAt: new Date(fixture.nowMs).toISOString(),
+		},
+	);
+	await assert.rejects(
+		captured.networkEpoch.consume(consumption),
 		/consumed|epoch/iu,
+	);
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/permit|one-use|valid/iu,
 	);
 });
 
 test("invalidates the one-use epoch after any intervening adapter read", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
-	fixture.incrementNetworkRead();
+	await assert.rejects(
+		fixture.adapters.github.getRepository(),
+		/sealed|epoch|rejected/iu,
+	);
 
 	await assert.rejects(
-		captured.networkEpoch.consume({
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => assert.fail("stale epoch must not write"),
-		}),
+		captured.networkEpoch.consume(journalIntentConsumption(captured, fixture)),
 		/epoch|intervening|read/iu,
 	);
+	await assert.rejects(readFile(fixture.journalPath), /ENOENT/u);
 });
 
-test("fails capture if the adapter counter advances after terminal completion but before return", async () => {
-	const fixture = await authorityFixture();
-	const currentCount = fixture.input.networkReadCount;
-	let samples = 0;
-	fixture.input.networkReadCount = () => {
-		const value = currentCount();
-		samples += 1;
-		if (samples === 1) fixture.incrementNetworkRead();
-		return value;
-	};
-
+test("rejects a constant-counter bypass and concurrent terminal-read race", async () => {
+	const constantCounter = await authorityFixture();
+	constantCounter.input.networkReadCount = () => 0;
 	await assert.rejects(
-		captureConsolidationAuthority(fixture.input),
-		/epoch|intervening|read|terminal/iu,
+		captureConsolidationAuthority(constantCounter.input),
+		/input|field|adapter/iu,
 	);
+
+	let releaseTerminal;
+	let signalTerminal;
+	const terminalEntered = new Promise((resolve) => {
+		signalTerminal = resolve;
+	});
+	const terminalGate = new Promise((resolve) => {
+		releaseTerminal = resolve;
+	});
+	const raced = await authorityFixture({
+		terminalGate: { entered: signalTerminal, wait: terminalGate },
+	});
+	const pendingCapture = captureConsolidationAuthority(raced.input);
+	await terminalEntered;
+	await assert.rejects(
+		raced.adapters.github.getRepository(),
+		/terminal|epoch|concurrent|rejected/iu,
+	);
+	releaseTerminal();
+	await assert.rejects(pendingCapture, /terminal|epoch|failed/iu);
 });
 
-test("binds the frozen exact workflow-run query to the executed adapter read", async () => {
+test("real Task4 composition binds the executed workflow query into Task5 authority", async () => {
 	const fixture = await authorityFixture();
-	const github = fixture.input.github;
-	let receivedQuery;
-	fixture.input.github = Object.freeze({
-		...github,
-		async listNonterminalWorkflowRuns(query) {
-			receivedQuery = query;
-			assert.equal(Object.isFrozen(query), true);
-			assert.equal(Object.isFrozen(query.statuses), true);
-			return {
-				query: structuredClone(query),
-				runs: await github.listNonterminalWorkflowRuns(query),
-			};
-		},
-	});
-
 	const captured = await captureConsolidationAuthority(fixture.input);
-	assert.deepEqual(receivedQuery, EXACT_WORKFLOW_RUN_QUERY);
-	assert.notEqual(receivedQuery, EXACT_WORKFLOW_RUN_QUERY);
 	assert.deepEqual(
 		captured.authority.workflowAuthority.query,
 		EXACT_WORKFLOW_RUN_QUERY,
 	);
-});
-
-test("rejects an adapter echo that drifts the executed workflow-run query", async (t) => {
-	for (const [name, mutate] of [
-		["incomplete statuses", (query) => query.statuses.pop()],
-		["status order", (query) => query.statuses.reverse()],
-		["per-page bound", (query) => (query.perPage = 99)],
-		["maximum-pages bound", (query) => (query.maximumPages = 99)],
-	]) {
-		await t.test(name, async () => {
-			const fixture = await authorityFixture();
-			const github = fixture.input.github;
-			fixture.input.github = Object.freeze({
-				...github,
-				async listNonterminalWorkflowRuns(query) {
-					const echoedQuery = structuredClone(query);
-					mutate(echoedQuery);
-					return {
-						query: echoedQuery,
-						runs: await github.listNonterminalWorkflowRuns(query),
-					};
-				},
-			});
-
-			await assert.rejects(
-				captureConsolidationAuthority(fixture.input),
-				/query|workflow|status|page|bound/iu,
-			);
-		});
-	}
+	assert.match(fixture.workflowRunUrls[0], /per_page=100&page=1/u);
 });
 
 test("captures exact ordered npm absence evidence with bounded canonical timestamps", async () => {
@@ -376,7 +366,7 @@ test("rejects invalid repository, checkout, workflow, tag, actor, and SHA author
 			mutate(fixture);
 			await assert.rejects(
 				captureConsolidationAuthority(fixture.input),
-				/repository|actor|checkout|branch|clean|SHA|workflow|run|tag|authority/iu,
+				/repository|actor|checkout|branch|clean|SHA|workflow|run|tag|authority|local Git reader/iu,
 			);
 		});
 	}
@@ -427,35 +417,28 @@ test("epoch rejects proposal drift before invoking the journal-intent writer", a
 	const captured = await captureConsolidationAuthority(fixture.input);
 	const driftedProposal = structuredClone(fixture.proposal);
 	driftedProposal.inspectedAt = "2026-09-01T11:59:59.000Z";
+	const consumption = journalIntentConsumption(captured, fixture, {
+		proposal: driftedProposal,
+	});
 
 	await assert.rejects(
-		captured.networkEpoch.consume({
-			authority: captured.authority,
-			proposal: driftedProposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => assert.fail("drifted proposal must not write"),
-		}),
+		captured.networkEpoch.consume(consumption),
 		/proposal|binding|changed/iu,
 	);
 	await assert.rejects(
-		captured.networkEpoch.consume({
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => assert.fail("burned epoch must not write"),
-		}),
+		captured.networkEpoch.consume(journalIntentConsumption(captured, fixture)),
 		/consumed|epoch/iu,
 	);
+	await assert.rejects(readFile(fixture.journalPath), /ENOENT/u);
 });
 
-test("epoch attempts burn before validation and callback failures", async (t) => {
+test("epoch attempts burn before binding and trusted-clock failures", async (t) => {
 	const invalidCases = [
 		[
 			"wrong authority",
-			({ authority }) => {
+			({ authority, consumption }) => {
 				authority.controller.headSha = "b".repeat(40);
+				consumption.authority = authority;
 			},
 		],
 		[
@@ -465,25 +448,16 @@ test("epoch attempts burn before validation and callback failures", async (t) =>
 			},
 		],
 		[
-			"invalid now",
+			"wrong path",
 			({ consumption }) => {
-				consumption.now = "2026-09-01T12:00:00Z";
+				consumption.intentPath = `${consumption.intentPath}.other`;
 			},
 		],
 		[
-			"stale now",
-			({ authority, consumption }) => {
-				consumption.now = new Date(
-					Date.parse(authority.npmInventory.completedAt) + 120_001,
-				).toISOString();
-			},
-		],
-		[
-			"future now",
-			({ authority, consumption }) => {
-				consumption.now = new Date(
-					Date.parse(authority.observedAt) - 1,
-				).toISOString();
+			"intent digest drift",
+			({ consumption }) => {
+				consumption.intentBytes = Buffer.from(consumption.intentBytes);
+				consumption.intentBytes[consumption.intentBytes.length - 1] = 0x20;
 			},
 		],
 	];
@@ -492,101 +466,206 @@ test("epoch attempts burn before validation and callback failures", async (t) =>
 			const fixture = await authorityFixture();
 			const captured = await captureConsolidationAuthority(fixture.input);
 			const authority = structuredClone(captured.authority);
-			let writes = 0;
-			const consumption = {
-				authority,
-				proposal: fixture.proposal,
-				targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-				now: new Date(fixture.nowMs).toISOString(),
-				writeIntent: async () => {
-					writes += 1;
-				},
-			};
+			const consumption = journalIntentConsumption(captured, fixture);
 			mutate({ authority, consumption });
 			await assert.rejects(
 				captured.networkEpoch.consume(consumption),
-				/authority|binding|canonical|clock|epoch|fresh|future|proposal|sha|stale|target|timestamp/iu,
+				/authority|binding|canonical|envelope|epoch|JSON|path|proposal|sha|target/iu,
 			);
-			assert.equal(writes, 0);
+			await assert.rejects(readFile(fixture.journalPath), /ENOENT/u);
 			await assert.rejects(
-				captured.networkEpoch.consume({
-					...consumption,
-					authority: captured.authority,
-					targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-					now: new Date(fixture.nowMs).toISOString(),
-				}),
+				captured.networkEpoch.consume(
+					journalIntentConsumption(captured, fixture),
+				),
 				/consumed|epoch/iu,
 			);
-			assert.equal(writes, 0);
 		});
 	}
 
-	await t.test("callback failure", async () => {
-		const fixture = await authorityFixture();
-		const captured = await captureConsolidationAuthority(fixture.input);
-		const consumption = {
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => {
-				throw new Error("secret callback failure");
+	for (const [name, clock] of [
+		["invalid", () => "2026-09-01T12:00:00Z"],
+		[
+			"throwing",
+			() => {
+				throw new Error("secret-clock-token");
 			},
-		};
-		await assert.rejects(
-			captured.networkEpoch.consume(consumption),
-			/may already be durable.*do not delete/iu,
+		],
+		[
+			"stale",
+			(captured) => () =>
+				new Date(
+					Date.parse(captured.authority.npmInventory.completedAt) + 120_001,
+				).toISOString(),
+		],
+		[
+			"future/reversed",
+			(captured) => () =>
+				new Date(Date.parse(captured.authority.observedAt) - 1).toISOString(),
+		],
+	]) {
+		await t.test(`${name} trusted clock`, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			fixture.setClock(clock.length === 0 ? clock : clock(captured));
+			await assert.rejects(
+				captured.networkEpoch.consume(
+					journalIntentConsumption(captured, fixture),
+				),
+				(error) => {
+					assert.equal(error.message.includes("secret-clock-token"), false);
+					return /clock|fresh|future|monotone|stale|epoch/iu.test(
+						error.message,
+					);
+				},
+			);
+			await assert.rejects(readFile(fixture.journalPath), /ENOENT/u);
+			await assert.rejects(
+				captured.networkEpoch.consume(
+					journalIntentConsumption(captured, fixture),
+				),
+				/consumed|epoch/iu,
+			);
+		});
+	}
+
+	for (const forbidden of ["writeIntent", "now"]) {
+		await t.test(
+			`caller ${forbidden} cannot substitute for owned authority`,
+			async () => {
+				const fixture = await authorityFixture();
+				const captured = await captureConsolidationAuthority(fixture.input);
+				const consumption = journalIntentConsumption(captured, fixture);
+				consumption[forbidden] =
+					forbidden === "writeIntent"
+						? async () => {}
+						: "2099-01-01T00:00:00.000Z";
+				await assert.rejects(
+					captured.networkEpoch.consume(consumption),
+					/field|descriptor|consumption/iu,
+				);
+				await assert.rejects(readFile(fixture.journalPath), /ENOENT/u);
+				await assert.rejects(
+					captured.networkEpoch.consume(consumption),
+					/consumed|epoch/iu,
+				);
+			},
 		);
-		await assert.rejects(
-			captured.networkEpoch.consume(consumption),
-			/consumed|epoch/iu,
-		);
-	});
+	}
 });
 
-test("epoch rejects counter drift while a deferred journal intent is pending", async () => {
+test("epoch fails closed when freshness expires during the real durable write", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
-	let signalEntered;
-	let finishWrite;
-	const entered = new Promise((resolve) => {
-		signalEntered = resolve;
+	let calls = 0;
+	fixture.setClock(() => {
+		calls += 1;
+		const offset = calls <= 2 ? 0 : 120_001;
+		return new Date(
+			Date.parse(captured.authority.npmInventory.completedAt) + offset,
+		).toISOString();
 	});
-	const pendingWrite = new Promise((resolve) => {
-		finishWrite = resolve;
-	});
-	let destructiveContinuation = false;
-	const consumption = captured.networkEpoch
-		.consume({
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => {
-				signalEntered();
-				return pendingWrite;
-			},
-		})
-		.then(() => {
-			destructiveContinuation = true;
-		});
-	await entered;
-	fixture.incrementNetworkRead();
-	finishWrite("DELETE_PERMISSION");
 	await assert.rejects(
-		consumption,
-		/may already be durable|do not delete|intent.*durable/iu,
+		captured.networkEpoch.consume(journalIntentConsumption(captured, fixture)),
+		/may already be durable.*do not DELETE|do not DELETE.*durable/iu,
 	);
-	assert.equal(destructiveContinuation, false);
+	await readFile(fixture.journalPath);
 	await assert.rejects(
-		captured.networkEpoch.consume({
-			authority: captured.authority,
-			proposal: fixture.proposal,
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			now: new Date(fixture.nowMs).toISOString(),
-			writeIntent: async () => assert.fail("burned epoch must not write"),
-		}),
+		captured.networkEpoch.consume(journalIntentConsumption(captured, fixture)),
 		/consumed|epoch/iu,
+	);
+});
+
+test("post-write trusted-clock failures are redacted and report possibly durable intent", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	let calls = 0;
+	fixture.setClock(() => {
+		calls += 1;
+		if (calls === 3) throw new Error("secret-post-write-clock");
+		return captured.authority.observedAt;
+	});
+	await assert.rejects(
+		captured.networkEpoch.consume(journalIntentConsumption(captured, fixture)),
+		(error) => {
+			assert.equal(error.message.includes("secret-post-write-clock"), false);
+			return /may already be durable.*do not DELETE/iu.test(error.message);
+		},
+	);
+	await readFile(fixture.journalPath);
+});
+
+test("raw reads and DELETE attempts during intent persistence invalidate the permit", async (t) => {
+	for (const effect of ["read", "delete"]) {
+		await t.test(effect, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const pending = captured.networkEpoch.consume(
+				journalIntentConsumption(captured, fixture),
+			);
+			if (effect === "read") {
+				await assert.rejects(
+					fixture.adapters.github.getRepository(),
+					/sealed|epoch|rejected/iu,
+				);
+			} else {
+				await assert.rejects(
+					fixture.adapters.writer.deleteDuplicate({
+						releaseId: DUPLICATE_DRAFT_IDS[0],
+						permit: Object.freeze({}),
+					}),
+					/permit|one-use|valid/iu,
+				);
+			}
+			await assert.rejects(
+				pending,
+				/may already be durable.*do not DELETE|do not DELETE.*durable/iu,
+			);
+			assert.equal(
+				fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+				false,
+			);
+		});
+	}
+});
+
+test("a permit is unforgeably bound to its composed delete writer", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		journalIntentConsumption(captured, fixture),
+	);
+	let standaloneFetches = 0;
+	const standalone = createExactDuplicateDeleteEffect({
+		repository: "cacheplane/dawnai",
+		apiOrigin: "https://api.github.com",
+		survivorId: DUPLICATE_DRAFT_SURVIVOR_ID,
+		duplicateIds: DUPLICATE_DRAFT_IDS,
+		token: "github_test_token_123456789",
+		fetchImpl: async () => {
+			standaloneFetches += 1;
+			return new Response(null, { status: 204 });
+		},
+		timeoutMs: 15_000,
+		now: () => captured.authority.observedAt,
+	});
+	await assert.rejects(
+		standalone.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/guard|permit|one-use/iu,
+	);
+	assert.equal(standaloneFetches, 0);
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/guard|permit|one-use|valid/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
 	);
 });
 
@@ -817,14 +896,17 @@ test("rejects symbol, hidden, sparse, nonplain, and mutable dependency inputs", 
 	});
 	await t.test("mutable dependency", async () => {
 		const fixture = await authorityFixture();
-		fixture.input.local = {
-			async readState() {
-				return fixture.localState;
+		fixture.input.adapters = {
+			...fixture.adapters,
+			local: {
+				async readState() {
+					return fixture.localState;
+				},
 			},
 		};
 		await assert.rejects(
 			captureConsolidationAuthority(fixture.input),
-			/immutable|reader/iu,
+			/adapter|facade|immutable/iu,
 		);
 	});
 });
@@ -839,23 +921,19 @@ test("rejects future service observations and authority that ages out during bro
 
 	const stale = await authorityFixture();
 	let calls = 0;
-	stale.input.now = () => {
+	stale.setClock(() => {
 		calls += 1;
 		return new Date(BASE_TIME + (calls > 24 ? 120_001 : 0)).toISOString();
-	};
+	});
 	await assert.rejects(
 		captureConsolidationAuthority(stale.input),
-		/stale|fresh|120000/iu,
+		/stale|fresh|120000|duration bound/iu,
 	);
 });
 
 test("redacts dependency failures instead of exposing untrusted controls", async () => {
 	const fixture = await authorityFixture();
-	fixture.input.local = Object.freeze({
-		async readState() {
-			throw new Error("github_test_token_123\u0000payload");
-		},
-	});
+	fixture.localState.failure = new Error("github_test_token_123\u0000payload");
 	await assert.rejects(
 		captureConsolidationAuthority(fixture.input),
 		(error) => {
@@ -866,7 +944,10 @@ test("redacts dependency failures instead of exposing untrusted controls", async
 	);
 });
 
-async function authorityFixture({ stage = "pre-delete-1" } = {}) {
+async function authorityFixture({
+	stage = "pre-delete-1",
+	terminalGate = null,
+} = {}) {
 	const evidenceFixture = createDuplicateDraftConsolidationFixture();
 	const inspected = await inspectEquivalentDrafts({
 		candidate: evidenceFixture.candidate,
@@ -878,8 +959,9 @@ async function authorityFixture({ stage = "pre-delete-1" } = {}) {
 	});
 	evidenceFixture.clearOperations();
 	let nowMs = BASE_TIME;
-	let readCount = 0;
+	let clockImplementation = () => new Date(nowMs).toISOString();
 	const networkOperations = [];
+	const workflowRunUrls = [];
 	const expectedIds =
 		stage === "pre-delete-1"
 			? [DUPLICATE_DRAFT_SURVIVOR_ID, ...DUPLICATE_DRAFT_IDS]
@@ -925,70 +1007,8 @@ async function authorityFixture({ stage = "pre-delete-1" } = {}) {
 		originMainSha: DUPLICATE_DRAFT_CANDIDATE.commitSha,
 	};
 	const log = (operation) => {
-		readCount += 1;
 		networkOperations.push(operation);
 	};
-	const github = Object.freeze({
-		async getRepository() {
-			log("repository");
-			return structuredClone(repository);
-		},
-		async getAuthenticatedUser() {
-			log("user");
-			return structuredClone(actor);
-		},
-		async getDefaultBranchSha() {
-			log("default-branch");
-			return githubMainSha.value;
-		},
-		async getWorkflowState() {
-			log("workflow");
-			return structuredClone(workflow);
-		},
-		async listNonterminalWorkflowRuns() {
-			log("workflow-runs");
-			return structuredClone(nonterminalRuns);
-		},
-		async getAnnotatedTag() {
-			log("tag");
-			return structuredClone(annotatedTag);
-		},
-		async listReleases() {
-			log("releases");
-			return present("releases", structuredClone(remainingReleases));
-		},
-		async downloadReleaseAsset(input) {
-			log(`download:${input.releaseId}:${input.assetId}`);
-			return evidenceFixture.github.downloadReleaseAsset(input);
-		},
-		async getRelease({ releaseId }) {
-			log(`get-release:${releaseId}`);
-			if (
-				directRelease === undefined ||
-				String(directRelease.id) !== String(releaseId)
-			) {
-				throw new Error("fixture direct release mismatch");
-			}
-			return present("release", structuredClone(directRelease));
-		},
-		async listReleaseAssets({ releaseId }) {
-			log(`list-assets:${releaseId}`);
-			if (
-				directRelease === undefined ||
-				String(directRelease.id) !== String(releaseId)
-			) {
-				throw new Error("fixture direct asset mismatch");
-			}
-			return present("release-assets", structuredClone(directRelease.assets));
-		},
-	});
-	const npm = Object.freeze({
-		async observePackageVersion({ name }) {
-			log(`npm:${name}`);
-			nowMs += 1;
-			return absent();
-		},
-	});
 	const proposal = deepFreeze(
 		createConsolidationEnvelope("proposed", {
 			schemaVersion: 1,
@@ -1041,6 +1061,156 @@ async function authorityFixture({ stage = "pre-delete-1" } = {}) {
 			inspectedAt: new Date(BASE_TIME).toISOString(),
 		}).record,
 	);
+	const root = await mkdtemp(
+		path.join(await realpath(os.tmpdir()), "dawn-authority-"),
+	);
+	TEMPORARY_ROOTS.push(root);
+	await mkdir(path.join(root, ".dawn", "release"), { recursive: true });
+	const adapters = await createDuplicateDraftConsolidationAdapters({
+		cwd: root,
+		token: "github_test_token_123456789",
+		environment: { HOME: root, PATH: "/tools" },
+		dependencies: {
+			fetchImpl: async (url, init) => {
+				const parsed = new URL(url);
+				if (init.method === "DELETE") {
+					log(`delete:${parsed.pathname.split("/").at(-1)}`);
+					return new Response(null, { status: 204 });
+				}
+				if (parsed.pathname === "/repos/cacheplane/dawnai") {
+					log("repository");
+					return jsonResponse({
+						id: Number(repository.id),
+						full_name: repository.name,
+						default_branch: repository.defaultBranch,
+					});
+				}
+				if (parsed.pathname === "/user") {
+					log("user");
+					return jsonResponse({ login: actor.login, id: Number(actor.id) });
+				}
+				if (parsed.pathname.endsWith("/runs")) {
+					log("workflow-runs");
+					workflowRunUrls.push(parsed.href);
+					const workflowRuns = nonterminalRuns.map((run, index) => ({
+						id: Number(run.id ?? index + 1),
+						run_attempt: run.runAttempt ?? 1,
+						status: run.status ?? "queued",
+						event: run.event ?? "workflow_dispatch",
+						head_sha: run.headSha ?? DUPLICATE_DRAFT_CANDIDATE.commitSha,
+						head_branch: run.headBranch ?? "main",
+					}));
+					return jsonResponse({
+						total_count: workflowRuns.length,
+						workflow_runs: workflowRuns,
+					});
+				}
+				throw new Error("unexpected fixture network request");
+			},
+			now: () => clockImplementation(),
+			run: async (command, args) => {
+				if (command !== "git") throw new Error("unexpected fixture command");
+				if (args[0] === "symbolic-ref") {
+					if (localState.branch === null) throw new Error("detached");
+					return commandResult(`${localState.branch}\n`);
+				}
+				if (args[0] === "status")
+					return commandResult(localState.porcelainStatus);
+				if (args[0] === "rev-parse") {
+					return commandResult(`${localState.originMainSha}\n`);
+				}
+				throw new Error("unexpected fixture git command");
+			},
+			createOwnerPreflightAdapters: () => ({
+				git: {
+					async headSha() {
+						if (localState.failure !== undefined) throw localState.failure;
+						return localState.headSha;
+					},
+				},
+			}),
+			createGitHubReader: () => ({
+				async getRef({ ref }) {
+					if (ref === "heads/main") {
+						log("default-branch");
+						return present("ref", {
+							ref: "refs/heads/main",
+							object: { type: "commit", sha: githubMainSha.value },
+						});
+					}
+					log("tag-ref");
+					return present("ref", {
+						ref: `refs/tags/${annotatedTag.name}`,
+						object: {
+							type: annotatedTag.objectType,
+							sha: annotatedTag.objectSha,
+						},
+					});
+				},
+				async getGitTag() {
+					log("tag-object");
+					return present("git-tag", {
+						sha: annotatedTag.objectSha,
+						tag: annotatedTag.name,
+						object: { type: "commit", sha: annotatedTag.targetSha },
+					});
+				},
+				async getWorkflow() {
+					log("workflow");
+					return present("workflow", {
+						id: workflow.workflowId,
+						path: workflow.path,
+						state: workflow.state,
+					});
+				},
+				async listReleases() {
+					log("releases");
+					return present("releases", structuredClone(remainingReleases));
+				},
+				async downloadReleaseAsset(input) {
+					log(`download:${input.releaseId}:${input.assetId}`);
+					return evidenceFixture.github.downloadReleaseAsset(input);
+				},
+				async getRelease({ releaseId }) {
+					log(`get-release:${releaseId}`);
+					if (terminalGate !== null) {
+						terminalGate.entered();
+						await terminalGate.wait;
+					}
+					if (
+						directRelease === undefined ||
+						String(directRelease.id) !== String(releaseId)
+					) {
+						throw new Error("fixture direct release mismatch");
+					}
+					return present("release", structuredClone(directRelease));
+				},
+				async listReleaseAssets({ releaseId }) {
+					log(`list-assets:${releaseId}`);
+					if (
+						directRelease === undefined ||
+						String(directRelease.id) !== String(releaseId)
+					) {
+						throw new Error("fixture direct asset mismatch");
+					}
+					return present(
+						"release-assets",
+						structuredClone(directRelease.assets),
+					);
+				},
+			}),
+			createNpmReader: () => ({
+				async observePackageVersion({ name }) {
+					log(`npm:${name}`);
+					nowMs += 1;
+					return absent();
+				},
+			}),
+			createCliAttestationVerifier: () => ({
+				verify: (input) => evidenceFixture.attestations.verify(input),
+			}),
+		},
+	});
 	const input = {
 		stage,
 		proposal,
@@ -1050,19 +1220,18 @@ async function authorityFixture({ stage = "pre-delete-1" } = {}) {
 				: stage === "pre-delete-1"
 					? DUPLICATE_DRAFT_IDS[0]
 					: DUPLICATE_DRAFT_IDS[1],
-		local: Object.freeze({
-			async readState() {
-				return structuredClone(localState);
-			},
-		}),
-		github,
-		npm,
-		attestations: evidenceFixture.attestations,
-		networkReadCount: () => readCount,
-		now: () => new Date(nowMs).toISOString(),
+		adapters,
 	};
 	return {
 		input,
+		adapters,
+		root,
+		journalPath: path.join(
+			root,
+			".dawn",
+			"release",
+			"duplicate-draft-consolidation.journal.json",
+		),
 		proposal,
 		localState,
 		repository,
@@ -1078,11 +1247,14 @@ async function authorityFixture({ stage = "pre-delete-1" } = {}) {
 		get networkOperations() {
 			return [...networkOperations];
 		},
+		get workflowRunUrls() {
+			return [...workflowRunUrls];
+		},
 		get nowMs() {
 			return nowMs;
 		},
-		incrementNetworkRead() {
-			readCount += 1;
+		setClock(implementation) {
+			clockImplementation = implementation;
 		},
 	};
 }
@@ -1114,6 +1286,93 @@ function absent() {
 
 function present(operation, value) {
 	return { status: "PRESENT", operation, httpStatus: 200, code: null, value };
+}
+
+function jsonResponse(value) {
+	return new Response(JSON.stringify(value), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+function commandResult(stdout) {
+	return { exitCode: 0, stdout, stderr: "" };
+}
+
+function journalIntentConsumption(captured, fixture, overrides = {}) {
+	const targetReleaseId = captured.authority.targetRead.evidence.id;
+	const proposedRecordSha256 = canonicalRecordSha256(fixture.proposal);
+	const confirmationSha256 = canonicalRecordSha256(
+		fixture.proposal.confirmation,
+	);
+	const recordedAt = captured.authority.observedAt;
+	const started = canonicalEventEnvelope(
+		{
+			schemaVersion: 1,
+			sequence: 1,
+			previousEventSha256: null,
+			type: "operation-started",
+			recordedAt,
+			payload: {
+				proposedRecordSha256,
+				confirmationSha256,
+				controllerSha: fixture.proposal.controller.headSha,
+				deletionOrder: [...DUPLICATE_DRAFT_IDS],
+			},
+		},
+		null,
+	);
+	const authorityEvent = canonicalEventEnvelope(
+		{
+			schemaVersion: 1,
+			sequence: 2,
+			previousEventSha256: started.eventSha256,
+			type: "delete-authority-observed",
+			recordedAt,
+			payload: {
+				targetReleaseId,
+				attemptNumber: 1,
+				authority: captured.authority,
+			},
+		},
+		started.eventSha256,
+	);
+	const intentEvent = canonicalEventEnvelope(
+		{
+			schemaVersion: 1,
+			sequence: 3,
+			previousEventSha256: authorityEvent.eventSha256,
+			type: "delete-intent",
+			recordedAt,
+			payload: {
+				targetReleaseId,
+				attemptNumber: 1,
+				authorityEventSha256: authorityEvent.eventSha256,
+			},
+		},
+		authorityEvent.eventSha256,
+	);
+	const journalEnvelope = createConsolidationEnvelope("journal", {
+		schemaVersion: 1,
+		repository: fixture.proposal.repository,
+		candidate: fixture.proposal.candidate,
+		proposedRecordSha256,
+		confirmationSha256,
+		deletionOrder: [...DUPLICATE_DRAFT_IDS],
+		events: [started, authorityEvent, intentEvent],
+		updatedAt: recordedAt,
+	});
+	return {
+		authority: captured.authority,
+		proposal: fixture.proposal,
+		targetReleaseId,
+		intentPath: fixture.journalPath,
+		intentBytes: canonicalConsolidationEnvelopeBytes(
+			"journal",
+			journalEnvelope,
+		),
+		...overrides,
+	};
 }
 
 function deepFreeze(value) {
