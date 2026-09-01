@@ -104,7 +104,7 @@ const KIND_LIMITS = Object.freeze({
 	final: DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
 });
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
-const GIT_SHA_PATTERN = /^[0-9a-f]{40,64}$/u;
+const GIT_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const POSITIVE_DECIMAL_PATTERN = /^[1-9][0-9]*$/u;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 const TIMESTAMP_PATTERN =
@@ -740,7 +740,7 @@ function normalizeReleaseEvidence(value) {
 			"Release asset evidence exceeds the escrow payload limit",
 		);
 	}
-	return {
+	const normalized = {
 		role: value.role,
 		id: assertId(value.id, "Release id"),
 		nodeId: assertNonemptyString(value.nodeId, "Release node id"),
@@ -750,6 +750,14 @@ function normalizeReleaseEvidence(value) {
 		semantic: normalizeReleaseSemantic(value.semantic),
 		assets,
 	};
+	if (normalized.role === "survivor") {
+		assertCanonicalValueByteLength(
+			normalized,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.survivorEvidenceBytes,
+			"Survivor Release evidence",
+		);
+	}
+	return normalized;
 }
 
 function normalizeReleaseSemantic(value) {
@@ -831,15 +839,30 @@ function normalizeAssetEvidence(value) {
 			"Asset service digest must be canonical sha256 evidence",
 		);
 	}
+	const name = assertNonemptyString(value.name, "Asset name");
+	if (
+		Buffer.byteLength(name, "utf8") >
+		RELEASE_PAYLOAD_LIMITS.archiveFilenameBytes
+	) {
+		throw new TypeError(
+			"Asset name exceeds the release archive filename limit",
+		);
+	}
+	const size = assertNonnegativeInteger(value.size, "Asset size");
+	if (size > RELEASE_PAYLOAD_LIMITS.tarballBytes) {
+		throw new TypeError(
+			"Asset size exceeds the release per-asset payload limit",
+		);
+	}
 	return {
 		id: assertId(value.id, "Asset id"),
 		nodeId: assertNonemptyString(value.nodeId, "Asset node id"),
-		name: assertNonemptyString(value.name, "Asset name"),
+		name,
 		label:
 			value.label === null ? null : assertString(value.label, "Asset label"),
 		state: assertNonemptyString(value.state, "Asset state"),
 		contentType: assertNonemptyString(value.contentType, "Asset content type"),
-		size: assertNonnegativeInteger(value.size, "Asset size"),
+		size,
 		digest,
 		uploader: normalizeServiceIdentity(value.uploader, "Asset uploader"),
 		createdAt: assertTimestamp(value.createdAt, "Asset creation timestamp"),
@@ -940,6 +963,12 @@ function normalizeAuthorityStage(value) {
 	const releases = assertArray(value.releases, "Authority releases").map(
 		normalizeReleaseEvidence,
 	);
+	if (
+		releases.reduce((total, release) => total + release.assets.length, 0) >
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumAssetDownloads
+	) {
+		throw new TypeError("Authority stage exceeds the asset download limit");
+	}
 	if (releases.length === 0 || releases[0].role !== "survivor") {
 		throw new TypeError("Authority releases must begin with the survivor");
 	}
@@ -965,7 +994,7 @@ function normalizeAuthorityStage(value) {
 			"Target read evidence must exactly match an authority Release",
 		);
 	}
-	return {
+	const normalized = {
 		stage,
 		controller: normalizeController(value.controller),
 		annotatedTag: normalizeAnnotatedTag(value.annotatedTag),
@@ -979,6 +1008,12 @@ function normalizeAuthorityStage(value) {
 			"Authority observation timestamp",
 		),
 	};
+	assertCanonicalValueByteLength(
+		normalized,
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+		"Authority stage",
+	);
+	return normalized;
 }
 
 function normalizeTargetRead(value) {
@@ -1462,6 +1497,13 @@ function assertDeleteAttempt(value) {
 		throw new TypeError("Delete attempt number exceeds the reviewed maximum");
 	}
 	return attempt;
+}
+
+function assertCanonicalValueByteLength(value, maximum, label) {
+	const byteLength = Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8");
+	if (byteLength > maximum) {
+		throw new TypeError(`${label} exceeds its ${maximum}-byte limit`);
+	}
 }
 
 function kindLimit(kind) {

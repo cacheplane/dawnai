@@ -9,6 +9,7 @@ import {
 	parseConsolidationEnvelope,
 	parseJournalEventEnvelope,
 } from "../duplicate-draft-consolidation-schema.mjs";
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs";
 
 const MEBIBYTE = 1024 * 1024;
@@ -196,6 +197,158 @@ test("canonical byte parsing rejects duplicate keys, drift, invalid UTF-8, and e
 	assert.throws(() => createConsolidationEnvelope("proposed", oversizedRecord));
 });
 
+test("nested evidence limits reject oversized authority, survivor, download, and Release payloads", () => {
+	const oversizedAuthority = authorityStage("pre-delete-1");
+	oversizedAuthority.annotatedTag.name = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+	);
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("delete-authority-observed", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				authority: oversizedAuthority,
+			}),
+			null,
+		),
+	);
+
+	const oversizedFinalAuthority = authorityStage("final", null);
+	oversizedFinalAuthority.annotatedTag.name = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+	);
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("final-authority-observed", {
+				authority: oversizedFinalAuthority,
+			}),
+			null,
+		),
+	);
+
+	const tooManyDownloads = authorityStage("pre-delete-1");
+	tooManyDownloads.releases.push(
+		releaseEvidence("duplicate", "999999999", 4000),
+	);
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("delete-authority-observed", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				authority: tooManyDownloads,
+			}),
+			null,
+		),
+	);
+
+	const { proposedEnvelope, journalEnvelope } = envelopeFixtures();
+	const oversizedSurvivorRecord = finalRecord(
+		proposedEnvelope,
+		journalEnvelope,
+	);
+	const oversizedNodeId = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.survivorEvidenceBytes,
+	);
+	oversizedSurvivorRecord.finalAuthority.releases[0].nodeId = oversizedNodeId;
+	oversizedSurvivorRecord.finalSurvivor.nodeId = oversizedNodeId;
+	assert.throws(() =>
+		createConsolidationEnvelope("final", oversizedSurvivorRecord),
+	);
+
+	const oversizedAsset = releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000);
+	oversizedAsset.assets[0].size = RELEASE_PAYLOAD_LIMITS.tarballBytes + 1;
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("resume-reconciliation", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "present-unchanged-retryable",
+				releaseEvidence: oversizedAsset,
+				observedAt: NOW,
+			}),
+			null,
+		),
+	);
+
+	const aggregateOverflow = releaseEvidence(
+		"duplicate",
+		DUPLICATE_IDS[0],
+		2000,
+	);
+	for (const asset of aggregateOverflow.assets) asset.size = 2 * MEBIBYTE;
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("resume-reconciliation", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "present-unchanged-retryable",
+				releaseEvidence: aggregateOverflow,
+				observedAt: NOW,
+			}),
+			null,
+		),
+	);
+
+	const oversizedAssetName = releaseEvidence(
+		"duplicate",
+		DUPLICATE_IDS[0],
+		2000,
+	);
+	oversizedAssetName.assets[0].name = "x".repeat(
+		RELEASE_PAYLOAD_LIMITS.archiveFilenameBytes + 1,
+	);
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("resume-reconciliation", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "present-unchanged-retryable",
+				releaseEvidence: oversizedAssetName,
+				observedAt: NOW,
+			}),
+			null,
+		),
+	);
+});
+
+test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {
+	assert.doesNotThrow(() =>
+		createConsolidationEnvelope("proposed", proposedRecord()),
+	);
+
+	const sha64 = "a".repeat(64);
+	const withSha256Objects = proposedRecord();
+	withSha256Objects.controller = {
+		headSha: sha64,
+		originMainSha: sha64,
+		githubMainSha: sha64,
+	};
+	withSha256Objects.candidate.commitSha = sha64;
+	withSha256Objects.confirmation.commitSha = sha64;
+	withSha256Objects.annotatedTag.objectSha = sha64;
+	withSha256Objects.annotatedTag.targetSha = sha64;
+	for (const release of withSha256Objects.releases) {
+		release.semantic.targetCommitish = sha64;
+	}
+	assert.doesNotThrow(() =>
+		createConsolidationEnvelope("proposed", withSha256Objects),
+	);
+
+	for (const length of [39, 41, 52, 63, 65]) {
+		const impossible = proposedRecord();
+		impossible.controller = {
+			headSha: "a".repeat(length),
+			originMainSha: "a".repeat(length),
+			githubMainSha: "a".repeat(length),
+		};
+		assert.throws(
+			() => createConsolidationEnvelope("proposed", impossible),
+			undefined,
+			`accepted impossible Git object SHA length ${length}`,
+		);
+	}
+});
+
 test("journal events enforce the hash chain and every exact typed payload", () => {
 	const events = eventFixtures();
 	let previous = null;
@@ -229,6 +382,133 @@ test("journal events enforce the hash chain and every exact typed payload", () =
 	assert.throws(() => parseJournalEventEnvelope(first, 1, DIGEST));
 	assert.throws(() =>
 		parseJournalEventEnvelope({ ...first, eventSha256: DIGEST }, 1, null),
+	);
+});
+
+test("event classifications, nullable evidence, convergence bases, and attempts are exact", () => {
+	const outcomeTriplets = [
+		["confirmed-204", 204],
+		["transport-ambiguous", null],
+		["response-404-ambiguous", 404],
+	];
+	for (const [classification, httpStatus] of outcomeTriplets) {
+		assert.doesNotThrow(() =>
+			canonicalEventEnvelope(
+				journalEvent("delete-outcome", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					classification,
+					httpStatus,
+					observedAt: NOW,
+				}),
+				null,
+			),
+		);
+		for (const wrongStatus of [204, null, 404].filter(
+			(value) => value !== httpStatus,
+		)) {
+			assert.throws(() =>
+				canonicalEventEnvelope(
+					journalEvent("delete-outcome", {
+						targetReleaseId: DUPLICATE_IDS[0],
+						attemptNumber: 1,
+						classification,
+						httpStatus: wrongStatus,
+						observedAt: NOW,
+					}),
+					null,
+				),
+			);
+		}
+	}
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("delete-outcome", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				classification: "unknown",
+				httpStatus: null,
+				observedAt: NOW,
+			}),
+			null,
+		),
+	);
+
+	const presentEvidence = releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000);
+	for (const [classification, releaseEvidenceValue] of [
+		["present-unchanged-retryable", presentEvidence],
+		["absent-ambiguous", null],
+	]) {
+		assert.doesNotThrow(() =>
+			canonicalEventEnvelope(
+				journalEvent("resume-reconciliation", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					classification,
+					releaseEvidence: releaseEvidenceValue,
+					observedAt: NOW,
+				}),
+				null,
+			),
+		);
+	}
+	for (const [classification, releaseEvidenceValue] of [
+		["present-unchanged-retryable", null],
+		["absent-ambiguous", presentEvidence],
+	]) {
+		assert.throws(() =>
+			canonicalEventEnvelope(
+				journalEvent("resume-reconciliation", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					classification,
+					releaseEvidence: releaseEvidenceValue,
+					observedAt: NOW,
+				}),
+				null,
+			),
+		);
+	}
+
+	for (const basis of ["confirmed-204", "ambiguous"]) {
+		assert.doesNotThrow(() =>
+			canonicalEventEnvelope(
+				journalEvent("absence-converged", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					basis,
+					directGet404At: NOW,
+					listAbsentAt: NOW,
+					attempts: 1,
+					completedAt: NOW,
+				}),
+				null,
+			),
+		);
+	}
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("absence-converged", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 1,
+				basis: "unknown",
+				directGet404At: NOW,
+				listAbsentAt: NOW,
+				attempts: 1,
+				completedAt: NOW,
+			}),
+			null,
+		),
+	);
+	assert.throws(() =>
+		canonicalEventEnvelope(
+			journalEvent("delete-intent", {
+				targetReleaseId: DUPLICATE_IDS[0],
+				attemptNumber: 4,
+				authorityEventSha256: DIGEST,
+			}),
+			null,
+		),
 	);
 });
 
@@ -286,6 +566,22 @@ function finalRecord(proposedEnvelope, journalEnvelope) {
 		finalSurvivor: finalAuthority.releases[0],
 		completedAt: NOW,
 	};
+}
+
+function envelopeFixtures() {
+	const proposedEnvelope = createConsolidationEnvelope(
+		"proposed",
+		proposedRecord(),
+	);
+	const operation = canonicalEventEnvelope(
+		operationStartedEvent(proposedEnvelope.recordSha256),
+		null,
+	);
+	const journalEnvelope = createConsolidationEnvelope(
+		"journal",
+		journalRecord(proposedEnvelope, [operation]),
+	);
+	return { proposedEnvelope, journalEnvelope };
 }
 
 function repository() {
@@ -456,6 +752,17 @@ function operationStartedEvent(proposedRecordSha256 = DIGEST) {
 			controllerSha: SHA,
 			deletionOrder: [...DUPLICATE_IDS],
 		},
+	};
+}
+
+function journalEvent(type, payload) {
+	return {
+		schemaVersion: 1,
+		sequence: 1,
+		previousEventSha256: null,
+		type,
+		recordedAt: NOW,
+		payload,
 	};
 }
 
