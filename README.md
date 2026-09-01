@@ -160,8 +160,9 @@ Drive the backend through the
 the [Workbench guide](https://dawnai.org/docs/recipes/research-web-ui) to add a
 browser client; the 0.8.21 scaffold does not include the Workbench package.
 
-In 0.8.21, `npm run build` compiles the TypeScript project. That scaffold does
-not define `npm start`; use `npm run dev` for its working server path.
+In a clean 0.8.21 scaffold inspected on September 1, 2026, `npm run build`
+compiles the TypeScript project. That scaffold does not define `npm start`; use
+`npm run dev` for its working server path.
 
 ### Current source (unreleased 0.8.22)
 

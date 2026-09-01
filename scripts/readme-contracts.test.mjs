@@ -573,6 +573,14 @@ describe("validateRootReadme", () => {
     assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
   })
 
+  it("rejects a sixth hero badge in an adjacent first-scroll block", () => {
+    const source = actualRootReadme.replace(
+      '<p align="center">\n  <a href="https://dawnai.org/docs/getting-started">',
+      '<p align="center">\n  <a href="https://example.com"><img src="https://example.com/sixth.svg" alt="Sixth badge"></a>\n</p>\n\n<p align="center">\n  <a href="https://dawnai.org/docs/getting-started">',
+    )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
+  })
+
   for (const [name, source] of [
     [
       "missing hero navigation link",
@@ -593,6 +601,17 @@ describe("validateRootReadme", () => {
       )
     })
   }
+
+  it("rejects a fifth hero navigation link in an adjacent first-scroll block", () => {
+    const source = actualRootReadme.replace(
+      canonicalHeroCommandBlock,
+      `<p align="center"><a href="https://example.com">Fifth link</a></p>\n\n${canonicalHeroCommandBlock}`,
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /exactly four canonical hero navigation links/i,
+    )
+  })
 
   it("requires the first scaffold command before the product-loop GIF", () => {
     const source = actualRootReadme

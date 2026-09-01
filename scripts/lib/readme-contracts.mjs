@@ -783,7 +783,7 @@ function universalCredentialClaimPresent(source) {
   ].some((pattern) => pattern.test(withoutNegatedClaims))
 }
 
-function validateCanonicalRootReadme(readme, withoutComments) {
+function validateCanonicalRootReadme(readme, withoutComments, visibleRendered) {
   const failures = []
 
   if (!readme.startsWith(CANONICAL_ROOT_HERO)) {
@@ -793,6 +793,27 @@ function validateCanonicalRootReadme(readme, withoutComments) {
     failures.push("README must contain exactly five approved badges")
   }
   if (!readme.includes(CANONICAL_ROOT_NAVIGATION)) {
+    failures.push("README must contain exactly four canonical hero navigation links")
+  }
+
+  const quickstartHeading = /^## Quickstart[ \t]*$/mu.exec(visibleRendered)
+  const firstScroll = visibleRendered.slice(0, quickstartHeading?.index ?? visibleRendered.length)
+  const firstScrollImages = [
+    ...firstScroll.matchAll(/<img\b[^>]*\bsrc=(?:"([^"]+)"|'([^']+)')[^>]*>/giu),
+  ]
+    .map((match) => match[1] ?? match[2])
+    .filter(
+      (source) =>
+        source !== "docs/brand/dawn-logo-horizontal-black-on-white.png" &&
+        source !== "docs/brand/product-loop.gif",
+    )
+  if (firstScrollImages.length !== 5) {
+    failures.push("README must contain exactly five approved badges")
+  }
+  const firstScrollTextLinks = [...firstScroll.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/giu)].filter(
+    (match) => !/<img\b/iu.test(match[1]),
+  )
+  if (firstScrollTextLinks.length !== 4) {
     failures.push("README must contain exactly four canonical hero navigation links")
   }
 
@@ -973,7 +994,7 @@ export function validateRootReadme(source, options = {}) {
     failures.push("README: not every live model call requires credentials")
   }
   if (options?.canonical === true) {
-    failures.push(...validateCanonicalRootReadme(readme, withoutComments))
+    failures.push(...validateCanonicalRootReadme(readme, withoutComments, visible.rendered))
   }
 
   return failures
