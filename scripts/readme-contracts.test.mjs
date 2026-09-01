@@ -98,6 +98,26 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	it("accepts an inline raw-text tag before the planned HTML thumbnail", () => {
+		const readme = entryReadme
+			.replace(
+				"Author-facing TypeScript SDK.",
+				"Author-facing TypeScript SDK. Inline `<script>` is documentation text.",
+			)
+			.replace(
+				"![Dawn product loop](https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif)",
+				`<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif" alt="Dawn product loop: route, deterministic test, and Workbench" width="720">
+  </a>
+</p>`,
+			);
+		assert.deepEqual(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			[],
+		);
+	});
+
 	it("does not accept Markdown image syntax inside a raw HTML block", () => {
 		const readme = entryReadme.replace(
 			/!\[Dawn product loop\].*$/u,

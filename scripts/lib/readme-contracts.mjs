@@ -562,7 +562,7 @@ function visibleBlockProjections(source) {
 	const projections = markdownBlockProjections(maskHtmlComments(source));
 	return {
 		markdown: maskInlineCode(projections.markdown),
-		rendered: maskInlineCode(maskNestedRawTextElements(projections.rendered)),
+		rendered: maskNestedRawTextElements(maskInlineCode(projections.rendered)),
 	};
 }
 
