@@ -455,9 +455,42 @@ function markdownBlockProjections(source) {
 }
 
 function maskHtmlComments(source) {
-	return source.replace(/<!--[\s\S]*?(?:-->|$)/gu, (comment) =>
-		maskText(comment),
-	);
+	const blockProjections = markdownBlockProjections(source);
+	const inlineMasked = maskInlineCode(blockProjections.rendered);
+	const characters = source.split("");
+	let index = 0;
+	while (index < source.length) {
+		if (!source.startsWith("<!--", index) || isEscaped(source, index)) {
+			index++;
+			continue;
+		}
+
+		const renderedHtmlOpener = blockProjections.rendered.startsWith(
+			"<!--",
+			index,
+		);
+		const insideRawHtml =
+			renderedHtmlOpener &&
+			!blockProjections.markdown.startsWith("<!--", index);
+		const outsideLiteralContext = inlineMasked.startsWith("<!--", index);
+		if (!insideRawHtml && !outsideLiteralContext) {
+			index += 4;
+			continue;
+		}
+
+		const closing = source.indexOf("-->", index + 4);
+		const commentEnd = closing === -1 ? source.length : closing + 3;
+		for (let commentIndex = index; commentIndex < commentEnd; commentIndex++) {
+			if (
+				characters[commentIndex] !== "\r" &&
+				characters[commentIndex] !== "\n"
+			) {
+				characters[commentIndex] = " ";
+			}
+		}
+		index = commentEnd;
+	}
+	return characters.join("");
 }
 
 function htmlTagEnd(source, start) {
@@ -481,7 +514,7 @@ function maskNestedRawTextElements(source) {
 	const characters = source.split("");
 	let index = 0;
 	while (index < source.length) {
-		if (source[index] !== "<") {
+		if (source[index] !== "<" || isEscaped(source, index)) {
 			index++;
 			continue;
 		}

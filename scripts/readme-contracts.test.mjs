@@ -118,6 +118,46 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	for (const [name, literal] of [
+		["inline code", "`<!--`"],
+		["a fenced block", "```md\n<!--\n```"],
+	]) {
+		it(`accepts an unmatched comment opener inside ${name} before package requirements`, () => {
+			const readme = entryReadme.replace(
+				"Author-facing TypeScript SDK.\n",
+				`Author-facing TypeScript SDK.\n\n${literal}\n`,
+			);
+			assert.deepEqual(
+				validatePackageReadme({
+					tier: "entry",
+					manifest: entryManifest,
+					readme,
+				}),
+				[],
+			);
+		});
+	}
+
+	it("accepts an escaped raw-text opener before the genuine thumbnail", () => {
+		const readme = entryReadme
+			.replace(
+				"Author-facing TypeScript SDK.",
+				"Author-facing TypeScript SDK. Escaped \\<script> is prose.",
+			)
+			.replace(
+				"![Dawn product loop](https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif)",
+				`<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif" alt="Dawn product loop: route, deterministic test, and Workbench" width="720">
+  </a>
+</p>`,
+			);
+		assert.deepEqual(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			[],
+		);
+	});
+
 	it("does not accept Markdown image syntax inside a raw HTML block", () => {
 		const readme = entryReadme.replace(
 			/!\[Dawn product loop\].*$/u,
@@ -550,6 +590,16 @@ describe("validateRootReadme", () => {
 	it("accepts the required root README structure and references", () => {
 		assert.deepEqual(validateRootReadme(rootReadme), []);
 	});
+
+	for (const [name, literal] of [
+		["inline code", "`<!--`"],
+		["a fenced block", "```md\n<!--\n```"],
+	]) {
+		it(`accepts an unmatched comment opener inside ${name} before root requirements`, () => {
+			const source = rootReadme.replace("# Dawn\n", `# Dawn\n\n${literal}\n`);
+			assert.deepEqual(validateRootReadme(source), []);
+		});
+	}
 
 	it("accepts the product-loop GIF as an HTML image", () => {
 		const htmlImage = rootReadme.replace(
