@@ -5,6 +5,7 @@ import {
 	mkdir,
 	readFile,
 	readdir,
+	rename as renameFile,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -41,8 +42,10 @@ import {
 	checkLocalMedia,
 	MEDIA_CONTRACTS,
 	parseMediaCheckArguments,
+	probeFile,
 	validateMediaManifestLayout,
 	validateLocalMediaContract,
+	validateStagedMediaManifest,
 } from "./check-media.mjs";
 import {
 	buildTimelineFilter,
@@ -487,6 +490,66 @@ test("local checker rejects a fixed asset that differs from its selected run", a
 	);
 });
 
+test("staged validation aborts and joins ffprobe before caller cleanup", async () => {
+	const repoRoot = "/repo";
+	const { pointer, manifest } = validManifestLayout(repoRoot);
+	const controller = new AbortController();
+	const reason = new Error("cancel staged validation");
+	const events = [];
+	let markStarted;
+	const started = new Promise((resolve) => {
+		markStarted = resolve;
+	});
+	const validation = validateStagedMediaManifest({
+		repoRoot,
+		manifest,
+		manifestPath: pointer.manifestPath,
+		signal: controller.signal,
+		async hash(path) {
+			return path.endsWith(".gif") ? "a".repeat(64) : "b".repeat(64);
+		},
+		async stat(path) {
+			return { size: path.endsWith(".mp4") ? 1_200_000 : 1_100_000 };
+		},
+		async access() {},
+		async readFile() {
+			return "transcript";
+		},
+		probe(path, options) {
+			return probeFile(path, {
+				...options,
+				exec: async (_command, _args, { signal }) => {
+					events.push("ffprobe started");
+					markStarted();
+					return new Promise((_resolve, reject) => {
+						signal.addEventListener(
+							"abort",
+							() => {
+								events.push("ffprobe abort received");
+								setImmediate(() => {
+									events.push("ffprobe child settled");
+									reject(new Error("native child abort"));
+								});
+							},
+							{ once: true },
+						);
+					});
+				},
+			});
+		},
+	});
+	await started;
+	controller.abort(reason);
+	await assert.rejects(validation, (error) => error === reason);
+	events.push("encoding cleanup");
+	assert.deepEqual(events, [
+		"ffprobe started",
+		"ffprobe abort received",
+		"ffprobe child settled",
+		"encoding cleanup",
+	]);
+});
+
 test("encoding plan builds the four honest capture timelines", () => {
 	const plan = createTimelinePlan({
 		videoTimeline: {
@@ -706,6 +769,42 @@ test("fixed media publication rolls back every prior asset and pointer", async (
 	}
 });
 
+test("failed backup restoration preserves and reports the recovery file", async () => {
+	const root = await mkdtemp(join(tmpdir(), "dawn-media-recovery-"));
+	try {
+		const stagedPath = join(root, "staged");
+		const targetPath = join(root, "fixed");
+		const transactionId = "run-recovery";
+		const backupPath = `${targetPath}.backup-${transactionId}`;
+		await writeFile(stagedPath, "new bytes");
+		await writeFile(targetPath, "old recoverable bytes");
+		let thrown;
+		try {
+			await publishFixedAssets({
+				entries: [{ name: "gif", stagedPath, targetPath }],
+				transactionId,
+				afterPublish() {
+					throw new Error("publish failed");
+				},
+				rename(source, destination) {
+					if (source === backupPath && destination === targetPath) {
+						throw new Error("restore rename failed");
+					}
+					return renameFile(source, destination);
+				},
+			});
+		} catch (error) {
+			thrown = error;
+		}
+		assert.ok(thrown instanceof AggregateError);
+		assert.match(thrown.message, new RegExp(backupPath.replaceAll("/", "\\/")));
+		await assert.rejects(readFile(targetPath), { code: "ENOENT" });
+		assert.equal(await readFile(backupPath, "utf8"), "old recoverable bytes");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("encoding failures never mix fixed assets or the latest pointer across runs", async () => {
 	const root = await mkdtemp(join(tmpdir(), "dawn-media-encode-"));
 	try {
@@ -756,6 +855,7 @@ test("encoding failures never mix fixed assets or the latest pointer across runs
 					},
 				},
 			};
+			const controller = new AbortController();
 
 			await assert.rejects(
 				encodeCaptureArtifacts({
@@ -764,6 +864,7 @@ test("encoding failures never mix fixed assets or the latest pointer across runs
 					recordingsDir,
 					summary,
 					summaryPath,
+					signal: controller.signal,
 					dependencies: {
 						async encodeVideo({ destination }) {
 							await writeFile(destination, "video");
@@ -774,7 +875,9 @@ test("encoding failures never mix fixed assets or the latest pointer across runs
 						async encodeGif({ destination }) {
 							await writeFile(destination, "gif");
 						},
-						async validateStagedMedia() {},
+						async validateStagedMedia(options) {
+							assert.equal(options.signal, controller.signal);
+						},
 						async afterPhase(phase) {
 							if (phase === failureAt) throw new Error(`fail after ${phase}`);
 						},

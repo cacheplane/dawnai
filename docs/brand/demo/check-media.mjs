@@ -260,17 +260,28 @@ export async function validateLocalMediaContract({ files, captions }) {
 	return failures;
 }
 
-async function probeFile(path) {
-	const { stdout } = await execFile("ffprobe", [
-		"-v",
-		"error",
-		"-show_streams",
-		"-show_format",
-		"-of",
-		"json",
-		path,
-	]);
-	return JSON.parse(stdout);
+export async function probeFile(path, { signal, exec = execFile } = {}) {
+	signal?.throwIfAborted();
+	try {
+		const { stdout } = await exec(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-show_streams",
+				"-show_format",
+				"-of",
+				"json",
+				path,
+			],
+			{ ...(signal !== undefined ? { signal } : {}) },
+		);
+		signal?.throwIfAborted();
+		return JSON.parse(stdout);
+	} catch (error) {
+		if (signal?.aborted) throw signal.reason ?? error;
+		throw error;
+	}
 }
 
 async function hashFile(path, readFile = nodeReadFile) {
@@ -301,6 +312,7 @@ async function collectMediaFiles(
 		access = nodeAccess,
 		probe = probeFile,
 		readFile = nodeReadFile,
+		signal,
 	} = {},
 ) {
 	const files = new Map();
@@ -315,7 +327,7 @@ async function collectMediaFiles(
 			const info = await stat(actualPath);
 			files.set(logicalPath, {
 				size: info.size,
-				probe: await probe(actualPath),
+				probe: await probe(actualPath, { signal }),
 			});
 		}
 		const posterPath = published ? join(repoRoot, contract.poster) : clip?.poster;
@@ -323,7 +335,7 @@ async function collectMediaFiles(
 			await access(posterPath);
 			files.set(contract.poster, {
 				size: (await stat(posterPath)).size,
-				probe: await probe(posterPath),
+				probe: await probe(posterPath, { signal }),
 			});
 		} catch (error) {
 			if (error?.code !== "ENOENT") throw error;
@@ -336,7 +348,7 @@ async function collectMediaFiles(
 		const info = await stat(gifPath);
 		files.set("docs/brand/product-loop.gif", {
 			size: info.size,
-			probe: await probe(gifPath),
+			probe: await probe(gifPath, { signal }),
 		});
 	} catch (error) {
 		if (error?.code !== "ENOENT") throw error;
@@ -362,6 +374,7 @@ export async function validateStagedMediaManifest({
 	probe = probeFile,
 	readFile = nodeReadFile,
 	hash = (path) => hashFile(path, readFile),
+	signal,
 }) {
 	validateMediaManifestLayout({
 		repoRoot,
@@ -387,6 +400,7 @@ export async function validateStagedMediaManifest({
 		access,
 		probe,
 		readFile,
+		signal,
 	});
 	const failures = await validateLocalMediaContract({
 		files,
@@ -434,6 +448,7 @@ export async function checkLocalMedia({
 	probe = probeFile,
 	hash = (path) => hashFile(path, readFile),
 	log = console.log,
+	signal,
 } = {}) {
 	const { manifest } = await readLatestManifest(repoRoot, readFile);
 	await verifyPublishedCorrespondence(repoRoot, manifest, { hash });
@@ -443,6 +458,7 @@ export async function checkLocalMedia({
 		access,
 		probe,
 		readFile,
+		signal,
 	});
 	const failures = await validateLocalMediaContract({
 		files,

@@ -282,13 +282,19 @@ export async function publishFixedAssets({
 		...entry,
 		candidatePath: `${entry.targetPath}.next-${transactionId}`,
 		backupPath: `${entry.targetPath}.backup-${transactionId}`,
+		preserveBackup: false,
 	}));
 	const states = [];
 	try {
 		for (const entry of prepared) {
 			signal?.throwIfAborted();
 			await remove(entry.candidatePath);
-			await remove(entry.backupPath);
+			if (await pathExists(entry.backupPath, access)) {
+				entry.preserveBackup = true;
+				throw new Error(
+					`media publication recovery backup already exists at ${entry.backupPath}`,
+				);
+			}
 			await copy(entry.stagedPath, entry.candidatePath);
 		}
 		for (const entry of prepared) {
@@ -311,19 +317,39 @@ export async function publishFixedAssets({
 	} catch (error) {
 		const rollbackErrors = [];
 		for (const state of states.reverse()) {
-			try {
-				if (state.published) await remove(state.entry.targetPath);
-				if (state.hadPrevious) {
-					await rename(state.entry.backupPath, state.entry.targetPath);
+			let targetRemoved = !state.published;
+			if (state.published) {
+				try {
+					await remove(state.entry.targetPath);
+					targetRemoved = true;
+				} catch (rollbackError) {
+					rollbackErrors.push(rollbackError);
 				}
-			} catch (rollbackError) {
-				rollbackErrors.push(rollbackError);
+			}
+			if (state.hadPrevious) {
+				try {
+					if (!targetRemoved) {
+						throw new Error("published target could not be removed");
+					}
+					await rename(state.entry.backupPath, state.entry.targetPath);
+				} catch (rollbackError) {
+					state.entry.preserveBackup = true;
+					rollbackErrors.push(
+						new Error(
+							`failed to restore ${state.entry.targetPath}; recovery bytes remain at ${state.entry.backupPath}`,
+							{ cause: rollbackError },
+						),
+					);
+				}
 			}
 		}
 		if (rollbackErrors.length > 0) {
+			const recoveryPaths = prepared
+				.filter((entry) => entry.preserveBackup)
+				.map((entry) => entry.backupPath);
 			throw new AggregateError(
 				[error, ...rollbackErrors],
-				"media publication failed and rollback was incomplete",
+				`media publication failed and rollback was incomplete; recovery files preserved at: ${recoveryPaths.join(", ")}`,
 				{ cause: error },
 			);
 		}
@@ -332,7 +358,7 @@ export async function publishFixedAssets({
 		await Promise.all(
 			prepared.flatMap((entry) => [
 				remove(entry.candidatePath),
-				remove(entry.backupPath),
+				...(entry.preserveBackup ? [] : [remove(entry.backupPath)]),
 			]),
 		);
 	}
@@ -787,7 +813,7 @@ export async function encodeCaptureArtifacts({
 		actLabels: Object.values(ACT_LABELS),
 		captions: MEDIA_CAPTIONS,
 	};
-	await validateStagedMedia({ repoRoot, manifest, manifestPath });
+	await validateStagedMedia({ repoRoot, manifest, manifestPath, signal });
 	signal?.throwIfAborted();
 	const stagedManifest = join(publicationDir, "media-manifest.json");
 	await writeJsonAtomic(stagedManifest, manifest, { signal });
