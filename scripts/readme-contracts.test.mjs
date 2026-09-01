@@ -83,6 +83,21 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	it("accepts the planned raw HTML product-loop thumbnail", () => {
+		const readme = entryReadme.replace(
+			"![Dawn product loop](https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif)",
+			`<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif" alt="Dawn product loop: route, deterministic test, and Workbench" width="720">
+  </a>
+</p>`,
+		);
+		assert.deepEqual(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			[],
+		);
+	});
+
 	for (const [name, source, expected] of [
 		[
 			"Use this when guidance",
@@ -226,6 +241,17 @@ describe("validatePackageReadme", () => {
 		});
 		assertFailure(failures, /H1.*@dawn-ai\/sdk/i);
 		assertFailure(failures, /product-loop\.gif/);
+	});
+
+	it("does not accept an HTML product-loop image inside indented code", () => {
+		const readme = entryReadme.replace(
+			/!\[Dawn product loop\].*$/u,
+			'    <img src="docs/brand/product-loop.gif" alt="Decoy">',
+		);
+		assertFailure(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			/product-loop\.gif/,
+		);
 	});
 
 	for (const structuralLine of [

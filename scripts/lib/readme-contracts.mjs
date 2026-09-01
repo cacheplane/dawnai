@@ -60,6 +60,61 @@ const ROOT_LINK_CONTRACTS = {
 	},
 };
 
+const RAW_HTML_BLOCK_TAGS = new Set([
+	"address",
+	"article",
+	"aside",
+	"blockquote",
+	"body",
+	"caption",
+	"center",
+	"colgroup",
+	"dd",
+	"details",
+	"dialog",
+	"dir",
+	"div",
+	"dl",
+	"dt",
+	"fieldset",
+	"figcaption",
+	"figure",
+	"footer",
+	"form",
+	"frame",
+	"frameset",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"head",
+	"header",
+	"html",
+	"iframe",
+	"legend",
+	"li",
+	"main",
+	"menu",
+	"nav",
+	"noframes",
+	"ol",
+	"p",
+	"pre",
+	"section",
+	"summary",
+	"table",
+	"tbody",
+	"td",
+	"tfoot",
+	"th",
+	"thead",
+	"title",
+	"tr",
+	"ul",
+]);
+
 function maskText(value) {
 	return value.replace(/[^\r\n]/gu, " ");
 }
@@ -207,8 +262,30 @@ function closingFenceRun(line, fence) {
 	return /^([`~]+)[ \t]*$/u.exec(stripFenceIndent(content))?.[1] ?? null;
 }
 
+function rawHtmlBlockOpening(line) {
+	const container = blockquoteContainer(line);
+	const lists = listContainers(container.content);
+	if (lists.indentedCode) return null;
+
+	const candidate = stripFenceIndent(lists.content);
+	const tag = /^<([a-z][a-z0-9-]*)(?=[\s/>])/iu
+		.exec(candidate)?.[1]
+		?.toLowerCase();
+	if (!tag || !RAW_HTML_BLOCK_TAGS.has(tag)) return null;
+	return {
+		tag,
+		listIndentColumns: lists.listIndentColumns,
+		quoteDepth: container.depth,
+	};
+}
+
+function closesRawHtmlBlock(line, htmlBlock) {
+	return new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "iu").test(line);
+}
+
 function maskMarkdownCodeBlocks(source) {
 	let fence = null;
+	let htmlBlock = null;
 	return source
 		.split(/(?<=\n)/u)
 		.map((line) => {
@@ -235,8 +312,30 @@ function maskMarkdownCodeBlocks(source) {
 				}
 			}
 
+			if (htmlBlock) {
+				const container = blockquoteContainer(content);
+				const containedContent = contentAfterIndent(
+					container.content,
+					htmlBlock.listIndentColumns,
+				);
+				const containerEnded =
+					container.depth < htmlBlock.quoteDepth || containedContent === null;
+				if (containerEnded || (containedContent?.trim().length ?? 0) === 0) {
+					htmlBlock = null;
+				} else {
+					if (closesRawHtmlBlock(containedContent, htmlBlock)) htmlBlock = null;
+					return line;
+				}
+			}
+
 			const container = blockquoteContainer(content);
 			if (listContainers(container.content).indentedCode) return maskText(line);
+
+			const htmlOpening = rawHtmlBlockOpening(content);
+			if (htmlOpening) {
+				if (!closesRawHtmlBlock(content, htmlOpening)) htmlBlock = htmlOpening;
+				return line;
+			}
 
 			const opening = fenceOpening(content);
 			if (opening) {
