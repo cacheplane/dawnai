@@ -179,6 +179,12 @@ test("canonical byte parsing rejects duplicate keys, drift, invalid UTF-8, and e
 	assert.throws(() =>
 		parseConsolidationEnvelope("proposed", Buffer.from([0xc3, 0x28, 0x0a])),
 	);
+	assert.throws(() =>
+		parseConsolidationEnvelope(
+			"proposed",
+			Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), canonical]),
+		),
+	);
 
 	for (const [kind, maximum] of [
 		["proposed", DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes],
@@ -309,6 +315,268 @@ test("nested evidence limits reject oversized authority, survivor, download, and
 			null,
 		),
 	);
+});
+
+test("embedded envelopes retain their own proposed and journal byte ceilings", () => {
+	const { proposedEnvelope, journalEnvelope } = envelopeFixtures();
+	const oversizedProposedRecord = structuredClone(proposedEnvelope.record);
+	oversizedProposedRecord.repository.name = "x".repeat(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes,
+	);
+	const oversizedProposedEnvelope = {
+		record: oversizedProposedRecord,
+		recordSha256: canonicalRecordSha256(oversizedProposedRecord),
+	};
+	assert.throws(() =>
+		createConsolidationEnvelope(
+			"final",
+			finalRecord(oversizedProposedEnvelope, journalEnvelope),
+		),
+	);
+
+	const oversizedJournalRecord = journalRecord(proposedEnvelope, []);
+	let previousEventSha256 = null;
+	const operation = operationStartedEvent(proposedEnvelope.recordSha256);
+	oversizedJournalRecord.events.push(
+		canonicalEventEnvelope(operation, previousEventSha256),
+	);
+	previousEventSha256 = oversizedJournalRecord.events.at(-1).eventSha256;
+	for (let index = 0; index < 10; index += 1) {
+		const authority = authorityStage("final", null);
+		authority.annotatedTag.name = "x".repeat(7 * MEBIBYTE);
+		const event = journalEvent("final-authority-observed", { authority });
+		event.sequence = index + 2;
+		event.previousEventSha256 = previousEventSha256;
+		const envelope = canonicalEventEnvelope(event, previousEventSha256);
+		oversizedJournalRecord.events.push(envelope);
+		previousEventSha256 = envelope.eventSha256;
+	}
+	const oversizedJournalEnvelope = {
+		record: oversizedJournalRecord,
+		recordSha256: canonicalRecordSha256(oversizedJournalRecord),
+	};
+	assert.throws(() =>
+		createConsolidationEnvelope(
+			"final",
+			finalRecord(proposedEnvelope, oversizedJournalEnvelope),
+		),
+	);
+});
+
+test("every fixed array rejects holes and unexpected own properties", () => {
+	for (const path of [
+		["roles", "duplicates"],
+		["confirmation", "duplicates"],
+		["workflowAuthority", "query", "statuses"],
+		["workflowAuthority", "nonterminalRuns"],
+		["npmInventories"],
+		["npmInventories", 0, "packages"],
+		["releases"],
+		["releases", 0, "assets"],
+		["payloadProof", "baseAssetSet"],
+		["payloadProof", "attestationVerification", "subjects"],
+	]) {
+		const withExtra = proposedRecord();
+		Object.defineProperty(valueAtPath(withExtra, path), "extra", {
+			value: "unexpected",
+			enumerable: true,
+			configurable: true,
+		});
+		assert.throws(
+			() => createConsolidationEnvelope("proposed", withExtra),
+			undefined,
+			`accepted extra array property at ${path.join(".")}`,
+		);
+
+		const withHole = proposedRecord();
+		const array = valueAtPath(withHole, path);
+		if (array.length > 0) {
+			const last = array.length - 1;
+			const displaced = array[last];
+			delete array[last];
+			Object.defineProperty(array, "replacement", {
+				value: displaced,
+				enumerable: true,
+				configurable: true,
+			});
+			assert.throws(
+				() => createConsolidationEnvelope("proposed", withHole),
+				undefined,
+				`accepted sparse array at ${path.join(".")}`,
+			);
+		}
+	}
+
+	const symbolArray = proposedRecord();
+	symbolArray.workflowAuthority.query.statuses[Symbol("hidden")] = true;
+	assert.throws(() => createConsolidationEnvelope("proposed", symbolArray));
+
+	const hiddenArray = proposedRecord();
+	Object.defineProperty(
+		hiddenArray.workflowAuthority.query.statuses,
+		"hidden",
+		{
+			value: true,
+			enumerable: false,
+		},
+	);
+	assert.throws(() => createConsolidationEnvelope("proposed", hiddenArray));
+
+	let arrayGetterCalls = 0;
+	const accessorArray = proposedRecord();
+	Object.defineProperty(accessorArray.workflowAuthority.query.statuses, 0, {
+		get() {
+			arrayGetterCalls += 1;
+			return "in_progress";
+		},
+		enumerable: true,
+		configurable: true,
+	});
+	assert.throws(() => createConsolidationEnvelope("proposed", accessorArray));
+	assert.equal(arrayGetterCalls, 0);
+
+	const { proposedEnvelope } = envelopeFixtures();
+	for (const path of [["deletionOrder"], ["events"]]) {
+		const record = journalRecord(proposedEnvelope, [
+			canonicalEventEnvelope(
+				operationStartedEvent(proposedEnvelope.recordSha256),
+				null,
+			),
+		]);
+		Object.defineProperty(valueAtPath(record, path), "extra", {
+			value: true,
+			enumerable: true,
+		});
+		assert.throws(() => createConsolidationEnvelope("journal", record));
+	}
+
+	const event = operationStartedEvent();
+	Object.defineProperty(event.payload.deletionOrder, "extra", {
+		value: true,
+		enumerable: true,
+	});
+	assert.throws(() => canonicalEventEnvelope(event, null));
+});
+
+test("exact objects reject accessors, hidden and symbol fields, unsafe keys, and prototypes", () => {
+	let getterCalls = 0;
+	const accessor = proposedRecord();
+	Object.defineProperty(accessor.repository, "name", {
+		get() {
+			getterCalls += 1;
+			return "cacheplane/dawnai";
+		},
+		enumerable: true,
+		configurable: true,
+	});
+	assert.throws(() => createConsolidationEnvelope("proposed", accessor));
+	assert.equal(getterCalls, 0);
+
+	const hidden = proposedRecord();
+	Object.defineProperty(hidden.repository, "hidden", {
+		value: true,
+		enumerable: false,
+	});
+	assert.throws(() => createConsolidationEnvelope("proposed", hidden));
+
+	const symbol = proposedRecord();
+	symbol.repository[Symbol("hidden")] = true;
+	assert.throws(() => createConsolidationEnvelope("proposed", symbol));
+
+	const unsafe = proposedRecord();
+	Object.defineProperty(unsafe.repository, "__proto__", {
+		value: {},
+		enumerable: true,
+	});
+	assert.throws(() => createConsolidationEnvelope("proposed", unsafe));
+
+	const prototype = proposedRecord();
+	Object.setPrototypeOf(prototype.repository.actor, { inherited: true });
+	assert.throws(() => createConsolidationEnvelope("proposed", prototype));
+
+	let proxyReads = 0;
+	const proxied = proposedRecord();
+	proxied.repository.actor = new Proxy(proxied.repository.actor, {
+		get(target, property, receiver) {
+			proxyReads += 1;
+			return Reflect.get(target, property, receiver);
+		},
+	});
+	assert.throws(() => createConsolidationEnvelope("proposed", proxied));
+	assert.equal(proxyReads, 0);
+
+	let eventGetterCalls = 0;
+	const eventAccessor = journalEvent("delete-intent", {
+		targetReleaseId: DUPLICATE_IDS[0],
+		attemptNumber: 1,
+		authorityEventSha256: DIGEST,
+	});
+	Object.defineProperty(eventAccessor.payload, "targetReleaseId", {
+		get() {
+			eventGetterCalls += 1;
+			return DUPLICATE_IDS[0];
+		},
+		enumerable: true,
+		configurable: true,
+	});
+	assert.throws(() => canonicalEventEnvelope(eventAccessor, null));
+	assert.equal(eventGetterCalls, 0);
+});
+
+test("timestamps reject impossible dates and normalize omitted milliseconds", () => {
+	const omittedMilliseconds = proposedRecord();
+	omittedMilliseconds.inspectedAt = "2026-09-01T12:00:00Z";
+	const normalized = createConsolidationEnvelope(
+		"proposed",
+		omittedMilliseconds,
+	);
+	assert.equal(normalized.record.inspectedAt, NOW);
+
+	for (const invalid of [
+		"2026-02-31T12:00:00.000Z",
+		"2025-02-29T12:00:00.000Z",
+		"2026-13-01T12:00:00.000Z",
+	]) {
+		const record = proposedRecord();
+		record.inspectedAt = invalid;
+		assert.throws(() => createConsolidationEnvelope("proposed", record));
+	}
+});
+
+test("fixed cardinality and journal ceilings reject hostile tails before traversal", () => {
+	let fixedTailCalls = 0;
+	const oversizedFixedArray = proposedRecord();
+	const npmInventories = new Array(3);
+	npmInventories[0] = npmInventory("inspect-initial");
+	npmInventories[1] = npmInventory("inspect-ready");
+	Object.defineProperty(npmInventories, 2, {
+		get() {
+			fixedTailCalls += 1;
+			return npmInventory("inspect-ready");
+		},
+		enumerable: true,
+	});
+	oversizedFixedArray.npmInventories = npmInventories;
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", oversizedFixedArray),
+	);
+	assert.equal(fixedTailCalls, 0);
+
+	let journalTailCalls = 0;
+	const { proposedEnvelope } = envelopeFixtures();
+	const record = journalRecord(proposedEnvelope, []);
+	record.events = new Array(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes + 1,
+	);
+	Object.defineProperty(record.events, record.events.length - 1, {
+		get() {
+			journalTailCalls += 1;
+			return {};
+		},
+		enumerable: true,
+	});
+	assert.throws(() => createConsolidationEnvelope("journal", record));
+	assert.equal(journalTailCalls, 0);
 });
 
 test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {

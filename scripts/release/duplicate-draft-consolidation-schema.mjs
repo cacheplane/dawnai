@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 
 import { RELEASE_PAYLOAD_LIMITS } from "./limits.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
@@ -137,6 +138,14 @@ export function parseConsolidationEnvelope(kind, bytes) {
 		throw new TypeError("Envelope bytes must be a byte array");
 	if (bytes.byteLength > maximum)
 		throw new Error(`${kind} envelope exceeds its byte limit`);
+	if (
+		bytes.byteLength >= 3 &&
+		bytes[0] === 0xef &&
+		bytes[1] === 0xbb &&
+		bytes[2] === 0xbf
+	) {
+		throw new TypeError("Envelope must not contain a UTF-8 byte-order mark");
+	}
 
 	let source;
 	try {
@@ -166,12 +175,13 @@ export function canonicalRecordSha256(record) {
 }
 
 export function canonicalEventEnvelope(event, previousEventSha256) {
+	const snapshot = assertExactFields(event, EVENT_FIELDS, "Journal event");
 	const expectedSequence = assertPositiveInteger(
-		event?.sequence,
+		snapshot.sequence,
 		"Journal event sequence",
 	);
 	const normalizedEvent = normalizeEvent(
-		event,
+		snapshot,
 		expectedSequence,
 		previousEventSha256,
 	);
@@ -186,7 +196,11 @@ export function parseJournalEventEnvelope(
 	expectedSequence,
 	previousEventSha256,
 ) {
-	assertExactFields(value, EVENT_ENVELOPE_FIELDS, "Journal event envelope");
+	value = assertExactFields(
+		value,
+		EVENT_ENVELOPE_FIELDS,
+		"Journal event envelope",
+	);
 	const event = normalizeEvent(
 		value.event,
 		expectedSequence,
@@ -202,7 +216,7 @@ export function parseJournalEventEnvelope(
 }
 
 function normalizeEnvelope(kind, value) {
-	assertExactFields(value, ENVELOPE_FIELDS, `${kind} envelope`);
+	value = assertExactFields(value, ENVELOPE_FIELDS, `${kind} envelope`);
 	const record = normalizeRecord(kind, value.record);
 	const recordSha256 = assertSha256(
 		value.recordSha256,
@@ -213,7 +227,13 @@ function normalizeEnvelope(kind, value) {
 			`${kind} envelope digest does not match its canonical record`,
 		);
 	}
-	return { record, recordSha256 };
+	const normalized = { record, recordSha256 };
+	assertCanonicalValueByteLength(
+		normalized,
+		kindLimit(kind),
+		`${kind} envelope`,
+	);
+	return normalized;
 }
 
 function normalizeRecord(kind, value) {
@@ -224,7 +244,7 @@ function normalizeRecord(kind, value) {
 }
 
 function normalizeProposedRecord(value) {
-	assertExactFields(value, RECORD_FIELDS.proposed, "Proposed record");
+	value = assertExactFields(value, RECORD_FIELDS.proposed, "Proposed record");
 	assertSchemaVersion(value.schemaVersion, "Proposed record");
 	const repository = normalizeRepository(value.repository);
 	const controller = normalizeController(value.controller);
@@ -236,10 +256,11 @@ function normalizeProposedRecord(value) {
 	const npmInventories = assertArray(
 		value.npmInventories,
 		"Proposed npm inventories",
+		{ exactLength: 2 },
 	).map(normalizeNpmInventory);
-	const releases = assertArray(value.releases, "Proposed releases").map(
-		normalizeReleaseEvidence,
-	);
+	const releases = assertArray(value.releases, "Proposed releases", {
+		exactLength: 3,
+	}).map(normalizeReleaseEvidence);
 	const payloadProof = normalizePayloadProof(value.payloadProof);
 	const inspectedAt = assertTimestamp(
 		value.inspectedAt,
@@ -307,7 +328,7 @@ function normalizeProposedRecord(value) {
 }
 
 function normalizeJournalRecord(value) {
-	assertExactFields(value, RECORD_FIELDS.journal, "Journal record");
+	value = assertExactFields(value, RECORD_FIELDS.journal, "Journal record");
 	assertSchemaVersion(value.schemaVersion, "Journal record");
 	const repository = normalizeRepository(value.repository);
 	const candidate = normalizeCandidate(value.candidate);
@@ -322,6 +343,7 @@ function normalizeJournalRecord(value) {
 	const deletionOrder = normalizeIdentityArray(
 		value.deletionOrder,
 		"Journal deletion order",
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets,
 	);
 	if (
 		deletionOrder.length !== DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets
@@ -335,7 +357,11 @@ function normalizeJournalRecord(value) {
 		APPROVED_DUPLICATE_IDS,
 		"Approved journal deletion order",
 	);
-	const rawEvents = assertArray(value.events, "Journal events");
+	const rawEvents = assertArray(value.events, "Journal events", {
+		maximumLength: Math.floor(
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes / 64,
+		),
+	});
 	const events = [];
 	let previousEventSha256 = null;
 	for (let index = 0; index < rawEvents.length; index += 1) {
@@ -393,7 +419,7 @@ function normalizeJournalRecord(value) {
 }
 
 function normalizeFinalRecord(value) {
-	assertExactFields(value, RECORD_FIELDS.final, "Final receipt record");
+	value = assertExactFields(value, RECORD_FIELDS.final, "Final receipt record");
 	assertSchemaVersion(value.schemaVersion, "Final receipt record");
 	const proposedEnvelope = normalizeEnvelope(
 		"proposed",
@@ -439,7 +465,7 @@ function normalizeFinalRecord(value) {
 }
 
 function normalizeRepository(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["name", "id", "defaultBranch", "actor"],
 		"Repository",
@@ -456,7 +482,7 @@ function normalizeRepository(value) {
 }
 
 function normalizeActor(value, label) {
-	assertExactFields(value, ["login", "id"], label);
+	value = assertExactFields(value, ["login", "id"], label);
 	return {
 		login: assertNonemptyString(value.login, `${label} login`),
 		id: assertId(value.id, `${label} id`),
@@ -464,7 +490,7 @@ function normalizeActor(value, label) {
 }
 
 function normalizeController(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["headSha", "originMainSha", "githubMainSha"],
 		"Controller",
@@ -485,7 +511,11 @@ function normalizeController(value) {
 }
 
 function normalizeCandidate(value) {
-	assertExactFields(value, ["version", "commitSha", "tag"], "Candidate");
+	value = assertExactFields(
+		value,
+		["version", "commitSha", "tag"],
+		"Candidate",
+	);
 	const version = assertMatchingString(
 		value.version,
 		VERSION_PATTERN,
@@ -499,11 +529,12 @@ function normalizeCandidate(value) {
 }
 
 function normalizeRoles(value) {
-	assertExactFields(value, ["survivor", "duplicates"], "Release roles");
+	value = assertExactFields(value, ["survivor", "duplicates"], "Release roles");
 	const survivor = assertId(value.survivor, "Survivor Release id");
 	const duplicates = normalizeIdentityArray(
 		value.duplicates,
 		"Duplicate Release ids",
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets,
 	);
 	if (
 		duplicates.length !== DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets ||
@@ -523,7 +554,7 @@ function normalizeRoles(value) {
 }
 
 function normalizeConfirmation(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["version", "commitSha", "survivor", "duplicates", "template"],
 		"Confirmation",
@@ -548,13 +579,14 @@ function normalizeConfirmation(value) {
 		duplicates: normalizeIdentityArray(
 			value.duplicates,
 			"Confirmation duplicate ids",
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets,
 		),
 		template,
 	};
 }
 
 function normalizeAnnotatedTag(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["name", "objectSha", "targetSha", "objectType", "observedAt"],
 		"Annotated tag",
@@ -578,22 +610,21 @@ function normalizeAnnotatedTag(value) {
 }
 
 function normalizeWorkflowAuthority(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["workflowId", "path", "state", "query", "nonterminalRuns", "observedAt"],
 		"Workflow authority",
 	);
-	assertExactFields(
+	const query = assertExactFields(
 		value.query,
 		["statuses", "perPage", "maximumPages"],
 		"Workflow query",
 	);
-	const statuses = assertArray(
-		value.query.statuses,
-		"Workflow query statuses",
-	).map((status) => assertNonemptyString(status, "Workflow query status"));
+	const statuses = assertArray(query.statuses, "Workflow query statuses", {
+		exactLength: WORKFLOW_STATUSES.length,
+	}).map((status) => assertNonemptyString(status, "Workflow query status"));
 	assertArrayEqual(statuses, WORKFLOW_STATUSES, "Workflow query statuses");
-	if (value.query.perPage !== 100 || value.query.maximumPages !== 100) {
+	if (query.perPage !== 100 || query.maximumPages !== 100) {
 		throw new TypeError(
 			"Workflow query bounds must be the reviewed 100-by-100 values",
 		);
@@ -601,6 +632,7 @@ function normalizeWorkflowAuthority(value) {
 	const nonterminalRuns = assertArray(
 		value.nonterminalRuns,
 		"Nonterminal workflow runs",
+		{ exactLength: 0 },
 	).map(normalizeWorkflowRun);
 	if (nonterminalRuns.length !== 0)
 		throw new TypeError("Nonterminal workflow runs must be empty");
@@ -626,7 +658,7 @@ function normalizeWorkflowAuthority(value) {
 }
 
 function normalizeWorkflowRun(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["id", "runAttempt", "status", "event", "headSha", "headBranch"],
 		"Workflow run",
@@ -645,14 +677,14 @@ function normalizeWorkflowRun(value) {
 }
 
 function normalizeNpmInventory(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["stage", "startedAt", "completedAt", "packages"],
 		"npm inventory",
 	);
-	const packages = assertArray(value.packages, "npm package observations").map(
-		normalizeNpmObservation,
-	);
+	const packages = assertArray(value.packages, "npm package observations", {
+		exactLength: CANONICAL_RELEASE_PACKAGE_ORDER.length,
+	}).map(normalizeNpmObservation);
 	assertArrayEqual(
 		packages.map(({ name }) => name),
 		CANONICAL_RELEASE_PACKAGE_ORDER,
@@ -673,7 +705,7 @@ function normalizeNpmInventory(value) {
 }
 
 function normalizeNpmObservation(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		["name", "version", "status", "httpStatus", "code", "observedAt"],
 		"npm package observation",
@@ -702,7 +734,7 @@ function normalizeNpmObservation(value) {
 }
 
 function normalizeReleaseEvidence(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"role",
@@ -719,9 +751,9 @@ function normalizeReleaseEvidence(value) {
 	if (!new Set(["survivor", "duplicate"]).has(value.role)) {
 		throw new TypeError("Release evidence has an invalid role");
 	}
-	const assets = assertArray(value.assets, "Release assets").map(
-		normalizeAssetEvidence,
-	);
+	const assets = assertArray(value.assets, "Release assets", {
+		exactLength: 45,
+	}).map(normalizeAssetEvidence);
 	if (assets.length !== 45 || new Set(assets.map(({ id }) => id)).size !== 45) {
 		throw new TypeError(
 			"Release evidence must contain exactly 45 uniquely identified assets",
@@ -761,7 +793,7 @@ function normalizeReleaseEvidence(value) {
 }
 
 function normalizeReleaseSemantic(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"name",
@@ -805,7 +837,7 @@ function normalizeReleaseSemantic(value) {
 }
 
 function normalizeServiceIdentity(value, label) {
-	assertExactFields(value, ["login", "id", "nodeId"], label);
+	value = assertExactFields(value, ["login", "id", "nodeId"], label);
 	return {
 		login: assertNonemptyString(value.login, `${label} login`),
 		id: assertId(value.id, `${label} id`),
@@ -814,7 +846,7 @@ function normalizeServiceIdentity(value, label) {
 }
 
 function normalizeAssetEvidence(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"id",
@@ -879,7 +911,7 @@ function normalizeAssetEvidence(value) {
 }
 
 function normalizePayloadProof(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"baseAssetSet",
@@ -889,26 +921,27 @@ function normalizePayloadProof(value) {
 		],
 		"Payload proof",
 	);
-	const baseAssetSet = assertArray(value.baseAssetSet, "Base asset set").map(
-		normalizeNamedDigest,
-	);
+	const baseAssetSet = assertArray(value.baseAssetSet, "Base asset set", {
+		exactLength: 45,
+	}).map(normalizeNamedDigest);
 	if (baseAssetSet.length !== 45)
 		throw new TypeError("Base asset set must contain exactly 45 assets");
 	assertUniqueNames(
 		baseAssetSet.map(({ name }) => name),
 		"Base asset set names",
 	);
-	assertExactFields(
+	const attestationVerification = assertExactFields(
 		value.attestationVerification,
 		["status", "subjects"],
 		"Attestation verification",
 	);
-	if (value.attestationVerification.status !== "VERIFIED") {
+	if (attestationVerification.status !== "VERIFIED") {
 		throw new TypeError("Attestation verification must be VERIFIED");
 	}
 	const subjects = assertArray(
-		value.attestationVerification.subjects,
+		attestationVerification.subjects,
 		"Attestation subjects",
+		{ exactLength: 22 },
 	).map(normalizeNamedDigest);
 	if (subjects.length !== 22)
 		throw new TypeError("Attestation verification requires 22 subjects");
@@ -931,7 +964,7 @@ function normalizePayloadProof(value) {
 }
 
 function normalizeNamedDigest(value) {
-	assertExactFields(value, ["name", "sha256"], "Named digest");
+	value = assertExactFields(value, ["name", "sha256"], "Named digest");
 	return {
 		name: assertNonemptyString(value.name, "Named digest name"),
 		sha256: assertSha256(value.sha256, "Named digest SHA-256"),
@@ -939,7 +972,7 @@ function normalizeNamedDigest(value) {
 }
 
 function normalizeAuthorityStage(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"stage",
@@ -960,9 +993,9 @@ function normalizeAuthorityStage(value) {
 	const npmInventory = normalizeNpmInventory(value.npmInventory);
 	if (npmInventory.stage !== stage)
 		throw new TypeError("Authority stage and npm inventory stage differ");
-	const releases = assertArray(value.releases, "Authority releases").map(
-		normalizeReleaseEvidence,
-	);
+	const releases = assertArray(value.releases, "Authority releases", {
+		maximumLength: 3,
+	}).map(normalizeReleaseEvidence);
 	if (
 		releases.reduce((total, release) => total + release.assets.length, 0) >
 		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumAssetDownloads
@@ -1017,7 +1050,7 @@ function normalizeAuthorityStage(value) {
 }
 
 function normalizeTargetRead(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"releaseGetStartedAt",
@@ -1065,7 +1098,7 @@ function normalizeTargetRead(value) {
 }
 
 function normalizeEvent(value, expectedSequence, previousEventSha256) {
-	assertExactFields(value, EVENT_FIELDS, "Journal event");
+	value = assertExactFields(value, EVENT_FIELDS, "Journal event");
 	assertSchemaVersion(value.schemaVersion, "Journal event");
 	const sequence = assertPositiveInteger(
 		expectedSequence,
@@ -1101,7 +1134,7 @@ function normalizeEvent(value, expectedSequence, previousEventSha256) {
 
 function normalizeEventPayload(type, value) {
 	if (type === "operation-started") {
-		assertExactFields(
+		value = assertExactFields(
 			value,
 			[
 				"proposedRecordSha256",
@@ -1114,6 +1147,7 @@ function normalizeEventPayload(type, value) {
 		const deletionOrder = normalizeIdentityArray(
 			value.deletionOrder,
 			"Operation deletion order",
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets,
 		);
 		if (
 			deletionOrder.length !==
@@ -1143,7 +1177,7 @@ function normalizeEventPayload(type, value) {
 		};
 	}
 	if (type === "npm-observed") {
-		assertExactFields(
+		value = assertExactFields(
 			value,
 			["targetReleaseId", "attemptNumber", "inventory"],
 			"npm-observed payload",
@@ -1164,7 +1198,7 @@ function normalizeEventPayload(type, value) {
 		};
 	}
 	if (type === "delete-authority-observed") {
-		assertExactFields(
+		value = assertExactFields(
 			value,
 			["targetReleaseId", "attemptNumber", "authority"],
 			"delete-authority-observed payload",
@@ -1186,7 +1220,7 @@ function normalizeEventPayload(type, value) {
 		};
 	}
 	if (type === "delete-intent") {
-		assertExactFields(
+		value = assertExactFields(
 			value,
 			["targetReleaseId", "attemptNumber", "authorityEventSha256"],
 			"delete-intent payload",
@@ -1208,7 +1242,11 @@ function normalizeEventPayload(type, value) {
 		return normalizeResumeReconciliation(value);
 	if (type === "absence-converged") return normalizeAbsenceConverged(value);
 	if (type === "final-authority-observed") {
-		assertExactFields(value, ["authority"], "final-authority-observed payload");
+		value = assertExactFields(
+			value,
+			["authority"],
+			"final-authority-observed payload",
+		);
 		const authority = normalizeAuthorityStage(value.authority);
 		if (authority.stage !== "final")
 			throw new TypeError("Final authority event must contain final authority");
@@ -1218,7 +1256,7 @@ function normalizeEventPayload(type, value) {
 }
 
 function normalizeDeleteOutcome(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"targetReleaseId",
@@ -1255,7 +1293,7 @@ function normalizeDeleteOutcome(value) {
 }
 
 function normalizeResumeReconciliation(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"targetReleaseId",
@@ -1301,7 +1339,7 @@ function normalizeResumeReconciliation(value) {
 }
 
 function normalizeAbsenceConverged(value) {
-	assertExactFields(
+	value = assertExactFields(
 		value,
 		[
 			"targetReleaseId",
@@ -1391,8 +1429,8 @@ function assertPayloadMatchesReleases(payloadProof, releases) {
 	}
 }
 
-function normalizeIdentityArray(value, label) {
-	const identities = assertArray(value, label).map((entry) =>
+function normalizeIdentityArray(value, label, exactLength) {
+	const identities = assertArray(value, label, { exactLength }).map((entry) =>
 		assertId(entry, label),
 	);
 	if (new Set(identities).size !== identities.length)
@@ -1401,16 +1439,39 @@ function normalizeIdentityArray(value, label) {
 }
 
 function assertExactFields(value, fields, label) {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+	if (
+		value === null ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		utilTypes.isProxy(value)
+	) {
 		throw new TypeError(`${label} must be an object`);
 	}
-	const keys = Object.keys(value);
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null) {
+		throw new TypeError(`${label} must be a plain object`);
+	}
+	const keys = Reflect.ownKeys(value);
 	if (
 		keys.length !== fields.length ||
-		fields.some((field) => !Object.hasOwn(value, field))
+		keys.some((key) => typeof key !== "string" || !fields.includes(key))
 	) {
 		throw new TypeError(`${label} must contain exactly: ${fields.join(", ")}`);
 	}
+	const descriptors = Object.getOwnPropertyDescriptors(value);
+	const snapshot = {};
+	for (const field of fields) {
+		const descriptor = descriptors[field];
+		if (
+			descriptor === undefined ||
+			descriptor.enumerable !== true ||
+			!("value" in descriptor)
+		) {
+			throw new TypeError(`${label} fields must be enumerable data properties`);
+		}
+		snapshot[field] = descriptor.value;
+	}
+	return snapshot;
 }
 
 function assertSchemaVersion(value, label) {
@@ -1418,11 +1479,50 @@ function assertSchemaVersion(value, label) {
 		throw new TypeError(`${label} schemaVersion must be integer 1`);
 }
 
-function assertArray(value, label) {
-	if (!Array.isArray(value) || Object.keys(value).length !== value.length) {
+function assertArray(value, label, { exactLength, maximumLength } = {}) {
+	if (
+		!Array.isArray(value) ||
+		utilTypes.isProxy(value) ||
+		Object.getPrototypeOf(value) !== Array.prototype
+	) {
 		throw new TypeError(`${label} must be a dense array`);
 	}
-	return value;
+	const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+	const length = lengthDescriptor?.value;
+	if (
+		!Number.isSafeInteger(length) ||
+		length < 0 ||
+		(exactLength !== undefined && length !== exactLength) ||
+		(maximumLength !== undefined && length > maximumLength)
+	) {
+		throw new TypeError(`${label} has an invalid cardinality`);
+	}
+	const keys = Reflect.ownKeys(value);
+	if (keys.length !== length + 1 || keys.at(-1) !== "length") {
+		throw new TypeError(`${label} must contain only canonical numeric indices`);
+	}
+	const descriptors = Object.getOwnPropertyDescriptors(value);
+	const snapshot = new Array(length);
+	for (let index = 0; index < length; index += 1) {
+		const key = String(index);
+		if (keys[index] !== key) {
+			throw new TypeError(
+				`${label} must contain every canonical numeric index`,
+			);
+		}
+		const descriptor = descriptors[key];
+		if (
+			descriptor === undefined ||
+			descriptor.enumerable !== true ||
+			!("value" in descriptor)
+		) {
+			throw new TypeError(
+				`${label} entries must be enumerable data properties`,
+			);
+		}
+		snapshot[index] = descriptor.value;
+	}
+	return snapshot;
 }
 
 function assertArrayEqual(actual, expected, label) {
@@ -1442,6 +1542,12 @@ function assertUniqueNames(values, label) {
 function assertString(value, label) {
 	if (typeof value !== "string")
 		throw new TypeError(`${label} must be a string`);
+	if (
+		Buffer.byteLength(value, "utf8") >
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes
+	) {
+		throw new TypeError(`${label} exceeds the largest nested string budget`);
+	}
 	return value;
 }
 
@@ -1472,7 +1578,14 @@ function assertGitSha(value, label) {
 function assertTimestamp(value, label) {
 	const timestamp = assertMatchingString(value, TIMESTAMP_PATTERN, label);
 	try {
-		return new Date(timestamp).toISOString();
+		const canonical = new Date(timestamp).toISOString();
+		const expected = timestamp.includes(".")
+			? timestamp
+			: timestamp.replace(/Z$/u, ".000Z");
+		if (canonical !== expected) {
+			throw new TypeError(`${label} is not a valid UTC instant`);
+		}
+		return canonical;
 	} catch {
 		throw new TypeError(`${label} is not a valid UTC instant`);
 	}
