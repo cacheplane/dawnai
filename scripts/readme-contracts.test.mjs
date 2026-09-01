@@ -479,6 +479,33 @@ function assertFailure(failures, expected) {
   )
 }
 
+function literalPattern(value) {
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+}
+
+it("treats regex metacharacters literally in assertion patterns", () => {
+  for (const metacharacter of [
+    ".",
+    "*",
+    "+",
+    "?",
+    "^",
+    "$",
+    "{",
+    "}",
+    "(",
+    ")",
+    "|",
+    "[",
+    "]",
+    "\\",
+  ]) {
+    const literal = `before${metacharacter}after`
+    assert.match(literal, literalPattern(literal))
+    assert.doesNotMatch("beforeXafter", literalPattern(literal))
+  }
+})
+
 function assertExactEntryBranding(packageName, readme) {
   for (const [blockName, block] of entryReadmeBlocks) {
     assert.ok(
@@ -1638,7 +1665,7 @@ describe("validateRootReadme", () => {
     it(`requires the ${heading} heading`, () => {
       assertFailure(
         validateRootReadme(rootReadme.replace(`## ${heading}`, `## Other ${heading}`)),
-        new RegExp(heading.replace(/[?]/g, "\\?"), "i"),
+        literalPattern(heading),
       )
     })
   }
