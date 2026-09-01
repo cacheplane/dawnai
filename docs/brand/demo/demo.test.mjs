@@ -1116,6 +1116,64 @@ test("Workbench capture arms and verifies CopilotKit runtime readiness before in
 	]);
 });
 
+test("failed Workbench navigation handles its later readiness rejection and closes once", async () => {
+	const fixture = orchestrationFixture();
+	const originalOpen = fixture.adapters.browser.open;
+	const navigationError = new Error("Workbench navigation failed");
+	const readinessError = new Error("readiness waiter closed later");
+	const unhandled = [];
+	let rejectReadiness;
+	let closeCount = 0;
+	const onUnhandled = (error) => unhandled.push(error);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		fixture.adapters.browser.open = async (options) => {
+			const session = await originalOpen(options);
+			session.runScenario = ({ url }) =>
+				openReadyWorkbench(
+					{
+						waitForResponse() {
+							return new Promise((_, reject) => {
+								rejectReadiness = reject;
+							});
+						},
+						async goto() {
+							throw navigationError;
+						},
+					},
+					url,
+				);
+			session.close = async () => {
+				closeCount += 1;
+				fixture.operations.push("close browser");
+			};
+			return session;
+		};
+
+		await assert.rejects(
+			captureDemo({
+				repoRoot: "/repo",
+				adapters: fixture.adapters,
+				recordOnly: true,
+				runIdFactory: () => "run-navigation-waiter-failure",
+			}),
+			(error) => error === navigationError,
+		);
+		rejectReadiness(readinessError);
+		await new Promise((resolve) => setImmediate(resolve));
+
+		assert.deepEqual(unhandled, []);
+		assert.equal(closeCount, 1);
+		assert.equal(
+			fixture.operations.indexOf("close browser") <
+				fixture.operations.indexOf("stop workbench"),
+			true,
+		);
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+});
+
 test("Workbench completion waits for Stop to leave and the real composer to return", async () => {
 	const calls = [];
 	const page = {
@@ -1239,6 +1297,64 @@ test("restoration scopes state GET to Workbench and proves canonical transcript 
 			),
 			true,
 		);
+	}
+});
+
+test("failed restoration interaction handles its later state rejection and closes once", async () => {
+	const fixture = orchestrationFixture();
+	const originalOpen = fixture.adapters.browser.open;
+	const reloadError = new Error("Workbench reload failed");
+	const stateError = new Error("state waiter closed later");
+	const unhandled = [];
+	let rejectState;
+	let closeCount = 0;
+	const onUnhandled = (error) => unhandled.push(error);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		fixture.adapters.browser.open = async (options) => {
+			const session = await originalOpen(options);
+			session.reloadAndRestore = (restoreOptions) =>
+				restoreWorkbenchThread(
+					{
+						waitForResponse() {
+							return new Promise((_, reject) => {
+								rejectState = reject;
+							});
+						},
+						async reload() {
+							throw reloadError;
+						},
+					},
+					restoreOptions,
+				);
+			session.close = async () => {
+				closeCount += 1;
+				fixture.operations.push("close browser");
+			};
+			return session;
+		};
+
+		await assert.rejects(
+			captureDemo({
+				repoRoot: "/repo",
+				adapters: fixture.adapters,
+				recordOnly: true,
+				runIdFactory: () => "run-restoration-waiter-failure",
+			}),
+			(error) => error === reloadError,
+		);
+		rejectState(stateError);
+		await new Promise((resolve) => setImmediate(resolve));
+
+		assert.deepEqual(unhandled, []);
+		assert.equal(closeCount, 1);
+		assert.equal(
+			fixture.operations.indexOf("close browser") <
+				fixture.operations.indexOf("stop workbench"),
+			true,
+		);
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
 	}
 });
 

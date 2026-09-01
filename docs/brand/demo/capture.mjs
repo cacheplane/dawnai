@@ -809,8 +809,10 @@ export async function openReadyWorkbench(page, url) {
 		},
 		{ timeout: 60_000 },
 	);
-	await page.goto(url, { waitUntil: "domcontentloaded" });
-	const response = await runtimeReady;
+	const navigation = Promise.resolve().then(() =>
+		page.goto(url, { waitUntil: "domcontentloaded" }),
+	);
+	const [response] = await Promise.all([runtimeReady, navigation]);
 	if (!response.ok()) {
 		throw new Error(
 			`CopilotKit runtime readiness failed with HTTP ${response.status()}`,
@@ -855,14 +857,16 @@ export async function restoreWorkbenchThread(
 			response.request().method() === "GET" && response.url() === stateUrl,
 		{ timeout: 120_000 },
 	);
-	await page.reload({ waitUntil: "domcontentloaded" });
-	const row = page.getByRole("button", { name: prompt, exact: true });
-	await row.waitFor({ state: "visible", timeout: 60_000 });
-	await row.click();
-	if ((await row.getAttribute("aria-current")) !== "true") {
-		throw new Error(`Reload did not select the captured thread ${threadId}`);
-	}
-	const response = await stateResponsePromise;
+	const interaction = Promise.resolve().then(async () => {
+		await page.reload({ waitUntil: "domcontentloaded" });
+		const row = page.getByRole("button", { name: prompt, exact: true });
+		await row.waitFor({ state: "visible", timeout: 60_000 });
+		await row.click();
+		if ((await row.getAttribute("aria-current")) !== "true") {
+			throw new Error(`Reload did not select the captured thread ${threadId}`);
+		}
+	});
+	const [response] = await Promise.all([stateResponsePromise, interaction]);
 	if (!response.ok()) {
 		throw new Error(`Thread restoration failed with HTTP ${response.status()}`);
 	}
