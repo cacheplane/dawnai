@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 
+import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { MediaSwitcher } from "./MediaSwitcher"
+
+const heroSource = await readFile(resolve(process.cwd(), "app/components/landing/Hero.tsx"), "utf8")
 
 let container: HTMLDivElement
 let root: Root | undefined
@@ -93,5 +97,22 @@ describe("MediaSwitcher", () => {
     ;[videoTab] = tabs()
     expect(document.activeElement).toBe(videoTab)
     expect(videoTab?.getAttribute("aria-selected")).toBe("true")
+  })
+})
+
+describe("Hero media ownership", () => {
+  it("leads with the product loop while preserving the route and CTAs", () => {
+    expect(heroSource).toContain('id="product-loop"')
+    expect(heroSource).toContain("<MediaSwitcher")
+    expect(heroSource).toContain('videoLabel="Video"')
+    expect(heroSource).toContain('codeLabel="Code"')
+    expect(heroSource).toContain("demoMedia.productLoop")
+    expect(heroSource).toContain("<ClipPlayer")
+    expect(heroSource).toContain("demoMedia.productLoop.caption")
+    expect(heroSource).toContain("demoMedia.productLoop.transcript")
+    expect(heroSource).toContain("const ROUTE_CODE")
+    expect(heroSource).toContain('highlightLight(ROUTE_CODE, "typescript")')
+    expect(heroSource).toContain("<CopyCommand")
+    expect(heroSource).toContain("<CopyPromptButton")
   })
 })
