@@ -286,7 +286,7 @@ const capabilityCaveatContracts = new Map([
       ],
       [
         "caller-owned pool shutdown",
-        /(?:(?:close|end) stores? and caller-owned pools|(?:close|end) caller-owned pools and stores?)[^\n]*(?:during|at)[^\n]*shutdown/iu,
+        /Close stores and caller-owned pools during application shutdown\./u,
         (readme) =>
           readme.replace(
             "Close stores and caller-owned pools during application shutdown",
@@ -984,6 +984,20 @@ describe("capability-package README contracts", () => {
       }
     })
   }
+
+  it("rejects direct negations of the Postgres caller-owned pool shutdown guidance", () => {
+    const readme = actualCapabilityReadme("@dawn-ai/postgres-storage")
+    const guidance = "Close stores and caller-owned pools during application shutdown."
+
+    for (const contradiction of [
+      "Do not close stores and caller-owned pools during application shutdown.",
+      "Never close stores and caller-owned pools during application shutdown.",
+    ]) {
+      const mutated = readme.replace(guidance, contradiction)
+      assert.notEqual(mutated, readme, `${contradiction} mutation must apply`)
+      assert.throws(() => assertCapabilityCaveats("@dawn-ai/postgres-storage", mutated))
+    }
+  })
 })
 
 describe("validatePackageDiscoveryMetadata", () => {
