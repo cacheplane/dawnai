@@ -589,6 +589,27 @@ describe("validateRootReadme", () => {
     assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
   })
 
+  it("rejects a sixth reference-style linked GFM badge before Quickstart", () => {
+    const source = actualRootReadme
+      .replace(
+        canonicalHeroCommandBlock,
+        `[![Sixth][sixth-image]][sixth-link]\n\n${canonicalHeroCommandBlock}`,
+      )
+      .replace(
+        "## License",
+        "[sixth-image]: https://example.com/sixth.svg\n[sixth-link]: https://example.com\n\n## License",
+      )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
+  })
+
+  it("rejects a sixth raw HTML badge with unquoted attributes before Quickstart", () => {
+    const source = actualRootReadme.replace(
+      canonicalHeroCommandBlock,
+      `<a href=https://example.com><img src=https://example.com/sixth.svg alt=Sixth></a>\n\n${canonicalHeroCommandBlock}`,
+    )
+    assertFailure(validateRootReadme(source, { canonical: true }), /exactly five approved badges/i)
+  })
+
   for (const [name, source] of [
     [
       "missing hero navigation link",
@@ -630,6 +651,43 @@ describe("validateRootReadme", () => {
       validateRootReadme(source, { canonical: true }),
       /exactly four canonical hero navigation links/i,
     )
+  })
+
+  it("rejects a fifth reference-style GFM navigation link before Quickstart", () => {
+    const source = actualRootReadme
+      .replace(
+        canonicalHeroCommandBlock,
+        `[Fifth link][fifth-link]\n\n${canonicalHeroCommandBlock}`,
+      )
+      .replace("## License", "[fifth-link]: https://example.com\n\n## License")
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /exactly four canonical hero navigation links/i,
+    )
+  })
+
+  it("rejects a fifth GFM autolink before Quickstart", () => {
+    const source = actualRootReadme.replace(
+      canonicalHeroCommandBlock,
+      `<https://example.com>\n\n${canonicalHeroCommandBlock}`,
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /exactly four canonical hero navigation links/i,
+    )
+  })
+
+  it("does not count body-only reference-style GFM badges and links", () => {
+    const source = actualRootReadme
+      .replace(
+        "## Why Dawn",
+        "## Why Dawn\n\n[![Body badge][body-image]][body-link]\n\n[Body link][body-nav]",
+      )
+      .replace(
+        "## License",
+        "[body-image]: https://example.com/body.svg\n[body-link]: https://example.com/badge\n[body-nav]: https://example.com/nav\n\n## License",
+      )
+    assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
   })
 
   it("requires the first scaffold command before the product-loop GIF", () => {
@@ -734,6 +792,25 @@ describe("validateRootReadme", () => {
       "## Run it live\n\nNot all live model calls require credentials.\n\n",
     )
     assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
+  })
+
+  it("accepts a negated universal live-provider credentials claim", () => {
+    const source = actualRootReadme.replace(
+      "## Run it live\n\n",
+      "## Run it live\n\nNot all live provider runs always need credentials.\n\n",
+    )
+    assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
+  })
+
+  it("rejects an each-quantified singular credential claim", () => {
+    const source = actualRootReadme.replace(
+      "## Run it live\n\n",
+      "## Run it live\n\nEach live model call requires a credential.\n\n",
+    )
+    assertFailure(
+      validateRootReadme(source, { canonical: true }),
+      /not every live model call requires credentials/i,
+    )
   })
 
   for (const [name, literal] of [

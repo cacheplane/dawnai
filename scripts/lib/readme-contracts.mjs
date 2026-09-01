@@ -743,6 +743,96 @@ function markdownImageDestinations(source) {
   return destinations
 }
 
+function normalizeReferenceLabel(label) {
+  return label.trim().replace(/\s+/gu, " ").toLowerCase()
+}
+
+function markdownReferenceDefinitions(source) {
+  const definitions = new Map()
+  for (const match of source.matchAll(/^[ \t]{0,3}\[([^\]\r\n]+)\]:[ \t]*(.+?)[ \t]*$/gmu)) {
+    const destination = linkDestination(match[2])
+    const label = normalizeReferenceLabel(match[1])
+    if (destination && label && !definitions.has(label)) definitions.set(label, destination)
+  }
+  return definitions
+}
+
+function maskMarkdownReferenceDefinitions(source) {
+  return source.replace(/^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*$/gmu, (definition) =>
+    " ".repeat(definition.length),
+  )
+}
+
+function referenceDestination(source, label, labelEnd, definitions) {
+  if (source[labelEnd + 1] === "[") {
+    const referenceEnd = matchingDelimiterEnd(source, labelEnd + 1, "[", "]")
+    if (referenceEnd === -1) return null
+    const explicitLabel = source.slice(labelEnd + 2, referenceEnd)
+    return {
+      destination: definitions.get(normalizeReferenceLabel(explicitLabel || label)),
+      end: referenceEnd,
+    }
+  }
+  if (source[labelEnd + 1] === "(") return null
+  return {
+    destination: definitions.get(normalizeReferenceLabel(label)),
+    end: labelEnd,
+  }
+}
+
+function markdownReferenceImageDestinations(source, definitions) {
+  const destinations = []
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] !== "!" || source[index + 1] !== "[" || isEscaped(source, index)) continue
+    const labelStart = index + 1
+    const labelEnd = matchingDelimiterEnd(source, labelStart, "[", "]")
+    if (labelEnd === -1) continue
+    const reference = referenceDestination(
+      source,
+      source.slice(labelStart + 1, labelEnd),
+      labelEnd,
+      definitions,
+    )
+    if (reference?.destination) destinations.push(reference.destination)
+    if (reference) index = reference.end
+  }
+  return destinations
+}
+
+function markdownReferenceLinkDestinations(source, definitions, options = {}) {
+  const destinations = []
+  for (let index = 0; index < source.length; index++) {
+    if (
+      source[index] !== "[" ||
+      (source[index - 1] === "!" && !isEscaped(source, index - 1)) ||
+      isEscaped(source, index)
+    ) {
+      continue
+    }
+    const labelEnd = matchingDelimiterEnd(source, index, "[", "]")
+    if (labelEnd === -1) continue
+    const label = source.slice(index + 1, labelEnd)
+    const reference = referenceDestination(source, label, labelEnd, definitions)
+    if (!reference?.destination) continue
+    if (
+      markdownReferenceLinkDestinations(label, definitions).length > 0 ||
+      (options.excludeImageLabels === true &&
+        (markdownImageDestinations(label).length > 0 ||
+          markdownReferenceImageDestinations(label, definitions).length > 0))
+    ) {
+      index = reference.end
+      continue
+    }
+    destinations.push(reference.destination)
+    index = reference.end
+  }
+  return destinations
+}
+
+function markdownAutolinkDestinations(source) {
+  return [...source.matchAll(/<(https?:\/\/[^<>\s]+)>/giu)].map((match) => match[1])
+}
+
 function markdownLinkDestinations(source, options = {}) {
   const destinations = []
   for (let index = 0; index < source.length; index++) {
@@ -792,15 +882,10 @@ function canonicalScaffoldCommandPresent(source) {
 }
 
 function universalCredentialClaimPresent(source) {
-  const withoutNegatedClaims = source.replace(
-    /\bnot\s+(?:all|every)\s+live model calls?\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/giu,
-    "",
+  const claims = source.matchAll(
+    /\b(?:(?<negation>not)\s+)?(?:(?:all|every|each)\s+)?live\s+(?:model\s+calls?|provider\s+runs?)\s+(?:always\s+)?(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:keys?|credentials?)\b/giu,
   )
-  return [
-    /\b(?:all|every)\s+live model calls?\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
-    /\blive model calls?\s+(?:always\s+)?(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
-    /\blive provider runs?\s+always\s+(?:requires?|needs?)\s+(?:an?\s+)?(?:api\s+)?(?:key|credentials)\b/iu,
-  ].some((pattern) => pattern.test(withoutNegatedClaims))
+  return [...claims].some((claim) => claim.groups?.negation === undefined)
 }
 
 function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, visibleRendered) {
@@ -819,11 +904,16 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, v
   const quickstartHeading = /^## Quickstart[ \t]*$/mu.exec(visibleRendered)
   const firstScrollEnd = quickstartHeading?.index ?? visibleRendered.length
   const firstScroll = visibleRendered.slice(0, firstScrollEnd)
-  const firstScrollMarkdown = visibleMarkdown.slice(0, firstScrollEnd)
+  const definitions = markdownReferenceDefinitions(visibleMarkdown)
+  const firstScrollMarkdown = maskMarkdownReferenceDefinitions(
+    visibleMarkdown.slice(0, firstScrollEnd),
+  )
   const firstScrollImages = [
-    ...firstScroll.matchAll(/<img\b[^>]*\bsrc=(?:"([^"]+)"|'([^']+)')[^>]*>/giu),
+    ...firstScroll.matchAll(
+      /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))[^>]*>/giu,
+    ),
   ]
-    .map((match) => match[1] ?? match[2])
+    .map((match) => match[1] ?? match[2] ?? match[3])
     .filter(
       (source) =>
         source !== "docs/brand/dawn-logo-horizontal-black-on-white.png" &&
@@ -836,7 +926,22 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, v
         "docs/brand/product-loop.gif",
       ].includes(destination.split(/[?#]/u, 1)[0]),
   )
-  if (firstScrollImages.length + firstScrollMarkdownImages.length !== 5) {
+  const firstScrollReferenceImages = markdownReferenceImageDestinations(
+    firstScrollMarkdown,
+    definitions,
+  ).filter(
+    (destination) =>
+      ![
+        "docs/brand/dawn-logo-horizontal-black-on-white.png",
+        "docs/brand/product-loop.gif",
+      ].includes(destination.split(/[?#]/u, 1)[0]),
+  )
+  if (
+    firstScrollImages.length +
+      firstScrollMarkdownImages.length +
+      firstScrollReferenceImages.length !==
+    5
+  ) {
     failures.push("README must contain exactly five approved badges")
   }
   const firstScrollTextLinks = [...firstScroll.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/giu)].filter(
@@ -845,7 +950,19 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, v
   const firstScrollMarkdownTextLinks = markdownLinkDestinations(firstScrollMarkdown, {
     excludeImageLabels: true,
   }).filter((destination) => destination.split(/[?#]/u, 1)[0] !== "docs/brand/demo/transcript.md")
-  if (firstScrollTextLinks.length + firstScrollMarkdownTextLinks.length !== 4) {
+  const firstScrollReferenceTextLinks = markdownReferenceLinkDestinations(
+    firstScrollMarkdown,
+    definitions,
+    { excludeImageLabels: true },
+  )
+  const firstScrollAutolinks = markdownAutolinkDestinations(firstScrollMarkdown)
+  if (
+    firstScrollTextLinks.length +
+      firstScrollMarkdownTextLinks.length +
+      firstScrollReferenceTextLinks.length +
+      firstScrollAutolinks.length !==
+    4
+  ) {
     failures.push("README must contain exactly four canonical hero navigation links")
   }
 
