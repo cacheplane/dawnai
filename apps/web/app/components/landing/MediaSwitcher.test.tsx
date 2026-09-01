@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { act } from "react"
@@ -7,7 +8,10 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { MediaSwitcher } from "./MediaSwitcher"
 
-const heroSource = await readFile(resolve(process.cwd(), "app/components/landing/Hero.tsx"), "utf8")
+const webRoot = existsSync(resolve(process.cwd(), "apps/web/package.json"))
+  ? resolve(process.cwd(), "apps/web")
+  : process.cwd()
+const heroSource = await readFile(resolve(webRoot, "app/components/landing/Hero.tsx"), "utf8")
 
 let container: HTMLDivElement
 let root: Root | undefined

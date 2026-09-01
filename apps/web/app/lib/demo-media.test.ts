@@ -1,7 +1,12 @@
+import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { demoMedia } from "./demo-media"
+
+const webRoot = existsSync(resolve(process.cwd(), "apps/web/package.json"))
+  ? resolve(process.cwd(), "apps/web")
+  : process.cwd()
 
 const sectionSources = new Map<string, string>(
   await Promise.all(
@@ -10,7 +15,7 @@ const sectionSources = new Map<string, string>(
         [
           component,
           await readFile(
-            resolve(process.cwd(), "app/components/landing", component.concat(".tsx")),
+            resolve(webRoot, "app/components/landing", component.concat(".tsx")),
             "utf8",
           ),
         ] as const,
