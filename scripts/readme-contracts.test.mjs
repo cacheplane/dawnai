@@ -120,6 +120,51 @@ const entryReadmeAssets = new Map([
     "https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif",
   ],
 ])
+const entryReadmeBlocks = new Map([
+  [
+    "logo",
+    `<p align="center">
+  <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="180">
+</p>`,
+  ],
+  [
+    "product loop",
+    `<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/product-loop.gif" alt="Dawn product loop: route, deterministic test, and Workbench" width="720">
+  </a>
+</p>`,
+  ],
+])
+const entryReadmeBlockMutations = new Map([
+  [
+    "logo",
+    [
+      ["centered wrapper", (block) => block.replace('<p align="center">', "<p>")],
+      ["alt text", (block) => block.replace('alt="Dawn"', 'alt="Dawn logo"')],
+      ["width", (block) => block.replace('width="180"', 'width="181"')],
+    ],
+  ],
+  [
+    "product loop",
+    [
+      ["centered wrapper", (block) => block.replace('<p align="center">', "<p>")],
+      [
+        "anchor",
+        (block) => block.replace("https://dawnai.org/#product-loop", "https://dawnai.org/docs"),
+      ],
+      [
+        "alt text",
+        (block) =>
+          block.replace(
+            "Dawn product loop: route, deterministic test, and Workbench",
+            "Dawn product loop",
+          ),
+      ],
+      ["width", (block) => block.replace('width="720"', 'width="721"')],
+    ],
+  ],
+])
 const canonicalHeroCommandBlock = `\`\`\`bash
 npm create dawn-ai-app@latest my-agent
 \`\`\``
@@ -144,11 +189,11 @@ function assertFailure(failures, expected) {
   )
 }
 
-function assertAbsoluteEntryAssets(packageName, readme) {
-  for (const [assetName, destination] of entryReadmeAssets) {
+function assertExactEntryBranding(packageName, readme) {
+  for (const [blockName, block] of entryReadmeBlocks) {
     assert.ok(
-      readme.includes(`src="${destination}"`),
-      `${packageName} must use the absolute ${assetName} URL ${destination}`,
+      readme.includes(block),
+      `${packageName} must use the exact canonical ${blockName} block`,
     )
   }
 }
@@ -557,14 +602,28 @@ describe("entry-package README contracts", () => {
     })
 
     it(`uses npm-safe absolute assets in the actual ${manifest.name} README`, () => {
-      assertAbsoluteEntryAssets(manifest.name, readme)
+      assertExactEntryBranding(manifest.name, readme)
     })
 
     for (const [assetName, destination] of entryReadmeAssets) {
       it(`rejects a repository-relative ${assetName} in the actual ${manifest.name} README`, () => {
         const mutated = readme.replace(destination, destination.slice(destination.indexOf("docs/")))
         assert.notEqual(mutated, readme)
-        assert.throws(() => assertAbsoluteEntryAssets(manifest.name, mutated))
+        assert.throws(() => assertExactEntryBranding(manifest.name, mutated))
+      })
+    }
+
+    for (const [blockName, mutations] of entryReadmeBlockMutations) {
+      it(`rejects noncanonical ${blockName} block fields in the actual ${manifest.name} README`, () => {
+        const canonicalBlock = entryReadmeBlocks.get(blockName) ?? ""
+        for (const [mutationName, mutate] of mutations) {
+          const mutated = readme.replace(canonicalBlock, mutate(canonicalBlock))
+          assert.notEqual(mutated, readme, `${manifest.name} ${mutationName} mutation must apply`)
+          assert.throws(
+            () => assertExactEntryBranding(manifest.name, mutated),
+            `${manifest.name} ${mutationName} mutation must fail the asset contract`,
+          )
+        }
       })
     }
 
