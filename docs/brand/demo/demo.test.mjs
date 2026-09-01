@@ -10,13 +10,20 @@ import {
 	closeBrowserResources,
 	createBrowserResources,
 	createManagedChildRegistry,
+	createManagedServiceMonitor,
 	fillActiveWorkbenchComposer,
 	generatedInstallCommand,
 	generatedTestCommand,
+	installCaptureSignalHandlers,
 	openReadyWorkbench,
 	parseCaptureArguments,
+	raceCapturePhase,
+	restoreWorkbenchThread,
 	sanitizeOperationalEnvironment,
 	startWithAssignedPort,
+	validateRunId,
+	validateToolchainVersions,
+	waitForWorkbenchRunCompletion,
 } from "./capture.mjs";
 import { normalizeLog } from "./normalize-log.mjs";
 import {
@@ -411,6 +418,7 @@ const EXPECTED_ANSWER =
 function orchestrationFixture({ failAt } = {}) {
 	const operations = [];
 	const writes = [];
+	const renames = [];
 	const stopped = [];
 	const childEnvironments = [];
 	const workspaceRoot = "/tmp/dawn-demo-unit-abc123";
@@ -424,11 +432,13 @@ function orchestrationFixture({ failAt } = {}) {
 		},
 	};
 	let assignedPort = 4100;
+	let monotonicNow = 0;
 
 	const adapters = {
 		commands: {
 			async checkToolchain() {
 				operations.push("check toolchain");
+				return { node: "v24.19.0", pnpm: "10.33.0" };
 			},
 			async build() {
 				operations.push("build");
@@ -465,6 +475,10 @@ function orchestrationFixture({ failAt } = {}) {
 				if (path.endsWith("capture-summary.json")) {
 					operations.push("write summary");
 				}
+			},
+			async rename(from, to) {
+				renames.push({ from, to });
+				operations.push("publish summary");
 			},
 			async readFile(path) {
 				if (path.endsWith("server/src/app/research/index.ts")) {
@@ -513,7 +527,7 @@ function orchestrationFixture({ failAt } = {}) {
 				assert.deepEqual(options.viewport, { width: 1440, height: 810 });
 				assert.match(
 					options.recordingsDir,
-					/docs\/brand\/demo\/raw-recordings$/,
+					/docs\/brand\/demo\/raw-recordings\/runs\/[A-Za-z0-9_-]+$/,
 				);
 				return {
 					async recordStage({ act, html }) {
@@ -553,10 +567,17 @@ function orchestrationFixture({ failAt } = {}) {
 					},
 					async close() {
 						operations.push("close browser");
-						return { videoPath: "/ignored/raw-recordings/demo.webm" };
+						return { videoPath: `${options.recordingsDir}/demo.webm` };
 					},
 				};
 			},
+		},
+		timing: {
+			now() {
+				monotonicNow += 1;
+				return monotonicNow;
+			},
+			async sleep() {},
 		},
 	};
 
@@ -566,6 +587,7 @@ function orchestrationFixture({ failAt } = {}) {
 		appRoot,
 		childEnvironments,
 		operations,
+		renames,
 		stopped,
 		workspaceRoot,
 		writes,
@@ -599,7 +621,7 @@ test("capture orchestrates the real-product phases in exact order and cleans up"
 		"record run",
 		"record close",
 		"close browser",
-		"write summary",
+		"publish summary",
 		"stop workbench",
 		"stop server",
 		"close aimock",
@@ -965,6 +987,31 @@ test("capture CLI accepts pnpm's forwarded separator before --record-only", () =
 	);
 });
 
+test("toolchain validation accepts the repository Node floor and records actual patches", () => {
+	assert.deepEqual(
+		validateToolchainVersions({ node: "v24.0.0", pnpm: "10.33.0" }),
+		{ node: "v24.0.0", pnpm: "10.33.0" },
+	);
+	assert.deepEqual(
+		validateToolchainVersions({ node: "v25.4.1", pnpm: "10.33.0" }),
+		{ node: "v25.4.1", pnpm: "10.33.0" },
+	);
+	assert.throws(
+		() => validateToolchainVersions({ node: "v23.11.0", pnpm: "10.33.0" }),
+		/Node >=24\.0\.0/,
+	);
+	assert.throws(
+		() => validateToolchainVersions({ node: "v24.19.0", pnpm: "10.32.0" }),
+		/pnpm 10\.33\.0/,
+	);
+});
+
+test("run ids accept focused safe names and reject traversal", () => {
+	assert.equal(validateRunId("run-2026_09_01"), "run-2026_09_01");
+	for (const unsafe of ["", ".", "..", "../escape", "nested/run", "run.id"])
+		assert.throws(() => validateRunId(unsafe), /run id/);
+});
+
 test("generated npm test command enables the real runner's verbose named-test output", () => {
 	assert.deepEqual(generatedTestCommand(), {
 		command: "npm",
@@ -1035,6 +1082,132 @@ test("Workbench capture arms and verifies CopilotKit runtime readiness before in
 	]);
 });
 
+test("Workbench completion waits for Stop to leave and the real composer to return", async () => {
+	const calls = [];
+	const page = {
+		getByRole(role, options) {
+			if (role === "button" && options.name === "Stop") {
+				return {
+					async waitFor(waitOptions) {
+						calls.push(["stop", waitOptions]);
+					},
+				};
+			}
+			if (role === "button" && options.name === "Send") {
+				return {
+					async waitFor(waitOptions) {
+						calls.push(["send", waitOptions]);
+					},
+				};
+			}
+			if (role === "textbox" && options.name === "Message") {
+				return {
+					async fill(value, fillOptions) {
+						calls.push(["composer", value, fillOptions]);
+					},
+				};
+			}
+			throw new Error(`unexpected role: ${role}`);
+		},
+	};
+
+	await waitForWorkbenchRunCompletion(page);
+	assert.deepEqual(calls, [
+		["stop", { state: "hidden", timeout: 120_000 }],
+		["send", { state: "visible", timeout: 120_000 }],
+		["composer", "", { timeout: 120_000 }],
+	]);
+});
+
+test("restoration scopes state GET to Workbench and proves canonical transcript evidence", async () => {
+	const calls = [];
+	let responsePredicate;
+	const stateUrl = "http://127.0.0.1:4101/api/dawn/threads/thread-unit-1/state";
+	const response = {
+		ok: () => true,
+		status: () => 200,
+		request: () => ({ method: () => "GET" }),
+		url: () => stateUrl,
+		async finished() {
+			calls.push("response finished");
+		},
+	};
+	const transcript = {
+		getByText(text, options) {
+			return {
+				last() {
+					return {
+						async waitFor(waitOptions) {
+							calls.push(["transcript", text, options, waitOptions]);
+						},
+					};
+				},
+			};
+		},
+	};
+	const page = {
+		waitForResponse(predicate, options) {
+			responsePredicate = predicate;
+			calls.push(["arm state", options]);
+			return Promise.resolve(response);
+		},
+		async reload(options) {
+			calls.push(["reload", options]);
+		},
+		getByRole(role, options) {
+			if (role === "main") return transcript;
+			if (role === "button" && options.name === DEMO_PROMPT) {
+				return {
+					async waitFor(waitOptions) {
+						calls.push(["row", waitOptions]);
+					},
+					async click() {
+						calls.push("click row");
+					},
+					async getAttribute(name) {
+						calls.push(["attribute", name]);
+						return "true";
+					},
+				};
+			}
+			throw new Error(`unexpected role: ${role}`);
+		},
+	};
+
+	const result = await restoreWorkbenchThread(page, {
+		workbenchUrl: "http://127.0.0.1:4101",
+		threadId: "thread-unit-1",
+		prompt: DEMO_PROMPT,
+		tools: ["searchCorpus", "readDoc"],
+		answer: EXPECTED_ANSWER,
+	});
+	assert.equal(responsePredicate(response), true);
+	assert.equal(
+		responsePredicate({
+			...response,
+			url: () => "http://public.example/api/dawn/threads/thread-unit-1/state",
+		}),
+		false,
+	);
+	assert.equal(result.stateUrl, stateUrl);
+	for (const evidence of [
+		DEMO_PROMPT,
+		"searchCorpus",
+		"readDoc",
+		EXPECTED_ANSWER,
+	]) {
+		assert.equal(
+			calls.some(
+				(call) =>
+					Array.isArray(call) &&
+					call[0] === "transcript" &&
+					call[1] === evidence,
+			),
+			true,
+		);
+	}
+});
+
 test("managed-child registry retains a child whose stop fails and retries it during final cleanup", async () => {
 	const child = { name: "failed-start" };
 	const unrelated = { name: "unrelated" };
@@ -1050,6 +1223,141 @@ test("managed-child registry retains a child whose stop fails and retries it dur
 	await registry.stopRemaining();
 	assert.deepEqual(calls, [child, child]);
 	assert.equal(calls.includes(unrelated), false);
+});
+
+test("managed-service monitor reports post-readiness exit with bounded transcript", async () => {
+	const child = new EventEmitter();
+	child.stdout = new EventEmitter();
+	child.stderr = new EventEmitter();
+	child.stdout.setEncoding = () => {};
+	child.stderr.setEncoding = () => {};
+	const monitor = createManagedServiceMonitor({
+		child,
+		service: "Workbench",
+		maxTranscriptLength: 40,
+	});
+	monitor.arm();
+	child.stdout.emit("data", "prefix-that-must-be-truncated-");
+	child.stderr.emit("data", "fatal-tail-from-workbench");
+	child.emit("exit", 7, null);
+	await assert.rejects(monitor.unexpectedExit, (error) => {
+		assert.match(error.message, /Workbench exited unexpectedly \(code 7\)/);
+		assert.match(error.message, /fatal-tail-from-workbench/);
+		assert.equal(error.message.includes("prefix-that-must"), false);
+		return true;
+	});
+});
+
+test("expected managed-service cleanup cannot win a capture-phase race", async () => {
+	const child = new EventEmitter();
+	const monitor = createManagedServiceMonitor({
+		child,
+		service: "Dawn server",
+	});
+	monitor.arm();
+	monitor.markExpectedExit();
+	child.emit("exit", 0, null);
+	assert.equal(
+		await raceCapturePhase("close", async () => "phase complete", [monitor]),
+		"phase complete",
+	);
+});
+
+test("capture phase fails promptly when a ready service exits", async () => {
+	const serviceFailure = Promise.reject(
+		new Error("Dawn server exited unexpectedly (signal SIGTERM)\nserver-tail"),
+	);
+	serviceFailure.catch(() => {});
+	await assert.rejects(
+		raceCapturePhase("restoration", () => new Promise(() => {}), [
+			{ unexpectedExit: serviceFailure },
+		]),
+		/Dawn server exited unexpectedly.*server-tail/s,
+	);
+});
+
+test("capture signal handlers abort once, force on the second signal, and restore", () => {
+	const calls = [];
+	const handlers = new Map();
+	const signalAdapter = {
+		on(signal, handler) {
+			calls.push(["on", signal]);
+			handlers.set(signal, handler);
+		},
+		off(signal, handler) {
+			calls.push(["off", signal]);
+			assert.equal(handlers.get(signal), handler);
+			handlers.delete(signal);
+		},
+		forceExit(signal) {
+			calls.push(["force", signal]);
+		},
+	};
+	const scope = installCaptureSignalHandlers({ signalAdapter });
+	handlers.get("SIGINT")();
+	assert.equal(scope.signal.aborted, true);
+	assert.match(scope.signal.reason.message, /cancelled by SIGINT/);
+	handlers.get("SIGTERM")();
+	scope.restore();
+	assert.deepEqual(calls, [
+		["on", "SIGINT"],
+		["on", "SIGTERM"],
+		["force", "SIGTERM"],
+		["off", "SIGINT"],
+		["off", "SIGTERM"],
+	]);
+});
+
+test("SIGINT during capture triggers normal owned-resource cleanup and restores handlers", async () => {
+	const fixture = orchestrationFixture();
+	const handlers = new Map();
+	const signalCalls = [];
+	const signalAdapter = {
+		on(signal, handler) {
+			signalCalls.push(["on", signal]);
+			handlers.set(signal, handler);
+		},
+		off(signal, handler) {
+			signalCalls.push(["off", signal]);
+			assert.equal(handlers.get(signal), handler);
+			handlers.delete(signal);
+		},
+		forceExit() {
+			throw new Error("force exit must not run for one signal");
+		},
+	};
+	const originalOpen = fixture.adapters.browser.open;
+	fixture.adapters.browser.open = async (options) => {
+		const session = await originalOpen(options);
+		session.runScenario = async () => {
+			handlers.get("SIGINT")();
+			return new Promise(() => {});
+		};
+		return session;
+	};
+
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: fixture.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-signal-cleanup",
+			signalAdapter,
+		}),
+		/cancelled by SIGINT/,
+	);
+	assert.deepEqual(fixture.operations.slice(-5), [
+		"close browser",
+		"stop workbench",
+		"stop server",
+		"close aimock",
+		`remove ${fixture.workspaceRoot}`,
+	]);
+	assert.deepEqual(signalCalls.slice(-2), [
+		["off", "SIGINT"],
+		["off", "SIGTERM"],
+	]);
+	assert.equal(handlers.size, 0);
 });
 
 test("browser cleanup always closes Chromium even when context finalization fails", async () => {
@@ -1163,28 +1471,152 @@ test("capture invokes the future encoder after finalizing recordings and summary
 		repoRoot: "/repo",
 		adapters: fixture.adapters,
 		recordOnly: false,
+		runIdFactory: () => "run-unit-encode",
 		async encodeCaptureArtifacts(options) {
 			fixture.operations.push("encode capture");
 			assert.equal(
 				options.summaryPath,
-				"/repo/docs/brand/demo/artifacts/capture-summary.json",
+				"/repo/docs/brand/demo/artifacts/runs/run-unit-encode/capture-summary.json",
 			);
 			assert.equal(
 				options.summary.videoPath,
-				"/ignored/raw-recordings/demo.webm",
+				"/repo/docs/brand/demo/raw-recordings/runs/run-unit-encode/demo.webm",
 			);
 		},
 	});
 
 	assert.deepEqual(fixture.operations.slice(-7), [
 		"close browser",
-		"write summary",
+		"publish summary",
 		"encode capture",
 		"stop workbench",
 		"stop server",
 		"close aimock",
 		`remove ${fixture.workspaceRoot}`,
 	]);
+});
+
+test("capture publishes a versioned run-specific manifest with deterministic scene boundaries", async () => {
+	const fixture = orchestrationFixture();
+	let tick = 1_000;
+	const holds = [];
+	const summary = await captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: true,
+		runIdFactory: () => "run-unit-manifest",
+		timing: {
+			now() {
+				const value = tick;
+				tick += 100;
+				return value;
+			},
+			async sleep(durationMs) {
+				holds.push(durationMs);
+			},
+		},
+		holdDurations: { preReloadMs: 700, restorationMs: 900 },
+	});
+
+	assert.equal(summary.schemaVersion, 1);
+	assert.equal(summary.runId, "run-unit-manifest");
+	assert.deepEqual(summary.toolchain, {
+		node: "v24.19.0",
+		pnpm: "10.33.0",
+	});
+	assert.deepEqual(summary.paths, {
+		artifactsRoot: "/repo/docs/brand/demo/artifacts/runs/run-unit-manifest",
+		recordingsRoot:
+			"/repo/docs/brand/demo/raw-recordings/runs/run-unit-manifest",
+		logs: {
+			stdout:
+				"/repo/docs/brand/demo/artifacts/runs/run-unit-manifest/test.stdout.log",
+			stderr:
+				"/repo/docs/brand/demo/artifacts/runs/run-unit-manifest/test.stderr.log",
+			result:
+				"/repo/docs/brand/demo/artifacts/runs/run-unit-manifest/test.result.json",
+		},
+		recording:
+			"/repo/docs/brand/demo/raw-recordings/runs/run-unit-manifest/demo.webm",
+	});
+	assert.deepEqual(Object.keys(summary.videoTimeline.scenes), [
+		"author",
+		"test",
+		"workbench-run",
+		"pre-reload-complete",
+		"restoration",
+		"close",
+	]);
+	let previousEnd = -1;
+	for (const boundary of Object.values(summary.videoTimeline.scenes)) {
+		assert.equal(Number.isFinite(boundary.startMs), true);
+		assert.equal(boundary.endMs >= boundary.startMs, true);
+		assert.equal(boundary.startMs >= previousEnd, true);
+		previousEnd = boundary.endMs;
+	}
+	assert.deepEqual(holds, [700, 900]);
+	assert.deepEqual(summary.evidence, {
+		prompt: DEMO_PROMPT,
+		tools: ["searchCorpus", "readDoc"],
+		answer: EXPECTED_ANSWER,
+		threadId: "thread-unit-1",
+		stateUrl: undefined,
+	});
+});
+
+test("distinct run ids own disjoint raw and artifact roots", async () => {
+	const first = orchestrationFixture();
+	const second = orchestrationFixture();
+	await Promise.all([
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: first.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-concurrent-a",
+		}),
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: second.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-concurrent-b",
+		}),
+	]);
+	for (const write of first.writes)
+		assert.match(write.path, /\/runs\/run-concurrent-a\//);
+	for (const write of second.writes)
+		assert.match(write.path, /\/runs\/run-concurrent-b\//);
+});
+
+test("successful summaries publish atomically and failed runs leave no success summary", async () => {
+	const success = orchestrationFixture();
+	await captureDemo({
+		repoRoot: "/repo",
+		adapters: success.adapters,
+		recordOnly: true,
+		runIdFactory: () => "run-atomic-success",
+	});
+	assert.deepEqual(success.renames, [
+		{
+			from: "/repo/docs/brand/demo/artifacts/runs/run-atomic-success/capture-summary.json.tmp",
+			to: "/repo/docs/brand/demo/artifacts/runs/run-atomic-success/capture-summary.json",
+		},
+	]);
+
+	const failed = orchestrationFixture({ failAt: "scenario" });
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: failed.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-atomic-failure",
+		}),
+		/scenario failed/,
+	);
+	assert.equal(
+		failed.writes.some(({ path }) => path.includes("capture-summary.json")),
+		false,
+	);
+	assert.deepEqual(failed.renames, []);
 });
 
 test("record-only capture never invokes the future encoder", async () => {
@@ -1211,10 +1643,14 @@ test("non-record-only capture fails actionably while the future encoder is unava
 		}),
 		/Encoding requested but docs\/brand\/demo\/encode\.mjs is unavailable; use --record-only/,
 	);
-	assert.deepEqual(fixture.operations.slice(-4), [
+	assert.deepEqual(fixture.operations.slice(-5, -1), [
 		"stop workbench",
 		"stop server",
 		"close aimock",
 		`remove ${fixture.workspaceRoot}`,
 	]);
+	assert.match(
+		fixture.operations.at(-1),
+		/^remove \/repo\/docs\/brand\/demo\/artifacts\/runs\/[A-Za-z0-9_-]+\/capture-summary\.json$/,
+	);
 });

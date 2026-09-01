@@ -1,8 +1,10 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
 	mkdir as nodeMkdir,
 	mkdtemp as nodeMkdtemp,
 	readFile as nodeReadFile,
+	rename as nodeRename,
 	rm as nodeRm,
 	writeFile as nodeWriteFile,
 } from "node:fs/promises";
@@ -34,8 +36,18 @@ if (typeof EXPECTED_ANSWER !== "string") {
 }
 const DEFAULT_REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const DEFAULT_SCAFFOLD_PORTS = new Set([3002, 3010]);
-const TOOLCHAIN = Object.freeze({ node: "v24.19.0", pnpm: "10.33.0" });
+const NODE_MINIMUM_MAJOR = 24;
+const PNPM_VERSION = "10.33.0";
 const VIEWPORT = Object.freeze({ width: 1440, height: 810 });
+const DEFAULT_HOLD_DURATIONS = Object.freeze({
+	preReloadMs: 1_200,
+	restorationMs: 1_800,
+});
+const DEFAULT_TIMING = Object.freeze({
+	now: () => performance.now(),
+	sleep: (durationMs) =>
+		new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs)),
+});
 // Child processes receive only local toolchain, package-manager, locale, temp,
 // home/cache, and CI settings. Everything else is excluded by construction.
 const OPERATIONAL_ENVIRONMENT_KEYS = Object.freeze([
@@ -72,6 +84,60 @@ function assertCommandSucceeded(result, label) {
 	throw new Error(
 		`${label} failed with exit code ${result.exitCode}${transcript ? `\n${transcript}` : ""}`,
 	);
+}
+
+export function validateToolchainVersions({ node, pnpm }) {
+	requireString(node, "Node version");
+	requireString(pnpm, "pnpm version");
+	const nodeMatch = /^v(\d+)\.(\d+)\.(\d+)$/.exec(node);
+	if (nodeMatch === null || Number(nodeMatch[1]) < NODE_MINIMUM_MAJOR) {
+		throw new Error(`Capture requires Node >=24.0.0; received ${node}`);
+	}
+	if (pnpm !== PNPM_VERSION) {
+		throw new Error(`Capture requires pnpm ${PNPM_VERSION}; received ${pnpm}`);
+	}
+	return { node, pnpm };
+}
+
+export function validateRunId(value) {
+	if (
+		typeof value !== "string" ||
+		!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)
+	) {
+		throw new TypeError(
+			"run id must contain only letters, digits, hyphens, and underscores",
+		);
+	}
+	return value;
+}
+
+function createVideoTimeline(now) {
+	if (typeof now !== "function")
+		throw new TypeError("timing.now must be a function");
+	const startedAtMonotonicMs = now();
+	const scenes = {};
+	let previousEnd = 0;
+	return {
+		async scene(name, action) {
+			const startMs = now() - startedAtMonotonicMs;
+			if (startMs < previousEnd)
+				throw new Error("scene clock must be monotonic");
+			const value = await action();
+			const endMs = now() - startedAtMonotonicMs;
+			if (endMs < startMs) throw new Error("scene clock must be monotonic");
+			scenes[name] = { startMs, endMs };
+			previousEnd = endMs;
+			return value;
+		},
+		manifest() {
+			return {
+				unit: "milliseconds",
+				startedAtMonotonicMs,
+				endedAtMonotonicMs: startedAtMonotonicMs + previousEnd,
+				scenes: { ...scenes },
+			};
+		},
+	};
 }
 
 export function generatedTestCommand() {
@@ -269,11 +335,7 @@ function createCommandAdapter({ repoRoot, parentEnvironment }) {
 				node: nodeResult.stdout.trim(),
 				pnpm: pnpmResult.stdout.trim(),
 			};
-			if (actual.node !== TOOLCHAIN.node || actual.pnpm !== TOOLCHAIN.pnpm) {
-				throw new Error(
-					`Capture requires Node ${TOOLCHAIN.node} and pnpm ${TOOLCHAIN.pnpm}; received Node ${actual.node} and pnpm ${actual.pnpm}`,
-				);
-			}
+			return validateToolchainVersions(actual);
 		},
 		async build() {
 			assertCommandSucceeded(
@@ -331,30 +393,20 @@ async function startHttpService({
 	const child = childRegistry.track(
 		spawnManaged(command, args, { options: { cwd, env } }),
 	);
-	let stdout = "";
-	let stderr = "";
-	child.stdout?.setEncoding("utf8");
-	child.stderr?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk) => {
-		stdout += chunk;
-	});
-	child.stderr?.on("data", (chunk) => {
-		stderr += chunk;
-	});
+	const monitor = createManagedServiceMonitor({ child, service });
 	try {
 		await waitForHttp(readyUrl, child, { timeoutMs: 90_000, intervalMs: 150 });
-		return child;
+		monitor.arm();
+		return monitor;
 	} catch (error) {
+		monitor.markExpectedExit();
 		let cleanupError;
 		try {
 			await childRegistry.stop(child);
 		} catch (caught) {
 			cleanupError = caught;
 		}
-		const transcript = [stdout, stderr]
-			.filter(Boolean)
-			.join("\n")
-			.slice(-8_000);
+		const transcript = monitor.transcript();
 		const wrapped = new Error(
 			`${service} did not become ready: ${errorMessage(error)}${transcript ? `\n${transcript}` : ""}`,
 			{ cause: error },
@@ -367,6 +419,137 @@ async function startHttpService({
 	}
 }
 
+export function createManagedServiceMonitor({
+	child,
+	service,
+	maxTranscriptLength = 8_000,
+}) {
+	requireString(service, "service");
+	if (!child || typeof child.once !== "function") {
+		throw new TypeError("child must be an event emitter");
+	}
+	let output = "";
+	let armed = false;
+	let expectedExit = false;
+	let rejectUnexpected;
+	const unexpectedExit = new Promise((_, reject) => {
+		rejectUnexpected = reject;
+	});
+	unexpectedExit.catch(() => {});
+	const append = (chunk) => {
+		output = `${output}${String(chunk)}`.slice(-maxTranscriptLength);
+	};
+	child.stdout?.setEncoding?.("utf8");
+	child.stderr?.setEncoding?.("utf8");
+	child.stdout?.on("data", append);
+	child.stderr?.on("data", append);
+	const rejectExit = (detail) => {
+		if (!armed || expectedExit) return;
+		const transcript = output.length === 0 ? "" : `\n${output}`;
+		rejectUnexpected(
+			new Error(`${service} exited unexpectedly (${detail})${transcript}`),
+		);
+	};
+	child.once("exit", (code, signal) =>
+		rejectExit(
+			code !== null ? `code ${code}` : `signal ${signal ?? "unknown"}`,
+		),
+	);
+	child.once("error", (error) => rejectExit(`error ${errorMessage(error)}`));
+	return {
+		child,
+		unexpectedExit,
+		arm() {
+			armed = true;
+			if (child.exitCode !== null && child.exitCode !== undefined) {
+				rejectExit(`code ${child.exitCode}`);
+			} else if (child.signalCode !== null && child.signalCode !== undefined) {
+				rejectExit(`signal ${child.signalCode}`);
+			}
+		},
+		markExpectedExit() {
+			expectedExit = true;
+		},
+		transcript() {
+			return output;
+		},
+	};
+}
+
+export async function raceCapturePhase(label, action, services = [], signal) {
+	requireString(label, "phase label");
+	if (typeof action !== "function")
+		throw new TypeError("phase action must be a function");
+	let onAbort;
+	const cancellation =
+		signal === undefined
+			? []
+			: [
+					new Promise((_, reject) => {
+						onAbort = () =>
+							reject(signal.reason ?? new Error(`${label} cancelled`));
+						if (signal.aborted) onAbort();
+						else signal.addEventListener("abort", onAbort, { once: true });
+					}),
+				];
+	try {
+		return await Promise.race([
+			Promise.resolve().then(action),
+			...services
+				.filter((service) => service?.unexpectedExit instanceof Promise)
+				.map((service) => service.unexpectedExit),
+			...cancellation,
+		]);
+	} finally {
+		if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+	}
+}
+
+function createProcessSignalAdapter() {
+	return {
+		on: (signal, handler) => process.on(signal, handler),
+		off: (signal, handler) => process.off(signal, handler),
+		forceExit(signal) {
+			process.exit(signal === "SIGINT" ? 130 : 143);
+		},
+	};
+}
+
+export function installCaptureSignalHandlers({
+	signalAdapter = createProcessSignalAdapter(),
+	abortController = new AbortController(),
+} = {}) {
+	for (const method of ["on", "off", "forceExit"]) {
+		if (typeof signalAdapter?.[method] !== "function") {
+			throw new TypeError(`signalAdapter.${method} must be a function`);
+		}
+	}
+	let receivedSignal = false;
+	let restored = false;
+	const handlers = new Map();
+	for (const signal of ["SIGINT", "SIGTERM"]) {
+		const handler = () => {
+			if (receivedSignal) {
+				signalAdapter.forceExit(signal);
+				return;
+			}
+			receivedSignal = true;
+			abortController.abort(new Error(`Capture cancelled by ${signal}`));
+		};
+		handlers.set(signal, handler);
+		signalAdapter.on(signal, handler);
+	}
+	return {
+		signal: abortController.signal,
+		restore() {
+			if (restored) return;
+			restored = true;
+			for (const [signal, handler] of handlers)
+				signalAdapter.off(signal, handler);
+		},
+	};
+}
+
 function createProcessAdapter() {
 	const childRegistry = createManagedChildRegistry((child) =>
 		stopManaged(child, {
@@ -374,6 +557,7 @@ function createProcessAdapter() {
 			confirmationTimeoutMs: 2_000,
 		}),
 	);
+	const serviceHandles = new WeakMap();
 	return {
 		startAimock(fixtures) {
 			return createAimock({ fixtures });
@@ -385,8 +569,8 @@ function createProcessAdapter() {
 			}
 			throw new Error("Could not assign a distinct loopback port");
 		},
-		startDawn({ cwd, port, env }) {
-			return startHttpService({
+		async startDawn({ cwd, port, env }) {
+			const handle = await startHttpService({
 				command: "npm",
 				args: ["exec", "--", "dawn", "dev", "--port", String(port)],
 				cwd,
@@ -395,9 +579,11 @@ function createProcessAdapter() {
 				service: "Dawn server",
 				childRegistry,
 			});
+			serviceHandles.set(handle.child, handle);
+			return handle;
 		},
-		startWorkbench({ cwd, port, env }) {
-			return startHttpService({
+		async startWorkbench({ cwd, port, env }) {
+			const handle = await startHttpService({
 				command: "npm",
 				args: [
 					"exec",
@@ -415,8 +601,11 @@ function createProcessAdapter() {
 				service: "Workbench",
 				childRegistry,
 			});
+			serviceHandles.set(handle.child, handle);
+			return handle;
 		},
 		stop(child) {
+			serviceHandles.get(child)?.markExpectedExit();
 			return childRegistry.stop(child);
 		},
 		stopRemaining() {
@@ -430,6 +619,7 @@ function createFilesystemAdapter() {
 		mkdtemp: nodeMkdtemp,
 		mkdir: nodeMkdir,
 		readFile: nodeReadFile,
+		rename: nodeRename,
 		rm: nodeRm,
 		writeFile: nodeWriteFile,
 	};
@@ -464,6 +654,56 @@ export async function fillActiveWorkbenchComposer(page, prompt) {
 		.waitFor({ state: "visible", timeout: 60_000 });
 	const messageBox = page.getByRole("textbox", { name: "Message" });
 	await messageBox.fill(prompt);
+}
+
+export async function waitForWorkbenchRunCompletion(page) {
+	await page
+		.getByRole("button", { name: "Stop", exact: true })
+		.waitFor({ state: "hidden", timeout: 120_000 });
+	await page
+		.getByRole("button", { name: "Send", exact: true })
+		.waitFor({ state: "visible", timeout: 120_000 });
+	// The generated composer intentionally disables Send for an empty draft, so
+	// editability—not button enabledness—is the real idle-state proof.
+	await page
+		.getByRole("textbox", { name: "Message" })
+		.fill("", { timeout: 120_000 });
+}
+
+export async function restoreWorkbenchThread(
+	page,
+	{ workbenchUrl, threadId, prompt, tools, answer },
+) {
+	const origin = new URL(workbenchUrl).origin;
+	const stateUrl = new URL(
+		`/api/dawn/threads/${encodeURIComponent(threadId)}/state`,
+		origin,
+	).href;
+	const stateResponsePromise = page.waitForResponse(
+		(response) =>
+			response.request().method() === "GET" && response.url() === stateUrl,
+		{ timeout: 120_000 },
+	);
+	await page.reload({ waitUntil: "domcontentloaded" });
+	const row = page.getByRole("button", { name: prompt, exact: true });
+	await row.waitFor({ state: "visible", timeout: 60_000 });
+	await row.click();
+	if ((await row.getAttribute("aria-current")) !== "true") {
+		throw new Error(`Reload did not select the captured thread ${threadId}`);
+	}
+	const response = await stateResponsePromise;
+	if (!response.ok()) {
+		throw new Error(`Thread restoration failed with HTTP ${response.status()}`);
+	}
+	await response.finished();
+	const transcript = page.getByRole("main");
+	for (const evidence of [prompt, ...tools, answer]) {
+		await transcript
+			.getByText(evidence, { exact: true })
+			.last()
+			.waitFor({ state: "visible", timeout: 120_000 });
+	}
+	return { stateUrl: response.url() };
 }
 
 export async function closeBrowserResources({ context, video, browser }) {
@@ -560,6 +800,7 @@ function createBrowserAdapter() {
 						state: "visible",
 						timeout: 120_000,
 					});
+					await waitForWorkbenchRunCompletion(page);
 					const threadId = await page.evaluate((title) => {
 						const raw = localStorage.getItem("dawn.workbench.threads");
 						const threads = raw === null ? [] : JSON.parse(raw);
@@ -571,38 +812,20 @@ function createBrowserAdapter() {
 					}
 					return { threadId };
 				},
-				async reloadAndRestore({ threadId, prompt, answer }) {
-					const statePath = `/api/dawn/threads/${encodeURIComponent(threadId)}/state`;
-					const stateResponsePromise = page.waitForResponse(
-						(response) => {
-							const url = new URL(response.url());
-							return (
-								response.request().method() === "GET" &&
-								url.pathname === statePath
-							);
-						},
-						{ timeout: 120_000 },
-					);
-					await page.reload({ waitUntil: "domcontentloaded" });
-					const row = page.getByRole("button", { name: prompt, exact: true });
-					await row.waitFor({ state: "visible", timeout: 60_000 });
-					if ((await row.getAttribute("aria-current")) !== "true") {
-						throw new Error(
-							`Reload did not select the captured thread ${threadId}`,
-						);
-					}
-					const response = await stateResponsePromise;
-					if (!response.ok()) {
-						throw new Error(
-							`Thread restoration failed with HTTP ${response.status()}`,
-						);
-					}
-					await response.finished();
-					await page.getByText(answer, { exact: true }).last().waitFor({
-						state: "visible",
-						timeout: 120_000,
+				async reloadAndRestore({
+					workbenchUrl,
+					threadId,
+					prompt,
+					tools,
+					answer,
+				}) {
+					return restoreWorkbenchThread(page, {
+						workbenchUrl,
+						threadId,
+						prompt,
+						tools,
+						answer,
 					});
-					return { stateUrl: response.url() };
 				},
 				async recordRun() {
 					await page.waitForTimeout(1_800);
@@ -622,6 +845,7 @@ function mergeAdapters(defaults, overrides = {}) {
 		filesystem: { ...defaults.filesystem, ...overrides.filesystem },
 		processes: { ...defaults.processes, ...overrides.processes },
 		browser: { ...defaults.browser, ...overrides.browser },
+		timing: { ...defaults.timing, ...overrides.timing },
 	};
 }
 
@@ -663,54 +887,76 @@ export async function captureDemo({
 	adapters: adapterOverrides,
 	recordOnly = false,
 	encodeCaptureArtifacts = encodeWithFutureModule,
+	runIdFactory = randomUUID,
+	timing: timingOverride,
+	holdDurations = DEFAULT_HOLD_DURATIONS,
+	signalAdapter = createProcessSignalAdapter(),
 } = {}) {
 	requireString(repoRoot, "repoRoot");
-	const artifactsDir = join(repoRoot, "docs/brand/demo/artifacts");
-	const recordingsDir = join(repoRoot, "docs/brand/demo/raw-recordings");
+	if (typeof runIdFactory !== "function")
+		throw new TypeError("runIdFactory must be a function");
+	const runId = validateRunId(runIdFactory());
+	const artifactsDir = join(repoRoot, "docs/brand/demo/artifacts/runs", runId);
+	const recordingsDir = join(
+		repoRoot,
+		"docs/brand/demo/raw-recordings/runs",
+		runId,
+	);
+	const logPaths = {
+		stdout: join(artifactsDir, "test.stdout.log"),
+		stderr: join(artifactsDir, "test.stderr.log"),
+		result: join(artifactsDir, "test.result.json"),
+	};
 	const defaults = {
 		commands: createCommandAdapter({ repoRoot, parentEnvironment: parentEnv }),
 		filesystem: createFilesystemAdapter(),
 		processes: createProcessAdapter(),
 		browser: createBrowserAdapter(),
+		timing: DEFAULT_TIMING,
 	};
 	const adapters = mergeAdapters(defaults, adapterOverrides);
+	const timing = timingOverride ?? adapters.timing;
+	if (typeof timing?.now !== "function")
+		throw new TypeError("timing.now must be a function");
+	if (typeof timing?.sleep !== "function")
+		throw new TypeError("timing.sleep must be a function");
+	const signalScope = installCaptureSignalHandlers({ signalAdapter });
 	let workspaceRoot;
 	let aimock;
 	let serverChild;
 	let workbenchChild;
+	const managedServices = [];
 	let browserSession;
 	let browserResult = {};
 	let result;
 	let finalSummary;
+	let publishedSummaryPath;
 	let primaryError;
 
 	try {
-		await adapters.commands.checkToolchain({ repoRoot });
+		const toolchain = await adapters.commands.checkToolchain({ repoRoot });
+		signalScope.signal.throwIfAborted();
 		await adapters.commands.build({ repoRoot });
+		signalScope.signal.throwIfAborted();
 		workspaceRoot = await adapters.filesystem.mkdtemp(
 			join(tmpdir(), "dawn-brand-demo-"),
 		);
 		const appRoot = join(workspaceRoot, "my-agent");
 		await adapters.commands.scaffold({ repoRoot, appRoot });
+		signalScope.signal.throwIfAborted();
 		await adapters.commands.install({ appRoot });
+		signalScope.signal.throwIfAborted();
 		const testResult = await adapters.commands.test({ appRoot });
+		signalScope.signal.throwIfAborted();
 		await Promise.all([
 			adapters.filesystem.mkdir(artifactsDir, { recursive: true }),
 			adapters.filesystem.mkdir(recordingsDir, { recursive: true }),
 		]);
 		await Promise.all([
+			adapters.filesystem.writeFile(logPaths.stdout, testResult.stdout, "utf8"),
+			adapters.filesystem.writeFile(logPaths.stderr, testResult.stderr, "utf8"),
 			adapters.filesystem.writeFile(
-				join(artifactsDir, "test.stdout.log"),
-				testResult.stdout,
-				"utf8",
-			),
-			adapters.filesystem.writeFile(
-				join(artifactsDir, "test.stderr.log"),
-				testResult.stderr,
-				"utf8",
-			),
-			adapters.filesystem.writeFile(
-				join(artifactsDir, "test.result.json"),
+				logPaths.result,
 				`${JSON.stringify({ exitCode: testResult.exitCode }, null, 2)}\n`,
 				"utf8",
 			),
@@ -746,6 +992,7 @@ export async function captureDemo({
 				}),
 		});
 		serverChild = serverStart.child;
+		managedServices.push(serverStart);
 
 		const workbenchEnvironment = {
 			...sanitizeOperationalEnvironment(parentEnv),
@@ -766,17 +1013,24 @@ export async function captureDemo({
 				}),
 		});
 		workbenchChild = workbenchStart.child;
+		managedServices.push(workbenchStart);
+		const racePhase = (label, action) =>
+			raceCapturePhase(label, action, managedServices, signalScope.signal);
 
-		const [primarySource, secondarySource] = await Promise.all([
-			adapters.filesystem.readFile(
-				join(appRoot, "server/src/app/research/index.ts"),
-				"utf8",
-			),
-			adapters.filesystem.readFile(
-				join(appRoot, "server/src/tools/searchCorpus.ts"),
-				"utf8",
-			),
-		]);
+		const [primarySource, secondarySource] = await racePhase(
+			"read generated source",
+			() =>
+				Promise.all([
+					adapters.filesystem.readFile(
+						join(appRoot, "server/src/app/research/index.ts"),
+						"utf8",
+					),
+					adapters.filesystem.readFile(
+						join(appRoot, "server/src/tools/searchCorpus.ts"),
+						"utf8",
+					),
+				]),
+		);
 		const authorHtml = renderStage({
 			act: "author",
 			tree: GENERATED_PATHS,
@@ -795,61 +1049,126 @@ export async function captureDemo({
 			throw new Error("Author compositor is missing the canonical Dawn source");
 		}
 		const testHtml = renderStage({ act: "test", testLog: normalizedTestLog });
-		browserSession = await adapters.browser.open({
-			recordingsDir,
-			viewport: { ...VIEWPORT },
+		browserSession = await racePhase("open browser", () =>
+			adapters.browser.open({
+				recordingsDir,
+				viewport: { ...VIEWPORT },
+			}),
+		);
+		const timeline = createVideoTimeline(timing.now);
+		await timeline.scene("author", () =>
+			racePhase("record author", () =>
+				browserSession.recordStage({ act: "author", html: authorHtml }),
+			),
+		);
+		await timeline.scene("test", () =>
+			racePhase("record test", () =>
+				browserSession.recordStage({ act: "test", html: testHtml }),
+			),
+		);
+		const scenario = await timeline.scene("workbench-run", () =>
+			racePhase("run Workbench scenario", () =>
+				browserSession.runScenario({
+					url: `http://127.0.0.1:${workbenchStart.port}`,
+					prompt: DEMO_PROMPT,
+					tools: EXPECTED_TOOLS,
+					answer: EXPECTED_ANSWER,
+				}),
+			),
+		);
+		await timeline.scene("pre-reload-complete", () =>
+			racePhase("hold completed run", () =>
+				timing.sleep(holdDurations.preReloadMs),
+			),
+		);
+		let restoration;
+		await timeline.scene("restoration", async () => {
+			restoration = await racePhase("restore Workbench thread", () =>
+				browserSession.reloadAndRestore({
+					workbenchUrl: `http://127.0.0.1:${workbenchStart.port}`,
+					threadId: scenario.threadId,
+					prompt: DEMO_PROMPT,
+					tools: EXPECTED_TOOLS,
+					answer: EXPECTED_ANSWER,
+				}),
+			);
+			await racePhase("record restored run", () => browserSession.recordRun());
+			await racePhase("hold restored run", () =>
+				timing.sleep(holdDurations.restorationMs),
+			);
 		});
-		await browserSession.recordStage({ act: "author", html: authorHtml });
-		await browserSession.recordStage({ act: "test", html: testHtml });
-		const scenario = await browserSession.runScenario({
-			url: `http://127.0.0.1:${workbenchStart.port}`,
-			prompt: DEMO_PROMPT,
-			tools: EXPECTED_TOOLS,
-			answer: EXPECTED_ANSWER,
-		});
-		const restoration = await browserSession.reloadAndRestore({
-			threadId: scenario.threadId,
-			prompt: DEMO_PROMPT,
-			answer: EXPECTED_ANSWER,
-		});
-		await browserSession.recordRun();
-		await browserSession.recordStage({
-			act: "close",
-			html: renderStage({ act: "close" }),
-		});
+		await timeline.scene("close", () =>
+			racePhase("record close", () =>
+				browserSession.recordStage({
+					act: "close",
+					html: renderStage({ act: "close" }),
+				}),
+			),
+		);
 		result = {
+			schemaVersion: 1,
+			runId,
 			status: "captured",
 			recordOnly,
+			toolchain,
 			threadId: scenario.threadId,
 			serverPort: serverStart.port,
 			workbenchPort: workbenchStart.port,
 			...(restoration?.stateUrl !== undefined
 				? { stateUrl: restoration.stateUrl }
 				: {}),
+			videoTimeline: timeline.manifest(),
 		};
 
 		const completedBrowserSession = browserSession;
 		browserSession = undefined;
-		browserResult = await completedBrowserSession.close();
-		const summary = { ...result, ...browserResult };
-		const summaryPath = join(artifactsDir, "capture-summary.json");
-		await adapters.filesystem.writeFile(
-			summaryPath,
-			`${JSON.stringify(summary, null, 2)}\n`,
-			"utf8",
+		browserResult = await racePhase("finalize browser recording", () =>
+			completedBrowserSession.close(),
 		);
+		const summary = {
+			...result,
+			...browserResult,
+			paths: {
+				artifactsRoot: artifactsDir,
+				recordingsRoot: recordingsDir,
+				logs: logPaths,
+				recording: browserResult.videoPath,
+			},
+			evidence: {
+				prompt: DEMO_PROMPT,
+				tools: [...EXPECTED_TOOLS],
+				answer: EXPECTED_ANSWER,
+				threadId: scenario.threadId,
+				stateUrl: restoration?.stateUrl,
+			},
+		};
+		const summaryPath = join(artifactsDir, "capture-summary.json");
+		const temporarySummaryPath = `${summaryPath}.tmp`;
+		await racePhase("write capture summary", () =>
+			adapters.filesystem.writeFile(
+				temporarySummaryPath,
+				`${JSON.stringify(summary, null, 2)}\n`,
+				"utf8",
+			),
+		);
+		await racePhase("publish capture summary", () =>
+			adapters.filesystem.rename(temporarySummaryPath, summaryPath),
+		);
+		publishedSummaryPath = summaryPath;
 		finalSummary = { ...summary, summaryPath };
 		if (!recordOnly) {
 			if (typeof encodeCaptureArtifacts !== "function") {
 				throw new TypeError("encodeCaptureArtifacts must be a function");
 			}
-			await encodeCaptureArtifacts({
-				repoRoot,
-				artifactsDir,
-				recordingsDir,
-				summary,
-				summaryPath,
-			});
+			await racePhase("encode capture artifacts", () =>
+				encodeCaptureArtifacts({
+					repoRoot,
+					artifactsDir,
+					recordingsDir,
+					summary,
+					summaryPath,
+				}),
+			);
 		}
 	} catch (error) {
 		primaryError = error;
@@ -889,6 +1208,16 @@ export async function captureDemo({
 			cleanupErrors,
 		);
 	}
+	if (
+		(primaryError !== undefined || cleanupErrors.length > 0) &&
+		publishedSummaryPath !== undefined
+	) {
+		await cleanupResource(
+			() => adapters.filesystem.rm(publishedSummaryPath, { force: true }),
+			cleanupErrors,
+		);
+	}
+	await cleanupResource(() => signalScope.restore(), cleanupErrors);
 
 	if (primaryError !== undefined) {
 		if (cleanupErrors.length > 0) {
