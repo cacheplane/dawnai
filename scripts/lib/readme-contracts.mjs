@@ -60,7 +60,7 @@ const ROOT_LINK_CONTRACTS = {
 	},
 };
 
-const RAW_HTML_BLOCK_TAGS = new Set([
+const COMMONMARK_BLOCK_TAGS = new Set([
 	"address",
 	"article",
 	"aside",
@@ -114,6 +114,7 @@ const RAW_HTML_BLOCK_TAGS = new Set([
 	"tr",
 	"ul",
 ]);
+const RAW_TEXT_HTML_BLOCK_TAGS = new Set(["script", "style", "textarea"]);
 
 function maskText(value) {
 	return value.replace(/[^\r\n]/gu, " ");
@@ -262,24 +263,44 @@ function closingFenceRun(line, fence) {
 	return /^([`~]+)[ \t]*$/u.exec(stripFenceIndent(content))?.[1] ?? null;
 }
 
+function isCompleteHtmlTag(source) {
+	return /^(?:<\/[a-z][a-z0-9-]*[ \t]*>|<[a-z][a-z0-9-]*(?:[ \t]+[a-z_:][a-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t]*\/?>)[ \t]*$/iu.test(
+		source,
+	);
+}
+
 function rawHtmlBlockOpening(line) {
 	const container = blockquoteContainer(line);
 	const lists = listContainers(container.content);
 	if (lists.indentedCode) return null;
 
 	const candidate = stripFenceIndent(lists.content);
-	const tag = /^<([a-z][a-z0-9-]*)(?=[\s/>])/iu
+	const rawTextTag = /^<([a-z][a-z0-9-]*)(?=[\s>])/iu
 		.exec(candidate)?.[1]
 		?.toLowerCase();
-	if (!tag || !RAW_HTML_BLOCK_TAGS.has(tag)) return null;
+	if (rawTextTag && RAW_TEXT_HTML_BLOCK_TAGS.has(rawTextTag)) {
+		return {
+			kind: "raw-text",
+			tag: rawTextTag,
+			listIndentColumns: lists.listIndentColumns,
+			quoteDepth: container.depth,
+		};
+	}
+
+	const blockTag = /^<\/?([a-z][a-z0-9-]*)(?=[\s/>])/iu
+		.exec(candidate)?.[1]
+		?.toLowerCase();
+	if (!blockTag || !COMMONMARK_BLOCK_TAGS.has(blockTag)) {
+		if (!isCompleteHtmlTag(candidate)) return null;
+	}
 	return {
-		tag,
+		kind: "rendered",
 		listIndentColumns: lists.listIndentColumns,
 		quoteDepth: container.depth,
 	};
 }
 
-function closesRawHtmlBlock(line, htmlBlock) {
+function closesRawTextHtmlBlock(line, htmlBlock) {
 	return new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "iu").test(line);
 }
 
@@ -325,10 +346,17 @@ function markdownBlockProjections(source) {
 			);
 			const containerEnded =
 				container.depth < htmlBlock.quoteDepth || containedContent === null;
-			if (containerEnded || (containedContent?.trim().length ?? 0) === 0) {
+			if (containerEnded) {
+				htmlBlock = null;
+			} else if (htmlBlock.kind === "raw-text") {
+				if (closesRawTextHtmlBlock(containedContent, htmlBlock)) {
+					htmlBlock = null;
+				}
+				append(maskText(line));
+				continue;
+			} else if ((containedContent?.trim().length ?? 0) === 0) {
 				htmlBlock = null;
 			} else {
-				if (closesRawHtmlBlock(containedContent, htmlBlock)) htmlBlock = null;
 				append(maskText(line), line);
 				continue;
 			}
@@ -342,8 +370,15 @@ function markdownBlockProjections(source) {
 
 		const htmlOpening = rawHtmlBlockOpening(content);
 		if (htmlOpening) {
-			if (!closesRawHtmlBlock(content, htmlOpening)) htmlBlock = htmlOpening;
-			append(maskText(line), line);
+			if (htmlOpening.kind === "raw-text") {
+				if (!closesRawTextHtmlBlock(content, htmlOpening)) {
+					htmlBlock = htmlOpening;
+				}
+				append(maskText(line));
+			} else {
+				htmlBlock = htmlOpening;
+				append(maskText(line), line);
+			}
 			continue;
 		}
 

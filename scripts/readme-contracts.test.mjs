@@ -120,6 +120,67 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	for (const tag of ["script", "style", "textarea"]) {
+		it(`does not accept a Markdown image inside a <${tag}> raw-text block`, () => {
+			const readme = entryReadme.replace(
+				/!\[Dawn product loop\].*$/u,
+				`<${tag}>\n![Loop](docs/brand/product-loop.gif)\n</${tag}>`,
+			);
+			assertFailure(
+				validatePackageReadme({
+					tier: "entry",
+					manifest: entryManifest,
+					readme,
+				}),
+				/product-loop\.gif/,
+			);
+		});
+	}
+
+	it("does not accept a Markdown image inside a generic HTML block", () => {
+		const readme = entryReadme.replace(
+			/!\[Dawn product loop\].*$/u,
+			"<span>\n![Loop](docs/brand/product-loop.gif)\n</span>",
+		);
+		assertFailure(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			/product-loop\.gif/,
+		);
+	});
+
+	it("does not accept an HTML image inside a raw-text block", () => {
+		const readme = entryReadme.replace(
+			/!\[Dawn product loop\].*$/u,
+			'<script>\n<img src="docs/brand/product-loop.gif" alt="Decoy">\n</script>',
+		);
+		assertFailure(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			/product-loop\.gif/,
+		);
+	});
+
+	it("accepts an HTML image inside a rendered generic HTML block", () => {
+		const readme = entryReadme.replace(
+			/!\[Dawn product loop\].*$/u,
+			'<span>\n<img src="docs/brand/product-loop.gif" alt="Dawn product loop">\n</span>',
+		);
+		assert.deepEqual(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			[],
+		);
+	});
+
+	it("does not count raw-text block content as purpose prose", () => {
+		const readme = entryReadme.replace(
+			"Author-facing TypeScript SDK.",
+			"<textarea>\nAuthor-facing TypeScript SDK.\n</textarea>",
+		);
+		assertFailure(
+			validatePackageReadme({ tier: "entry", manifest: entryManifest, readme }),
+			/purpose statement/,
+		);
+	});
+
 	for (const [name, source, expected] of [
 		[
 			"Use this when guidance",
@@ -517,6 +578,13 @@ describe("validateRootReadme", () => {
 		assertFailure(validateRootReadme(misleading), /Quickstart/);
 	});
 
+	it("ignores Markdown headings inside raw-text HTML blocks", () => {
+		const misleading = rootReadme
+			.replace("## Quickstart\n", "")
+			.concat("\n\n<style>\n## Quickstart\n</style>");
+		assertFailure(validateRootReadme(misleading), /Quickstart/);
+	});
+
 	it("requires exact H2 spelling for root section headings", () => {
 		assertFailure(
 			validateRootReadme(rootReadme.replace("## Quickstart", "### quickstart")),
@@ -580,6 +648,23 @@ describe("validateRootReadme", () => {
 				.replace(reference, "")
 				.concat(`\n\n<div>\n    ${decoy}\n</div>`);
 			assertFailure(validateRootReadme(source), expected);
+		});
+	}
+
+	for (const tag of ["script", "style", "textarea", "span"]) {
+		it(`does not accept Markdown links inside a <${tag}> HTML block`, () => {
+			const source = rootReadme
+				.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+				.replace(
+					"[Read the demo transcript](docs/brand/demo/transcript.md)",
+					"",
+				)
+				.concat(
+					`\n\n<${tag}>\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n</${tag}>`,
+				);
+			const failures = validateRootReadme(source);
+			assertFailure(failures, /migrating-from-langgraph/);
+			assertFailure(failures, /transcript\.md/);
 		});
 	}
 
