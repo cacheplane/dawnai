@@ -629,6 +629,67 @@ test("concurrent broad reads invalidate the complete capture trace", async () =>
 	);
 });
 
+test("raw authority capture rejects a complete Release trace that violates its stage", async (t) => {
+	await t.test(
+		"pre-delete-2 rejects the first target reappearing",
+		async () => {
+			const source = await authorityFixture();
+			const fixture = await authorityFixture({ stage: "pre-delete-2" });
+			fixture.remainingReleases.push(
+				structuredClone(
+					source.remainingReleases.find(
+						({ id }) => String(id) === DUPLICATE_DRAFT_IDS[0],
+					),
+				),
+			);
+			await assertRawReleaseTraceRejected(fixture);
+		},
+	);
+
+	await t.test("rejects a fourth managed candidate draft", async () => {
+		const fixture = await authorityFixture();
+		const extra = structuredClone(fixture.remainingReleases[0]);
+		extra.id = 999_999_999;
+		extra.node_id = "RE_kwDO-managed-extra";
+		fixture.remainingReleases.push(extra);
+		await assertRawReleaseTraceRejected(fixture);
+	});
+
+	await t.test("rejects a published candidate", async () => {
+		const fixture = await authorityFixture();
+		fixture.remainingReleases[0].published_at = "2026-09-01T11:59:00Z";
+		await assertRawReleaseTraceRejected(fixture);
+	});
+
+	await t.test(
+		"rejects malformed and duplicate expected entries",
+		async (t) => {
+			await t.test("malformed managed marker", async () => {
+				const fixture = await authorityFixture();
+				fixture.remainingReleases[0].body = "malformed managed candidate";
+				await assertRawReleaseTraceRejected(fixture);
+			});
+
+			await t.test("duplicate expected id", async () => {
+				const fixture = await authorityFixture();
+				fixture.remainingReleases.push(
+					structuredClone(fixture.remainingReleases[1]),
+				);
+				await assertRawReleaseTraceRejected(fixture);
+			});
+		},
+	);
+
+	await t.test("an authority cannot omit an extra managed entry", async () => {
+		const fixture = await authorityFixture();
+		const extra = structuredClone(fixture.remainingReleases[2]);
+		extra.id = 999_999_998;
+		extra.node_id = "RE_kwDO-omitted-managed-extra";
+		fixture.remainingReleases.push(extra);
+		await assertRawReleaseTraceRejected(fixture);
+	});
+});
+
 test("a missing durable head bootstraps only exact operation genesis", async (t) => {
 	await t.test("post-genesis authority history rejects", async () => {
 		const fixture = await authorityFixture();
@@ -1544,6 +1605,31 @@ test("redacts dependency failures instead of exposing untrusted controls", async
 		},
 	);
 });
+
+async function assertRawReleaseTraceRejected(fixture) {
+	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
+		stage: fixture.input.stage,
+		proposal: fixture.proposal,
+		targetReleaseId: fixture.input.targetReleaseId,
+	});
+	await capture.local.readState();
+	await capture.github.getRepository();
+	await capture.github.getAuthenticatedUser();
+	await capture.github.getDefaultBranchSha();
+	await capture.github.getWorkflowState();
+	await capture.github.listNonterminalWorkflowRuns(EXACT_WORKFLOW_RUN_QUERY);
+	await capture.github.getAnnotatedTag({
+		name: fixture.proposal.candidate.tag,
+	});
+	await assert.rejects(
+		capture.github.listReleases(),
+		/release|managed|candidate|duplicate|published|trace|authority/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+}
 
 async function authorityFixture({
 	stage = "pre-delete-1",

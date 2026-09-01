@@ -22,6 +22,10 @@ import {
 	parseConsolidationJournal,
 } from "./duplicate-draft-consolidation-journal.mjs";
 import {
+	classifyConsolidationReleases,
+	consolidationStageRule,
+} from "./duplicate-draft-consolidation-release-classifier.mjs";
+import {
 	canonicalConsolidationEnvelopeBytes,
 	canonicalRecordSha256,
 	createConsolidationEnvelope,
@@ -745,12 +749,18 @@ function expectedAuthorityTrace(proposal, stage) {
 			) {
 				throw new Error("Release-list capture is malformed");
 			}
+			const classification = classifyConsolidationReleases(
+				actual.value,
+				proposal,
+				stage,
+			);
 			session.keyResults.set("releases", actual);
+			session.keyResults.set("release-classification", classification);
 			appendExpectedPayloadTrace(
 				session.expected,
 				proposal,
 				stage,
-				actual.value,
+				classification.selected,
 				exact,
 				equals,
 			);
@@ -784,12 +794,8 @@ function appendExpectedPayloadTrace(
 	exact,
 	equals,
 ) {
-	const remainingIds =
-		stage === "pre-delete-1"
-			? [SURVIVOR_ID, ...DUPLICATE_IDS]
-			: stage === "pre-delete-2"
-				? [SURVIVOR_ID, DUPLICATE_IDS[1]]
-				: [SURVIVOR_ID];
+	const { releaseIds: remainingIds, targetReleaseId } =
+		consolidationStageRule(stage);
 	for (const releaseId of remainingIds) {
 		const release = proposal.releases.find(({ id }) => id === releaseId);
 		const rawRelease = rawReleases.find(({ id }) => String(id) === releaseId);
@@ -829,8 +835,6 @@ function appendExpectedPayloadTrace(
 		}
 	}
 	if (stage !== "final") {
-		const targetReleaseId =
-			stage === "pre-delete-1" ? DUPLICATE_IDS[0] : DUPLICATE_IDS[1];
 		steps.push(
 			exact(
 				"terminal Release GET",
@@ -998,12 +1002,7 @@ function assertCapturedAuthorityProjection(capture, authority) {
 
 async function validateCapturedReleaseEvidence(capture, authority) {
 	const proposal = capture.proposedEnvelope.record;
-	const expectedIds =
-		capture.stage === "pre-delete-1"
-			? [SURVIVOR_ID, ...DUPLICATE_IDS]
-			: capture.stage === "pre-delete-2"
-				? [SURVIVOR_ID, DUPLICATE_IDS[1]]
-				: [SURVIVOR_ID];
+	const expectedIds = consolidationStageRule(capture.stage).releaseIds;
 	if (
 		!Array.isArray(authority.releases) ||
 		!isDeepStrictEqual(
@@ -1018,11 +1017,28 @@ async function validateCapturedReleaseEvidence(capture, authority) {
 		throw new Error("Captured authority has no broad Release enumeration");
 	}
 	const rawReleases = releaseEnvelope.value;
+	const capturedClassification = capture.keyResults.get(
+		"release-classification",
+	);
+	const classification = classifyConsolidationReleases(
+		rawReleases,
+		proposal,
+		capture.stage,
+	);
+	if (
+		capturedClassification === undefined ||
+		capturedClassification.enumerationSha256 !==
+			classification.enumerationSha256
+	) {
+		throw new Error(
+			"Captured full Release enumeration classification differs from its trace",
+		);
+	}
 	for (const authorityRelease of authority.releases) {
 		const proposed = proposal.releases.find(
 			({ id }) => id === authorityRelease.id,
 		);
-		const raw = rawReleases.find(
+		const raw = classification.selected.find(
 			({ id }) => String(id) === authorityRelease.id,
 		);
 		if (proposed === undefined || raw === undefined) {
@@ -1089,6 +1105,7 @@ async function validateCapturedReleaseEvidence(capture, authority) {
 			throw new Error("Terminal evidence differs from captured authority");
 		}
 	}
+	return classification.enumerationSha256;
 }
 
 function createNetworkGuard({ cwd, now }) {
@@ -1276,12 +1293,16 @@ function createNetworkGuard({ cwd, now }) {
 		}
 		assertCapturedClockBinding(capture, authority);
 		assertCapturedAuthorityProjection(capture, authority);
-		await validateCapturedReleaseEvidence(capture, authority);
+		const releaseEnumerationSha256 = await validateCapturedReleaseEvidence(
+			capture,
+			authority,
+		);
 		capture.bound = Object.freeze({
 			traceSha256: traceSha256(capture.entries),
 			authoritySha256: canonicalRecordSha256(authority),
 			proposalSha256: proposedEnvelope.recordSha256,
 			targetReadSha256: traceSha256(normalizeTraceValue(authority.targetRead)),
+			releaseEnumerationSha256,
 		});
 		return undefined;
 	};
@@ -1334,12 +1355,7 @@ function createNetworkGuard({ cwd, now }) {
 		);
 		const targetReleaseId =
 			targetValue === null ? null : canonicalStringId(targetValue);
-		const expectedTarget =
-			stage === "pre-delete-1"
-				? DUPLICATE_IDS[0]
-				: stage === "pre-delete-2"
-					? DUPLICATE_IDS[1]
-					: null;
+		const expectedTarget = consolidationStageRule(stage).targetReleaseId;
 		if (
 			targetReleaseId !== expectedTarget ||
 			state !== "open" ||
@@ -1652,10 +1668,23 @@ function createNetworkGuard({ cwd, now }) {
 					proposedEnvelope.record,
 					targetReleaseId,
 				);
+				const releaseEnvelope = capture.keyResults.get("releases");
+				if (releaseEnvelope === undefined) {
+					throw new Error(
+						"Task6 transition has no guarded Release enumeration",
+					);
+				}
+				const releaseClassification = classifyConsolidationReleases(
+					releaseEnvelope.value,
+					proposedEnvelope.record,
+					capture.stage,
+				);
 				if (
 					capture.bound.traceSha256 !== traceSha256(capture.entries) ||
 					capture.bound.authoritySha256 !== canonicalRecordSha256(authority) ||
 					capture.bound.proposalSha256 !== proposedEnvelope.recordSha256 ||
+					capture.bound.releaseEnumerationSha256 !==
+						releaseClassification.enumerationSha256 ||
 					capture.bound.targetReadSha256 !==
 						traceSha256(normalizeTraceValue(authority.targetRead))
 				) {

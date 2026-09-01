@@ -16,6 +16,10 @@ import {
 	parseConsolidationJournal,
 } from "./duplicate-draft-consolidation-journal.mjs";
 import {
+	classifyConsolidationReleases,
+	consolidationStageRule,
+} from "./duplicate-draft-consolidation-release-classifier.mjs";
+import {
 	canonicalConsolidationEnvelopeBytes,
 	canonicalEventEnvelope,
 	canonicalRecordSha256,
@@ -23,7 +27,6 @@ import {
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 } from "./duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs";
-import { parseReleaseMarker } from "./metadata.mjs";
 
 const REPOSITORY = "cacheplane/dawnai";
 const REPOSITORY_ID = "1210070282";
@@ -141,7 +144,7 @@ export async function captureConsolidationAuthority(input) {
 	const context = normalizeCaptureInput(input);
 	const proposal = normalizeProposal(context.proposal);
 	assertProductionProposal(proposal);
-	const stageRule = authorityStageRule(context.stage);
+	const stageRule = consolidationStageRule(context.stage);
 	if (context.targetReleaseId !== stageRule.targetReleaseId) {
 		throw new Error(
 			"Authority target is not the approved current next duplicate",
@@ -239,11 +242,11 @@ export async function captureConsolidationAuthority(input) {
 		npm: adapters.npm.source,
 		now: adapters.now,
 	});
-	const selectedRaw = selectManagedReleases(
+	const selectedRaw = classifyConsolidationReleases(
 		listedReleases,
 		proposal,
-		stageRule.releaseIds,
-	);
+		context.stage,
+	).selected;
 	const broadEvidence = await hydrateListedEvidence({
 		stage: context.stage,
 		selectedRaw,
@@ -409,22 +412,6 @@ function assertProductionProposal(proposal) {
 	}
 }
 
-function authorityStageRule(stage) {
-	if (stage === "pre-delete-1") {
-		return {
-			releaseIds: [SURVIVOR_ID, ...DUPLICATE_IDS],
-			targetReleaseId: DUPLICATE_IDS[0],
-		};
-	}
-	if (stage === "pre-delete-2") {
-		return {
-			releaseIds: [SURVIVOR_ID, DUPLICATE_IDS[1]],
-			targetReleaseId: DUPLICATE_IDS[1],
-		};
-	}
-	return { releaseIds: [SURVIVOR_ID], targetReleaseId: null };
-}
-
 function assertRepositoryAuthority({ repository, actor, proposal }) {
 	assertExactKeys(
 		repository,
@@ -544,59 +531,6 @@ function assertStableTagAndWorkflow(tag, workflow, proposal) {
 			);
 		}
 	}
-}
-
-function selectManagedReleases(rawReleases, proposal, expectedIds) {
-	const expected = new Set(expectedIds);
-	const selected = new Map();
-	const allIds = new Set();
-	for (const [index, source] of rawReleases.entries()) {
-		const release = snapshotPlain(source, `GitHub Release ${index}`);
-		const id = canonicalId(release.id, `GitHub Release ${index} id`);
-		if (allIds.has(id))
-			throw new Error("GitHub Release enumeration contains a duplicate ID");
-		allIds.add(id);
-		let marker = null;
-		try {
-			marker = parseReleaseMarker(release.body);
-		} catch {
-			marker = null;
-		}
-		const candidateMarker =
-			marker !== null &&
-			marker.version === CANDIDATE.version &&
-			marker.commitSha === CANDIDATE.commitSha &&
-			marker.tag === CANDIDATE.tag;
-		const candidateTag = release.tag_name === CANDIDATE.tag;
-		if (
-			!candidateMarker &&
-			!candidateTag &&
-			![SURVIVOR_ID, ...DUPLICATE_IDS].includes(id)
-		)
-			continue;
-		if (!candidateMarker)
-			throw new Error("Managed candidate Release marker is malformed");
-		if (!expected.has(id))
-			throw new Error(
-				"Release enumeration contains an extra managed candidate Release",
-			);
-		if (selected.has(id))
-			throw new Error(
-				"Release enumeration contains a duplicate managed Release",
-			);
-		selected.set(id, release);
-	}
-	if (
-		selected.size !== expectedIds.length ||
-		expectedIds.some((id) => !selected.has(id))
-	) {
-		throw new Error(
-			"Release enumeration is missing an exact remaining managed draft",
-		);
-	}
-	if (proposal.releases.length !== 3)
-		throw new Error("Proposal Release evidence is incomplete");
-	return expectedIds.map((id) => selected.get(id));
 }
 
 async function hydrateListedEvidence({
@@ -746,7 +680,7 @@ function normalizeAuthorityStage(value) {
 						"authority observation",
 					),
 					payload: {
-						targetReleaseId: authorityStageRule(stage).targetReleaseId,
+						targetReleaseId: consolidationStageRule(stage).targetReleaseId,
 						attemptNumber: 1,
 						authority: value,
 					},
@@ -757,7 +691,7 @@ function normalizeAuthorityStage(value) {
 }
 
 function assertAuthorityAgainstProposal(authority, proposal) {
-	const rule = authorityStageRule(authority.stage);
+	const rule = consolidationStageRule(authority.stage);
 	if (!isDeepStrictEqual(authority.controller, proposal.controller)) {
 		throw new Error("Authority controller differs from the proposal");
 	}
