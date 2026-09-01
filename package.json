@@ -27,6 +27,7 @@
     "docs:errors": "node scripts/generate-error-docs.mjs",
     "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json scripts test && turbo run lint",
     "lint:fix": "pnpm exec biome check --write --unsafe --config-path packages/config-biome/biome.json package.json scripts test && turbo run lint -- --write",
+    "media:readme:capture": "node docs/brand/demo/capture.mjs",
     "pack:check": "pnpm test:pack-check && node scripts/pack-check.mjs",
     "published:smoke": "node scripts/published-artifact-smoke.mjs",
     "published:verify": "node scripts/published-artifact-verify.mjs",

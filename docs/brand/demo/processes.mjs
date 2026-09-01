@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { createServer as nodeCreateServer } from "node:net";
 
 const defaultTimers = {
 	setTimeout: globalThis.setTimeout,
@@ -33,6 +34,39 @@ function exitedChildDetail(child) {
 		return `signal ${child.signalCode}`;
 	}
 	return undefined;
+}
+
+export function getAvailableLoopbackPort({
+	createServer = nodeCreateServer,
+} = {}) {
+	if (typeof createServer !== "function") {
+		return Promise.reject(new TypeError("createServer must be a function"));
+	}
+
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		let settled = false;
+		const finish = (error, port) => {
+			if (settled) return;
+			settled = true;
+			server.off("error", onError);
+			if (error) reject(error);
+			else resolve(port);
+		};
+		const onError = (error) => finish(error);
+		server.once("error", onError);
+		server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
+			server.unref();
+			const address = server.address();
+			if (address === null || typeof address === "string") {
+				server.close(() =>
+					finish(new Error("node:net did not assign a TCP port")),
+				);
+				return;
+			}
+			server.close((error) => finish(error ?? undefined, address.port));
+		});
+	});
 }
 
 export function spawnManaged(
