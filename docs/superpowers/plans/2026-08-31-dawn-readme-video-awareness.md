@@ -648,7 +648,9 @@ raw `fetch`.
 
 - Default to `--dry-run`.
 - Require `--apply` and `BLOB_READ_WRITE_TOKEN` for mutation.
-- Require `DAWN_MEDIA_PUBLIC_BASE_URL` so the public store hostname is explicit.
+- Require `DAWN_MEDIA_PUBLIC_BASE_URL` with `--apply` so the public store
+  hostname is explicit. A dry run may omit it and must then print the literal
+  `<DAWN_MEDIA_PUBLIC_BASE_URL>` placeholder without writing a catalog.
 - Upload with stable pathnames and no random suffix.
 - Verify every URL and content type.
 - Write `apps/web/app/lib/demo-media.json` only after all files verify.
