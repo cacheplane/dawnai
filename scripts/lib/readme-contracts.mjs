@@ -44,36 +44,203 @@ const DEFAULT_PUBLIC_PACKAGE_TIERS = {
 
 const OLD_GIF_CAPTION =
 	"Dawn quickstart — scaffold a route and invoke it in under a minute";
+const ROOT_LINK_CONTRACTS = {
+	migration: {
+		relative: new Set(["/docs/migrating-from-langgraph"]),
+		absolute: new Set(["https://dawnai.org/docs/migrating-from-langgraph"]),
+	},
+	transcript: {
+		relative: new Set([
+			"docs/brand/demo/transcript.md",
+			"./docs/brand/demo/transcript.md",
+		]),
+		absolute: new Set([
+			"https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md",
+		]),
+	},
+};
 
 function maskText(value) {
 	return value.replace(/[^\r\n]/gu, " ");
 }
 
-function maskFencedCode(source) {
+function blockquoteContainer(line) {
+	let index = 0;
+	let depth = 0;
+	while (index < line.length) {
+		let marker = index;
+		let spacesBeforeMarker = 0;
+		while (spacesBeforeMarker < 3 && line[marker] === " ") {
+			marker++;
+			spacesBeforeMarker++;
+		}
+		if (line[marker] !== ">") break;
+		index = marker + 1;
+		if (line[index] === " " || line[index] === "\t") index++;
+		depth++;
+	}
+	return { content: line.slice(index), depth };
+}
+
+function indentationColumns(line) {
+	let columns = 0;
+	for (const character of line) {
+		if (character === " ") {
+			columns++;
+			continue;
+		}
+		if (character === "\t") {
+			columns += 4 - (columns % 4);
+			continue;
+		}
+		break;
+	}
+	return columns;
+}
+
+function stripFenceIndent(line) {
+	let index = 0;
+	while (index < 3 && line[index] === " ") index++;
+	return line.slice(index);
+}
+
+function listContainers(line) {
+	const initialIndent = /^[ \t]*/u.exec(line)?.[0] ?? "";
+	if (indentationColumns(initialIndent) >= 4) {
+		return { content: line, indentedCode: true, listIndentColumns: 0 };
+	}
+
+	let index = initialIndent.length;
+	let columns = indentationColumns(initialIndent);
+	let listIndentColumns = 0;
+	let foundList = false;
+	while (true) {
+		const marker = /^(?:[-+*]|\d+[.)])/u.exec(line.slice(index))?.[0];
+		if (!marker || !/[ \t]/u.test(line[index + marker.length])) break;
+		foundList = true;
+		index += marker.length;
+		columns += marker.length;
+
+		const whitespaceStart = index;
+		const columnsBeforeWhitespace = columns;
+		while (line[index] === " " || line[index] === "\t") {
+			if (line[index] === " ") columns++;
+			else columns += 4 - (columns % 4);
+			index++;
+		}
+		if (columns - columnsBeforeWhitespace > 4) {
+			return {
+				content: line.slice(whitespaceStart),
+				indentedCode: true,
+				listIndentColumns: columnsBeforeWhitespace + 1,
+			};
+		}
+		listIndentColumns = columns;
+
+		if (indentationColumns(line.slice(index)) >= 4) {
+			return {
+				content: line.slice(index),
+				indentedCode: true,
+				listIndentColumns,
+			};
+		}
+
+		const nestedIndent = /^[ ]{0,3}/u.exec(line.slice(index))?.[0] ?? "";
+		const nestedIndex = index + nestedIndent.length;
+		if (!/^(?:[-+*]|\d+[.)])[ \t]/u.test(line.slice(nestedIndex))) break;
+		index = nestedIndex;
+		columns += nestedIndent.length;
+	}
+
+	return {
+		content: foundList ? line.slice(index) : line,
+		indentedCode: false,
+		listIndentColumns,
+	};
+}
+
+function contentAfterIndent(line, requiredColumns) {
+	let columns = 0;
+	let index = 0;
+	while (columns < requiredColumns) {
+		if (line[index] === " ") {
+			columns++;
+			index++;
+			continue;
+		}
+		if (line[index] === "\t") {
+			columns += 4 - (columns % 4);
+			index++;
+			continue;
+		}
+		return null;
+	}
+	return line.slice(index);
+}
+
+function fenceOpening(line) {
+	const container = blockquoteContainer(line);
+	const lists = listContainers(container.content);
+	if (lists.indentedCode) return null;
+
+	const candidate = stripFenceIndent(lists.content);
+	const match = /^(`{3,}|~{3,})(.*)$/u.exec(candidate);
+	const opening = match?.[1];
+	if (!opening || (opening[0] === "`" && match?.[2]?.includes("`")))
+		return null;
+	return {
+		character: opening[0],
+		length: opening.length,
+		listIndentColumns: lists.listIndentColumns,
+		quoteDepth: container.depth,
+	};
+}
+
+function closingFenceRun(line, fence) {
+	const container = blockquoteContainer(line);
+	if (container.depth !== fence.quoteDepth) return null;
+	const content = contentAfterIndent(
+		container.content,
+		fence.listIndentColumns,
+	);
+	if (content === null) return null;
+	return /^([`~]+)[ \t]*$/u.exec(stripFenceIndent(content))?.[1] ?? null;
+}
+
+function maskMarkdownCodeBlocks(source) {
 	let fence = null;
 	return source
 		.split(/(?<=\n)/u)
 		.map((line) => {
 			const content = line.replace(/\r?\n$/u, "");
 			if (fence) {
-				const closing = /^[ \t]{0,3}([`~]+)[ \t]*$/u.exec(content)?.[1];
-				if (
-					closing &&
-					closing.length >= fence.length &&
-					[...closing].every((character) => character === fence.character)
-				) {
+				const container = blockquoteContainer(content);
+				const listContainerEnded =
+					fence.listIndentColumns > 0 &&
+					content.trim().length > 0 &&
+					contentAfterIndent(container.content, fence.listIndentColumns) ===
+						null;
+				if (container.depth < fence.quoteDepth || listContainerEnded) {
 					fence = null;
+				} else {
+					const closing = closingFenceRun(content, fence);
+					if (
+						closing &&
+						closing.length >= fence.length &&
+						[...closing].every((character) => character === fence.character)
+					) {
+						fence = null;
+					}
+					return maskText(line);
 				}
-				return maskText(line);
 			}
 
-			const openingMatch = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/u.exec(content);
-			const opening = openingMatch?.[1];
-			if (
-				opening &&
-				!(opening[0] === "`" && openingMatch?.[2]?.includes("`"))
-			) {
-				fence = { character: opening[0], length: opening.length };
+			const container = blockquoteContainer(content);
+			if (listContainers(container.content).indentedCode) return maskText(line);
+
+			const opening = fenceOpening(content);
+			if (opening) {
+				fence = opening;
 				return maskText(line);
 			}
 			return line;
@@ -134,11 +301,11 @@ function maskInlineCode(source) {
 }
 
 function maskNonRenderedMarkdown(source) {
-	return maskInlineCode(maskHtmlComments(maskFencedCode(source)));
+	return maskInlineCode(maskHtmlComments(maskMarkdownCodeBlocks(source)));
 }
 
 function markdownHeadings(source) {
-	const visible = maskHtmlComments(maskFencedCode(source));
+	const visible = maskHtmlComments(maskMarkdownCodeBlocks(source));
 	return [...visible.matchAll(/^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/gmu)].map(
 		(match) => ({
 			index: match.index,
@@ -191,36 +358,114 @@ function productLoopImagePresent(source) {
 	);
 }
 
-function markdownLinkPresent(source, href) {
-	const links = source.matchAll(
-		/(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\)/giu,
-	);
-	for (const match of links) {
-		const destination = match[1].replace(/^<|>$/gu, "");
-		if (/^https?:\/\//iu.test(destination)) {
-			try {
-				const pathname = new URL(destination).pathname;
-				if (
-					(href.startsWith("/") && pathname === href) ||
-					(!href.startsWith("/") && pathname.endsWith(`/${href}`))
-				) {
-					return true;
-				}
-			} catch {
-				continue;
-			}
+function matchingDelimiterEnd(source, start, opening, closing) {
+	let depth = 0;
+	for (let index = start; index < source.length; index++) {
+		if (source[index] === "\\") {
+			index++;
 			continue;
 		}
+		if (source[index] === opening) depth++;
+		if (source[index] !== closing) continue;
+		depth--;
+		if (depth === 0) return index;
+	}
+	return -1;
+}
 
-		const relativeDestination = destination.split(/[?#]/u, 1)[0];
+function isEscaped(source, index) {
+	let backslashes = 0;
+	for (
+		let cursor = index - 1;
+		cursor >= 0 && source[cursor] === "\\";
+		cursor--
+	) {
+		backslashes++;
+	}
+	return backslashes % 2 === 1;
+}
+
+function validLinkTitle(value) {
+	if (value.length === 0) return true;
+	return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/u.test(
+		value,
+	);
+}
+
+function linkDestination(linkBody) {
+	const body = linkBody.trim();
+	if (body.length === 0) return null;
+	if (body.startsWith("<")) {
+		const closing = body.indexOf(">");
+		const suffix = body.slice(closing + 1);
 		if (
-			relativeDestination === href ||
-			(!href.startsWith("/") && relativeDestination === `./${href}`)
+			closing === -1 ||
+			(suffix.length > 0 && !/^\s/u.test(suffix)) ||
+			!validLinkTitle(suffix.trim())
 		) {
-			return true;
+			return null;
+		}
+		return body.slice(1, closing);
+	}
+
+	let depth = 0;
+	let destinationEnd = body.length;
+	for (let index = 0; index < body.length; index++) {
+		if (body[index] === "\\") {
+			index++;
+			continue;
+		}
+		if (body[index] === "(") depth++;
+		if (body[index] === ")") depth--;
+		if (/\s/u.test(body[index]) && depth === 0) {
+			destinationEnd = index;
+			break;
 		}
 	}
-	return false;
+	if (!validLinkTitle(body.slice(destinationEnd).trim())) return null;
+	return body.slice(0, destinationEnd);
+}
+
+function markdownLinkDestinations(source) {
+	const destinations = [];
+	for (let index = 0; index < source.length; index++) {
+		if (
+			source[index] !== "[" ||
+			(source[index - 1] === "!" && !isEscaped(source, index - 1)) ||
+			isEscaped(source, index)
+		) {
+			continue;
+		}
+		const labelEnd = matchingDelimiterEnd(source, index, "[", "]");
+		if (labelEnd === -1 || source[labelEnd + 1] !== "(") continue;
+		if (
+			markdownLinkDestinations(source.slice(index + 1, labelEnd)).length > 0
+		) {
+			index = labelEnd;
+			continue;
+		}
+		const linkEnd = matchingDelimiterEnd(source, labelEnd + 1, "(", ")");
+		if (linkEnd === -1) continue;
+		const destination = linkDestination(source.slice(labelEnd + 2, linkEnd));
+		if (destination) destinations.push(destination);
+		index = linkEnd;
+	}
+	return destinations;
+}
+
+function markdownLinkPresent(source, contract) {
+	return markdownLinkDestinations(source).some((destination) => {
+		if (!/^https?:\/\//iu.test(destination)) {
+			return contract.relative.has(destination.split(/[?#]/u, 1)[0]);
+		}
+		try {
+			const url = new URL(destination);
+			if (url.username || url.password) return false;
+			return contract.absolute.has(`${url.origin}${url.pathname}`);
+		} catch {
+			return false;
+		}
+	});
 }
 
 function canonicalScaffoldCommandPresent(source) {
@@ -367,20 +612,20 @@ export function validateRootReadme(source) {
 		requiredIndexes.push(matches[0].index);
 	}
 
+	const presentRequiredIndexes = requiredIndexes.filter(
+		(index) => index !== null,
+	);
 	if (
-		requiredIndexes.some(
+		presentRequiredIndexes.some(
 			(index, position) =>
-				index !== null &&
-				position > 0 &&
-				requiredIndexes[position - 1] !== null &&
-				index <= requiredIndexes[position - 1],
+				position > 0 && index <= presentRequiredIndexes[position - 1],
 		)
 	) {
 		failures.push("README required headings are out of order");
 	}
 
 	const withoutComments = maskHtmlComments(readme);
-	const visibleSource = maskInlineCode(maskFencedCode(withoutComments));
+	const visibleSource = maskInlineCode(maskMarkdownCodeBlocks(withoutComments));
 	if (!canonicalScaffoldCommandPresent(withoutComments)) {
 		failures.push(
 			"README is missing the canonical scaffold command: pnpm create dawn-ai-app my-app",
@@ -389,12 +634,12 @@ export function validateRootReadme(source) {
 	if (!productLoopImagePresent(visibleSource)) {
 		failures.push("README is missing the docs/brand/product-loop.gif image");
 	}
-	if (!markdownLinkPresent(visibleSource, "/docs/migrating-from-langgraph")) {
+	if (!markdownLinkPresent(visibleSource, ROOT_LINK_CONTRACTS.migration)) {
 		failures.push(
 			"README is missing the /docs/migrating-from-langgraph migration link",
 		);
 	}
-	if (!markdownLinkPresent(visibleSource, "docs/brand/demo/transcript.md")) {
+	if (!markdownLinkPresent(visibleSource, ROOT_LINK_CONTRACTS.transcript)) {
 		failures.push("README is missing the docs/brand/demo/transcript.md link");
 	}
 	if (readme.includes(OLD_GIF_CAPTION)) {

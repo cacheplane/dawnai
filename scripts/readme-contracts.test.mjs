@@ -182,6 +182,52 @@ describe("validatePackageReadme", () => {
 		);
 	});
 
+	it("ignores package contract decoys inside a list-nested fence", () => {
+		const readme = entryReadme
+			.replace("# @dawn-ai/sdk\n\n", "")
+			.replace(/!\[Dawn product loop\].*$/u, "")
+			.concat(
+				"\n- ```md\n  # @dawn-ai/sdk\n  ![Loop](docs/brand/product-loop.gif)\n  ```",
+			);
+		const failures = validatePackageReadme({
+			tier: "entry",
+			manifest: entryManifest,
+			readme,
+		});
+		assertFailure(failures, /H1.*@dawn-ai\/sdk/i);
+		assertFailure(failures, /product-loop\.gif/);
+	});
+
+	it("ignores package contract decoys inside a three-space-indented fence", () => {
+		const readme = entryReadme
+			.replace("# @dawn-ai/sdk\n\n", "")
+			.replace(/!\[Dawn product loop\].*$/u, "")
+			.concat(
+				"\n   ```md\n# @dawn-ai/sdk\n![Loop](docs/brand/product-loop.gif)\n   ```",
+			);
+		const failures = validatePackageReadme({
+			tier: "entry",
+			manifest: entryManifest,
+			readme,
+		});
+		assertFailure(failures, /H1.*@dawn-ai\/sdk/i);
+		assertFailure(failures, /product-loop\.gif/);
+	});
+
+	it("ignores package contract decoys inside indented code", () => {
+		const readme = entryReadme
+			.replace("# @dawn-ai/sdk\n\n", "")
+			.replace(/!\[Dawn product loop\].*$/u, "")
+			.concat("\n    # @dawn-ai/sdk\n    ![Loop](docs/brand/product-loop.gif)");
+		const failures = validatePackageReadme({
+			tier: "entry",
+			manifest: entryManifest,
+			readme,
+		});
+		assertFailure(failures, /H1.*@dawn-ai\/sdk/i);
+		assertFailure(failures, /product-loop\.gif/);
+	});
+
 	for (const structuralLine of [
 		"---",
 		"-",
@@ -398,6 +444,17 @@ describe("validateRootReadme", () => {
 		assertFailure(validateRootReadme(outOfOrder), /order/i);
 	});
 
+	it("reports order failures among present headings when another heading is missing", () => {
+		const missingAndOutOfOrder = rootReadme
+			.replace("## Why Dawn\n\n", "")
+			.replace("## Quickstart", "## TEMP")
+			.replace("## How Dawn fits", "## Quickstart")
+			.replace("## TEMP", "## How Dawn fits");
+		const failures = validateRootReadme(missingAndOutOfOrder);
+		assertFailure(failures, /Why Dawn/);
+		assertFailure(failures, /order/i);
+	});
+
 	it("ignores headings inside fenced code blocks when checking order", () => {
 		const misleading = rootReadme
 			.replace("## Quickstart\n", "")
@@ -469,6 +526,100 @@ describe("validateRootReadme", () => {
 		assertFailure(failures, /transcript\.md/);
 	});
 
+	for (const [name, decoy] of [
+		[
+			"a list-nested fence",
+			"- ```md\n  ## Quickstart\n  ![Loop](docs/brand/product-loop.gif)\n  [Migration](/docs/migrating-from-langgraph)\n  [Transcript](docs/brand/demo/transcript.md)\n  ```",
+		],
+		[
+			"indented code",
+			"    ## Quickstart\n    ![Loop](docs/brand/product-loop.gif)\n    [Migration](/docs/migrating-from-langgraph)\n    [Transcript](docs/brand/demo/transcript.md)",
+		],
+	]) {
+		it(`ignores root contract decoys inside ${name}`, () => {
+			const source = rootReadme
+				.replace("## Quickstart\n", "")
+				.replace("![Dawn product loop](docs/brand/product-loop.gif)", "")
+				.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+				.replace(
+					"[Read the demo transcript](docs/brand/demo/transcript.md)",
+					"",
+				)
+				.concat(`\n\n${decoy}`);
+			const failures = validateRootReadme(source);
+			assertFailure(failures, /Quickstart/);
+			assertFailure(failures, /product-loop\.gif/);
+			assertFailure(failures, /migrating-from-langgraph/);
+			assertFailure(failures, /transcript\.md/);
+		});
+	}
+
+	it("does not close a top-level fence on a list-prefixed fence marker", () => {
+		const deceptiveClose = rootReadme
+			.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+			.replace("[Read the demo transcript](docs/brand/demo/transcript.md)", "")
+			.concat(
+				"\n\n```md\n- ```\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)\n```",
+			);
+		const failures = validateRootReadme(deceptiveClose);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	for (const [name, prefix] of [
+		["tab-expanded indented code", " \t"],
+		["blockquote-contained indented code", ">     "],
+	]) {
+		it(`ignores root links inside ${name}`, () => {
+			const source = rootReadme
+				.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+				.replace(
+					"[Read the demo transcript](docs/brand/demo/transcript.md)",
+					"",
+				)
+				.concat(
+					`\n\n${prefix}[Migration](/docs/migrating-from-langgraph)\n${prefix}[Transcript](docs/brand/demo/transcript.md)`,
+				);
+			const failures = validateRootReadme(source);
+			assertFailure(failures, /migrating-from-langgraph/);
+			assertFailure(failures, /transcript\.md/);
+		});
+	}
+
+	it("ignores links inside list-container indented code", () => {
+		const source = rootReadme
+			.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+			.replace("[Read the demo transcript](docs/brand/demo/transcript.md)", "")
+			.concat(
+				"\n\n-     [Migration](/docs/migrating-from-langgraph)\n1.     [Transcript](docs/brand/demo/transcript.md)",
+			);
+		const failures = validateRootReadme(source);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	it("ignores links inside tab-expanded list indented code", () => {
+		const source = rootReadme
+			.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+			.replace("[Read the demo transcript](docs/brand/demo/transcript.md)", "")
+			.concat(
+				"\n\n-\t  [Migration](/docs/migrating-from-langgraph)\n1.\t   [Transcript](docs/brand/demo/transcript.md)",
+			);
+		const failures = validateRootReadme(source);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	it("ends an unclosed list fence when the list container ends", () => {
+		const source = rootReadme
+			.replace("[Migrate from LangGraph](/docs/migrating-from-langgraph)", "")
+			.replace("[Read the demo transcript](docs/brand/demo/transcript.md)", "")
+			.concat(
+				"\n\n- ```md\n  code\n[Migration](/docs/migrating-from-langgraph)\n[Transcript](docs/brand/demo/transcript.md)",
+			);
+		assert.deepEqual(validateRootReadme(source), []);
+	});
+
 	it("does not count a Markdown image as the required migration link", () => {
 		const imageOnly = rootReadme.replace(
 			"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
@@ -503,6 +654,102 @@ describe("validateRootReadme", () => {
 				"https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md",
 			);
 		assert.deepEqual(validateRootReadme(absoluteLinks), []);
+	});
+
+	it("rejects arbitrary origins that copy canonical link paths", () => {
+		const evilOrigins = rootReadme
+			.replace(
+				"/docs/migrating-from-langgraph",
+				"https://evil.example/docs/migrating-from-langgraph",
+			)
+			.replace(
+				"docs/brand/demo/transcript.md",
+				"https://evil.example/docs/brand/demo/transcript.md",
+			);
+		const failures = validateRootReadme(evilOrigins);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	it("does not treat linked-image destinations as enclosing documentation links", () => {
+		const linkedImages = rootReadme
+			.replace(
+				"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
+				"[![Migration](/docs/migrating-from-langgraph)](https://evil.example)",
+			)
+			.replace(
+				"[Read the demo transcript](docs/brand/demo/transcript.md)",
+				"[![Transcript](docs/brand/demo/transcript.md)](https://evil.example)",
+			);
+		const failures = validateRootReadme(linkedImages);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	it("does not treat outer destinations of nested ordinary links as rendered links", () => {
+		const nestedLinks = rootReadme
+			.replace(
+				"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
+				"[Outer [inner](https://evil.example)](/docs/migrating-from-langgraph)",
+			)
+			.replace(
+				"[Read the demo transcript](docs/brand/demo/transcript.md)",
+				"[Outer [inner](https://evil.example)](docs/brand/demo/transcript.md)",
+			);
+		const failures = validateRootReadme(nestedLinks);
+		assertFailure(failures, /migrating-from-langgraph/);
+		assertFailure(failures, /transcript\.md/);
+	});
+
+	for (const [name, migration, transcript] of [
+		[
+			"escaped link openers",
+			"\\[Migration](/docs/migrating-from-langgraph)",
+			"\\[Transcript](docs/brand/demo/transcript.md)",
+		],
+		[
+			"garbage after angle-bracket destinations",
+			"[Migration](</docs/migrating-from-langgraph>evil)",
+			"[Transcript](<docs/brand/demo/transcript.md>evil)",
+		],
+		[
+			"unquoted garbage after destinations",
+			"[Migration](/docs/migrating-from-langgraph nope)",
+			"[Transcript](docs/brand/demo/transcript.md nope)",
+		],
+		[
+			"titles without separating whitespace",
+			'[Migration](</docs/migrating-from-langgraph>"title")',
+			'[Transcript](<docs/brand/demo/transcript.md>"title")',
+		],
+	]) {
+		it(`rejects ${name} as documentation links`, () => {
+			const source = rootReadme
+				.replace(
+					"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
+					migration,
+				)
+				.replace(
+					"[Read the demo transcript](docs/brand/demo/transcript.md)",
+					transcript,
+				);
+			const failures = validateRootReadme(source);
+			assertFailure(failures, /migrating-from-langgraph/);
+			assertFailure(failures, /transcript\.md/);
+		});
+	}
+
+	it("accepts real links after escaped image markers", () => {
+		const escapedImageMarkers = rootReadme
+			.replace(
+				"[Migrate from LangGraph](/docs/migrating-from-langgraph)",
+				"\\![Migration](/docs/migrating-from-langgraph)",
+			)
+			.replace(
+				"[Read the demo transcript](docs/brand/demo/transcript.md)",
+				"\\![Transcript](docs/brand/demo/transcript.md)",
+			);
+		assert.deepEqual(validateRootReadme(escapedImageMarkers), []);
 	});
 
 	it("requires a boundary after the canonical scaffold command", () => {
