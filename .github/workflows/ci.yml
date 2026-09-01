@@ -10,6 +10,39 @@ permissions:
   contents: read
 
 jobs:
+  metadata_scope:
+    name: metadata-scope
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      metadata_only: ${{ steps.classify.outputs.metadata_only }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.17.0
+
+      - name: Classify metadata-only change
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          METADATA_ONLY="$(node scripts/ci-scope.mjs --event pull_request --base "$BASE_SHA" --head "$HEAD_SHA")"
+          case "$METADATA_ONLY" in
+            true|false) ;;
+            *) echo "Malformed metadata-only scope output" >&2; exit 1 ;;
+          esac
+          printf 'metadata_only=%s\n' "$METADATA_ONLY" >> "$GITHUB_OUTPUT"
+
   changesets:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -645,6 +678,8 @@ jobs:
             | kubeconform -strict -summary -ignore-missing-schemas
 
   sandbox-k8s:
+    needs: metadata_scope
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -736,6 +771,8 @@ jobs:
     # sandbox-k8s's kind+Calico setup; adds a Verdaccio-published image build and
     # both Helm charts (cross-namespace: app in dawn-app, sandboxes in
     # dawn-sandboxes). Determinism comes from a baked aimock (no model key).
+    needs: metadata_scope
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -894,6 +931,8 @@ jobs:
     # host daemon, then tears it down. Mirrors sandbox-docker's host-Docker setup;
     # adds a Verdaccio-published image build (same mechanism as sandbox-k8s-e2e).
     # Determinism comes from a baked aimock (no model key).
+    needs: metadata_scope
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -974,6 +1013,8 @@ jobs:
           docker network rm dawn-smoke-net || true
 
   chart-apply-smoke:
+    needs: metadata_scope
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
