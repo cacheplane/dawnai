@@ -73,6 +73,10 @@ const SAFE_ENVIRONMENT_NAMES = new Set([
   "TERM",
   "USERPROFILE",
 ])
+const WINDOWS_SAFE_ENVIRONMENT_NAMES = new Map(
+  [...SAFE_ENVIRONMENT_NAMES].map((name) => [name.toUpperCase(), name === "Path" ? "PATH" : name]),
+)
+const WINDOWS_ENVIRONMENT_MARKERS = new Set(["COMSPEC", "PATHEXT", "SYSTEMROOT"])
 
 export async function createDuplicateDraftConsolidationAdapters(options) {
   const root = exactDataOptions(options, ROOT_OPTION_FIELDS, "Adapter options")
@@ -1171,20 +1175,45 @@ function snapshotRuntimeEnvironment(value) {
   if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) {
     throw new TypeError("Runtime environment is invalid")
   }
-  return snapshotEnvironmentFields(value)
+  return snapshotEnvironmentFields(value, process.platform === "win32")
 }
 
-function snapshotEnvironmentFields(input) {
+function snapshotEnvironmentFields(input, windowsRuntime = false) {
   const output = Object.create(null)
-  for (const key of Reflect.ownKeys(input)) {
+  const keys = Reflect.ownKeys(input)
+  for (const key of keys) {
     if (typeof key !== "string") throw new TypeError("Adapter environment contains a symbol")
     const descriptor = Object.getOwnPropertyDescriptor(input, key)
     if (!isEnumerableData(descriptor) || typeof descriptor.value !== "string") {
       throw new TypeError("Adapter environment contains an unsafe field")
     }
-    if (SAFE_ENVIRONMENT_NAMES.has(key) || key === "GH_TOKEN" || key === "GITHUB_TOKEN") {
-      output[key] = descriptor.value
+  }
+  const logicalNames = new Set(
+    keys.flatMap((key) => {
+      const logicalName = typeof key === "string" ? asciiEnvironmentName(key) : null
+      return logicalName === null ? [] : [logicalName]
+    }),
+  )
+  const windowsShaped =
+    windowsRuntime || [...WINDOWS_ENVIRONMENT_MARKERS].every((name) => logicalNames.has(name))
+  for (const key of keys) {
+    const value = Object.getOwnPropertyDescriptor(input, key).value
+    if (key === "GH_TOKEN" || key === "GITHUB_TOKEN") {
+      output[key] = value
+      continue
     }
+    if (!windowsShaped) {
+      if (SAFE_ENVIRONMENT_NAMES.has(key)) output[key] = value
+      continue
+    }
+    const logicalName = asciiEnvironmentName(key)
+    const canonicalName =
+      logicalName === null ? undefined : WINDOWS_SAFE_ENVIRONMENT_NAMES.get(logicalName)
+    if (canonicalName === undefined) continue
+    if (Object.hasOwn(output, canonicalName) && output[canonicalName] !== value) {
+      throw new TypeError("Adapter Windows environment contains conflicting aliases")
+    }
+    output[canonicalName] = value
   }
   return Object.freeze({ ...output })
 }
@@ -1200,6 +1229,10 @@ function subprocessEnvironment(environment) {
   else if (typeof environment.Path === "string") output.Path = environment.Path
   output.NO_COLOR = "1"
   return Object.freeze({ ...output })
+}
+
+function asciiEnvironmentName(value) {
+  return /^[A-Za-z_]+$/u.test(value) ? value.toUpperCase() : null
 }
 
 function exactDataOptions(value, allowed, label) {

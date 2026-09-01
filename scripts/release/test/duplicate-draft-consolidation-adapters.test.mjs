@@ -115,28 +115,29 @@ test("composition falls back to one bounded non-shell gh auth token command", as
   assert.equal(recording.calls[0].init.headers.Authorization, `Bearer ${TOKEN}`)
 })
 
-test("command environment preserves bounded Windows runtime fields with one PATH spelling", async () => {
+test("command environment canonicalizes bounded Windows runtime aliases", async () => {
   const calls = []
   const environment = {
-    CI: "true",
-    COLORTERM: "truecolor",
-    COMSPEC: "C:\\Windows\\System32\\cmd.exe",
-    FORCE_COLOR: "1",
-    GITHUB_ACTIONS: "true",
-    HOME: "C:\\Users\\release",
-    LANG: "en_US.UTF-8",
-    LC_ALL: "C",
-    PATH: "C:\\preferred",
-    Path: "C:\\discarded",
-    PATHEXT: ".COM;.EXE;.BAT;.CMD",
-    SYSTEMROOT: "C:\\Windows",
-    TEMP: "C:\\Temp",
-    TERM: "xterm-256color",
-    TMP: "C:\\Tmp",
-    TMPDIR: "C:\\TmpDir",
-    USERPROFILE: "C:\\Users\\release",
-    NODE_OPTIONS: "--require C:\\unsafe.cjs",
-    UNRELATED_SECRET: "must-not-leak",
+    ci: "true",
+    ColorTerm: "truecolor",
+    ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    Force_Color: "1",
+    Github_Actions: "true",
+    Home: "C:\\Users\\release",
+    lang: "en_US.UTF-8",
+    Lc_All: "C",
+    Path: "C:\\tools",
+    path: "C:\\tools",
+    PathExt: ".COM;.EXE;.BAT;.CMD",
+    SystemRoot: "C:\\Windows",
+    Temp: "C:\\Temp",
+    term: "xterm-256color",
+    tmp: "C:\\Tmp",
+    TmpDir: "C:\\TmpDir",
+    UserProfile: "C:\\Users\\release",
+    Gh_ToKeN: "must-not-be-a-token",
+    Node_Options: "--require C:\\unsafe.cjs",
+    Unrelated_Secret: "must-not-leak",
   }
   const adapters = await createAdapters({
     token: undefined,
@@ -155,7 +156,7 @@ test("command environment preserves bounded Windows runtime fields with one PATH
     HOME: "C:\\Users\\release",
     LANG: "en_US.UTF-8",
     LC_ALL: "C",
-    PATH: "C:\\preferred",
+    PATH: "C:\\tools",
     PATHEXT: ".COM;.EXE;.BAT;.CMD",
     SYSTEMROOT: "C:\\Windows",
     TEMP: "C:\\Temp",
@@ -168,8 +169,101 @@ test("command environment preserves bounded Windows runtime fields with one PATH
   for (const [, , options] of calls) {
     assert.deepEqual(options.env, expectedEnvironment)
     assert.equal(Object.hasOwn(options.env, "Path"), false)
+    assert.equal(JSON.stringify(options.env).includes("must-not-be-a-token"), false)
     assert.equal(JSON.stringify(options.env).includes("unsafe"), false)
     assert.equal(JSON.stringify(options.env).includes("must-not-leak"), false)
+  }
+})
+
+test("Windows environment rejects conflicting case aliases before command invocation", async () => {
+  const logicalNames = [
+    "CI",
+    "COLORTERM",
+    "COMSPEC",
+    "FORCE_COLOR",
+    "GITHUB_ACTIONS",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+  ]
+  for (const name of logicalNames) {
+    const commandCalls = []
+    const fetchCalls = []
+    const alias = name === "PATH" ? "Path" : name.toLowerCase()
+    const environment = {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PathExt: ".COM;.EXE;.BAT;.CMD",
+      SystemRoot: "C:\\Windows",
+      [name]: "first",
+      [alias]: "second",
+    }
+
+    await assert.rejects(
+      createAdapters({
+        environment,
+        fetchImpl: (...args) => fetchCalls.push(args),
+        run: async (...args) => {
+          commandCalls.push(args)
+          return { exitCode: 0, stdout: "", stderr: "" }
+        },
+      }),
+      /environment|alias|conflict|duplicate|unsafe/iu,
+      name,
+    )
+    assert.equal(commandCalls.length, 0, name)
+    assert.equal(fetchCalls.length, 0, name)
+  }
+})
+
+test("POSIX environment keeps approved names case-sensitive", async () => {
+  const calls = []
+  const adapters = await createAdapters({
+    token: undefined,
+    environment: {
+      HOME: "/home/release",
+      home: "/unsafe-home",
+      PATH: "/usr/bin",
+      Path: "/opt/legacy-bin",
+      path: "/unsafe-bin",
+      SYSTEMROOT: "posix-data",
+      temp: "/unsafe-temp",
+      Gh_ToKeN: "must-not-be-a-token",
+    },
+    fetchImpl: assert.fail,
+    run: commandRunner(calls, { authToken: TOKEN }),
+  })
+
+  await adapters.local.readState()
+  for (const [, , options] of calls) {
+    assert.deepEqual(options.env, {
+      HOME: "/home/release",
+      PATH: "/usr/bin",
+      SYSTEMROOT: "posix-data",
+      NO_COLOR: "1",
+    })
+  }
+
+  const pathOnlyCalls = []
+  const pathOnly = await createAdapters({
+    environment: { HOME: "/home/release", Path: "/opt/legacy-bin" },
+    fetchImpl: assert.fail,
+    run: commandRunner(pathOnlyCalls),
+  })
+  await pathOnly.local.readState()
+  for (const [, , options] of pathOnlyCalls) {
+    assert.deepEqual(options.env, {
+      HOME: "/home/release",
+      Path: "/opt/legacy-bin",
+      NO_COLOR: "1",
+    })
   }
 })
 
