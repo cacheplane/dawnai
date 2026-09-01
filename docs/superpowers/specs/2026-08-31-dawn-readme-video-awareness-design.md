@@ -1,8 +1,8 @@
 # Dawn README and video awareness system — design
 
-**Date:** 2026-08-31  
-**Status:** Approved in design review  
-**Primary goal:** Developer awareness among TypeScript developers  
+**Date:** 2026-08-31
+**Status:** Approved in design review
+**Primary goal:** Developer awareness among TypeScript developers
 **Primary product proof:** A small TypeScript route becomes a tested, running Dawn application
 
 ## Summary
