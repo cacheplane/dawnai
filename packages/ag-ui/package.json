@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "AG-UI protocol adapters for streaming Dawn agent runs to compatible clients.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "ag-ui",
+    "ai-agents",
+    "streaming"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/ag-ui#readme",
   "repository": {
     "type": "git",

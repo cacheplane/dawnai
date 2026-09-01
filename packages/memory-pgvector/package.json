@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Postgres and pgvector storage for shared Dawn agent memory and vector retrieval.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "memory",
+    "postgres",
+    "pgvector"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/memory-pgvector#readme",
   "repository": {
     "type": "git",

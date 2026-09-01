@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Scaffold a Dawn TypeScript agent application with supported starter templates.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "ai-agents",
+    "scaffolding",
+    "create-app"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/create-dawn-app#readme",
   "repository": {
     "type": "git",

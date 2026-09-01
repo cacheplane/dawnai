@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Author-facing TypeScript SDK for defining Dawn agents, tools, middleware, memory, and routes.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "ai-agents",
+    "sdk",
+    "agent-framework"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/sdk#readme",
   "repository": {
     "type": "git",

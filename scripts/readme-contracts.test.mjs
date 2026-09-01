@@ -89,7 +89,8 @@ const actualEntryPackages = [
   const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
 
   return {
-    manifest: { ...actualManifest, description, keywords },
+    manifest: actualManifest,
+    expectedDiscoveryMetadata: { description, keywords },
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
@@ -164,8 +165,8 @@ const actualCapabilityPackages = [
   const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
 
   return {
-    // Actual discovery metadata is intentionally deferred to Task 10.
-    manifest: { ...actualManifest, description, keywords },
+    manifest: actualManifest,
+    expectedDiscoveryMetadata: { description, keywords },
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
@@ -213,11 +214,17 @@ const actualToolingPackages = [
   const actualManifest = JSON.parse(readFileSync(new URL("package.json", packageRoot), "utf8"))
 
   return {
-    // Task 10 verifies the actual manifests; these approved overlays isolate README behavior here.
-    manifest: { ...actualManifest, description, keywords },
+    manifest: actualManifest,
+    expectedDiscoveryMetadata: { description, keywords },
     readme: readFileSync(new URL("README.md", packageRoot), "utf8"),
   }
 })
+
+const actualPublicPackageManifests = [
+  ...actualEntryPackages,
+  ...actualCapabilityPackages,
+  ...actualToolingPackages,
+].map(({ manifest }) => manifest)
 const capabilityExampleAnchors = new Map([
   ["@dawn-ai/ag-ui", ["fromRunAgentInput", "toAguiEvents", "@dawn-ai/ag-ui/sse"]],
   ["@dawn-ai/evals", ["contains", "defineEval", "gate", "runEval"]],
@@ -1164,6 +1171,33 @@ describe("tooling-package README contracts", () => {
 })
 
 describe("validatePackageDiscoveryMetadata", () => {
+  it("accepts discovery metadata from every actual public package manifest", () => {
+    assert.equal(actualPublicPackageManifests.length, 21)
+    assert.deepEqual(
+      actualPublicPackageManifests.flatMap((manifest) =>
+        validatePackageDiscoveryMetadata(manifest),
+      ),
+      [],
+    )
+  })
+
+  it("keeps every public package manifest on the approved discovery copy", () => {
+    for (const { manifest, expectedDiscoveryMetadata } of [
+      ...actualEntryPackages,
+      ...actualCapabilityPackages,
+      ...actualToolingPackages,
+    ]) {
+      assert.deepEqual(
+        {
+          description: manifest.description,
+          keywords: manifest.keywords,
+        },
+        expectedDiscoveryMetadata,
+        manifest.name,
+      )
+    }
+  })
+
   it("accepts a trimmed 30-180 character description and 3-8 discovery keywords", () => {
     assert.deepEqual(validatePackageDiscoveryMetadata(entryManifest), [])
     assert.deepEqual(

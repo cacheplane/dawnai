@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Permission matching, approval gates, and access-control stores for Dawn agents.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "permissions",
+    "access-control",
+    "human-in-the-loop"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/permissions#readme",
   "repository": {
     "type": "git",

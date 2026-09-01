@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Evaluation definitions, scorers, datasets, and runners for Dawn agents.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "evals",
+    "testing",
+    "llm"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/evals#readme",
   "repository": {
     "type": "git",

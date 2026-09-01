@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Shared TypeScript compiler configurations for Dawn packages and applications.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "tsconfig",
+    "configuration",
+    "nodejs",
+    "nextjs"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/config-typescript#readme",
   "repository": {
     "type": "git",

@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "LangGraph.js adapters and route contracts for Dawn agents, workflows, and graphs.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "langgraphjs",
+    "ai-agents",
+    "workflows"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/langgraph#readme",
   "repository": {
     "type": "git",
