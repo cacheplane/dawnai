@@ -454,7 +454,7 @@ test("partial writes and every pre-rename failure preserve the destination and r
 	}
 });
 
-test("failure retention never unlinks a replacement swapped after cleanup identity observation", async (t) => {
+test("failure retention reports a replacement swapped after identity observation and never unlinks it", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(repository, "private.json");
 	const identifier = "11111111-1111-4111-8111-111111111111";
@@ -501,7 +501,7 @@ test("failure retention never unlinks a replacement swapped after cleanup identi
 			fileSystem,
 			randomUUID: () => identifier,
 		}),
-		/retained/iu,
+		/no longer identifies|replacement.*untouched/iu,
 	);
 	assert.deepEqual(await readFile(target), Buffer.from("previous\n"));
 	assert.deepEqual(
@@ -509,6 +509,46 @@ test("failure retention never unlinks a replacement swapped after cleanup identi
 		Buffer.from("attacker replacement\n"),
 	);
 	assert.equal((await lstat(sibling)).isFile(), true);
+	assert.equal(unlinkCalls, 0);
+});
+
+test("failure retention reports when the operation-owned temporary inode is missing", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(repository, "private.json");
+	const identifier = "22222222-2222-4222-8222-222222222222";
+	const temporary = path.join(
+		repository,
+		`.private.json.${process.pid}.${identifier}.tmp`,
+	);
+	const displaced = path.join(repository, "displaced-operation-temp.tmp");
+	let unlinkCalls = 0;
+	const fileSystem = fileSystemWith({
+		async open(filePath, flags, mode) {
+			const handle = await open(filePath, flags, mode);
+			if (filePath !== temporary) return handle;
+			return wrapHandle(handle, {
+				async write(...arguments_) {
+					await handle.write(...arguments_);
+					await rename(temporary, displaced);
+					throw new Error("injected missing retained temp");
+				},
+			});
+		},
+		async unlink(filePath) {
+			unlinkCalls += 1;
+			return unlink(filePath);
+		},
+	});
+
+	await assert.rejects(
+		writePrivateEnvelope(target, Buffer.from("replacement\n"), {
+			fileSystem,
+			randomUUID: () => identifier,
+		}),
+		/no longer present/iu,
+	);
+	await assert.rejects(lstat(temporary), { code: "ENOENT" });
+	assert.equal((await lstat(displaced)).isFile(), true);
 	assert.equal(unlinkCalls, 0);
 });
 
@@ -534,6 +574,58 @@ test("same-inode same-size mutation immediately after rename is reported as ambi
 	);
 	assert.equal(inodeAfterMutation, inodeBeforeMutation);
 	assert.deepEqual(await readFile(target), changed);
+});
+
+test("mutate-then-restore after rename is rejected or the restored intended bytes are re-fsynced before the parent", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(repository, "private.json");
+	const intended = Buffer.from("AAAA\n");
+	const events = [];
+	const fileSystem = fileSystemWith({
+		async open(filePath, flags, mode) {
+			const handle = await open(filePath, flags, mode);
+			if (filePath.endsWith(".tmp")) {
+				return wrapHandle(handle, {
+					async sync() {
+						events.push("file-sync");
+						return handle.sync();
+					},
+				});
+			}
+			if (filePath === repository) {
+				return wrapHandle(handle, {
+					async sync() {
+						events.push("directory-sync");
+						return handle.sync();
+					},
+				});
+			}
+			return handle;
+		},
+		async rename(from, to) {
+			await rename(from, to);
+			await writeFile(to, "BBBB\n", { mode: PRIVATE_MODE });
+			await writeFile(to, intended, { mode: PRIVATE_MODE });
+			events.push("restored");
+		},
+	});
+
+	let rejected = false;
+	try {
+		await writePrivateEnvelope(target, intended, { fileSystem });
+	} catch (error) {
+		rejected = true;
+		assert.match(String(error), /ambiguous|publication|durability/iu);
+	}
+	assert.deepEqual(await readFile(target), intended);
+	if (!rejected) {
+		assert.deepEqual(events, [
+			"file-sync",
+			"restored",
+			"file-sync",
+			"directory-sync",
+		]);
+	}
 });
 
 test("writes fsync the file before rename and the parent directory after rename", async (t) => {
@@ -571,7 +663,12 @@ test("writes fsync the file before rename and the parent directory after rename"
 		fileSystem,
 	});
 
-	assert.deepEqual(events, ["file-sync", "rename", "directory-sync"]);
+	assert.deepEqual(events, [
+		"file-sync",
+		"rename",
+		"file-sync",
+		"directory-sync",
+	]);
 });
 
 test("a post-rename directory fsync failure reports ambiguous durability without rolling back", async (t) => {

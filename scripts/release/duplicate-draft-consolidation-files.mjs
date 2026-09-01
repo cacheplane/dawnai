@@ -285,6 +285,17 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 				policy,
 				false,
 			);
+			await temporaryOperations.sync();
+			publishedIdentity = await verifyPublishedBytes(
+				runtime.operations,
+				temporaryOperations,
+				target,
+				publishedIdentity,
+				bytes,
+				runtime.effectiveUserId,
+				policy,
+				true,
+			);
 			await parentGuard.operations.sync();
 			await assertParentChainCurrent(
 				runtime.operations,
@@ -314,6 +325,7 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 	}
 
 	const secondaryErrors = [];
+	let retainedState = null;
 	if (temporaryHandle !== undefined) {
 		try {
 			const operations =
@@ -325,18 +337,14 @@ async function writeEvidence(filePath, inputBytes, dependencies, policy) {
 		}
 	}
 	if (temporaryCreated && !renamed) {
-		try {
-			await observeRetainedTemporary(
-				runtime.operations,
-				temporaryPath,
-				temporaryIdentity,
-			);
-		} catch (error) {
-			secondaryErrors.push(error);
-		}
+		retainedState = await observeRetainedTemporary(
+			runtime.operations,
+			temporaryPath,
+			temporaryIdentity,
+		);
 		if (primaryError !== null) {
 			primaryError = new Error(
-				`${capitalize(policy.label)} failed before publication; temporary pathname ${temporaryPath} was retained for safe inspection`,
+				retainedTemporaryMessage(policy.label, temporaryPath, retainedState),
 				{ cause: primaryError },
 			);
 		}
@@ -780,6 +788,7 @@ async function verifyPublishedBytes(
 		before.dev !== expected.dev ||
 		before.ino !== expected.ino ||
 		before.size !== expected.size ||
+		before.mtimeNs !== expected.mtimeNs ||
 		(includeChangeMetadata && !sameIdentityRecord(expected, before))
 	) {
 		throw new Error(
@@ -828,20 +837,42 @@ async function verifyPublishedBytes(
 }
 
 async function observeRetainedTemporary(operations, temporaryPath, expected) {
-	try {
-		const current = await operations.lstat(temporaryPath, { bigint: true });
-		if (
-			expected !== undefined &&
-			!current.isSymbolicLink() &&
-			current.dev === expected.dev &&
-			current.ino === expected.ino
-		) {
-			return;
-		}
-	} catch (error) {
-		if (errorCode(error) === "ENOENT") return;
-		throw error;
+	if (expected === undefined) return "unobservable";
+	const first = await retainedPathStatus(operations, temporaryPath);
+	if (first === "missing" || first === "unobservable") return first;
+	const second = await retainedPathStatus(operations, temporaryPath);
+	if (second === "missing" || second === "unobservable") return second;
+	if (
+		!first.isSymbolicLink() &&
+		first.dev === expected.dev &&
+		first.ino === expected.ino &&
+		sameFileState(first, second)
+	) {
+		return "owned";
 	}
+	return "replaced";
+}
+
+async function retainedPathStatus(operations, temporaryPath) {
+	try {
+		return await operations.lstat(temporaryPath, { bigint: true });
+	} catch (error) {
+		return errorCode(error) === "ENOENT" ? "missing" : "unobservable";
+	}
+}
+
+function retainedTemporaryMessage(label, temporaryPath, state) {
+	const prefix = `${capitalize(label)} failed before publication;`;
+	if (state === "owned") {
+		return `${prefix} operation-owned temporary artifact ${temporaryPath} was retained for safe inspection`;
+	}
+	if (state === "missing") {
+		return `${prefix} the operation-owned temporary artifact is no longer present at ${temporaryPath}; no pathname was removed`;
+	}
+	if (state === "replaced") {
+		return `${prefix} temporary pathname ${temporaryPath} no longer identifies the operation-owned artifact; the replacement was left untouched`;
+	}
+	return `${prefix} temporary pathname ${temporaryPath} could not be identified safely and was left untouched`;
 }
 
 function sameFileState(before, after) {
