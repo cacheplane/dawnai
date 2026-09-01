@@ -56,13 +56,21 @@ const DELETE_OPTION_FIELDS = new Set([
 const DELETE_CALL_FIELDS = new Set(["releaseId", "signal"])
 const SAFE_ENVIRONMENT_NAMES = new Set([
   "CI",
+  "COLORTERM",
+  "COMSPEC",
+  "FORCE_COLOR",
+  "GITHUB_ACTIONS",
   "HOME",
   "LANG",
   "LC_ALL",
   "PATH",
+  "Path",
+  "PATHEXT",
+  "SYSTEMROOT",
   "TEMP",
   "TMP",
   "TMPDIR",
+  "TERM",
   "USERPROFILE",
 ])
 
@@ -141,11 +149,14 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
     fetchImpl: authenticatedFetch,
     token,
     now: timestampNow,
+    wallNow,
   })
+  const ownerRun = (command, args, options) =>
+    run(command, args, { ...options, env: { ...safeEnvironment } })
   const ownerAdapters = createOwnerPreflightAdapters({
     cwd,
     environment: safeEnvironment,
-    run,
+    run: ownerRun,
   })
   const local = createLocalGitReader({ cwd, environment: safeEnvironment, run, ownerAdapters })
   const npmReader = createNpmReader({ fetchImpl })
@@ -241,6 +252,7 @@ export function createExactDuplicateDeleteEffect(options) {
         throw new Error("Duplicate Release deletion was aborted before send")
       }
 
+      const observedAt = canonicalTimestamp(callClock(now))
       const deadline = deleteDeadline(timeoutMs, callerSignal)
       let response
       try {
@@ -254,7 +266,7 @@ export function createExactDuplicateDeleteEffect(options) {
         )
       } catch {
         deadline.dispose()
-        return deleteOutcome("transport-ambiguous", null, now)
+        return deleteOutcome("transport-ambiguous", null, observedAt)
       }
       let normalized
       try {
@@ -263,10 +275,10 @@ export function createExactDuplicateDeleteEffect(options) {
         deadline.dispose()
       }
       if (normalized.status === 204) {
-        return deleteOutcome("confirmed-204", 204, now)
+        return deleteOutcome("confirmed-204", 204, observedAt)
       }
       if (normalized.status === 404) {
-        return deleteOutcome("response-404-ambiguous", 404, now)
+        return deleteOutcome("response-404-ambiguous", 404, observedAt)
       }
       if (normalized.status >= 300 && normalized.status < 400) {
         throw new Error(`GitHub DELETE failed closed on redirect HTTP ${normalized.status}`)
@@ -276,7 +288,7 @@ export function createExactDuplicateDeleteEffect(options) {
   })
 }
 
-function createIncidentGitHubReader({ reader, fetchImpl, token, now }) {
+function createIncidentGitHubReader({ reader, fetchImpl, token, now, wallNow }) {
   const getRef = bindMethod(reader, "getRef", "GitHub reader")
   const getGitTag = bindMethod(reader, "getGitTag", "GitHub reader")
   const getWorkflow = bindMethod(reader, "getWorkflow", "GitHub reader")
@@ -338,7 +350,7 @@ function createIncidentGitHubReader({ reader, fetchImpl, token, now }) {
       })
     },
     listNonterminalWorkflowRuns() {
-      return readNonterminalWorkflowRuns(http, token)
+      return readNonterminalWorkflowRuns(http, token, wallNow)
     },
     async getAnnotatedTag(input) {
       const call = exactDataOptions(input, new Set(["name"]), "Annotated-tag options")
@@ -442,14 +454,22 @@ function createLocalGitReader({ cwd, environment, run, ownerAdapters }) {
   })
 }
 
-async function readNonterminalWorkflowRuns(http, token) {
+async function readNonterminalWorkflowRuns(http, token, now) {
   const runs = []
   const rawIds = new Set()
+  const budget = workflowReadBudget(now)
   let total = null
   let pages = 1
   for (let page = 1; page <= pages; page += 1) {
     const url = workflowRunsUrl(page)
-    const result = await readDirectJsonResult(http, url, token, "workflow runs")
+    const result = await readDirectJsonResult(
+      http,
+      url,
+      token,
+      "workflow runs",
+      remainingWorkflowRequestBudget(budget),
+    )
+    consumeWorkflowResponseBudget(budget, result.bodyBytes)
     const { body } = result
     if (
       !isPlainRecord(body) ||
@@ -523,13 +543,54 @@ async function readDirectJson(http, url, token, label) {
   return (await readDirectJsonResult(http, url, token, label)).body
 }
 
-async function readDirectJsonResult(http, url, token, label) {
-  const result = await http.getJson({ url, headers: githubHeaders(token) })
+async function readDirectJsonResult(http, url, token, label, requestBudget) {
+  const result = await http.getJson({
+    url,
+    headers: githubHeaders(token),
+    ...(requestBudget === undefined ? {} : requestBudget),
+  })
   if (result.status !== "OK" || result.httpStatus < 200 || result.httpStatus >= 300) {
     throw new Error(`GitHub ${label} read failed closed`)
   }
   if (!isPlainRecord(result.body)) throw new TypeError(`GitHub ${label} response is malformed`)
-  return { body: result.body, link: result.headers.link }
+  return { body: result.body, link: result.headers.link, bodyBytes: result.bodyBytes }
+}
+
+function workflowReadBudget(now) {
+  const startedAt = workflowClockMillis(now)
+  return {
+    deadline: startedAt + DELETE_TIMEOUT_MS,
+    remainingBytes: MAX_DIRECT_JSON_BYTES,
+    now,
+  }
+}
+
+function remainingWorkflowRequestBudget(budget) {
+  const timeoutMs = budget.deadline - workflowClockMillis(budget.now)
+  if (timeoutMs < 1) throw new Error("GitHub workflow-run operation deadline exceeded")
+  if (budget.remainingBytes < 1) {
+    throw new Error("GitHub workflow-run operation byte budget exceeded")
+  }
+  return {
+    timeoutMs: Math.min(timeoutMs, DELETE_TIMEOUT_MS),
+    maxResponseBytes: budget.remainingBytes,
+  }
+}
+
+function consumeWorkflowResponseBudget(budget, bodyBytes) {
+  if (!Number.isSafeInteger(bodyBytes) || bodyBytes < 0 || bodyBytes > budget.remainingBytes) {
+    throw new Error("GitHub workflow-run operation byte budget exceeded")
+  }
+  budget.remainingBytes -= bodyBytes
+  if (budget.deadline <= workflowClockMillis(budget.now)) {
+    throw new Error("GitHub workflow-run operation deadline exceeded")
+  }
+}
+
+function workflowClockMillis(now) {
+  const value = now()
+  if (!Number.isSafeInteger(value)) throw new TypeError("GitHub workflow-run clock is invalid")
+  return value
 }
 
 function workflowRunsUrl(page) {
@@ -1033,11 +1094,11 @@ async function cancelDeleteResponseBody(body, deadline) {
   }
 }
 
-function deleteOutcome(classification, httpStatus, now) {
+function deleteOutcome(classification, httpStatus, observedAt) {
   return deepFreeze({
     classification,
     httpStatus,
-    observedAt: canonicalTimestamp(callClock(now)),
+    observedAt,
   })
 }
 
@@ -1129,14 +1190,16 @@ function snapshotEnvironmentFields(input) {
 }
 
 function subprocessEnvironment(environment) {
-  return Object.freeze({
-    ...Object.fromEntries(
-      [...SAFE_ENVIRONMENT_NAMES].flatMap((name) =>
-        typeof environment[name] === "string" ? [[name, environment[name]]] : [],
-      ),
-    ),
-    NO_COLOR: "1",
-  })
+  const output = Object.create(null)
+  for (const name of SAFE_ENVIRONMENT_NAMES) {
+    if (name !== "PATH" && name !== "Path" && typeof environment[name] === "string") {
+      output[name] = environment[name]
+    }
+  }
+  if (typeof environment.PATH === "string") output.PATH = environment.PATH
+  else if (typeof environment.Path === "string") output.Path = environment.Path
+  output.NO_COLOR = "1"
+  return Object.freeze({ ...output })
 }
 
 function exactDataOptions(value, allowed, label) {

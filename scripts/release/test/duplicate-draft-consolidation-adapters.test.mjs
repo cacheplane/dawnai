@@ -115,6 +115,64 @@ test("composition falls back to one bounded non-shell gh auth token command", as
   assert.equal(recording.calls[0].init.headers.Authorization, `Bearer ${TOKEN}`)
 })
 
+test("command environment preserves bounded Windows runtime fields with one PATH spelling", async () => {
+  const calls = []
+  const environment = {
+    CI: "true",
+    COLORTERM: "truecolor",
+    COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+    FORCE_COLOR: "1",
+    GITHUB_ACTIONS: "true",
+    HOME: "C:\\Users\\release",
+    LANG: "en_US.UTF-8",
+    LC_ALL: "C",
+    PATH: "C:\\preferred",
+    Path: "C:\\discarded",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    SYSTEMROOT: "C:\\Windows",
+    TEMP: "C:\\Temp",
+    TERM: "xterm-256color",
+    TMP: "C:\\Tmp",
+    TMPDIR: "C:\\TmpDir",
+    USERPROFILE: "C:\\Users\\release",
+    NODE_OPTIONS: "--require C:\\unsafe.cjs",
+    UNRELATED_SECRET: "must-not-leak",
+  }
+  const adapters = await createAdapters({
+    token: undefined,
+    environment,
+    fetchImpl: assert.fail,
+    run: commandRunner(calls, { authToken: TOKEN }),
+  })
+
+  await adapters.local.readState()
+  const expectedEnvironment = {
+    CI: "true",
+    COLORTERM: "truecolor",
+    COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+    FORCE_COLOR: "1",
+    GITHUB_ACTIONS: "true",
+    HOME: "C:\\Users\\release",
+    LANG: "en_US.UTF-8",
+    LC_ALL: "C",
+    PATH: "C:\\preferred",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    SYSTEMROOT: "C:\\Windows",
+    TEMP: "C:\\Temp",
+    TERM: "xterm-256color",
+    TMP: "C:\\Tmp",
+    TMPDIR: "C:\\TmpDir",
+    USERPROFILE: "C:\\Users\\release",
+    NO_COLOR: "1",
+  }
+  for (const [, , options] of calls) {
+    assert.deepEqual(options.env, expectedEnvironment)
+    assert.equal(Object.hasOwn(options.env, "Path"), false)
+    assert.equal(JSON.stringify(options.env).includes("unsafe"), false)
+    assert.equal(JSON.stringify(options.env).includes("must-not-leak"), false)
+  }
+})
+
 test("token inputs and command output are strictly bounded and never echoed in errors", async () => {
   for (const token of [null, 42, "", "bad\ntoken", "bad\u0000token", "x".repeat(4_097)]) {
     await assert.rejects(
@@ -856,6 +914,57 @@ test("workflow-run pagination accepts compatible next-last and prev-first aliase
   )
 })
 
+test("workflow-run pagination enforces one cumulative raw-byte budget", async () => {
+  const firstPage = Array.from({ length: 100 }, (_unused, index) => workflowRun(index + 1))
+  const secondPage = [workflowRun(101)]
+  const secondPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2`
+  const padding = "x".repeat(4_500_000)
+  const recording = recordingFetch([
+    jsonResponse({ total_count: 101, workflow_runs: firstPage, padding }, 200, {
+      Link: `<${secondPageUrl}>; rel="next"`,
+    }),
+    jsonResponse({ total_count: 101, workflow_runs: secondPage, padding }),
+  ])
+  const adapters = await createAdapters({
+    fetchImpl: recording.fetchImpl,
+    run: commandRunner([]),
+  })
+
+  await assert.rejects(
+    adapters.github.listNonterminalWorkflowRuns(),
+    /byte|size|large|budget|failed closed/iu,
+  )
+  assert.equal(recording.calls.length, 2)
+})
+
+test("workflow-run pagination enforces one cumulative wall-clock deadline", async () => {
+  const firstPage = Array.from({ length: 100 }, (_unused, index) => workflowRun(index + 1))
+  const secondPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2`
+  let clockMillis = Date.parse(NOW)
+  const recording = recordingFetch([
+    jsonResponse({ total_count: 101, workflow_runs: firstPage }, 200, {
+      Link: `<${secondPageUrl}>; rel="next"`,
+    }),
+    jsonResponse({ total_count: 101, workflow_runs: [workflowRun(101)] }),
+  ])
+  const fetchImpl = async (...args) => {
+    const response = await recording.fetchImpl(...args)
+    clockMillis += 15_001
+    return response
+  }
+  const adapters = await createAdapters({
+    fetchImpl,
+    run: commandRunner([]),
+    now: () => new Date(clockMillis).toISOString(),
+  })
+
+  await assert.rejects(
+    adapters.github.listNonterminalWorkflowRuns(),
+    /deadline|time|budget|failed closed/iu,
+  )
+  assert.equal(recording.calls.length, 1)
+})
+
 test("local Git reads use exact argv arrays and reject detached, dirty, or malformed output", async () => {
   const calls = []
   const adapters = await createAdapters({ fetchImpl: assert.fail, run: commandRunner(calls) })
@@ -1226,15 +1335,45 @@ test("delete outcomes require a canonical clock value", async () => {
       throw new Error(TOKEN)
     },
   ]) {
+    let fetchCalls = 0
     const writer = createWriter({
-      fetchImpl: async () => ({ status: 204, headers: new Headers(), body: null }),
+      fetchImpl: async () => {
+        fetchCalls += 1
+        return { status: 204, headers: new Headers(), body: null }
+      },
       now,
     })
     await assert.rejects(
       () => writer.deleteDuplicate({ releaseId: DUPLICATES[0] }),
       (error) => !String(error).includes(TOKEN),
     )
+    assert.equal(fetchCalls, 0)
   }
+})
+
+test("delete prevalidates its one outcome timestamp before the side effect", async () => {
+  let clockCalls = 0
+  let fetchCalls = 0
+  const writer = createWriter({
+    now: () => {
+      clockCalls += 1
+      if (clockCalls > 1) throw new Error("clock must not run after send")
+      return NOW
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1
+      assert.equal(clockCalls, 1)
+      return { status: 204, headers: new Headers(), body: null }
+    },
+  })
+
+  assert.deepEqual(await writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), {
+    classification: "confirmed-204",
+    httpStatus: 204,
+    observedAt: NOW,
+  })
+  assert.equal(fetchCalls, 1)
+  assert.equal(clockCalls, 1)
 })
 
 test("composition and delete writer are deeply frozen owned capability sets", async () => {
@@ -1259,7 +1398,12 @@ test("composition and delete writer are deeply frozen owned capability sets", as
 })
 
 function createAdapters(options = {}) {
-  const { environment = { HOME: "/home/release", PATH: "/tools" }, fetchImpl, run } = options
+  const {
+    environment = { HOME: "/home/release", PATH: "/tools" },
+    fetchImpl,
+    run,
+    now = () => NOW,
+  } = options
   return createDuplicateDraftConsolidationAdapters({
     cwd: "/workspace",
     ...(Object.hasOwn(options, "token")
@@ -1271,7 +1415,7 @@ function createAdapters(options = {}) {
     dependencies: {
       fetchImpl,
       run,
-      now: () => NOW,
+      now,
     },
   })
 }
