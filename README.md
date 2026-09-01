@@ -12,7 +12,7 @@
 Build LangGraph agents like Next.js apps. Dawn is the TypeScript meta-framework for LangGraph — author AI agents and workflows as filesystem routes with route-local tools, generated types, durable threads, and an HMR dev server. Keep the runtime, drop the boilerplate.
 
 <p align="center">
-  <img src="docs/brand/quickstart.gif" alt="Dawn quickstart — scaffold a route and invoke it in under a minute" width="900" />
+  <img src="docs/brand/product-loop.gif" alt="Dawn product loop — inspect a generated route and shared tool, run the offline test, use the Workbench, and restore the same thread after browser reload" width="900" />
 </p>
 
 ## Why Dawn?

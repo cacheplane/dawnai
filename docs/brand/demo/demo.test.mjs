@@ -27,6 +27,15 @@ import {
 	validateToolchainVersions,
 	waitForWorkbenchRunCompletion,
 } from "./capture.mjs";
+import {
+	MEDIA_CONTRACTS,
+	validateLocalMediaContract,
+} from "./check-media.mjs";
+import {
+	createTimelinePlan,
+	encodePoster,
+	runEncoderCommand,
+} from "./encode.mjs";
 import { normalizeLog } from "./normalize-log.mjs";
 import {
 	getAvailableLoopbackPort,
@@ -36,6 +45,325 @@ import {
 } from "./processes.mjs";
 import { DEMO_FIXTURES, DEMO_PROMPT } from "./scenario.mjs";
 import { renderStage } from "./stage.mjs";
+
+function videoProbe({
+	codecName,
+	duration,
+	width = 1440,
+	height = 810,
+	frameRate = "30/1",
+	reportedFrameRate = frameRate,
+}) {
+	return {
+		streams: [
+		{
+			codec_name: codecName,
+			codec_type: "video",
+			width,
+			height,
+			avg_frame_rate: frameRate,
+			r_frame_rate: reportedFrameRate,
+		},
+		],
+		format: { duration: String(duration) },
+	};
+}
+
+function validMediaFixtures() {
+	const files = new Map();
+	for (const contract of MEDIA_CONTRACTS) {
+		files.set(contract.mp4, {
+			size: 1_200_000,
+			probe: videoProbe({
+				codecName: "h264",
+				duration: contract.name === "product-loop" ? 24 : 10,
+			}),
+		});
+		files.set(contract.webm, {
+			size: 1_100_000,
+			probe: videoProbe({
+				codecName: "vp9",
+				duration: contract.name === "product-loop" ? 24 : 10,
+			}),
+		});
+		files.set(contract.poster, {
+			size: 80_000,
+			probe: videoProbe({ codecName: "webp", duration: 0 }),
+		});
+	}
+	files.set("docs/brand/product-loop.gif", {
+		size: 3_500_000,
+		probe: videoProbe({ codecName: "gif", duration: 24 }),
+	});
+	files.set("docs/brand/demo/transcript.md", {
+		size: 2_000,
+		text: "Exact static walkthrough",
+	});
+	return files;
+}
+
+async function validateMedia(overrides = new Map()) {
+	const files = validMediaFixtures();
+	for (const [path, value] of overrides) files.set(path, value);
+	return validateLocalMediaContract({
+		files,
+		captions: {
+			"product-loop":
+				"Author a route, run its offline test, use the Workbench, and restore the same thread after a browser reload.",
+			author: "Inspect the generated research route and shared tool.",
+			test: "Run the deterministic research scenario with npm test.",
+			run: "Complete a Workbench run, reload, and restore the same thread.",
+		},
+	});
+}
+
+test("media contracts accept the exact flagship and derivative formats", async () => {
+	assert.deepEqual(await validateMedia(), []);
+});
+
+test("media contracts accept GIF centisecond timing reported as 30 fps", async () => {
+	const files = validMediaFixtures();
+	files.set("docs/brand/product-loop.gif", {
+		size: 3_000_000,
+		probe: videoProbe({
+			codecName: "gif",
+			duration: 24.03,
+			frameRate: "100/3",
+			reportedFrameRate: "30/1",
+		}),
+	});
+	const failures = await validateLocalMediaContract({
+		files,
+		captions: {
+			"product-loop": "Author, test, run, reload, and restore.",
+			author: "Generated route and shared tool.",
+			test: "Offline test passes.",
+			run: "Browser reload restores the thread.",
+		},
+	});
+	assert.deepEqual(failures, []);
+});
+
+test("media contracts reject wrong dimensions and aspect ratio", async () => {
+	const failures = await validateMedia(
+		new Map([
+			[
+				"docs/brand/demo/artifacts/output/author.mp4",
+				{
+					size: 1_200_000,
+					probe: videoProbe({
+						codecName: "h264",
+						duration: 10,
+						width: 1280,
+						height: 800,
+					}),
+				},
+			],
+		]),
+	);
+	assert.ok(failures.some((failure) => /1440x810/.test(failure)));
+});
+
+test("media contracts reject durations outside each clip window", async () => {
+	const failures = await validateMedia(
+		new Map([
+			[
+				"docs/brand/demo/artifacts/output/product-loop.mp4",
+				{
+					size: 1_200_000,
+					probe: videoProbe({ codecName: "h264", duration: 19.99 }),
+				},
+			],
+			[
+				"docs/brand/demo/artifacts/output/run.webm",
+				{
+					size: 1_100_000,
+					probe: videoProbe({ codecName: "vp9", duration: 12.01 }),
+				},
+			],
+		]),
+	);
+	assert.ok(failures.some((failure) => /product-loop.*20-30 seconds/.test(failure)));
+	assert.ok(failures.some((failure) => /run.*8-12 seconds/.test(failure)));
+});
+
+test("media contracts reject files over their byte budgets", async () => {
+	const failures = await validateMedia(
+		new Map([
+			[
+				"docs/brand/demo/artifacts/output/test.mp4",
+				{
+					size: 2_000_001,
+					probe: videoProbe({ codecName: "h264", duration: 10 }),
+				},
+			],
+			[
+				"docs/brand/product-loop.gif",
+				{
+					size: 4_000_001,
+					probe: videoProbe({ codecName: "gif", duration: 24 }),
+				},
+			],
+		]),
+	);
+	assert.ok(failures.some((failure) => /test\.mp4.*2,000,000 bytes/.test(failure)));
+	assert.ok(
+		failures.some((failure) => /product-loop\.gif.*4,000,000 bytes/.test(failure)),
+	);
+});
+
+test("media contracts require every poster and the transcript", async () => {
+	const files = validMediaFixtures();
+	files.delete("apps/web/public/demo/run-poster.webp");
+	files.delete("docs/brand/demo/transcript.md");
+	const failures = await validateLocalMediaContract({
+		files,
+		captions: Object.fromEntries(
+			MEDIA_CONTRACTS.map(({ name }) => [name, "Accurate static description"]),
+		),
+	});
+	assert.ok(failures.some((failure) => /run.*poster/.test(failure)));
+	assert.ok(failures.some((failure) => /transcript/.test(failure)));
+});
+
+test("media contracts require 1440x810 WebP posters", async () => {
+	const files = validMediaFixtures();
+	files.set("apps/web/public/demo/test-poster.webp", {
+		size: 80_000,
+		probe: videoProbe({
+			codecName: "png",
+			duration: 0,
+			width: 1280,
+			height: 720,
+		}),
+	});
+	const failures = await validateLocalMediaContract({
+		files,
+		captions: Object.fromEntries(
+			MEDIA_CONTRACTS.map(({ name }) => [name, "Accurate static description"]),
+		),
+	});
+	assert.ok(failures.some((failure) => /test-poster\.webp.*WebP/.test(failure)));
+	assert.ok(failures.some((failure) => /test-poster\.webp.*1440x810/.test(failure)));
+});
+
+test("media contracts reject captions that claim scaffolding is visible", async () => {
+	const files = validMediaFixtures();
+	const failures = await validateLocalMediaContract({
+		files,
+		captions: {
+			"product-loop": "Scaffold a Dawn app, then run it.",
+			author: "Generated route and shared tool.",
+			test: "Offline test passes.",
+			run: "Browser reload restores the thread.",
+		},
+	});
+	assert.ok(failures.some((failure) => /caption.*scaffold/i.test(failure)));
+});
+
+test("media contracts require H.264 MP4, VP9 WebM, and 30 fps", async () => {
+	const failures = await validateMedia(
+		new Map([
+			[
+				"docs/brand/demo/artifacts/output/author.mp4",
+				{
+					size: 1_200_000,
+					probe: videoProbe({ codecName: "hevc", duration: 10 }),
+				},
+			],
+			[
+				"docs/brand/demo/artifacts/output/author.webm",
+				{
+					size: 1_100_000,
+					probe: videoProbe({
+						codecName: "vp8",
+						duration: 10,
+						frameRate: "25/1",
+					}),
+				},
+			],
+		]),
+	);
+	assert.ok(failures.some((failure) => /author\.mp4.*H\.264/.test(failure)));
+	assert.ok(failures.some((failure) => /author\.webm.*VP9/.test(failure)));
+	assert.ok(failures.some((failure) => /author\.webm.*30 fps/.test(failure)));
+});
+
+test("encoding plan builds the four honest capture timelines", () => {
+	const plan = createTimelinePlan({
+		videoTimeline: {
+			unit: "milliseconds",
+			scenes: {
+				author: { startMs: 0, endMs: 1_500 },
+				test: { startMs: 1_500, endMs: 3_000 },
+				"workbench-run": { startMs: 3_000, endMs: 7_000 },
+				"pre-reload-complete": { startMs: 7_000, endMs: 8_200 },
+				restoration: { startMs: 8_200, endMs: 12_000 },
+				close: { startMs: 12_000, endMs: 13_500 },
+			},
+		},
+	});
+
+	assert.deepEqual(Object.keys(plan), ["product-loop", "author", "test", "run"]);
+	assert.equal(plan["product-loop"].duration, 24);
+	assert.equal(plan.author.duration, 9);
+	assert.equal(plan.test.duration, 9);
+	assert.equal(plan.run.duration, 10);
+	assert.deepEqual(
+		plan["product-loop"].segments.map(({ scene }) => scene),
+		["author", "test", "workbench", "close"],
+	);
+	assert.deepEqual(
+		plan.run.segments.map(({ scene }) => scene),
+		["run-completed", "reload-and-restoration"],
+	);
+	assert.equal(plan["product-loop"].segments[0].sourceEnd, 1.3);
+	assert.equal(plan.author.segments[0].sourceEnd, 1.3);
+	assert.equal(plan.test.segments[0].sourceEnd, 2.8);
+	assert.equal(plan.run.segments[0].sourceEnd, 8);
+	assert.equal(plan.run.segments[1].sourceEnd, 11.8);
+});
+
+test("poster encoding extracts a real frame before WebP conversion", async () => {
+	const calls = [];
+	await encodePoster({
+		source: "/capture/raw.webm",
+		destination: "/repo/apps/web/public/demo/author-poster.webp",
+		time: 0.75,
+		async run(command, args) {
+			calls.push({ command, args });
+		},
+		async convert(source, destination) {
+			calls.push({ convert: [source, destination] });
+		},
+		async rename(source, destination) {
+			calls.push({ rename: [source, destination] });
+		},
+		async remove(path) {
+			calls.push({ remove: path });
+		},
+	});
+
+	assert.equal(calls[0].command, "ffmpeg");
+	assert.ok(calls[0].args.includes("/capture/raw.webm"));
+	assert.ok(calls[0].args.at(-1).endsWith(".tmp.png"));
+	assert.equal(calls[0].args.includes("libwebp"), false);
+	assert.deepEqual(calls[1], {
+		convert: [
+			"/repo/apps/web/public/demo/author-poster.webp.tmp.png",
+			"/repo/apps/web/public/demo/author-poster.webp.tmp.webp",
+		],
+	});
+	assert.deepEqual(calls[2], {
+		rename: [
+			"/repo/apps/web/public/demo/author-poster.webp.tmp.webp",
+			"/repo/apps/web/public/demo/author-poster.webp",
+		],
+	});
+	assert.deepEqual(calls[3], {
+		remove: "/repo/apps/web/public/demo/author-poster.webp.tmp.png",
+	});
+});
 
 const GENERATED_TREE = [
 	"server/src/app/research/index.ts",
@@ -127,6 +455,23 @@ test("author stage renders exactly the generated tree and escaped source", () =>
 	assert.doesNotMatch(html, /<research>|<tool>/);
 });
 
+test("author stage keeps both real source panels in the 16:9 viewport", () => {
+	const html = renderStage({
+		act: "author",
+		tree: GENERATED_TREE,
+		primarySource: "export default agent({\n  model: 'gpt-5-mini',\n})",
+		secondarySource: "export const searchCorpus = tool({})",
+		testLog: "unused",
+	});
+
+	assert.match(
+		html,
+		/\.stack \{[^}]*grid-template-rows: repeat\(2, minmax\(0, 1fr\)\)/,
+	);
+	assert.match(html, /\.stack \.panel \{ min-height: 0; \}/);
+	assert.match(html, /\.stack pre \{ height: calc\(100% - 44px\); \}/);
+});
+
 test("test stage renders escaped normalized npm test output", () => {
 	const html = renderStage({
 		act: "test",
@@ -202,6 +547,23 @@ class ExitDuringListenerChild extends FakeChild {
 		return super.once(event, listener);
 	}
 }
+
+test("encoder command owns and joins an aborted ffmpeg child", async () => {
+	const child = new FakeChild(7654);
+	const controller = new AbortController();
+	const stopped = [];
+	const command = runEncoderCommand("ffmpeg", ["-version"], {
+		signal: controller.signal,
+		spawn: () => child,
+		stop: async (ownedChild) => {
+			stopped.push(ownedChild.pid);
+			ownedChild.exit(0);
+		},
+	});
+	controller.abort(new Error("encoding cancelled"));
+	await assert.rejects(command, /encoding cancelled/);
+	assert.deepEqual(stopped, [7654]);
+});
 
 function manualTimers() {
 	const scheduled = [];
@@ -2163,15 +2525,18 @@ test("record-only capture never invokes the future encoder", async () => {
 	assert.equal(invoked, false);
 });
 
-test("non-record-only capture fails actionably while the future encoder is unavailable", async () => {
+test("non-record-only capture cleans up when the encoder fails", async () => {
 	const fixture = orchestrationFixture();
 	await assert.rejects(
 		captureDemo({
 			repoRoot: "/repo",
 			adapters: fixture.adapters,
 			recordOnly: false,
+			async encodeCaptureArtifacts() {
+				throw new Error("encoder failed");
+			},
 		}),
-		/Encoding requested but docs\/brand\/demo\/encode\.mjs is unavailable; use --record-only/,
+		/encoder failed/,
 	);
 	assert.deepEqual(fixture.operations.slice(-5, -1), [
 		"stop workbench",

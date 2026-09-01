@@ -47,8 +47,10 @@ function page(content) {
     main { width: 100vw; min-height: 100vh; padding: 52px 64px; display: grid; gap: 28px; align-content: center; }
     header { display: flex; align-items: center; gap: 14px; font-weight: 750; letter-spacing: -.02em; }
     .mark { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, #e6ff75, #68e0b8); }
-    .grid { display: grid; grid-template-columns: minmax(310px, .72fr) 1.5fr; gap: 20px; }
-    .stack { display: grid; gap: 20px; }
+    .grid { height: 640px; display: grid; grid-template-columns: minmax(310px, .72fr) 1.5fr; gap: 20px; }
+    .stack { min-height: 0; display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .stack .panel { min-height: 0; }
+    .stack pre { height: calc(100% - 44px); }
     .panel { overflow: hidden; border: 1px solid #2a3040; border-radius: 16px; background: #111520; box-shadow: 0 22px 80px #0008; }
     .bar { min-height: 44px; padding: 12px 18px; border-bottom: 1px solid #2a3040; color: #aab2c5; font-size: 13px; }
     pre { margin: 0; padding: 20px; overflow: hidden; white-space: pre-wrap; font: 14px/1.55 "SFMono-Regular", Consolas, monospace; color: #e4e8f1; }
