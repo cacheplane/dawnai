@@ -97,6 +97,7 @@ export function waitForHttp(
 		timers = defaultTimers,
 		timeoutMs = 10_000,
 		intervalMs = 100,
+		signal,
 	} = {},
 ) {
 	if (typeof url !== "string" || url.length === 0) {
@@ -118,6 +119,13 @@ export function waitForHttp(
 			new TypeError("intervalMs must be a positive number"),
 		);
 	}
+	if (
+		signal !== undefined &&
+		(typeof signal.addEventListener !== "function" ||
+			typeof signal.removeEventListener !== "function")
+	) {
+		return Promise.reject(new TypeError("signal must be an AbortSignal"));
+	}
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let pollTimer;
@@ -126,6 +134,7 @@ export function waitForHttp(
 		const cleanup = () => {
 			child.off("exit", onExit);
 			child.off("error", onError);
+			if (signal !== undefined) signal.removeEventListener("abort", onAbort);
 			if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
 			if (pollTimer !== undefined) timers.clearTimeout(pollTimer);
 		};
@@ -152,9 +161,12 @@ export function waitForHttp(
 				),
 			);
 		};
+		const onAbort = () => {
+			finish(signal.reason ?? new Error(`Cancelled while waiting for ${url}`));
+		};
 		const probe = async () => {
 			try {
-				const response = await fetchImpl(url);
+				const response = await fetchImpl(url, { signal });
 				if (response?.ok) {
 					finish();
 					return;
@@ -167,6 +179,13 @@ export function waitForHttp(
 
 		child.once("exit", onExit);
 		child.once("error", onError);
+		if (signal !== undefined) {
+			signal.addEventListener("abort", onAbort, { once: true });
+			if (signal.aborted) {
+				onAbort();
+				return;
+			}
+		}
 		const existingExit = exitedChildDetail(child);
 		if (existingExit !== undefined) {
 			finish(

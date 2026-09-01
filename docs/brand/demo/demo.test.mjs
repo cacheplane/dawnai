@@ -19,7 +19,9 @@ import {
 	parseCaptureArguments,
 	raceCapturePhase,
 	restoreWorkbenchThread,
+	runManagedCommand,
 	sanitizeOperationalEnvironment,
+	startHttpService,
 	startWithAssignedPort,
 	validateRunId,
 	validateToolchainVersions,
@@ -316,6 +318,38 @@ test("waitForHttp rejects on the injected readiness timeout", async () => {
 	assert.ok(timeout);
 	timeout.callback();
 	await assert.rejects(readiness, /Timed out after 500ms waiting for/);
+});
+
+test("waitForHttp aborts an in-flight probe and removes readiness listeners", async () => {
+	const child = new FakeChild();
+	const { timers } = manualTimers();
+	const controller = new AbortController();
+	const cancellation = new Error("cancel readiness probe");
+	let probeAborted = false;
+	const readiness = waitForHttp("http://127.0.0.1:3002/health", child, {
+		fetch: (_url, options) =>
+			new Promise((_, reject) => {
+				assert.equal(options.signal, controller.signal);
+				options.signal.addEventListener(
+					"abort",
+					() => {
+						probeAborted = true;
+						reject(options.signal.reason);
+					},
+					{ once: true },
+				);
+			}),
+		timers,
+		timeoutMs: 500,
+		intervalMs: 10,
+		signal: controller.signal,
+	});
+	controller.abort(cancellation);
+
+	await assert.rejects(readiness, (error) => error === cancellation);
+	assert.equal(probeAborted, true);
+	assert.equal(child.listenerCount("exit"), 0);
+	assert.equal(child.listenerCount("error"), 0);
 });
 
 test("stopManaged sends SIGTERM and clears its timeout when the child exits", async () => {
@@ -1225,6 +1259,80 @@ test("managed-child registry retains a child whose stop fails and retries it dur
 	assert.equal(calls.includes(unrelated), false);
 });
 
+test("managed command cancellation stops and confirms its exact owned child", async () => {
+	const child = new EventEmitter();
+	child.pid = 8123;
+	child.exitCode = null;
+	child.signalCode = null;
+	child.stdout = new EventEmitter();
+	child.stderr = new EventEmitter();
+	child.stdout.setEncoding = () => {};
+	child.stderr.setEncoding = () => {};
+	const stopped = [];
+	const registry = createManagedChildRegistry(async (candidate) => {
+		stopped.push(candidate);
+		candidate.signalCode = "SIGTERM";
+	});
+	const controller = new AbortController();
+	const cancellation = new Error("cancel build now");
+	const command = runManagedCommand("pnpm", ["build"], {
+		cwd: "/repo",
+		childRegistry: registry,
+		signal: controller.signal,
+		spawn: () => child,
+	});
+	controller.abort(cancellation);
+
+	await assert.rejects(command, (error) => error === cancellation);
+	assert.deepEqual(stopped, [child]);
+	await registry.stopRemaining();
+	assert.deepEqual(stopped, [child]);
+});
+
+test("service readiness cancellation stops the just-started child exactly once", async () => {
+	const child = new EventEmitter();
+	child.exitCode = null;
+	child.signalCode = null;
+	child.stdout = new EventEmitter();
+	child.stderr = new EventEmitter();
+	child.stdout.setEncoding = () => {};
+	child.stderr.setEncoding = () => {};
+	const stopped = [];
+	const registry = createManagedChildRegistry(async (candidate) => {
+		stopped.push(candidate);
+	});
+	const controller = new AbortController();
+	const cancellation = new Error("cancel readiness now");
+	const starting = startHttpService({
+		command: "npm",
+		args: ["exec", "--", "dawn", "dev"],
+		cwd: "/repo/server",
+		env: { PATH: "/bin" },
+		readyUrl: "http://127.0.0.1:4100/healthz",
+		service: "Dawn server",
+		childRegistry: registry,
+		signal: controller.signal,
+		spawn: () => child,
+		waitUntilReady(_url, candidate, options) {
+			assert.equal(candidate, child);
+			assert.equal(options.signal, controller.signal);
+			return new Promise((_, reject) => {
+				options.signal.addEventListener(
+					"abort",
+					() => reject(options.signal.reason),
+					{ once: true },
+				);
+			});
+		},
+	});
+	controller.abort(cancellation);
+
+	await assert.rejects(starting, (error) => error.cause === cancellation);
+	assert.deepEqual(stopped, [child]);
+	await registry.stopRemaining();
+	assert.deepEqual(stopped, [child]);
+});
+
 test("managed-service monitor reports post-readiness exit with bounded transcript", async () => {
 	const child = new EventEmitter();
 	child.stdout = new EventEmitter();
@@ -1306,6 +1414,110 @@ test("capture signal handlers abort once, force on the second signal, and restor
 		["off", "SIGINT"],
 		["off", "SIGTERM"],
 	]);
+});
+
+function captureSignalFixture() {
+	const calls = [];
+	const handlers = new Map();
+	return {
+		calls,
+		handlers,
+		adapter: {
+			on(signal, handler) {
+				calls.push(["on", signal]);
+				handlers.set(signal, handler);
+			},
+			off(signal, handler) {
+				calls.push(["off", signal]);
+				assert.equal(handlers.get(signal), handler);
+				handlers.delete(signal);
+			},
+			forceExit() {
+				throw new Error("force exit must not run for one signal");
+			},
+		},
+	};
+}
+
+test("SIGTERM during build aborts the command owner before capture restores handlers", {
+	timeout: 1_000,
+}, async () => {
+	const fixture = orchestrationFixture();
+	const signals = captureSignalFixture();
+	let commandSettled = false;
+	fixture.adapters.commands.build = ({ signal }) =>
+		new Promise((_, reject) => {
+			signal.addEventListener(
+				"abort",
+				() => {
+					fixture.operations.push("abort build child");
+					commandSettled = true;
+					reject(signal.reason);
+				},
+				{ once: true },
+			);
+			queueMicrotask(() => signals.handlers.get("SIGTERM")());
+		});
+	fixture.adapters.commands.stopRemaining = async () => {
+		fixture.operations.push("confirm command children stopped");
+	};
+
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: fixture.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-cancel-build",
+			signalAdapter: signals.adapter,
+		}),
+		/cancelled by SIGTERM/,
+	);
+	assert.equal(commandSettled, true);
+	assert.equal(
+		fixture.operations.includes("confirm command children stopped"),
+		true,
+	);
+	assert.equal(signals.handlers.size, 0);
+});
+
+test("SIGTERM during Dawn readiness aborts and confirms the startup child before cleanup", {
+	timeout: 1_000,
+}, async () => {
+	const fixture = orchestrationFixture();
+	const signals = captureSignalFixture();
+	let startupSettled = false;
+	fixture.adapters.processes.startDawn = ({ signal }) =>
+		new Promise((_, reject) => {
+			signal.addEventListener(
+				"abort",
+				() => {
+					fixture.operations.push("stop startup child");
+					startupSettled = true;
+					reject(signal.reason);
+				},
+				{ once: true },
+			);
+			queueMicrotask(() => signals.handlers.get("SIGTERM")());
+		});
+
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: fixture.adapters,
+			recordOnly: true,
+			runIdFactory: () => "run-cancel-readiness",
+			signalAdapter: signals.adapter,
+		}),
+		/cancelled by SIGTERM/,
+	);
+	assert.equal(startupSettled, true);
+	assert.equal(fixture.operations.includes("stop startup child"), true);
+	assert.equal(fixture.operations.includes("close aimock"), true);
+	assert.equal(
+		fixture.operations.includes(`remove ${fixture.workspaceRoot}`),
+		true,
+	);
+	assert.equal(signals.handlers.size, 0);
 });
 
 test("SIGINT during capture triggers normal owned-resource cleanup and restores handlers", async () => {
@@ -1474,6 +1686,7 @@ test("capture invokes the future encoder after finalizing recordings and summary
 		runIdFactory: () => "run-unit-encode",
 		async encodeCaptureArtifacts(options) {
 			fixture.operations.push("encode capture");
+			assert.ok(options.signal instanceof AbortSignal);
 			assert.equal(
 				options.summaryPath,
 				"/repo/docs/brand/demo/artifacts/runs/run-unit-encode/capture-summary.json",
@@ -1494,6 +1707,53 @@ test("capture invokes the future encoder after finalizing recordings and summary
 		"close aimock",
 		`remove ${fixture.workspaceRoot}`,
 	]);
+});
+
+test("SIGTERM during encoding aborts and awaits the encoder before final cleanup", {
+	timeout: 1_000,
+}, async () => {
+	const fixture = orchestrationFixture();
+	const signals = captureSignalFixture();
+	let encoderSettled = false;
+	let encoderSignal;
+
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: fixture.adapters,
+			recordOnly: false,
+			runIdFactory: () => "run-cancel-encoder",
+			signalAdapter: signals.adapter,
+			encodeCaptureArtifacts(options) {
+				encoderSignal = options.signal;
+				return new Promise((_, reject) => {
+					options.signal.addEventListener(
+						"abort",
+						() => {
+							fixture.operations.push("abort encoder child");
+							encoderSettled = true;
+							reject(options.signal.reason);
+						},
+						{ once: true },
+					);
+					queueMicrotask(() => signals.handlers.get("SIGTERM")());
+				});
+			},
+		}),
+		/cancelled by SIGTERM/,
+	);
+
+	assert.ok(encoderSignal instanceof AbortSignal);
+	assert.equal(encoderSettled, true);
+	assert.equal(fixture.operations.includes("abort encoder child"), true);
+	assert.deepEqual(fixture.operations.slice(-5), [
+		"stop workbench",
+		"stop server",
+		"close aimock",
+		`remove ${fixture.workspaceRoot}`,
+		"remove /repo/docs/brand/demo/artifacts/runs/run-cancel-encoder/capture-summary.json",
+	]);
+	assert.equal(signals.handlers.size, 0);
 });
 
 test("capture publishes a versioned run-specific manifest with deterministic scene boundaries", async () => {

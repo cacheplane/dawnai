@@ -45,8 +45,20 @@ const DEFAULT_HOLD_DURATIONS = Object.freeze({
 });
 const DEFAULT_TIMING = Object.freeze({
 	now: () => performance.now(),
-	sleep: (durationMs) =>
-		new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs)),
+	sleep: (durationMs, { signal } = {}) =>
+		new Promise((resolvePromise, reject) => {
+			signal?.throwIfAborted();
+			const timeout = setTimeout(() => {
+				signal?.removeEventListener("abort", onAbort);
+				resolvePromise();
+			}, durationMs);
+			const onAbort = () => {
+				clearTimeout(timeout);
+				signal.removeEventListener("abort", onAbort);
+				reject(signal.reason ?? new Error("Capture hold cancelled"));
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+		}),
 });
 // Child processes receive only local toolchain, package-manager, locale, temp,
 // home/cache, and CI settings. Everything else is excluded by construction.
@@ -271,6 +283,9 @@ export function createManagedChildRegistry(stopChild) {
 			children.add(child);
 			return child;
 		},
+		release(child) {
+			children.delete(child);
+		},
 		async stop(child) {
 			if (!children.has(child)) return;
 			await stopChild(child);
@@ -293,14 +308,34 @@ export function createManagedChildRegistry(stopChild) {
 	};
 }
 
-function runCommand(command, args, { cwd, env, spawn = nodeSpawn } = {}) {
+export function runManagedCommand(
+	command,
+	args,
+	{
+		cwd,
+		env,
+		spawn = nodeSpawn,
+		signal,
+		childRegistry = createManagedChildRegistry((child) =>
+			stopManaged(child, {
+				timeoutMs: 5_000,
+				confirmationTimeoutMs: 2_000,
+			}),
+		),
+	} = {},
+) {
+	signal?.throwIfAborted();
 	return new Promise((resolvePromise, reject) => {
-		const child = spawnManaged(command, args, {
-			spawn,
-			options: { cwd, env },
-		});
+		const child = childRegistry.track(
+			spawnManaged(command, args, {
+				spawn,
+				options: { cwd, env },
+			}),
+		);
 		let stdout = "";
 		let stderr = "";
+		let settled = false;
+		let aborting = false;
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk) => {
@@ -309,25 +344,85 @@ function runCommand(command, args, { cwd, env, spawn = nodeSpawn } = {}) {
 		child.stderr?.on("data", (chunk) => {
 			stderr += chunk;
 		});
-		child.once("error", reject);
-		child.once("close", (code, signal) => {
+		const cleanup = () => {
+			child.off("error", onError);
+			child.off("close", onClose);
+			if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+		};
+		const onError = (error) => {
+			if (settled || aborting) return;
+			settled = true;
+			cleanup();
+			childRegistry.release(child);
+			reject(error);
+		};
+		const onClose = (code, childSignal) => {
+			if (settled || aborting) return;
+			settled = true;
+			cleanup();
+			childRegistry.release(child);
 			resolvePromise({
 				stdout,
 				stderr,
-				exitCode: code ?? (signal === null ? 1 : 128),
-				...(signal !== null ? { signal } : {}),
+				exitCode: code ?? (childSignal === null ? 1 : 128),
+				...(childSignal !== null ? { signal: childSignal } : {}),
 			});
-		});
+		};
+		const onAbort = async () => {
+			if (settled || aborting) return;
+			aborting = true;
+			const cancellation = signal.reason ?? new Error("Command cancelled");
+			let cleanupError;
+			try {
+				await childRegistry.stop(child);
+			} catch (error) {
+				cleanupError = error;
+			}
+			settled = true;
+			cleanup();
+			if (cleanupError === undefined) reject(cancellation);
+			else {
+				reject(
+					new AggregateError(
+						[cancellation, cleanupError],
+						`${errorMessage(cancellation)}; command cleanup also failed`,
+						{ cause: cancellation },
+					),
+				);
+			}
+		};
+		child.once("error", onError);
+		child.once("close", onClose);
+		if (signal !== undefined) {
+			signal.addEventListener("abort", onAbort, { once: true });
+			if (signal.aborted) void onAbort();
+		}
 	});
 }
 
 function createCommandAdapter({ repoRoot, parentEnvironment }) {
 	const environment = sanitizeOperationalEnvironment(parentEnvironment);
+	const childRegistry = createManagedChildRegistry((child) =>
+		stopManaged(child, {
+			timeoutMs: 5_000,
+			confirmationTimeoutMs: 2_000,
+		}),
+	);
+	const run = (command, args, options) =>
+		runManagedCommand(command, args, { ...options, childRegistry });
 	return {
-		async checkToolchain() {
+		async checkToolchain({ signal } = {}) {
 			const [nodeResult, pnpmResult] = await Promise.all([
-				runCommand("node", ["--version"], { cwd: repoRoot, env: environment }),
-				runCommand("pnpm", ["--version"], { cwd: repoRoot, env: environment }),
+				run("node", ["--version"], {
+					cwd: repoRoot,
+					env: environment,
+					signal,
+				}),
+				run("pnpm", ["--version"], {
+					cwd: repoRoot,
+					env: environment,
+					signal,
+				}),
 			]);
 			assertCommandSucceeded(nodeResult, "node --version");
 			assertCommandSucceeded(pnpmResult, "pnpm --version");
@@ -337,18 +432,19 @@ function createCommandAdapter({ repoRoot, parentEnvironment }) {
 			};
 			return validateToolchainVersions(actual);
 		},
-		async build() {
+		async build({ signal } = {}) {
 			assertCommandSucceeded(
-				await runCommand("pnpm", ["build"], {
+				await run("pnpm", ["build"], {
 					cwd: repoRoot,
 					env: environment,
+					signal,
 				}),
 				"pnpm build",
 			);
 		},
-		async scaffold({ appRoot }) {
+		async scaffold({ appRoot, signal }) {
 			assertCommandSucceeded(
-				await runCommand(
+				await run(
 					"node",
 					[
 						join(repoRoot, "packages/create-dawn-app/dist/bin.js"),
@@ -356,32 +452,37 @@ function createCommandAdapter({ repoRoot, parentEnvironment }) {
 						"--mode",
 						"internal",
 					],
-					{ cwd: repoRoot, env: environment },
+					{ cwd: repoRoot, env: environment, signal },
 				),
 				"internal scaffold",
 			);
 		},
-		async install({ appRoot }) {
+		async install({ appRoot, signal }) {
 			const installCommand = generatedInstallCommand();
 			assertCommandSucceeded(
-				await runCommand(installCommand.command, installCommand.args, {
+				await run(installCommand.command, installCommand.args, {
 					cwd: appRoot,
 					env: environment,
+					signal,
 				}),
 				"pnpm install",
 			);
 		},
-		test({ appRoot }) {
+		test({ appRoot, signal }) {
 			const testCommand = generatedTestCommand();
-			return runCommand(testCommand.command, testCommand.args, {
+			return run(testCommand.command, testCommand.args, {
 				cwd: appRoot,
 				env: environment,
+				signal,
 			});
+		},
+		stopRemaining() {
+			return childRegistry.stopRemaining();
 		},
 	};
 }
 
-async function startHttpService({
+export async function startHttpService({
 	command,
 	args,
 	cwd,
@@ -389,13 +490,21 @@ async function startHttpService({
 	readyUrl,
 	service,
 	childRegistry,
+	signal,
+	spawn = nodeSpawn,
+	waitUntilReady = waitForHttp,
 }) {
+	signal?.throwIfAborted();
 	const child = childRegistry.track(
-		spawnManaged(command, args, { options: { cwd, env } }),
+		spawnManaged(command, args, { spawn, options: { cwd, env } }),
 	);
 	const monitor = createManagedServiceMonitor({ child, service });
 	try {
-		await waitForHttp(readyUrl, child, { timeoutMs: 90_000, intervalMs: 150 });
+		await waitUntilReady(readyUrl, child, {
+			timeoutMs: 90_000,
+			intervalMs: 150,
+			signal,
+		});
 		monitor.arm();
 		return monitor;
 	} catch (error) {
@@ -505,6 +614,34 @@ export async function raceCapturePhase(label, action, services = [], signal) {
 	}
 }
 
+async function runOwnedAbortablePhase({
+	label,
+	action,
+	services,
+	abortController,
+}) {
+	abortController.signal.throwIfAborted();
+	const operation = Promise.resolve().then(action);
+	try {
+		return await raceCapturePhase(
+			label,
+			() => operation,
+			services,
+			abortController.signal,
+		);
+	} catch (error) {
+		// The operation owns any child it creates and must settle after observing
+		// this signal. Waiting here prevents a rejected race from orphaning work.
+		if (!abortController.signal.aborted) abortController.abort(error);
+		try {
+			await operation;
+		} catch {
+			// Preserve the lifecycle failure that interrupted the phase.
+		}
+		throw error;
+	}
+}
+
 function createProcessSignalAdapter() {
 	return {
 		on: (signal, handler) => process.on(signal, handler),
@@ -569,7 +706,7 @@ function createProcessAdapter() {
 			}
 			throw new Error("Could not assign a distinct loopback port");
 		},
-		async startDawn({ cwd, port, env }) {
+		async startDawn({ cwd, port, env, signal }) {
 			const handle = await startHttpService({
 				command: "npm",
 				args: ["exec", "--", "dawn", "dev", "--port", String(port)],
@@ -578,11 +715,12 @@ function createProcessAdapter() {
 				readyUrl: `http://127.0.0.1:${port}/healthz`,
 				service: "Dawn server",
 				childRegistry,
+				signal,
 			});
 			serviceHandles.set(handle.child, handle);
 			return handle;
 		},
-		async startWorkbench({ cwd, port, env }) {
+		async startWorkbench({ cwd, port, env, signal }) {
 			const handle = await startHttpService({
 				command: "npm",
 				args: [
@@ -600,6 +738,7 @@ function createProcessAdapter() {
 				readyUrl: `http://127.0.0.1:${port}`,
 				service: "Workbench",
 				childRegistry,
+				signal,
 			});
 			serviceHandles.set(handle.child, handle);
 			return handle;
@@ -920,7 +1059,11 @@ export async function captureDemo({
 		throw new TypeError("timing.now must be a function");
 	if (typeof timing?.sleep !== "function")
 		throw new TypeError("timing.sleep must be a function");
-	const signalScope = installCaptureSignalHandlers({ signalAdapter });
+	const abortController = new AbortController();
+	const signalScope = installCaptureSignalHandlers({
+		signalAdapter,
+		abortController,
+	});
 	let workspaceRoot;
 	let aimock;
 	let serverChild;
@@ -934,19 +1077,32 @@ export async function captureDemo({
 	let primaryError;
 
 	try {
-		const toolchain = await adapters.commands.checkToolchain({ repoRoot });
+		const toolchain = await adapters.commands.checkToolchain({
+			repoRoot,
+			signal: signalScope.signal,
+		});
 		signalScope.signal.throwIfAborted();
-		await adapters.commands.build({ repoRoot });
+		await adapters.commands.build({ repoRoot, signal: signalScope.signal });
 		signalScope.signal.throwIfAborted();
 		workspaceRoot = await adapters.filesystem.mkdtemp(
 			join(tmpdir(), "dawn-brand-demo-"),
 		);
 		const appRoot = join(workspaceRoot, "my-agent");
-		await adapters.commands.scaffold({ repoRoot, appRoot });
+		await adapters.commands.scaffold({
+			repoRoot,
+			appRoot,
+			signal: signalScope.signal,
+		});
 		signalScope.signal.throwIfAborted();
-		await adapters.commands.install({ appRoot });
+		await adapters.commands.install({
+			appRoot,
+			signal: signalScope.signal,
+		});
 		signalScope.signal.throwIfAborted();
-		const testResult = await adapters.commands.test({ appRoot });
+		const testResult = await adapters.commands.test({
+			appRoot,
+			signal: signalScope.signal,
+		});
 		signalScope.signal.throwIfAborted();
 		await Promise.all([
 			adapters.filesystem.mkdir(artifactsDir, { recursive: true }),
@@ -989,6 +1145,7 @@ export async function captureDemo({
 					cwd: join(appRoot, "server"),
 					port,
 					env: serverEnvironment,
+					signal: signalScope.signal,
 				}),
 		});
 		serverChild = serverStart.child;
@@ -1010,6 +1167,7 @@ export async function captureDemo({
 					cwd: join(appRoot, "web"),
 					port,
 					env: workbenchEnvironment,
+					signal: signalScope.signal,
 				}),
 		});
 		workbenchChild = workbenchStart.child;
@@ -1053,17 +1211,26 @@ export async function captureDemo({
 			adapters.browser.open({
 				recordingsDir,
 				viewport: { ...VIEWPORT },
+				signal: signalScope.signal,
 			}),
 		);
 		const timeline = createVideoTimeline(timing.now);
 		await timeline.scene("author", () =>
 			racePhase("record author", () =>
-				browserSession.recordStage({ act: "author", html: authorHtml }),
+				browserSession.recordStage({
+					act: "author",
+					html: authorHtml,
+					signal: signalScope.signal,
+				}),
 			),
 		);
 		await timeline.scene("test", () =>
 			racePhase("record test", () =>
-				browserSession.recordStage({ act: "test", html: testHtml }),
+				browserSession.recordStage({
+					act: "test",
+					html: testHtml,
+					signal: signalScope.signal,
+				}),
 			),
 		);
 		const scenario = await timeline.scene("workbench-run", () =>
@@ -1073,12 +1240,15 @@ export async function captureDemo({
 					prompt: DEMO_PROMPT,
 					tools: EXPECTED_TOOLS,
 					answer: EXPECTED_ANSWER,
+					signal: signalScope.signal,
 				}),
 			),
 		);
 		await timeline.scene("pre-reload-complete", () =>
 			racePhase("hold completed run", () =>
-				timing.sleep(holdDurations.preReloadMs),
+				timing.sleep(holdDurations.preReloadMs, {
+					signal: signalScope.signal,
+				}),
 			),
 		);
 		let restoration;
@@ -1090,11 +1260,16 @@ export async function captureDemo({
 					prompt: DEMO_PROMPT,
 					tools: EXPECTED_TOOLS,
 					answer: EXPECTED_ANSWER,
+					signal: signalScope.signal,
 				}),
 			);
-			await racePhase("record restored run", () => browserSession.recordRun());
+			await racePhase("record restored run", () =>
+				browserSession.recordRun({ signal: signalScope.signal }),
+			);
 			await racePhase("hold restored run", () =>
-				timing.sleep(holdDurations.restorationMs),
+				timing.sleep(holdDurations.restorationMs, {
+					signal: signalScope.signal,
+				}),
 			);
 		});
 		await timeline.scene("close", () =>
@@ -1102,6 +1277,7 @@ export async function captureDemo({
 				browserSession.recordStage({
 					act: "close",
 					html: renderStage({ act: "close" }),
+					signal: signalScope.signal,
 				}),
 			),
 		);
@@ -1160,15 +1336,20 @@ export async function captureDemo({
 			if (typeof encodeCaptureArtifacts !== "function") {
 				throw new TypeError("encodeCaptureArtifacts must be a function");
 			}
-			await racePhase("encode capture artifacts", () =>
-				encodeCaptureArtifacts({
-					repoRoot,
-					artifactsDir,
-					recordingsDir,
-					summary,
-					summaryPath,
-				}),
-			);
+			await runOwnedAbortablePhase({
+				label: "encode capture artifacts",
+				services: managedServices,
+				abortController,
+				action: () =>
+					encodeCaptureArtifacts({
+						repoRoot,
+						artifactsDir,
+						recordingsDir,
+						summary,
+						summaryPath,
+						signal: signalScope.signal,
+					}),
+			});
 		}
 	} catch (error) {
 		primaryError = error;
@@ -1195,6 +1376,12 @@ export async function captureDemo({
 	if (typeof adapters.processes.stopRemaining === "function") {
 		await cleanupResource(
 			() => adapters.processes.stopRemaining(),
+			cleanupErrors,
+		);
+	}
+	if (typeof adapters.commands.stopRemaining === "function") {
+		await cleanupResource(
+			() => adapters.commands.stopRemaining(),
 			cleanupErrors,
 		);
 	}
