@@ -523,14 +523,12 @@ test("exact objects reject accessors, hidden and symbol fields, unsafe keys, and
 	assert.equal(eventGetterCalls, 0);
 });
 
-test("timestamps reject impossible dates and normalize omitted milliseconds", () => {
+test("timestamps reject impossible dates and require canonical milliseconds", () => {
 	const omittedMilliseconds = proposedRecord();
 	omittedMilliseconds.inspectedAt = "2026-09-01T12:00:00Z";
-	const normalized = createConsolidationEnvelope(
-		"proposed",
-		omittedMilliseconds,
+	assert.throws(() =>
+		createConsolidationEnvelope("proposed", omittedMilliseconds),
 	);
-	assert.equal(normalized.record.inspectedAt, NOW);
 
 	for (const invalid of [
 		"2026-02-31T12:00:00.000Z",
@@ -577,6 +575,95 @@ test("fixed cardinality and journal ceilings reject hostile tails before travers
 	});
 	assert.throws(() => createConsolidationEnvelope("journal", record));
 	assert.equal(journalTailCalls, 0);
+});
+
+test("cumulative budgets stop repeated shared strings before hostile trailing evidence", () => {
+	const record = proposedRecord();
+	const shared = "x".repeat(512 * 1024);
+	for (const asset of record.releases[1].assets) asset.label = shared;
+	let sentinelTraps = 0;
+	record.payloadProof = new Proxy(record.payloadProof, {
+		getPrototypeOf(target) {
+			sentinelTraps += 1;
+			return Reflect.getPrototypeOf(target);
+		},
+		ownKeys(target) {
+			sentinelTraps += 1;
+			return Reflect.ownKeys(target);
+		},
+	});
+	assert.throws(
+		() => createConsolidationEnvelope("proposed", record),
+		/cumulative proposed envelope budget/iu,
+	);
+	assert.equal(sentinelTraps, 0);
+
+	const authority = authorityStage("pre-delete-1");
+	for (const asset of authority.releases[1].assets) asset.label = shared;
+	let authoritySentinelTraps = 0;
+	authority.payloadProof = new Proxy(authority.payloadProof, {
+		getPrototypeOf(target) {
+			authoritySentinelTraps += 1;
+			return Reflect.getPrototypeOf(target);
+		},
+	});
+	assert.throws(
+		() =>
+			canonicalEventEnvelope(
+				journalEvent("delete-authority-observed", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					authority,
+				}),
+				null,
+			),
+		/cumulative (?:journal event envelope|authority stage) budget/iu,
+	);
+	assert.equal(authoritySentinelTraps, 0);
+
+	const resumeEvidence = releaseEvidence("duplicate", DUPLICATE_IDS[0], 2000);
+	for (const asset of resumeEvidence.assets.slice(0, -1)) asset.label = shared;
+	let resumeSentinelTraps = 0;
+	resumeEvidence.assets[resumeEvidence.assets.length - 1] = new Proxy(
+		resumeEvidence.assets.at(-1),
+		{
+			getPrototypeOf(target) {
+				resumeSentinelTraps += 1;
+				return Reflect.getPrototypeOf(target);
+			},
+		},
+	);
+	assert.throws(
+		() =>
+			canonicalEventEnvelope(
+				journalEvent("resume-reconciliation", {
+					targetReleaseId: DUPLICATE_IDS[0],
+					attemptNumber: 1,
+					classification: "present-unchanged-retryable",
+					releaseEvidence: resumeEvidence,
+					observedAt: NOW,
+				}),
+				null,
+			),
+		/cumulative journal event envelope budget/iu,
+	);
+	assert.equal(resumeSentinelTraps, 0);
+});
+
+test("incremental accounting accepts canonical evidence close to its proposed cap", () => {
+	const record = proposedRecord();
+	const shared = "x".repeat(1_700_000);
+	record.releases[1].semantic.body = shared;
+	record.releases[2].semantic.body = shared;
+	const envelope = createConsolidationEnvelope("proposed", record);
+	const bytes = canonicalConsolidationEnvelopeBytes("proposed", envelope);
+	assert.ok(
+		bytes.byteLength >
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes - MEBIBYTE,
+	);
+	assert.ok(
+		bytes.byteLength < DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes,
+	);
 });
 
 test("Git object SHAs accept exactly 40 or 64 lowercase hex characters", () => {

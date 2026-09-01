@@ -109,20 +109,27 @@ const GIT_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const POSITIVE_DECIMAL_PATTERN = /^[1-9][0-9]*$/u;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 const TIMESTAMP_PATTERN =
-	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/u;
+	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const CANONICAL_BUDGETS = [];
 
 export function createConsolidationEnvelope(kind, record) {
-	const normalized = normalizeRecord(kind, record);
-	const envelope = {
-		record: normalized,
-		recordSha256: canonicalRecordSha256(normalized),
-	};
-	assertWithinKindLimit(
-		kind,
-		Buffer.byteLength(`${JSON.stringify(envelope)}\n`, "utf8"),
-	);
-	return envelope;
+	return withCanonicalBudget(kindLimit(kind), `${kind} envelope`, () => {
+		chargeCanonicalBytes(
+			Buffer.byteLength('{"record":', "utf8") +
+				Buffer.byteLength(`,"recordSha256":"${"0".repeat(64)}"}\n`, "utf8"),
+		);
+		const normalized = normalizeRecord(kind, record);
+		const envelope = {
+			record: normalized,
+			recordSha256: canonicalRecordSha256(normalized),
+		};
+		assertWithinKindLimit(
+			kind,
+			Buffer.byteLength(`${JSON.stringify(envelope)}\n`, "utf8"),
+		);
+		return envelope;
+	});
 }
 
 export function canonicalConsolidationEnvelopeBytes(kind, envelope) {
@@ -175,20 +182,29 @@ export function canonicalRecordSha256(record) {
 }
 
 export function canonicalEventEnvelope(event, previousEventSha256) {
-	const snapshot = assertExactFields(event, EVENT_FIELDS, "Journal event");
-	const expectedSequence = assertPositiveInteger(
-		snapshot.sequence,
-		"Journal event sequence",
+	return withCanonicalBudget(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+		"journal event envelope",
+		() => {
+			chargeCanonicalBytes(
+				Buffer.byteLength('{"event":', "utf8") +
+					Buffer.byteLength(`,"eventSha256":"${"0".repeat(64)}"}`, "utf8"),
+			);
+			const expectedSequence = assertPositiveInteger(
+				ownDataDiscriminator(event, "sequence"),
+				"Journal event sequence",
+			);
+			const normalizedEvent = normalizeEvent(
+				event,
+				expectedSequence,
+				previousEventSha256,
+			);
+			return {
+				event: normalizedEvent,
+				eventSha256: canonicalRecordSha256(normalizedEvent),
+			};
+		},
 	);
-	const normalizedEvent = normalizeEvent(
-		snapshot,
-		expectedSequence,
-		previousEventSha256,
-	);
-	return {
-		event: normalizedEvent,
-		eventSha256: canonicalRecordSha256(normalizedEvent),
-	};
 }
 
 export function parseJournalEventEnvelope(
@@ -196,51 +212,64 @@ export function parseJournalEventEnvelope(
 	expectedSequence,
 	previousEventSha256,
 ) {
-	value = assertExactFields(
-		value,
-		EVENT_ENVELOPE_FIELDS,
-		"Journal event envelope",
+	return withCanonicalBudget(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
+		"journal event envelope",
+		() => {
+			value = assertExactFields(
+				value,
+				EVENT_ENVELOPE_FIELDS,
+				"Journal event envelope",
+			);
+			const event = normalizeEvent(
+				value.event,
+				expectedSequence,
+				previousEventSha256,
+			);
+			const eventSha256 = assertSha256(
+				value.eventSha256,
+				"Journal event digest",
+			);
+			if (eventSha256 !== canonicalRecordSha256(event)) {
+				throw new TypeError(
+					"Journal event digest does not match its canonical event",
+				);
+			}
+			return { event, eventSha256 };
+		},
 	);
-	const event = normalizeEvent(
-		value.event,
-		expectedSequence,
-		previousEventSha256,
-	);
-	const eventSha256 = assertSha256(value.eventSha256, "Journal event digest");
-	if (eventSha256 !== canonicalRecordSha256(event)) {
-		throw new TypeError(
-			"Journal event digest does not match its canonical event",
-		);
-	}
-	return { event, eventSha256 };
 }
 
 function normalizeEnvelope(kind, value) {
-	value = assertExactFields(value, ENVELOPE_FIELDS, `${kind} envelope`);
-	const record = normalizeRecord(kind, value.record);
-	const recordSha256 = assertSha256(
-		value.recordSha256,
-		`${kind} record digest`,
-	);
-	if (recordSha256 !== canonicalRecordSha256(record)) {
-		throw new TypeError(
-			`${kind} envelope digest does not match its canonical record`,
+	return withCanonicalBudget(kindLimit(kind), `${kind} envelope`, () => {
+		chargeCurrentCanonicalBytes(1);
+		value = assertExactFields(value, ENVELOPE_FIELDS, `${kind} envelope`);
+		const record = normalizeRecord(kind, value.record);
+		const recordSha256 = assertSha256(
+			value.recordSha256,
+			`${kind} record digest`,
 		);
-	}
-	const normalized = { record, recordSha256 };
-	assertCanonicalValueByteLength(
-		normalized,
-		kindLimit(kind),
-		`${kind} envelope`,
-	);
-	return normalized;
+		if (recordSha256 !== canonicalRecordSha256(record)) {
+			throw new TypeError(
+				`${kind} envelope digest does not match its canonical record`,
+			);
+		}
+		const normalized = { record, recordSha256 };
+		assertCanonicalValueByteLength(
+			normalized,
+			kindLimit(kind),
+			`${kind} envelope`,
+		);
+		return normalized;
+	});
 }
 
 function normalizeRecord(kind, value) {
-	kindLimit(kind);
-	if (kind === "proposed") return normalizeProposedRecord(value);
-	if (kind === "journal") return normalizeJournalRecord(value);
-	return normalizeFinalRecord(value);
+	return withCanonicalBudget(kindLimit(kind), `${kind} record`, () => {
+		if (kind === "proposed") return normalizeProposedRecord(value);
+		if (kind === "journal") return normalizeJournalRecord(value);
+		return normalizeFinalRecord(value);
+	});
 }
 
 function normalizeProposedRecord(value) {
@@ -734,6 +763,18 @@ function normalizeNpmObservation(value) {
 }
 
 function normalizeReleaseEvidence(value) {
+	const role = ownDataDiscriminator(value, "role");
+	if (role === "survivor") {
+		return withCanonicalBudget(
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.survivorEvidenceBytes,
+			"survivor evidence",
+			() => normalizeReleaseEvidenceValue(value),
+		);
+	}
+	return normalizeReleaseEvidenceValue(value);
+}
+
+function normalizeReleaseEvidenceValue(value) {
 	value = assertExactFields(
 		value,
 		[
@@ -972,6 +1013,14 @@ function normalizeNamedDigest(value) {
 }
 
 function normalizeAuthorityStage(value) {
+	return withCanonicalBudget(
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+		"authority stage",
+		() => normalizeAuthorityStageValue(value),
+	);
+}
+
+function normalizeAuthorityStageValue(value) {
 	value = assertExactFields(
 		value,
 		[
@@ -1438,6 +1487,66 @@ function normalizeIdentityArray(value, label, exactLength) {
 	return identities;
 }
 
+function withCanonicalBudget(maximum, label, operation) {
+	const budget = { label, maximum, used: 0 };
+	CANONICAL_BUDGETS.push(budget);
+	try {
+		return operation();
+	} finally {
+		CANONICAL_BUDGETS.pop();
+	}
+}
+
+function chargeCanonicalBytes(byteLength) {
+	if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+		throw new TypeError("Canonical byte accounting received an invalid length");
+	}
+	for (const budget of CANONICAL_BUDGETS) {
+		budget.used += byteLength;
+		if (!Number.isSafeInteger(budget.used) || budget.used > budget.maximum) {
+			throw new TypeError(
+				`Canonical value exceeds its cumulative ${budget.label} budget`,
+			);
+		}
+	}
+}
+
+function chargeCurrentCanonicalBytes(byteLength) {
+	const current = CANONICAL_BUDGETS.at(-1);
+	if (current === undefined) return;
+	current.used += byteLength;
+	if (!Number.isSafeInteger(current.used) || current.used > current.maximum) {
+		throw new TypeError(
+			`Canonical value exceeds its cumulative ${current.label} budget`,
+		);
+	}
+}
+
+function chargeCanonicalPrimitive(value, arrayEntry) {
+	if (value !== null && typeof value === "object") return;
+	let source;
+	try {
+		source = JSON.stringify(value);
+	} catch {
+		throw new TypeError("Canonical value contains a non-JSON primitive");
+	}
+	if (source === undefined) {
+		if (arrayEntry) chargeCanonicalBytes(4);
+		return;
+	}
+	chargeCanonicalBytes(Buffer.byteLength(source, "utf8"));
+}
+
+function ownDataDiscriminator(value, field) {
+	if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) {
+		return undefined;
+	}
+	const descriptor = Object.getOwnPropertyDescriptor(value, field);
+	return descriptor !== undefined && "value" in descriptor
+		? descriptor.value
+		: undefined;
+}
+
 function assertExactFields(value, fields, label) {
 	if (
 		value === null ||
@@ -1460,6 +1569,7 @@ function assertExactFields(value, fields, label) {
 	}
 	const descriptors = Object.getOwnPropertyDescriptors(value);
 	const snapshot = {};
+	chargeCanonicalBytes(2 + Math.max(0, fields.length - 1));
 	for (const field of fields) {
 		const descriptor = descriptors[field];
 		if (
@@ -1470,6 +1580,8 @@ function assertExactFields(value, fields, label) {
 			throw new TypeError(`${label} fields must be enumerable data properties`);
 		}
 		snapshot[field] = descriptor.value;
+		chargeCanonicalBytes(Buffer.byteLength(JSON.stringify(field), "utf8") + 1);
+		chargeCanonicalPrimitive(descriptor.value, false);
 	}
 	return snapshot;
 }
@@ -1503,6 +1615,7 @@ function assertArray(value, label, { exactLength, maximumLength } = {}) {
 	}
 	const descriptors = Object.getOwnPropertyDescriptors(value);
 	const snapshot = new Array(length);
+	chargeCanonicalBytes(2 + Math.max(0, length - 1));
 	for (let index = 0; index < length; index += 1) {
 		const key = String(index);
 		if (keys[index] !== key) {
@@ -1521,6 +1634,7 @@ function assertArray(value, label, { exactLength, maximumLength } = {}) {
 			);
 		}
 		snapshot[index] = descriptor.value;
+		chargeCanonicalPrimitive(descriptor.value, true);
 	}
 	return snapshot;
 }
@@ -1542,12 +1656,6 @@ function assertUniqueNames(values, label) {
 function assertString(value, label) {
 	if (typeof value !== "string")
 		throw new TypeError(`${label} must be a string`);
-	if (
-		Buffer.byteLength(value, "utf8") >
-		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes
-	) {
-		throw new TypeError(`${label} exceeds the largest nested string budget`);
-	}
 	return value;
 }
 
@@ -1579,10 +1687,7 @@ function assertTimestamp(value, label) {
 	const timestamp = assertMatchingString(value, TIMESTAMP_PATTERN, label);
 	try {
 		const canonical = new Date(timestamp).toISOString();
-		const expected = timestamp.includes(".")
-			? timestamp
-			: timestamp.replace(/Z$/u, ".000Z");
-		if (canonical !== expected) {
+		if (canonical !== timestamp) {
 			throw new TypeError(`${label} is not a valid UTC instant`);
 		}
 		return canonical;
