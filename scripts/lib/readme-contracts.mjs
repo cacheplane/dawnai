@@ -829,8 +829,50 @@ function markdownReferenceLinkDestinations(source, definitions, options = {}) {
   return destinations
 }
 
-function markdownAutolinkDestinations(source) {
-  return [...source.matchAll(/<(https?:\/\/[^<>\s]+)>/giu)].map((match) => match[1])
+function maskMarkdownLinksAndImages(source, definitions) {
+  const characters = [...source]
+  for (let index = 0; index < source.length; index++) {
+    const image = source[index] === "!" && source[index + 1] === "[" && !isEscaped(source, index)
+    const labelStart = image ? index + 1 : index
+    if (source[labelStart] !== "[" || isEscaped(source, labelStart)) continue
+    const labelEnd = matchingDelimiterEnd(source, labelStart, "[", "]")
+    if (labelEnd === -1) continue
+
+    let syntaxEnd = -1
+    if (source[labelEnd + 1] === "(") {
+      syntaxEnd = matchingDelimiterEnd(source, labelEnd + 1, "(", ")")
+    } else {
+      syntaxEnd =
+        referenceDestination(source, source.slice(labelStart + 1, labelEnd), labelEnd, definitions)
+          ?.end ?? -1
+    }
+    if (syntaxEnd === -1) continue
+    for (let cursor = index; cursor <= syntaxEnd; cursor++) characters[cursor] = " "
+    index = syntaxEnd
+  }
+  return characters.join("")
+}
+
+function markdownAutolinkDestinations(source, definitions) {
+  let remaining = maskMarkdownLinksAndImages(source, definitions).replace(
+    /<\/?[A-Z][A-Z0-9-]*(?=[\s/>])[^>]*>/giu,
+    (tag) => " ".repeat(tag.length),
+  )
+  const destinations = []
+  const collect = (pattern) => {
+    remaining = remaining.replace(pattern, (match, destination) => {
+      destinations.push(destination)
+      return " ".repeat(match.length)
+    })
+  }
+
+  collect(
+    /<(https?:\/\/[^<>\s]+|[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,})>/giu,
+  )
+  collect(/\b(https?:\/\/[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?(?::\d+)?(?:\/[^\s<]*)?)/giu)
+  collect(/\b(www\.[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?(?::\d+)?(?:\/[^\s<]*)?)/giu)
+  collect(/\b([A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,})\b/giu)
+  return destinations
 }
 
 function markdownLinkDestinations(source, options = {}) {
@@ -955,7 +997,7 @@ function validateCanonicalRootReadme(readme, withoutComments, visibleMarkdown, v
     definitions,
     { excludeImageLabels: true },
   )
-  const firstScrollAutolinks = markdownAutolinkDestinations(firstScrollMarkdown)
+  const firstScrollAutolinks = markdownAutolinkDestinations(firstScrollMarkdown, definitions)
   if (
     firstScrollTextLinks.length +
       firstScrollMarkdownTextLinks.length +

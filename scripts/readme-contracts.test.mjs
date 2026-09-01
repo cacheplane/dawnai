@@ -677,6 +677,55 @@ describe("validateRootReadme", () => {
     )
   })
 
+  for (const [name, autolink] of [
+    ["bare URL", "https://example.com"],
+    ["bare www URL", "www.example.com"],
+    ["bare email", "extra@example.com"],
+    ["angle-bracket email autolink", "<extra@example.com>"],
+  ]) {
+    it(`rejects a fifth ${name} GFM link before Quickstart`, () => {
+      const source = actualRootReadme.replace(
+        canonicalHeroCommandBlock,
+        `${autolink}\n\n${canonicalHeroCommandBlock}`,
+      )
+      assertFailure(
+        validateRootReadme(source, { canonical: true }),
+        /exactly four canonical hero navigation links/i,
+      )
+    })
+  }
+
+  it("does not count body-only GFM bare and angle-bracket autolinks", () => {
+    const source = actualRootReadme.replace(
+      "## Why Dawn",
+      "## Why Dawn\n\nhttps://example.com\n\nwww.example.com\n\nextra@example.com\n\n<extra@example.com>",
+    )
+    assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
+  })
+
+  for (const [name, hiddenLinks] of [
+    [
+      "fenced code",
+      "```text\nhttps://example.com\nwww.example.com\nextra@example.com\n<extra@example.com>\n```",
+    ],
+    [
+      "HTML comment",
+      "<!-- https://example.com www.example.com extra@example.com <extra@example.com> -->",
+    ],
+    [
+      "raw-text HTML",
+      "<script>const links = 'https://example.com www.example.com extra@example.com <extra@example.com>'</script>",
+    ],
+  ]) {
+    it(`does not count GFM autolinks inside ${name}`, () => {
+      const source = actualRootReadme.replace(
+        canonicalHeroCommandBlock,
+        `${hiddenLinks}\n\n${canonicalHeroCommandBlock}`,
+      )
+      assert.deepEqual(validateRootReadme(source, { canonical: true }), [])
+    })
+  }
+
   it("does not count body-only reference-style GFM badges and links", () => {
     const source = actualRootReadme
       .replace(
