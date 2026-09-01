@@ -1,202 +1,222 @@
 <p align="center">
-  <img src="docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="360" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/dawn-logo-horizontal-white-on-black.png">
+    <img src="docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="360">
+  </picture>
 </p>
 
-# Dawn
+<p align="center"><strong>TypeScript meta-framework for LangGraph.js</strong></p>
 
-[![CI](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13317/badge)](https://www.bestpractices.dev/projects/13317)
-[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
+# Build LangGraph agents like Next.js apps.
 
-Build LangGraph agents like Next.js apps. Dawn is the TypeScript meta-framework for LangGraph — author AI agents and workflows as filesystem routes with route-local tools, generated types, durable threads, and an HMR dev server. Keep the runtime, drop the boilerplate.
+Dawn adds file-system routes, shared and route-local tools, generated types,
+deterministic tests, durable threads, and build targets around LangGraph.js.
+Keep the runtime. Drop the boilerplate.
 
 <p align="center">
-  <img src="docs/brand/quickstart.gif" alt="Dawn quickstart — scaffold a route and invoke it in under a minute" width="900" />
+  <a href="https://www.npmjs.com/package/create-dawn-ai-app"><img src="https://img.shields.io/npm/v/create-dawn-ai-app?label=create-dawn-ai-app" alt="create-dawn-ai-app npm version"></a>
+  <a href="https://github.com/cacheplane/dawnai/actions/workflows/ci.yml"><img src="https://github.com/cacheplane/dawnai/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-111827.svg" alt="MIT license"></a>
+  <a href="https://github.com/cacheplane/dawnai/stargazers"><img src="https://img.shields.io/github/stars/cacheplane/dawnai" alt="GitHub stars"></a>
+  <a href="https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml"><img src="https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg" alt="OpenSSF Scorecard"></a>
 </p>
 
-## Why Dawn?
+<p align="center">
+  <a href="https://dawnai.org/docs/getting-started">Get started</a> ·
+  <a href="https://dawnai.org/docs/migrating-from-langgraph">Migrate from LangGraph.js</a> ·
+  <a href="https://dawnai.org/docs">Documentation</a> ·
+  <a href="https://github.com/cacheplane/dawnai/discussions">Discussions</a>
+</p>
 
-- **Kill the LangGraph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
-- **Filesystem-routed agents.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
-- **A real local dev loop.** `dawn dev` runs your routes locally with Agent Protocol thread endpoints: create a thread, then call `/threads/:thread_id/runs/wait` or `/threads/:thread_id/runs/stream`. Iterate in seconds, then verify the generated deployment artifact before shipping.
-- **Typed end to end (TypeScript).** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
-- **Durable by default.** Every Dawn app ships a working SQLite checkpointer and thread store — no setup. Threads survive a `dawn dev` restart, and an agent that pauses for human input resumes exactly where it left off. LangGraph defines the checkpoint interface; Dawn ships the default implementation.
-- **Test and evaluate before shipping.** `@dawn-ai/testing` provides CI-safe agent harnesses and fixture replay. `dawn eval` runs co-located evals in replay mode by default, with `--live` and `--record` for local real-model checks.
-- **Sandbox when execution needs isolation.** Add `sandbox` to `dawn.config.ts` to route workspace filesystem and shell calls through a provider; `@dawn-ai/sandbox` includes a Docker reference implementation.
-- **Two ways to drive the model.** A route exports one of `agent` (LLM picks tools at runtime, can pause for a human), `workflow` (deterministic typed async function when you own the order), `graph`, or `chain`. Same routing, same types, same dev loop — you choose who's in charge.
-
-## Without Dawn / With Dawn
-
-Same LangGraph deployment shape, less code to author.
-
-### Without Dawn
-
-```ts
-// graph.ts
-import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph"
-import { ToolNode } from "@langchain/langgraph/prebuilt"
-import { ChatOpenAI } from "@langchain/openai"
-import { tool } from "@langchain/core/tools"
-import { z } from "zod"
-
-const greet = tool(async ({ name }) => `Hello, ${name}!`, {
-  name: "greet",
-  description: "Greet a user by name.",
-  schema: z.object({ name: z.string() }),
-})
-
-const model = new ChatOpenAI({ model: "gpt-5-mini" }).bindTools([greet])
-const tools = new ToolNode([greet])
-
-async function callModel(state: typeof MessagesAnnotation.State) {
-  return { messages: [await model.invoke(state.messages)] }
-}
-
-function shouldContinue(state: typeof MessagesAnnotation.State) {
-  const last = state.messages.at(-1) as any
-  return last?.tool_calls?.length ? "tools" : END
-}
-
-export const graph = new StateGraph(MessagesAnnotation)
-  .addNode("agent", callModel)
-  .addNode("tools", tools)
-  .addEdge(START, "agent")
-  .addConditionalEdges("agent", shouldContinue, ["tools", END])
-  .addEdge("tools", "agent")
-  .compile()
+```bash
+npm create dawn-ai-app@latest my-agent
 ```
 
-```json
-// langgraph.json
-{
-  "dependencies": ["."],
-  "graphs": { "hello": "./graph.ts:graph" },
-  "node_version": "22",
-  "env": ".env"
-}
-```
+<p align="center">
+  <a href="https://dawnai.org/#product-loop">
+    <img src="docs/brand/product-loop.gif" alt="Animation showing an existing generated research workspace, a deterministic test, and the Dawn Workbench" width="900">
+  </a>
+</p>
 
-### With Dawn
-
-```ts
-// src/app/research/index.ts
-import { agent } from "@dawn-ai/sdk"
-
-export default agent({
-  model: "gpt-5-mini",
-  description:
-    "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
-  systemPrompt:
-    "You are a deep-research coordinator. Search the corpus, cite every claim, and write reports to the workspace.",
-})
-```
-
-```ts
-// src/app/research/tools/searchCorpus.ts
-export default async ({ query }: { readonly query: string }) => {
-  return [{ path: "corpus/agent-architectures.md", title: "Agent architectures" }]
-}
-```
-
-`dawn build` emits the `langgraph.json` for you.
+[Read the product-loop transcript](docs/brand/demo/transcript.md).
 
 ## Quickstart
 
-1. Create a new app.
+The first activation is the no-key path:
+
+Requires Node.js 24 or later.
 
 ```bash
-npm create dawn-ai-app@latest my-dawn-app
-cd my-dawn-app
+npm create dawn-ai-app@latest my-agent
+cd my-agent
 npm install
-```
-
-Requires Node.js 24 (the active LTS) or later. The default template generates a two-package npm workspace — `server/` (the Dawn app) and `web/` (the Dawn Workbench UI) — and the root `npm install` wires both. Every command below runs from the workspace root and delegates into the package that owns it.
-
-2. Validate the app and generate types.
-
-```bash
-npm run check
-```
-
-Offline path — no API key needed — via recorded fixtures:
-
-```bash
 npm test
 ```
 
-3. Run it live. Set your API key and start the dev server:
+In a credential-sanitized clean-room run on August 31, 2026, npm resolved
+`create-dawn-ai-app` 0.8.21; the generated starter installed and its default
+fixture suite passed, with one opt-in test file skipped. The observation is
+version- and date-specific; `@latest` can move. See the
+[activation receipt](docs/brand/demo/evidence-matrix.md#clean-room-activation-observation).
+
+## Why Dawn
+
+- **Author the application shape, not route wiring.** Put one supported entry in
+  a route's `src/app/**/index.ts`; Dawn discovers the route. Shared tools live in
+  `src/tools/`, while route-local tools can live beside the route and remain
+  subject to its runtime policy.
+- **Let generated types follow the route.** Dawn generates TypeScript route,
+  parameter, state, and tool declarations during typegen and build. State types
+  are emitted when the discovered state schema supplies valid defaults.
+- **Make the normal test loop deterministic.** Fixture-backed tests replay
+  committed responses and fail on an unmatched interaction instead of silently
+  calling a provider. Live and recording modes remain explicit opt-ins.
+- **Carry one project from local state to build artifacts.** Default
+  SQLite-backed state can survive a `dawn dev` restart when the app root and its
+  SQLite files persist. The default build emits a runnable Node server,
+  Dockerfile, and LangSmith graph artifacts; validate the runtime, storage, auth,
+  and provider boundary for the deployment target you choose.
+
+## How Dawn fits
+
+| Layer | Role |
+| --- | --- |
+| **LangChain** | Remains available. Dawn's built-in `agent()` path uses LangChain integrations; raw graph and chain routes own their imports and provider behavior, and Dawn does not claim coverage for every LangChain package or provider. |
+| **LangGraph.js** | Remains the graph runtime and is required by Dawn. Dawn adds application conventions around it rather than replacing it. |
+| **Dawn** | Supplies file-system routing, generated types, local test and development conventions, persistence primitives, and build targets around LangGraph.js. |
+| **Deployment and observability choices** | Model providers and LangSmith remain external. Dawn emits a Node runtime and LangSmith artifacts by default, with target-specific options documented separately; it does not provision infrastructure, host the app, or manage secrets. |
+
+## What Dawn writes for you
+
+| You author | Dawn discovers or emits |
+| --- | --- |
+| One `agent`, `workflow`, `graph`, or `chain` entry in a route's `index.ts` | The route identity and runtime entry |
+| Shared tools in `src/tools/` and optional route-local tools in the route's `tools/` directory | The tool set available at that route, subject to tool policy and runtime constraints |
+| Optional state schemas and typed tool signatures | Regenerated route, route-parameter, state, and tool declarations; state exports require discoverable defaults |
+| Fixture-backed tests and application configuration | A deterministic replay path for those fixtures; live and recording paths stay explicit |
+| Application source | A runnable Node server, Dockerfile, and LangSmith graph artifacts from the default build |
+
+Already have a graph? Keep its nodes, edges, and imports, expose it as a raw
+`graph` route, and validate invocation and checkpointer behavior for each target.
+The [full migration guide](https://dawnai.org/docs/migrating-from-langgraph)
+covers that incremental path.
+
+## What are you building?
+
+- [Research assistant](./examples/research/README.md)
+- [Chat and workspace assistant](./examples/chat/README.md)
+- [Memory-backed agent](./examples/memory/README.md)
+- [Routes and workflows guide](https://dawnai.org/docs/routes)
+
+## When Dawn fits
+
+- **A good fit:** a TypeScript team wants LangGraph.js with file-system routes,
+  generated types, a local test and development loop, persistence primitives,
+  and build targets. Capability support varies by target, so validate the subset
+  your application uses.
+- **Stay with raw LangGraph.js:** if you do not want Dawn's application
+  conventions, or if your project requires Python. Dawn requires LangGraph.js
+  and targets TypeScript and Node.js.
+- **Bring the ecosystem with you:** existing raw LangGraph.js graphs can migrate
+  incrementally as `graph` routes. LangChain remains usable, and CopilotKit
+  composes with Dawn through the tested AG-UI boundary; validate versions and
+  target-specific invocation, provider, and checkpointer behavior in your app.
+
+Dawn is not a hosted AI platform or an infrastructure provisioner. You operate
+the emitted application or deploy it through a separate platform.
+
+## Build with a coding agent
+
+Give your coding agent the framework sources before it writes a route.
+
+<details>
+<summary>Copy this prompt</summary>
+
+```text
+Scaffold a new Dawn app and help me build an agent. Dawn is the TypeScript meta-framework for LangGraph — agents and workflows are file-system routes with route-local tools, generated types, and durable threads. Run `npm create dawn-ai-app@latest my-agent` to scaffold, then read https://dawnai.org/AGENTS.md and https://dawnai.org/llms-full.txt for the full framework reference before writing any routes.
+```
+
+</details>
+
+## Run it live
+
+Credentials are provider-specific: the published research starter's OpenAI live
+path requires `OPENAI_API_KEY`, while a local Ollama route requires no provider
+key.
+
+### Published `@latest` (0.8.21)
+
+The clean-room activation recorded above resolved npm `@latest` to 0.8.21. That
+published scaffold is a single package. Set its OpenAI key and start its Dawn
+server on port 3000:
 
 ```bash
+export OPENAI_API_KEY=sk-...
+npm run dev
+```
+
+Drive the backend through the
+[Agent Protocol](https://dawnai.org/docs/dev-server/agent-protocol), or follow
+the [Workbench guide](https://dawnai.org/docs/recipes/research-web-ui) to add a
+browser client; the 0.8.21 scaffold does not include the Workbench package.
+
+In a clean 0.8.21 scaffold inspected on September 1, 2026, `npm run build`
+compiles the TypeScript project. That scaffold does not define `npm start`; use
+`npm run dev` for its working server path.
+
+### Current source (unreleased 0.8.22)
+
+The current checked-in research template is a two-package workspace with a
+server and the Dawn Workbench. These commands apply to a scaffold generated
+from current repository source, not the published `@latest` package:
+
+```bash
+npm install
 export OPENAI_API_KEY=sk-...
 npm run dev:server
 ```
 
-In a second terminal, start the Dawn Workbench and open [http://localhost:3010](http://localhost:3010):
+In a second terminal:
 
 ```bash
 npm run dev:web
 ```
 
-Or drive the same agent over the Agent Protocol — create a thread and run the research route on it:
-
-```bash
-THREAD_ID=$(curl -s -X POST http://127.0.0.1:3002/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-curl -s -X POST http://127.0.0.1:3002/threads/$THREAD_ID/runs/wait \
-  -H 'content-type: application/json' \
-  -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}' | jq .
-```
-
-Use `/threads/$THREAD_ID/runs/stream` with the same body when you want SSE events instead of a blocking JSON response.
-
-4. Ship it. `dawn build` emits a runnable production server (`server.mjs` plus a hardened `Dockerfile`) alongside the LangSmith `langgraph.json` target; serve it locally with the generated `start` script, or build and run the Docker image:
+That source template serves the Dawn server on port 3002 and the Workbench on
+port 3010. Its root workspace defines the production build and start scripts:
 
 ```bash
 npm run build
 npm start
 ```
 
-The default scaffold is the deep-research app at `/research`, with the workbench UI in front of it. For the smaller greeter scaffold, run `npm create dawn-ai-app@latest my-dawn-app -- --template basic`; that optional template is a single flat package, serves on port 3000, and uses `/hello/[tenant]`.
+Choose and validate the deployment boundary that matches your application:
+[Node](https://dawnai.org/docs/deployment/node),
+[LangSmith](https://dawnai.org/docs/deployment/langsmith),
+[edge targets](https://dawnai.org/docs/deployment/edge), or
+[Kubernetes](https://dawnai.org/docs/deployment/kubernetes). Dawn emits the
+artifacts; it does not provision infrastructure, host the application, or
+manage its secrets.
 
-Prefer pnpm or yarn? Swap `npm create dawn-ai-app@latest` for `pnpm create dawn-ai-app` / `yarn create dawn-ai-app`, and `npm install`/`npm run`/`npx` for your package manager's equivalents.
+## Maturity and support
 
-## 30-Second Route
+Dawn is pre-1.0 and its API surface is moving. Pin versions and read the
+[release notes](https://github.com/cacheplane/dawnai/releases) and
+[upgrade guide](https://dawnai.org/docs/upgrading). Supported means documented
+public surfaces on the current release line, not a 1.0 stability or long-term
+support guarantee.
 
-Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, wires route-local tools into the generated graph, generates types, and produces a `langgraph.json` package for LangSmith.
+- Follow [SUPPORT.md](./SUPPORT.md) for support routes, and ask usage questions
+  in [GitHub Discussions](https://github.com/cacheplane/dawnai/discussions).
+- Report security issues through the process in [SECURITY.md](./SECURITY.md).
+- See [CONTRIBUTING.md](./CONTRIBUTING.md) and [CONTRIBUTORS.md](./CONTRIBUTORS.md) before contributing.
+- Follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
-```ts
-import { agent } from "@dawn-ai/sdk"
+Ready to start?
 
-export default agent({
-  model: "gpt-5-mini",
-  systemPrompt:
-    "You are a research coordinator. Search the local corpus, dispatch specialists when useful, and cite every claim.",
-  retry: { maxAttempts: 3, baseDelay: 250 },
-})
+```bash
+npm create dawn-ai-app@latest my-agent
 ```
-
-Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `middleware.ts` for access control, and `run.test.ts` for colocated scenarios.
-
-The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families; set `provider` explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. Raw `graph` and `chain` routes can still instantiate any provider directly.
-
----
-
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
-
-## Learn more
-
-- [Getting started](https://dawnai.org/docs/getting-started)
-- [Routes](https://dawnai.org/docs/routes)
-- [Tools](https://dawnai.org/docs/tools)
-- [State](https://dawnai.org/docs/state)
-- [CLI](https://dawnai.org/docs/cli)
-- [Dev server](https://dawnai.org/docs/dev-server)
-- [Testing](https://dawnai.org/docs/testing)
-- [Deployment](https://dawnai.org/docs/deployment)
-
----
-
-Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md). Repo layout and dev commands in [CONTRIBUTORS.md](./CONTRIBUTORS.md). Standards, workspace map, and Definition of Done in [AGENTS.md](./AGENTS.md). Security: [SECURITY.md](./SECURITY.md). Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 

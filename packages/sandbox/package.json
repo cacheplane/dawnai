@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Docker and Kubernetes sandbox providers for isolated Dawn workspace execution.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "sandbox",
+    "docker",
+    "kubernetes"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/sandbox#readme",
   "repository": {
     "type": "git",

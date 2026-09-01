@@ -6,15 +6,25 @@
 
 Supported AG-UI protocol translation for Dawn runtime streams, client inputs, interrupts, activities, and SSE responses.
 
+**Use this when:** You are translating Dawn runs or activity snapshots for an AG-UI client.
+
 ## Install
 
 ```bash
 pnpm add @dawn-ai/ag-ui
 ```
 
+## Example
+
 ```ts
 import { fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+
+const dawnInput = fromRunAgentInput(runAgentInput)
+
+for await (const event of toAguiEvents(dawnChunks, { threadId, runId })) {
+  response.write(encodeAgUiSse(event, request.headers.accept))
+}
 ```
 
 Plan and subagent activity snapshots are translated on the root surface; use the focused API reference for their exact identifiers and payload contracts.
@@ -136,8 +146,16 @@ Three keys are easy to confuse. `section` is a card's labelled region and exists
 
 They translate protocol data; they do not authenticate callers or make client-provided state authoritative.
 
-Use the [AG-UI API reference](https://dawnai.org/docs/api/ag-ui) for exact contracts. See [AG-UI and Web Clients](https://dawnai.org/docs/ag-ui) for setup and [Agent Protocol](https://dawnai.org/docs/dev-server/agent-protocol) for the underlying runtime endpoints.
+## Related
+
+- [AG-UI API reference](https://dawnai.org/docs/api/ag-ui) — exact adapter, activity, and renderer contracts.
+- [AG-UI and Web Clients](https://dawnai.org/docs/ag-ui) — client and transport setup.
+- [Agent Protocol](https://dawnai.org/docs/dev-server/agent-protocol) — the underlying Dawn runtime endpoints.
+
+## Maturity and support
+
+Dawn is pre-1.0, and its public surface can change. All publishable Dawn packages release together as a fixed group; review the [`@dawn-ai/ag-ui` changelog](https://github.com/cacheplane/dawnai/blob/main/packages/ag-ui/CHANGELOG.md) and [upgrading guide](https://dawnai.org/docs/upgrading) before upgrading. For support, use [GitHub Discussions](https://github.com/cacheplane/dawnai/discussions); report defects in [GitHub Issues](https://github.com/cacheplane/dawnai/issues).
 
 ## License
 
-MIT
+MIT. See the [repository license](https://github.com/cacheplane/dawnai/blob/main/LICENSE).

@@ -70,7 +70,11 @@ Use this path only when you intentionally want the generated app wired to the lo
 
 ## Brand assets
 
-- Rebuild the README demo gif with `./docs/brand/build-gif.sh` (requires `brew install vhs`). The script scaffolds a temp app, starts `node docs/brand/stub-openai.mjs --fixture docs/brand/quickstart-fixture.json --port 4317`, and runs `vhs docs/brand/quickstart.tape`. See [docs/brand/README.md](./docs/brand/README.md) for details and the fixture-recapture flow.
+- Rebuild and validate the deterministic README media with
+  `pnpm media:readme:capture` and `pnpm media:readme:check -- --local`. See
+  [docs/brand/README.md](./docs/brand/README.md) and the
+  [recording guide](./docs/brand/recording-guide.md) for prerequisites,
+  generated artifacts, and the fixture-backed Workbench boundary.
 
 ## Verification And Test Lanes
 

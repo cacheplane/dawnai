@@ -35,6 +35,9 @@ importers:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      '@vercel/blob':
+        specifier: 2.4.0
+        version: 2.4.0
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
@@ -44,6 +47,9 @@ importers:
       publint:
         specifier: 0.3.22
         version: 0.3.22
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@26.1.2)
       tsx:
         specifier: ^4.23.5
         version: 4.23.10
@@ -144,6 +150,9 @@ importers:
       '@vitest/ui':
         specifier: ^4.1.10
         version: 4.1.10(vitest@4.1.10)
+      jsdom:
+        specifier: ^30.0.1
+        version: 30.0.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -17165,7 +17174,6 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.3
       '@img/sharp-win32-x64': 0.35.3
       '@types/node': 26.1.2
-    optional: true
 
   shebang-command@2.0.0:
     dependencies:

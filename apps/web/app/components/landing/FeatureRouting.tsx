@@ -1,6 +1,9 @@
 import { highlightLight } from "../../../lib/shiki/highlight-light"
+import { demoMedia } from "../../lib/demo-media"
+import { ClipPlayer } from "../ui/ClipPlayer"
 import { CodeFrame } from "../ui/CodeFrame"
 import { FeatureBlock } from "./FeatureBlock"
+import { MediaSwitcher } from "./MediaSwitcher"
 
 const ROUTE_CODE = `// src/app/(public)/support/index.ts
 import { agent } from "@dawn-ai/sdk"
@@ -33,13 +36,35 @@ export async function FeatureRouting() {
       ]}
       link={{ href: "/docs/routes", label: "See routing docs" }}
       visual={
-        <CodeFrame label="src/app/(public)/support/">
-          <div
-            className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        </CodeFrame>
+        <MediaSwitcher
+          videoLabel="Video"
+          codeLabel="Code"
+          ariaLabel="Dawn route authoring"
+          video={
+            <figure>
+              <ClipPlayer clip={demoMedia.author} className="border border-divider shadow-sm" />
+              <figcaption className="mt-3 text-sm leading-6 text-ink-muted">
+                {demoMedia.author.caption}{" "}
+                <a
+                  href={demoMedia.author.transcript}
+                  className="font-medium text-ink underline underline-offset-4"
+                >
+                  Read the transcript
+                </a>
+                .
+              </figcaption>
+            </figure>
+          }
+          code={
+            <CodeFrame label="src/app/(public)/support/">
+              <div
+                className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            </CodeFrame>
+          }
+        />
       }
     />
   )

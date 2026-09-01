@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Deterministic harnesses, fixtures, and matchers for testing Dawn agent applications.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "testing",
+    "fixtures",
+    "llm"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/testing#readme",
   "repository": {
     "type": "git",

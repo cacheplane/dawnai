@@ -1,4 +1,6 @@
+import { demoMedia } from "../../lib/demo-media"
 import { Card } from "../ui/Card"
+import { ClipPlayer } from "../ui/ClipPlayer"
 import { Eyebrow } from "../ui/Eyebrow"
 
 const PAYOFFS = [
@@ -65,6 +67,20 @@ export function DurableByDefault() {
             </ul>
           </Card>
         </div>
+
+        <figure className="mt-12 max-w-4xl">
+          <ClipPlayer clip={demoMedia.run} className="border border-divider shadow-sm" />
+          <figcaption className="mt-3 text-sm leading-6 text-ink-muted">
+            {demoMedia.run.caption}{" "}
+            <a
+              href={demoMedia.run.transcript}
+              className="font-medium text-ink underline underline-offset-4"
+            >
+              Read the transcript
+            </a>
+            .
+          </figcaption>
+        </figure>
       </div>
     </section>
   )

@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "SQLite persistence for Dawn checkpoints, Agent Protocol threads, and local state.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "sqlite",
+    "persistence",
+    "ai-agents"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/sqlite-storage#readme",
   "repository": {
     "type": "git",

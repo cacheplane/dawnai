@@ -1,9 +1,12 @@
 import Link from "next/link"
 import { highlightLight } from "../../../lib/shiki/highlight-light"
+import { demoMedia } from "../../lib/demo-media"
 import { CopyCommand } from "../CopyCommand"
 import { CopyPromptButton } from "../CopyPromptButton"
+import { ClipPlayer } from "../ui/ClipPlayer"
 import { CodeFrame } from "../ui/CodeFrame"
 import { Eyebrow } from "../ui/Eyebrow"
+import { MediaSwitcher } from "./MediaSwitcher"
 
 const ROUTE_CODE = `import { agent } from "@dawn-ai/sdk"
 
@@ -18,7 +21,7 @@ export async function Hero() {
   const codeHtml = await highlightLight(ROUTE_CODE, "typescript")
 
   return (
-    <section className="relative bg-page border-b border-divider">
+    <section id="product-loop" className="relative bg-page border-b border-divider scroll-mt-16">
       <div className="max-w-[1200px] mx-auto px-6 md:px-8 pt-20 md:pt-28 pb-16 md:pb-20">
         <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-16 items-center">
           <div className="min-w-0">
@@ -55,14 +58,39 @@ export async function Hero() {
             </div>
           </div>
 
-          <div className="w-full min-w-0 overflow-hidden">
-            <CodeFrame label="src/app/(public)/support/index.ts">
-              <div
-                className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
-                dangerouslySetInnerHTML={{ __html: codeHtml }}
-              />
-            </CodeFrame>
+          <div className="w-full min-w-0">
+            <MediaSwitcher
+              videoLabel="Video"
+              codeLabel="Code"
+              ariaLabel="Dawn product loop"
+              video={
+                <figure>
+                  <ClipPlayer
+                    clip={demoMedia.productLoop}
+                    className="border border-divider shadow-sm"
+                  />
+                  <figcaption className="mt-3 text-sm leading-6 text-ink-muted">
+                    {demoMedia.productLoop.caption}{" "}
+                    <a
+                      href={demoMedia.productLoop.transcript}
+                      className="font-medium text-ink underline underline-offset-4"
+                    >
+                      Read the transcript
+                    </a>
+                    .
+                  </figcaption>
+                </figure>
+              }
+              code={
+                <CodeFrame label="src/app/(public)/support/index.ts">
+                  <div
+                    className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
+                    // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
+                    dangerouslySetInnerHTML={{ __html: codeHtml }}
+                  />
+                </CodeFrame>
+              }
+            />
           </div>
         </div>
       </div>

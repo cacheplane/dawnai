@@ -15,6 +15,6 @@ export default defineConfig({
     name: "web",
     environment: "node",
     env: { DAWN_WEB_CONTENT_ROOT: resolve(webRoot, "content") },
-    include: ["app/**/*.test.ts"],
+    include: ["app/**/*.test.{ts,tsx}"],
   },
 })

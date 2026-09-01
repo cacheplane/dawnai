@@ -4,7 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
-  "description": "Dawn runtime inspector \u2014 browser UI for inspecting a Dawn app (memory panel).",
+  "description": "Browser inspector for reviewing memory and runtime state in a Dawn application.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "inspector",
+    "memory",
+    "developer-tools"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
   "repository": {
     "type": "git",

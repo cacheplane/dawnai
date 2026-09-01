@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Low-level Dawn APIs for route discovery, configuration, state resolution, and type generation.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "ai-agents",
+    "routing",
+    "type-generation"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/core#readme",
   "repository": {
     "type": "git",
