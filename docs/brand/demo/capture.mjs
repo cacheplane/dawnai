@@ -36,11 +36,25 @@ const DEFAULT_REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const DEFAULT_SCAFFOLD_PORTS = new Set([3002, 3010]);
 const TOOLCHAIN = Object.freeze({ node: "v24.19.0", pnpm: "10.33.0" });
 const VIEWPORT = Object.freeze({ width: 1440, height: 810 });
-const PROVIDER_PREFIX =
-	/^(?:OPENAI|ANTHROPIC|GOOGLE|GEMINI|VERTEX|AZURE|AWS|BEDROCK)(?:_|$)/i;
-const PROVIDER_SETTING =
-	/(?:^|_)(?:API_KEY|BASE_URL|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)$/i;
-const TRACING_SETTING = /^(?:LANGCHAIN|LANGSMITH)(?:_|$)/i;
+// Child processes receive only local toolchain, package-manager, locale, temp,
+// home/cache, and CI settings. Everything else is excluded by construction.
+const OPERATIONAL_ENVIRONMENT_KEYS = Object.freeze([
+	"PATH",
+	"HOME",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TMPDIR",
+	"TMP",
+	"TEMP",
+	"CI",
+	"PNPM_HOME",
+	"COREPACK_HOME",
+	"XDG_CACHE_HOME",
+	"npm_config_cache",
+	"npm_config_store_dir",
+	"npm_config_userconfig",
+]);
 
 function errorMessage(error) {
 	return error instanceof Error ? error.message : String(error);
@@ -80,13 +94,10 @@ export function sanitizeOperationalEnvironment(
 		throw new TypeError("parentEnvironment must be an object");
 	}
 	return Object.fromEntries(
-		Object.entries(parentEnvironment).filter(
-			([key, value]) =>
-				typeof value === "string" &&
-				!PROVIDER_PREFIX.test(key) &&
-				!PROVIDER_SETTING.test(key) &&
-				!TRACING_SETTING.test(key),
-		),
+		OPERATIONAL_ENVIRONMENT_KEYS.flatMap((key) => {
+			const value = parentEnvironment[key];
+			return typeof value === "string" ? [[key, value]] : [];
+		}),
 	);
 }
 
@@ -484,17 +495,50 @@ export async function closeBrowserResources({ context, video, browser }) {
 	return videoPath === undefined ? {} : { videoPath };
 }
 
+export async function createBrowserResources({
+	chromium,
+	recordingsDir,
+	viewport,
+}) {
+	let browser;
+	let context;
+	let page;
+	try {
+		browser = await chromium.launch({ headless: true });
+		context = await browser.newContext({
+			viewport,
+			recordVideo: { dir: recordingsDir, size: viewport },
+		});
+		page = await context.newPage();
+		return { browser, context, page, video: page.video() };
+	} catch (error) {
+		const cleanupErrors = [];
+		for (const resource of [page, context, browser]) {
+			if (resource === undefined) continue;
+			try {
+				await resource.close();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+		}
+		if (cleanupErrors.length === 0) throw error;
+		throw new AggregateError(
+			[error, ...cleanupErrors],
+			`${errorMessage(error)}; browser acquisition cleanup also failed`,
+			{ cause: error },
+		);
+	}
+}
+
 function createBrowserAdapter() {
 	return {
 		async open({ recordingsDir, viewport }) {
 			const { chromium } = await import("@playwright/test");
-			const browser = await chromium.launch({ headless: true });
-			const context = await browser.newContext({
+			const { browser, context, page, video } = await createBrowserResources({
+				chromium,
+				recordingsDir,
 				viewport,
-				recordVideo: { dir: recordingsDir, size: viewport },
 			});
-			const page = await context.newPage();
-			const video = page.video();
 			let closePromise;
 			return {
 				async recordStage({ html }) {
@@ -589,11 +633,36 @@ async function cleanupResource(action, errors) {
 	}
 }
 
+async function encodeWithFutureModule(options) {
+	let encoderModule;
+	try {
+		encoderModule = await import("./encode.mjs");
+	} catch (error) {
+		if (
+			error?.code === "ERR_MODULE_NOT_FOUND" &&
+			errorMessage(error).includes("docs/brand/demo/encode.mjs")
+		) {
+			throw new Error(
+				"Encoding requested but docs/brand/demo/encode.mjs is unavailable; use --record-only until the encoder is implemented",
+				{ cause: error },
+			);
+		}
+		throw error;
+	}
+	if (typeof encoderModule.encodeCaptureArtifacts !== "function") {
+		throw new TypeError(
+			"docs/brand/demo/encode.mjs must export encodeCaptureArtifacts(options)",
+		);
+	}
+	return encoderModule.encodeCaptureArtifacts(options);
+}
+
 export async function captureDemo({
 	repoRoot = DEFAULT_REPO_ROOT,
 	parentEnv = process.env,
 	adapters: adapterOverrides,
 	recordOnly = false,
+	encodeCaptureArtifacts = encodeWithFutureModule,
 } = {}) {
 	requireString(repoRoot, "repoRoot");
 	const artifactsDir = join(repoRoot, "docs/brand/demo/artifacts");
@@ -612,6 +681,7 @@ export async function captureDemo({
 	let browserSession;
 	let browserResult = {};
 	let result;
+	let finalSummary;
 	let primaryError;
 
 	try {
@@ -757,6 +827,30 @@ export async function captureDemo({
 				? { stateUrl: restoration.stateUrl }
 				: {}),
 		};
+
+		const completedBrowserSession = browserSession;
+		browserSession = undefined;
+		browserResult = await completedBrowserSession.close();
+		const summary = { ...result, ...browserResult };
+		const summaryPath = join(artifactsDir, "capture-summary.json");
+		await adapters.filesystem.writeFile(
+			summaryPath,
+			`${JSON.stringify(summary, null, 2)}\n`,
+			"utf8",
+		);
+		finalSummary = { ...summary, summaryPath };
+		if (!recordOnly) {
+			if (typeof encodeCaptureArtifacts !== "function") {
+				throw new TypeError("encodeCaptureArtifacts must be a function");
+			}
+			await encodeCaptureArtifacts({
+				repoRoot,
+				artifactsDir,
+				recordingsDir,
+				summary,
+				summaryPath,
+			});
+		}
 	} catch (error) {
 		primaryError = error;
 	}
@@ -809,14 +903,7 @@ export async function captureDemo({
 		throw new AggregateError(cleanupErrors, "Capture cleanup failed");
 	}
 
-	const summary = { ...result, ...browserResult };
-	const summaryPath = join(artifactsDir, "capture-summary.json");
-	await adapters.filesystem.writeFile(
-		summaryPath,
-		`${JSON.stringify(summary, null, 2)}\n`,
-		"utf8",
-	);
-	return { ...summary, summaryPath };
+	return finalSummary;
 }
 
 function isMainModule() {

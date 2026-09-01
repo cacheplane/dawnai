@@ -8,12 +8,14 @@ import {
 	buildChildEnvironment,
 	captureDemo,
 	closeBrowserResources,
+	createBrowserResources,
 	createManagedChildRegistry,
 	fillActiveWorkbenchComposer,
 	generatedInstallCommand,
 	generatedTestCommand,
 	openReadyWorkbench,
 	parseCaptureArguments,
+	sanitizeOperationalEnvironment,
 	startWithAssignedPort,
 } from "./capture.mjs";
 import { normalizeLog } from "./normalize-log.mjs";
@@ -460,6 +462,9 @@ function orchestrationFixture({ failAt } = {}) {
 			async mkdir() {},
 			async writeFile(path, contents) {
 				writes.push({ path, contents });
+				if (path.endsWith("capture-summary.json")) {
+					operations.push("write summary");
+				}
 			},
 			async readFile(path) {
 				if (path.endsWith("server/src/app/research/index.ts")) {
@@ -594,6 +599,7 @@ test("capture orchestrates the real-product phases in exact order and cleans up"
 		"record run",
 		"record close",
 		"close browser",
+		"write summary",
 		"stop workbench",
 		"stop server",
 		"close aimock",
@@ -662,7 +668,50 @@ test("capture finally closes owned resources and removes only its exact mkdtemp 
 	);
 });
 
-test("child environment preserves operations but strips provider credentials before exact overrides", () => {
+test("operational environment copies only the documented local-toolchain allowlist", () => {
+	assert.deepEqual(
+		sanitizeOperationalEnvironment({
+			PATH: "/toolchain/bin",
+			HOME: "/home/test",
+			LANG: "en_US.UTF-8",
+			LC_ALL: "C.UTF-8",
+			LC_CTYPE: "C.UTF-8",
+			TMPDIR: "/tmp/unit",
+			TMP: "/tmp",
+			TEMP: "/var/tmp",
+			CI: "1",
+			PNPM_HOME: "/cache/pnpm",
+			COREPACK_HOME: "/cache/corepack",
+			XDG_CACHE_HOME: "/cache/xdg",
+			npm_config_cache: "/cache/npm",
+			npm_config_store_dir: "/cache/pnpm-store",
+			npm_config_userconfig: "/home/test/.npmrc",
+			GITHUB_TOKEN: "github-secret",
+			DATABASE_URL: "postgres://secret",
+			CUSTOM_DEPLOY_SECRET: "custom-secret",
+			OPENAI_API_KEY: "provider-secret",
+		}),
+		{
+			PATH: "/toolchain/bin",
+			HOME: "/home/test",
+			LANG: "en_US.UTF-8",
+			LC_ALL: "C.UTF-8",
+			LC_CTYPE: "C.UTF-8",
+			TMPDIR: "/tmp/unit",
+			TMP: "/tmp",
+			TEMP: "/var/tmp",
+			CI: "1",
+			PNPM_HOME: "/cache/pnpm",
+			COREPACK_HOME: "/cache/corepack",
+			XDG_CACHE_HOME: "/cache/xdg",
+			npm_config_cache: "/cache/npm",
+			npm_config_store_dir: "/cache/pnpm-store",
+			npm_config_userconfig: "/home/test/.npmrc",
+		},
+	);
+});
+
+test("child environment allowlists operations before applying exact server overrides", () => {
 	const environment = buildChildEnvironment(
 		{
 			PATH: "/toolchain/bin",
@@ -672,6 +721,9 @@ test("child environment preserves operations but strips provider credentials bef
 			TMPDIR: "/tmp/unit",
 			npm_config_cache: "/cache/npm",
 			PNPM_HOME: "/cache/pnpm",
+			GITHUB_TOKEN: "github-secret",
+			DATABASE_URL: "postgres://secret",
+			CUSTOM_DEPLOY_SECRET: "custom-secret",
 			OPENAI_API_KEY: "openai-parent",
 			OPENAI_BASE_URL: "https://api.openai.com/v1",
 			ANTHROPIC_API_KEY: "anthropic-parent",
@@ -719,6 +771,9 @@ test("child environment preserves operations but strips provider credentials bef
 	);
 	assert.equal(environment.npm_config_package, "@dawn-ai/cli");
 	for (const key of [
+		"GITHUB_TOKEN",
+		"DATABASE_URL",
+		"CUSTOM_DEPLOY_SECRET",
 		"ANTHROPIC_API_KEY",
 		"ANTHROPIC_BASE_URL",
 		"GOOGLE_API_KEY",
@@ -743,6 +798,9 @@ test("capture gives both services sanitized environments and only Dawn receives 
 		parentEnv: {
 			PATH: "/toolchain/bin",
 			npm_config_userconfig: "/home/test/.npmrc",
+			GITHUB_TOKEN: "parent-github",
+			DATABASE_URL: "postgres://parent-secret",
+			CUSTOM_DEPLOY_SECRET: "parent-custom",
 			OPENAI_API_KEY: "parent-openai",
 			ANTHROPIC_API_KEY: "parent-anthropic",
 			GOOGLE_API_KEY: "parent-google",
@@ -783,6 +841,9 @@ test("capture gives both services sanitized environments and only Dawn receives 
 		assert.equal(environment?.PATH, "/toolchain/bin");
 		assert.equal(environment?.npm_config_userconfig, "/home/test/.npmrc");
 		for (const key of [
+			"GITHUB_TOKEN",
+			"DATABASE_URL",
+			"CUSTOM_DEPLOY_SECRET",
 			"ANTHROPIC_API_KEY",
 			"GOOGLE_API_KEY",
 			"AZURE_OPENAI_API_KEY",
@@ -1016,4 +1077,144 @@ test("browser cleanup always closes Chromium even when context finalization fail
 		/context failed/,
 	);
 	assert.deepEqual(calls, ["context", "video", "browser"]);
+});
+
+test("browser acquisition closes Chromium when context creation fails", async () => {
+	const calls = [];
+	const acquisitionError = new Error("context creation failed");
+	const chromium = {
+		async launch() {
+			calls.push("launch");
+			return {
+				async newContext() {
+					calls.push("new context");
+					throw acquisitionError;
+				},
+				async close() {
+					calls.push("close browser");
+				},
+			};
+		},
+	};
+
+	await assert.rejects(
+		createBrowserResources({
+			chromium,
+			recordingsDir: "/ignored/raw-recordings",
+			viewport: { width: 1440, height: 810 },
+		}),
+		(error) => {
+			assert.equal(error, acquisitionError);
+			return true;
+		},
+	);
+	assert.deepEqual(calls, ["launch", "new context", "close browser"]);
+});
+
+test("browser acquisition closes context then Chromium when page creation fails", async () => {
+	const calls = [];
+	const acquisitionError = new Error("page creation failed");
+	const chromium = {
+		async launch() {
+			calls.push("launch");
+			return {
+				async newContext() {
+					calls.push("new context");
+					return {
+						async newPage() {
+							calls.push("new page");
+							throw acquisitionError;
+						},
+						async close() {
+							calls.push("close context");
+						},
+					};
+				},
+				async close() {
+					calls.push("close browser");
+				},
+			};
+		},
+	};
+
+	await assert.rejects(
+		createBrowserResources({
+			chromium,
+			recordingsDir: "/ignored/raw-recordings",
+			viewport: { width: 1440, height: 810 },
+		}),
+		(error) => {
+			assert.equal(error, acquisitionError);
+			return true;
+		},
+	);
+	assert.deepEqual(calls, [
+		"launch",
+		"new context",
+		"new page",
+		"close context",
+		"close browser",
+	]);
+});
+
+test("capture invokes the future encoder after finalizing recordings and summary", async () => {
+	const fixture = orchestrationFixture();
+	await captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: false,
+		async encodeCaptureArtifacts(options) {
+			fixture.operations.push("encode capture");
+			assert.equal(
+				options.summaryPath,
+				"/repo/docs/brand/demo/artifacts/capture-summary.json",
+			);
+			assert.equal(
+				options.summary.videoPath,
+				"/ignored/raw-recordings/demo.webm",
+			);
+		},
+	});
+
+	assert.deepEqual(fixture.operations.slice(-7), [
+		"close browser",
+		"write summary",
+		"encode capture",
+		"stop workbench",
+		"stop server",
+		"close aimock",
+		`remove ${fixture.workspaceRoot}`,
+	]);
+});
+
+test("record-only capture never invokes the future encoder", async () => {
+	const fixture = orchestrationFixture();
+	let invoked = false;
+	await captureDemo({
+		repoRoot: "/repo",
+		adapters: fixture.adapters,
+		recordOnly: true,
+		async encodeCaptureArtifacts() {
+			invoked = true;
+		},
+	});
+	assert.equal(invoked, false);
+});
+
+test("non-record-only capture fails actionably while the future encoder is unavailable", async () => {
+	const fixture = orchestrationFixture();
+	await assert.rejects(
+		captureDemo({
+			repoRoot: "/repo",
+			adapters: fixture.adapters,
+			recordOnly: false,
+		}),
+		/Encoding requested but docs\/brand\/demo\/encode\.mjs is unavailable; use --record-only/,
+	);
+	assert.deepEqual(fixture.operations.slice(-4), [
+		"stop workbench",
+		"stop server",
+		"close aimock",
+		`remove ${fixture.workspaceRoot}`,
+	]);
 });
