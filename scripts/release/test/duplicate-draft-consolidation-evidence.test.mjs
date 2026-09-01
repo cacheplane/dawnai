@@ -257,6 +257,17 @@ test("rejects noncanonical core evidence and incorrect downloaded bytes", async 
 	}
 });
 
+test("rejects a canonical shared marker whose release-record digest is wrong", async () => {
+	const fixture = createDuplicateDraftConsolidationFixture();
+	fixture.replaceMarker((marker) => {
+		marker.releaseRecordSha256 = "f".repeat(64);
+	});
+	await assert.rejects(
+		inspectEquivalentDrafts(INPUT(fixture)),
+		/marker|record|digest/iu,
+	);
+});
+
 test("rejects malformed or non-exact Release asset inventories before destructive evidence exists", async (t) => {
 	const cases = [
 		["missing asset", (fixture) => fixture.releases[0].assets.pop()],
@@ -399,9 +410,38 @@ test("rejects an oversized download envelope before base64 decoding", async () =
 	);
 });
 
+test("enforces aggregate accounting before a 136th download or a 192 MiB crossing", async (t) => {
+	await t.test("136th download", async () => {
+		const fixture = createDuplicateDraftConsolidationFixture();
+		await assert.rejects(
+			inspectEquivalentDrafts({
+				...INPUT(fixture),
+				accounting: { downloadedAssets: 1, downloadedBytes: 0 },
+			}),
+			/135|download/iu,
+		);
+		assert.equal(fixture.downloadCount, 0);
+	});
+	await t.test("aggregate byte crossing", async () => {
+		const fixture = createDuplicateDraftConsolidationFixture();
+		await assert.rejects(
+			inspectEquivalentDrafts({
+				...INPUT(fixture),
+				accounting: {
+					downloadedAssets: 0,
+					downloadedBytes: 192 * 1024 * 1024,
+				},
+			}),
+			/192|aggregate|payload/iu,
+		);
+		assert.equal(fixture.downloadCount, 0);
+	});
+});
+
 test("captures a bounded monotone direct Release-by-ID and complete asset read", async () => {
 	const fixture = createDuplicateDraftConsolidationFixture();
 	const inspected = await inspectEquivalentDrafts(INPUT(fixture));
+	fixture.clearOperations();
 	const timestamps = [
 		"2026-09-01T12:00:00.000Z",
 		"2026-09-01T12:00:01.000Z",
@@ -414,7 +454,6 @@ test("captures a bounded monotone direct Release-by-ID and complete asset read",
 		role: "duplicate",
 		expectedEvidence: inspected.releases[1],
 		github: fixture.github,
-		attestations: fixture.attestations,
 		now: () => timestamps.shift(),
 	});
 
@@ -427,9 +466,62 @@ test("captures a bounded monotone direct Release-by-ID and complete asset read",
 	assert.equal(direct.evidence.id, DUPLICATE_DRAFT_IDS[0]);
 	assert.match(direct.evidenceSha256, /^[0-9a-f]{64}$/u);
 	assert.equal(Object.isFrozen(direct), true);
+	assert.deepEqual(fixture.operations, [
+		`get:${DUPLICATE_DRAFT_IDS[0]}`,
+		`list-assets:${DUPLICATE_DRAFT_IDS[0]}`,
+	]);
 });
 
-test("direct target reads reject nonmonotone clocks and identity or parity drift", async (t) => {
+test("direct target reads allow approved service volatility and return its latest metadata", async (t) => {
+	const cases = [
+		["Release node id", (release) => (release.node_id = "RE_latest")],
+		["opaque tag", (release) => (release.tag_name = "untagged-latest")],
+		[
+			"Release creation",
+			(release) => (release.created_at = "2026-08-29T00:00:00.000Z"),
+		],
+		[
+			"Release update",
+			(release) => (release.updated_at = "2026-09-01T00:00:00.000Z"),
+		],
+		["asset id", (release) => (release.assets[0].id = 777_777_777)],
+		["asset node id", (release) => (release.assets[0].node_id = "RA_latest")],
+		[
+			"asset creation",
+			(release) => (release.assets[0].created_at = "2026-08-29T00:00:00.000Z"),
+		],
+		[
+			"asset update",
+			(release) => (release.assets[0].updated_at = "2026-09-01T00:00:00.000Z"),
+		],
+		["download count", (release) => (release.assets[0].download_count = 999)],
+	];
+	for (const [name, mutate] of cases) {
+		await t.test(name, async () => {
+			const fixture = createDuplicateDraftConsolidationFixture();
+			const inspected = await inspectEquivalentDrafts(INPUT(fixture));
+			mutate(fixture.releases[1]);
+			fixture.clearOperations();
+			const direct = await captureDirectTargetRead({
+				candidate: fixture.candidate,
+				releaseId: DUPLICATE_DRAFT_IDS[0],
+				role: "duplicate",
+				expectedEvidence: inspected.releases[1],
+				github: fixture.github,
+			});
+			assert.deepEqual(fixture.operations, [
+				`get:${DUPLICATE_DRAFT_IDS[0]}`,
+				`list-assets:${DUPLICATE_DRAFT_IDS[0]}`,
+			]);
+			assert.deepEqual(
+				semanticReleaseProjection(direct.evidence),
+				semanticReleaseProjection(inspected.releases[1]),
+			);
+		});
+	}
+});
+
+test("direct target reads reject nonmonotone clocks and every included parity drift", async (t) => {
 	const setup = async () => {
 		const fixture = createDuplicateDraftConsolidationFixture();
 		const inspected = await inspectEquivalentDrafts(INPUT(fixture));
@@ -445,42 +537,58 @@ test("direct target reads reject nonmonotone clocks and identity or parity drift
 				role: "duplicate",
 				expectedEvidence: inspected.releases[1],
 				github: fixture.github,
-				attestations: fixture.attestations,
 				now: () => timestamps.shift() ?? "2026-09-01T12:00:02.000Z",
 			}),
 			/monotone|timestamp/iu,
 		);
 	});
-	await t.test("identity drift", async () => {
-		const { fixture, inspected } = await setup();
-		fixture.releases[1].node_id = "RE_changed";
-		await assert.rejects(
-			captureDirectTargetRead({
-				candidate: fixture.candidate,
-				releaseId: DUPLICATE_DRAFT_IDS[0],
-				role: "duplicate",
-				expectedEvidence: inspected.releases[1],
-				github: fixture.github,
-				attestations: fixture.attestations,
-			}),
-			/equal|evidence|identity|proposal/iu,
-		);
-	});
-	await t.test("semantic drift", async () => {
-		const { fixture, inspected } = await setup();
-		fixture.releases[1].name = "changed";
-		await assert.rejects(
-			captureDirectTargetRead({
-				candidate: fixture.candidate,
-				releaseId: DUPLICATE_DRAFT_IDS[0],
-				role: "duplicate",
-				expectedEvidence: inspected.releases[1],
-				github: fixture.github,
-				attestations: fixture.attestations,
-			}),
-			/equal|evidence|expected|parity|proposal/iu,
-		);
-	});
+	const cases = [
+		["name", (release) => (release.name = "changed")],
+		["target", (release) => (release.target_commitish = "f".repeat(40))],
+		["draft", (release) => (release.draft = false)],
+		["immutable", (release) => (release.immutable = true)],
+		["prerelease", (release) => (release.prerelease = true)],
+		[
+			"published",
+			(release) => (release.published_at = "2026-09-01T00:00:00.000Z"),
+		],
+		["body", (release) => (release.body += " ")],
+		["author", (release) => (release.author.id = 2048)],
+		["asset name", (release) => (release.assets[0].name = "wrong.bin")],
+		["asset label", (release) => (release.assets[0].label = "changed")],
+		["asset state", (release) => (release.assets[0].state = "new")],
+		[
+			"asset content type",
+			(release) => (release.assets[0].content_type = "text/plain"),
+		],
+		["asset size", (release) => (release.assets[0].size += 1)],
+		[
+			"asset digest",
+			(release) => (release.assets[0].digest = `sha256:${"f".repeat(64)}`),
+		],
+		["asset uploader", (release) => (release.assets[0].uploader.id = 2048)],
+	];
+	for (const [name, mutate] of cases) {
+		await t.test(name, async () => {
+			const { fixture, inspected } = await setup();
+			mutate(fixture.releases[1]);
+			fixture.clearOperations();
+			await assert.rejects(
+				captureDirectTargetRead({
+					candidate: fixture.candidate,
+					releaseId: DUPLICATE_DRAFT_IDS[0],
+					role: "duplicate",
+					expectedEvidence: inspected.releases[1],
+					github: fixture.github,
+				}),
+				/asset|author|body|candidate|digest|evidence|equal|expected|marker|mutable|parity|proposal|uploaded/iu,
+			);
+			assert.deepEqual(fixture.operations, [
+				`get:${DUPLICATE_DRAFT_IDS[0]}`,
+				`list-assets:${DUPLICATE_DRAFT_IDS[0]}`,
+			]);
+		});
+	}
 });
 
 test("public evidence parsers reject hostile shapes without invoking accessors and return owned frozen data", async () => {
@@ -495,6 +603,18 @@ test("public evidence parsers reject hostile shapes without invoking accessors a
 	assert.deepEqual(
 		assertEvidenceEqualsProposal(parsed, result.releases[0]),
 		parsed,
+	);
+	const volatile = structuredClone(result.releases[0]);
+	volatile.nodeId = "RE_latest";
+	volatile.tagName = "untagged-latest";
+	volatile.createdAt = "2026-08-29T00:00:00.000Z";
+	volatile.updatedAt = "2026-09-01T00:00:00.000Z";
+	volatile.assets[0].id = "777777777";
+	volatile.assets[0].nodeId = "RA_latest";
+	volatile.assets[0].downloadCount = 999;
+	assert.deepEqual(
+		assertEvidenceEqualsProposal(volatile, parsed),
+		parseReleaseEvidence(volatile),
 	);
 	const oversized = structuredClone(result.releases[0]);
 	oversized.assets[0].size = 32 * 1024 * 1024;
@@ -536,6 +656,27 @@ test("public evidence parsers reject hostile shapes without invoking accessors a
 		() => semanticAssetProjection(accessor),
 		/accessor|data|field|plain|snapshot/iu,
 	);
+});
+
+test("strict evidence IDs accept only canonical positive decimal strings", async () => {
+	const fixture = createDuplicateDraftConsolidationFixture();
+	const result = await inspectEquivalentDrafts(INPUT(fixture));
+	const invalid = [61436, 0, "0", "061436", "-1", "+1", " 1", "1 ", "1e3"];
+	for (const value of invalid) {
+		for (const mutate of [
+			(evidence) => (evidence.id = value),
+			(evidence) => (evidence.semantic.author.id = value),
+			(evidence) => (evidence.assets[0].id = value),
+			(evidence) => (evidence.assets[0].uploader.id = value),
+		]) {
+			const evidence = structuredClone(result.releases[0]);
+			mutate(evidence);
+			assert.throws(
+				() => parseReleaseEvidence(evidence),
+				/decimal|id|identity/iu,
+			);
+		}
+	}
 });
 
 test("candidate identity is exact", async () => {

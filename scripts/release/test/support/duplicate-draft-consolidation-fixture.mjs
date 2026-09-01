@@ -124,8 +124,10 @@ export function createDuplicateDraftConsolidationFixture() {
 
 	let downloadCount = 0;
 	let failVerification = false;
+	const operations = [];
 	const github = Object.freeze({
 		async downloadReleaseAsset({ assetId, maximumBytes, releaseId }) {
+			operations.push(`download:${releaseId}:${assetId}`);
 			downloadCount += 1;
 			const release = releases.find(
 				({ id }) => String(id) === String(releaseId),
@@ -145,6 +147,7 @@ export function createDuplicateDraftConsolidationFixture() {
 			});
 		},
 		async getRelease({ releaseId }) {
+			operations.push(`get:${releaseId}`);
 			const release = releases.find(
 				({ id }) => String(id) === String(releaseId),
 			);
@@ -153,6 +156,7 @@ export function createDuplicateDraftConsolidationFixture() {
 			return present("release", { value: structuredClone(release) });
 		},
 		async listReleaseAssets({ releaseId }) {
+			operations.push(`list-assets:${releaseId}`);
 			const release = releases.find(
 				({ id }) => String(id) === String(releaseId),
 			);
@@ -184,8 +188,23 @@ export function createDuplicateDraftConsolidationFixture() {
 		get downloadCount() {
 			return downloadCount;
 		},
+		get operations() {
+			return [...operations];
+		},
+		clearOperations() {
+			operations.length = 0;
+		},
 		failVerification() {
 			failVerification = true;
+		},
+		replaceMarker(mutator) {
+			const next = structuredClone(marker);
+			mutator(next);
+			const nextBody = canonicalReleaseBody({
+				marker: next,
+				manifest: artifact.manifest,
+			});
+			for (const release of releases) release.body = nextBody;
 		},
 		assetBytes(releaseId, name) {
 			const bytes = payloads.get(`${String(releaseId)}:${name}`);

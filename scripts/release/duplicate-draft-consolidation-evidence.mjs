@@ -17,6 +17,7 @@ import {
 import {
 	canonicalReleaseRecordBytes,
 	parseReleaseRecord,
+	releaseRecordSha256,
 } from "./release-record.mjs";
 
 const APPROVED_VERSION = "0.8.22";
@@ -99,9 +100,15 @@ export async function inspectEquivalentDrafts(input) {
 		...byId.get(id),
 		role: index === 0 ? "survivor" : "duplicate",
 	}));
-	preflightDownloads(selected.map(({ release }) => release));
+	preflightDownloads(
+		selected.map(({ release }) => release),
+		context.accounting,
+	);
 
-	const counter = { downloads: 0, bytes: 0 };
+	const counter = {
+		downloads: context.accounting.downloadedAssets,
+		bytes: context.accounting.downloadedBytes,
+	};
 	const releases = [];
 	const hydration = [];
 	for (const selectedRelease of selected) {
@@ -174,7 +181,6 @@ export async function captureDirectTargetRead(input) {
 			"role",
 			"expectedEvidence",
 			"github",
-			"attestations",
 			...(Object.hasOwn(value, "now") ? ["now"] : []),
 		],
 		"direct target read input",
@@ -191,13 +197,8 @@ export async function captureDirectTargetRead(input) {
 	}
 	const github = bindBoundary(
 		value.github,
-		["downloadReleaseAsset", "getRelease", "listReleaseAssets"],
+		["getRelease", "listReleaseAssets"],
 		"GitHub direct target reader",
-	);
-	const attestations = bindBoundary(
-		value.attestations,
-		["verify"],
-		"Attestation verifier",
 	);
 	const now =
 		value.now === undefined ? () => new Date().toISOString() : value.now;
@@ -232,22 +233,14 @@ export async function captureDirectTargetRead(input) {
 		throw new TypeError("Direct target asset enumeration is invalid");
 	const directRelease = { ...snapshotPlain(release, "direct Release"), assets };
 	preflightDownloads([directRelease]);
-	const marker = parseCandidateMarker(
-		directRelease.body,
-		candidate,
-		"Direct target Release",
-	);
-	const hydrated = await hydrateRelease({
+	const directEvidence = buildDirectEvidence({
 		release: directRelease,
-		marker,
 		role,
 		candidate,
-		github,
-		attestations,
-		counter: { downloads: 0, bytes: 0 },
+		expectedEvidence,
 	});
 	const evidence = assertEvidenceEqualsProposal(
-		hydrated.evidence,
+		directEvidence,
 		expectedEvidence,
 	);
 	return deepFreeze({
@@ -285,7 +278,7 @@ export function parseReleaseEvidence(value) {
 	}
 	return deepFreeze({
 		role: value.role,
-		id: canonicalId(value.id, "Release id"),
+		id: evidenceId(value.id, "Release id"),
 		nodeId: nonemptyString(value.nodeId, "Release node id"),
 		tagName: nonemptyString(value.tagName, "Release tag name"),
 		createdAt: canonicalTimestamp(
@@ -322,12 +315,97 @@ export function semanticAssetProjection(value) {
 export function assertEvidenceEqualsProposal(actual, proposed) {
 	const normalizedActual = parseReleaseEvidence(actual);
 	const normalizedProposed = parseReleaseEvidence(proposed);
-	if (!isDeepStrictEqual(normalizedActual, normalizedProposed)) {
+	if (
+		!isDeepStrictEqual(
+			semanticReleaseProjection(normalizedActual),
+			semanticReleaseProjection(normalizedProposed),
+		)
+	) {
 		throw new Error(
-			"Direct Release evidence does not equal the proposed evidence",
+			"Direct Release semantic evidence does not equal the proposal",
+		);
+	}
+	const proposedAssets = new Map(
+		normalizedProposed.assets.map((asset) => [
+			asset.name,
+			semanticAssetProjection(asset),
+		]),
+	);
+	if (
+		proposedAssets.size !== normalizedActual.assets.length ||
+		normalizedActual.assets.some(
+			(asset) =>
+				!isDeepStrictEqual(
+					semanticAssetProjection(asset),
+					proposedAssets.get(asset.name),
+				),
+		)
+	) {
+		throw new Error(
+			"Direct Release asset evidence does not equal the proposal",
 		);
 	}
 	return normalizedActual;
+}
+
+function buildDirectEvidence({ release, role, candidate, expectedEvidence }) {
+	validateRawReleasePolicy(release, candidate);
+	parseCandidateMarker(release.body, candidate, "Direct target Release");
+	const expectedByName = new Map(
+		expectedEvidence.assets.map((asset) => [asset.name, asset]),
+	);
+	const latestByName = new Map();
+	for (const rawAsset of release.assets) {
+		const descriptor = parseRawAsset(rawAsset);
+		const expected = expectedByName.get(descriptor.name);
+		if (expected === undefined) {
+			throw new Error("Direct target asset list contains an unknown asset");
+		}
+		if (descriptor.digest !== `sha256:${expected.downloadSha256}`) {
+			throw new Error(
+				"Direct target asset digest does not match the proven downloaded payload",
+			);
+		}
+		latestByName.set(descriptor.name, {
+			...descriptor,
+			downloadSha256: expected.downloadSha256,
+		});
+	}
+	if (
+		latestByName.size !== expectedByName.size ||
+		[...expectedByName.keys()].some((name) => !latestByName.has(name))
+	) {
+		throw new Error("Direct target asset list is incomplete");
+	}
+	return parseReleaseEvidence({
+		role,
+		id: canonicalId(release.id, "Direct target Release id"),
+		nodeId: nonemptyString(release.node_id, "Direct target Release node id"),
+		tagName: nonemptyString(release.tag_name, "Direct target Release tag name"),
+		createdAt: canonicalTimestamp(
+			release.created_at,
+			"Direct target Release creation timestamp",
+		),
+		updatedAt: canonicalTimestamp(
+			release.updated_at,
+			"Direct target Release update timestamp",
+		),
+		semantic: {
+			name: nonemptyString(release.name, "Direct target Release name"),
+			targetCommitish: nonemptyString(
+				release.target_commitish,
+				"Direct target Release target commitish",
+			),
+			draft: release.draft,
+			immutable: release.immutable,
+			prerelease: release.prerelease,
+			publishedAt: release.published_at,
+			body: release.body,
+			bodySha256: sha256(Buffer.from(release.body, "utf8")),
+			author: parseRawIdentity(release.author, "Direct target Release author"),
+		},
+		assets: expectedEvidence.assets.map(({ name }) => latestByName.get(name)),
+	});
 }
 
 function snapshotInspectionInput(input) {
@@ -343,6 +421,7 @@ function snapshotInspectionInput(input) {
 			"releases",
 			"github",
 			"attestations",
+			...(Object.hasOwn(value, "accounting") ? ["accounting"] : []),
 		],
 		"duplicate draft evidence input",
 	);
@@ -362,6 +441,7 @@ function snapshotInspectionInput(input) {
 	}
 	if (!Array.isArray(value.releases))
 		throw new TypeError("Release enumeration is invalid");
+	const accounting = normalizeAccounting(value.accounting);
 	return {
 		candidate,
 		survivorId,
@@ -377,7 +457,37 @@ function snapshotInspectionInput(input) {
 			["verify"],
 			"Attestation verifier",
 		),
+		accounting,
 	};
+}
+
+function normalizeAccounting(value) {
+	if (value === undefined) {
+		return Object.freeze({ downloadedAssets: 0, downloadedBytes: 0 });
+	}
+	assertExactKeys(
+		value,
+		["downloadedAssets", "downloadedBytes"],
+		"duplicate draft accounting",
+	);
+	const downloadedAssets = nonnegativeInteger(
+		value.downloadedAssets,
+		"Downloaded asset accounting",
+	);
+	const downloadedBytes = nonnegativeInteger(
+		value.downloadedBytes,
+		"Downloaded byte accounting",
+	);
+	if (
+		downloadedAssets >
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumAssetDownloads ||
+		downloadedBytes > AGGREGATE_ESCROW_BYTES
+	) {
+		throw new Error(
+			"Duplicate draft accounting already exceeds its aggregate limit",
+		);
+	}
+	return Object.freeze({ downloadedAssets, downloadedBytes });
 }
 
 function parseCandidate(value) {
@@ -442,9 +552,12 @@ function candidateReleases(releases, candidate) {
 	return { drafts, published };
 }
 
-function preflightDownloads(releases) {
-	let aggregate = 0;
-	let downloads = 0;
+function preflightDownloads(
+	releases,
+	accounting = { downloadedAssets: 0, downloadedBytes: 0 },
+) {
+	let aggregate = accounting.downloadedBytes;
+	let downloads = accounting.downloadedAssets;
 	for (const [releaseIndex, release] of releases.entries()) {
 		if (!Array.isArray(release.assets) || release.assets.length !== 45) {
 			throw new Error(`Release ${releaseIndex} must expose exactly 45 assets`);
@@ -565,6 +678,11 @@ async function hydrateRelease({
 		record.commitSha !== candidate.commitSha
 	) {
 		throw new Error("Release record does not bind the approved candidate");
+	}
+	if (parsedMarker.releaseRecordSha256 !== releaseRecordSha256(record)) {
+		throw new Error(
+			"Release marker record digest does not bind the canonical release record",
+		);
 	}
 	const manifestBytes = downloaded.get("manifest.json");
 	const manifest = parseSealedReleaseManifest(manifestBytes, { candidate });
@@ -824,7 +942,7 @@ function parseAssetEvidence(value) {
 	if (size > RELEASE_PAYLOAD_LIMITS.tarballBytes)
 		throw new TypeError("Asset size exceeds its limit");
 	return {
-		id: canonicalId(value.id, "Asset id"),
+		id: evidenceId(value.id, "Asset id"),
 		nodeId: nonemptyString(value.nodeId, "Asset node id"),
 		name: nonemptyString(value.name, "Asset name"),
 		label:
@@ -849,7 +967,7 @@ function parseServiceIdentity(value, label) {
 	assertExactKeys(value, SERVICE_IDENTITY_FIELDS, label);
 	return {
 		login: nonemptyString(value.login, `${label} login`),
-		id: canonicalId(value.id, `${label} id`),
+		id: evidenceId(value.id, `${label} id`),
 		nodeId: nonemptyString(value.nodeId, `${label} node id`),
 	};
 }
@@ -1022,6 +1140,13 @@ function canonicalId(value, label) {
 		throw new TypeError(`${label} must be a positive decimal identity`);
 	}
 	return normalized;
+}
+
+function evidenceId(value, label) {
+	if (typeof value !== "string" || !ID_PATTERN.test(value)) {
+		throw new TypeError(`${label} must be a canonical positive decimal string`);
+	}
+	return value;
 }
 
 function nonnegativeInteger(value, label) {
