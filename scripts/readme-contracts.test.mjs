@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 
 import {
@@ -40,7 +41,7 @@ const rootReadme = `# Dawn
 
 ## Quickstart
 
-\`pnpm create dawn-ai-app my-app\`
+\`npm create dawn-ai-app@latest my-agent\`
 
 ## Why Dawn
 
@@ -504,6 +505,11 @@ describe("validatePackageDiscoveryMetadata", () => {
 })
 
 describe("validateRootReadme", () => {
+  it("accepts the actual root README", () => {
+    const actualRootReadme = readFileSync(new URL("../README.md", import.meta.url), "utf8")
+    assert.deepEqual(validateRootReadme(actualRootReadme), [])
+  })
+
   it("accepts the required root README structure and references", () => {
     assert.deepEqual(validateRootReadme(rootReadme), [])
   })
@@ -528,8 +534,8 @@ describe("validateRootReadme", () => {
 
   it("accepts the canonical scaffold command in a fenced shell example", () => {
     const fencedCommand = rootReadme.replace(
-      "`pnpm create dawn-ai-app my-app`",
-      "```bash\npnpm create dawn-ai-app my-app\n```",
+      "`npm create dawn-ai-app@latest my-agent`",
+      "```bash\nnpm create dawn-ai-app@latest my-agent\n```",
     )
     assert.deepEqual(validateRootReadme(fencedCommand), [])
   })
@@ -934,19 +940,22 @@ describe("validateRootReadme", () => {
     assertFailure(
       validateRootReadme(
         rootReadme.replace(
-          "pnpm create dawn-ai-app my-app",
-          "pnpm create dawn-ai-app my-app-extra",
+          "npm create dawn-ai-app@latest my-agent",
+          "npm create dawn-ai-app@latest my-agent-extra",
         ),
       ),
-      /pnpm create dawn-ai-app my-app/,
+      /npm create dawn-ai-app@latest my-agent/,
     )
   })
 
   for (const [name, source, expected] of [
     [
       "canonical scaffold command",
-      rootReadme.replace("pnpm create dawn-ai-app my-app", "npm create dawn-ai-app@latest my-app"),
-      /pnpm create dawn-ai-app my-app/,
+      rootReadme.replace(
+        "npm create dawn-ai-app@latest my-agent",
+        "pnpm create dawn-ai-app my-app",
+      ),
+      /npm create dawn-ai-app@latest my-agent/,
     ],
     [
       "product-loop GIF",

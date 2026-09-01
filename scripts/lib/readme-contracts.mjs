@@ -711,7 +711,7 @@ function markdownLinkPresent(source, contract) {
 }
 
 function canonicalScaffoldCommandPresent(source) {
-  return /(?:^|[\s`$>])pnpm create dawn-ai-app my-app(?=$|[\s`'";|&])/mu.test(source)
+  return /(?:^|[\s`$>])npm create dawn-ai-app@latest my-agent(?=$|[\s`'";|&])/mu.test(source)
 }
 
 export function validatePackageDiscoveryMetadata(manifest) {
@@ -842,7 +842,7 @@ export function validateRootReadme(source) {
   const visible = visibleBlockProjections(readme)
   if (!canonicalScaffoldCommandPresent(withoutComments)) {
     failures.push(
-      "README is missing the canonical scaffold command: pnpm create dawn-ai-app my-app",
+      "README is missing the canonical scaffold command: npm create dawn-ai-app@latest my-agent",
     )
   }
   if (!productLoopImagePresent(visible.markdown, visible.rendered)) {
