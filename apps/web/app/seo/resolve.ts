@@ -7,7 +7,7 @@ import {
   selectVisiblePosts,
 } from "../components/blog/post-index"
 import type { DocsPageHref } from "../components/docs/nav"
-import { STATIC_LASTMOD } from "./lastmod.generated"
+import { STATIC_LASTMOD } from "./lastmod"
 import { DOCS_SEO_PAGES, requireValidLastModified, STATIC_SEO_PAGES } from "./registry"
 import { SOCIAL_CARD, SOCIAL_IMAGE, SOCIAL_SITE_NAME } from "./social"
 import type {
