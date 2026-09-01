@@ -646,12 +646,17 @@ function assertSourcePolicy(status, expectedUserId, policy) {
 			`${capitalize(policy.label)} must have the current effective owner`,
 		);
 	}
-	const mode = Number(status.mode & 0o777n);
+	const mode = Number(status.mode & 0o7777n);
 	if (policy === POLICIES.private) {
 		if (mode !== PRIVATE_MODE) {
 			throw new Error(`${capitalize(policy.label)} mode must be exactly 0600`);
 		}
 		return;
+	}
+	if ((mode & 0o7000) !== 0) {
+		throw new Error(
+			`${capitalize(policy.label)} mode must not contain special permission bits`,
+		);
 	}
 	if ((mode & 0o111) !== 0) {
 		throw new Error(`${capitalize(policy.label)} mode must be nonexecutable`);

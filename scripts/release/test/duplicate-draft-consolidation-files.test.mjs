@@ -142,6 +142,30 @@ test("private sources require exactly 0600 while tracked sources reject executab
 	);
 });
 
+test("private and tracked reads reject every special permission bit", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(repository, "special-mode.json");
+	await writeFile(target, "evidence\n", { mode: PRIVATE_MODE });
+
+	for (const specialBit of [0o4000, 0o2000, 0o1000]) {
+		await chmod(target, PRIVATE_MODE | specialBit);
+		assert.equal((await stat(target)).mode & 0o7777, PRIVATE_MODE | specialBit);
+		await assert.rejects(
+			readPrivateEnvelope(target, MAXIMUM_BYTES),
+			/0600|special|mode/iu,
+			`private ${specialBit.toString(8)}`,
+		);
+
+		await chmod(target, TRACKED_MODE | specialBit);
+		assert.equal((await stat(target)).mode & 0o7777, TRACKED_MODE | specialBit);
+		await assert.rejects(
+			readTrackedReceipt(target, MAXIMUM_BYTES),
+			/special|mode/iu,
+			`tracked ${specialBit.toString(8)}`,
+		);
+	}
+});
+
 test("replacement refuses unsafe existing destinations before creating a temporary file", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(repository, "destination.json");
@@ -176,6 +200,68 @@ test("replacement refuses unsafe existing destinations before creating a tempora
 		/writable|mode/iu,
 	);
 	assert.deepEqual(await readFile(target), Buffer.from("previous\n"));
+	assert.deepEqual(
+		(await entries(repository)).filter((name) => name.endsWith(".tmp")),
+		[],
+	);
+});
+
+test("replacement refuses existing private and tracked destinations with special permission bits", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(repository, "destination.json");
+	const replacement = Buffer.from("replacement\n");
+	await writeFile(target, "previous\n", { mode: PRIVATE_MODE });
+
+	for (const specialBit of [0o4000, 0o2000, 0o1000]) {
+		await chmod(target, PRIVATE_MODE | specialBit);
+		await assert.rejects(
+			writePrivateEnvelope(target, replacement),
+			/0600|special|mode/iu,
+			`private ${specialBit.toString(8)}`,
+		);
+
+		await chmod(target, TRACKED_MODE | specialBit);
+		await assert.rejects(
+			writeTrackedReceipt(target, replacement),
+			/special|mode/iu,
+			`tracked ${specialBit.toString(8)}`,
+		);
+	}
+	assert.deepEqual(await readFile(target), Buffer.from("previous\n"));
+});
+
+test("temporary-file validation rejects injected special permission bits before publication", async (t) => {
+	const repository = await temporaryRepository(t);
+	for (const [label, writeEnvelope, injectedMode] of [
+		["private", writePrivateEnvelope, 0o4600],
+		["tracked", writeTrackedReceipt, 0o4644],
+	]) {
+		const target = path.join(repository, `${label}.json`);
+		let renames = 0;
+		const fileSystem = fileSystemWith({
+			async open(filePath, flags, mode) {
+				const handle = await open(filePath, flags, mode);
+				if (!filePath.endsWith(".tmp")) return handle;
+				return wrapHandle(handle, {
+					async stat(options) {
+						return statusWithMode(await handle.stat(options), injectedMode);
+					},
+				});
+			},
+			async rename(from, to) {
+				renames += 1;
+				return rename(from, to);
+			},
+		});
+
+		await assert.rejects(
+			writeEnvelope(target, Buffer.from("replacement\n"), { fileSystem }),
+			/0600|special|mode/iu,
+			label,
+		);
+		assert.equal(renames, 0, label);
+		await assert.rejects(lstat(target), { code: "ENOENT" });
+	}
 	assert.deepEqual(
 		(await entries(repository)).filter((name) => name.endsWith(".tmp")),
 		[],
@@ -505,6 +591,13 @@ function wrapHandle(handle, overrides) {
 		write: handle.write.bind(handle),
 		...overrides,
 	};
+}
+
+function statusWithMode(status, mode) {
+	const result = Object.create(Object.getPrototypeOf(status));
+	Object.assign(result, status);
+	result.mode = (status.mode & ~0o7777n) | BigInt(mode);
+	return result;
 }
 
 async function temporaryRepository(t) {
